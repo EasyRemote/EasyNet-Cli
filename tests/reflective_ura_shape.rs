@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use easynet_axon::ura::{ability_ura, agent_ura};
-use easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry;
+use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all;
 use easynet_cli::runtime::execution::mcp_client::{
     McpClientService, McpClientsFile, McpServerSpec,
@@ -108,7 +108,7 @@ async fn reflective_ability_ura_is_clean_canonical_shape() {
         "agent_ura builder shape sanity"
     );
 
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     let result = reflect_all(&svc, &mut reg, &owner_ura).await;
     assert!(
         result.failed.is_empty(),
@@ -226,7 +226,7 @@ while True:
     let agent = "mcp";
     let owner_ura = agent_ura(realm, user, agent);
 
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     let result = reflect_all(&svc, &mut reg, &owner_ura).await;
     assert!(result.failed.is_empty(), "{:?}", result.failed);
     assert_eq!(result.registered.len(), 1);

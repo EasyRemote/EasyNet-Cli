@@ -39,6 +39,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
@@ -85,6 +86,17 @@ pub struct PtyCreateSpec {
     pub env: HashMap<String, String>,
 }
 
+/// Read-only snapshot of a live PTY session. This is the daemon-side
+/// truth exposed by `device.terminal.list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PtySessionSnapshot {
+    pub id: PtySessionId,
+    pub created_unix_ms: u64,
+    pub command: Option<String>,
+    pub command_args: Vec<String>,
+    pub cwd: Option<String>,
+}
+
 impl Default for PtyCreateSpec {
     fn default() -> Self {
         Self {
@@ -109,6 +121,10 @@ impl Default for PtyCreateSpec {
 /// every borrow path to be async (close can use `try_lock`).
 pub struct PtySession {
     pub id: PtySessionId,
+    pub created_unix_ms: u64,
+    pub command: Option<String>,
+    pub command_args: Vec<String>,
+    pub cwd: Option<String>,
     pub master: tokio::sync::Mutex<Box<dyn MasterPty + Send>>,
     /// Boxed Child trait object — portable-pty owns process
     /// ownership. We take it via Mutex<Option<...>> because
@@ -225,8 +241,16 @@ impl PtyService {
         drop(pair.slave);
 
         let id = PtySessionId::new(uuid::Uuid::new_v4().to_string());
+        let created_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         let session = Arc::new(PtySession {
             id: id.clone(),
+            created_unix_ms,
+            command: Some(cmd_str),
+            command_args: spec.command_args.clone(),
+            cwd: spec.cwd.clone(),
             master: tokio::sync::Mutex::new(pair.master),
             child: std::sync::Mutex::new(Some(child)),
         });
@@ -243,6 +267,25 @@ impl PtyService {
     pub fn get(&self, id: &PtySessionId) -> Option<Arc<PtySession>> {
         let g = self.inner.lock().expect("pty service lock");
         g.sessions.get(id).cloned()
+    }
+
+    /// Return a stable snapshot of every live PTY session. The caller
+    /// receives cloned metadata only; PTY handles never escape.
+    pub fn list(&self) -> Vec<PtySessionSnapshot> {
+        let g = self.inner.lock().expect("pty service lock");
+        let mut sessions = g
+            .sessions
+            .values()
+            .map(|session| PtySessionSnapshot {
+                id: session.id.clone(),
+                created_unix_ms: session.created_unix_ms,
+                command: session.command.clone(),
+                command_args: session.command_args.clone(),
+                cwd: session.cwd.clone(),
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by_key(|session| session.created_unix_ms);
+        sessions
     }
 
     /// Close a session. Idempotent: returns `ack: false` when the id
@@ -319,14 +362,17 @@ mod tests {
     /// $SHELL keeps the test deterministic + fast (true exits with 0
     /// immediately, so close path doesn't race the spawn).
     fn true_spec() -> PtyCreateSpec {
-        let mut s = PtyCreateSpec::default();
-        s.command = Some("/usr/bin/true".to_string());
         // /usr/bin/true exists on macOS; on some Linux distros true
         // is at /bin/true. Pick whichever exists.
-        if !std::path::Path::new("/usr/bin/true").exists() {
-            s.command = Some("/bin/true".to_string());
+        let command = if std::path::Path::new("/usr/bin/true").exists() {
+            "/usr/bin/true"
+        } else {
+            "/bin/true"
+        };
+        PtyCreateSpec {
+            command: Some(command.to_string()),
+            ..PtyCreateSpec::default()
         }
-        s
     }
 
     #[test]
@@ -374,8 +420,10 @@ mod tests {
     #[test]
     fn create_reports_spawn_error_clearly() {
         let svc = PtyService::new();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some("/this/path/should/not/exist/ever".to_string());
+        let spec = PtyCreateSpec {
+            command: Some("/this/path/should/not/exist/ever".to_string()),
+            ..PtyCreateSpec::default()
+        };
         let err = svc.create(spec).unwrap_err();
         let msg = format!("{err}");
         assert!(

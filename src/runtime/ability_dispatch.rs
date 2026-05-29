@@ -1,48 +1,57 @@
-// EasyNet CLI — Ability Dispatch Executor (stage 2)
-// ==================================================
+// EasyNet CLI — Axon ability catalogue
+// ====================================
 //
 // File: src/runtime/ability_dispatch.rs
-// Description: Stage 2 of two-stage dispatch (plan v10.1). Consumes
-//              an `InvocationTarget` from the stage-1 resolver and
-//              executes it — locally via the in-process system-
-//              ability handler registry, or remotely via the
-//              GatewayApi.
-//
-// Why this is a separate file from the resolver
-// ---------------------------------------------
-// Resolution is "where does this go" (a policy decision: future
-// planner, capability router, locality preference all hang off
-// stage 1). Execution is "send the bytes" (a transport concern:
-// loopback handler invocation vs. GatewayApi forwarding). Mixing
-// the two means every routing-policy change has to walk through
-// transport code and vice versa.
-//
-// CI rule reinforcing this split: handlers under
-// `src/runtime/system/*` may NOT branch on `target_node` /
-// `self.node_id` (`scripts/check-dispatch-boundary.sh`). They get
-// a resolved `InvocationTarget` and act on it.
-//
-// v1 scope
-// --------
-// `LocalAbility` registry is keyed by full ability name
-// (`observe.health`, future `device.session.attach`, etc.). The
-// remote path delegates to `GatewayApi::invoke_remote_ability`
-// which already exists. Streaming abilities (`subscribe`-mode
-// invocations) follow in PR-ATTACH/PR-PERM/PR-DISCUSS/PR-LOOP;
-// this executor's stream surface is a pass-through stub here so
-// PR-SYS does not block them.
+// Description: Registration and metadata surface for daemon-hosted
+//              Axon abilities. `AxonAbilityCatalog` preserves the
+//              existing module-level `register(&mut catalog)` API,
+//              but every registered handler is written through to
+//              `easynet_axon::invocation::LocalRuntime` when the
+//              daemon builds the catalogue. Production invocation
+//              paths execute through that runtime; direct catalogue
+//              execution helpers are test-only compatibility probes.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Arc;
 
+use easynet_axon::invocation::{
+    make_ability, AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions, AxonError,
+    CallMode as AxonCallMode, LocalRuntime,
+};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::runtime::gateway_api::GatewayApi;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+
+/// Module-local sync→async bridge for the ability-dispatch hot
+/// path. Every future driven through this helper only touches
+/// in-memory state — the registry's `Arc<Mutex<…>>` cells and
+/// `LocalRuntime`'s own async mutex. None of them await tokio
+/// resources (timers, sockets, IPC).
+///
+/// On that contract, the cheap `UseFuturesExecutor` fallback is
+/// correct: it drives the future on the calling thread when there
+/// is no tokio runtime, without paying the cost of spinning up a
+/// fresh current-thread tokio runtime. Any future addition that
+/// would await a tokio resource MUST reach for
+/// `crate::support::async_bridge::run_blocking` directly with
+/// `NoRuntimeFallback::BuildCurrentThreadTokio` rather than
+/// extending this helper — otherwise the in-memory-only
+/// invariant is silently broken.
+fn block_on_runtime_sync<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    crate::support::async_bridge::run_blocking(
+        future,
+        crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+    )
+}
 
 /// One in-process RPC handler. Boxed closure so the registry can
 /// hold heterogeneous handlers behind a uniform key.
@@ -67,7 +76,7 @@ pub struct EnvelopeContext {
     pub subject: Option<String>,
 }
 
-/// Envelope-aware RPC handler. The dispatcher passes a snapshot of
+/// Envelope-aware RPC handler. The runtime adapter passes a snapshot of
 /// the relevant envelope fields alongside the args. Used by media
 /// abilities (which need `subject` for resource resolution) and any
 /// future ability that needs to inspect AXIOM-layer state without
@@ -206,7 +215,7 @@ pub struct BidiSource {
 /// One in-process bidi handler. Per design §D2 the closure runs at
 /// open time only: it builds the two channels, spawns its own
 /// long-lived `tokio::spawn(...)` loop that owns the session, and
-/// returns the `BidiSource` immediately. The dispatcher never
+/// returns the `BidiSource` immediately. The catalogue adapter never
 /// blocks waiting for a session loop, mirroring how
 /// `register_stream`'s `Live` variant is already shaped.
 pub type LocalBidiHandler = Arc<dyn Fn(Value) -> anyhow::Result<BidiSource> + Send + Sync>;
@@ -226,6 +235,307 @@ pub type LocalBidiHandlerWithEnvelope =
 /// it for the agent-workspace path. Returning `Send + Sync` so the
 /// registry stays clone-friendly on the Arc share.
 pub type LocalFallbackResolver = Arc<dyn Fn(&str) -> Option<LocalRpcHandler> + Send + Sync>;
+
+#[derive(Clone, Default)]
+struct RuntimeHandlerSet {
+    rpc: Option<LocalRpcHandler>,
+    stream: Option<LocalStreamHandler>,
+    bidi: Option<LocalBidiHandler>,
+    rpc_with_env: Option<LocalRpcHandlerWithEnvelope>,
+    stream_with_env: Option<LocalStreamHandlerWithEnvelope>,
+    bidi_with_env: Option<LocalBidiHandlerWithEnvelope>,
+}
+
+impl RuntimeHandlerSet {
+    fn modes(&self) -> AbilityCallModes {
+        AbilityCallModes {
+            rpc: self.rpc.is_some() || self.rpc_with_env.is_some(),
+            stream: self.stream.is_some() || self.stream_with_env.is_some(),
+            bidi: self.bidi.is_some() || self.bidi_with_env.is_some(),
+        }
+    }
+}
+
+fn payload_to_json_value(payload: &[u8]) -> Result<Value, AxonError> {
+    if payload.is_empty() {
+        Ok(Value::Object(Default::default()))
+    } else {
+        serde_json::from_slice(payload).map_err(|err| {
+            AxonError::invalid_argument(format!("local_runtime_adapter: payload not JSON: {err}"))
+        })
+    }
+}
+
+fn json_value_to_payload(value: &Value) -> Result<Vec<u8>, AxonError> {
+    serde_json::to_vec(value)
+        .map_err(|err| AxonError::internal(format!("local_runtime_adapter: encode JSON: {err}")))
+}
+
+pub(crate) fn rpc_handler_to_ability_fn(handler: LocalRpcHandler) -> AbilityFn {
+    make_ability(move |ctx| {
+        let handler = Arc::clone(&handler);
+        let payload = ctx.payload.clone();
+        async move {
+            let value = payload_to_json_value(&payload)?;
+            let result = tokio::task::spawn_blocking(move || handler(value))
+                .await
+                .map_err(|err| {
+                    AxonError::internal(format!("local_runtime_adapter: handler join error: {err}"))
+                })?
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: handler returned error: {err}"
+                    ))
+                })?;
+            json_value_to_payload(&result)
+        }
+    })
+}
+
+async fn envelope_context_from_axon(ctx: &Arc<AbilityContext>) -> EnvelopeContext {
+    let subject = ctx
+        .runtime
+        .axiom_envelope_of(&ctx.invocation_id)
+        .await
+        .map(|signed| signed.envelope.subject.ura);
+    EnvelopeContext { subject }
+}
+
+fn rpc_env_handler_to_ability_fn(handler: LocalRpcHandlerWithEnvelope) -> AbilityFn {
+    make_ability(move |ctx| {
+        let handler = Arc::clone(&handler);
+        async move {
+            let value = payload_to_json_value(&ctx.payload)?;
+            let env = envelope_context_from_axon(&ctx).await;
+            let result = tokio::task::spawn_blocking(move || handler(env, value))
+                .await
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: env handler join error: {err}"
+                    ))
+                })?
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: env handler returned error: {err}"
+                    ))
+                })?;
+            json_value_to_payload(&result)
+        }
+    })
+}
+
+async fn emit_json_progress(ctx: &Arc<AbilityContext>, value: Value) -> Result<(), AxonError> {
+    let payload = json_value_to_payload(&value)?;
+    ctx.emit_progress(payload, "application/json").await
+}
+
+async fn emit_stream_source(
+    ctx: Arc<AbilityContext>,
+    source: StreamSource,
+) -> Result<Vec<u8>, AxonError> {
+    match source {
+        StreamSource::Snapshot(frames) => {
+            for frame in frames {
+                emit_json_progress(&ctx, frame).await?;
+            }
+        }
+        StreamSource::Live(mut rx) => loop {
+            match rx.recv().await {
+                Ok(frame) => emit_json_progress(&ctx, frame).await?,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    return Err(AxonError::internal(format!(
+                        "local_runtime_adapter: stream lagged by {n} frame(s)"
+                    )));
+                }
+            }
+        },
+        StreamSource::SnapshotThenLive(frames, mut rx) => {
+            for frame in frames {
+                emit_json_progress(&ctx, frame).await?;
+            }
+            loop {
+                match rx.recv().await {
+                    Ok(frame) => emit_json_progress(&ctx, frame).await?,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        return Err(AxonError::internal(format!(
+                            "local_runtime_adapter: stream lagged by {n} frame(s)"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn stream_handler_to_ability_fn(handler: LocalStreamHandler) -> AbilityFn {
+    make_ability(move |ctx| {
+        let handler = Arc::clone(&handler);
+        async move {
+            let value = payload_to_json_value(&ctx.payload)?;
+            let source = tokio::task::spawn_blocking(move || handler(value))
+                .await
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: stream handler join error: {err}"
+                    ))
+                })?
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: stream handler returned error: {err}"
+                    ))
+                })?;
+            emit_stream_source(ctx, source).await
+        }
+    })
+}
+
+fn stream_env_handler_to_ability_fn(handler: LocalStreamHandlerWithEnvelope) -> AbilityFn {
+    make_ability(move |ctx| {
+        let handler = Arc::clone(&handler);
+        async move {
+            let value = payload_to_json_value(&ctx.payload)?;
+            let env = envelope_context_from_axon(&ctx).await;
+            let source = tokio::task::spawn_blocking(move || handler(env, value))
+                .await
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: env stream handler join error: {err}"
+                    ))
+                })?
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: env stream handler returned error: {err}"
+                    ))
+                })?;
+            emit_stream_source(ctx, source).await
+        }
+    })
+}
+
+async fn run_bidi_source(
+    ctx: Arc<AbilityContext>,
+    source: BidiSource,
+) -> Result<Vec<u8>, AxonError> {
+    let BidiSource {
+        to_client,
+        mut from_client,
+    } = source;
+    let mut to_client = Some(to_client);
+    loop {
+        if to_client.is_none() {
+            match from_client.recv().await {
+                Some(value) => emit_json_progress(&ctx, value).await?,
+                None => break,
+            }
+            continue;
+        }
+
+        tokio::select! {
+            inbound = ctx.recv_message(None) => {
+                match inbound {
+                    Some(msg) => {
+                        let value = payload_to_json_value(&msg.payload)?;
+                        let send_closed = match to_client.as_ref() {
+                            Some(sender) => sender.send(value).await.is_err(),
+                            None => false,
+                        };
+                        if send_closed {
+                            to_client = None;
+                        }
+                    }
+                    None => {
+                        to_client = None;
+                    }
+                }
+            }
+            outbound = from_client.recv() => {
+                match outbound {
+                    Some(value) => emit_json_progress(&ctx, value).await?,
+                    None => break,
+                }
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn bidi_handler_to_ability_fn(handler: LocalBidiHandler) -> AbilityFn {
+    make_ability(move |ctx| {
+        let handler = Arc::clone(&handler);
+        async move {
+            let value = payload_to_json_value(&ctx.payload)?;
+            let source = tokio::task::spawn_blocking(move || handler(value))
+                .await
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: bidi handler join error: {err}"
+                    ))
+                })?
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: bidi handler returned error: {err}"
+                    ))
+                })?;
+            run_bidi_source(ctx, source).await
+        }
+    })
+}
+
+fn bidi_env_handler_to_ability_fn(handler: LocalBidiHandlerWithEnvelope) -> AbilityFn {
+    make_ability(move |ctx| {
+        let handler = Arc::clone(&handler);
+        async move {
+            let value = payload_to_json_value(&ctx.payload)?;
+            let env = envelope_context_from_axon(&ctx).await;
+            let source = tokio::task::spawn_blocking(move || handler(env, value))
+                .await
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: env bidi handler join error: {err}"
+                    ))
+                })?
+                .map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: env bidi handler returned error: {err}"
+                    ))
+                })?;
+            run_bidi_source(ctx, source).await
+        }
+    })
+}
+
+fn runtime_handler_set_to_ability_fn(name: String, handlers: RuntimeHandlerSet) -> AbilityFn {
+    let rpc_fn = handlers.rpc.map(rpc_handler_to_ability_fn);
+    let stream_fn = handlers.stream.map(stream_handler_to_ability_fn);
+    let bidi_fn = handlers.bidi.map(bidi_handler_to_ability_fn);
+    let rpc_env_fn = handlers.rpc_with_env.map(rpc_env_handler_to_ability_fn);
+    let stream_env_fn = handlers
+        .stream_with_env
+        .map(stream_env_handler_to_ability_fn);
+    let bidi_env_fn = handlers.bidi_with_env.map(bidi_env_handler_to_ability_fn);
+
+    make_ability(move |ctx| {
+        let mode = ctx.call_mode;
+        let name = name.clone();
+        let handler = match mode {
+            AxonCallMode::Rpc => rpc_env_fn.clone().or_else(|| rpc_fn.clone()),
+            AxonCallMode::Stream => stream_env_fn.clone().or_else(|| stream_fn.clone()),
+            AxonCallMode::Bidi => bidi_env_fn.clone().or_else(|| bidi_fn.clone()),
+        };
+        async move {
+            match handler {
+                Some(handler) => handler(ctx).await,
+                None => Err(AxonError::invalid_argument(format!(
+                    "local_runtime_adapter: ability {name} does not support {} mode",
+                    mode.as_str()
+                ))),
+            }
+        }
+    })
+}
 
 /// What kind of actor owns the ability — the AXIOM seven-tuple
 /// `callee` form for this verb.
@@ -272,13 +582,13 @@ pub enum OwnerKind {
     User(String),
 }
 
-/// Local-ability registry. Keyed by full ability name. v1 shape is
-/// a `BTreeMap` for deterministic iteration order; the registry
-/// is read-mostly (built once at daemon start, queried per
-/// invocation), so RwLock + per-invocation hash is overkill.
+/// Axon ability catalogue. Keyed by full ability name. v1 shape is
+/// a `BTreeMap` for deterministic iteration order; the catalogue is
+/// read-mostly (built once at daemon start, queried for metadata), so
+/// RwLock + per-invocation hash is overkill.
 ///
 /// Hot-reload note: the static maps below are written at boot, then
-/// frozen behind `Arc<LocalAbilityRegistry>`. Post-boot mutation goes
+/// frozen behind `Arc<AxonAbilityCatalog>`. Post-boot mutation goes
 /// through `dynamic_ext` — an interior-mutability side table fed by
 /// `RegistryRefreshSink` when an upstream MCP server emits
 /// `notifications/tools/list_changed`. Lookups (`resolve_rpc`,
@@ -288,7 +598,17 @@ pub enum OwnerKind {
 /// support list-changed) pays nothing beyond a single empty-RwLock
 /// read per miss.
 #[derive(Default)]
-pub struct LocalAbilityRegistry {
+pub struct AxonAbilityCatalog {
+    /// Shared Axon runtime that owns the live invocation surface.
+    ///
+    /// During the Axon migration this catalogue remains the metadata
+    /// construction API used by the existing `register(...)` modules,
+    /// but handler registration is written through to `LocalRuntime`
+    /// immediately. `new()` creates an isolated runtime for tests and
+    /// local fixtures; daemon boot passes the process-wide runtime via
+    /// `new_with_runtime` so no secondary synchronization pass is
+    /// needed.
+    runtime: Option<Arc<LocalRuntime>>,
     rpc: BTreeMap<String, LocalRpcHandler>,
     stream: BTreeMap<String, LocalStreamHandler>,
     bidi: BTreeMap<String, LocalBidiHandler>,
@@ -341,7 +661,7 @@ pub struct LocalAbilityRegistry {
 /// Post-boot ability additions. Same shape as the six handler maps
 /// above plus owner/manifest, but mutated through `&self` via the
 /// enclosing RwLock so the hot-reload sink can write while the
-/// daemon holds the registry behind `Arc<LocalAbilityRegistry>`.
+/// daemon holds the registry behind `Arc<AxonAbilityCatalog>`.
 ///
 /// We do not merge `dynamic_ext` into the static maps lazily —
 /// keeping the two sides separate means the hot path's miss
@@ -359,7 +679,50 @@ struct DynamicCatalogue {
     manifests: BTreeMap<String, Arc<crate::core::ability_spec::AbilityManifest>>,
 }
 
-impl std::fmt::Debug for LocalAbilityRegistry {
+impl DynamicCatalogue {
+    /// Drop every dynamic-side trace of `ability` across the eight
+    /// maps and return whether any of them carried it. Names the
+    /// "a key is in at most one map but may be in any" invariant in
+    /// one place so the three sites that previously repeated the
+    /// 8-way walk (`AxonAbilityCatalog::unregister`, `hot_unregister`,
+    /// future hot-reload sinks) cannot drift independently.
+    fn drain(&mut self, ability: &str) -> bool {
+        let present = self.contains(ability);
+        self.rpc.remove(ability);
+        self.stream.remove(ability);
+        self.bidi.remove(ability);
+        self.rpc_with_env.remove(ability);
+        self.stream_with_env.remove(ability);
+        self.bidi_with_env.remove(ability);
+        self.owner.remove(ability);
+        self.manifests.remove(ability);
+        present
+    }
+
+    /// Handler-only presence test (excludes `owner` and `manifests`
+    /// because those are metadata side-tables — they exist iff a
+    /// handler exists, but a stale row in either should not pin
+    /// `has_dynamic` to true).
+    fn contains_handler(&self, ability: &str) -> bool {
+        self.rpc.contains_key(ability)
+            || self.stream.contains_key(ability)
+            || self.bidi.contains_key(ability)
+            || self.rpc_with_env.contains_key(ability)
+            || self.stream_with_env.contains_key(ability)
+            || self.bidi_with_env.contains_key(ability)
+    }
+
+    /// Full presence test including the two metadata side-tables.
+    /// Used by `drain` to decide the return value, and by any
+    /// caller that wants "is this name known at all".
+    fn contains(&self, ability: &str) -> bool {
+        self.contains_handler(ability)
+            || self.owner.contains_key(ability)
+            || self.manifests.contains_key(ability)
+    }
+}
+
+impl std::fmt::Debug for AxonAbilityCatalog {
     /// Manual impl because the handler types are `Arc<dyn Fn>`
     /// trait objects which do not implement `Debug`. Surfaces just
     /// the registered ability counts + names per shape — enough for
@@ -371,7 +734,7 @@ impl std::fmt::Debug for LocalAbilityRegistry {
             .read()
             .map(|g| g.rpc.len() + g.stream.len() + g.bidi.len())
             .unwrap_or(0);
-        f.debug_struct("LocalAbilityRegistry")
+        f.debug_struct("AxonAbilityCatalog")
             .field("rpc_count", &self.rpc.len())
             .field("stream_count", &self.stream.len())
             .field("bidi_count", &self.bidi.len())
@@ -386,9 +749,168 @@ impl std::fmt::Debug for LocalAbilityRegistry {
     }
 }
 
-impl LocalAbilityRegistry {
+impl AxonAbilityCatalog {
     pub fn new() -> Self {
-        Self::default()
+        Self::new_with_runtime(LocalRuntime::new())
+    }
+
+    /// Build a registry whose registration APIs write through to
+    /// the daemon-hosted Axon runtime. This keeps the existing
+    /// module-level `register(&mut reg)` call sites intact while
+    /// making `LocalRuntime` the live source of truth.
+    pub fn new_with_runtime(runtime: Arc<LocalRuntime>) -> Self {
+        Self {
+            runtime: Some(runtime),
+            ..Self::default()
+        }
+    }
+
+    /// Return the attached Axon runtime, if this registry was
+    /// constructed for daemon boot.
+    pub fn runtime(&self) -> Option<Arc<LocalRuntime>> {
+        self.runtime.as_ref().map(Arc::clone)
+    }
+
+    /// Invoke an RPC ability through Axon's `LocalRuntime`. The
+    /// handler maps are retained as catalogue metadata and for
+    /// descriptor synthesis, but runtime execution is the authoritative
+    /// path.
+    pub fn invoke_rpc_json(&self, ability: &str, args: Value) -> anyhow::Result<Value> {
+        let runtime = self.runtime().ok_or_else(|| {
+            anyhow::anyhow!(
+                "AxonAbilityCatalog has no LocalRuntime attached; use new() or new_with_runtime()"
+            )
+        })?;
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args: args.clone(),
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+        match crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(
+            Arc::clone(&runtime),
+            target,
+        ) {
+            Ok(value) => Ok(value),
+            Err(err) if crate::runtime::local_runtime_invoker::is_not_found_error(&err) => {
+                if let Some(handler) = self.resolve_rpc(ability) {
+                    // Self-heal: the handler exists in the catalogue
+                    // but was not synced into LocalRuntime at boot.
+                    // We register lazily and retry, but the bug is in
+                    // boot: every handler that lives in the catalogue
+                    // should be in LocalRuntime by the time we serve
+                    // an Invoke. Surface a warn so SRE notices when
+                    // this path fires — silent self-heal would mask
+                    // a real wiring regression.
+                    crate::op_event!(
+                        component = ability_dispatch,
+                        kind = late_bound_rpc_handler,
+                        ability = ability,
+                        message = "RPC handler resolved from catalogue but missing from \
+                                   LocalRuntime; lazily synced. Boot should have wired \
+                                   this; investigate the registration path.",
+                    );
+                    self.register_runtime_rpc(ability, handler);
+                    let target = InvocationTarget {
+                        scope: TargetScope::Local,
+                        ability: ability.to_string(),
+                        normalized_args: args,
+                        call_mode: CallMode::Rpc,
+                        subject: None,
+                    };
+                    return crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(
+                        runtime, target,
+                    )
+                    .map_err(|err| anyhow::anyhow!("{err}"));
+                }
+                Err(anyhow::anyhow!("{err}"))
+            }
+            Err(err) => Err(anyhow::anyhow!("{err}")),
+        }
+    }
+
+    fn replace_runtime_ability(&self, name: &str, ability_fn: AbilityFn, options: AbilityOptions) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
+        let result =
+            block_on_runtime_sync(runtime.replace_ability(name.to_string(), ability_fn, options));
+        if let Err(err) = result {
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_bridge,
+                kind = local_runtime_register_failed,
+                ability = name,
+                error = err_msg.as_str(),
+            );
+        }
+    }
+
+    fn unregister_runtime_ability(&self, name: &str) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
+        let _ = block_on_runtime_sync(runtime.unregister_ability(name));
+    }
+
+    fn register_runtime_rpc(&self, name: &str, handler: LocalRpcHandler) {
+        let mut handlers = self.runtime_handlers_for(name);
+        handlers.rpc = Some(handler);
+        self.sync_runtime_ability_from_handlers(name, handlers);
+    }
+
+    fn runtime_handlers_for(&self, name: &str) -> RuntimeHandlerSet {
+        let mut handlers = RuntimeHandlerSet {
+            rpc: self.rpc.get(name).map(Arc::clone),
+            stream: self.stream.get(name).map(Arc::clone),
+            bidi: self.bidi.get(name).map(Arc::clone),
+            rpc_with_env: self.rpc_with_env.get(name).map(Arc::clone),
+            stream_with_env: self.stream_with_env.get(name).map(Arc::clone),
+            bidi_with_env: self.bidi_with_env.get(name).map(Arc::clone),
+        };
+
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        if handlers.rpc.is_none() {
+            handlers.rpc = dyn_ext.rpc.get(name).map(Arc::clone);
+        }
+        if handlers.stream.is_none() {
+            handlers.stream = dyn_ext.stream.get(name).map(Arc::clone);
+        }
+        if handlers.bidi.is_none() {
+            handlers.bidi = dyn_ext.bidi.get(name).map(Arc::clone);
+        }
+        if handlers.rpc_with_env.is_none() {
+            handlers.rpc_with_env = dyn_ext.rpc_with_env.get(name).map(Arc::clone);
+        }
+        if handlers.stream_with_env.is_none() {
+            handlers.stream_with_env = dyn_ext.stream_with_env.get(name).map(Arc::clone);
+        }
+        if handlers.bidi_with_env.is_none() {
+            handlers.bidi_with_env = dyn_ext.bidi_with_env.get(name).map(Arc::clone);
+        }
+        handlers
+    }
+
+    fn sync_runtime_ability(&self, name: &str) {
+        let handlers = self.runtime_handlers_for(name);
+        self.sync_runtime_ability_from_handlers(name, handlers);
+    }
+
+    fn sync_runtime_ability_from_handlers(&self, name: &str, handlers: RuntimeHandlerSet) {
+        let modes = handlers.modes();
+        if modes.is_empty() {
+            self.unregister_runtime_ability(name);
+            return;
+        }
+        self.replace_runtime_ability(
+            name,
+            runtime_handler_set_to_ability_fn(name.to_string(), handlers),
+            AbilityOptions::default().with_modes(modes),
+        );
     }
 
     /// Register an RPC handler under `ability` with explicit owner.
@@ -409,7 +931,8 @@ impl LocalAbilityRegistry {
     ) {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
-        self.rpc.insert(name, handler);
+        self.rpc.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Register an RPC handler with explicit owner AND a manifest
@@ -434,7 +957,8 @@ impl LocalAbilityRegistry {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
         self.manifests.insert(name.clone(), Arc::new(manifest));
-        self.rpc.insert(name, handler);
+        self.rpc.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Companion to [`register_rpc_with_spec`] for stream
@@ -454,7 +978,8 @@ impl LocalAbilityRegistry {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
         self.manifests.insert(name.clone(), Arc::new(manifest));
-        self.stream.insert(name, handler);
+        self.stream.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Lookup the registered manifest, if any. Returns `None`
@@ -520,7 +1045,8 @@ impl LocalAbilityRegistry {
     ) {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
-        self.stream.insert(name, handler);
+        self.stream.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Register a stream handler under `ability`. Same single-
@@ -540,7 +1066,8 @@ impl LocalAbilityRegistry {
     ) {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
-        self.bidi.insert(name, handler);
+        self.bidi.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Register a bidi handler under `ability`. Same single-writer
@@ -572,7 +1099,8 @@ impl LocalAbilityRegistry {
     ) {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
-        self.rpc_with_env.insert(name, handler);
+        self.rpc_with_env.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Register an envelope-aware RPC handler. Used by abilities
@@ -580,7 +1108,8 @@ impl LocalAbilityRegistry {
     /// **INV-SUBJECT-ENVELOPE**) — typically media abilities
     /// resolving a `subject = resource_ura` to a local resource
     /// table entry. The handler closure signature is
-    /// `Fn(EnvelopeContext, Value) -> Result<Value>`; the dispatcher
+    /// `Fn(EnvelopeContext, Value) -> Result<Value>`; the runtime
+    /// adapter
     /// passes the resolved `InvocationTarget.subject` in the
     /// context. Mutually exclusive with `register_rpc` per ability
     /// — registering both is a startup bug (caller picks one
@@ -605,7 +1134,8 @@ impl LocalAbilityRegistry {
     ) {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
-        self.stream_with_env.insert(name, handler);
+        self.stream_with_env.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Envelope-aware stream variant. See `register_rpc_with_envelope`
@@ -629,7 +1159,8 @@ impl LocalAbilityRegistry {
     ) {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
-        self.bidi_with_env.insert(name, handler);
+        self.bidi_with_env.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
     }
 
     /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
@@ -688,8 +1219,21 @@ impl LocalAbilityRegistry {
     /// Callers driving runtime hot-reload MUST hold whatever
     /// synchronisation the daemon imposes (today: build_registry is
     /// the only writer; B4 will introduce a process-wide
-    /// `Arc<Mutex<LocalAbilityRegistry>>` if hot-reload lands).
+    /// `Arc<Mutex<AxonAbilityCatalog>>` if hot-reload lands).
     pub fn unregister(&mut self, ability: &str) -> bool {
+        let present = self.drain_static(ability);
+        if present {
+            self.sync_runtime_ability(ability);
+        }
+        present
+    }
+
+    /// Drop every static-side trace of `ability` across the eight
+    /// maps and return whether any of them carried it. Mirrors
+    /// [`DynamicCatalogue::drain`]; lifted out of `unregister` so
+    /// the 8-way walk lives in one named place per side instead of
+    /// being inlined at every removal site.
+    fn drain_static(&mut self, ability: &str) -> bool {
         let present = self.rpc.contains_key(ability)
             || self.stream.contains_key(ability)
             || self.bidi.contains_key(ability)
@@ -732,13 +1276,16 @@ impl LocalAbilityRegistry {
         handler: LocalRpcHandler,
     ) {
         let name = ability.into();
-        let mut dyn_ext = self
-            .dynamic_ext
-            .write()
-            .expect("dynamic_ext RwLock poisoned");
-        dyn_ext.owner.insert(name.clone(), owner);
-        dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
-        dyn_ext.rpc.insert(name, handler);
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
+            dyn_ext.rpc.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
     }
 
     /// Hot-register an RPC handler without a manifest. Used by
@@ -752,12 +1299,15 @@ impl LocalAbilityRegistry {
         handler: LocalRpcHandler,
     ) {
         let name = ability.into();
-        let mut dyn_ext = self
-            .dynamic_ext
-            .write()
-            .expect("dynamic_ext RwLock poisoned");
-        dyn_ext.owner.insert(name.clone(), owner);
-        dyn_ext.rpc.insert(name, handler);
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.rpc.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
     }
 
     /// Hot-register a STREAM handler with a manifest. The reflective
@@ -774,13 +1324,16 @@ impl LocalAbilityRegistry {
         handler: LocalStreamHandler,
     ) {
         let name = ability.into();
-        let mut dyn_ext = self
-            .dynamic_ext
-            .write()
-            .expect("dynamic_ext RwLock poisoned");
-        dyn_ext.owner.insert(name.clone(), owner);
-        dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
-        dyn_ext.stream.insert(name, handler);
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
+            dyn_ext.stream.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
     }
 
     /// Remove every dynamic-side trace of `ability` (the parallel
@@ -794,22 +1347,11 @@ impl LocalAbilityRegistry {
             .dynamic_ext
             .write()
             .expect("dynamic_ext RwLock poisoned");
-        let present = dyn_ext.rpc.contains_key(ability)
-            || dyn_ext.stream.contains_key(ability)
-            || dyn_ext.bidi.contains_key(ability)
-            || dyn_ext.rpc_with_env.contains_key(ability)
-            || dyn_ext.stream_with_env.contains_key(ability)
-            || dyn_ext.bidi_with_env.contains_key(ability)
-            || dyn_ext.owner.contains_key(ability)
-            || dyn_ext.manifests.contains_key(ability);
-        dyn_ext.rpc.remove(ability);
-        dyn_ext.stream.remove(ability);
-        dyn_ext.bidi.remove(ability);
-        dyn_ext.rpc_with_env.remove(ability);
-        dyn_ext.stream_with_env.remove(ability);
-        dyn_ext.bidi_with_env.remove(ability);
-        dyn_ext.owner.remove(ability);
-        dyn_ext.manifests.remove(ability);
+        let present = dyn_ext.drain(ability);
+        if present {
+            drop(dyn_ext);
+            self.sync_runtime_ability(ability);
+        }
         present
     }
 
@@ -819,16 +1361,10 @@ impl LocalAbilityRegistry {
     /// `has_bidi` lookups already consult this internally via the
     /// fall-through paths.
     pub fn has_dynamic(&self, ability: &str) -> bool {
-        let dyn_ext = self
-            .dynamic_ext
+        self.dynamic_ext
             .read()
-            .expect("dynamic_ext RwLock poisoned");
-        dyn_ext.rpc.contains_key(ability)
-            || dyn_ext.stream.contains_key(ability)
-            || dyn_ext.bidi.contains_key(ability)
-            || dyn_ext.rpc_with_env.contains_key(ability)
-            || dyn_ext.stream_with_env.contains_key(ability)
-            || dyn_ext.bidi_with_env.contains_key(ability)
+            .expect("dynamic_ext RwLock poisoned")
+            .contains_handler(ability)
     }
 
     /// List the names currently held in the dynamic side table.
@@ -872,7 +1408,7 @@ impl LocalAbilityRegistry {
 
     /// Lookup helper — exposed because PR-ATTACH onwards will need
     /// a way to introspect "what abilities does this daemon
-    /// publish?" without reflecting through the dispatcher.
+    /// publish?" without reflecting through an invocation.
     ///
     /// Returns the union of RPC + stream + bidi ability names,
     /// sorted. Discovery callers should not see the call-mode
@@ -880,6 +1416,14 @@ impl LocalAbilityRegistry {
     /// under one call mode, but the union here keeps the list
     /// honest if a future ability legitimately exposes both shapes).
     pub fn list_abilities(&self) -> Vec<String> {
+        if let Some(runtime) = self.runtime() {
+            let mut names: Vec<String> = block_on_runtime_sync(runtime.list_abilities())
+                .into_iter()
+                .map(|descriptor| descriptor.name)
+                .collect();
+            names.sort();
+            return names;
+        }
         let mut names: Vec<String> = self.rpc.keys().cloned().collect();
         // Envelope-aware variants are part of the same discovery
         // surface — meta.list_abilities should not care which
@@ -912,7 +1456,7 @@ impl LocalAbilityRegistry {
         // Hot-reload side: union dynamic names so a freshly reflected
         // MCP tool shows up in `meta.list_abilities` immediately.
         for k in self.list_dynamic_abilities() {
-            if !names.iter().any(|n| *n == k) {
+            if !names.contains(&k) {
                 names.push(k);
             }
         }
@@ -930,6 +1474,11 @@ impl LocalAbilityRegistry {
     /// side table on static-map miss so hot-loaded MCP tools count
     /// as registered.
     pub fn has_rpc(&self, ability: &str) -> bool {
+        if let Some(runtime) = self.runtime() {
+            return block_on_runtime_sync(runtime.ability_options(ability))
+                .map(|options| options.modes.rpc)
+                .unwrap_or(false);
+        }
         if self.rpc.contains_key(ability) || self.rpc_with_env.contains_key(ability) {
             return true;
         }
@@ -946,18 +1495,28 @@ impl LocalAbilityRegistry {
     /// listing). Used by RFC-006-C `01HUB.openai.list_models` to
     /// project chat-base abilities into the /v1/models response.
     pub fn list_rpc_names(&self) -> Vec<String> {
+        if let Some(runtime) = self.runtime() {
+            let mut names: Vec<String> = block_on_runtime_sync(runtime.list_abilities())
+                .into_iter()
+                .filter(|descriptor| descriptor.options.modes.rpc)
+                .map(|descriptor| descriptor.name)
+                .collect();
+            names.sort();
+            return names;
+        }
         self.rpc.keys().cloned().collect()
     }
 
     /// Owned-clone counterpart that consults the fallback resolver
     /// on a registry miss. Existing call sites that take `&Arc<...>`
-    /// keep using `get_rpc`; the dispatcher's execute path uses this
-    /// so a `<agent>.<verb>` written to disk post-boot is found via
-    /// the fallback without forcing the registry to be mutable.
+    /// keep using `get_rpc`; the runtime adapter and test-only invoke
+    /// probes use this so a `<agent>.<verb>` written to disk post-boot
+    /// is found via the fallback without forcing the registry to be
+    /// mutable.
     ///
     /// Lookup order: static map → dynamic side table → fallback
     /// resolver. The hot-reload sink writes only the dynamic side,
-    /// so the dispatch hot path stays lock-free for everything
+    /// so the runtime lookup path stays lock-free for everything
     /// registered at boot.
     pub fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
         if let Some(h) = self.rpc.get(ability) {
@@ -996,10 +1555,7 @@ impl LocalAbilityRegistry {
     }
 
     /// Companion to `resolve_stream` for the envelope-aware variant.
-    pub fn resolve_stream_with_env(
-        &self,
-        ability: &str,
-    ) -> Option<LocalStreamHandlerWithEnvelope> {
+    pub fn resolve_stream_with_env(&self, ability: &str) -> Option<LocalStreamHandlerWithEnvelope> {
         if let Some(h) = self.stream_with_env.get(ability) {
             return Some(Arc::clone(h));
         }
@@ -1024,10 +1580,7 @@ impl LocalAbilityRegistry {
     }
 
     /// Companion to `resolve_bidi` for the envelope-aware variant.
-    pub fn resolve_bidi_with_env(
-        &self,
-        ability: &str,
-    ) -> Option<LocalBidiHandlerWithEnvelope> {
+    pub fn resolve_bidi_with_env(&self, ability: &str) -> Option<LocalBidiHandlerWithEnvelope> {
         if let Some(h) = self.bidi_with_env.get(ability) {
             return Some(Arc::clone(h));
         }
@@ -1043,10 +1596,7 @@ impl LocalAbilityRegistry {
     /// `execute_rpc` to keep the envelope-aware precedence rule
     /// (envelope handler beats args-only) honest for hot-loaded
     /// abilities too.
-    pub fn resolve_rpc_with_env(
-        &self,
-        ability: &str,
-    ) -> Option<LocalRpcHandlerWithEnvelope> {
+    pub fn resolve_rpc_with_env(&self, ability: &str) -> Option<LocalRpcHandlerWithEnvelope> {
         if let Some(h) = self.rpc_with_env.get(ability) {
             return Some(Arc::clone(h));
         }
@@ -1097,6 +1647,11 @@ impl LocalAbilityRegistry {
     /// including the envelope-aware variant. Consults the dynamic
     /// side table on static-map miss.
     pub fn has_stream(&self, ability: &str) -> bool {
+        if let Some(runtime) = self.runtime() {
+            return block_on_runtime_sync(runtime.ability_options(ability))
+                .map(|options| options.modes.stream)
+                .unwrap_or(false);
+        }
         if self.stream.contains_key(ability) || self.stream_with_env.contains_key(ability) {
             return true;
         }
@@ -1116,6 +1671,11 @@ impl LocalAbilityRegistry {
     /// `ability`, including the envelope-aware variant. Consults
     /// the dynamic side table on static-map miss.
     pub fn has_bidi(&self, ability: &str) -> bool {
+        if let Some(runtime) = self.runtime() {
+            return block_on_runtime_sync(runtime.ability_options(ability))
+                .map(|options| options.modes.bidi)
+                .unwrap_or(false);
+        }
         if self.bidi.contains_key(ability) || self.bidi_with_env.contains_key(ability) {
             return true;
         }
@@ -1125,189 +1685,332 @@ impl LocalAbilityRegistry {
             .expect("dynamic_ext RwLock poisoned");
         dyn_ext.bidi.contains_key(ability) || dyn_ext.bidi_with_env.contains_key(ability)
     }
-}
-
-/// Stage-2 executor. Holds a registry of local ability handlers
-/// and an Arc<dyn GatewayApi> for the remote path. Construction
-/// is cheap (Arc clones); the real cost is registry build at
-/// daemon start.
-#[derive(Clone)]
-pub struct AbilityDispatcher {
-    local: Arc<LocalAbilityRegistry>,
-}
-
-impl AbilityDispatcher {
-    pub fn new(local: Arc<LocalAbilityRegistry>, _gateway: Arc<dyn GatewayApi>) -> Self {
-        Self { local }
-    }
-
-    /// Borrow the unified local-ability registry. Used by `Kernel`
-    /// to look up handlers without going through `execute_rpc`'s
-    /// `InvocationTarget` envelope — Kernel admission has already
-    /// resolved scope to local by this point. Exposed as a borrow
-    /// (rather than a clone) so the caller chooses whether to
-    /// retain a handle.
-    pub fn local_registry(&self) -> &Arc<LocalAbilityRegistry> {
-        &self.local
-    }
-
-    /// Execute an RPC-mode `InvocationTarget`. Returns the response
-    /// value (for local) or the gateway's response (for remote).
+    /// Test-only convenience wrapper that still executes through
+    /// `LocalRuntime`, matching the daemon path.
+    #[cfg(test)]
     pub fn execute_rpc(&self, target: InvocationTarget) -> anyhow::Result<Value> {
         if target.call_mode != CallMode::Rpc {
             anyhow::bail!(
-                "AbilityDispatcher::execute_rpc called with non-Rpc call_mode \
+                "AxonAbilityCatalog::execute_rpc called with non-Rpc call_mode \
                  (got {:?}); use a streaming method instead",
                 target.call_mode
             );
         }
-        match target.scope {
-            TargetScope::Local => {
-                // Per PR-DISPATCHER-SUBJECT: envelope-aware
-                // handlers take precedence so an ability that
-                // opted into envelope access is never called via
-                // the legacy args-only path. The args-only registry
-                // is the fallback for legacy abilities. Both
-                // lookups go through the resolver helpers so
-                // hot-loaded dynamic-side handlers compete with
-                // static ones on equal terms.
-                if let Some(handler) = self.local.resolve_rpc_with_env(&target.ability) {
-                    let env = EnvelopeContext {
-                        subject: target.subject,
-                    };
-                    return handler(env, target.normalized_args);
-                }
-                match self.local.resolve_rpc(&target.ability) {
-                    Some(handler) => handler(target.normalized_args),
-                    None => anyhow::bail!(
-                        "no local handler registered for ability {} (loopback path)",
-                        target.ability
-                    ),
-                }
-            }
-            TargetScope::Remote { node } => {
-                // Joint-plan phase 4: TargetScope::Remote no longer
-                // routes through GatewayApi (deleted along with
-                // NoopGateway's invoke_remote_ability stub). Any
-                // caller that still constructs a Remote target
-                // should be migrated to
-                // `support::federation_invoke::invoke_via_federation_forward`
-                // — every CLI surface and EAL dispatcher already
-                // did. Surface a typed error rather than silently
-                // bouncing to `Local` so a regression that adds a
-                // new Remote caller fails loud.
-                let _ = node;
-                anyhow::bail!(
-                    "AbilityDispatcher::execute_rpc no longer accepts \
-                     TargetScope::Remote; route through \
-                     `federation.forward_invoke` (see \
-                     `support::federation_invoke::invoke_via_federation_forward`)."
-                )
-            }
+        if let TargetScope::Remote { node } = &target.scope {
+            anyhow::bail!(
+                "AxonAbilityCatalog::execute_rpc no longer accepts \
+                 TargetScope::Remote ({node}); route through \
+                 Axon federation.forward_invoke."
+            );
         }
+        let runtime = self.runtime().ok_or_else(|| {
+            anyhow::anyhow!(
+                "AxonAbilityCatalog has no LocalRuntime attached; use new() or new_with_runtime()"
+            )
+        })?;
+        crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(runtime, target).map_err(
+            |err| {
+                if crate::runtime::local_runtime_invoker::is_not_found_error(&err) {
+                    anyhow::anyhow!("{err}; local Axon runtime loopback path")
+                } else {
+                    anyhow::anyhow!("{err}")
+                }
+            },
+        )
     }
 
-    /// Execute a Stream-mode `InvocationTarget`. Returns a
-    /// `StreamSource` — either an eager snapshot (Vec) or a live
-    /// broadcast::Receiver. The caller (IPC server) decides how to
-    /// fan it out into wire frames.
-    ///
-    /// Remote streams are not yet supported in v1 —
-    /// `subscribe_remote_ability` on the gateway is callback-shaped
-    /// and would need a separate plumbing pass to forward through
-    /// the IPC connection.
+    /// Test-only convenience wrapper that opens the stream through
+    /// `LocalRuntime`, matching the daemon path.
+    #[cfg(test)]
     pub fn execute_stream(&self, target: InvocationTarget) -> anyhow::Result<StreamSource> {
         if target.call_mode != CallMode::Stream {
             anyhow::bail!(
-                "AbilityDispatcher::execute_stream called with non-Stream call_mode \
+                "AxonAbilityCatalog::execute_stream called with non-Stream call_mode \
                  (got {:?}); use execute_rpc instead",
                 target.call_mode
             );
         }
-        match target.scope {
-            TargetScope::Local => {
-                if let Some(handler) = self.local.resolve_stream_with_env(&target.ability) {
-                    let env = EnvelopeContext {
-                        subject: target.subject,
-                    };
-                    return handler(env, target.normalized_args);
-                }
-                match self.local.resolve_stream(&target.ability) {
-                    Some(handler) => handler(target.normalized_args),
-                    None => anyhow::bail!(
-                        "no local stream handler registered for ability {} (loopback path)",
-                        target.ability
-                    ),
-                }
-            }
-            TargetScope::Remote { .. } => anyhow::bail!(
-                "remote stream dispatch not yet wired in v1; \
-                 lands once GatewayApi::subscribe_remote_ability is plumbed \
-                 to forward into the IPC stream"
-            ),
+        if let TargetScope::Remote { node } = &target.scope {
+            anyhow::bail!("local Axon runtime cannot execute remote stream target `{node}`");
         }
+        let runtime = self.runtime().ok_or_else(|| {
+            anyhow::anyhow!(
+                "AxonAbilityCatalog has no LocalRuntime attached; use new() or new_with_runtime()"
+            )
+        })?;
+        let ability = target.ability.clone();
+        runtime_stream_source(runtime, target).map_err(|err| {
+            let msg = err.to_string();
+            if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
+                anyhow::anyhow!(
+                    "no local stream handler registered for ability {ability} (local Axon runtime)"
+                )
+            } else {
+                err
+            }
+        })
     }
 
-    /// Execute a Bidi-mode `InvocationTarget`. Returns a `BidiSource`
-    /// holding both ends of the live session. The caller (IPC
-    /// server) installs the session into the per-connection
-    /// `BidiRegistry`, spawns the forwarder that pumps `to_client`
-    /// into `RecvBidi` envelopes, and routes inbound `SendBidi`
-    /// frames into `from_client`.
-    ///
-    /// Per §I3 atomicity: returning Ok(BidiSource) is the
-    /// "session opened" signal. The handler closure has already
-    /// spawned its long-lived loop; failure paths in the closure
-    /// surface as `Err` here and the IPC layer must NOT install
-    /// any session state.
-    ///
-    /// Remote bidi forwarding through GatewayApi is deferred for
-    /// the same reason as remote stream — InvokeBidi over the
-    /// federation hop needs Axon-side machinery (C-M5b/c/d) before
-    /// it can forward through the IPC connection.
+    /// Test-only convenience wrapper that opens the bidi session
+    /// through `LocalRuntime`, matching the daemon path.
+    #[cfg(test)]
     pub fn execute_bidi(&self, target: InvocationTarget) -> anyhow::Result<BidiSource> {
         if target.call_mode != CallMode::Bidi {
             anyhow::bail!(
-                "AbilityDispatcher::execute_bidi called with non-Bidi call_mode \
+                "AxonAbilityCatalog::execute_bidi called with non-Bidi call_mode \
                  (got {:?}); use execute_rpc or execute_stream instead",
                 target.call_mode
             );
         }
-        match target.scope {
-            TargetScope::Local => {
-                if let Some(handler) = self.local.resolve_bidi_with_env(&target.ability) {
-                    let env = EnvelopeContext {
-                        subject: target.subject,
-                    };
-                    return handler(env, target.normalized_args);
-                }
-                match self.local.resolve_bidi(&target.ability) {
-                    Some(handler) => handler(target.normalized_args),
-                    None => anyhow::bail!(
-                        "no local bidi handler registered for ability {} (loopback path)",
-                        target.ability
-                    ),
-                }
-            }
-            TargetScope::Remote { .. } => anyhow::bail!(
-                "remote bidi dispatch not yet wired in v1; \
-                 lands once GatewayApi exposes a bidi forwarder over \
-                 InvokeBidi (tracked by C-M5b/c/d)"
-            ),
+        if let TargetScope::Remote { node } = &target.scope {
+            anyhow::bail!("local Axon runtime cannot execute remote bidi target `{node}`");
         }
+        let runtime = self.runtime().ok_or_else(|| {
+            anyhow::anyhow!(
+                "AxonAbilityCatalog has no LocalRuntime attached; use new() or new_with_runtime()"
+            )
+        })?;
+        let ability = target.ability.clone();
+        runtime_bidi_source(runtime, target).map_err(|err| {
+            let msg = err.to_string();
+            if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
+                anyhow::anyhow!(
+                    "no local bidi handler registered for ability {ability} (local Axon runtime)"
+                )
+            } else {
+                err
+            }
+        })
     }
+}
+
+#[cfg(test)]
+fn runtime_stream_source(
+    runtime: Arc<LocalRuntime>,
+    target: InvocationTarget,
+) -> anyhow::Result<StreamSource> {
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name(format!("easynet-axon-stream-{}", target.ability))
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    let _ = ready_tx.send(Err(anyhow::anyhow!("build stream runtime: {err}")));
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let mut handle =
+                    match crate::runtime::local_runtime_invoker::open_local_stream(runtime, target)
+                        .await
+                    {
+                        Ok(handle) => handle,
+                        Err(err) => {
+                            let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                            return;
+                        }
+                    };
+
+                let mut snapshot = Vec::new();
+                let (tx, rx) = broadcast::channel(BIDI_CHANNEL_BOUND);
+                loop {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_millis(100),
+                        handle.next_frame(),
+                    )
+                    .await
+                    {
+                        Ok(Some(Ok(frame))) => {
+                            if !frame.payload.is_empty() {
+                                match crate::runtime::local_runtime_invoker::ability_frame_to_json(
+                                    &frame,
+                                ) {
+                                    Ok(value) => snapshot.push(value),
+                                    Err(err) => {
+                                        let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                                        return;
+                                    }
+                                }
+                            }
+                            if frame.terminal {
+                                let _ = ready_tx.send(Ok(StreamSource::Snapshot(snapshot)));
+                                return;
+                            }
+                        }
+                        Ok(Some(Err(err))) => {
+                            let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                            return;
+                        }
+                        Ok(None) => {
+                            let _ = ready_tx.send(Ok(StreamSource::Snapshot(snapshot)));
+                            return;
+                        }
+                        Err(_) => {
+                            let source = if snapshot.is_empty() {
+                                StreamSource::Live(rx)
+                            } else {
+                                StreamSource::SnapshotThenLive(snapshot, rx)
+                            };
+                            if ready_tx.send(Ok(source)).is_err() {
+                                return;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                while let Some(frame_result) = handle.next_frame().await {
+                    let Ok(frame) = frame_result else {
+                        break;
+                    };
+                    if !frame.payload.is_empty() {
+                        if let Ok(value) =
+                            crate::runtime::local_runtime_invoker::ability_frame_to_json(&frame)
+                        {
+                            let _ = tx.send(value);
+                        }
+                    }
+                    if frame.terminal {
+                        break;
+                    }
+                }
+            });
+        })
+        .map_err(|err| anyhow::anyhow!("spawn stream bridge: {err}"))?;
+    ready_rx
+        .recv()
+        .map_err(|err| anyhow::anyhow!("stream bridge exited before ready: {err}"))?
+}
+
+#[cfg(test)]
+fn runtime_bidi_source(
+    runtime: Arc<LocalRuntime>,
+    target: InvocationTarget,
+) -> anyhow::Result<BidiSource> {
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name(format!("easynet-axon-bidi-{}", target.ability))
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    let _ = ready_tx.send(Err(anyhow::anyhow!("build bidi runtime: {err}")));
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let source =
+                    match crate::runtime::local_runtime_invoker::open_local_bidi(runtime, target)
+                        .await
+                    {
+                        Ok(source) => source,
+                        Err(err) => {
+                            let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                            return;
+                        }
+                    };
+
+                let (to_client, mut to_runtime) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                let (from_runtime, from_client) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                let runtime_input = source.to_client;
+                let mut runtime_output = source.from_client;
+
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(100),
+                    runtime_output.next_frame(),
+                )
+                .await
+                {
+                    Ok(Some(Ok(frame))) => {
+                        if !frame.payload.is_empty() {
+                            match crate::runtime::local_runtime_invoker::ability_frame_to_json(
+                                &frame,
+                            ) {
+                                Ok(value) => {
+                                    let _ = from_runtime.send(value).await;
+                                }
+                                Err(err) => {
+                                    let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Ok(Some(Err(err))) => {
+                        let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
+                        return;
+                    }
+                    Ok(None) | Err(_) => {}
+                }
+
+                if ready_tx
+                    .send(Ok(BidiSource {
+                        to_client,
+                        from_client,
+                    }))
+                    .is_err()
+                {
+                    return;
+                }
+
+                let input_task = tokio::spawn(async move {
+                    while let Some(value) = to_runtime.recv().await {
+                        let Ok(payload) = json_value_to_payload(&value) else {
+                            continue;
+                        };
+                        let frame = easynet_axon::invocation::BidiInputFrame::new(payload)
+                            .with_content_type("application/json");
+                        if runtime_input.send(frame).await.is_err() {
+                            break;
+                        }
+                    }
+                    let _ = runtime_input.close_input().await;
+                });
+
+                let output_task = tokio::spawn(async move {
+                    while let Some(frame_result) = runtime_output.next_frame().await {
+                        let Ok(frame) = frame_result else {
+                            break;
+                        };
+                        if !frame.payload.is_empty() {
+                            if let Ok(value) =
+                                crate::runtime::local_runtime_invoker::ability_frame_to_json(&frame)
+                            {
+                                if from_runtime.send(value).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        if frame.terminal {
+                            break;
+                        }
+                    }
+                });
+                let _ = tokio::join!(input_task, output_task);
+            });
+        })
+        .map_err(|err| anyhow::anyhow!("spawn bidi bridge: {err}"))?;
+    ready_rx
+        .recv()
+        .map_err(|err| anyhow::anyhow!("bidi bridge exited before ready: {err}"))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::domain::NodeId;
-    use crate::runtime::gateway::NoopGateway;
     use crate::runtime::gateway_api::PeerInfo;
     use serde_json::json;
 
-    fn empty_registry() -> Arc<LocalAbilityRegistry> {
-        Arc::new(LocalAbilityRegistry::new())
+    fn empty_registry() -> Arc<AxonAbilityCatalog> {
+        Arc::new(AxonAbilityCatalog::new())
     }
 
     fn ping_target_local() -> InvocationTarget {
@@ -1324,7 +2027,7 @@ mod tests {
     fn unregistered_local_ability_returns_clear_error() {
         // The error must name the ability so an operator can grep
         // "is observe.health registered?" against the daemon log.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let err = dispatcher.execute_rpc(ping_target_local()).unwrap_err();
         let msg = format!("{err}");
         assert!(
@@ -1339,12 +2042,12 @@ mod tests {
         // Smoke: the dispatcher actually calls the registered
         // handler with the normalised args; the handler's return
         // value is surfaced verbatim.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc(
             "observe.health",
             Arc::new(|args: Value| Ok(json!({"echo": args}))),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let mut t = ping_target_local();
         t.normalized_args = json!({"k": "v"});
         let resp = dispatcher.execute_rpc(t).unwrap();
@@ -1358,7 +2061,7 @@ mod tests {
         // The load-bearing test for INV-SUBJECT-ENVELOPE positive
         // half: handler registered via register_rpc_with_envelope
         // receives target.subject in EnvelopeContext, NOT via args.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_envelope(
             "media.x.snapshot",
             Arc::new(|env: EnvelopeContext, _args: Value| {
@@ -1368,7 +2071,7 @@ mod tests {
                 }))
             }),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "media.x.snapshot".into(),
@@ -1390,7 +2093,7 @@ mod tests {
         // this so a future refactor that flipped precedence would
         // surface here rather than silently routing media handlers
         // through the args-only path that drops subject.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc(
             "x.dual",
             Arc::new(|_args: Value| Ok(json!({"path": "legacy"}))),
@@ -1399,7 +2102,7 @@ mod tests {
             "x.dual",
             Arc::new(|_env: EnvelopeContext, _args: Value| Ok(json!({"path": "envelope"}))),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "x.dual".into(),
@@ -1418,14 +2121,14 @@ mod tests {
         // can decide what to do (fail with resource_not_found or
         // process anyway). The dispatcher does NOT reject the call
         // for missing subject; that's a per-handler policy.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_envelope(
             "x.optional",
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 Ok(json!({"subject_was_none": env.subject.is_none()}))
             }),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "x.optional".into(),
@@ -1439,7 +2142,7 @@ mod tests {
 
     #[test]
     fn envelope_aware_stream_handler_receives_subject() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_stream_with_envelope(
             "x.subscribe",
             Arc::new(|env: EnvelopeContext, _args: Value| {
@@ -1447,7 +2150,7 @@ mod tests {
                 Ok(StreamSource::Snapshot(vec![frame]))
             }),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "x.subscribe".into(),
@@ -1473,7 +2176,7 @@ mod tests {
         // Discovery must see env-aware handlers — meta.list_abilities
         // and gen-ability-tomls iterate this list, and a handler
         // registered only via register_rpc_with_envelope MUST appear.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_envelope("x.env_only", Arc::new(|_env, _args| Ok(json!({}))));
         let names = reg.list_abilities();
         assert!(
@@ -1493,7 +2196,7 @@ mod tests {
         // pointing the caller at the new path so a stale Remote
         // construction fails loud instead of silently bouncing
         // to Local.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let target = InvocationTarget {
             scope: TargetScope::Remote {
                 node: NodeId::new("peer"),
@@ -1517,7 +2220,7 @@ mod tests {
         // mode is calling the wrong method. Returning a clear
         // error catches the misuse at the call site instead of
         // silently degrading to an RPC return.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let mut t = ping_target_local();
         t.call_mode = CallMode::Stream;
         let err = dispatcher.execute_rpc(t).unwrap_err();
@@ -1532,7 +2235,7 @@ mod tests {
         // RPC executor would silently swallow the session contract.
         // Pin the rejection so a future refactor can't relax this
         // check to `== Stream`.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let mut t = ping_target_local();
         t.call_mode = CallMode::Bidi;
         let err = dispatcher.execute_rpc(t).unwrap_err();
@@ -1545,7 +2248,7 @@ mod tests {
         // target arriving here means a wiring bug upstream; pin the
         // bail so the misroute surfaces immediately rather than
         // silently returning an empty StreamSource.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let mut t = ping_target_local();
         t.call_mode = CallMode::Bidi;
         let err = dispatcher.execute_stream(t).unwrap_err();
@@ -1557,7 +2260,7 @@ mod tests {
         // Deterministic iteration order matters because PR-SYS
         // builds the `system_skills[]` label from this list, and
         // the byte-stable golden fixture depends on it.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc("observe.health", Arc::new(|_| Ok(Value::Null)));
         reg.register_rpc("test.foo", Arc::new(|_| Ok(Value::Null)));
         reg.register_rpc("test.bar", Arc::new(|_| Ok(Value::Null)));
@@ -1592,7 +2295,7 @@ mod tests {
         // registration, a get_bidi lookup must surface the handler.
         // Pin the round-trip so a typo (e.g. inserting into
         // `self.stream` instead of `self.bidi`) trips a test.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         assert!(reg.get_bidi("device.terminal.attach").is_none());
         reg.register_bidi("device.terminal.attach", trivial_bidi_handler());
         assert!(reg.get_bidi("device.terminal.attach").is_some());
@@ -1607,7 +2310,7 @@ mod tests {
         // meta.list_abilities ability) project this list verbatim,
         // so a missing call mode would silently hide bidi-only
         // abilities from clients.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc("observe.health", Arc::new(|_| Ok(Value::Null)));
         reg.register_stream(
             "permission.subscribe",
@@ -1631,7 +2334,7 @@ mod tests {
         // through the bidi executor would silently allocate channels
         // and never receive a frame; the bail catches that at the
         // call site.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let t = ping_target_local(); // call_mode = Rpc
         let err = dispatcher.execute_bidi(t).unwrap_err();
         assert!(format!("{err}").contains("Bidi"));
@@ -1644,7 +2347,7 @@ mod tests {
         // frame from the test (acting as IPC server) to the handler-
         // facing receiver; if the dispatcher returned the wrong
         // half the recv would never arrive.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
 
         // A handler that owns its own loop reading from_client and
         // echoing into to_client. Spawned inside the closure per §D2.
@@ -1673,7 +2376,7 @@ mod tests {
                 })
             }),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "device.test.echo".into(),
@@ -1702,7 +2405,7 @@ mod tests {
         // Mirror unregistered_local_ability_returns_clear_error for
         // bidi. The error must name the ability so an operator can
         // grep for it.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "device.terminal.attach".into(),
@@ -1728,12 +2431,12 @@ mod tests {
         // type system prevents that — but we do pin that the error
         // message preserves the handler's reason rather than being
         // swallowed by a generic dispatcher message.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_bidi(
             "device.test.bad",
             Arc::new(|_| anyhow::bail!("intentional handler failure: precondition foo missing")),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "device.test.bad".into(),
@@ -1751,7 +2454,7 @@ mod tests {
         // here keeps a misroute from silently degrading to a local
         // lookup or panicking on a missing gateway method; pin it
         // so a later refactor can't drop the guard.
-        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = empty_registry();
         let target = InvocationTarget {
             scope: TargetScope::Remote {
                 node: NodeId::new("01PEER"),
@@ -1798,7 +2501,7 @@ mod tests {
         // with the exact OwnerKind variant the call site declared.
         // No name-string sniffing — the registry is the source of
         // truth for owner kind. M0 of the system-namespace migration.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner("device.fs.read", OwnerKind::Device, ok_handler());
         reg.register_rpc_with_owner("hub.openai.chat_completions", OwnerKind::Hub, ok_handler());
         reg.register_rpc_with_owner(
@@ -1841,7 +2544,7 @@ mod tests {
         // commits 2-5; the shim is removed at M0 commit 6.
         // Guarantees the shim default matches the documented
         // contract ("80%+ of system abilities are device-bundle").
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc("legacy.shim.smoke", ok_handler());
         assert_eq!(
             reg.lookup_owner("legacy.shim.smoke"),
@@ -1856,7 +2559,7 @@ mod tests {
         // Without this we'd ship sniffing fallbacks for the half-
         // covered variants — the same flat-namespace bug class
         // that the migration is closing.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
 
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
@@ -1921,13 +2624,13 @@ mod tests {
         // `AbilityNotFound`. Pin so a future revert that re-adds
         // dual-aliasing has to argue with this test rather than
         // silently re-introducing the legacy half.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "device.fs.read",
             OwnerKind::Device,
             Arc::new(|_args: Value| Ok(json!({"ok": true}))),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
 
         // Canonical works.
         let mut t_can = ping_target_local();
@@ -1951,7 +2654,7 @@ mod tests {
         // The owner table must carry an entry for the canonical
         // name. A future synth path that reads `lookup_owner` and
         // gets `None` would produce orphaned descriptors.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "hub.openai.chat_completions",
             OwnerKind::Hub,
@@ -1977,7 +2680,7 @@ mod tests {
         // registry. Pin so a future revert that re-introduces
         // dual-aliasing has to argue with this test rather than
         // silently re-doubling the catalogue.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "device.shell.run",
             OwnerKind::Device,
@@ -2005,7 +2708,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let first_calls = Arc::new(AtomicUsize::new(0));
         let second_calls = Arc::new(AtomicUsize::new(0));
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let f = Arc::clone(&first_calls);
         reg.register_rpc_with_owner(
             "device.x.foo",
@@ -2024,7 +2727,7 @@ mod tests {
                 Ok(json!({"who": "second"}))
             }),
         );
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let mut t = ping_target_local();
         t.ability = "device.x.foo".into();
         let resp = dispatcher.execute_rpc(t).unwrap();
@@ -2042,7 +2745,7 @@ mod tests {
         // threaded OwnerKind across all six variants; M3 retains
         // that breadth (the legacy `_aliased` mirror has been
         // retired).
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
@@ -2113,7 +2816,7 @@ mod tests {
 
     #[test]
     fn unregister_removes_rpc_handler_and_descriptor_state() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc("doomed.tool", Arc::new(|_| Ok(json!("v"))));
         assert!(reg.has_rpc("doomed.tool"));
         assert_eq!(reg.lookup_owner("doomed.tool"), Some(OwnerKind::Device));
@@ -2128,7 +2831,7 @@ mod tests {
 
     #[test]
     fn unregister_idempotent_on_missing_ability() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         // Returns false but does not panic — the contract callers
         // (B4 list_changed refresh diff) rely on for the
         // "tool went away mid-sync" race.
@@ -2137,7 +2840,7 @@ mod tests {
 
     #[test]
     fn unregister_removes_stream_and_bidi_handlers() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_stream(
             "doomed.stream",
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
@@ -2167,7 +2870,7 @@ mod tests {
         // lookup surface that fed the dispatcher pre-refactor now
         // sees it. `Arc::new(reg)` mirrors the daemon boot shape —
         // after that point a `&mut reg` is no longer reachable.
-        let reg = Arc::new(LocalAbilityRegistry::new());
+        let reg = Arc::new(AxonAbilityCatalog::new());
         assert!(!reg.has_rpc("mcp_wikipedia__search"));
         assert!(reg.resolve_rpc("mcp_wikipedia__search").is_none());
 
@@ -2190,7 +2893,7 @@ mod tests {
         // `manifest_for_dynamic` is what `meta_ability::list_abilities`
         // reads. A hot-registered manifest must surface there or
         // freshly reflected MCP tools advertise without a schema.
-        let reg = Arc::new(LocalAbilityRegistry::new());
+        let reg = Arc::new(AxonAbilityCatalog::new());
         let manifest = crate::core::ability_spec::AbilityManifest::new(
             "search",
             "Search Wikipedia.",
@@ -2221,7 +2924,7 @@ mod tests {
         // (boot-registered system abilities) must never be touched
         // by this surface — if a future bug routes a static name
         // through `hot_unregister`, the static entry survives.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "device.fs.read",
             OwnerKind::Device,
@@ -2246,7 +2949,10 @@ mod tests {
         // Calling hot_unregister on a static name is a silent no-op
         // (returns false) — the static side is the boot-time truth.
         let static_removed = reg.hot_unregister("device.fs.read");
-        assert!(!static_removed, "hot_unregister does not touch the static map");
+        assert!(
+            !static_removed,
+            "hot_unregister does not touch the static map"
+        );
         assert!(reg.has_rpc("device.fs.read"));
     }
 
@@ -2257,7 +2963,7 @@ mod tests {
         // freshly reflected MCP tool MUST show up here without a
         // restart — that's the user-visible payoff for the listener
         // + dynamic side combined.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "device.fs.read",
             OwnerKind::Device,
@@ -2285,7 +2991,7 @@ mod tests {
         // remain canonical. This is a defensive invariant: an
         // operator who deliberately wires such an upstream still
         // gets the system handler, not a 3rd-party reimplementation.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "device.fs.read",
             OwnerKind::Device,

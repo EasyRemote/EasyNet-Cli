@@ -1,12 +1,16 @@
 schema_version = "1"
 name = "device.agent.stop"
-description = "Remove an LLM sub-agent registry row. Accepts either the agent name or its canonical URA. Idempotent: ack=false when the row didn't exist. Workspace files are deliberately NOT deleted — use `easynet agent remove --purge` for that."
+description = "Remove an LLM sub-agent registry row by name or Agent URA. Idempotent: ack=false when the row didn't exist. Workspace files are deliberately NOT deleted — use `easynet agent remove --purge` for that."
 
 [input_schema]
 type = "object"
-required = ["name_or_uri"]
 additionalProperties = false
+anyOf = [{ required = ["name"] }, { required = ["agent_ura"] }]
 
-[input_schema.properties.name_or_uri]
+[input_schema.properties.agent_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.name]
 type = "string"
 minLength = 1

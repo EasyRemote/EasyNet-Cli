@@ -352,7 +352,7 @@ impl InMemoryVault {
 
     pub fn open(path: &Path, source: &MasterKeySource) -> Result<Self, SelfIdentityError> {
         Vault::open(path, source)
-            .map(|v| Self::new(v))
+            .map(Self::new)
             .map_err(|e| SelfIdentityError::Transport(format!("open vault: {e}")))
     }
 

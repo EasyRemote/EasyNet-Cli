@@ -28,13 +28,13 @@
 //     bridge: list_mcp_tools removed by AXON-RFC-001 P1.5; use
 //     Invoke against the appropriate Agent ability
 //
-// regardless of `--node`. The replacement: invoke `easynet.discover`
-// — itself an ability registered on the local daemon's
-// LocalAbilityRegistry — through the same IPC path
-// `easynet ability invoke` uses. One dispatcher; one source of
-// truth for the catalogue. The `--node` flag is reserved for a
-// future federation-Invoke entry; passing a remote node id today
-// returns a precise error rather than silently auto-routing local.
+// regardless of `--node`. The replacement: invoke the daemon-hosted
+// metadata ability through Axon's local Invocation gRPC path, the
+// same route `easynet ability invoke` uses for local calls. One
+// Axon runtime; one source of truth for the catalogue. The `--node`
+// flag is reserved for a future federation-Invoke entry; passing a
+// remote node id today returns a precise error rather than silently
+// auto-routing local.
 //
 // Filtering model
 // ---------------

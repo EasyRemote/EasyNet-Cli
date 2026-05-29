@@ -145,8 +145,8 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
         return Ok(());
     }
     println!(
-        "{:<14} {:<10} {:<22} {}",
-        "ID_PREFIX", "STATUS", "LABEL", "CREATED"
+        "{:<14} {:<10} {:<22} CREATED",
+        "ID_PREFIX", "STATUS", "LABEL"
     );
     for k in keys {
         let id_prefix = k.get("id_prefix").and_then(Value::as_str).unwrap_or("?");

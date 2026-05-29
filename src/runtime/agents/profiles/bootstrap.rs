@@ -26,7 +26,7 @@
 // - Does not call `federation.advertise_agent`. That's the
 //   advertise.rs module's job, called by the daemon-boot wiring
 //   that consumes this module's output.
-// - Does not register handlers in LocalAbilityRegistry. That's
+// - Does not register handlers in AxonAbilityCatalog. That's
 //   already wired in `runtime::agents::build_registry_for_daemon`.
 // - Does not assume credentials.json exists. The host_device URI
 //   may be "" if join hasn't run; the persisted file just records
@@ -75,6 +75,40 @@ pub struct LlmSubAgent {
     pub name: String,
     pub agent_type_display: String,
     pub model: Option<String>,
+}
+
+/// Build the daemon bootstrap plan from credentials-derived identity
+/// plus the persisted hosted-agent registry.
+///
+/// This is bootstrapping state, so it intentionally lives in runtime
+/// rather than CLI facade code. Normal post-boot management flows go
+/// through daemon-hosted Axon abilities.
+pub fn build_plan_from_registry(
+    tenant_id: &str,
+    node_id: &str,
+    username: &str,
+) -> anyhow::Result<BootstrapPlan> {
+    let registry = crate::registry::agents::load_agents()
+        .map_err(|err| anyhow::anyhow!("load agent registry: {err}"))?;
+    let llm_sub_agents: Vec<LlmSubAgent> = registry
+        .agents
+        .iter()
+        .map(|(name, entry)| LlmSubAgent {
+            name: name.clone(),
+            agent_type_display: entry.agent_type.to_string(),
+            model: entry.model.clone(),
+        })
+        .collect();
+
+    Ok(BootstrapPlan {
+        realm: tenant_id.to_string(),
+        user_id: username.to_string(),
+        host_device_ura: crate::ura::device_ura(tenant_id, node_id),
+        consent: true,
+        policy: false,
+        mcp: false,
+        llm_sub_agents,
+    })
 }
 
 /// One outcome row from `bootstrap_local_agents`. Useful for

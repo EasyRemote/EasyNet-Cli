@@ -145,11 +145,14 @@ pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs
 /// `None` (the runtime driver picks its own default).
 ///
 /// Extracted so production and tests call the same code.
-/// Three-tier model resolution: per-call override > agent.toml spec
-/// > legacy entry. Extracted as its own helper (rather than inlined
-/// at the call site) so production and tests bind to the same code
-/// path — the chat-ability override precedence is itself a contract
-/// that should not have a second place to drift to.
+///
+/// Three-tier model resolution:
+/// per-call override > agent.toml spec > legacy entry.
+///
+/// Extracted as its own helper (rather than inlined at the call site)
+/// so production and tests bind to the same code path — the chat-ability
+/// override precedence is itself a contract that should not have a
+/// second place to drift to.
 pub(crate) fn resolve_model_with_overrides(
     override_model: Option<String>,
     spec_model: Option<String>,
@@ -345,6 +348,7 @@ pub fn send_to_agent_with_depth(
 /// real per-token stream: the driver invokes `progress_tx`
 /// once per stdout line in stream-json mode, and chat's
 /// stream_handler forwards that into its broadcast channel.
+#[allow(clippy::too_many_arguments)]
 pub fn send_to_agent_with_depth_and_progress(
     agent_name: &str,
     entry: &AgentEntry,
@@ -434,8 +438,6 @@ pub fn send_to_agent_with_depth_and_progress(
                 (None, None)
             }
         };
-    let cwd = cwd;
-
     // ── Resolve dispatch knobs from spec (falling back to entry) ──
     //
     // Precedence per field:

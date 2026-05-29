@@ -47,8 +47,6 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-#![cfg(feature = "axon-pb")]
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -115,6 +113,15 @@ impl SharedFederatedKeyCache {
         match self.inner.lock() {
             Ok(g) => g.len(),
             Err(poisoned) => poisoned.into_inner().len(),
+        }
+    }
+
+    /// Test-only: whether the cache currently holds no entries.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        match self.inner.lock() {
+            Ok(g) => g.is_empty(),
+            Err(poisoned) => poisoned.into_inner().is_empty(),
         }
     }
 }

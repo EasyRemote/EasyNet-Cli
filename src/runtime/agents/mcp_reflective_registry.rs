@@ -45,7 +45,7 @@ use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::runtime::execution::mcp_client::McpClientService;
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
@@ -208,7 +208,7 @@ pub struct ReflectResult {
 #[derive(Clone)]
 pub struct McpReflectionSupervisor {
     client: Arc<McpClientService>,
-    registry: Arc<LocalAbilityRegistry>,
+    registry: Arc<AxonAbilityCatalog>,
     owner_agent_ura: String,
     concurrency_limit: usize,
 }
@@ -216,7 +216,7 @@ pub struct McpReflectionSupervisor {
 impl McpReflectionSupervisor {
     pub fn new(
         client: Arc<McpClientService>,
-        registry: Arc<LocalAbilityRegistry>,
+        registry: Arc<AxonAbilityCatalog>,
         owner_agent_ura: impl Into<String>,
     ) -> Self {
         Self {
@@ -387,7 +387,7 @@ impl McpReflectionSupervisor {
 
 /// Eager reflection entry point used at daemon boot.
 ///
-/// Runs against a still-mutable `&mut LocalAbilityRegistry` because
+/// Runs against a still-mutable `&mut AxonAbilityCatalog` because
 /// the registry hasn't been wrapped in `Arc` yet — that asymmetry
 /// (eager-pre-Arc / lazy-post-Arc) is the reason this is a free
 /// function rather than a method on [`McpReflectionSupervisor`]; the
@@ -399,12 +399,12 @@ impl McpReflectionSupervisor {
 /// On success, returns the `(per_server_index, ReflectResult)` pair
 /// so the caller can later hand the per-server index to
 /// [`McpReflectionSupervisor::attach_refresh_sinks_blocking`] once
-/// the `Arc<LocalAbilityRegistry>` exists. On a runtime-bridge
+/// the `Arc<AxonAbilityCatalog>` exists. On a runtime-bridge
 /// failure, logs and returns `None`; per-tool failures are surfaced
 /// inside `ReflectResult.failed` rather than as an `Err`.
 pub fn run_eager_blocking(
     client: &McpClientService,
-    registry: &mut LocalAbilityRegistry,
+    registry: &mut AxonAbilityCatalog,
     owner_agent_ura: &str,
 ) -> Option<(BTreeMap<String, Vec<String>>, ReflectResult)> {
     let fut = async move { reflect_all(client, registry, owner_agent_ura).await };
@@ -427,7 +427,7 @@ pub fn run_eager_blocking(
     }
 }
 
-/// Post-`Arc<LocalAbilityRegistry>` hook the boot path executes
+/// Post-`Arc<AxonAbilityCatalog>` hook the boot path executes
 /// after wrapping the registry in `Arc`. One variant per terminal
 /// outcome of [`McpReflectionMode`] resolution, plus the unpaired-
 /// daemon arm — so the call site in
@@ -462,7 +462,7 @@ impl PostArcReflection {
     /// Resolve `mode` + pairing state into a concrete post-Arc plan.
     ///
     /// The eager branch runs reflection synchronously against the
-    /// still-mutable `&mut LocalAbilityRegistry`; the lazy branch
+    /// still-mutable `&mut AxonAbilityCatalog`; the lazy branch
     /// only stamps an op-event ("deferred") and hands the supervisor
     /// the owner URA to use later. Both branches log through
     /// [`op_event!`] so an operator reading the boot log can tell
@@ -478,7 +478,7 @@ impl PostArcReflection {
         pages_user: Option<&str>,
         realm: &str,
         client: &McpClientService,
-        registry: &mut LocalAbilityRegistry,
+        registry: &mut AxonAbilityCatalog,
     ) -> Self {
         let Some(user) = pages_user else {
             // Unpaired daemons emit a single informational line so
@@ -535,13 +535,9 @@ impl PostArcReflection {
     ///
     /// The supervisor is intentionally rebuilt per call rather than
     /// stored on the variant — it captures the freshly-constructed
-    /// `Arc<LocalAbilityRegistry>`, which only exists at this point
+    /// `Arc<AxonAbilityCatalog>`, which only exists at this point
     /// in the boot path.
-    pub fn apply(
-        self,
-        client: Arc<McpClientService>,
-        registry: Arc<LocalAbilityRegistry>,
-    ) {
+    pub fn apply(self, client: Arc<McpClientService>, registry: Arc<AxonAbilityCatalog>) {
         match self {
             Self::Skip => {}
             Self::AttachAfterEager {
@@ -648,7 +644,7 @@ fn log_reflect_failures(report: &ReflectResult) {
 
 async fn attach_refresh_sinks(
     client: Arc<McpClientService>,
-    registry: Arc<LocalAbilityRegistry>,
+    registry: Arc<AxonAbilityCatalog>,
     owner_agent_ura: String,
     initially_reflected: BTreeMap<String, Vec<String>>,
 ) {
@@ -718,7 +714,7 @@ async fn attach_refresh_sinks(
 /// `name_collision_fails_explicitly` pins.
 pub async fn reflect_all(
     client: &McpClientService,
-    registry: &mut LocalAbilityRegistry,
+    registry: &mut AxonAbilityCatalog,
     owner_agent_ura: &str,
 ) -> ReflectResult {
     let mut out = ReflectResult::default();
@@ -959,7 +955,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
 
 /// Dynamic-side refresh facade. Reacts to a runtime
 /// `notifications/tools/list_changed` push after the registry has
-/// been frozen behind `Arc<LocalAbilityRegistry>` at daemon boot.
+/// been frozen behind `Arc<AxonAbilityCatalog>` at daemon boot.
 ///
 /// The hot path's lookup order is static → dynamic → fallback, so
 /// a dynamic-side rewrite is invisible to any boot-registered
@@ -968,7 +964,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
 /// `static_lookup_wins_over_dynamic_on_name_collision` for the pin.
 pub async fn refresh_server_dynamic(
     client: &McpClientService,
-    registry: &LocalAbilityRegistry,
+    registry: &AxonAbilityCatalog,
     owner_agent_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
@@ -987,10 +983,10 @@ pub async fn refresh_server_dynamic(
 
 /// Static-side refresh facade. The boot path's explicit
 /// reconcile-one-server entry point; used by callers that hold
-/// `&mut LocalAbilityRegistry` (the boot reflective sweep, tests).
+/// `&mut AxonAbilityCatalog` (the boot reflective sweep, tests).
 pub async fn refresh_server(
     client: &McpClientService,
-    registry: &mut LocalAbilityRegistry,
+    registry: &mut AxonAbilityCatalog,
     owner_agent_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
@@ -1031,8 +1027,8 @@ fn mcp_tools_list_timeout() -> Duration {
 }
 
 /// Abstract over the two registry-side surfaces (static maps owned
-/// by `&mut LocalAbilityRegistry`, hot-reload side table owned via
-/// `&LocalAbilityRegistry` interior mutability) so the two reflection
+/// by `&mut AxonAbilityCatalog`, hot-reload side table owned via
+/// `&AxonAbilityCatalog` interior mutability) so the two reflection
 /// flows — boot-time `reflect_all`/`refresh_server` and runtime
 /// `RegistryRefreshSink`-driven `refresh_server_dynamic` — share
 /// one body.
@@ -1096,10 +1092,10 @@ fn format_collision_hint(hint: Option<&'static str>) -> String {
     }
 }
 
-/// Static side: `&mut LocalAbilityRegistry`. Used by boot-time
+/// Static side: `&mut AxonAbilityCatalog`. Used by boot-time
 /// `reflect_all` and the original `refresh_server` facade.
 struct StaticWriter<'a> {
-    reg: &'a mut LocalAbilityRegistry,
+    reg: &'a mut AxonAbilityCatalog,
 }
 
 impl RegistryWriter for StaticWriter<'_> {
@@ -1125,19 +1121,19 @@ impl RegistryWriter for StaticWriter<'_> {
     const COLLISION_KIND_HINT: Option<&'static str> = None;
 }
 
-/// Dynamic side: `&LocalAbilityRegistry` (interior mutability via
+/// Dynamic side: `&AxonAbilityCatalog` (interior mutability via
 /// `hot_*` methods). Used by `RegistryRefreshSink` to react to
 /// upstream `notifications/tools/list_changed` after the registry
-/// has been frozen behind `Arc<LocalAbilityRegistry>` at daemon
+/// has been frozen behind `Arc<AxonAbilityCatalog>` at daemon
 /// boot.
 ///
 /// The implementor takes `&self` on the underlying registry —
 /// `&mut self` on the writer is purely to let the trait stay
-/// shared-shape. The `LocalAbilityRegistry` itself is borrowed
+/// shared-shape. The `AxonAbilityCatalog` itself is borrowed
 /// shared, so this writer can live alongside other readers of the
 /// registry without violating borrow rules.
 struct DynamicWriter<'a> {
-    reg: &'a LocalAbilityRegistry,
+    reg: &'a AxonAbilityCatalog,
 }
 
 impl RegistryWriter for DynamicWriter<'_> {
@@ -1389,7 +1385,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for StreamForwardin
 /// per upstream at daemon boot and observes notifications at any
 /// time, including while the daemon is idle.
 ///
-/// Holds a `Weak<LocalAbilityRegistry>` so the sink does not extend
+/// Holds a `Weak<AxonAbilityCatalog>` so the sink does not extend
 /// the daemon's registry lifetime — when the registry is dropped at
 /// shutdown the sink becomes a no-op rather than blocking shutdown.
 ///
@@ -1402,7 +1398,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for StreamForwardin
 /// dynamic-registered for this server, so the diff-driven refresh
 /// can retire vanished names without leaving stale entries.
 pub struct RegistryRefreshSink {
-    registry: std::sync::Weak<LocalAbilityRegistry>,
+    registry: std::sync::Weak<AxonAbilityCatalog>,
     client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
     server_name: String,
     owner_agent_ura: String,
@@ -1416,7 +1412,7 @@ pub struct RegistryRefreshSink {
 
 impl RegistryRefreshSink {
     pub fn new(
-        registry: std::sync::Weak<LocalAbilityRegistry>,
+        registry: std::sync::Weak<AxonAbilityCatalog>,
         client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
         server_name: String,
         owner_agent_ura: String,
@@ -1594,7 +1590,7 @@ while True:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reflects_two_tools_with_clean_descriptors() {
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         // mcp-profile agent URA — same shape as the daemon would
         // construct: easynet:///r/<realm>/agent/<user>.mcp
         let owner = "easynet:///r/test-realm/agent/test-user.mcp";
@@ -1713,7 +1709,7 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
 
         assert!(
@@ -1733,7 +1729,7 @@ while True:
         // Pre-register a handler under the name the upstream tool
         // would claim, then verify reflection refuses to overwrite.
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc("echo_one", Arc::new(|_: Value| Ok(json!("local"))));
 
         let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
@@ -1764,7 +1760,7 @@ while True:
         // against the operator running before they've configured
         // any upstreams.
         let svc = McpClientService::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
         assert!(result.registered.is_empty());
         assert!(result.failed.is_empty());
@@ -1811,10 +1807,7 @@ while True:
         // that turns this `Err` into a logged warning + lazy fallback;
         // the parser itself stays honest so config validators can
         // hard-fail when they need to.
-        assert_eq!(
-            McpReflectionMode::parse("eagre"),
-            Err("eagre".to_string())
-        );
+        assert_eq!(McpReflectionMode::parse("eagre"), Err("eagre".to_string()));
         assert_eq!(
             McpReflectionMode::parse("not-a-mode"),
             Err("not-a-mode".to_string())
@@ -1838,7 +1831,7 @@ while True:
         // any mode-dependent work. This invariant holds across all
         // three modes — `pages_user = None` always wins.
         let svc = empty_mcp_client();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         for mode in [
             McpReflectionMode::Off,
             McpReflectionMode::Lazy,
@@ -1858,7 +1851,7 @@ while True:
         // `EASYNET_MCP_REFLECTION=off` is the operator's explicit opt
         // out — pairing state is irrelevant, the plan stays Skip.
         let svc = empty_mcp_client();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let plan = PostArcReflection::plan(
             McpReflectionMode::Off,
             Some("test-user"),
@@ -1877,7 +1870,7 @@ while True:
         // is sufficient — the actual reflection happens later inside
         // the supervisor's spawned thread.
         let svc = empty_mcp_client();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let plan = PostArcReflection::plan(
             McpReflectionMode::Lazy,
             Some("test-user"),
@@ -1907,7 +1900,7 @@ while True:
         // a future refactor that moved the index off the variant would
         // break the hot-reload sink attachment.
         let (_dir, svc) = make_echo_client("echo");
-        let reg = LocalAbilityRegistry::new();
+        let reg = AxonAbilityCatalog::new();
 
         // `PostArcReflection::plan` calls `run_eager_blocking`, which
         // uses `block_in_place` when an ambient runtime is available.
@@ -1958,7 +1951,7 @@ while True:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn lazy_supervisor_registers_reflected_tools_in_dynamic_overlay() {
         let (_dir, svc) = make_echo_client("echo");
-        let reg = Arc::new(LocalAbilityRegistry::new());
+        let reg = Arc::new(AxonAbilityCatalog::new());
         let owner = "easynet:///r/test-realm/agent/test-user.mcp";
         let supervisor = McpReflectionSupervisor::new(Arc::clone(&svc), Arc::clone(&reg), owner);
 
@@ -2058,7 +2051,7 @@ while True:
                     ..Default::default()
                 }],
             });
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let initial = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
         assert!(initial.failed.is_empty(), "{:?}", initial.failed);
         let prev_names: Vec<String> = initial
@@ -2088,7 +2081,7 @@ while True:
                     ..Default::default()
                 }],
             });
-        let mut reg2 = LocalAbilityRegistry::new();
+        let mut reg2 = AxonAbilityCatalog::new();
         // Pre-seed reg2 with the "before" catalogue + a fake
         // descriptor source — refresh_server should keep `b`,
         // remove `a`, add `c`.
@@ -2210,7 +2203,7 @@ while True:
                 }],
             },
         );
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let result = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
         assert!(result.failed.is_empty(), "{:?}", result.failed);
         assert!(reg.has_stream("slow_op"));

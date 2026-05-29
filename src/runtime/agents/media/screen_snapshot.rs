@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 
 use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext};
 use crate::runtime::agents::media_abilities::{ABILITY_SCREEN_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
 
 /// 256 KiB inline cap — same shape as camera.snapshot. A 1080p
@@ -185,7 +185,7 @@ impl ScreenSnapshotBackend for SyntheticScreenBackend {
 // ── Registration ─────────────────────────────────────────────
 
 pub fn register_with_backend(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     backend: Arc<dyn ScreenSnapshotBackend>,
 ) {
     reg.register_rpc_with_envelope_and_owner(
@@ -201,7 +201,7 @@ pub fn register_with_backend(
 /// stub. Tests that need a hardware-free path call
 /// `register_with_backend(reg, Arc::new(SyntheticScreenBackend))`
 /// instead.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     register_with_backend(reg, Arc::new(XcapBackend));
 }
 
@@ -286,8 +286,6 @@ mod tests {
     use crate::persistence::resources::{
         upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
-    use crate::runtime::ability_dispatch::AbilityDispatcher;
-    use crate::runtime::gateway::NoopGateway;
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     fn seed_display(file: &mut ResourcesFile, hardware_id: &str) -> String {
@@ -305,7 +303,7 @@ mod tests {
         )
     }
 
-    fn register_with_synthetic(reg: &mut LocalAbilityRegistry) {
+    fn register_with_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticScreenBackend));
     }
 
@@ -331,9 +329,9 @@ mod tests {
         let mut file = ResourcesFile::default();
         let uri = seed_display(&mut file, "h-display-e2e");
         resources::save(&file).unwrap();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
@@ -363,9 +361,9 @@ mod tests {
     #[test]
     fn handler_rejects_missing_subject_with_subject_required_reason() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
@@ -394,9 +392,9 @@ mod tests {
             },
         );
         resources::save(&file).unwrap();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
@@ -412,9 +410,9 @@ mod tests {
     fn handler_rejects_unknown_subject_with_resource_not_found_reason() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         resources::save(&ResourcesFile::default()).unwrap();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
@@ -429,9 +427,9 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),

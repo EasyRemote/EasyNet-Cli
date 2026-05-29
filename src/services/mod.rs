@@ -12,19 +12,30 @@
 //
 // Layering rule
 // -------------
-// `services/` sits at the same layer as `facade/` and imports from
-// the runtime layer only through the two hard trait boundaries:
+// `services/` sits at the same layer as `facade/` and reaches the
+// runtime through hard trait/type boundaries. The exact allowlist
+// is per-subtree because the three subdirs play different roles:
 //
-//   * KernelApi  (runtime/kernel_api.rs)  — for invoking abilities,
-//                                          listing sessions, etc.
-//   * GatewayApi (runtime/gateway_api.rs) — NOT used here; only the
-//                                          runtime itself speaks to
-//                                          the gateway.
+//   * `services/control/` — Control-plane wire adapter. Narrow
+//     allowlist: kernel_api, invocation, invocation_target, domain,
+//     ability_dispatch, gateway_api, gateway, system,
+//     local_runtime_invoker, hosted_receipt. Every entry is a
+//     syscall-boundary type.
 //
-// `scripts/check-kernel-boundary.sh` greps `src/services/` for any
-// `use crate::runtime::...` import that is not `kernel_api`,
-// `invocation`, `domain`, or `receipt_subscriber`. Anything else is
-// a boundary violation and fails CI.
+//   * `services/axon_serve/` — daemon's gRPC Invocation server.
+//     Wider allowlist (adds agents, keyring, publish, execution,
+//     advertise, federation_client, abilities) because the gRPC
+//     surface legitimately translates each of those concerns.
+//
+//   * `services/trust_anchor_key_resolver` — the adapter from the
+//     daemon-owned trust-anchor cell to Axon's `KeyResolver` trait.
+//     It stays in services so `runtime/axon_bridge` receives only a
+//     trait object and never imports services internals.
+//
+// `scripts/check-kernel-boundary.sh` is the CI gate. Adding a new
+// permitted import requires updating both the allowlist there AND
+// the rationale comment next to it — the script's own header
+// documents the convention.
 //
 // Why a separate top-level layer instead of a sibling under facade/
 // -----------------------------------------------------------------
@@ -39,6 +50,34 @@
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
+
+// Admission observability contract (post Phase-5a)
+// -------------------------------------------------
+// `services/receipt_store.rs` (the in-memory `SharedReceiptStore`
+// ring buffer) was deleted in Phase 5a. The current contract:
+//
+//   * Successful admission of an Invoke/Subscribe/OpenBidi
+//     emits NO standalone audit artefact. The call proceeds.
+//     When (and only when) the invocation reaches a terminal
+//     state, the `LedgerSink` writes one `InvocationLedger` row
+//     (redb-backed, on-disk).
+//
+//   * Rejected admission emits an `op_event!`
+//     (`component = axon_serve`, `kind = admission_rejected_*`)
+//     to stderr and surfaces the typed `tonic::Status` to the
+//     caller. Nothing is persisted server-side.
+//
+//   * Forward-invoke (cross-hub) outcomes are observable via the
+//     two channels above plus `kind = forward_invoke_*` op_events
+//     for transport-level miss/fail diagnostics.
+//
+// Known gap (DEC-011, scheduled Week-5+): an invocation that
+// passes admission but never reaches a terminal state (handler
+// hang, daemon crash mid-call) leaves NO record at all. Closing
+// this gap with an admission-time ledger sentinel
+// (`state = Admitted`) is tracked separately from the Phase 5a
+// deletion. Until that lands, the operator log is the audit
+// source for non-terminal calls.
 
 pub mod control;
 
@@ -122,6 +161,7 @@ pub mod nonce_replay_store;
 /// once at boot and shared by clone between the admission facade
 /// and the register-pubkey handler. DEC-010 mechanism layer.
 pub mod trust_anchor_cell;
+pub mod trust_anchor_key_resolver;
 
 /// EasyNet-native device identity vault (RFC-001 plan v4.1.5
 /// Phase 3A). Process-external Ed25519 keypair store sealed under
@@ -140,16 +180,6 @@ pub mod keyring;
 /// `Vault`. Boot wiring picks the impl; callsites take an
 /// `Arc<dyn SelfIdentity>` and never touch raw seed bytes.
 pub mod self_identity;
-
-/// Bounded in-memory store the admission gate records signed
-/// `InvocationReceipt`s into. PR-10 commit 2/N introduces the
-/// surface; commit 3/N hooks `run_strict_admission` to emit a
-/// receipt per accepted call. RFC 001 §5.3 best-effort semantics —
-/// receipt write failure does not fail admission (PR-10 spec
-/// INV-5). Persistence is a future RFC concern; v1 is in-memory
-/// FIFO at `DEFAULT_RECEIPT_CAPACITY`.
-#[cfg(feature = "axon-pb")]
-pub mod receipt_store;
 
 /// Cross-hub federation transport (RFC-N PR-N1 onwards). The
 /// outbound dial counterpart to PR-10 commit 1/N's inbound
@@ -176,3 +206,11 @@ pub mod federation_client;
 /// out.
 #[cfg(feature = "axon-pb")]
 pub mod federation_directory;
+
+// `axon_bridge` moved to `crate::runtime::axon_bridge` per the
+// 2026-05-29 industrial-textbook review: its imports go almost
+// entirely to `crate::runtime::*` (`ability_dispatch`, `agents::*`,
+// `invocation_target`); it carries no `services/`-layer
+// concern of its own. Keeping a re-export here would only
+// reintroduce the false hierarchy. Search by name (`axon_bridge`)
+// or by symbol — every public type is unchanged.

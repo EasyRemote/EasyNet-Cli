@@ -33,6 +33,9 @@ use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
+type RealmDirectoryMap = BTreeMap<String, Arc<DirectoryView>>;
+type SharedRealmDirectoryMap = Arc<RealmDirectoryMap>;
+
 /// One entry in the federated directory view.
 ///
 /// **Spec v2 §2.1**. Schema-B fields (`origin_realm`,
@@ -486,7 +489,7 @@ impl DirectoryView {
 /// RemoteDirectoryClient task replaces the map mid-RPC.
 #[derive(Clone, Debug)]
 pub struct SharedFederatedDirectoryView {
-    inner: Arc<RwLock<Arc<BTreeMap<String, Arc<DirectoryView>>>>>,
+    inner: Arc<RwLock<SharedRealmDirectoryMap>>,
     /// **PR-N3 N3-streaming-10**. Peers currently being kept
     /// up-to-date by the streaming supervisor. The poll task
     /// (N3-3.1 fallback) skips entries in this set so the two

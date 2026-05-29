@@ -22,7 +22,6 @@ use clap::Args;
 use console::style;
 
 use crate::persistence::config;
-use crate::registry::agents;
 use crate::runtime::drivers::{claude_code, codex};
 use crate::support::net;
 #[derive(Debug, Args)]
@@ -271,25 +270,49 @@ fn federation_check_impl() -> Check {
 }
 
 fn check_agents() -> Vec<Check> {
-    let registry = agents::load_agents().unwrap_or_default();
     let mut out = Vec::new();
-    let to_check: Vec<(String, agents::AgentType)> = if registry.agents.is_empty() {
+    let daemon_rows = match crate::facade::cli::daemon_agent_view::list_agents() {
+        Ok(rows) => rows,
+        Err(err) => {
+            out.push(Check {
+                name: "agents".to_string(),
+                status: CheckStatus::Warn,
+                detail: format!("device.agent.list unavailable: {err}"),
+                hint: Some("Start the daemon before checking registered agent rows."),
+            });
+            Vec::new()
+        }
+    };
+    let to_check: Vec<(
+        String,
+        crate::facade::cli::daemon_agent_view::AgentRuntimeKind,
+    )> = if daemon_rows.is_empty() {
         vec![
-            ("claude-code".to_string(), agents::AgentType::ClaudeCode),
-            ("codex".to_string(), agents::AgentType::Codex),
+            (
+                "claude-code".to_string(),
+                crate::facade::cli::daemon_agent_view::AgentRuntimeKind::ClaudeCode,
+            ),
+            (
+                "codex".to_string(),
+                crate::facade::cli::daemon_agent_view::AgentRuntimeKind::Codex,
+            ),
         ]
     } else {
-        registry
-            .agents
+        daemon_rows
             .iter()
-            .map(|(n, e)| (n.clone(), e.agent_type))
+            .filter_map(|row| {
+                crate::facade::cli::daemon_agent_view::agent_kind(row)
+                    .ok()
+                    .map(|kind| (row.name.clone(), kind))
+            })
             .collect()
     };
 
     for (name, ty) in to_check {
-        let probe = match ty {
-            agents::AgentType::ClaudeCode => claude_code::doctor(),
-            agents::AgentType::Codex | agents::AgentType::CodexAppServer => codex::doctor(),
+        let probe = if ty.is_claude_code() {
+            claude_code::doctor()
+        } else {
+            codex::doctor()
         };
         out.push(match probe {
             Ok(version) => Check {

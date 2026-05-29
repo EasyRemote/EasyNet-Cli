@@ -25,7 +25,6 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::json;
 
-use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::runtime::domain::{
     AgentId, DiscussRoom, LoopId, LoopInstance, NodeId, PermissionDecision, PermissionId,
     PermissionRequest, PermissionSensitivity, RoomId, ScheduleEntry, ScheduleId, Session,
@@ -63,22 +62,12 @@ pub struct Kernel {
     loop_svc: Arc<LoopService>,
     #[allow(dead_code)]
     gateway: Arc<dyn GatewayApi>,
-    /// Dispatcher handle, set by `set_dispatcher` after the daemon
-    /// has built the unified `LocalAbilityRegistry`. Held in a
-    /// `OnceLock` because the construction order is: 1) build Kernel,
-    /// 2) build registry off the Kernel's sub-services, 3) build
-    /// dispatcher off the registry, 4) hand the dispatcher back here.
-    /// A field that is only readable after step 4 — and never written
-    /// twice — is exactly what `OnceLock` is for.
-    ///
-    /// `Kernel::invoke` reads this through `get()`. If unset (tests
-    /// that build a Kernel without a daemon, or the loop runner's
-    /// in-process driver before Phase 4 wired it), invoke degrades to
-    /// admission + permission gate + terminal events without
-    /// dispatching to a handler — preserving the pre-refactor
-    /// "no-op kernel.invoke for non-agent ability" semantics for the
-    /// duration of the refactor and for unit tests.
-    dispatcher: OnceLock<Arc<AbilityDispatcher>>,
+    /// Shared Axon LocalRuntime, set by daemon boot after the runtime
+    /// is constructed. `Kernel::invoke` dispatches through this handle
+    /// so daemon-internal invocation sources (schedule ticks, loop
+    /// iterations, future controllers) observe the same admission,
+    /// state machine, and ledger sink as gRPC Invoke.
+    local_runtime: OnceLock<Arc<easynet_axon::invocation::LocalRuntime>>,
 }
 
 impl Kernel {
@@ -96,7 +85,7 @@ impl Kernel {
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
             gateway,
-            dispatcher: OnceLock::new(),
+            local_runtime: OnceLock::new(),
         }
     }
 
@@ -121,23 +110,16 @@ impl Kernel {
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
             gateway,
-            dispatcher: OnceLock::new(),
+            local_runtime: OnceLock::new(),
         }
     }
 
-    /// Wire the unified dispatcher into the Kernel post-construction.
-    /// Called by `bin/easynet-daemon.rs` after step 3 of the boot
-    /// sequence — `Kernel::invoke` then routes ability dispatch
-    /// through the same registry the IPC proxy uses, removing the
-    /// pre-refactor `<agent>.chat` special-case in invoke.
-    ///
-    /// Idempotent within a single `OnceLock`: a second call is a
-    /// no-op and silently returns the first value via `set`'s Result.
-    /// We intentionally do not surface that as an error — daemons
-    /// that re-wire on hot-reload (a future PR) will benefit from
-    /// the no-op being free.
-    pub fn set_dispatcher(&self, dispatcher: Arc<AbilityDispatcher>) {
-        let _ = self.dispatcher.set(dispatcher);
+    /// Wire the shared Axon runtime into the Kernel post-construction.
+    /// Called by daemon boot once `LocalRuntime` exists; ability
+    /// registrations can happen before or after this because the Arc
+    /// points at the same runtime object.
+    pub fn set_local_runtime(&self, runtime: Arc<easynet_axon::invocation::LocalRuntime>) {
+        let _ = self.local_runtime.set(runtime);
     }
 
     /// Borrow the SessionService handle. Used by the daemon bin's
@@ -241,47 +223,32 @@ impl Kernel {
         decision
     }
 
-    /// Dispatch an admitted invocation through the unified ability
-    /// registry. Looks up the named ability's local handler and
-    /// invokes it; the kernel is intentionally agnostic about what
-    /// the handler does internally (chat, voice, system.*, future
-    /// abilities all flow through here).
+    /// Dispatch an admitted invocation through Axon's LocalRuntime.
     ///
     /// Returns `Ok(Value::Null)` when no dispatcher is wired (tests
     /// that build a Kernel without a daemon, or callers that want
     /// admission + permission + terminal events without a real
     /// dispatch). The pre-refactor "no-op kernel.invoke for
     /// non-agent ability" semantic is preserved by this fall-through.
-    fn dispatch_via_registry(
+    fn dispatch_via_local_runtime(
         &self,
         session_id: &SessionId,
         ability: &str,
         args: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        let dispatcher = match self.dispatcher.get() {
-            Some(d) => d,
+        let runtime = match self.local_runtime.get() {
+            Some(runtime) => runtime,
             None => {
-                // No dispatcher wired — the kernel is being used in
+                // No runtime wired — the kernel is being used in
                 // isolation (test fixture or pre-PR-4 caller). Behave
                 // as the pre-refactor non-agent path did: succeed
                 // with a marker payload so terminal state is `Succeeded`.
                 return Ok(json!({
-                    "note": "kernel has no dispatcher wired; ability would have routed through registry",
+                    "note": "kernel has no LocalRuntime wired; ability would have routed through Axon",
                     "ability": ability,
                 }));
             }
         };
-        let registry = dispatcher.local_registry();
-        let handler = registry.get_rpc(ability).cloned();
-        let Some(handler) = handler else {
-            // Distinguish "ability unknown" from "registered but
-            // failed". The proxy that normally fronts the registry
-            // would also surface this as an error; matching that
-            // shape keeps Kernel::invoke and proxy-dispatch paths
-            // observable-equivalent.
-            anyhow::bail!("no local handler registered for ability {ability}");
-        };
-
         // Surface a 200-char preview of the prompt for chat-style
         // calls so a Client UI can see the rendered template in the
         // timeline. The preview key is only emitted when the
@@ -304,15 +271,34 @@ impl Kernel {
             }),
         );
 
-        // Handlers may block (chat shells out to a subprocess and
-        // waits). When called from a tokio worker we yield via
-        // block_in_place so other tasks on the runtime can make
-        // progress; in non-tokio contexts we call directly.
-        let result = if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(|| handler(args))
-        } else {
-            handler(args)
-        };
+        let payload = serde_json::to_vec(&args)
+            .map_err(|err| anyhow::anyhow!("encode args for ability {ability}: {err}"))?;
+        let ability_name = ability.to_string();
+        let runtime = Arc::clone(runtime);
+        let result = block_on_axon_dispatch(move || async move {
+            let handle = runtime
+                .invoke_async(&ability_name, payload, None, None)
+                .await
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
+            let state = handle.wait().await;
+            let events = handle.core().snapshot_events().await;
+            let terminal = events.iter().rev().find(|e| e.state.is_terminal()).cloned();
+            match (state, terminal) {
+                (easynet_axon::invocation::InvocationState::Completed, Some(ev)) => {
+                    if ev.payload.is_empty() {
+                        Ok(serde_json::Value::Null)
+                    } else {
+                        serde_json::from_slice(&ev.payload)
+                            .map_err(|err| anyhow::anyhow!("decode {ability_name} result: {err}"))
+                    }
+                }
+                (_, Some(ev)) => Err(anyhow::anyhow!("{}", ev.reason)),
+                (other, None) => Err(anyhow::anyhow!(
+                    "Axon invocation ended in {} without a terminal event",
+                    other.as_str()
+                )),
+            }
+        });
 
         match &result {
             Ok(value) => {
@@ -338,6 +324,17 @@ impl Kernel {
         }
         result
     }
+}
+
+fn block_on_axon_dispatch<F, Fut>(f: F) -> anyhow::Result<serde_json::Value>
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send,
+{
+    crate::support::async_bridge::run_blocking(
+        f(),
+        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+    )
 }
 
 /// Decide whether an ability name should be routed through the
@@ -407,8 +404,8 @@ impl KernelApi for Kernel {
         //      ask the broker; system.* skip the gate to preserve the
         //      pre-refactor behaviour where ping/session/permission
         //      calls do not prompt the operator.
-        //   3. Dispatch — look up the ability in the unified
-        //      registry via `dispatch_via_registry` and invoke it.
+        //   3. Dispatch — invoke the ability through the daemon's
+        //      Axon `LocalRuntime`.
         //      All abilities — chat, system.*, future verbs — flow
         //      through the same code path; the kernel does not
         //      special-case any one of them.
@@ -453,9 +450,8 @@ impl KernelApi for Kernel {
         let outcome: anyhow::Result<serde_json::Value> = if should_gate(&invocation.ability) {
             let agent_label = agent_portion(&invocation.ability);
             match self.gate_permission(&session_id, agent_label, &invocation.args) {
-                PermissionDecision::Allow | PermissionDecision::AllowOnce => {
-                    self.dispatch_via_registry(&session_id, &invocation.ability, invocation.args)
-                }
+                PermissionDecision::Allow | PermissionDecision::AllowOnce => self
+                    .dispatch_via_local_runtime(&session_id, &invocation.ability, invocation.args),
                 PermissionDecision::Deny => {
                     let _ = self.session.emit_event(
                         &session_id,
@@ -472,7 +468,7 @@ impl KernelApi for Kernel {
                 }
             }
         } else {
-            self.dispatch_via_registry(&session_id, &invocation.ability, invocation.args)
+            self.dispatch_via_local_runtime(&session_id, &invocation.ability, invocation.args)
         };
 
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -509,6 +505,15 @@ impl KernelApi for Kernel {
 
     fn get_session(&self, id: &SessionId) -> anyhow::Result<Option<Session>> {
         Ok(self.session.get(id))
+    }
+
+    fn session_events(
+        &self,
+        id: &SessionId,
+        since_seq: usize,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let (history, _rx) = self.session.subscribe_session(id, since_seq)?;
+        Ok(history)
     }
 
     fn pending_permission_requests(&self) -> anyhow::Result<Vec<PermissionRequest>> {
@@ -693,7 +698,7 @@ mod tests {
 
         // Pull the pending request off the broadcast.
         let pending = pending_rx.recv().await.expect("pending broadcast");
-        assert_eq!(pending.prompt.contains("ghost-agent"), true);
+        assert!(pending.prompt.contains("ghost-agent"));
 
         // Decide Deny; the kernel's gate_permission returns Deny;
         // invoke returns a Failed receipt.
@@ -718,19 +723,11 @@ mod tests {
         // contract a Client uses to render a "no such ability" /
         // "no such agent" dialog rather than spinning forever.
         //
-        // Pre-Phase-4 this test asserted the same property by going
-        // through the agent-registry path. After the refactor the
-        // kernel routes through the unified dispatcher, so we wire
-        // an empty registry — same observable contract via a
-        // different code path.
+        // Kernel dispatch now enters Axon's LocalRuntime directly,
+        // so we wire an empty runtime — same observable contract
+        // through the daemon's current source of truth.
         let k = Kernel::new(Arc::new(NoopGateway));
-        let empty_registry =
-            Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::new());
-        let dispatcher = Arc::new(crate::runtime::ability_dispatch::AbilityDispatcher::new(
-            empty_registry,
-            Arc::new(NoopGateway),
-        ));
-        k.set_dispatcher(dispatcher);
+        k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let device_uri = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {

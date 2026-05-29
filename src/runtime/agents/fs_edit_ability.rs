@@ -100,7 +100,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name. Pinned by the Tier 2.5 surface; rename = protocol break.
@@ -116,7 +116,7 @@ pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 /// content). Caller gets FileTooLarge rather than a long stall.
 pub const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
 
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner("device.fs.edit", OwnerKind::Device, Arc::new(handler));
 }
 

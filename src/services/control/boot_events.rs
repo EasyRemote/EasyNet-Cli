@@ -4,7 +4,7 @@
 // File: src/services/control/boot_events.rs
 // Description: Small in-process broadcast bus for daemon startup
 //              progress. The control server exposes this bus through
-//              `system.watch_boot` before the AbilityDispatcher is
+//              `system.watch_boot` before the Axon runtime is
 //              available, so `easynet start` can attach to the daemon
 //              as soon as `control.sock` accepts.
 //
@@ -118,11 +118,7 @@ impl BootBus {
     /// after `control.sock` accepts (i.e. after the daemon's first
     /// few stages), and the history replay is how it observes them.
     pub fn subscribe(&self) -> BootSubscription {
-        let replay = self
-            .history
-            .read()
-            .expect("boot history lock")
-            .clone();
+        let replay = self.history.read().expect("boot history lock").clone();
         BootSubscription {
             replay: replay.into_iter().collect(),
             rx: self.tx.subscribe(),

@@ -16,7 +16,7 @@
 //   keyring.peer_list     — enumerate peer table
 //
 // All handlers are JSON-in / JSON-out. They register against the
-// daemon's `LocalAbilityRegistry` and are invoked through the same
+// daemon's `AxonAbilityCatalog` and are invoked through the same
 // dispatch path as any other ability.
 //
 // Author: Silan.Hu
@@ -34,7 +34,7 @@ use super::user_binding_chain::{
     verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::ura::{parse_ura, URAKind};
 
 fn b64_encode(bytes: &[u8]) -> String {
@@ -119,11 +119,13 @@ pub fn handle_list(handle: &KeyringHandle, args: Value) -> Result<Value> {
         .filter(|e| {
             status_filter
                 .as_deref()
-                .map(|s| match (s, &e.status) {
-                    ("active", KeyStatus::Active) => true,
-                    ("retired", KeyStatus::Retired) => true,
-                    ("revoked", KeyStatus::Revoked) => true,
-                    _ => false,
+                .map(|s| {
+                    matches!(
+                        (s, &e.status),
+                        ("active", KeyStatus::Active)
+                            | ("retired", KeyStatus::Retired)
+                            | ("revoked", KeyStatus::Revoked)
+                    )
                 })
                 .unwrap_or(true)
         })
@@ -459,56 +461,56 @@ pub fn handle_peer_list(handle: &KeyringHandle, _args: Value) -> Result<Value> {
 ///
 /// `owner` is the agent name they publish under (typically `"<self>"`
 /// for the daemon's self-bundle).
-pub fn register_for_owner(reg: &mut LocalAbilityRegistry, owner: &str, handle: Arc<KeyringHandle>) {
+pub fn register_for_owner(reg: &mut AxonAbilityCatalog, owner: &str, handle: Arc<KeyringHandle>) {
     let name = |verb: &str| format!("{owner}.keyring.{verb}");
 
     let h = handle.clone();
     reg.register_rpc(
-        &name("create"),
+        name("create"),
         Arc::new(move |args| handle_create(&h, args)),
     );
     let h = handle.clone();
-    reg.register_rpc(&name("list"), Arc::new(move |args| handle_list(&h, args)));
+    reg.register_rpc(name("list"), Arc::new(move |args| handle_list(&h, args)));
     let h = handle.clone();
     reg.register_rpc(
-        &name("get_public"),
+        name("get_public"),
         Arc::new(move |args| handle_get_public(&h, args)),
     );
     let h = handle.clone();
-    reg.register_rpc(&name("sign"), Arc::new(move |args| handle_sign(&h, args)));
+    reg.register_rpc(name("sign"), Arc::new(move |args| handle_sign(&h, args)));
     let h = handle.clone();
     reg.register_rpc(
-        &name("rotate"),
+        name("rotate"),
         Arc::new(move |args| handle_rotate(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("revoke"),
+        name("revoke"),
         Arc::new(move |args| handle_revoke(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("expire_set"),
+        name("expire_set"),
         Arc::new(move |args| handle_expire_set(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("bind_subject"),
+        name("bind_subject"),
         Arc::new(move |args| handle_bind_subject(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("peer_add"),
+        name("peer_add"),
         Arc::new(move |args| handle_peer_add(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("peer_list"),
+        name("peer_list"),
         Arc::new(move |args| handle_peer_list(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("federate_user_identity_token"),
+        name("federate_user_identity_token"),
         Arc::new(move |args| handle_federate_user_identity_token(&h, args)),
     );
 }
@@ -521,7 +523,7 @@ pub fn register_for_owner(reg: &mut LocalAbilityRegistry, owner: &str, handle: A
 /// production daemons construct one bindings store per process
 /// from a path, while the keyring handle is per-ring.
 pub fn register_federated_consume_for_owner(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     owner: &str,
     bindings: Arc<FederatedBindingsStore>,
 ) {
@@ -557,7 +559,7 @@ mod tests {
 
         let pub_view = handle_get_public(&h, json!({"key_id": key_id})).unwrap();
         assert_eq!(pub_view["status"], json!("active"));
-        assert!(pub_view["public_key"].as_str().unwrap().len() > 0);
+        assert!(!pub_view["public_key"].as_str().unwrap().is_empty());
     }
 
     #[test]

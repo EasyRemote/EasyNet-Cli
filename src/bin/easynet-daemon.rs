@@ -45,13 +45,11 @@ use std::time::Duration;
 use chrono::Utc;
 use easynet_cli::facade::cli::run_daemon;
 use easynet_cli::persistence::daemon_config::{default_config_path, DaemonConfig};
-use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
 use easynet_cli::runtime::agents;
 use easynet_cli::runtime::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::runtime::execution::schedule::ScheduleService;
 use easynet_cli::runtime::gateway::NoopGateway;
-use easynet_cli::runtime::gateway_api::GatewayApi;
 use easynet_cli::runtime::invocation::{CausalContext, Invocation};
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
@@ -147,7 +145,6 @@ async fn main() -> anyhow::Result<()> {
     let kernel_api: Arc<dyn KernelApi> = Arc::clone(&kernel) as Arc<dyn KernelApi>;
     let loop_driver = Arc::new(KernelLoopInvocationDriver::new(
         Arc::clone(&kernel_api),
-        kernel.session_service(),
         local_node.clone(),
     ));
     if let Err(e) = kernel.loop_service().install_driver(loop_driver) {
@@ -196,6 +193,25 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_started("ability-registry");
     let pages_identity = agents::PagesIdentity::from_env();
     let invocation_ledger = open_invocation_ledger();
+    let local_runtime = easynet_axon::invocation::LocalRuntime::new();
+    // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
+    // here so it can be shared between:
+    //   * the registry's `device.agent.start` / `.stop` handler
+    //     closures (capture an Arc clone via
+    //     `agent_lifecycle_ability::register`), and
+    //   * the boot sidecar's post-`LocalRuntime` wiring
+    //     (`start_axon_serve_sidecar`) which populates the cell
+    //     ONCE with the actual `HotAgentRegistrar` after
+    //     `LocalRuntime` + `dispatch_handle` are wired.
+    //
+    // Pre-set, dispatches of `device.agent.start` see an empty
+    // cell and skip runtime registration (logged via op_event); the
+    // agent still lands on disk so a daemon restart picks it up via
+    // the static registration path. Post-set, every subsequent
+    // dispatch registers into `LocalRuntime` and ledger writes start
+    // landing.
+    let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
+        Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
     let registry = agents::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
@@ -205,38 +221,26 @@ async fn main() -> anyhow::Result<()> {
         invocation_ledger.clone(),
         None,
         pages_identity,
+        Some(Arc::clone(&local_runtime)),
+        Arc::clone(&hot_agent_registrar_cell),
     );
+    kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
 
-    // Stage-2 dispatcher (executor). Wired with the unified registry
-    // and the same NoopGateway the Kernel holds — a real Gateway impl
-    // pointing at Axon lands in a focused follow-up.
-    boot_bus.emit_started("dispatcher");
-    let gateway: Arc<dyn GatewayApi> = Arc::new(NoopGateway::new());
-    let dispatcher = AbilityDispatcher::new(registry, gateway);
-
-    // Hand the dispatcher back to the Kernel so Kernel::invoke can
-    // route ability dispatch through the same registry the proxy
-    // uses. This closes the loop from Phase 4 of the chat-as-ability
-    // refactor: Kernel::invoke no longer special-cases <agent>.chat
-    // — it delegates to whichever handler the registry has under
-    // that name.
-    let dispatcher_for_kernel = Arc::new(dispatcher.clone());
-    kernel.set_dispatcher(Arc::clone(&dispatcher_for_kernel));
-    // Joint-plan phase 4: a2a.client.send_task no longer needs a
-    // shared dispatcher handle. The handler dials
-    // `federation.forward_invoke` over the daemon UDS directly,
-    // matching every other unified-path caller. The legacy
-    // `set_dispatcher` hook + DISPATCHER_HANDLE OnceLock came down
-    // with the cull.
-    let _ = &dispatcher_for_kernel;
-    boot_bus.emit_ok("dispatcher");
+    // Keep the registry object alive for dynamic side tables whose
+    // handlers were installed while building the Axon runtime. Runtime
+    // execution itself goes through `local_runtime`.
+    let _registry = registry;
 
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
     // harness default; controls loopback-vs-remote routing.
     let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
-    let proxy = AbilityProxy::new_with_dispatcher(Arc::clone(&kernel_api), dispatcher, resolver);
+    let proxy = AbilityProxy::new_with_runtime(
+        Arc::clone(&kernel_api),
+        Arc::clone(&local_runtime),
+        resolver,
+    );
 
     // RFC-003 PR-1 sidecar: gRPC InvocationServer (transport plane).
     // Start this BEFORE any other daemon listener binds so
@@ -249,8 +253,9 @@ async fn main() -> anyhow::Result<()> {
     {
         boot_bus.emit_started("axon-serve-sidecar");
         if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(
-            Arc::clone(&dispatcher_for_kernel),
+            Arc::clone(&local_runtime),
             invocation_ledger,
+            Arc::clone(&hot_agent_registrar_cell),
         ) {
             eprintln!("[axon-serve] sidecar boot failed: {e:#}");
             boot_bus.emit_failed("axon-serve-sidecar", e.to_string());

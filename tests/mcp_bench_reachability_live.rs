@@ -33,7 +33,7 @@
 
 use std::path::PathBuf;
 
-use easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry;
+use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all;
 use easynet_cli::runtime::execution::mcp_client::McpClientService;
 
@@ -64,7 +64,7 @@ async fn live_reachability_holds_baseline() {
         names.len()
     );
 
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     let owner = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
     let result = reflect_all(&svc, &mut reg, &owner).await;
 

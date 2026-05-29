@@ -10,9 +10,8 @@
 // construction site, shared with the `easynet start --mcp` path.
 //
 // RFC-001 §A3 quarantine (P4.8d + P4.9): every tool call routes
-// through the in-process AbilityProxy via InvokeMcpProvider. No
-// independent dispatch, no duplicate catalog, no direct bridge
-// calls.
+// through the daemon-hosted Axon ability surface. No independent
+// dispatch, no duplicate catalog, no direct bridge calls.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

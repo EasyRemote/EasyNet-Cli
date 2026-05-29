@@ -4,7 +4,7 @@
 // Run a real-disk / real-binary / real-API exercise of the
 // load-bearing abilities (fs.write, fs.read, process.exec,
 // shell.run, <agent>.chat) end-to-end through the actual
-// dispatcher, and print what each one returned. Distinct from
+// Axon LocalRuntime, and print what each one returned. Distinct from
 // the unit-test layer in two ways:
 //
 //   1. No tempdir trickery for the input — fs.write into
@@ -33,13 +33,16 @@
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
-use easynet_cli::runtime::agents::{build_registry, build_registry_for_daemon};
-use easynet_cli::runtime::gateway::NoopGateway;
+use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
+use easynet_cli::runtime::agents::chat_ability::ContextLoader;
+use easynet_cli::runtime::agents::{build_registry_for_daemon, build_registry_with_runtime};
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
+use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {
     InvocationTarget {
@@ -51,13 +54,122 @@ fn target(ability: &str, args: Value) -> InvocationTarget {
     }
 }
 
-fn d() -> AbilityDispatcher {
-    AbilityDispatcher::new(build_registry(), Arc::new(NoopGateway::new()))
+struct RuntimeSmoke {
+    runtime: Arc<LocalRuntime>,
+    catalog: Arc<AxonAbilityCatalog>,
+}
+
+impl RuntimeSmoke {
+    fn system() -> Self {
+        let runtime = LocalRuntime::new();
+        let catalog = build_registry_with_runtime(Arc::clone(&runtime));
+        Self { runtime, catalog }
+    }
+
+    fn daemon(loaders: Option<Arc<Vec<Arc<dyn ContextLoader>>>>) -> Self {
+        let runtime = LocalRuntime::new();
+        let catalog = build_registry_for_daemon(
+            Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
+            Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
+            Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
+            Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
+            Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
+            None,
+            loaders,
+            easynet_cli::runtime::agents::PagesIdentity::from_env(),
+            Some(Arc::clone(&runtime)),
+            Arc::new(
+                easynet_cli::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(
+                ),
+            ),
+        );
+        Self { runtime, catalog }
+    }
+
+    fn list_abilities(&self) -> Vec<String> {
+        self.catalog.list_abilities()
+    }
+
+    fn execute_rpc(&self, target: InvocationTarget) -> anyhow::Result<Value> {
+        if target.call_mode != CallMode::Rpc {
+            anyhow::bail!("execute_rpc called with non-RPC target");
+        }
+        invoke_local_rpc_sync(Arc::clone(&self.runtime), target)
+            .map_err(|err| anyhow::anyhow!("{err}"))
+    }
+
+    fn execute_stream(
+        &self,
+        target: InvocationTarget,
+    ) -> anyhow::Result<easynet_axon::invocation::StreamingInvocationHandle> {
+        if target.call_mode != CallMode::Stream {
+            anyhow::bail!("execute_stream called with non-stream target");
+        }
+        run_blocking(
+            open_local_stream(Arc::clone(&self.runtime), target),
+            NoRuntimeFallback::BuildCurrentThreadTokio,
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"))
+    }
+}
+
+fn d() -> RuntimeSmoke {
+    RuntimeSmoke::system()
 }
 
 fn b64(s: &str) -> String {
     let bytes = BASE64_STANDARD.decode(s).unwrap();
     String::from_utf8(bytes).unwrap_or_else(|e| format!("<non-utf8: {e}>"))
+}
+
+fn print_stream_frames(
+    rt: &tokio::runtime::Runtime,
+    label: &str,
+    mut stream: StreamingInvocationHandle,
+) {
+    let stream_start = std::time::Instant::now();
+    let mut frame_seq: u64 = 0;
+    rt.block_on(async {
+        while let Some(frame_result) = stream.next_frame().await {
+            match frame_result {
+                Ok(frame) => {
+                    if !frame.payload.is_empty() {
+                        frame_seq += 1;
+                        let elapsed = stream_start.elapsed().as_millis();
+                        let value: Value = serde_json::from_slice(&frame.payload).unwrap_or_else(
+                            |err| json!({"type": "decode_error", "message": err.to_string()}),
+                        );
+                        let kind = value.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                        let preview = match kind {
+                            "done" => {
+                                let reply =
+                                    value.get("reply").and_then(|r| r.as_str()).unwrap_or("");
+                                format!(
+                                    "type=done reply={:?} ({}b)",
+                                    &reply.chars().take(40).collect::<String>(),
+                                    reply.len()
+                                )
+                            }
+                            other => format!("type={other}"),
+                        };
+                        println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] {preview}");
+                    }
+                    if frame.terminal {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    println!("  stream error: {err}");
+                    break;
+                }
+            }
+        }
+    });
+    println!(
+        "{label} stream finished after {} frames in {}ms",
+        frame_seq,
+        stream_start.elapsed().as_millis()
+    );
 }
 
 fn main() -> anyhow::Result<()> {
@@ -219,17 +331,8 @@ fn main() -> anyhow::Result<()> {
         //    so existing `claude` / `codex` rows are picked up. This bin is
         //    deliberately running against the developer's real config — the
         //    EASYNET_REAL_CHAT_OK guard signals consent.
-        let reg = build_registry_for_daemon(
-            Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
-            Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
-            Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
-            Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
-            Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-            None,
-            Some(Arc::new(Vec::new())),
-            easynet_cli::runtime::agents::PagesIdentity::from_env(),
-        );
-        let advertised = reg.list_abilities();
+        let smoke = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
+        let advertised = smoke.list_abilities();
         let chat_ability = advertised.iter().find(|n| n.ends_with(".chat"));
         let chat_ability = match chat_ability {
             Some(n) => n.clone(),
@@ -240,7 +343,6 @@ fn main() -> anyhow::Result<()> {
             }
         };
         println!("Will invoke: {chat_ability}");
-        let dispatcher = AbilityDispatcher::new(reg, Arc::new(NoopGateway::new()));
 
         // Workspace-tool-injection probe: ask claude to list every
         // MCP tool whose name contains "audit". Post-G1, the
@@ -256,7 +358,7 @@ fn main() -> anyhow::Result<()> {
         let chat_for_invoke = chat_ability.clone();
         let result = rt.block_on(async move {
             tokio::task::spawn_blocking(move || {
-                dispatcher.execute_rpc(target(
+                smoke.execute_rpc(target(
                     &chat_for_invoke,
                     json!({"prompt": prompt, "stream": false}),
                 ))
@@ -303,23 +405,11 @@ fn main() -> anyhow::Result<()> {
                 &schedule_svc,
             )),
         );
-        let ctx_dispatcher = AbilityDispatcher::new(
-            build_registry_for_daemon(
-                Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
-                Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
-                Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
-                schedule_svc,
-                Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                None,
-                Some(default_loaders),
-                easynet_cli::runtime::agents::PagesIdentity::from_env(),
-            ),
-            Arc::new(NoopGateway::new()),
-        );
+        let ctx_runtime = RuntimeSmoke::daemon(Some(default_loaders));
         let canary_for_thread = canary.clone();
         let ctx_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
-                ctx_dispatcher.execute_rpc(InvocationTarget {
+                ctx_runtime.execute_rpc(InvocationTarget {
                     scope: TargetScope::Local,
                     ability: chat_for_ctx,
                     normalized_args: json!({
@@ -356,27 +446,15 @@ fn main() -> anyhow::Result<()> {
 
         // ── G1-handler reality check ──────────────────────────
         println!("\n=== claude.audit-test-ability direct invocation ===");
-        // Call the agent's own declared ability THROUGH the dispatcher.
+        // Call the agent's own declared ability through LocalRuntime.
         // Pre-fix this returned NOT_FOUND. Post-fix the chat
         // fallback handler dispatches to claude.chat with a
         // synthesised prompt; the reply comes back as
         // {result: <agent reply>, fulfilled_by: "agent_chat", ...}.
-        let dispatcher_for_ability = AbilityDispatcher::new(
-            build_registry_for_daemon(
-                Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
-                Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
-                Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
-                Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
-                Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                None,
-                Some(Arc::new(Vec::new())),
-                easynet_cli::runtime::agents::PagesIdentity::from_env(),
-            ),
-            Arc::new(NoopGateway::new()),
-        );
+        let ability_runtime = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
         let direct_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
-                dispatcher_for_ability.execute_rpc(InvocationTarget {
+                ability_runtime.execute_rpc(InvocationTarget {
                     scope: TargetScope::Local,
                     ability: "claude.audit-test-ability".to_string(),
                     normalized_args: json!({}),
@@ -406,19 +484,7 @@ fn main() -> anyhow::Result<()> {
         // CodexExecAdapter::invoke).
         if advertised.iter().any(|n| n == "codex.chat") {
             println!("\n=== codex.chat STREAM mode (frame-by-frame) ===");
-            let dispatcher_for_codex = AbilityDispatcher::new(
-                build_registry_for_daemon(
-                    Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
-                    Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
-                    Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
-                    Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
-                    Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                    None,
-                    Some(Arc::new(Vec::new())),
-                    easynet_cli::runtime::agents::PagesIdentity::from_env(),
-                ),
-                Arc::new(NoopGateway::new()),
-            );
+            let dispatcher_for_codex = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
             let codex_target = InvocationTarget {
                 scope: TargetScope::Local,
                 ability: "codex.chat".to_string(),
@@ -430,55 +496,7 @@ fn main() -> anyhow::Result<()> {
                 subject: None,
             };
             match dispatcher_for_codex.execute_stream(codex_target) {
-                Ok(stream_source) => {
-                    use easynet_cli::runtime::ability_dispatch::StreamSource;
-                    let stream_start = std::time::Instant::now();
-                    let mut frame_seq: u64 = 0;
-                    match stream_source {
-                        StreamSource::SnapshotThenLive(snapshot, mut rx) => {
-                            for v in &snapshot {
-                                frame_seq += 1;
-                                let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("?");
-                                let elapsed = stream_start.elapsed().as_millis();
-                                println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}");
-                            }
-                            rt.block_on(async {
-                                loop {
-                                    match rx.recv().await {
-                                        Ok(frame) => {
-                                            frame_seq += 1;
-                                            let kind = frame
-                                                .get("type")
-                                                .and_then(|t| t.as_str())
-                                                .unwrap_or("?");
-                                            let elapsed = stream_start.elapsed().as_millis();
-                                            println!(
-                                                "  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}"
-                                            );
-                                        }
-                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                            break
-                                        }
-                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(
-                                            _,
-                                        )) => {}
-                                    }
-                                }
-                            });
-                        }
-                        other => {
-                            println!(
-                                "  unexpected StreamSource variant: {other:?}",
-                                other = std::any::type_name_of_val(&other)
-                            );
-                        }
-                    }
-                    println!(
-                        "Codex stream finished after {} frames in {}ms",
-                        frame_seq,
-                        stream_start.elapsed().as_millis()
-                    );
-                }
+                Ok(stream) => print_stream_frames(&rt, "Codex", stream),
                 Err(e) => {
                     println!("codex.chat stream failed: {e}");
                 }
@@ -489,19 +507,7 @@ fn main() -> anyhow::Result<()> {
 
         // ── streaming reality check (claude) ──────────────────
         println!("\n=== claude.chat STREAM mode (frame-by-frame) ===");
-        let dispatcher_for_stream = AbilityDispatcher::new(
-            build_registry_for_daemon(
-                Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
-                Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
-                Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
-                Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
-                Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                None,
-                Some(Arc::new(Vec::new())),
-                easynet_cli::runtime::agents::PagesIdentity::from_env(),
-            ),
-            Arc::new(NoopGateway::new()),
-        );
+        let dispatcher_for_stream = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
         let stream_target = InvocationTarget {
             scope: TargetScope::Local,
             ability: chat_ability.clone(),
@@ -512,74 +518,10 @@ fn main() -> anyhow::Result<()> {
             call_mode: CallMode::Stream,
             subject: None,
         };
-        let stream_source = dispatcher_for_stream
+        let stream = dispatcher_for_stream
             .execute_stream(stream_target)
             .expect("execute_stream");
-
-        // The StreamSource enum has SnapshotThenLive(snapshot, rx)
-        // and Live(rx). Pull frames in order, print each with a
-        // wallclock delta from start.
-        use easynet_cli::runtime::ability_dispatch::StreamSource;
-        let stream_start = std::time::Instant::now();
-        let mut frame_seq: u64 = 0;
-        match stream_source {
-            StreamSource::SnapshotThenLive(snapshot, mut rx) => {
-                println!("Mode: SnapshotThenLive");
-                println!("Snapshot frames ({}):", snapshot.len());
-                for v in &snapshot {
-                    let elapsed = stream_start.elapsed().as_millis();
-                    frame_seq += 1;
-                    let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("?");
-                    println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}");
-                }
-                println!("Live frames (subscribing to broadcast channel):");
-                rt.block_on(async {
-                    loop {
-                        match rx.recv().await {
-                            Ok(frame) => {
-                                let elapsed = stream_start.elapsed().as_millis();
-                                frame_seq += 1;
-                                let kind =
-                                    frame.get("type").and_then(|t| t.as_str()).unwrap_or("?");
-                                let preview = match kind {
-                                    "done" => {
-                                        let reply = frame
-                                            .get("reply")
-                                            .and_then(|r| r.as_str())
-                                            .unwrap_or("");
-                                        format!(
-                                            "type=done reply={:?} ({}b)",
-                                            &reply.chars().take(40).collect::<String>(),
-                                            reply.len()
-                                        )
-                                    }
-                                    other => format!("type={other}"),
-                                };
-                                println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] {preview}");
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                println!("  (channel closed)");
-                                break;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                println!("  (lagged: missed {n} frames)");
-                            }
-                        }
-                    }
-                });
-            }
-            StreamSource::Live(_rx) => {
-                println!("Mode: Live (no snapshot)");
-            }
-            StreamSource::Snapshot(snap) => {
-                println!("Mode: Snapshot-only ({} frames)", snap.len());
-            }
-        }
-        println!(
-            "Stream finished after {} frames in {}ms",
-            frame_seq,
-            stream_start.elapsed().as_millis()
-        );
+        print_stream_frames(&rt, "Claude", stream);
 
         // Cleanup the mission dir. We did NOT mutate agents.json
         // (we used the developer's existing agent row), so nothing
@@ -588,25 +530,15 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!("\n=== meta.list_abilities completeness audit ===");
-    let reg = build_registry_for_daemon(
-        Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
-        Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
-        Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
-        Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
-        Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-        None,
-        Some(Arc::new(Vec::new())),
-        easynet_cli::runtime::agents::PagesIdentity::from_env(),
-    );
+    let meta_runtime = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
     let registered_names: std::collections::BTreeSet<String> =
-        reg.list_abilities().into_iter().collect();
+        meta_runtime.list_abilities().into_iter().collect();
     println!(
         "LIVE registry has {} abilities (registered_rpc/stream/bidi):",
         registered_names.len()
     );
 
-    let dispatcher = AbilityDispatcher::new(Arc::clone(&reg), Arc::new(NoopGateway::new()));
-    let meta_resp = dispatcher
+    let meta_resp = meta_runtime
         .execute_rpc(target("meta.list_abilities", json!({})))
         .expect("meta.list_abilities");
     let meta_names: std::collections::BTreeSet<String> = meta_resp["abilities"]

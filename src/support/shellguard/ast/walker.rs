@@ -1050,12 +1050,11 @@ fn resolve_simple_expansion<'a>(
         return Ok(value.clone());
     }
     if inside_string {
-        if SAFE_ENV_VARS.iter().any(|&n| n == name) {
+        if SAFE_ENV_VARS.contains(&name) {
             return Ok(VAR_PLACEHOLDER.to_string());
         }
         if is_special
-            && (SPECIAL_VAR_NAMES.iter().any(|&n| n == name)
-                || name.chars().all(|c| c.is_ascii_digit()))
+            && (SPECIAL_VAR_NAMES.contains(&name) || name.chars().all(|c| c.is_ascii_digit()))
         {
             return Ok(VAR_PLACEHOLDER.to_string());
         }

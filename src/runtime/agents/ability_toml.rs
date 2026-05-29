@@ -34,12 +34,9 @@
 //
 // What this renderer does NOT support
 // -----------------------------------
-// * `oneOf` / `anyOf` / `allOf` (schema combinators) — none of
-//   our ability schemas use them today, and TOML's data model
-//   doesn't have a clean inline form for "one of these shapes".
-//   A future ability that needs them would force a richer
-//   renderer; v1 keeps the table flat.
-// * Schema `$ref` — same reason, none used.
+// * Deep schema composition with `$ref` or nested reusable
+//   definitions. Simple combinators (`oneOf`, `anyOf`, `allOf`)
+//   are rendered as inline tables when the schema carries them.
 // * Comments inside the rendered TOML — TOML supports them, JSON
 //   Schema doesn't carry them, and human-edited handwritten
 //   comments would be erased on every regenerate. A future
@@ -262,6 +259,26 @@ additionalProperties = false
     }
 
     #[test]
+    fn renders_simple_schema_combinator() {
+        let toml = render_ability_toml(
+            "x",
+            "d",
+            &json!({
+                "type":"object",
+                "required":["name"],
+                "additionalProperties":false,
+                "anyOf":[
+                    {"required":["agent_type"]},
+                    {"required":["entry"]}
+                ]
+            }),
+        );
+        assert!(
+            toml.contains("anyOf = [{ required = [\"agent_type\"] }, { required = [\"entry\"] }]")
+        );
+    }
+
+    #[test]
     fn renders_property_with_description_and_min_length() {
         let toml = render_ability_toml(
             "x",
@@ -386,7 +403,7 @@ additionalProperties = false
         let schema = &parsed["input_schema"];
         assert_eq!(schema["type"].as_str().unwrap(), "object");
         assert_eq!(schema["required"].as_array().unwrap().len(), 1);
-        assert_eq!(schema["additionalProperties"].as_bool().unwrap(), false);
+        assert!(!schema["additionalProperties"].as_bool().unwrap());
         let props = schema.get("properties").unwrap();
         assert_eq!(
             props["encoding"]["enum"].as_array().unwrap()[0]

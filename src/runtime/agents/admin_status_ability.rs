@@ -43,7 +43,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_ADMIN_STATUS: &str = "device.admin.status";
@@ -53,7 +53,7 @@ pub const ABILITY_ADMIN_STATUS: &str = "device.admin.status";
 /// `ability_count_provider` runs at handler-call time so the count
 /// reflects whatever the registry holds when the call lands (not
 /// what it held at boot — relevant once hot-add of abilities exists).
-pub fn register<F>(reg: &mut LocalAbilityRegistry, ability_count_provider: F)
+pub fn register<F>(reg: &mut AxonAbilityCatalog, ability_count_provider: F)
 where
     F: Fn() -> usize + Send + Sync + 'static,
 {
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn registration_makes_admin_status_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, || 0);
         assert!(reg.get_rpc(ABILITY_ADMIN_STATUS).is_some());
     }

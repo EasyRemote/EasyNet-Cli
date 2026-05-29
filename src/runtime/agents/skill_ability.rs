@@ -80,7 +80,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     // that shape (see `cliInstalledRow` in
     // backend/internal/logic/skill/listInstalledLogic.go), and this
     // ability now becomes the definitive source.
-    use crate::facade::cli::skill::{
+    use crate::runtime::skill_store::{
         global_skill_pools_for, read_install_record, scan_global_pool_into, InstallRecord,
     };
     let mut rows: Vec<InstallRecord> = Vec::new();

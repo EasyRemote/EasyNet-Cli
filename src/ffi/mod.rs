@@ -232,7 +232,7 @@ mod tests {
         // Client bindings sometimes check `ver != 0` as a cheap
         // "did the symbol load?" test. If the ABI version ever
         // became 0, that idiom would silently pass; this pins it.
-        assert!(EASYNET_ABI_VERSION >= 1);
+        const { assert!(EASYNET_ABI_VERSION >= 1) };
     }
 
     #[test]

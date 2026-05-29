@@ -247,7 +247,7 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
     use serde_json::json;
 
     fn clear_registry() {
@@ -270,7 +270,7 @@ mod tests {
             user,
             8787,
             "easynet.run",
-            Arc::new(LocalAbilityRegistry::new()),
+            Arc::new(AxonAbilityCatalog::new()),
             json!({
                 "folder": folder.display().to_string(),
                 "project_id": project_id,
@@ -318,7 +318,7 @@ mod tests {
             user,
             8787,
             "easynet.run",
-            Arc::new(LocalAbilityRegistry::new()),
+            Arc::new(AxonAbilityCatalog::new()),
             json!({
                 "folder": folder.display().to_string(),
                 "project_id": project_id,

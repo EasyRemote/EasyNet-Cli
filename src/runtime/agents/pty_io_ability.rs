@@ -71,7 +71,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
@@ -331,7 +331,7 @@ impl PtyIoService {
 /// shared `PtyService` (lifecycle) + `PtyIoService` (I/O state) so
 /// every handler observes the same session and state tables.
 ///
-pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoService) {
+pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoService) {
     use crate::runtime::ability_dispatch::LocalRpcHandler;
     {
         let pty = Arc::clone(&pty);
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn registration_mounts_three_rpcs() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let (pty, io) = fresh();
         register(&mut reg, pty, io);
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_INPUT).is_some());

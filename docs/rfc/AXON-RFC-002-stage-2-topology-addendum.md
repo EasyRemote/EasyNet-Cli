@@ -28,8 +28,8 @@ Reality on inspection:
   It owns the `SessionRegistry`, `BidiStreamHandle` channel quartet,
   and the in-process `SessionProvider` trait dispatch.
 - **EasyNet-Cli daemon** (`easynet-daemon`) is a separate process.
-  It owns the `LocalAbilityRegistry`, `PtyService` (portable-pty
-  spawning), and its own `register_bidi` IPC surface for PTY
+  It owns the daemon-hosted Axon `LocalRuntime`, `PtyService`
+  (portable-pty spawning), and its own Bidi ability surface for PTY
   abilities.
 - CLI consumes Axon only as a Rust SDK (`easynet-axon = path =
   "../EasyNet-Axon/sdk/rust"`) which exposes `DendriteBridge`,
@@ -48,8 +48,8 @@ Stage 1 ran entirely inside `core/runtime-rs/` and the
 new `fleet.session_attach` path goes registry → BuiltinPty →
 `session_bridge::pty_*_bytes` → existing axon PTY backend.
 
-Today's PTY traffic in production uses CLI's `fleet.pty_session_*`
-abilities (registered against CLI's `LocalAbilityRegistry`),
+Today's PTY traffic in production uses CLI daemon `fleet.pty_session_*`
+abilities (registered into the daemon-hosted Axon `LocalRuntime`),
 **not** the Axon `fleet.session_attach` path. The two paths exist
 side by side; Axon's auto-registered builtin is currently
 unreachable in production because nobody dispatches
@@ -157,7 +157,7 @@ For the record, here is the production state after Stage 1:
 
 | Layer | What runs | Where it lives |
 |---|---|---|
-| CLI PTY abilities | `fleet.pty_session_create / _close / _attach` against `LocalAbilityRegistry` | `EasyNet-Cli/src/runtime/agents/pty_*_ability.rs` + `runtime/execution/pty/` |
+| CLI PTY abilities | `fleet.pty_session_create / _close / _attach` against daemon `LocalRuntime` | `EasyNet-Cli/src/runtime/agents/pty_*_ability.rs` + `runtime/execution/pty/` |
 | Axon PTY plumbing | `BuiltinPtySessionProvider` auto-registered into `SessionRegistry`; serves `fleet.session_attach` if ever called | `EasyNet-Axon/core/runtime-rs/src/services/invocation/builtin_pty_provider.rs` |
 | Wire dispatch (today) | Backend → CLI daemon over CLI IPC; PTY traffic uses `fleet.pty_session_attach` (BIDI) | unchanged |
 | Wire dispatch (post-Stage-2) | Backend → Axon daemon over Axon RPC; PTY traffic uses `fleet.session_attach` (BIDI) → `SessionRegistry` → Path-A/B-dependent backend | depends on path chosen |

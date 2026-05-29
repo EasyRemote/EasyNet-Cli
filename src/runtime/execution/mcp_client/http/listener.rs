@@ -149,11 +149,7 @@ async fn listener_connect_and_pump(
         .with_context(|| format!("listener TCP connect to {host}:{port}"))?;
     let io: Box<dyn AsyncStream> = match tls {
         Some(connector) => {
-            let sni = spec
-                .tls
-                .server_name
-                .clone()
-                .unwrap_or_else(|| host.clone());
+            let sni = spec.tls.server_name.clone().unwrap_or_else(|| host.clone());
             let server_name = sni
                 .clone()
                 .try_into()

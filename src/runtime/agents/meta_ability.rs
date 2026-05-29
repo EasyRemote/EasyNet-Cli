@@ -44,10 +44,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
-
 use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = "device.meta.describe";
 pub const ABILITY_LIST_ABILITIES: &str = "device.meta.list_abilities";
@@ -73,9 +72,9 @@ pub const ABILITY_LIST_ABILITIES: &str = "device.meta.list_abilities";
 /// asking `meta.list_abilities` would see a stale, profile-only view
 /// that breaks every "discover then invoke" flow.
 pub fn register<F>(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     descriptors_provider: F,
-    registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     pages_user: Option<String>,
 ) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
@@ -169,7 +168,7 @@ fn describe_handler(
 
 fn list_abilities_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
-    registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
     pages_user: Option<&str>,
 ) -> anyhow::Result<Value> {
@@ -227,7 +226,7 @@ fn list_abilities_handler(
     // `list_abilities_keeps_same_public_ability_name_for_multiple_hosted_agents`.
     //
     // Phase 2: live registry. Anything registered into
-    // `LocalAbilityRegistry` that the static catalogue does NOT
+    // `AxonAbilityCatalog` that the static catalogue does NOT
     // already cover gets a synthesised minimal descriptor. This
     // catches (a) abilities registered AFTER meta_ability itself
     // (mission.run, easynet.* aliases), (b) per-agent verbs that the
@@ -236,7 +235,7 @@ fn list_abilities_handler(
     // author forgot to thread it through the profile catalogue.
     if let Some(registry) = registry_handle.get() {
         // Owner URAs for the synthesised descriptors below. These
-        // entries are abilities registered into `LocalAbilityRegistry`
+        // entries are abilities registered into `AxonAbilityCatalog`
         // that no static profile descriptor covers (RFC-002
         // `device.keyring.*`, the runtime `easynet.*` / `mission.*`
         // aliases, dynamic per-agent fallbacks, …). The owner-kind
@@ -340,7 +339,7 @@ fn list_abilities_handler(
                 continue;
             };
             let public_name = crate::ura::public_ability_name_for_owner(owner, &name);
-            let transport_hints = crate::runtime::agents::discovery_hints_for(&registry, &name);
+            let transport_hints = crate::runtime::agents::discovery_hints_for(registry, &name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
             // (chat ability + the family that follows it), surface
@@ -421,7 +420,7 @@ fn list_abilities_handler(
 
 fn synthesize_hot_hosted_agent_descriptors(
     catalog: &mut std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor>,
-    registry: &LocalAbilityRegistry,
+    registry: &AxonAbilityCatalog,
     local: &crate::persistence::local_agents::LocalAgentsFile,
 ) {
     use crate::runtime::ability_descriptor::Visibility;
@@ -542,13 +541,13 @@ mod tests {
     /// descriptor path. The list_abilities handler tolerates an
     /// unset OnceLock (returns the static catalogue alone), so
     /// passing an empty one is the cheapest fixture.
-    fn empty_registry_handle() -> Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> {
+    fn empty_registry_handle() -> Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> {
         Arc::new(std::sync::OnceLock::new())
     }
 
     #[test]
     fn registration_makes_both_abilities_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, Vec::new, empty_registry_handle(), None);
         assert!(reg.get_rpc(ABILITY_DESCRIBE).is_some());
         assert!(reg.get_rpc(ABILITY_LIST_ABILITIES).is_some());
@@ -561,7 +560,7 @@ mod tests {
 
     #[test]
     fn list_abilities_returns_descriptors_verbatim() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(
             &mut reg,
             || vec![d("device.observe.health"), d("device.agent.list")],
@@ -591,7 +590,7 @@ mod tests {
         use crate::runtime::federation_client::HubAbilityEntry;
         use crate::services::hub_published_ability_store as store_mod;
 
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(
             &mut reg,
             || vec![d("device.observe.health")],
@@ -674,17 +673,27 @@ mod tests {
         };
         save_credentials(&creds).expect("seed credentials.json fixture");
 
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
 
         // Live registry entry registered WITH a manifest. We use
-        // a freshly-built `LocalAbilityRegistry` here (not the
+        // a freshly-built `AxonAbilityCatalog` here (not the
         // one `register` runs against) and then publish it
         // through the OnceLock seam so the synth path picks it up.
-        let mut live_reg = LocalAbilityRegistry::new();
+        let mut live_reg = AxonAbilityCatalog::new();
         live_reg.register_stream_with_spec(
             "alice.chat",
             OwnerKind::Agent("alice".to_string()),
+            crate::core::ability_spec::default_chat_manifest(),
+            Arc::new(|_args| {
+                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                    Vec::new(),
+                ))
+            }),
+        );
+        live_reg.register_stream_with_spec(
+            "bob.chat",
+            OwnerKind::Agent("bob".to_string()),
             crate::core::ability_spec::default_chat_manifest(),
             Arc::new(|_args| {
                 Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
@@ -732,15 +741,28 @@ mod tests {
         );
         handle.set(Arc::new(live_reg)).expect("set OnceLock");
 
-        register(&mut reg, Vec::new, handle, Some("alice".to_string()));
+        register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
         let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
         let resp = handler(json!({})).unwrap();
         let abilities = resp["abilities"].as_array().unwrap();
 
         let chat = abilities
             .iter()
-            .find(|a| a["name"] == "chat")
+            .find(|a| {
+                a["name"] == "chat"
+                    && a["owner_agent_ura"] == "easynet:///r/alice-realm/agent/user-1.alice"
+            })
             .expect("agent-owned chat must surface as the local verb");
+        let chat_owners: std::collections::BTreeSet<&str> = abilities
+            .iter()
+            .filter(|a| a["name"] == "chat")
+            .filter_map(|a| a["owner_agent_ura"].as_str())
+            .collect();
+        assert!(
+            chat_owners.contains("easynet:///r/alice-realm/agent/user-1.alice")
+                && chat_owners.contains("easynet:///r/alice-realm/agent/user-1.bob"),
+            "same public ability name must preserve one descriptor per owner, got: {chat_owners:?}"
+        );
         // Description must be the manifest's description, not the
         // generic "no manifest schema" stub.
         let desc = chat["description"].as_str().unwrap_or_default();
@@ -806,6 +828,66 @@ mod tests {
     }
 
     #[test]
+    fn list_abilities_surfaces_dynamic_manifest_schema_for_hot_registered_tools() {
+        // Hot MCP reload writes handlers + manifests through the
+        // dynamic side table. `meta.list_abilities` is the user-facing
+        // catalogue backing SchemaForm, so it must read static OR
+        // dynamic manifests rather than the static-only map.
+        use crate::persistence::local_agents::{save, LocalAgentsFile};
+        use crate::runtime::ability_dispatch::OwnerKind;
+        use std::sync::OnceLock;
+
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        save(&LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            hosted_agents: Vec::new(),
+        })
+        .expect("seed local-agents.json");
+
+        let live_reg = Arc::new(AxonAbilityCatalog::new());
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "hot_echo",
+            "Echo a hot-reloaded MCP payload.",
+            json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                    "text": {"type": "string"}
+                }
+            }),
+        )
+        .expect("valid manifest");
+        live_reg.hot_register_rpc_with_spec(
+            "device.hot.echo",
+            OwnerKind::Device,
+            manifest,
+            Arc::new(|_args| Ok(json!({}))),
+        );
+
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+        handle
+            .set(Arc::clone(&live_reg))
+            .expect("set live registry");
+        register(&mut reg, Vec::new, handle, None);
+
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let ability = resp["abilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == "device.hot.echo")
+            .expect("hot-registered dynamic ability must appear");
+
+        assert_eq!(ability["description"], "Echo a hot-reloaded MCP payload.");
+        assert_eq!(
+            ability["schema_summary"]["input"]["properties"]["text"]["type"], "string",
+            "dynamic manifest schema must flow into meta.list_abilities: {ability}"
+        );
+    }
+
+    #[test]
     fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
         use crate::persistence::config::{save_credentials, Credentials};
         use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
@@ -832,6 +914,12 @@ mod tests {
             "alice",
             "easynet:///r/test-realm/agent/user-1.alice",
         );
+        upsert_hosted_agent(
+            &mut local,
+            "llm",
+            "bob",
+            "easynet:///r/test-realm/agent/user-1.bob",
+        );
         save(&local).expect("seed local-agents.json");
 
         let mut agents = AgentRegistry::default();
@@ -839,12 +927,16 @@ mod tests {
             "alice".to_string(),
             AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
         );
+        agents.agents.insert(
+            "bob".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, Some("opus".to_string())),
+        );
         save_agents(&agents).expect("seed agents.json");
 
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle
-            .set(Arc::new(LocalAbilityRegistry::new()))
+            .set(Arc::new(AxonAbilityCatalog::new()))
             .expect("set empty live registry");
 
         register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
@@ -853,8 +945,21 @@ mod tests {
         let abilities = resp["abilities"].as_array().unwrap();
         let chat = abilities
             .iter()
-            .find(|a| a["name"] == "chat")
+            .find(|a| {
+                a["name"] == "chat"
+                    && a["owner_agent_ura"] == "easynet:///r/test-realm/agent/user-1.alice"
+            })
             .expect("hot-added hosted agent chat must appear in meta.list_abilities");
+        let chat_owners: std::collections::BTreeSet<&str> = abilities
+            .iter()
+            .filter(|a| a["name"] == "chat")
+            .filter_map(|a| a["owner_agent_ura"].as_str())
+            .collect();
+        assert!(
+            chat_owners.contains("easynet:///r/test-realm/agent/user-1.alice")
+                && chat_owners.contains("easynet:///r/test-realm/agent/user-1.bob"),
+            "hot-added agents with the same public verb must not collapse: {chat_owners:?}"
+        );
 
         assert_eq!(
             chat["owner_agent_ura"],
@@ -919,10 +1024,10 @@ mod tests {
         );
         save_agents(&agents).expect("seed agents.json");
 
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle
-            .set(Arc::new(LocalAbilityRegistry::new()))
+            .set(Arc::new(AxonAbilityCatalog::new()))
             .expect("set empty live registry");
 
         register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
@@ -963,7 +1068,7 @@ mod tests {
 
     #[test]
     fn describe_buckets_abilities_by_namespace() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(
             &mut reg,
             || {
@@ -993,7 +1098,7 @@ mod tests {
 
     #[test]
     fn describe_handles_empty_catalog() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, Vec::new, empty_registry_handle(), None);
         let handler = reg.get_rpc(ABILITY_DESCRIBE).unwrap();
         let resp = handler(json!({})).unwrap();

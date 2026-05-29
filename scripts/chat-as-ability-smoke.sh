@@ -2,10 +2,11 @@
 # chat-as-ability-smoke.sh — verifies the chat-as-system-ability cutover
 # ======================================================================
 #
-# Boots `easynet-daemon`, dials the UDS at ~/.easynet/control.sock, and
-# sends one length-prefixed `Invoke` frame against a `<agent>.chat`
-# ability name. Asserts the daemon's response shape matches what the
-# unified-registry path produces (Phase 4 of the chat refactor):
+# Boots `easynet-daemon`, then invokes a `<agent>.chat` ability through
+# `easynet ability invoke`, which routes over the daemon-hosted Axon
+# Invocation gRPC socket (`~/.easynet/daemon.sock`). This script
+# deliberately does not dial `control.sock` or construct legacy
+# control-plane frames.
 #
 #   - When NO local agent is registered (the typical CI / dev shape):
 #       expected wire: type=error with code mentioning "no local handler"
@@ -26,24 +27,24 @@
 # -----------------------------------------------------------------
 # The Rust tests in src/runtime/system/chat_ability.rs cover the
 # handler logic in isolation. This script exercises the entire IPC
-# plane — control-socket framing, the proxy's stage-1 resolver, the
-# stage-2 dispatcher, the LocalAbilityRegistry that
-# build_registry_for_daemon populated at boot, and the Kernel.invoke
-# admission path that routes into it. A regression that disconnected
-# any one of those layers would silently make the in-process tests
-# pass while breaking real clients (EasyNet backend, FFI consumers).
+# plane — CLI argument mapping, daemon.sock admission, Axon
+# LocalRuntime dispatch, and the daemon-hosted chat ability. A
+# regression that disconnected any one of those layers would silently
+# make the in-process tests pass while breaking real clients.
 #
 # Usage:
 #   scripts/chat-as-ability-smoke.sh [--keep-daemon]
 #
 #   --keep-daemon   leave the daemon running after the test (default
 #                   is SIGTERM on EXIT trap so the next invocation
-#                   has a clean ~/.easynet/control.sock).
+#                   has a clean ~/.easynet/daemon.sock).
 
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON_BIN="$REPO_ROOT/target/debug/easynet-daemon"
+CLI_BIN="$REPO_ROOT/target/debug/easynet"
+DAEMON_SOCK="${EASYNET_DAEMON_GRPC_UDS:-$HOME/.easynet/daemon.sock}"
 KEEP_DAEMON=0
 
 for arg in "$@"; do
@@ -53,9 +54,9 @@ for arg in "$@"; do
   esac
 done
 
-if [ ! -x "$DAEMON_BIN" ]; then
-  echo "[chat-smoke] building easynet-daemon (debug)..."
-  (cd "$REPO_ROOT" && cargo build --bin easynet-daemon)
+if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
+  echo "[chat-smoke] building easynet + easynet-daemon (debug, axon-pb)..."
+  (cd "$REPO_ROOT" && cargo build --features axon-pb --bin easynet --bin easynet-daemon)
 fi
 
 # Detect mode: pick the first agent name from the registry if present,
@@ -90,76 +91,52 @@ fi
 # otherwise stick around (bind_at clears it but a live process would
 # block bind).
 pkill -f "$DAEMON_BIN" 2>/dev/null || true
-rm -f "$HOME/.easynet/control.sock"
+rm -f "$DAEMON_SOCK"
 
 echo "[chat-smoke] starting daemon (logs to /tmp/chat-as-ability-smoke.daemon.log)..."
 "$DAEMON_BIN" >/tmp/chat-as-ability-smoke.daemon.log 2>&1 &
 DAEMON_PID=$!
 trap '[ "$KEEP_DAEMON" -eq 0 ] && kill "$DAEMON_PID" 2>/dev/null || true' EXIT
 
-# Wait up to 2 s for the socket to appear.
+# Wait up to 4 s for the Axon Invocation socket to appear.
 for _ in $(seq 1 20); do
-  [ -S "$HOME/.easynet/control.sock" ] && break
-  sleep 0.1
+  [ -S "$DAEMON_SOCK" ] && break
+  sleep 0.2
 done
-if [ ! -S "$HOME/.easynet/control.sock" ]; then
-  echo "[chat-smoke] FAIL: socket did not appear at ~/.easynet/control.sock" >&2
+if [ ! -S "$DAEMON_SOCK" ]; then
+  echo "[chat-smoke] FAIL: socket did not appear at $DAEMON_SOCK" >&2
   exit 1
 fi
 
-echo "[chat-smoke] dialing socket and invoking $ABILITY..."
-RESP="$(
-ABILITY="$ABILITY" python3 - <<'PY'
-import socket, struct, json, os, sys
-sock_path = os.path.expanduser("~/.easynet/control.sock")
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.connect(sock_path)
-req = {
-    "type": "invoke",
-    "request_id": "chat-smoke-1",
-    "ability": os.environ["ABILITY"],
-    "args": {"prompt": "smoke-ping"},
-}
-payload = json.dumps(req).encode()
-s.sendall(struct.pack("<I", len(payload)) + payload)
-raw_len = s.recv(4)
-(resp_len,) = struct.unpack("<I", raw_len)
-buf = b""
-while len(buf) < resp_len:
-    chunk = s.recv(resp_len - len(buf))
-    if not chunk: break
-    buf += chunk
-sys.stdout.write(buf.decode())
-PY
-)"
+echo "[chat-smoke] invoking $ABILITY through easynet ability invoke..."
+set +e
+RESP="$("$CLI_BIN" ability invoke "$ABILITY" --args '{"prompt":"smoke-ping"}' --raw 2>&1)"
+STATUS=$?
+set -e
 
+echo "[chat-smoke] status: $STATUS"
 echo "[chat-smoke] response: $RESP"
 
 # Mode-specific assertion. Pass the response via env var rather than
 # stdin so the python heredoc's own stdin is not contended for by
 # whatever wrapper bash thinks the heredoc reader should see.
-RESP="$RESP" MODE="$MODE" ABILITY="$ABILITY" python3 - <<'PY'
-import json, os, sys
-r = json.loads(os.environ["RESP"])
+RESP="$RESP" STATUS="$STATUS" MODE="$MODE" ABILITY="$ABILITY" python3 - <<'PY'
+import os, sys
+r = os.environ["RESP"]
+status = int(os.environ["STATUS"])
 mode = os.environ["MODE"]
 ability = os.environ["ABILITY"]
 
-assert r.get("request_id") == "chat-smoke-1", f"request_id mismatch: {r}"
-
 if mode == "no_agents":
-    # Post-Phase-4 shape: the kernel asks the unified registry; no
-    # `<ghost>.chat` handler is registered; the dispatcher returns an
-    # error mentioning the absent handler. The exact wording is owned
-    # by AbilityDispatcher::execute_rpc; we pin the substring that
-    # would change if someone reverted the cutover.
-    assert r.get("type") == "error", f"expected type=error, got {r}"
-    msg = json.dumps(r).lower()
+    assert status != 0, f"expected no_agents invoke to fail, got status=0 and response={r}"
+    msg = r.lower()
     assert (
         "no local handler" in msg
+        or "unknown_ability" in msg
         or "permission denied" in msg
         or ability.lower() in msg
-    ), f"expected unified-registry not-found shape; got {r}"
-    print("[chat-smoke] PASS — unified registry returned the expected not-found shape")
+    ), f"expected Axon LocalRuntime not-found shape; got {r}"
+    print("[chat-smoke] PASS — Axon LocalRuntime returned the expected not-found shape")
 elif mode == "agent_registered":
     # When a real agent is registered the chat handler runs the LLM
     # subprocess. Success requires the underlying CLI (claude/codex)
@@ -168,13 +145,12 @@ elif mode == "agent_registered":
     # error from the driver layer. The load-bearing property is that
     # the response is a typed envelope with `request_id` echoed —
     # not a daemon panic, not a connection drop.
-    assert r.get("type") in ("result", "error"), f"expected typed envelope, got {r}"
-    if r.get("type") == "result":
-        v = r.get("value", {})
-        assert "reply" in v, f"chat ability return value must include `reply`; got {v}"
-        print(f"[chat-smoke] PASS — chat ability returned a structured reply ({len(v.get('reply', ''))} chars)")
+    if status == 0:
+        assert "reply" in r or "fulfilled_by" in r, f"chat ability return should look structured; got {r}"
+        print("[chat-smoke] PASS — chat ability returned through daemon-hosted Axon invoke")
     else:
-        print(f"[chat-smoke] PASS — chat ability surfaced a typed error (driver/credentials likely missing): {r.get('message', '')}")
+        assert "daemon error invoking" in r or "ability" in r.lower() or "driver" in r.lower(), r
+        print("[chat-smoke] PASS — chat ability surfaced a CLI/Axon error (driver/credentials likely missing)")
 else:
     print(f"[chat-smoke] FAIL: unknown mode {mode}", file=sys.stderr); sys.exit(1)
 PY

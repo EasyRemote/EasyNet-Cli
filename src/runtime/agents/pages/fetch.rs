@@ -23,7 +23,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 
 use super::mime::mime_from_path;
 use super::sandbox::{open_beneath, validate_regular};
@@ -86,33 +86,21 @@ pub fn handle_fetch(user: &str, project_id: &str, args: Value) -> anyhow::Result
     }))
 }
 
-/// Register `ability/<user>.<project_id>.page.fetch` into the
-/// LocalAbilityRegistry. Called by `publish.rs` at publish time.
-///
-/// Note: the registry is shared as `Arc<LocalAbilityRegistry>` from
-/// `OnceLock` (set at daemon boot). To register dynamically we'd
-/// need an interior-mutable handle. v0 MVP keeps the registry
-/// static after boot; per-publish `page.fetch` registration is
-/// implemented as a *resolver fallback* (see `register_resolver`)
-/// so the registry doesn't need to be mutated after boot.
-///
-/// In other words: at boot we register a single fallback resolver
-/// that, on lookup miss for any name matching
-/// `<user>.<project_id>.page.fetch`, manufactures the handler on
-/// the fly by looking up `(user, project_id)` in
-/// `PUBLISHED_PROJECTS`. If the project exists, the handler is
-/// returned; if not, the registry returns "no such ability" and
-/// the dispatcher fails the call as it would for any unknown
-/// ability.
-pub fn register_fetch_ability(
-    _registry: &Arc<LocalAbilityRegistry>,
-    _user: &str,
-    _project_id: &str,
-) {
-    // Intentionally a no-op in v0: registration is implicit through
-    // the resolver fallback installed at boot
-    // (see `super::register_resolver_fallback`). This function exists
-    // so call sites read intentionally — when the registry grows a
-    // mutable insertion path post-boot, this is where the eager
-    // registration goes.
+pub(crate) fn fetch_ability_name(user: &str, project_id: &str) -> String {
+    format!("{user}.{project_id}.page.fetch")
+}
+
+/// Register `<user>.<project_id>.page.fetch` into the daemon-hosted
+/// Axon runtime. Called by `publish.rs` at publish time and by
+/// `pages::register` after restart restore.
+pub fn register_fetch_ability(registry: &AxonAbilityCatalog, user: &str, project_id: &str) {
+    let ability = fetch_ability_name(user, project_id);
+    let owner = OwnerKind::User(user.to_string());
+    let user = user.to_string();
+    let project_id = project_id.to_string();
+    registry.hot_register_rpc(
+        ability,
+        owner,
+        Arc::new(move |args| handle_fetch(&user, &project_id, args)),
+    );
 }

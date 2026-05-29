@@ -79,7 +79,7 @@ use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
 use crate::registry::agents;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::directory::ABILITY_MANIFEST_SUFFIX;
 
@@ -96,7 +96,7 @@ pub const ABILITY_UNPUBLISH: &str = "device.ability.unpublish";
 /// reach disk directly and read the agent registry on every call,
 /// because publish is rare and the registry lookup is cheap (no
 /// hot-path concern). No captured state to keep coherent.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.ability.publish",
         OwnerKind::Device,

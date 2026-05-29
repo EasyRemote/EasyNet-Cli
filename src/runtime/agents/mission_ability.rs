@@ -41,7 +41,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_RUN: &str = "device.mission.run";
@@ -70,7 +70,7 @@ pub const ABILITY_CANCEL: &str = "device.mission.cancel";
 /// Single canonical name, no twin: the LLM never had a way to
 /// know which to pick, the receipts diverged, and the duplicate
 /// names doubled the meta-discovery surface for no win.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.mission.run",
         OwnerKind::Device,

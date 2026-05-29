@@ -101,7 +101,7 @@ pub fn is_destructive(command: &str) -> bool {
     if base.is_empty() {
         return false;
     }
-    if DESTRUCTIVE.iter().any(|&c| c == base) {
+    if DESTRUCTIVE.contains(&base) {
         return true;
     }
     DESTRUCTIVE_PREFIXES.iter().any(|&prefix| {

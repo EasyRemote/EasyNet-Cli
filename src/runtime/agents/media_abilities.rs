@@ -70,7 +70,7 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_descriptor::AbilityClass;
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource, StreamSource};
 use crate::runtime::agents::ability_toml::Rfc006Metadata;
 
 // ── Ability names (exported so registration + descriptor sites
@@ -270,7 +270,7 @@ fn row(name: &str) -> Option<&'static AbilityRow> {
 /// Each closure captures `row: &'static AbilityRow` by value
 /// (the reference is `Copy + 'static`); no rebinding to `let
 /// name = row.name;` is needed.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     for row in ABILITIES {
         // Post-M3 of the system-namespace migration: `row.name` is
         // already canonical (`device.<segment>.<verb>`). Earlier
@@ -501,7 +501,7 @@ mod tests {
         // resolve to a registered handler of that exact dispatch
         // type. Catches both "row added but not registered" and
         // "row's shape field changed but register() not updated".
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         for row in ABILITIES {
             match row.shape {

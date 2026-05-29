@@ -80,7 +80,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Wire name. Pinned because the CLI (`easynet mission think`) and
 /// any future EAL caller bind to it by string.
@@ -105,8 +105,8 @@ pub const HARD_MAX_CYCLES: u32 = 50;
 /// client would deadlock the daemon's accept loop because we are
 /// already mid-call.
 pub fn register(
-    reg: &mut LocalAbilityRegistry,
-    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    reg: &mut AxonAbilityCatalog,
+    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
     use crate::runtime::ability_dispatch::OwnerKind;
     let handle = Arc::clone(&dispatch_registry_handle);
@@ -142,7 +142,7 @@ pub fn register(
 /// }
 /// ```
 fn think_handler(
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
@@ -162,7 +162,7 @@ fn think_handler(
 /// curator flow without an LLM subprocess. Same boundary the
 /// shell/http executors use to keep their core unit-testable.
 pub(crate) fn think_with_registry(
-    registry: &Arc<LocalAbilityRegistry>,
+    registry: &Arc<AxonAbilityCatalog>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let parsed = parse_think_args(&args)?;
@@ -174,26 +174,12 @@ pub(crate) fn think_with_registry(
         dry_run,
     } = parsed;
 
-    // Resolve the two chat handlers up front. If either is missing
-    // we fail fast before doing any work, with a clear pointer to
-    // the misconfiguration. Worker and judge can be the same agent
-    // — the *sessions* are independent (each call is a new chat
-    // session with its own session_id), the model and tool catalog
-    // are the agent's.
+    // Resolve the two chat ability names up front. Worker and judge
+    // can be the same agent — the sessions are independent (each call
+    // is a new chat session with its own session_id), the model and
+    // tool catalog are the agent's.
     let worker_chat_name = format!("{owner}.chat");
-    let worker_chat = registry.resolve_rpc(&worker_chat_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "mission.think: agent {owner:?} has no chat ability registered (looked up \
-             {worker_chat_name:?}); confirm the agent is registered with `easynet agent list`"
-        )
-    })?;
     let judge_chat_name = format!("{judge}.chat");
-    let judge_chat = registry.resolve_rpc(&judge_chat_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "mission.think: judge agent {judge:?} has no chat ability (looked up \
-             {judge_chat_name:?})"
-        )
-    })?;
 
     let mut transcript: Vec<Value> = Vec::new();
     let mut worker_session_id: Option<String> = None;
@@ -225,7 +211,7 @@ pub(crate) fn think_with_registry(
         // distinguishable reason so the operator can audit. Same
         // failure-soft policy as the curator step at the end of
         // the loop.
-        let worker_resp = match invoke_chat_protected(&worker_chat, worker_args) {
+        let worker_resp = match invoke_chat_protected(registry, &worker_chat_name, worker_args) {
             Ok(v) => v,
             Err(e) => {
                 termination = "worker_error";
@@ -279,7 +265,11 @@ pub(crate) fn think_with_registry(
         // outer loop continues with no parsed verdict for this
         // cycle, and termination flips to "judge_error" so the
         // operator sees it in the envelope.
-        let judge_resp = match invoke_chat_protected(&judge_chat, json!({"prompt": judge_prompt})) {
+        let judge_resp = match invoke_chat_protected(
+            registry,
+            &judge_chat_name,
+            json!({"prompt": judge_prompt}),
+        ) {
             Ok(v) => v,
             Err(e) => {
                 termination = "judge_error";
@@ -533,13 +523,13 @@ fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<Str
         // (we don't expect nested CallExpr today but FieldValue::Object
         // could hold them once the parser grows that surface).
         for field in &c.arguments {
-            visit_field_value(&field.value, out);
+            visit_field_value(&field.value);
         }
     }
-    fn visit_field_value(v: &FieldValue, out: &mut Vec<String>) {
+    fn visit_field_value(v: &FieldValue) {
         if let FieldValue::Object(fields) = v {
             for f in fields {
-                visit_field_value(&f.value, out);
+                visit_field_value(&f.value);
             }
         }
     }
@@ -569,8 +559,9 @@ fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<Str
 /// JSON outcome describing what happened at every stage so the
 /// operator reading the mission.think envelope can audit the
 /// publish step without grep'ing the daemon log.
+#[allow(clippy::too_many_arguments)]
 fn run_curator_turn(
-    registry: &Arc<LocalAbilityRegistry>,
+    registry: &Arc<AxonAbilityCatalog>,
     owner: &str,
     curator_agent: &str,
     initial_prompt: &str,
@@ -586,20 +577,10 @@ fn run_curator_turn(
     let target = if scope == "team" { "ability" } else { "skill" };
 
     let curator_chat_name = format!("{curator_agent}.chat");
-    let curator_chat = match registry.resolve_rpc(&curator_chat_name) {
-        Some(h) => h,
-        None => {
-            return json!({
-                "attempted": true,
-                "ok": false,
-                "stage": "resolve_curator",
-                "error": format!("curator agent {curator_agent:?} has no chat ability"),
-            });
-        }
-    };
 
     let prompt = render_curator_prompt(target, initial_prompt, verdict, transcript, catalog);
-    let resp = match invoke_chat_protected(&curator_chat, json!({"prompt": prompt})) {
+    let resp = match invoke_chat_protected(registry, &curator_chat_name, json!({"prompt": prompt}))
+    {
         Ok(v) => v,
         Err(e) => {
             return json!({
@@ -673,9 +654,8 @@ fn run_curator_turn(
         });
     }
 
-    // Dispatch to the matching publish handler. We use the
-    // in-process registry (same path as worker/judge dispatch) so
-    // failures surface as anyhow::Error directly.
+    // Dispatch to the matching publish handler through the same
+    // LocalRuntime-backed path as worker/judge dispatch.
     let (publish_name, publish_args) = if target == "ability" {
         (
             "ability.publish",
@@ -716,19 +696,16 @@ fn run_curator_turn(
         )
     };
 
-    let publish_handler = match registry.resolve_rpc(publish_name) {
-        Some(h) => h,
-        None => {
-            return json!({
-                "attempted": true,
-                "ok": false,
-                "stage": "resolve_publish",
-                "error": format!("{publish_name} not registered"),
-                "authored_body_len": authored.len(),
-            });
-        }
-    };
-    match publish_handler(publish_args) {
+    if !registry.has_rpc(publish_name) {
+        return json!({
+            "attempted": true,
+            "ok": false,
+            "stage": "resolve_publish",
+            "error": format!("{publish_name} not registered"),
+            "authored_body_len": authored.len(),
+        });
+    }
+    match registry.invoke_rpc_json(publish_name, publish_args) {
         Ok(v) => json!({
             "attempted": true,
             "ok": true,
@@ -1138,10 +1115,13 @@ const CONTINUE_HINT: &str =
 /// juggling around the LLM subprocess and rare paths can panic on
 /// stderr writes when the parent shell's stderr is gone.
 fn invoke_chat_protected(
-    chat_handler: &crate::runtime::ability_dispatch::LocalRpcHandler,
+    registry: &Arc<AxonAbilityCatalog>,
+    ability: &str,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| chat_handler(args)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.invoke_rpc_json(ability, args)
+    }));
     match result {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(anyhow::anyhow!("{e}")),
@@ -1930,7 +1910,7 @@ This skill does X.\n";
 
     // ── Integration tests with stub chat handlers ────────────────
     //
-    // These tests build a `LocalAbilityRegistry`, register stub
+    // These tests build a `AxonAbilityCatalog`, register stub
     // `<agent>.chat` handlers that return canned JSON envelopes
     // matching the chat ability's wire shape, then drive the full
     // worker+judge+curator loop. Boundaries:
@@ -1949,13 +1929,10 @@ This skill does X.\n";
     /// returns the next canned reply each call; once exhausted, it
     /// cycles. Each call advances the session_id so a test can
     /// distinguish "resumed" from "fresh".
-    fn registry_with_stub_chat(
-        agent: &str,
-        replies: Vec<&'static str>,
-    ) -> Arc<LocalAbilityRegistry> {
+    fn registry_with_stub_chat(agent: &str, replies: Vec<&'static str>) -> Arc<AxonAbilityCatalog> {
         let counter: Arc<StdMutex<usize>> = Arc::new(StdMutex::new(0));
         let replies: Arc<Vec<String>> = Arc::new(replies.into_iter().map(String::from).collect());
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let counter_c = Arc::clone(&counter);
         let replies_c = Arc::clone(&replies);
         reg.register_rpc(

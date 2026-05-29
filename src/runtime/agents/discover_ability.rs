@@ -71,7 +71,7 @@ use serde_json::{json, Value};
 
 use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Verb portion of the per-agent discover ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.discover`.
@@ -86,10 +86,10 @@ pub const ABILITY_VERB: &str = "discover";
 /// hot-added or hot-removed peer agents are reflected on the next
 /// discover call without re-registration.
 pub fn register_for_agent<F>(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
-    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
@@ -120,11 +120,11 @@ pub fn register_for_agent<F>(
 /// Exposed so the dynamic per-agent fallback resolver in
 /// `chat_ability::register_dynamic_agent_fallback` can synthesise a
 /// handler for a hot-added agent without re-running this module's
-/// register_for_agent (which requires `&mut LocalAbilityRegistry`).
+/// register_for_agent (which requires `&mut AxonAbilityCatalog`).
 pub fn dispatch(
     self_agent: &str,
     agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     // Provider routing happens BEFORE scope/query parsing because the
@@ -217,7 +217,7 @@ pub fn dispatch(
 /// declared in its own input_schema, not a recursion-trigger.
 fn delegate_to_provider(
     provider_name: &str,
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     if !provider_name.contains('.') {
@@ -229,15 +229,16 @@ fn delegate_to_provider(
              discover provider routing requires the daemon's live registry"
         )
     })?;
-    let handler = registry.resolve_rpc(provider_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "discover: provider {provider_name:?} is not registered. Pick from \
+    registry
+        .invoke_rpc_json(provider_name, args)
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "discover: provider {provider_name:?} is not registered or failed. Pick from \
              the abilities your `<self>.discover()` lists with names ending \
              in `.discover` (or `.semantic_discover` etc), or omit the \
-             `provider` argument to use the builtin BM25 matcher."
-        )
-    })?;
-    handler(args)
+             `provider` argument to use the builtin BM25 matcher. ({err})"
+            )
+        })
 }
 
 /// Build a clone of `args` with the top-level `provider` field
@@ -676,10 +677,7 @@ fn classify_fulfilled_by(
 fn federated_directory_candidates(entries: &[Value]) -> Vec<Candidate> {
     let mut out = Vec::with_capacity(entries.len());
     for entry in entries {
-        let agent_ura = entry
-            .get("agent_ura")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let agent_ura = entry.get("agent_ura").and_then(Value::as_str).unwrap_or("");
         if agent_ura.is_empty() {
             continue;
         }
@@ -879,7 +877,7 @@ mod tests {
 
     #[test]
     fn register_publishes_discover_manifest_description() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -937,7 +935,7 @@ mod tests {
 
     #[test]
     fn unknown_scope_is_rejected() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -974,9 +972,7 @@ mod tests {
         for v in enum_arr {
             let s = v.as_str().expect("scope.enum entries must be strings");
             parse_scope(&json!({"scope": s})).unwrap_or_else(|e| {
-                panic!(
-                    "schema advertises scope = {s:?} but parse_scope rejected it: {e}"
-                )
+                panic!("schema advertises scope = {s:?} but parse_scope rejected it: {e}")
             });
         }
 
@@ -986,10 +982,8 @@ mod tests {
         // failure mode where someone adds a parse_scope match arm
         // but forgets to extend the literal list (so the LLM never
         // learns the new spelling exists).
-        let enum_set: std::collections::BTreeSet<&str> = enum_arr
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+        let enum_set: std::collections::BTreeSet<&str> =
+            enum_arr.iter().map(|v| v.as_str().unwrap()).collect();
         let literal_set: std::collections::BTreeSet<&str> =
             ACCEPTED_SCOPE_LITERALS.iter().copied().collect();
         assert_eq!(
@@ -1054,7 +1048,7 @@ mod tests {
         // but exercising the new "user" name explicitly so a future
         // refactor that drops the alias still has direct coverage.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1074,7 +1068,7 @@ mod tests {
     #[test]
     fn public_scope_falls_through_when_not_joined() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1098,7 +1092,7 @@ mod tests {
         // a typed envelope so the LLM falls through gracefully.
         // Pin the wire-level code so a SKILL.md grep stays stable.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1132,7 +1126,7 @@ mod tests {
         agents.agents.insert("codex".into(), entry_b);
         let agents_clone = agents.clone();
 
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1149,8 +1143,8 @@ mod tests {
         // claude's seeded chat manifest plus weather; codex's
         // summarize must NOT appear.
         assert!(names.iter().all(|n| n.starts_with("claude.")));
-        assert!(names.iter().any(|n| *n == "claude.weather"));
-        assert!(!names.iter().any(|n| *n == "codex.summarize"));
+        assert!(names.contains(&"claude.weather"));
+        assert!(!names.contains(&"codex.summarize"));
     }
 
     #[test]
@@ -1173,7 +1167,7 @@ mod tests {
         agents.agents.insert("codex".into(), codex_entry);
         let agents_clone = agents.clone();
 
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "codex".into(),
@@ -1215,7 +1209,7 @@ mod tests {
         agents.agents.insert("codex".into(), codex_entry);
         let agents_clone = agents.clone();
 
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "codex".into(),
@@ -1246,7 +1240,7 @@ mod tests {
         let agents = one_agent("claude", entry);
         let agents_clone = agents.clone();
 
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1261,7 +1255,7 @@ mod tests {
 
     #[test]
     fn top_k_zero_is_rejected() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1297,9 +1291,9 @@ mod tests {
         // Build a registry with the provider handler + the per-agent
         // discover. Wire the OnceLock to the same registry so the
         // builtin discover can resolve the provider.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc("userx.semantic_discover", provider_handler);
-        let handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
+        let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         register_for_agent(
             &mut reg,
@@ -1327,7 +1321,7 @@ mod tests {
 
     #[test]
     fn provider_without_dot_is_rejected() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1341,8 +1335,8 @@ mod tests {
 
     #[test]
     fn provider_not_registered_returns_typed_error() {
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         register_for_agent(
             &mut reg,

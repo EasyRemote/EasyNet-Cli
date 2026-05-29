@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
 use crate::runtime::execution::schedule::ScheduleService;
@@ -33,7 +33,7 @@ pub const ABILITY_LIST: &str = "device.schedule.list";
 pub const ABILITY_REMOVE: &str = "device.schedule.remove";
 pub const ABILITY_ENABLE: &str = "device.schedule.enable";
 
-pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<ScheduleService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<ScheduleService>) {
     let a = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         "device.schedule.add",

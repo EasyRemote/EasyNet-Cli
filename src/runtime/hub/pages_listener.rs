@@ -579,7 +579,7 @@ mod tests {
     use std::time::SystemTime;
     use tempfile::TempDir;
 
-    use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+    use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::runtime::agents::pages::sandbox::open_directory;
     use crate::runtime::agents::pages::state::{
         ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
@@ -658,7 +658,7 @@ mod tests {
         // and inherit the earlier test's identity — which is what
         // produced the `v1_models` / `v1_chat_completions` flakes
         // when these tests ran inside the full lib test process.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "codex.chat",
             OwnerKind::Agent("codex".into()),

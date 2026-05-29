@@ -81,7 +81,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, BIDI_CHANNEL_BOUND};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource, BIDI_CHANNEL_BOUND};
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str = "device.terminal.attach";
@@ -128,7 +128,7 @@ const READ_CHUNK_SIZE: usize = 4096;
 /// burn CPU on idle sessions.
 const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
     use crate::runtime::ability_dispatch::LocalBidiHandler;
     let pty_for_attach = Arc::clone(&pty);
     let handler: LocalBidiHandler =
@@ -470,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn registration_makes_attach_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, fresh_service());
         assert!(
             reg.get_bidi(ABILITY_PTY_SESSION_ATTACH).is_some(),
@@ -507,8 +507,10 @@ mod tests {
         // contain "hi". A regression in either the writer (T2) or
         // the reader (T1) trips this.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command());
+        let spec = PtyCreateSpec {
+            command: Some(shell_command()),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /bin/sh");
 
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
@@ -557,8 +559,10 @@ mod tests {
         // sending a resize, then a stdin echo, and observing the
         // stdin still round-trips.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command());
+        let spec = PtyCreateSpec {
+            command: Some(shell_command()),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /bin/sh");
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
@@ -602,12 +606,14 @@ mod tests {
         // /bin/true exits immediately; the exit-watcher should
         // emit exactly one `exit` frame. Pins T3.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(if std::path::Path::new("/usr/bin/true").exists() {
-            "/usr/bin/true".to_string()
-        } else {
-            "/bin/true".to_string()
-        });
+        let spec = PtyCreateSpec {
+            command: Some(if std::path::Path::new("/usr/bin/true").exists() {
+                "/usr/bin/true".to_string()
+            } else {
+                "/bin/true".to_string()
+            }),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /usr/bin/true");
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
@@ -636,8 +642,10 @@ mod tests {
         // a future "paste-mode" marker) must NOT close the session.
         // Send junk, then a valid stdin, observe stdin still works.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command());
+        let spec = PtyCreateSpec {
+            command: Some(shell_command()),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /bin/sh");
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 

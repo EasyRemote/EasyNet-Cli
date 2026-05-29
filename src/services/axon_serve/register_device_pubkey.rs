@@ -79,6 +79,9 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 /// v4.1.6's wire-break carrier; see
 /// `docs/open-questions/deprecate-self-alias-in-ability-names.md`
 /// Stage 2 for the cross-repo coordination plan.
+// TODO(RFC-001-v4.1.6 stage-2): rename to
+// `device.register_device_pubkey` once the hub ships dual-name
+// acceptance. Single grep anchor for all wire-pinned `<self>.*` constants.
 pub const ABILITY_SELF_REGISTER_DEVICE_PUBKEY: &str = "<self>.register_device_pubkey";
 
 /// JSON-shaped argument tuple. `role` is a free string here (rather
@@ -475,7 +478,7 @@ mod tests {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
         let invalid_key = "xxdqcD1MnE8te47Y0dRcLz8rn+fYxqSy8eDZyLem9f8=";
-        let args = args_bytes("easynet:///r/r1/device/z", &invalid_key, "device");
+        let args = args_bytes("easynet:///r/r1/device/z", invalid_key, "device");
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject invalid curve point");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("valid Ed25519 verifying key"));

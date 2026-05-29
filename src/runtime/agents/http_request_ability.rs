@@ -66,7 +66,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name. Pinned by AXIOM Tier 2.5.
@@ -115,7 +115,7 @@ const REDACTED_HEADER_NAMES: &[&str] = &[
 /// gopher, javascript) rejects.
 const ALLOWED_SCHEMES: &[&str] = &["http", "https"];
 
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner("device.http.request", OwnerKind::Device, Arc::new(handler));
 }
 
@@ -140,7 +140,7 @@ struct HttpRequest {
 fn parse_request(args: &Value) -> Result<HttpRequest> {
     let url = require_string(args, "url")?.to_string();
     let parsed = parse_url_scheme(&url)?;
-    if !ALLOWED_SCHEMES.iter().any(|&s| s == parsed) {
+    if !ALLOWED_SCHEMES.contains(&parsed) {
         return Err(anyhow!(
             "http.request: scheme {parsed:?} not in allowlist (http, https)"
         ));
@@ -536,7 +536,7 @@ fn url_host(url: &str) -> String {
     // field. Returns "scheme://host" segment minus path/query.
     let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     without_scheme
-        .split(|c: char| c == '/' || c == '?' || c == '#')
+        .split(['/', '?', '#'])
         .next()
         .unwrap_or("")
         .to_string()

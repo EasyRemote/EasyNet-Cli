@@ -25,7 +25,7 @@
 //   2. Constructs a realistic args object — not `{}`, not random
 //      garbage, but the kind of payload an operator would actually
 //      send.
-//   3. Invokes through `AbilityDispatcher::execute_rpc` (or
+//   3. Invokes through `AxonAbilityCatalog::execute_rpc` (or
 //      `execute_stream` / `execute_bidi`).
 //   4. Asserts a specific shape of the result.
 //
@@ -48,7 +48,7 @@
 // -------------------------
 // * Cross-process IPC. The Kernel's full admission-and-receipt
 //   pipeline is exercised by separate integration tests; here
-//   we go directly through `AbilityDispatcher::execute_rpc`.
+//   we go directly through `AxonAbilityCatalog::execute_rpc`.
 // * Multi-host federation. Anything `mcp.client.*` / `a2a.*`
 //   exercises the dispatcher's branch into the relevant client
 //   service; we assert the call returns a structured "no
@@ -65,8 +65,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
-use crate::runtime::gateway::NoopGateway;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
 use super::*;
@@ -77,7 +76,7 @@ use super::*;
 /// HOME-touching boot logic (mcp_clients.json discovery,
 /// agents.json load, etc.) lands in a fresh tempdir.
 fn registry_with_temp_home() -> (
-    Arc<LocalAbilityRegistry>,
+    Arc<AxonAbilityCatalog>,
     crate::facade::cli::test_support::HomeGuard,
 ) {
     let guard = crate::facade::cli::test_support::HomeGuard::new();
@@ -92,6 +91,8 @@ fn registry_with_temp_home() -> (
         None,
         Some(Arc::new(Vec::new())),
         crate::runtime::agents::PagesIdentity::default(),
+        None,
+        Arc::new(crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new()),
     );
     (reg, guard)
 }
@@ -122,8 +123,8 @@ fn materialise_skill_fixture(
     (owner, skill_dir)
 }
 
-fn dispatcher_for(reg: Arc<LocalAbilityRegistry>) -> AbilityDispatcher {
-    AbilityDispatcher::new(reg, Arc::new(NoopGateway::new()))
+fn dispatcher_for(reg: Arc<AxonAbilityCatalog>) -> Arc<AxonAbilityCatalog> {
+    reg
 }
 
 fn target(name: &str, args: Value) -> InvocationTarget {
@@ -199,6 +200,20 @@ fn real_invocation_history_list_returns_records_array() {
     assert!(
         body.get("records").and_then(Value::as_array).is_some(),
         "history list must return records array: {resp}"
+    );
+}
+
+#[test]
+fn real_invocation_history_path_returns_ledger_location() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("device.invocation.history.path", json!({})))
+        .expect("device.invocation.history.path");
+    let body = resp.as_object().expect("object");
+    assert!(
+        body.get("ledger_path").and_then(Value::as_str).is_some()
+            && body.contains_key("ledger_ura"),
+        "history path must return ledger_path and ledger_ura field: {resp}"
     );
 }
 
@@ -1084,7 +1099,7 @@ fn real_consent_decide_records_a_decision() {
     // unknown id rather than panicking.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let perms = Arc::new(crate::runtime::execution::permission::PermissionService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let result = d.execute_rpc(target(
@@ -1113,7 +1128,7 @@ fn real_consent_decide_records_a_decision() {
 fn real_consent_list_pending_returns_empty_on_fresh_service() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let perms = Arc::new(crate::runtime::execution::permission::PermissionService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let resp = d
@@ -1134,7 +1149,7 @@ fn real_consent_list_pending_returns_empty_on_fresh_service() {
 fn real_discuss_create_then_post_round_trips_through_the_service() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::discuss::DiscussService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -1179,7 +1194,7 @@ fn real_discuss_create_then_post_round_trips_through_the_service() {
 fn real_schedule_add_then_list_then_remove_round_trip() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::schedule::ScheduleService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -1217,7 +1232,7 @@ fn real_schedule_add_then_list_then_remove_round_trip() {
 fn real_schedule_enable_routes_to_handler() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::schedule::ScheduleService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target(
@@ -1240,7 +1255,7 @@ fn real_schedule_enable_routes_to_handler() {
 fn real_schedule_remove_routes_to_handler() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::schedule::ScheduleService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target(
@@ -1259,7 +1274,7 @@ fn real_schedule_remove_routes_to_handler() {
 fn real_loop_create_then_status_then_cancel() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -1297,7 +1312,7 @@ fn real_loop_create_then_status_then_cancel() {
 fn real_loop_status_routes_for_unknown_id() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target("device.loop.status", json!({"loop_id": "none"})));
@@ -1313,7 +1328,7 @@ fn real_loop_status_routes_for_unknown_id() {
 fn real_loop_cancel_routes_for_unknown_id() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target("device.loop.cancel", json!({"loop_id": "none"})));
@@ -1360,7 +1375,7 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
     // Stop it.
     let stop = d.execute_rpc(target(
         "device.agent.stop",
-        json!({"name_or_uri": "smoke-test-agent"}),
+        json!({"name": "smoke-test-agent"}),
     ));
     match stop {
         Ok(v) => {
@@ -1369,6 +1384,29 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
         }
         Err(e) => panic!("device.agent.stop unexpected: {e}"),
     }
+}
+
+#[test]
+fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target(
+        "device.agent.start",
+        json!({
+            "name": "refresh-smoke-agent",
+            "agent_type": "claude-code",
+        }),
+    ))
+    .expect("seed agent before refresh");
+    let resp = d
+        .execute_rpc(target("device.agent.refresh", json!({})))
+        .expect("device.agent.refresh");
+    assert_eq!(resp.get("ok"), Some(&json!(false)));
+    assert_eq!(resp.get("runtime_not_ready"), Some(&json!(true)));
+    assert!(
+        resp.get("agents").and_then(Value::as_array).is_some(),
+        "refresh must return an agents array even when runtime is not ready: {resp}"
+    );
 }
 
 #[test]
@@ -1920,7 +1958,7 @@ fn every_published_ability_has_a_real_invoke_test() {
 fn real_consent_subscribe_returns_a_stream_source() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let perms = Arc::new(crate::runtime::execution::permission::PermissionService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("device.consent.subscribe", json!({}));
@@ -1934,7 +1972,7 @@ fn real_consent_subscribe_returns_a_stream_source() {
 fn real_discuss_subscribe_returns_a_stream_source() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::discuss::DiscussService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("device.discuss.subscribe", json!({"room_id": "any"}));
@@ -1955,7 +1993,7 @@ fn real_discuss_subscribe_returns_a_stream_source() {
 fn real_loop_subscribe_returns_a_stream_source() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("device.loop.subscribe", json!({"loop_id": "any"}));
@@ -1973,7 +2011,7 @@ fn real_loop_subscribe_returns_a_stream_source() {
 fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::session::SessionService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::session_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("device.session.attach", json!({"session_id": "no-such"}));
@@ -1991,7 +2029,7 @@ fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
 fn real_device_terminal_create_then_close_round_trip() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -2003,6 +2041,17 @@ fn real_device_terminal_create_then_close_round_trip() {
         .expect("session_id in response")
         .to_string();
     assert!(!session_id.is_empty());
+
+    let listed = d
+        .execute_rpc(target("device.terminal.list", json!({})))
+        .expect("device.terminal.list");
+    let sessions = listed["sessions"].as_array().expect("sessions array");
+    assert!(
+        sessions
+            .iter()
+            .any(|session| session["session_id"].as_str() == Some(session_id.as_str())),
+        "device.terminal.list must include the created session: {listed}"
+    );
 
     let close = d
         .execute_rpc(target(
@@ -2027,7 +2076,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let io = super::pty_io_ability::PtyIoService::new();
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
     super::pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
@@ -2097,7 +2146,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
 async fn real_device_terminal_attach_returns_a_bidi_source() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     super::pty_attach_ability::register(&mut reg, Arc::clone(&pty));
     let d = dispatcher_for(Arc::new(reg));
@@ -2124,7 +2173,7 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     use base64::Engine;
     let _g = crate::facade::cli::test_support::HomeGuard::new();
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::file_transfer_ability::register(&mut reg);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -2352,10 +2401,7 @@ fn real_browser_send_input_requires_known_session() {
             }),
         ))
         .expect_err("send_input against unknown session must error");
-    assert!(
-        err.to_string().contains("not found"),
-        "send_input: {err}"
-    );
+    assert!(err.to_string().contains("not found"), "send_input: {err}");
 }
 
 #[test]
@@ -2372,11 +2418,12 @@ fn real_browser_capture_viewport_emits_one_placeholder_frame() {
         ))
         .expect("open_session ok");
     let ura = open["session_ura"].as_str().unwrap().to_string();
-    let mut t = target("device.browser.capture_viewport", json!({"session_ura": ura}));
+    let mut t = target(
+        "device.browser.capture_viewport",
+        json!({"session_ura": ura}),
+    );
     t.call_mode = CallMode::Stream;
-    let source = d
-        .execute_stream(t)
-        .expect("capture_viewport must dispatch");
+    let source = d.execute_stream(t).expect("capture_viewport must dispatch");
     let frames = source.into_snapshot();
     assert_eq!(
         frames.len(),
@@ -2451,7 +2498,7 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     // namespace so an accidental reintroduction of old names fails.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -2481,7 +2528,7 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let io = super::pty_io_ability::PtyIoService::new();
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
     super::pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
@@ -2543,7 +2590,7 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     // on the legacy alias's test.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     super::pty_attach_ability::register(&mut reg, pty);
     assert!(
         reg.get_bidi("device.terminal.attach").is_some(),
@@ -2630,12 +2677,12 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
     // family without polluting the global env var (which would
     // bleed into every concurrent test that materialises the live
     // registry), we register `api_key_ability` directly into a
-    // private LocalAbilityRegistry with a fixed username "test".
+    // private AxonAbilityCatalog with a fixed username "test".
     // The handlers themselves are agnostic to how they were
     // wired in — invoking them through a private dispatcher hits
     // the same code paths the production registration would.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
-    let mut reg = LocalAbilityRegistry::new();
+    let mut reg = AxonAbilityCatalog::new();
     crate::runtime::agents::api_key_ability::register(&mut reg, "test");
     let d = dispatcher_for(Arc::new(reg));
 

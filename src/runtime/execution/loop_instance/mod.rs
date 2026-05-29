@@ -23,7 +23,6 @@ use uuid::Uuid;
 use crate::runtime::domain::{
     AgentId, LoopId, LoopInstance, LoopState, NodeId, SessionId, TenantId,
 };
-use crate::runtime::execution::session::SessionService;
 use crate::runtime::invocation::{invocation_id_of, CausalContext, Invocation, TerminalState};
 use crate::runtime::kernel_api::KernelApi;
 
@@ -55,21 +54,12 @@ pub trait LoopInvocationDriver: Send + Sync {
 
 pub struct KernelLoopInvocationDriver {
     kernel: Arc<dyn KernelApi>,
-    sessions: Arc<SessionService>,
     local_node: NodeId,
 }
 
 impl KernelLoopInvocationDriver {
-    pub fn new(
-        kernel: Arc<dyn KernelApi>,
-        sessions: Arc<SessionService>,
-        local_node: NodeId,
-    ) -> Self {
-        Self {
-            kernel,
-            sessions,
-            local_node,
-        }
+    pub fn new(kernel: Arc<dyn KernelApi>, local_node: NodeId) -> Self {
+        Self { kernel, local_node }
     }
 }
 
@@ -114,9 +104,9 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
             }
         }
 
-        let (history, _rx) = self
-            .sessions
-            .subscribe_session(&SessionId::new(invocation_id.clone()), 0)
+        let history = self
+            .kernel
+            .session_events(&SessionId::new(invocation_id.clone()), 0)
             .with_context(|| {
                 format!(
                     "loop {} {} iter {}: session {} missing after invoke",

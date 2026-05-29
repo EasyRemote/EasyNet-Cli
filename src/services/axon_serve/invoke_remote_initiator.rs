@@ -83,6 +83,9 @@ use crate::pb::axon::v1::{
 /// migration is staged for RFC-001 v4.1.6's wire-break carrier;
 /// see `docs/open-questions/deprecate-self-alias-in-ability-names.md`
 /// Stage 2 for the cross-repo coordination plan.
+// TODO(RFC-001-v4.1.6 stage-2): rename to `device.invoke_remote`
+// once the hub ships dual-name acceptance. Single grep anchor for
+// all wire-pinned `<self>.*` constants.
 pub const ABILITY_INVOKE_REMOTE: &str = "<self>.invoke_remote";
 
 /// Stream id used by every BinaryChunk on the invoke_remote bidi.
@@ -161,10 +164,13 @@ pub enum InvokeRemoteDown {
     Chunk { payload: Vec<u8> },
     /// Terminal frame. `payload` carries the final reply if any;
     /// `error` non-None means the call failed at the remote side or
-    /// in transit.
+    /// in transit. `request_id` is the target Axon runtime ledger key
+    /// when the target device routed the call through LocalRuntime.
     Result {
         payload: Vec<u8>,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
 }
 
@@ -240,6 +246,8 @@ pub enum SessionDispatch {
         payload: Vec<u8>,
         terminal: bool,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
     /// Device → hub. A device-mode daemon emits this when its
     /// CLI's `ability invoke --node` lands a `forward_invoke`
@@ -509,12 +517,14 @@ fn map_one_frame(frame: &crate::pb::axon::v1::InvokeBidiDown) -> FrameOutcome {
         InvokeRemoteDown::Result {
             payload: _,
             error: Some(msg),
+            request_id: _,
         } => FrameOutcome::Terminal(Err(Status::aborted(format!(
             "invoke_remote remote error: {msg}"
         )))),
         InvokeRemoteDown::Result {
             payload,
             error: None,
+            request_id: _,
         } => FrameOutcome::Terminal(Ok(InvokeRemoteFrame::Done(payload))),
     }
 }
@@ -596,6 +606,7 @@ mod tests {
         let result_ok = InvokeRemoteDown::Result {
             payload: b"final-reply".to_vec(),
             error: None,
+            request_id: None,
         };
         let bytes = serde_json::to_vec(&result_ok).unwrap();
         let recovered: InvokeRemoteDown = serde_json::from_slice(&bytes).unwrap();
@@ -604,6 +615,7 @@ mod tests {
         let result_err = InvokeRemoteDown::Result {
             payload: Vec::new(),
             error: Some("target offline".into()),
+            request_id: None,
         };
         let bytes = serde_json::to_vec(&result_err).unwrap();
         let recovered: InvokeRemoteDown = serde_json::from_slice(&bytes).unwrap();
@@ -644,6 +656,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"the-reply".to_vec(),
                     error: None,
+                    request_id: None,
                 },
             )),
         ];
@@ -683,6 +696,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"final".to_vec(),
                     error: None,
+                    request_id: None,
                 },
             )),
         ];
@@ -714,6 +728,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: Vec::new(),
                     error: Some("device dropped before reply".into()),
+                    request_id: None,
                 },
             )),
         ];
@@ -757,6 +772,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"reply-after-receipt".to_vec(),
                     error: None,
+                    request_id: None,
                 },
             )),
         ];
@@ -801,6 +817,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"reply".to_vec(),
                     error: None,
+                    request_id: None,
                 },
             )),
         ];

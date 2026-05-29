@@ -39,6 +39,7 @@ use crate::runtime::domain::{
     ScheduleEntry, ScheduleId, Session, SessionId,
 };
 use crate::runtime::invocation::{Invocation, Receipt};
+use serde_json::Value;
 
 /// v1 KernelApi surface. Each method is the runtime analogue of a
 /// Linux syscall; the feature PRs add implementations on the Kernel
@@ -75,6 +76,14 @@ pub trait KernelApi: Send + Sync {
 
     /// Fetch a session handle by id, or None when not present.
     fn get_session(&self, id: &SessionId) -> anyhow::Result<Option<Session>>;
+
+    /// Return stored timeline frames for one session. This is the
+    /// kernel-mediated read path for execution sub-services that
+    /// need to observe a session produced by `invoke` without
+    /// importing the session sub-service directly.
+    fn session_events(&self, _id: &SessionId, _since_seq: usize) -> anyhow::Result<Vec<Value>> {
+        anyhow::bail!("KernelApi::session_events not implemented")
+    }
 
     // ── Permission (PR-PERM) ─────────────────────────────────────────
 

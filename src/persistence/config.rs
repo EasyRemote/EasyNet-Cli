@@ -511,7 +511,7 @@ fn extract_api_host(endpoint: &str) -> String {
             // https://[::1]:50443 → strip daemon-TLS port back to bare host
             if let Some(rest) = authority.strip_prefix(host_part) {
                 if let Some(port) = rest.strip_prefix(':') {
-                    if DAEMON_TLS_PORTS.iter().any(|p| *p == port) {
+                    if DAEMON_TLS_PORTS.contains(&port) {
                         return host_part.to_string();
                     }
                 }
@@ -530,7 +530,7 @@ fn extract_api_host(endpoint: &str) -> String {
         // REST). Preserve every other authority verbatim so an
         // operator running REST on a non-standard port keeps working.
         if let Some((host, port)) = authority.rsplit_once(':') {
-            if DAEMON_TLS_PORTS.iter().any(|p| *p == port) {
+            if DAEMON_TLS_PORTS.contains(&port) {
                 return host.to_string();
             }
         }

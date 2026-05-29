@@ -49,7 +49,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_EVALUATE: &str = "device.policy.evaluate";
@@ -62,7 +62,7 @@ pub const ABILITY_SIMULATE: &str = "device.policy.simulate";
 /// config without hunting through callers.
 const DECISION_TTL_SECS: i64 = 300;
 
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.policy.evaluate",
         OwnerKind::Device,
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn registration_makes_both_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         assert!(reg.get_rpc(ABILITY_EVALUATE).is_some());
         assert!(reg.get_rpc(ABILITY_SIMULATE).is_some());

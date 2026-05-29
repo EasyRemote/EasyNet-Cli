@@ -780,113 +780,29 @@ enum DaemonDispatch {
 }
 
 /// Dispatch a fully-qualified `<agent>.<verb>` against the local
-/// daemon's ability registry over the control socket. Returns one of
-/// the four outcome variants the caller branches on.
-///
-/// Spins a single-threaded current-thread tokio runtime per call.
-/// The cost is one runtime construction (~500 µs) plus the UDS
-/// round-trip (~1 ms). EAL's other CLI subcommands (mission run,
-/// agent send) follow the same pattern; if EAL ever runs inside an
-/// already-tokio context the construction will fail and we'll need
-/// to detect that — but today every EAL entry point is sync.
+/// daemon through Axon's local Invocation gRPC surface. Returns one
+/// of the four outcome variants the caller branches on.
 fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDispatch {
-    let control_json = crate::services::control::discovery::default_path();
-    if !control_json.exists() {
-        return DaemonDispatch::DaemonDown(format!(
-            "no control.json at {} — start the daemon with `easynet runtime start`",
-            control_json.display()
-        ));
-    }
-
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            return DaemonDispatch::Error(format!("build tokio runtime: {e}"));
+    match crate::support::local_invoke::invoke_local_ability(qualified_name, arguments.clone()) {
+        Ok(value) => DaemonDispatch::Result(value),
+        Err(err) => {
+            let msg = format!("{err}");
+            let lower = msg.to_ascii_lowercase();
+            if lower.contains("daemon not running")
+                || lower.contains("listener unreachable")
+                || lower.contains("connect to local axon daemon")
+            {
+                DaemonDispatch::DaemonDown(msg)
+            } else if lower.contains("unknown_ability")
+                || lower.contains("not_found")
+                || msg.contains("no local handler registered")
+            {
+                DaemonDispatch::AbilityNotFound
+            } else {
+                DaemonDispatch::Error(msg)
+            }
         }
-    };
-
-    let ability = qualified_name.to_string();
-    let args = arguments.clone();
-    let request_id = format!("eal-{}", uuid_like_hex());
-
-    let outcome: Result<Result<Value, DaemonDispatch>, String> = runtime.block_on(async move {
-        use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
-
-        let mut client = match crate::ffi::client::connect(&control_json).await {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(Err(DaemonDispatch::DaemonDown(format!(
-                    "connect control socket: {e}"
-                ))));
-            }
-        };
-        let resp = match client
-            .round_trip(IncomingFrame::Invoke {
-                request_id: request_id.clone(),
-                ability,
-                args,
-                subject: None,
-            })
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(Err(DaemonDispatch::Error(format!("round_trip: {e}"))));
-            }
-        };
-        match resp {
-            OutgoingFrame::Result {
-                request_id: rid,
-                value,
-                ..
-            } => {
-                if rid != request_id {
-                    return Ok(Err(DaemonDispatch::Error(format!(
-                        "daemon Result rid mismatch (got {rid:?}, sent {request_id:?})"
-                    ))));
-                }
-                Ok(Ok(value))
-            }
-            OutgoingFrame::Error { code, message, .. } => {
-                // Map the typed code so the caller can route on intent
-                // rather than string-matching. `not_found` is the
-                // documented daemon code for "no handler for this
-                // ability"; anything else is propagated verbatim.
-                let lower = code.to_ascii_lowercase();
-                if lower.contains("not_found") || message.contains("no local handler registered") {
-                    Ok(Err(DaemonDispatch::AbilityNotFound))
-                } else {
-                    Ok(Err(DaemonDispatch::Error(format!(
-                        "code={code}: {message}"
-                    ))))
-                }
-            }
-            other => Ok(Err(DaemonDispatch::Error(format!(
-                "unexpected frame: {other:?}"
-            )))),
-        }
-    });
-
-    match outcome {
-        Ok(Ok(value)) => DaemonDispatch::Result(value),
-        Ok(Err(d)) => d,
-        Err(e) => DaemonDispatch::Error(e),
     }
-}
-
-/// Short hex correlation id for the IPC `request_id`. Mirrors the
-/// helper in `facade::cli::invoke` — kept local to avoid a cross-crate
-/// dep just for a 5-line function.
-fn uuid_like_hex() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{:x}", nanos)
 }
 
 /// Build a prompt for an agent from an EAL step's `function_name` and arguments.
@@ -2591,7 +2507,7 @@ mod tests {
     #[test]
     fn dispatch_to_agent_chat_stays_local_when_daemon_is_absent() {
         // Regression pin for `easynet agent send`: chat must not go
-        // through the daemon's unary control-socket invoke, because
+        // through the legacy unary control-socket invoke, because
         // that hides the driver's live stderr timeline inside the
         // daemon process. The local path fails here on the bogus
         // binary name, not on missing control.json.

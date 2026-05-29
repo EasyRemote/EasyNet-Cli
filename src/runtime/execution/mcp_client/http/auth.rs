@@ -56,7 +56,9 @@ mod tests {
     use std::collections::HashMap;
 
     fn build() -> hyper::http::request::Builder {
-        Request::builder().method("POST").uri("http://localhost/mcp")
+        Request::builder()
+            .method("POST")
+            .uri("http://localhost/mcp")
     }
 
     #[test]

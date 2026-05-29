@@ -55,15 +55,13 @@ use easynet_cli::pb::axon::v1::{
     AgentIdentity, BinaryChunk, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
     InvokeBidiUp, InvokeServerStreamRequest, StreamDescriptor,
 };
-use easynet_cli::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
-use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
 use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::axon_serve::invoke_remote_initiator::{
     InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
-use easynet_cli::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
+use easynet_cli::services::axon_serve::local_session_dispatcher::LocalAxonSessionDispatcher;
 use easynet_cli::services::axon_serve::session_initiator::{
     SessionFrameDispatcher, SessionUpSender, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
 };
@@ -245,12 +243,14 @@ fn subscribe_directory_request(caller_ura: &str) -> Request<InvokeServerStreamRe
     })
 }
 
-fn build_test_echo_dispatcher() -> Arc<AbilityDispatcher> {
-    let mut registry = LocalAbilityRegistry::new();
-    registry.register_rpc("test.echo", Arc::new(|args| Ok(args)));
-    let gateway: Arc<dyn easynet_cli::runtime::gateway_api::GatewayApi> =
-        Arc::new(NoopGateway::new());
-    Arc::new(AbilityDispatcher::new(Arc::new(registry), gateway))
+fn build_test_echo_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
+    let runtime = easynet_axon::invocation::LocalRuntime::new();
+    futures::executor::block_on(runtime.register_ability(
+        "test.echo",
+        easynet_axon::invocation::make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+    ))
+    .expect("register test.echo in LocalRuntime");
+    runtime
 }
 
 /// A device-side `<self>.session` bidi held open for the duration
@@ -432,7 +432,7 @@ async fn cross_device_invoke_remote_round_trip() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cross_device_invoke_remote_round_trip_via_local_ability_dispatcher() {
+async fn cross_device_invoke_remote_round_trip_via_local_session_dispatcher() {
     tokio::time::timeout(Duration::from_secs(60), async {
         run_round_trip_via_local_dispatcher().await;
     })
@@ -732,6 +732,7 @@ async fn run_round_trip() {
             payload: REPLY_MARKER.to_vec(),
             terminal: true,
             error: None,
+            request_id: None,
         };
         let payload = serde_json::to_vec(&result).expect("encode Result");
 
@@ -818,7 +819,7 @@ async fn run_round_trip() {
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 
-    let InvokeRemoteDown::Result { payload, error } = down else {
+    let InvokeRemoteDown::Result { payload, error, .. } = down else {
         panic!("caller expected Result variant");
     };
 
@@ -857,7 +858,8 @@ async fn run_round_trip_via_local_dispatcher() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let device_b_up_for_reply = SessionUpSender::new(device_b.up().clone());
-    let local_dispatcher = LocalAbilityDispatcher::new(build_test_echo_dispatcher());
+    let local_dispatcher =
+        LocalAxonSessionDispatcher::new().with_local_runtime(build_test_echo_runtime());
     let reply_task_handle = tokio::spawn(async move {
         let frame = recv_next_binary_chunk_frame(&mut device_b_down).await;
 
@@ -933,7 +935,7 @@ async fn run_round_trip_via_local_dispatcher() {
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 
-    let InvokeRemoteDown::Result { payload, error } = down else {
+    let InvokeRemoteDown::Result { payload, error, .. } = down else {
         panic!("caller expected Result variant");
     };
 

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::domain::{AgentId, LoopId};
 use crate::runtime::execution::loop_instance::LoopService;
 
@@ -32,7 +32,7 @@ pub const ABILITY_STATUS: &str = "device.loop.status";
 pub const ABILITY_SUBSCRIBE: &str = "device.loop.subscribe";
 pub const ABILITY_CANCEL: &str = "device.loop.cancel";
 
-pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<LoopService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<LoopService>) {
     let a = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         "device.loop.create",

@@ -99,7 +99,7 @@ Existing `InvocationReceipt` records on disk contain `function_name = "<self>.di
 **Scope:** ~15 register call sites in `runtime/agents/` and `runtime/keyring/`. No wire changes, no name changes.
 
 **Ship criteria:**
-1. `LocalAbilityRegistry::register_rpc` (and bidi/stream/envelope variants) accept an `OwnerKind` parameter or pre-resolved `owner_uri`.
+1. Daemon Axon catalogue registration APIs (rpc/bidi/stream/envelope variants) accept an `OwnerKind` parameter or pre-resolved `owner_uri`.
 2. `meta_ability::list_abilities_handler` reads owner from the registry, deletes the `name.starts_with("01HUB.")` branch and the `device_owner` fallback for `<self>.*`.
 3. CLI render layer (`facade/cli/abilities.rs`) is unchanged because its input is already correct owner URAs.
 4. New regression test: every registered ability name resolves to a parseable v4.1.5 URA via the registry's owner table.

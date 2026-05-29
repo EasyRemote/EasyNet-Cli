@@ -19,12 +19,15 @@ use console::style;
 use serde_json::Value;
 use std::time::Duration;
 
-use crate::core::agent_spec::{AgentSpec, RuntimeKind};
 use crate::facade::cli::mission_runs::{self, MissionRunOpts};
+use crate::facade::cli::{
+    daemon_agent_view,
+    daemon_agent_view::{AgentRuntimeKind, DaemonAgentRow},
+};
 use crate::persistence::config;
-use crate::registry::agents::{self, AgentEntry, AgentType, CURRENT_REGISTRY_SCHEMA};
-use crate::runtime::directory::{AgentDirectory, Location};
+use crate::runtime::directory::AgentDirectory;
 use crate::runtime::drivers::{claude_code, codex};
+use crate::support::local_daemon_grpc::LocalDaemonAbilityClient;
 use crate::support::output;
 use crate::support::timeouts;
 
@@ -36,11 +39,14 @@ pub struct AgentArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AgentAction {
-    /// Register a new AI agent.
+    /// Register a new daemon-owned AI agent. Requires a paired,
+    /// running local runtime.
     Add(AddArgs),
-    /// List registered agents.
+    /// List daemon-owned registered agents. Requires a paired,
+    /// running local runtime.
     List,
-    /// Remove a registered agent.
+    /// Remove a daemon-owned registered agent. Requires a paired,
+    /// running local runtime.
     Remove(RemoveArgs),
     /// Send a prompt to an agent and print the response.
     Send(SendArgs),
@@ -52,22 +58,19 @@ pub enum AgentAction {
     Abilities(AbilitiesArgs),
     /// Bind configured upstream MCP tools into one agent.
     Mcp(McpArgs),
-    /// Update fields of a registered agent in place. Currently
-    /// supports `--model`. Mutates `agent.toml` + the registry
-    /// row atomically; preserves label, abilities, skills, runs.
+    /// Update fields of a daemon-owned registered agent in place.
+    /// Currently supports `--model`. Requires a paired, running
+    /// local runtime.
     Set(SetArgs),
     /// Dry-run: show what `<agent>.<ability>` tools would be published,
     /// without touching Axon. Live publishing lands in a later PR.
     Publish(PublishArgs),
-    /// Re-run runtime.register_local_tool for every daemon-owned
-    /// ability against the live runtime. Use this after authoring a
-    /// new `<agent>/abilities/<verb>.ability.toml` to make the new
-    /// ability invokable from outside the daemon (the in-daemon
-    /// dispatcher's fallback resolver picks up new TOMLs automatically
-    /// for in-process invocation; this command propagates the same
-    /// view to axon-runtime so cross-process Invokes route correctly).
-    /// No daemon restart required.
-    Refresh,
+    /// Ask the daemon to re-register one agent's, or every registered
+    /// agent's, LocalRuntime handlers. Requires a paired, running
+    /// local runtime. Use after authoring a new
+    /// `<agent>/abilities/<verb>.ability.toml`; no daemon restart
+    /// required.
+    Refresh(RefreshArgs),
     /// Inspect this agent's persisted chat history (the JSONL log
     /// that --follow / --resume / --session-id on 'agent send' read).
     /// Distinct from 'agent session' (singular), which manages the
@@ -78,6 +81,15 @@ pub enum AgentAction {
     /// `easynet agent <agent-id-or-ura> new-ability ...`.
     #[command(external_subcommand)]
     Scoped(Vec<String>),
+}
+
+#[derive(Debug, Args)]
+pub struct RefreshArgs {
+    /// Optional. Refresh only this agent's `<agent>.*` runtime
+    /// handlers, including ability TOMLs. Omit to refresh every
+    /// agent in `agents.json`.
+    #[arg(long)]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -349,7 +361,7 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Mcp(a) => run_mcp(a),
         AgentAction::Set(a) => run_set(a),
         AgentAction::Publish(a) => run_publish(a),
-        AgentAction::Refresh => run_refresh(),
+        AgentAction::Refresh(args) => run_refresh(args),
         AgentAction::ChatHistory(a) => run_sessions(a),
         AgentAction::Scoped(tokens) => run_agent_scoped(tokens),
     }
@@ -363,95 +375,26 @@ fn run_agent_scoped(tokens: Vec<String>) -> anyhow::Result<()> {
 }
 
 fn run_add(args: AddArgs) -> anyhow::Result<()> {
-    let agent_type: AgentType = args.r#type.parse()?;
-    let mut registry = agents::load_agents()?;
-
-    // Before we touch any disk state, reject an `agent add` that
-    // would overwrite an existing v2 row whose root directory is
-    // already present. The narrower `AgentDirectory::create`
-    // would refuse the same case on its own, but catching it up
-    // here lets us print a single clean CLI error instead of
-    // letting it surface as the directory layer's internal
-    // "agent.toml already exists" phrasing.
-    let root = agents_root_for(&args.name);
-    if root.join("agent.toml").exists() && !registry.agents.contains_key(&args.name) {
-        anyhow::bail!(
-            "agent root at {} already carries an 'agent.toml' but no registry row. \
-             Import it by hand (add a registry row pointing at this path) or remove \
-             the directory before running `agent add`.",
-            root.display()
-        );
-    }
-
-    // ── Build the v2 spec + directory ──
-    //
-    // The source of truth for an agent's configuration is its
-    // on-disk `agent.toml`. `run_add` materializes one from the
-    // CLI flags, and the registry row becomes a thin pointer
-    // (name → root path + runtime tag). Operator edits to the
-    // spec afterwards do not require re-running `agent add`.
-    let runtime = runtime_kind_from(agent_type);
-    let mut spec = AgentSpec::new(&args.name, runtime);
-    spec.model = args.model.clone();
-    if let Some(label) = &args.label {
-        spec.description = Some(label.clone());
-    }
-
-    // Only create the directory when the spec is brand new; an
-    // update keeps the existing directory (and any operator
-    // edits to the spec) intact, only touching the registry
-    // pointer. The rationale: `agent add alice --model gpt-5`
-    // the second time should change the registry-visible model
-    // and leave the operator's hand-written description alone.
-    let directory = if registry.agents.contains_key(&args.name) && root.join("agent.toml").exists()
-    {
-        AgentDirectory::open(&root)?
-    } else {
-        AgentDirectory::create(&Location::Local { root: root.clone() }, spec)?
-    };
-
-    // ── Build the v2 registry row ──
-    //
-    // We deliberately emit only the v2-shape fields on write
-    // (name → {schema_version, root_path, runtime, model}).
-    // The fat v1 fields are left at their default / empty value
-    // so `save_agents`'s `skip_serializing_if` helpers omit them
-    // from the JSON. A row read back from disk therefore carries
-    // no fat data — PR-3b.5's dispatch refactor can then rely on
-    // `AgentDirectory` being the only source of truth.
-    let mut entry = AgentEntry::new(agent_type, args.model.clone());
-    // Explicitly clear the fat fields that `AgentEntry::new`
-    // populates for backwards compatibility.
-    //
-    // The `skip_serializing_if` helpers on those fields would
-    // already omit them from JSON for their default values,
-    // but we reset here too — two reasons:
-    //
-    //   1. Intent is visible at the write site. A reader of
-    //      `run_add` sees "v2 write: every fat field explicitly
-    //      blank" without having to cross-reference serde
-    //      attributes in `registry::agents`.
-    //   2. Protects against future drift. If `AgentEntry::new`
-    //      ever starts returning a non-default `timeout_secs`
-    //      or `max_output_bytes` (say, a future `agent add
-    //      --timeout` flag is routed through `new`), the write
-    //      path here keeps v2 rows free of that value so an
-    //      operator who later edits `agent.toml` can't have
-    //      their change shadowed by a stale registry value.
-    //      The symmetry with `command.clear()` / `args.clear()`
-    //      is the whole discipline.
-    entry.command.clear();
-    entry.args.clear();
-    entry.label = None;
-    entry.env.clear();
-    entry.timeout_secs = agents::default_timeout_for_new_rows();
-    entry.max_output_bytes = agents::default_max_output_for_new_rows();
-    entry.schema_version = CURRENT_REGISTRY_SCHEMA;
-    entry.root_path = Some(directory.root().to_path_buf());
-
-    let is_update = registry.agents.contains_key(&args.name);
-    registry.agents.insert(args.name.clone(), entry);
-    agents::save_agents(&registry)?;
+    let agent_type: AgentRuntimeKind = args.r#type.parse()?;
+    let daemon_client = required_local_daemon_agent_client()?;
+    let name = args.name.clone();
+    let daemon_response = invoke_daemon_agent_start_required(
+        &daemon_client,
+        serde_json::json!({
+            "name": name,
+            "agent_type": agent_type.to_string(),
+            "model": args.model,
+            "model_present": true,
+            "label": args.label,
+            "materialize_directory": true,
+            "update_existing_spec": false,
+            "project_workspace": true,
+        }),
+    )?;
+    let is_update = daemon_response
+        .get("replaced_prior")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     if is_update {
         output::success(&format!("Updated agent '{}'", args.name));
@@ -459,707 +402,156 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
         output::success(&format!("Registered agent '{}'", args.name));
     }
     output::detail("type", &agent_type.to_string());
-    if let Some(m) = &args.model {
+    if let Some(m) = daemon_response
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+    {
         output::detail("model", m);
     }
-    output::detail("root", &directory.root().display().to_string());
-
-    // Eagerly project the workspace so the seeded skills (the
-    // `easynet-collaborate` and `easynet-pages-author` SKILL.md
-    // files) are on disk immediately after `agent add`, not
-    // lazily on the first dispatch. Operators using a freshly-
-    // added agent through `claude --resume` (or any non-easynet
-    // entry path) get the briefing without an EasyNet round-trip
-    // first. Best-effort: a projection failure logs but does not
-    // fail the registration.
-    if let Err(e) = crate::runtime::workspace::ensure_from_directory(&directory) {
+    if let Some(root) = daemon_response
+        .get("root_path")
+        .and_then(serde_json::Value::as_str)
+    {
+        output::detail("root", root);
+    }
+    if let Some(err) = daemon_response
+        .get("workspace_projection_error")
+        .and_then(serde_json::Value::as_str)
+    {
         eprintln!(
-            "[agent add warn] could not project workspace at {}: {e:#}; \
+            "[agent add warn] could not project workspace: {err}; \
              skills will land on first dispatch",
-            directory.root().display()
         );
     }
 
-    // Publish the new agent's manifests to the local axon-runtime so
-    // they appear in `ListMCPTools` (and therefore the EasyNet
-    // frontend's Abilities catalog) immediately. Best-effort — see
-    // `runtime::publish` doc for the failure model. The most common
-    // miss is "operator hasn't started the runtime yet"; we surface a
-    // hint so they know what to do, but don't fail `agent add`.
-    publish_to_local_runtime_best_effort(&args.name, &directory);
+    render_agent_start_runtime_outcome(&args.name, &daemon_response);
 
     Ok(())
 }
 
-/// Best-effort publish of a freshly-added (or re-added) agent's
-/// manifests. Logs every outcome via `output::detail` / `output::warn`;
-/// never propagates an error.
+/// Resolve the canonical caller URA the CLI should sign its
+/// loopback gRPC calls under when invoking daemon-hosted management
+/// abilities. Built from device credentials via the same bootstrap
+/// helper used at daemon start, so admission on the daemon's gRPC
+/// service sees a consistent shape across all CLI → daemon hops.
 ///
-/// The dispatch_endpoint passed to register is the EasyNet-CLI
-/// daemon's IPC socket. Step 3 of the cross-repo plan adds the
-/// runtime-side dispatch hook that uses it; until then the runtime
-/// stores it without acting on it. The frontend Abilities surface
-/// only needs the registration to be visible in `ListMCPTools` —
-/// dispatch is a follow-up.
-fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirectory) {
-    let creds = match crate::persistence::config::load_credentials() {
-        Ok(c) => c,
-        Err(e) => {
-            output::warn(&format!(
-                "could not load device credentials for publish: {e}"
-            ));
-            return;
-        }
-    };
+/// Returns `None` when the device hasn't been paired yet
+/// (credentials not on disk). The caller silently skips the notify
+/// in that case — there's no daemon state to mutate either.
+#[cfg(feature = "axon-pb")]
+fn resolve_local_daemon_caller_ura() -> Option<String> {
+    let creds = crate::persistence::config::load_credentials().ok()?;
     let username = crate::facade::cli::start::bootstrap_username_for(&creds);
-
-    if let Ok((bridge, state)) = crate::persistence::config::load_and_connect() {
-        let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
-        let plan = match crate::facade::cli::start::build_bootstrap_plan_from(
-            tenant_id,
-            &creds.node_id,
-            &username,
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                output::warn(&format!("publish bootstrap plan: {e}"));
-                return;
-            }
-        };
-        // Pin the caller URI so the bridge's hub-shaped envelope synth
-        // doesn't fall back to the literal-subject path
-        // (`agents/easynet:prv:hub:<realm>`), which axon's membership
-        // gate rejects with AXON_MEMBERSHIP_REQUIRED. Same shape `start.rs`
-        // uses at boot — the difference there was the boot path always
-        // calls `with_caller_ura`; this post-add path was missed.
-        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
-            &bridge,
-            plan.host_device_ura.clone(),
-        );
-        let runtime_publish = publish_bootstrap_plan_via_invoker(tenant_id, &plan, &invoker);
-        // Updating the local axon-runtime keeps the device's own
-        // cross-process tool catalog fresh, but the realm directory
-        // used by backend `/api/v1/agents` / `federation.resolve`
-        // is maintained by the daemon↔hub advertise path. Drive
-        // that second hop explicitly as well so post-boot `agent
-        // add` mutates both surfaces instead of only the local
-        // runtime view.
-        match publish_to_hub_direct_best_effort_silent(
-            tenant_id,
-            &creds.hub_endpoint,
-            &plan.host_device_ura,
-            &plan,
-        ) {
-            Ok(()) => output::detail(
-                "publish-path",
-                "local runtime updated; realm directory advertised directly to the hub",
-            ),
-            Err(hub_msg) => match publish_via_local_daemon_best_effort_silent(
-                tenant_id,
-                &plan.host_device_ura,
-                &plan,
-            ) {
-                Ok(()) => {
-                    output::warn(
-                        "direct hub directory sync failed; local daemon accepted only a local \
-                         publish, so hub-visible agent rows may still be stale",
-                    );
-                    output::warn(&format!("direct hub directory sync failed: {hub_msg}"));
-                    output::detail(
-                        "publish-path",
-                        "local runtime updated; local daemon accepted a non-authoritative local publish",
-                    );
-                }
-                Err(local_msg) => {
-                    output::warn("could not sync the realm directory after local runtime publish");
-                    output::warn(&format!("direct hub directory sync failed: {hub_msg}"));
-                    output::warn(&format!(
-                        "local daemon gRPC directory sync also failed: {local_msg}"
-                    ));
-                    output::warn(
-                        "  → peers and backend '/api/v1/agents' will stay stale until the next successful advertise round",
-                    );
-                }
-            },
-        }
-        if let Err(msg) = runtime_publish {
-            output::warn(&format!(
-                "publish through local axon-runtime reported advertise failures: {msg}"
-            ));
-        }
-        let _ = (agent_name, directory);
-        return;
-    }
-
-    let tenant_id = creds.tenant_id.as_str();
-    let plan = match crate::facade::cli::start::build_bootstrap_plan_from(
-        tenant_id,
+    let plan = crate::facade::cli::start::build_bootstrap_plan_from(
+        &creds.tenant_id,
         &creds.node_id,
         &username,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            output::warn(&format!("publish bootstrap plan: {e}"));
-            return;
-        }
-    };
-    match publish_to_hub_direct_best_effort(
-        tenant_id,
-        &creds.hub_endpoint,
-        &plan.host_device_ura,
-        &plan,
-    ) {
-        Ok(()) => output::detail(
-            "publish-path",
-            "local runtime state absent; advertised directly to the hub",
-        ),
-        Err(hub_msg) => {
-            output::warn(
-                "could not reach local axon-runtime to publish manifests: no runtime state",
-            );
-            output::warn(&format!("direct hub publish failed: {hub_msg}"));
-            output::warn(
-                "  → run 'easynet runtime start' to start it; then 'easynet agent add ...' \
-                 again will publish, or restart the daemon to re-register every agent",
-            );
-        }
-    }
-    let _ = (agent_name, directory);
+    )
+    .ok()?;
+    Some(plan.host_device_ura)
 }
 
-/// Best-effort unpublish for `easynet agent remove`. Mirror of
-/// `publish_to_local_runtime_best_effort` — same connect-and-loop
-/// pattern, calls unregister instead of register. Keeps the local
-/// runtime's MCP tool catalog in sync with the registry.
-fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentDirectory) {
-    let creds = match crate::persistence::config::load_credentials() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    // RFC-001 P4.8: revoke this agent's directory entry via
-    // federation.revoke. Look up the URA from local-agents.json
-    // (the bootstrap step persists every llm sub-agent under
-    // `(profile=llm, name=<agent_name>)`); if absent, the agent
-    // was never advertised, which makes the revoke a no-op.
-    let file = match crate::persistence::local_agents::load() {
-        Ok(f) => f,
-        Err(e) => {
-            output::warn(&format!("could not read local-agents.json for revoke: {e}"));
-            return;
-        }
-    };
-    let agent_ura =
-        match crate::persistence::local_agents::lookup_hosted_uri(&file, "llm", agent_name) {
-            Some(uri) => uri,
-            None => return,
-        };
-    // Pin the caller URI so federation.revoke's signed envelope
-    // carries the daemon's host URA, not the literal-subject
-    // fallback the bridge would otherwise synthesise (which the
-    // membership gate rejects). See the same fix in
-    // `publish_to_local_runtime_best_effort`.
-    let realm = crate::facade::cli::start::realm_from_agent_ura(&file.host_device_agent_ura)
-        .unwrap_or_default();
-    if let Ok((bridge, state)) = crate::persistence::config::load_and_connect() {
-        let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
-        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
-            &bridge,
-            file.host_device_agent_ura.clone(),
-        );
-        if let Err(msg) = revoke_agent_via_invoker(
-            &invoker,
-            tenant_id,
-            &realm,
-            &agent_ura,
-            "operator removed agent",
-        ) {
-            output::warn(&format!(
-                "revoke through local axon-runtime reported directory failure: {msg}"
-            ));
-        }
-        let _ = (agent_name, directory);
-        return;
-    }
+fn required_local_daemon_agent_client() -> anyhow::Result<LocalDaemonAbilityClient> {
+    #[cfg(feature = "axon-pb")]
+    let caller_ura = resolve_local_daemon_caller_ura();
+    #[cfg(not(feature = "axon-pb"))]
+    let caller_ura = None;
 
-    let _ = revoke_from_hub_direct_best_effort(
-        &creds.tenant_id,
-        &creds.hub_endpoint,
-        &file.host_device_agent_ura,
-        &realm,
-        &agent_ura,
-        "operator removed agent",
-    );
-    // Runtime not running and direct hub revoke unavailable →
-    // leave the stale directory entry to the next boot's full
-    // advertise sweep / revoke. Silent by contract; operator
-    // already saw "Removed agent".
-    let _ = (agent_name, directory);
+    LocalDaemonAbilityClient::for_agent_management(caller_ura).map_err(|msg| {
+        anyhow::anyhow!(
+            "agent registry is daemon-owned, but the local daemon Axon ability surface is \
+             unavailable: {msg}"
+        )
+    })
 }
 
-fn publish_bootstrap_plan_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
-    tenant_id: &str,
-    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-    invoker: &I,
-) -> Result<(), String> {
-    let outcomes = publish_bootstrap_plan_outcomes_via_invoker(tenant_id, plan, invoker);
-    render_publish_outcomes(&outcomes);
-    publish_outcome_summary(&outcomes)
+/// Shared CLI→daemon ability invocation with stable error
+/// prefixing. The named wrappers below stay as 1-line readers so a
+/// `git grep invoke_daemon_agent_start` still surfaces the call
+/// site, but the error-format policy and the `.invoke(...)`
+/// transport call live in ONE place. A future expansion to typed
+/// `invoke::<R>()` per PR-D in
+/// `docs/rfc/industrial-textbook-followups-2026-05-29.md` lands
+/// here without touching the wrappers.
+fn invoke_daemon_ability_required(
+    client: &LocalDaemonAbilityClient,
+    ability: &str,
+    payload: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    client
+        .invoke(ability, payload)
+        .map_err(|err| anyhow::anyhow!("{ability} failed: {err}"))
 }
 
-fn publish_bootstrap_plan_outcomes_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
-    tenant_id: &str,
-    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-    invoker: &I,
-) -> Vec<crate::runtime::publish::PublishOutcome> {
-    crate::runtime::publish::republish_abilities_via_advertise(invoker, tenant_id, plan)
+fn invoke_daemon_agent_start_required(
+    client: &LocalDaemonAbilityClient,
+    payload: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    invoke_daemon_ability_required(client, "device.agent.start", payload)
 }
 
-#[cfg(feature = "axon-pb")]
-fn publish_bootstrap_plan_via_invoker_silent<I: crate::runtime::advertise::AbilityInvoker>(
-    tenant_id: &str,
-    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-    invoker: &I,
-) -> Result<(), String> {
-    let outcomes = publish_bootstrap_plan_outcomes_via_invoker(tenant_id, plan, invoker);
-    publish_outcome_summary(&outcomes)
+fn invoke_daemon_agent_stop_required(
+    client: &LocalDaemonAbilityClient,
+    name: &str,
+) -> anyhow::Result<serde_json::Value> {
+    invoke_daemon_ability_required(
+        client,
+        "device.agent.stop",
+        serde_json::json!({ "name": name }),
+    )
 }
 
-fn render_publish_outcomes(outcomes: &[crate::runtime::publish::PublishOutcome]) {
-    let mut ok = 0usize;
-    let mut total = 0usize;
-    for outcome in outcomes {
-        if outcome.label == "skipped" || outcome.label == "local-agents.json" {
-            continue;
-        }
-        total += 1;
-        match &outcome.result {
-            Ok(_) => {
-                ok += 1;
-                if outcome.label.starts_with("abilities/") {
-                    output::detail(
-                        "published",
-                        &format!("{} {}", outcome.agent_ura, outcome.label),
-                    );
-                }
-            }
-            Err(msg) => output::warn(&format!("publish {} failed: {msg}", outcome.label)),
-        }
-    }
-    if total > 0 {
+fn invoke_daemon_agent_refresh_required(
+    client: &LocalDaemonAbilityClient,
+    payload: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    invoke_daemon_ability_required(client, "device.agent.refresh", payload)
+}
+
+fn render_agent_start_runtime_outcome(name: &str, resp: &serde_json::Value) {
+    let registered = resp
+        .get("runtime_registered")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let failed = resp
+        .get("runtime_failed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if registered > 0 {
         output::detail(
-            "directory",
-            &format!("{ok}/{total} federation.advertise_* calls — entries visible to peers"),
+            "runtime",
+            &format!(
+                "daemon registered {registered} `<{name}>.*` ability rows into LocalRuntime \
+                 (failed: {failed})"
+            ),
+        );
+    } else {
+        output::detail(
+            "runtime",
+            "daemon accepted device.agent.start but registered 0 rows \
+             (already present or registrar pending)",
         );
     }
 }
 
-fn publish_outcome_summary(
-    outcomes: &[crate::runtime::publish::PublishOutcome],
-) -> Result<(), String> {
-    let mut relevant = 0usize;
-    let mut failures = Vec::new();
-    for outcome in outcomes {
-        if outcome.label == "skipped" || outcome.label == "local-agents.json" {
-            continue;
-        }
-        relevant += 1;
-        if let Err(msg) = &outcome.result {
-            failures.push(format!("{} {}: {msg}", outcome.agent_ura, outcome.label));
-        }
+fn render_agent_stop_runtime_outcome(name: &str, resp: &serde_json::Value) {
+    let removed = resp
+        .get("runtime_removed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if removed > 0 {
+        output::detail(
+            "runtime",
+            &format!("daemon unregistered {removed} `{name}.*` rows from LocalRuntime"),
+        );
     }
-    if relevant == 0 {
-        return Err("no federation.advertise_* outcomes produced".into());
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures.join("; "))
-    }
-}
-
-fn revoke_agent_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
-    invoker: &I,
-    tenant_id: &str,
-    realm: &str,
-    agent_ura: &str,
-    reason: &str,
-) -> Result<(), String> {
-    let outcome = crate::runtime::publish::unpublish_abilities_via_revoke(
-        invoker, tenant_id, realm, agent_ura, reason,
-    );
-    match outcome.result {
-        Ok(_) => {
-            output::detail("revoked", &outcome.agent_ura);
-            Ok(())
-        }
-        Err(msg) => {
-            output::warn(&format!("revoke {} failed: {msg}", outcome.agent_ura));
-            Err(msg)
-        }
-    }
-}
-
-#[cfg(any(test, feature = "axon-pb"))]
-fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("hub endpoint is empty".into());
-    }
-    if let Some(rest) = trimmed.strip_prefix("axon://") {
-        return Ok(format!("http://{rest}"));
-    }
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        return Ok(trimmed.to_string());
-    }
-    if trimmed.contains("://") {
-        return Err(format!("unsupported hub endpoint scheme in '{trimmed}'"));
-    }
-    Ok(format!("http://{trimmed}"))
-}
-
-#[cfg(any(test, feature = "axon-pb"))]
-fn ability_name_from_resource_ura(resource_ura: &str) -> Option<String> {
-    // Canonical v4.1.4 ability URAs encode the member-call target as
-    // `<owner>.<agent>.<verb>`. Routing wants just `<agent>.<verb>`,
-    // e.g. `federation.advertise_agent` for
-    // `easynet:///r/acme/ability/hub.federation.advertise_agent`.
-    crate::ura::qualified_ability_name(resource_ura)
-}
-
-#[cfg(any(test, feature = "axon-pb"))]
-fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBuf>> {
-    for path in direct_hub_trust_path_candidates() {
-        let anchor =
-            match crate::services::realm_trust_anchor::RealmTrustAnchor::load_or_empty(&path) {
-                Ok(anchor) => anchor,
-                Err(_) => continue,
-            };
-        if let Some(entry) = anchor.lookup_peer_hub(endpoint_url) {
-            return Some(entry.tls_ca_pem_path.clone());
-        }
-    }
-    None
-}
-
-#[cfg(any(test, feature = "axon-pb"))]
-fn direct_hub_trust_path_candidates() -> Vec<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
-        candidates.push(std::path::PathBuf::from(override_path));
-    }
-    candidates.push(std::path::PathBuf::from(
-        crate::services::realm_trust_anchor::DEFAULT_REALM_TRUST_PATH,
-    ));
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = std::path::PathBuf::from(home);
-        candidates.push(home.join("realm-trust.toml"));
-        candidates.push(home.join(".easynet/realm-trust.toml"));
-    }
-    let mut deduped = Vec::with_capacity(candidates.len());
-    for path in candidates {
-        if !deduped.iter().any(|seen| seen == &path) {
-            deduped.push(path);
-        }
-    }
-    deduped
-}
-
-#[cfg(feature = "axon-pb")]
-struct DirectLocalDaemonAbilityInvoker {
-    caller_ura: String,
-    socket_path: std::path::PathBuf,
-}
-
-#[cfg(feature = "axon-pb")]
-impl DirectLocalDaemonAbilityInvoker {
-    fn new(caller_ura: &str) -> Result<Self, String> {
-        if caller_ura.trim().is_empty() {
-            return Err("host device URI is empty; cannot publish via local daemon".into());
-        }
-        let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
-        if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
-            return Err(format!(
-                "daemon gRPC listener not reachable at {}",
-                socket_path.display()
-            ));
-        }
-        Ok(Self {
-            caller_ura: caller_ura.to_string(),
-            socket_path,
-        })
-    }
-
-    fn invoke_function(
-        &self,
-        function_name: &str,
-        payload_json: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let caller_ura = self.caller_ura.clone();
-        let socket_path = self.socket_path.clone();
-        let arguments = serde_json::to_vec(&payload_json)
-            .map_err(|e| format!("encode {function_name} payload: {e}"))?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("build tokio runtime for local daemon publish: {e}"))?;
-
-        runtime.block_on(async move {
-            let channel = crate::support::local_daemon_grpc::connect_channel(
-                socket_path.clone(),
-                std::time::Duration::from_secs(10),
-                std::time::Duration::from_secs(5),
-            )
-            .await
-            .map_err(|e| format!("connect to local daemon gRPC socket: {e}"))?;
-            let mut client = crate::pb::axon::v1::invocation_client::InvocationClient::new(channel);
-            let request = crate::services::axon_serve::ProtoEnvelope::loopback(caller_ura)
-                .and_then(|env| env.invoke_request(function_name, arguments))
-                .map_err(|e| format!("build {function_name} invoke request: {e}"))?;
-            let response = client.invoke(request).await.map_err(|status| {
-                format!(
-                    "local daemon rejected {function_name}: code={:?} message={}",
-                    status.code(),
-                    status.message()
-                )
-            })?;
-            let body = response.into_inner();
-            if body.result.is_empty() {
-                return Ok(serde_json::Value::Null);
-            }
-            serde_json::from_slice(&body.result)
-                .map_err(|e| format!("decode {function_name} response: {e}"))
-        })
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl crate::runtime::advertise::AbilityInvoker for DirectLocalDaemonAbilityInvoker {
-    fn invoke_ability(
-        &self,
-        _tenant_id: &str,
-        resource_ura: &str,
-        payload_json: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let function_name = ability_name_from_resource_ura(resource_ura).ok_or_else(|| {
-            format!("cannot derive ability name from resource URI '{resource_ura}'")
-        })?;
-        self.invoke_function(&function_name, payload_json)
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn publish_via_local_daemon_best_effort_silent(
-    tenant_id: &str,
-    caller_ura: &str,
-    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    let invoker = DirectLocalDaemonAbilityInvoker::new(caller_ura)?;
-    publish_bootstrap_plan_via_invoker_silent(tenant_id, plan, &invoker)
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn publish_via_local_daemon_best_effort_silent(
-    _tenant_id: &str,
-    _caller_ura: &str,
-    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    Err("local daemon publish requires the 'axon-pb' feature".into())
-}
-
-#[cfg(feature = "axon-pb")]
-struct DirectHubAbilityInvoker {
-    endpoint: String,
-    caller_ura: String,
-    hub_uri: String,
-}
-
-#[cfg(feature = "axon-pb")]
-impl DirectHubAbilityInvoker {
-    fn new(raw_endpoint: &str, caller_ura: &str, realm: &str) -> Result<Self, String> {
-        if caller_ura.trim().is_empty() {
-            return Err("host device URI is empty; cannot publish to the hub".into());
-        }
-        Ok(Self {
-            endpoint: hub_invoke_endpoint(raw_endpoint)?,
-            caller_ura: caller_ura.to_string(),
-            hub_uri: crate::ura::hub_ura(realm),
-        })
-    }
-
-    fn invoke_function(
-        &self,
-        function_name: &str,
-        payload_json: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let endpoint_url = self.endpoint.clone();
-        let caller_ura = self.caller_ura.clone();
-        let hub_uri = self.hub_uri.clone();
-        let arguments = serde_json::to_vec(&payload_json)
-            .map_err(|e| format!("encode {function_name} payload: {e}"))?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("build tokio runtime for hub publish: {e}"))?;
-
-        runtime.block_on(async move {
-            let mut endpoint = tonic::transport::Endpoint::from_shared(endpoint_url.clone())
-                .map_err(|e| format!("invalid hub endpoint '{endpoint_url}': {e}"))?
-                .timeout(std::time::Duration::from_secs(10))
-                .connect_timeout(std::time::Duration::from_secs(5));
-
-            if endpoint_url.starts_with("https://") {
-                let tls = match direct_hub_trust_match(&endpoint_url) {
-                    Some(Some(path)) => {
-                        crate::services::federation_client::pinned_tls_config(path.as_path())
-                            .map_err(|e| format!("load pinned CA for '{endpoint_url}': {e}"))?
-                    }
-                    Some(None) | None => {
-                        tonic::transport::ClientTlsConfig::new().with_native_roots()
-                    }
-                };
-                endpoint = endpoint
-                    .tls_config(tls)
-                    .map_err(|e| format!("configure TLS for '{endpoint_url}': {e}"))?;
-            }
-
-            let channel = endpoint
-                .connect()
-                .await
-                .map_err(|e| format!("connect to hub '{endpoint_url}': {e}"))?;
-            let mut client = crate::pb::axon::v1::invocation_client::InvocationClient::new(channel);
-            let request = crate::services::axon_serve::ProtoEnvelope::targeted(
-                caller_ura,
-                hub_uri.clone(),
-                hub_uri,
-            )
-            .and_then(|env| env.invoke_request(function_name, arguments))
-            .map_err(|e| format!("build {function_name} invoke request: {e}"))?;
-            let response = client.invoke(request).await.map_err(|status| {
-                format!(
-                    "hub rejected {function_name}: code={:?} message={}",
-                    status.code(),
-                    status.message()
-                )
-            })?;
-            let body = response.into_inner();
-            if body.result.is_empty() {
-                return Ok(serde_json::Value::Null);
-            }
-            serde_json::from_slice(&body.result)
-                .map_err(|e| format!("decode {function_name} response: {e}"))
-        })
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl crate::runtime::advertise::AbilityInvoker for DirectHubAbilityInvoker {
-    fn invoke_ability(
-        &self,
-        _tenant_id: &str,
-        resource_ura: &str,
-        payload_json: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let function_name = ability_name_from_resource_ura(resource_ura).ok_or_else(|| {
-            format!("cannot derive ability name from resource URI '{resource_ura}'")
-        })?;
-        self.invoke_function(&function_name, payload_json)
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn publish_to_hub_direct_best_effort(
-    tenant_id: &str,
-    hub_endpoint: &str,
-    caller_ura: &str,
-    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    let invoker = DirectHubAbilityInvoker::new(hub_endpoint, caller_ura, tenant_id)?;
-    publish_bootstrap_plan_via_invoker(tenant_id, plan, &invoker)
-}
-
-#[cfg(feature = "axon-pb")]
-fn publish_to_hub_direct_best_effort_silent(
-    tenant_id: &str,
-    hub_endpoint: &str,
-    caller_ura: &str,
-    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    let invoker = DirectHubAbilityInvoker::new(hub_endpoint, caller_ura, tenant_id)?;
-    publish_bootstrap_plan_via_invoker_silent(tenant_id, plan, &invoker)
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn publish_to_hub_direct_best_effort(
-    _tenant_id: &str,
-    _hub_endpoint: &str,
-    _caller_ura: &str,
-    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    Err("direct hub publish requires the 'axon-pb' feature".into())
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn publish_to_hub_direct_best_effort_silent(
-    _tenant_id: &str,
-    _hub_endpoint: &str,
-    _caller_ura: &str,
-    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    Err("direct hub publish requires the 'axon-pb' feature".into())
-}
-
-#[cfg(feature = "axon-pb")]
-fn revoke_from_hub_direct_best_effort(
-    tenant_id: &str,
-    hub_endpoint: &str,
-    caller_ura: &str,
-    realm: &str,
-    agent_ura: &str,
-    reason: &str,
-) -> Result<(), String> {
-    let invoker = DirectHubAbilityInvoker::new(hub_endpoint, caller_ura, tenant_id)?;
-    revoke_agent_via_invoker(&invoker, tenant_id, realm, agent_ura, reason)
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn revoke_from_hub_direct_best_effort(
-    _tenant_id: &str,
-    _hub_endpoint: &str,
-    _caller_ura: &str,
-    _realm: &str,
-    _agent_ura: &str,
-    _reason: &str,
-) -> Result<(), String> {
-    Err("direct hub revoke requires the 'axon-pb' feature".into())
-}
-
-/// Map the legacy `AgentType` tag onto the `RuntimeKind` used
-/// by `AgentSpec`. Kept as a free function because three call
-/// sites share this mapping (`run_add`, `registry::migrate_one_entry`,
-/// `runtime::workspace::spec_from_entry`). A drift between any
-/// two of them would produce inconsistent specs for the same
-/// agent — the parity tests pin two of the three to each
-/// other; this function is the common implementation.
-fn runtime_kind_from(t: AgentType) -> RuntimeKind {
-    match t {
-        AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
-        AgentType::Codex => RuntimeKind::Codex,
-        AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
-    }
-}
-
-/// Resolve the on-disk root an `agent add` should materialize
-/// for the given name. Folds over the `agents_root()` fallback
-/// introduced in PR-0b so an operator with only the legacy
-/// `workspaces/` tree keeps working without a flag day.
-fn agents_root_for(agent_name: &str) -> std::path::PathBuf {
-    config::agents_root().join(agent_name)
 }
 
 fn run_list() -> anyhow::Result<()> {
-    let registry = agents::load_agents()?;
+    let daemon_client = required_local_daemon_agent_client()?;
+    let rows = invoke_daemon_agent_list_required(&daemon_client)?;
 
-    if registry.agents.is_empty() {
+    if rows.is_empty() {
         eprintln!("  No agents registered.");
         eprintln!(
             "  Run {} to add one.",
@@ -1185,25 +577,25 @@ fn run_list() -> anyhow::Result<()> {
     );
     eprintln!("  {}", style("─".repeat(68)).dim());
 
-    for (name, entry) in &registry.agents {
-        // Prefer the spec-derived values when available: an
-        // operator who edited `agent.toml` after
-        // `agent add` sees their changes reflected here
-        // without re-registering. Fall back to the legacy
-        // fat-row fields so pre-migration rows still render.
-        let (model, timeout_secs, status) = render_row_status(name, entry);
-
-        let type_styled = match entry.agent_type {
-            agents::AgentType::ClaudeCode => style("claude-code").magenta(),
-            agents::AgentType::Codex => style("codex").yellow(),
-            agents::AgentType::CodexAppServer => style("codex-app-server").yellow(),
+    for row in &rows {
+        let status = render_daemon_agent_row_status(row);
+        let type_styled = match row.runtime.as_str() {
+            "claude-code" => style("claude-code").magenta(),
+            "codex" => style("codex").yellow(),
+            "codex-app-server" => style("codex-app-server").yellow(),
+            other => style(other).yellow(),
         };
         eprintln!(
             "  {:<14} {:<18} {:<12} {:<10} {}",
-            style(name).white().bold(),
+            style(&row.name).white().bold(),
             type_styled,
-            style(model.as_deref().unwrap_or("-")).cyan(),
-            style(format!("{timeout_secs}s")).dim(),
+            style(row.model.as_deref().unwrap_or("-")).cyan(),
+            style(
+                row.timeout_secs
+                    .map(|secs| format!("{secs}s"))
+                    .unwrap_or_else(|| "-".to_string()),
+            )
+            .dim(),
             status,
         );
     }
@@ -1211,75 +603,68 @@ fn run_list() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve the rendered columns for one `agent list` row.
-///
-/// Returns `(model, timeout_secs, status)` where `status` is a
-/// pre-styled console string. Pulling this logic out of
-/// `run_list` keeps the loop body readable and lets the status
-/// rules be unit-tested if they grow (today "ok" vs "path
-/// missing" is the whole rule set; tomorrow we might add "v1
-/// un-migrated", "orphaned handle", etc.).
-fn render_row_status(
+fn invoke_daemon_agent_list_required(
+    client: &LocalDaemonAbilityClient,
+) -> anyhow::Result<Vec<DaemonAgentRow>> {
+    daemon_agent_view::list_agents_with_client(client)
+}
+
+fn render_daemon_agent_row_status(row: &DaemonAgentRow) -> console::StyledObject<&'static str> {
+    match row.root_exists {
+        Some(true) => style("ok").green(),
+        Some(false) => style("path missing").red(),
+        None => style("unknown").yellow(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RemovedAgentPayload {
+    #[serde(default)]
+    root_path: Option<std::path::PathBuf>,
+}
+
+fn daemon_agent_row(
+    client: &LocalDaemonAbilityClient,
     name: &str,
-    entry: &AgentEntry,
-) -> (Option<String>, u64, console::StyledObject<&'static str>) {
-    // Resolve the agent root: explicit `root_path` wins; fall
-    // back to the consumer-side default that `ensure_workspace`
-    // uses. This keeps display consistent with dispatch
-    // behaviour — any agent that `agent send` would find at
-    // path P must also be listed at that P.
-    let root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(name));
+) -> anyhow::Result<DaemonAgentRow> {
+    invoke_daemon_agent_list_required(client)?
+        .into_iter()
+        .find(|row| row.name == name)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "agent '{name}' is not registered; run 'easynet agent list' to see registered \
+                 names, or `easynet agent add {name} --type …` to register it"
+            )
+        })
+}
 
-    // Try to open the agent.toml for spec-derived values. If
-    // that fails (root missing, file missing, parse error) we
-    // still render the row using fat-field fallbacks so an
-    // operator can see the row at all and decide what to do.
-    let (spec_model, spec_timeout) = match AgentDirectory::open(&root) {
-        Ok(dir) => (dir.spec().model.clone(), dir.spec().timeout_secs),
-        Err(_) => (None, None),
-    };
+fn daemon_row_agent_type(row: &DaemonAgentRow) -> anyhow::Result<AgentRuntimeKind> {
+    daemon_agent_view::agent_kind(row)
+}
 
-    let model = spec_model.or_else(|| entry.model.clone());
-    let timeout_secs = spec_timeout.unwrap_or(entry.timeout_secs);
-
-    let status = if root.exists() {
-        style("ok").green()
-    } else {
-        // Red on purpose: a missing root is an actionable
-        // signal, not noise. Operators who see this are
-        // expected to run `agent prune` or re-materialize by
-        // hand; the column gives them the cue.
-        style("path missing").red()
-    };
-
-    (model, timeout_secs, status)
+fn daemon_row_root(row: &DaemonAgentRow) -> std::path::PathBuf {
+    daemon_agent_view::agent_root(row)
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
-    let mut registry = agents::load_agents()?;
-
-    let removed = registry
-        .agents
-        .remove(&args.name)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not found", args.name))?;
-
-    agents::save_agents(&registry)?;
-    output::success(&format!("Removed agent '{}'", args.name));
-
-    // Unpublish from the local axon-runtime so this agent's tools
-    // disappear from `ListMCPTools` (and the EasyNet frontend's
-    // Abilities catalog). Done BEFORE purge so we can still read the
-    // abilities directory; best-effort — see runtime::publish doc.
-    // The unpublish must happen before --purge wipes the abilities
-    // dir, otherwise we'd have nothing to enumerate from.
-    if let Some(root) = removed.root_path.as_ref() {
-        if let Ok(directory) = AgentDirectory::open(root) {
-            unpublish_from_local_runtime_best_effort(&args.name, &directory);
-        }
+    let daemon_client = required_local_daemon_agent_client()?;
+    let daemon_response = invoke_daemon_agent_stop_required(&daemon_client, &args.name)?;
+    let ack = daemon_response
+        .get("ack")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !ack {
+        anyhow::bail!("agent '{}' not found", args.name);
     }
+    let removed: RemovedAgentPayload = serde_json::from_value(
+        daemon_response
+            .get("removed_entry")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|err| anyhow::anyhow!("device.agent.stop returned invalid removed_entry: {err}"))?;
+    output::success(&format!("Removed agent '{}'", args.name));
+    render_agent_stop_runtime_outcome(&args.name, &daemon_response);
 
     // Root deletion is opt-in. This is the purge branch: we
     // only reach it when the operator explicitly asked for it.
@@ -1336,7 +721,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 /// operator can restore from `~/.easynet/agents.json.v1.bak` if
 /// they never completed a v2 save.
 fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
-    let mut registry = agents::load_agents()?;
+    let daemon_client = required_local_daemon_agent_client()?;
 
     // Identify rows whose root is missing. We check the
     // explicit `root_path` first, falling back to the
@@ -1344,20 +729,10 @@ fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
     // never populated (still a real scenario today — `run_add`
     // before this PR did not set it) is classified the same as
     // any other.
-    let orphans: Vec<String> = registry
-        .agents
-        .iter()
-        .filter_map(|(name, entry)| {
-            let root = entry
-                .root_path
-                .clone()
-                .unwrap_or_else(|| config::agents_root().join(name));
-            if root.exists() {
-                None
-            } else {
-                Some(name.clone())
-            }
-        })
+    let rows = invoke_daemon_agent_list_required(&daemon_client)?;
+    let orphans: Vec<DaemonAgentRow> = rows
+        .into_iter()
+        .filter(|row| row.root_exists == Some(false))
         .collect();
 
     if orphans.is_empty() {
@@ -1376,11 +751,8 @@ fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
         orphans.len()
     );
     for name in &orphans {
-        let root = registry.agents[name]
-            .root_path
-            .clone()
-            .unwrap_or_else(|| config::agents_root().join(name));
-        eprintln!("    • {}  (missing root: {})", name, root.display());
+        let root = daemon_row_root(name);
+        eprintln!("    • {}  (missing root: {})", name.name, root.display());
     }
     eprintln!();
 
@@ -1388,10 +760,19 @@ fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    for name in &orphans {
-        registry.agents.remove(name);
+    for row in &orphans {
+        let resp = invoke_daemon_agent_stop_required(&daemon_client, &row.name)?;
+        if !resp
+            .get("ack")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            output::warn(&format!(
+                "daemon reported orphaned agent '{}' was already absent",
+                row.name
+            ));
+        }
     }
-    agents::save_agents(&registry)?;
     output::success(&format!("Pruned {} orphaned agent(s)", orphans.len()));
     Ok(())
 }
@@ -1437,15 +818,8 @@ fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
 /// EasyNet to chase upstream releases. Validation belongs at
 /// invocation time. See `SetArgs::model` doc.
 fn run_set(args: SetArgs) -> anyhow::Result<()> {
-    let registry_before = agents::load_agents()?;
-    if !registry_before.agents.contains_key(&args.name) {
-        anyhow::bail!(
-            "agent '{}' is not registered; run 'easynet agent list' to see registered \
-             names, or `easynet agent add {} --type …` to register it first",
-            args.name,
-            args.name,
-        );
-    }
+    let daemon_client = required_local_daemon_agent_client()?;
+    let row = daemon_agent_row(&daemon_client, &args.name)?;
 
     // The clap surface lets us tell "flag absent" from "flag empty
     // string" via Option<String>. An empty string is the explicit
@@ -1465,23 +839,41 @@ fn run_set(args: SetArgs) -> anyhow::Result<()> {
     }
     let new_model = new_model.unwrap();
 
-    // Step 1: rewrite agent.toml.
-    let mut directory = open_registered_agent(&args.name)?;
-    directory.set_model(new_model.clone())?;
-
-    // Step 2: rewrite registry row.
-    let mut registry = agents::load_agents()?;
-    if let Some(entry) = registry.agents.get_mut(&args.name) {
-        entry.with_model(new_model.clone());
-    }
-    agents::save_agents(&registry)?;
+    let name = args.name.clone();
+    let runtime = row.runtime.clone();
+    let root_path = row
+        .root_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+    let model_for_request = new_model.clone();
+    let daemon_response = invoke_daemon_agent_start_required(
+        &daemon_client,
+        serde_json::json!({
+            "name": name,
+            "agent_type": runtime,
+            "model": model_for_request,
+            "model_present": true,
+            "root_path": root_path,
+            "materialize_directory": true,
+            "update_existing_spec": true,
+        }),
+    )?;
 
     output::success(&format!("Updated agent '{}'", args.name));
-    match &new_model {
+    render_agent_start_runtime_outcome(&args.name, &daemon_response);
+    match daemon_response
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+    {
         Some(m) => output::detail("model", m),
         None => output::detail("model", "(cleared — CLI default will be used)"),
     }
-    output::detail("root", &directory.root().display().to_string());
+    if let Some(root) = daemon_response
+        .get("root_path")
+        .and_then(serde_json::Value::as_str)
+    {
+        output::detail("root", root);
+    }
 
     Ok(())
 }
@@ -1660,12 +1052,10 @@ fn relative_age(ts: &str) -> String {
 }
 
 fn run_send(args: SendArgs) -> anyhow::Result<()> {
-    // Validate the agent exists in the registry up-front so the user gets
-    // a clear error before we go through the mission machinery.
-    let registry = agents::load_agents()?;
-    let _entry = registry.agents.get(&args.name).ok_or_else(|| {
-        anyhow::anyhow!("agent '{}' not found. Run 'easynet agent list'.", args.name)
-    })?;
+    // Validate through the daemon's Axon ability surface so the CLI
+    // does not own a parallel registry read path.
+    let daemon_client = required_local_daemon_agent_client()?;
+    let _row = daemon_agent_row(&daemon_client, &args.name)?;
 
     // `--resume` is picker-only — single job, no prompt allowed.
     // Validate this BEFORE resolving the session id so we don't
@@ -1786,7 +1176,7 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     )?;
 
     // Pull the agent's reply out of the mission's bound vars. The
-    // dispatcher returns a JSON object. Two shapes can appear:
+    // mission ability returns a JSON object. Two shapes can appear:
     //   * `<agent>.chat` (the invoke_direct_with_progress path):
     //     `{session_id, reply, tool_calls, usage, skills_loaded, ...}`
     //   * non-chat verbs (the send_to_agent shell-out path):
@@ -2112,29 +1502,28 @@ fn compact_markdown(src: &str) -> String {
 }
 
 fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
-    let registry = agents::load_agents()?;
+    let daemon_client = required_local_daemon_agent_client()?;
+    let rows = invoke_daemon_agent_list_required(&daemon_client)?;
 
-    let agents_to_check: Vec<(String, AgentType)> = match args.name {
+    let agents_to_check: Vec<(String, AgentRuntimeKind)> = match args.name {
         Some(name) => {
-            if let Some(entry) = registry.agents.get(&name) {
-                vec![(name, entry.agent_type)]
-            } else {
-                anyhow::bail!("agent '{}' not found", name);
-            }
+            let row = rows
+                .iter()
+                .find(|row| row.name == name)
+                .ok_or_else(|| anyhow::anyhow!("agent '{}' not found", name))?;
+            vec![(name, daemon_row_agent_type(row)?)]
         }
         None => {
-            if registry.agents.is_empty() {
+            if rows.is_empty() {
                 // Check both CLIs even if no agents registered.
                 vec![
-                    ("claude-code".to_string(), AgentType::ClaudeCode),
-                    ("codex".to_string(), AgentType::Codex),
+                    ("claude-code".to_string(), AgentRuntimeKind::ClaudeCode),
+                    ("codex".to_string(), AgentRuntimeKind::Codex),
                 ]
             } else {
-                registry
-                    .agents
-                    .iter()
-                    .map(|(n, e)| (n.clone(), e.agent_type))
-                    .collect()
+                rows.iter()
+                    .map(|row| Ok((row.name.clone(), daemon_row_agent_type(row)?)))
+                    .collect::<anyhow::Result<Vec<_>>>()?
             }
         }
     };
@@ -2143,9 +1532,10 @@ fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
     eprintln!();
 
     for (name, agent_type) in &agents_to_check {
-        let result = match agent_type {
-            AgentType::ClaudeCode => claude_code::doctor(),
-            AgentType::Codex | AgentType::CodexAppServer => codex::doctor(),
+        let result = if agent_type.is_claude_code() {
+            claude_code::doctor()
+        } else {
+            codex::doctor()
         };
         match result {
             Ok(version) => {
@@ -2190,17 +1580,9 @@ fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
 /// `<agent-root>/abilities/*` and both must fail with the same
 /// phrasing when the agent is unknown.
 fn open_registered_agent(name: &str) -> anyhow::Result<AgentDirectory> {
-    let registry = agents::load_agents()?;
-    let entry = registry.agents.get(name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "agent '{name}' is not registered; run 'easynet agent list' to see \
-             registered names, or `easynet agent add {name} --type …` to register it"
-        )
-    })?;
-    let root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(name));
+    let daemon_client = required_local_daemon_agent_client()?;
+    let row = daemon_agent_row(&daemon_client, name)?;
+    let root = daemon_row_root(&row);
     if !root.exists() {
         anyhow::bail!(
             "agent '{name}' has no on-disk root at {}. Either the directory was \
@@ -2934,76 +2316,63 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
     }
 }
 
-/// `easynet agent refresh` — re-issue `runtime.register_local_tool`
-/// for every daemon-owned ability the workspace currently declares.
+/// `easynet agent refresh` — ask the daemon to re-register every
+/// agent ability the workspace currently declares into LocalRuntime.
 ///
 /// Use this after authoring a new `<agent>/abilities/<verb>.ability.toml`
 /// (or after running `easynet agent add <name>` while the daemon is
-/// alive) to make the new ability invokable cross-process without
-/// restarting the daemon.
+/// alive) to make the new ability invokable without restarting the
+/// daemon.
 ///
-/// In-process invocations (the agent calling its own ability via the
-/// daemon's local MCP bridge) work the moment the TOML lands —
-/// `chat_ability::register_dynamic_agent_fallback` consults the
-/// workspace at lookup time. This command exists so the same view
-/// reaches axon-runtime's `runtime_local_tools` registry, which is
-/// what cross-process Invokes (frontend Abilities page,
-/// `bridge.ability_call_raw` from another process, etc.) consult.
-///
-/// Best-effort: bridge connect / register failures are reported but
-/// the command's exit code only reflects whether the bridge connect
-/// succeeded — partial registration is the same shape this same path
-/// already takes during boot.
-fn run_refresh() -> anyhow::Result<()> {
-    let (bridge, _state) = crate::persistence::config::load_and_connect().map_err(|e| {
-        anyhow::anyhow!(
-            "could not reach local axon-runtime: {e}; run 'easynet runtime start' first"
-        )
-    })?;
-    let creds = crate::persistence::config::load_credentials()
-        .map_err(|e| anyhow::anyhow!("load credentials: {e}"))?;
-    let username = crate::facade::cli::start::bootstrap_username_for(&creds);
-    let plan = crate::facade::cli::start::build_bootstrap_plan_from(
-        &creds.tenant_id,
-        &creds.node_id,
-        &username,
-    )?;
-    if plan.realm.is_empty() {
-        anyhow::bail!(
-            "daemon is not joined to a realm yet; run 'easynet join <token>' before refresh"
-        );
-    }
-    // Pin the caller URI for the refresh sweep — same reason as
-    // boot's start.rs and post-add publish_to_local_runtime: the
-    // bridge needs an explicit URA so hub-shaped envelopes carry
-    // a proper caller, not the literal-subject fallback that fails
-    // the membership gate.
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
-        &bridge,
-        plan.host_device_ura.clone(),
-    );
-    let dispatch_endpoint = crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
-    let outcomes = crate::runtime::publish::register_local_tools_via_runtime(
-        &invoker,
-        &creds.tenant_id,
-        &plan.realm,
-        &creds.node_id,
-        &dispatch_endpoint,
-    );
-    let mut ok = 0usize;
-    let mut total = 0usize;
-    for o in &outcomes {
-        total += 1;
-        match &o.result {
-            Ok(_) => ok += 1,
-            Err(msg) => {
-                output::warn(&format!("refresh {} failed: {msg}", o.label));
-            }
+/// The CLI deliberately does not connect to daemon storage, Axon runtime,
+/// or hub transport here. Runtime sync is daemon-owned and exposed as
+/// `device.agent.refresh`.
+fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
+    let daemon_client = required_local_daemon_agent_client()?;
+    let payload = match args
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(name) => serde_json::json!({ "name": name }),
+        None => serde_json::json!({}),
+    };
+    let response = invoke_daemon_agent_refresh_required(&daemon_client, payload)?;
+    let scanned = response
+        .get("agents_scanned")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let registered = response
+        .get("runtime_registered")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let failed = response
+        .get("runtime_failed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if let Some(rows) = response.get("agents").and_then(serde_json::Value::as_array) {
+        for row in rows {
+            let name = row
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unknown>");
+            let row_registered = row
+                .get("runtime_registered")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let row_failed = row
+                .get("runtime_failed")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            output::detail(
+                "refreshed",
+                &format!("{name}: registered {row_registered}, failed {row_failed}"),
+            );
         }
     }
     output::success(&format!(
-        "{ok}/{total} runtime.register_local_tool calls succeeded; \
-         daemon-owned abilities are now invokable cross-process."
+        "daemon refreshed {scanned} agent(s): registered {registered}, failed {failed}"
     ));
     Ok(())
 }
@@ -3013,10 +2382,8 @@ fn run_refresh() -> anyhow::Result<()> {
 fn run_sessions(args: ChatHistoryArgs) -> anyhow::Result<()> {
     // Validate the agent exists. Lets us emit "no such agent"
     // rather than "no sessions" for a typo'd name.
-    let registry = agents::load_agents()?;
-    if !registry.agents.contains_key(&args.name) {
-        anyhow::bail!("agent '{}' not found. Run 'easynet agent list'.", args.name);
-    }
+    let daemon_client = required_local_daemon_agent_client()?;
+    let _row = daemon_agent_row(&daemon_client, &args.name)?;
     match args.action {
         ChatHistoryAction::List(a) => run_sessions_list(&args.name, a),
         ChatHistoryAction::Show(a) => run_sessions_show(&args.name, a),
@@ -3039,8 +2406,8 @@ fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyhow::Result<(
     }
     let latest = chat_sessions::latest_session(agent).unwrap_or_default();
     println!(
-        "{:<38} {:<22} {:>6}  {}",
-        "SESSION_ID", "LAST_TURN_AT", "TURNS", "PROMPT"
+        "{:<38} {:<22} {:>6}  PROMPT",
+        "SESSION_ID", "LAST_TURN_AT", "TURNS"
     );
     for s in &sessions {
         let marker = if s.session_id == latest { "*" } else { " " };
@@ -3163,7 +2530,10 @@ mod tests {
 
     // ── v2 CLI verbs ────────────────────────────────────────────────────
 
+    use crate::core::agent_spec::{AgentSpec, RuntimeKind};
     use crate::facade::cli::test_support::HomeGuard;
+    use crate::registry::agents::{self, CURRENT_REGISTRY_SCHEMA};
+    use crate::runtime::directory::Location;
     use std::fs;
 
     /// Build the AddArgs shape the CLI surface would construct
@@ -3304,171 +2674,6 @@ while True:
         manifest
             .to_toml_string()
             .expect("normalized schema should serialize to TOML");
-    }
-
-    #[test]
-    fn hub_invoke_endpoint_rewrites_axon_scheme_to_http() {
-        assert_eq!(
-            hub_invoke_endpoint("axon://hub.example:50051").unwrap(),
-            "http://hub.example:50051"
-        );
-        assert_eq!(
-            hub_invoke_endpoint("https://hub.example:50443").unwrap(),
-            "https://hub.example:50443"
-        );
-        assert_eq!(
-            hub_invoke_endpoint("hub.example:50051").unwrap(),
-            "http://hub.example:50051"
-        );
-    }
-
-    #[test]
-    fn ability_name_from_resource_ura_extracts_canonical_hub_ability_id() {
-        // Canonical hub-owned ability: reserved owner `hub`, agent
-        // namespace `federation`, verb `advertise_agent`.
-        assert_eq!(
-            ability_name_from_resource_ura(
-                "easynet:///r/acme/ability/hub.federation.advertise_agent"
-            )
-            .as_deref(),
-            Some("federation.advertise_agent")
-        );
-        assert_eq!(ability_name_from_resource_ura("not-a-resource-uri"), None);
-    }
-
-    #[test]
-    fn ability_name_from_resource_ura_rejects_retired_legacy_shape() {
-        assert_eq!(
-            ability_name_from_resource_ura(
-                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=acme"
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn direct_hub_trust_match_prefers_env_override() {
-        let _home = HomeGuard::new();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let override_path = tmp.path().join("override.toml");
-        fs::write(
-            &override_path,
-            r#"
-[[trusted_agent]]
-agent_ura = "easynet:///r/test-realm/hub"
-public_key_b64 = "AA=="
-role = "hub"
-added_at_unix_ms = 1
-origin_tenant_id = "test-realm"
-hub_uri = "https://hub.example:50443"
-tls_ca_pem_path = "/tmp/env-ca.pem"
-"#,
-        )
-        .expect("write env trust anchor");
-
-        let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
-        std::env::set_var("EASYNET_REALM_TRUST_PATH", &override_path);
-        struct EnvGuard(Option<std::ffi::OsString>);
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                match self.0.take() {
-                    Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
-                    None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
-                }
-            }
-        }
-        let _guard = EnvGuard(prev);
-
-        assert_eq!(
-            direct_hub_trust_match("https://hub.example:50443"),
-            Some(Some(std::path::PathBuf::from("/tmp/env-ca.pem")))
-        );
-    }
-
-    #[test]
-    fn direct_hub_trust_match_falls_back_to_home_paths() {
-        let _home = HomeGuard::new();
-        let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
-        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
-        struct EnvGuard(Option<std::ffi::OsString>);
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                match self.0.take() {
-                    Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
-                    None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
-                }
-            }
-        }
-        let _guard = EnvGuard(prev);
-
-        let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("home"));
-        fs::write(
-            home.join("realm-trust.toml"),
-            r#"
-[[trusted_agent]]
-agent_ura = "easynet:///r/test-realm/hub"
-public_key_b64 = "AA=="
-role = "hub"
-added_at_unix_ms = 1
-origin_tenant_id = "test-realm"
-hub_uri = "https://hub.example:50443"
-tls_ca_pem_path = "/tmp/home-ca.pem"
-"#,
-        )
-        .expect("write home trust anchor");
-
-        assert_eq!(
-            direct_hub_trust_match("https://hub.example:50443"),
-            Some(Some(std::path::PathBuf::from("/tmp/home-ca.pem")))
-        );
-    }
-
-    #[test]
-    fn publish_outcome_summary_requires_all_directory_rows_to_succeed() {
-        let outcomes = vec![
-            crate::runtime::publish::PublishOutcome {
-                agent_ura: String::new(),
-                label: "local-agents.json".into(),
-                result: Err("save failed".into()),
-            },
-            crate::runtime::publish::PublishOutcome {
-                agent_ura: "device:1".into(),
-                label: "device".into(),
-                result: Ok(()),
-            },
-            crate::runtime::publish::PublishOutcome {
-                agent_ura: "agent:alice".into(),
-                label: "abilities/3".into(),
-                result: Err("membership required".into()),
-            },
-        ];
-
-        let err = publish_outcome_summary(&outcomes).unwrap_err();
-        assert!(err.contains("agent:alice abilities/3: membership required"));
-        assert!(!err.contains("local-agents.json"));
-    }
-
-    #[test]
-    fn publish_outcome_summary_accepts_clean_directory_rows() {
-        let outcomes = vec![
-            crate::runtime::publish::PublishOutcome {
-                agent_ura: String::new(),
-                label: "local-agents.json".into(),
-                result: Err("save failed".into()),
-            },
-            crate::runtime::publish::PublishOutcome {
-                agent_ura: "device:1".into(),
-                label: "device".into(),
-                result: Ok(()),
-            },
-            crate::runtime::publish::PublishOutcome {
-                agent_ura: "agent:alice".into(),
-                label: "abilities/3".into(),
-                result: Ok(()),
-            },
-        ];
-
-        publish_outcome_summary(&outcomes).expect("directory rows succeeded");
     }
 
     #[test]
@@ -3617,6 +2822,43 @@ tls_ca_pem_path = "/tmp/home-ca.pem"
         let root = entry.root_path.clone().unwrap();
         let spec = AgentSpec::from_toml_str(&fs::read_to_string(root.join("agent.toml")).unwrap())
             .unwrap();
+        assert_eq!(spec.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn run_set_preserves_project_local_root_path() {
+        // `agent set` is now a daemon ability invoke. The CLI must
+        // still preserve an existing registry row's custom root_path;
+        // otherwise project-local agents get silently rewritten into
+        // the global agents root during a model update.
+        let _g = HomeGuard::new();
+        run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
+
+        let custom_root = crate::persistence::config::home_dir()
+            .join("project")
+            .join("agents")
+            .join("alice");
+        let mut spec = AgentSpec::new("alice", RuntimeKind::ClaudeCode);
+        spec.model = Some("sonnet".to_string());
+        AgentDirectory::create(
+            &Location::Local {
+                root: custom_root.clone(),
+            },
+            spec,
+        )
+        .unwrap();
+
+        let mut registry = agents::load_agents().unwrap();
+        registry.agents.get_mut("alice").unwrap().root_path = Some(custom_root.clone());
+        agents::save_agents(&registry).unwrap();
+
+        run_set(set_args("alice", Some("opus"))).unwrap();
+
+        let entry = agents::load_agents().unwrap().agents["alice"].clone();
+        assert_eq!(entry.root_path.as_deref(), Some(custom_root.as_path()));
+        let spec =
+            AgentSpec::from_toml_str(&fs::read_to_string(custom_root.join("agent.toml")).unwrap())
+                .unwrap();
         assert_eq!(spec.model.as_deref(), Some("opus"));
     }
 
@@ -4153,12 +3395,20 @@ type = "object"
             input_schema: serde_json::json!({}),
             cost: None,
         }];
-        let err =
-            assert_tools_filter_satisfied(&["a".into(), "missing-1".into(), "missing-2".into()], &planned)
-                .unwrap_err();
+        let err = assert_tools_filter_satisfied(
+            &["a".into(), "missing-1".into(), "missing-2".into()],
+            &planned,
+        )
+        .unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("missing-1"), "msg should name missing-1: {msg}");
-        assert!(msg.contains("missing-2"), "msg should name missing-2: {msg}");
+        assert!(
+            msg.contains("missing-1"),
+            "msg should name missing-1: {msg}"
+        );
+        assert!(
+            msg.contains("missing-2"),
+            "msg should name missing-2: {msg}"
+        );
         assert!(
             !msg.contains(" a,") && !msg.ends_with(" a"),
             "msg should not list resolved tools as missing: {msg}"
@@ -4176,7 +3426,10 @@ type = "object"
         // with an unreachable flag.
         use crate::core::ability_spec::CostKind;
         assert_eq!(CostKindArg::Free.into_core(), CostKind::Free);
-        assert_eq!(CostKindArg::ExternalMetered.into_core(), CostKind::ExternalMetered);
+        assert_eq!(
+            CostKindArg::ExternalMetered.into_core(),
+            CostKind::ExternalMetered
+        );
         assert_eq!(CostKindArg::LlmMetered.into_core(), CostKind::LlmMetered);
         assert_eq!(CostKindArg::Unknown.into_core(), CostKind::Unknown);
     }

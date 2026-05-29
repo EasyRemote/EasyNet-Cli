@@ -23,7 +23,7 @@ all exist in the current tree and are wired end-to-end:
 | Axon kernel: `bidi_handler.rs` (frame 0 Ed25519, HKDF up/down keys, HMAC chain, replay, all `REASON_BIDI_*` codes) | shipped | `EasyNet-Axon/core/runtime-rs/src/services/invocation/bidi_handler.rs` |
 | Axon kernel: `SessionProvider` + `BidiStreamHandle` (RFC-002 Stage 1) | shipped | `EasyNet-Axon/core/runtime-rs/src/services/invocation/session_provider.rs` |
 | Axon kernel: dispatch via `SessionRegistry::attach_session_with_synthesis` | shipped | `EasyNet-Axon/core/runtime-rs/src/services/invocation/session_registry.rs` |
-| CLI: `LocalAbilityRegistry::register_bidi` | shipped | `EasyNet-Cli/src/services/control/server.rs` (uses `bidi.echo` + `fleet.pty_session_attach`) |
+| CLI daemon: `LocalRuntime` Bidi ability registration | shipped | `EasyNet-Cli/src/services/control/server.rs` (uses `bidi.echo` + `fleet.pty_session_attach`) |
 | CLI: `fleet.pty_session_attach` BIDI handler | shipped | `EasyNet-Cli/src/runtime/agents/pty_attach_ability.rs` |
 | Backend: `RealClient.InvokeBidi` (cgo path, ~200 LOC) | shipped | `EasyNet/backend/internal/axon/real_invoke_bidi.go` |
 | Backend: `Fake.InvokeBidi` for tests | shipped | `EasyNet/backend/internal/axontest/fake.go` |

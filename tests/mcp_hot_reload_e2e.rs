@@ -17,11 +17,13 @@
 
 use std::sync::Arc;
 
-use easynet_cli::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+use easynet_cli::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use easynet_cli::runtime::agents::mcp_reflective_registry::{
     refresh_server_dynamic, RegistryRefreshSink,
 };
-use easynet_cli::runtime::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
+use easynet_cli::runtime::execution::mcp_client::{
+    McpClientService, McpClientsFile, McpServerSpec,
+};
 
 /// Build a Python stdio MCP server whose tools/list answer toggles
 /// between two single-tool catalogues and pushes a list_changed
@@ -107,7 +109,7 @@ async fn list_changed_push_triggers_dynamic_refresh() {
         }],
     };
     let svc = Arc::new(McpClientService::from_file(file));
-    let registry = Arc::new(LocalAbilityRegistry::new());
+    let registry = Arc::new(AxonAbilityCatalog::new());
 
     // Seed the dynamic side with `tool_a` so the refresh logic sees a
     // diff (removed=[tool_a], added=[tool_b]). In production this
@@ -130,9 +132,7 @@ async fn list_changed_push_triggers_dynamic_refresh() {
             "tool_a",
             OwnerKind::Device,
             manifest,
-            Arc::new(|_args| {
-                anyhow::bail!("tool_a handler not expected to run in this test")
-            }),
+            Arc::new(|_args| anyhow::bail!("tool_a handler not expected to run in this test")),
         );
     }
     assert!(registry.has_stream("tool_a"));
@@ -211,7 +211,7 @@ async fn refresh_server_dynamic_direct_call_diffs_correctly() {
         }],
     };
     let svc = McpClientService::from_file(file);
-    let registry = LocalAbilityRegistry::new();
+    let registry = AxonAbilityCatalog::new();
 
     // First refresh — registry empty, prev=[], upstream replies
     // tool_a (script's first tools/list response).

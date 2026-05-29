@@ -59,7 +59,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::registry::agents;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
@@ -77,7 +77,7 @@ pub const ABILITY_WRITE_FILE: &str = "device.skill.write_file";
 
 const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.skill.publish",
         OwnerKind::Device,
@@ -155,7 +155,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     })?;
     let skill_md_path = skill_dir.join("SKILL.md");
     let hash = content_hash(&body);
-    let size_bytes = body.as_bytes().len() as u64;
+    let size_bytes = body.len() as u64;
     crate::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display()))?;
 
@@ -166,7 +166,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let identifier = run_id
         .clone()
         .unwrap_or_else(|| "mission.think".to_string());
-    let source = crate::facade::cli::skill::SkillSource {
+    let source = crate::runtime::skill_store::SkillSource {
         kind: "curator".to_string(),
         identifier: identifier.clone(),
         ref_: None,
@@ -177,9 +177,9 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     // The wire envelope below keeps the prefix because callers
     // benefit from algorithm tagging.
     let bare_hash = hash.strip_prefix("sha256:").unwrap_or(&hash).to_string();
-    let record = crate::facade::cli::skill::InstallRecord {
+    let record = crate::runtime::skill_store::InstallRecord {
         name: skill_name.clone(),
-        description: crate::facade::cli::skill::skill_description_from_dir(&skill_dir),
+        description: crate::runtime::skill_store::skill_description_from_dir(&skill_dir),
         agent_id: owner_id.clone(),
         source,
         skill_tree_hash: bare_hash,
@@ -254,7 +254,7 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     let install_path = skill_dir.join(".easynet").join("install.json");
     let logged_hash = std::fs::read_to_string(&install_path)
         .ok()
-        .and_then(|t| serde_json::from_str::<crate::facade::cli::skill::InstallRecord>(&t).ok())
+        .and_then(|t| serde_json::from_str::<crate::runtime::skill_store::InstallRecord>(&t).ok())
         .map(|r| {
             if r.skill_tree_hash.starts_with("sha256:") {
                 r.skill_tree_hash
@@ -393,10 +393,10 @@ fn write_file_handler(args: Value) -> anyhow::Result<Value> {
         .get("content")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("skill.write_file: missing `content` string"))?;
-    if content.as_bytes().len() as u64 > MAX_SKILL_FILE_BYTES {
+    if content.len() as u64 > MAX_SKILL_FILE_BYTES {
         anyhow::bail!(
             "skill.write_file: content is {} bytes; cap is {} bytes",
-            content.as_bytes().len(),
+            content.len(),
             MAX_SKILL_FILE_BYTES
         );
     }
@@ -419,7 +419,7 @@ fn write_file_handler(args: Value) -> anyhow::Result<Value> {
         "owner_agent_id": owner_id,
         "skill_name": skill_name,
         "path": rel_wire,
-        "size_bytes": content.as_bytes().len() as u64,
+        "size_bytes": content.len() as u64,
         "content_hash": hash,
     });
     receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));
@@ -674,7 +674,7 @@ fn skill_dir_candidates_for(
         }
     };
     if let Some(global_dir) =
-        crate::facade::cli::skill::global_skill_dir_for(agent_type, skill_name)
+        crate::runtime::skill_store::global_skill_dir_for(agent_type, skill_name)
     {
         if !candidates.iter().any(|candidate| candidate == &global_dir) {
             candidates.push(global_dir);
@@ -837,7 +837,7 @@ fn refresh_install_record_hash(skill_dir: &Path) -> anyhow::Result<String> {
     let hash = hash_skill_tree(skill_dir)?;
     let record_path = skill_dir.join(".easynet").join("install.json");
     if record_path.exists() {
-        let mut record = crate::facade::cli::skill::read_install_record(&record_path)?;
+        let mut record = crate::runtime::skill_store::read_install_record(&record_path)?;
         record.skill_tree_hash = hash.clone();
         record.size_bytes = skill_tree_size_bytes(skill_dir)?;
         let body = serde_json::to_string_pretty(&record)

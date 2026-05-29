@@ -74,7 +74,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource};
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_FILE_TRANSFER: &str = "device.fs.transfer";
@@ -106,7 +106,7 @@ const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Register the bidi handler on the dispatcher. Mirrors
 /// pty_attach_ability::register's signature so the daemon-boot
 /// path stays uniform.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_bidi_with_owner(
         "device.fs.transfer",
         OwnerKind::Device,
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn registration_mounts_bidi_handler() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         assert!(reg.get_bidi(ABILITY_FILE_TRANSFER).is_some());
     }

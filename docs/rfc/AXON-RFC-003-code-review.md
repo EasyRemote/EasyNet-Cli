@@ -494,8 +494,8 @@ hardening + observability + ergonomics, not protocol correctness.
    HMAC chain emit happens (Go SDK's send path → bridge HMAC
    → kernel-internal frame). If any of P1-1's deeper investigation
    needs the actual chain math, this is the file.
-2. **CLI's `pty_attach_ability.rs`** + `LocalAbilityRegistry::register_bidi`.
-   Same trait shape as the Axon-side, but client-side dispatch.
+2. **CLI's `pty_attach_ability.rs`** + daemon `LocalRuntime` Bidi registration.
+   Same trait shape as the Axon-side, with dispatch owned by the daemon runtime.
 3. **Test coverage breadth** — I read tests opportunistically
    while reading the production paths. A separate "what's
    missing from coverage" pass would be its own audit.

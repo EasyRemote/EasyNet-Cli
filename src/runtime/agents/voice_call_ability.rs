@@ -37,7 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 pub const ABILITY_CREATE_CALL: &str = "device.voice.create_call";
 pub const ABILITY_SHOW_CALL: &str = "device.voice.show_call";
@@ -92,47 +92,47 @@ fn now_ms() -> u64 {
 /// changes to per-agent at that point. Until then the daemon
 /// hosts the dispatch surface and `OwnerKind::Device` is the
 /// honest classification of where the handler runs today.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::runtime::ability_dispatch::OwnerKind;
     reg.register_rpc_with_owner(
         "device.voice.create_call",
         OwnerKind::Device,
-        Arc::new(|args| create_call_handler(args)),
+        Arc::new(create_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.show_call",
         OwnerKind::Device,
-        Arc::new(|args| show_call_handler(args)),
+        Arc::new(show_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.join_call",
         OwnerKind::Device,
-        Arc::new(|args| join_call_handler(args)),
+        Arc::new(join_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.leave_call",
         OwnerKind::Device,
-        Arc::new(|args| leave_call_handler(args)),
+        Arc::new(leave_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.end_call",
         OwnerKind::Device,
-        Arc::new(|args| end_call_handler(args)),
+        Arc::new(end_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.watch_call",
         OwnerKind::Device,
-        Arc::new(|args| watch_call_handler(args)),
+        Arc::new(watch_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.report_metrics",
         OwnerKind::Device,
-        Arc::new(|args| report_metrics_handler(args)),
+        Arc::new(report_metrics_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.list_calls",
         OwnerKind::Device,
-        Arc::new(|args| list_calls_handler(args)),
+        Arc::new(list_calls_handler),
     );
 }
 

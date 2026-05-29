@@ -6,16 +6,12 @@
 //
 // Routing model after the AXON-RFC-001 P1.5 federation cull:
 //
-//   easynet ability invoke <ability>            # Local IPC dispatch.
+//   easynet ability invoke <ability>            # Local Axon dispatch.
 //                                               # Goes to the local daemon's
-//                                               # Control plane (unix socket
-//                                               # at ~/.easynet/control.sock)
-//                                               # and lands in the same
-//                                               # AbilityDispatcher every
-//                                               # other invocation surface
-//                                               # uses (EAL agent.ability,
-//                                               # MCP tools/call, library
-//                                               # FFI). One source of truth.
+//                                               # Invocation gRPC socket
+//                                               # at ~/.easynet/daemon.sock
+//                                               # and lands in the shared
+//                                               # Axon LocalRuntime.
 //
 //   easynet ability invoke <ability> --node N   # ⚠ Pinning to a remote
 //                                               # node is not supported in
@@ -44,11 +40,11 @@
 //     use Invoke against the appropriate Agent ability
 //
 // regardless of which ability the caller named. The CLI sub-command
-// was effectively dead. The fix is to route through the Control
-// plane the daemon already runs on a local UDS — the same dispatcher
-// (`AbilityDispatcher::execute_rpc`) that backs every other
-// invocation surface in the codebase. One dispatcher, all surfaces;
-// no "federation bridge" path that exists in name only.
+// was effectively dead. The fix is to route through the daemon's
+// Axon Invocation gRPC surface (`~/.easynet/daemon.sock`), where the
+// shared `LocalRuntime` owns admission, dispatch, receipts, and ledger
+// persistence. One Axon invoke path, all CLI surfaces; no "federation
+// bridge" path that exists in name only.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -191,10 +187,11 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Some(_) => unreachable!("--node bail handled above when axon-pb is off"),
         None => {
             // One ability invocation. The shared helper owns the
-            // control.json lookup, the IPC dance, and the daemon-error
-            // rendering — every CLI subcommand goes through this same
-            // function per the AXON-RFC-001 ontology that says "every
-            // action is an ability invocation".
+            // daemon.sock Axon Invoke, subject threading, and
+            // daemon-error rendering — every CLI subcommand goes
+            // through this same function per the AXON-RFC-001
+            // ontology that says "every action is an ability
+            // invocation".
             let subject = invoke_args
                 .subject
                 .as_deref()

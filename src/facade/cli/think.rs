@@ -205,7 +205,7 @@ fn render_summary(resp: &Value) {
                 if w.len() > 800 {
                     eprintln!(
                         "{}",
-                        style(format!("… (truncated; pass --json for full)")).dim()
+                        style("… (truncated; pass --json for full)".to_string()).dim()
                     );
                 }
             }

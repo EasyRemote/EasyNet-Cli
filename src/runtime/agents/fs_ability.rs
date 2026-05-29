@@ -70,7 +70,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 // ── Wire-name constants (cross-language pins) ─────────────────────
@@ -144,7 +144,7 @@ const DEFAULT_LIST_MAX_ENTRIES: usize = 4096;
 /// from `runtime::agents::build_registry_with_services` once at
 /// daemon startup. The abilities are stateless so registration is
 /// just three handler closures with no per-call setup.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner("device.fs.read", OwnerKind::Device, Arc::new(handler_read));
     reg.register_rpc_with_owner(
         "device.fs.write",
@@ -257,12 +257,12 @@ fn handler_read(args: Value) -> Result<Value> {
 /// The double check defends against `/proc/self/cwd/../dev/zero`
 /// or symlinks pointing at `/dev/zero`.
 fn is_blocked_read_path(path: &str) -> bool {
-    if BLOCKED_READ_PATHS.iter().any(|&b| b == path) {
+    if BLOCKED_READ_PATHS.contains(&path) {
         return true;
     }
     if let Ok(canon) = std::fs::canonicalize(Path::new(path)) {
         if let Some(s) = canon.to_str() {
-            return BLOCKED_READ_PATHS.iter().any(|&b| b == s);
+            return BLOCKED_READ_PATHS.contains(&s);
         }
     }
     false

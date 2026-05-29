@@ -21,6 +21,8 @@ use serde_json::{json, Value};
 
 use anyhow::Context;
 
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+
 use super::state::{persist_registry_for_user, PUBLISHED_PROJECTS};
 
 /// `<user>.pages.list` — return every project the daemon
@@ -100,14 +102,33 @@ pub fn handle_get(
 /// `<user>.pages.unpublish` — remove the project. Drops the
 /// `ProjectHandle` (releasing the folder fd) and removes the
 /// entry from `PUBLISHED_PROJECTS`, then rewrites the user's
-/// restart snapshot. Subsequent fetch calls fail at the resolver
-/// because the entry is gone.
+/// restart snapshot. Ability-path unpublish also removes the
+/// project's hot-registered fetch/API abilities from LocalRuntime.
 pub fn handle_unpublish(user: &str, args: Value) -> anyhow::Result<Value> {
+    handle_unpublish_inner(user, None, args)
+}
+
+pub fn handle_unpublish_with_registry(
+    user: &str,
+    registry: &AxonAbilityCatalog,
+    args: Value,
+) -> anyhow::Result<Value> {
+    handle_unpublish_inner(user, Some(registry), args)
+}
+
+fn handle_unpublish_inner(
+    user: &str,
+    registry: Option<&AxonAbilityCatalog>,
+    args: Value,
+) -> anyhow::Result<Value> {
     let project_id = args
         .get("project_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing required arg: project_id"))?;
     let key = (user.to_string(), project_id.to_string());
+    let ability_names = registry
+        .map(|registry| super::registered_project_ability_names(registry, user, project_id))
+        .unwrap_or_default();
     let removed = PUBLISHED_PROJECTS.remove(&key);
     let Some((_removed_key, removed_handle)) = removed else {
         anyhow::bail!("project not found: user={user} project_id={project_id}");
@@ -115,6 +136,9 @@ pub fn handle_unpublish(user: &str, args: Value) -> anyhow::Result<Value> {
     if let Err(err) = persist_registry_for_user(user) {
         PUBLISHED_PROJECTS.insert(key, removed_handle);
         return Err(err).context("persist pages publish registry");
+    }
+    if let Some(registry) = registry {
+        super::unregister_project_abilities(registry, ability_names);
     }
     Ok(json!({
         "user":       user,

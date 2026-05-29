@@ -53,7 +53,7 @@
 // - `SessionFrameDispatcher` trait: the local-side handler
 //   implementation. Trait so PR-3 commit 3/3 (integration test)
 //   can plug in a mock dispatcher that records frames received
-//   without spinning up the full LocalAbilityRegistry.
+//   without spinning up the full AxonAbilityCatalog.
 // - The exponential-backoff supervisor `run_session_supervisor`:
 //   the `dial_and_run_session` returns an error → wait → retry.
 //   Bounded jitter, capped maximum, never gives up.
@@ -68,9 +68,9 @@
 //
 // What this commit does NOT do
 // ----------------------------
-// - LocalAbilityRegistry stream/unary multiplexing beyond the
+// - AxonAbilityCatalog stream/unary multiplexing beyond the
 //   current RPC path. Production now wires
-//   `LocalAbilityDispatcher` at boot for local RPC abilities; true
+//   `LocalAxonSessionDispatcher` at boot for local RPC abilities; true
 //   multi-frame stream forwarding stays out of PR-2 and belongs to
 //   the future streaming-ability surface.
 // - daemon-config integration. The supervisor takes a hub
@@ -123,6 +123,9 @@ use crate::pb::axon::v1::{
 /// See `docs/open-questions/deprecate-self-alias-in-ability-names.md`
 /// Stage 2 / Stage 4. RFC-001 v4.1.6 is the carrier window for the
 /// wire-break.
+// TODO(RFC-001-v4.1.6 stage-2): rename to `device.session` once the
+// hub ships dual-name acceptance. Single grep anchor for all
+// wire-pinned `<self>.*` constants.
 pub const ABILITY_SELF_SESSION: &str = "<self>.session";
 
 /// Stream id used by every BinaryChunk on the session bidi. PR-2
@@ -229,7 +232,7 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
 /// - Up-direction sequence numbers are independent from down-
 ///   direction numbers per RFC 001 §A16.
 /// - Multiple producers share one live bidi after frame 0:
-///   `LocalAbilityDispatcher` reply frames, device-mode
+///   `LocalAxonSessionDispatcher` reply frames, device-mode
 ///   `SessionEscalationHandle` Request frames, and the no-op
 ///   up-heartbeat task.
 /// - Using raw `mpsc::Sender<InvokeBidiUp>` let each producer
@@ -382,6 +385,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_ura: String,
@@ -963,6 +967,7 @@ impl Drop for OutboxGuard {
 /// if a future change wires SIGHUP-driven trust reloads through
 /// the supervisor, this value should become a cell snapshot
 /// rather than an owned `PathBuf`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_ura: String,
@@ -1308,7 +1313,6 @@ pub fn build_session_envelope_open_with_seed(
             }],
             ..EnvelopeOpen::default()
         })),
-        ..InvokeBidiUp::default()
     }
 }
 
@@ -1393,7 +1397,7 @@ mod tests {
 
     /// A mock dispatcher that just records every down frame it
     /// receives. Used by tests; production wires the real
-    /// LocalAbilityRegistry-backed dispatcher.
+    /// AxonAbilityCatalog-backed dispatcher.
     #[derive(Default)]
     struct RecordingDispatcher {
         received: tokio::sync::Mutex<Vec<InvokeBidiDown>>,

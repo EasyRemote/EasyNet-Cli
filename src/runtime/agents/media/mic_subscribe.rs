@@ -47,7 +47,7 @@ use tokio::sync::broadcast;
 
 use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::runtime::agents::media_abilities::{ABILITY_MIC_SUBSCRIBE, REASON_SUBJECT_IN_ARGS};
 
 pub const REASON_SUBJECT_REQUIRED: &str = "subject_required";
@@ -300,7 +300,7 @@ impl MicBackend for SyntheticMicBackend {
 
 // ── Registration ─────────────────────────────────────────────
 
-pub fn register_with_backend(reg: &mut LocalAbilityRegistry, backend: Arc<dyn MicBackend>) {
+pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn MicBackend>) {
     reg.register_stream_with_envelope_and_owner(
         "device.mic.subscribe",
         OwnerKind::Device,
@@ -308,7 +308,7 @@ pub fn register_with_backend(reg: &mut LocalAbilityRegistry, backend: Arc<dyn Mi
     );
 }
 
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     register_with_backend(reg, Arc::new(CpalMicBackend));
 }
 
@@ -358,8 +358,6 @@ mod tests {
     use crate::persistence::resources::{
         upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
-    use crate::runtime::ability_dispatch::AbilityDispatcher;
-    use crate::runtime::gateway::NoopGateway;
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     fn seed_mic(file: &mut ResourcesFile, hardware_id: &str) -> String {
@@ -377,7 +375,7 @@ mod tests {
         )
     }
 
-    fn register_synthetic(reg: &mut LocalAbilityRegistry) {
+    fn register_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticMicBackend));
     }
 
@@ -387,9 +385,9 @@ mod tests {
         let mut file = ResourcesFile::default();
         let uri = seed_mic(&mut file, "h-mic-e2e");
         resources::save(&file).unwrap();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
@@ -398,13 +396,19 @@ mod tests {
             subject: Some(uri),
         };
         let src = dispatcher.execute_stream(target).unwrap();
-        let mut rx = match src {
-            StreamSource::Live(rx) => rx,
-            other => panic!("expected Live, got {:?}", other),
+        let frame = match src {
+            StreamSource::Snapshot(mut frames) => {
+                assert_eq!(frames.len(), 1);
+                frames.remove(0)
+            }
+            StreamSource::Live(mut rx) => rx
+                .try_recv()
+                .expect("synthetic backend must publish one frame"),
+            StreamSource::SnapshotThenLive(mut frames, _) => {
+                assert_eq!(frames.len(), 1);
+                frames.remove(0)
+            }
         };
-        let frame = rx
-            .try_recv()
-            .expect("synthetic backend must publish one frame");
         assert!(
             frame.get("samples_b64").is_some(),
             "frame missing samples_b64: {frame}"
@@ -421,9 +425,9 @@ mod tests {
     #[test]
     fn handler_rejects_missing_subject() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
@@ -452,9 +456,9 @@ mod tests {
             },
         );
         resources::save(&file).unwrap();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
@@ -469,9 +473,9 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),

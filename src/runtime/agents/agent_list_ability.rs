@@ -36,8 +36,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::persistence::config;
 use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::directory::AgentDirectory;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_LIST_AGENTS: &str = "device.agent.list";
@@ -46,7 +48,7 @@ pub const ABILITY_LIST_AGENTS: &str = "device.agent.list";
 ///
 /// `registry_provider` runs at handler-call time so a future
 /// hot-reload of `agents.json` is reflected without re-registration.
-pub fn register<F>(reg: &mut LocalAbilityRegistry, registry_provider: F)
+pub fn register<F>(reg: &mut AxonAbilityCatalog, registry_provider: F)
 where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
@@ -66,11 +68,25 @@ fn list_agents_handler(
         .agents
         .iter()
         .map(|(name, e)| {
+            let root = e
+                .root_path
+                .clone()
+                .unwrap_or_else(|| config::agents_root().join(name));
+            let (spec_model, spec_timeout_secs) = match AgentDirectory::open(&root) {
+                Ok(dir) => (dir.spec().model.clone(), dir.spec().timeout_secs),
+                Err(_) => (None, None),
+            };
+            let model = spec_model.or_else(|| e.model.clone());
+            let timeout_secs = spec_timeout_secs.unwrap_or(e.timeout_secs);
             json!({
                 "name": name,
                 "runtime": e.agent_type.to_string(),
-                "model": e.model.clone().map(Value::String).unwrap_or(Value::Null),
+                "model": model.map(Value::String).unwrap_or(Value::Null),
                 "label": e.label.clone().map(Value::String).unwrap_or(Value::Null),
+                "timeout_secs": timeout_secs,
+                "root_path": root.to_string_lossy(),
+                "root_exists": root.exists(),
+                "entry": e,
             })
         })
         .collect();
@@ -100,14 +116,14 @@ mod tests {
 
     #[test]
     fn registration_makes_list_agents_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, AgentRegistry::default);
         assert!(reg.get_rpc(ABILITY_LIST_AGENTS).is_some());
     }
 
     #[test]
     fn list_agents_empty_registry_returns_empty_array() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, AgentRegistry::default);
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
@@ -121,7 +137,7 @@ mod tests {
         entry.with_label(Some("primary".to_string()));
         registry.agents.insert("claude".to_string(), entry);
 
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let snapshot = registry.clone();
         register(&mut reg, move || snapshot.clone());
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
@@ -143,7 +159,7 @@ mod tests {
             AgentEntry::new(AgentType::Codex, None),
         );
 
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let snapshot = registry.clone();
         register(&mut reg, move || snapshot.clone());
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();

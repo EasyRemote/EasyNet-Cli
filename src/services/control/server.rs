@@ -730,8 +730,7 @@ mod tests {
     #[tokio::test]
     async fn end_to_end_bidi_round_trip_echoes_three_frames_then_terminal() {
         use crate::runtime::ability_dispatch::{
-            AbilityDispatcher, BidiSource, LocalAbilityRegistry, LocalBidiHandler,
-            BIDI_CHANNEL_BOUND,
+            AxonAbilityCatalog, BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND,
         };
         use crate::runtime::domain::NodeId;
         use crate::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
@@ -742,7 +741,8 @@ mod tests {
         // Build a proxy whose registry has one bidi handler. Same
         // pattern as the proxy-level tests in ability_proxy.rs but
         // exercised here through the real serve_connection codec.
-        let mut reg = LocalAbilityRegistry::new();
+        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
         let handler: LocalBidiHandler = Arc::new(|_args: serde_json::Value| {
             let (xport_to_handler_tx, mut handler_rx) =
                 mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
@@ -761,13 +761,10 @@ mod tests {
             })
         });
         reg.register_bidi("bidi.echo", handler);
-        let registry = Arc::new(reg);
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        let _registry = Arc::new(reg);
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(NodeId::new("self")));
-        let proxy = AbilityProxy::new_with_dispatcher(make_kernel(), dispatcher, resolver);
+        let proxy = AbilityProxy::new_with_runtime(make_kernel(), runtime, resolver);
 
         let (listener, _addr) = transport::bind_at(&path).expect("bind");
         let server_task = tokio::spawn(async move {

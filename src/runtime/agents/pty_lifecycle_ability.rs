@@ -1,4 +1,4 @@
-// EasyNet CLI — device.terminal.{create,close} ability handlers
+// EasyNet CLI — device.terminal.{create,list,close} ability handlers
 // =================================================================
 //
 // File: src/runtime/agents/pty_lifecycle_ability.rs
@@ -8,6 +8,7 @@
 //
 //   * device.terminal.create  (this file, RPC) — open a PTY,
 //                                spawn a child, return session_id
+//   * device.terminal.list    (this file, RPC) — snapshot live PTYs
 //   * device.terminal.close   (this file, RPC) — kill the child,
 //                                drop the session row
 //   * device.terminal.attach  (C-M3c, BIDI)    — wire stdin/stdout
@@ -36,11 +37,12 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_CREATE: &str = "device.terminal.create";
+pub const ABILITY_PTY_SESSION_LIST: &str = "device.terminal.list";
 pub const ABILITY_PTY_SESSION_CLOSE: &str = "device.terminal.close";
 
 /// Description published by the dispatcher's `description_for`
@@ -59,6 +61,14 @@ pub fn description_close() -> &'static str {
      an unknown session_id returns ack=false rather than an \
      error so callers can poll without special-casing already- \
      gone sessions."
+}
+
+pub fn description_list() -> &'static str {
+    "List live PTY sessions owned by this device daemon. Returns \
+     daemon-minted session_id values suitable for device.terminal.attach, \
+     input/read/resize, and close. Equivalent to the PTY-internal list \
+     used by the lifecycle subsystem; the `terminal` namespace is the \
+     stable operator-facing alias."
 }
 
 /// JSON Schema for device.terminal.create input. All fields
@@ -90,6 +100,14 @@ pub fn input_schema_close() -> Value {
     })
 }
 
+pub fn input_schema_list() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    })
+}
+
 /// Default PTY size when the caller doesn't specify. 80×24 is the
 /// classic VT100; matches what most terminal emulators open with so
 /// shells render readably even before a `_resize` lands.
@@ -106,7 +124,7 @@ const DEFAULT_ROWS: u16 = 24;
 /// reader thread. None is acceptable for tests / fixtures that
 /// don't exercise the unary I/O surface.
 pub fn register(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     pty: Arc<PtyService>,
     io: Option<crate::runtime::agents::pty_io_ability::PtyIoService>,
 ) {
@@ -115,6 +133,10 @@ pub fn register(
     let create_h: LocalRpcHandler =
         Arc::new(move |args: Value| create_handler(&svc_for_create, args));
     reg.register_rpc_with_owner("device.terminal.create", OwnerKind::Device, create_h);
+
+    let svc_for_list = Arc::clone(&pty);
+    let list_h: LocalRpcHandler = Arc::new(move |args: Value| list_handler(&svc_for_list, args));
+    reg.register_rpc_with_owner("device.terminal.list", OwnerKind::Device, list_h);
 
     let pty_for_close = pty;
     let close_h: LocalRpcHandler =
@@ -135,6 +157,33 @@ fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
     let spec = parse_create_spec(&args)?;
     let id = pty.create(spec)?;
     Ok(json!({ "session_id": id.as_str() }))
+}
+
+/// `device.terminal.list` handler.
+///
+/// Args: `{}`.
+///
+/// Returns: `{ sessions: [{ session_id, status, created_unix_ms, command?,
+/// command_args?, cwd? }] }`.
+fn list_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
+    if !args.is_object() {
+        anyhow::bail!("args must be an object");
+    }
+    let sessions = pty
+        .list()
+        .into_iter()
+        .map(|session| {
+            json!({
+                "session_id": session.id.as_str(),
+                "status": "active",
+                "created_unix_ms": session.created_unix_ms,
+                "command": session.command,
+                "command_args": session.command_args,
+                "cwd": session.cwd,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({ "sessions": sessions }))
 }
 
 /// `device.terminal.close` handler.
@@ -271,6 +320,14 @@ pub fn create_description() -> &'static str {
      device.terminal.close (close+reap)."
 }
 
+pub fn list_description() -> &'static str {
+    description_list()
+}
+
+pub fn list_input_schema() -> Value {
+    input_schema_list()
+}
+
 pub fn close_input_schema() -> Value {
     json!({
         "type": "object",
@@ -306,9 +363,10 @@ mod tests {
 
     #[test]
     fn registration_makes_both_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, fresh_service(), None);
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_CREATE).is_some());
+        assert!(reg.get_rpc(ABILITY_PTY_SESSION_LIST).is_some());
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_CLOSE).is_some());
     }
 
@@ -373,6 +431,31 @@ mod tests {
         let close_resp = close_handler(&svc, None, json!({"session_id": id.clone()})).unwrap();
         assert_eq!(close_resp["ack"], true);
         assert_eq!(svc.live_count(), 0);
+    }
+
+    #[test]
+    fn list_returns_live_sessions_and_close_removes_them() {
+        let svc = fresh_service();
+        let first = create_handler(&svc, json!({"command": true_command()})).unwrap();
+        let second = create_handler(&svc, json!({"command": true_command()})).unwrap();
+        let first_id = first["session_id"].as_str().unwrap().to_string();
+        let second_id = second["session_id"].as_str().unwrap().to_string();
+
+        let listed = list_handler(&svc, json!({})).unwrap();
+        let sessions = listed["sessions"].as_array().expect("sessions array");
+        let ids = sessions
+            .iter()
+            .map(|session| session["session_id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![first_id.as_str(), second_id.as_str()]);
+        assert!(sessions
+            .iter()
+            .all(|session| session["status"].as_str() == Some("active")));
+
+        close_handler(&svc, None, json!({"session_id": first_id})).unwrap();
+        close_handler(&svc, None, json!({"session_id": second_id})).unwrap();
+        let listed = list_handler(&svc, json!({})).unwrap();
+        assert_eq!(listed["sessions"].as_array().unwrap().len(), 0);
     }
 
     #[test]
