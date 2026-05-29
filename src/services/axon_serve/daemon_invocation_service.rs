@@ -1107,7 +1107,7 @@ impl Invocation for DaemonInvocationService {
         // with the canonical wire reasons. Ability name + initial
         // args feed `args_digest` exactly the way unary/server-stream
         // requests do.
-        self.admission.verify_envelope_for_bidi(&envelope_open)?;
+        self.admission.verify_envelope_for_bidi(envelope_open)?;
 
         let ability_name = envelope_open
             .target
@@ -1837,7 +1837,7 @@ impl DaemonInvocationService {
             match result {
                 Ok(mut entries) => devices.append(&mut entries),
                 Err(err) => {
-                    let err_msg = format!("{err}");
+                    let err_msg = err.to_string();
                     crate::op_event!(
                         component = axon_serve,
                         kind = proxy_list_user_devices_fanout_error,
@@ -1964,7 +1964,7 @@ impl DaemonInvocationService {
                     }
                 }
                 Err(err) => {
-                    let err_msg = format!("{err}");
+                    let err_msg = err.to_string();
                     crate::op_event!(
                         component = axon_serve,
                         kind = proxy_resolve_fanout_error,
@@ -3376,61 +3376,58 @@ impl DaemonInvocationService {
             |(mut events, presence_weak)| async move {
                 use tokio::sync::broadcast::error::RecvError;
 
-                loop {
-                    match events.recv().await {
-                        Ok(event) => {
-                            // `PresenceEventDelta` is `Online { String }` /
-                            // `Offline { String, &'static str }` — both
-                            // variants are statically `Serialize` and
-                            // never fail to encode. `expect` rather than
-                            // `.ok()?` so a future field that introduces
-                            // a fallible serialise mode trips a panic
-                            // with a self-documenting message instead of
-                            // silently terminating the stream — the
-                            // subscriber's `Closed` is otherwise
-                            // indistinguishable from a normal shutdown.
-                            let payload = serde_json::to_vec(&PresenceEventDelta::from(event))
-                                .expect(
-                                    "PresenceEventDelta is statically Serialize; a serialise \
-                                     failure here means the type grew a fallible field — update \
-                                     this site to surface Status::internal instead of panicking",
-                                );
-                            let chunk = InvokeStreamChunk {
-                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                                payload,
-                                ..InvokeStreamChunk::default()
-                            };
-                            return Some((Ok(chunk), (events, presence_weak)));
-                        }
-                        Err(RecvError::Lagged(_)) => {
-                            // Re-snapshot recovery: emit a fresh
-                            // initial frame so the subscriber's
-                            // state converges with the registry.
-                            // If the registry has been dropped under
-                            // us, end the stream gracefully.
-                            let presence = presence_weak.upgrade()?;
-                            let snapshot =
-                                federation_wrappers::build_subscribe_directory_initial(&presence);
-                            drop(presence);
-                            // `SubscribeDirectoryInitial` is statically
-                            // `Serialize` (Vec<AgentSummary> of two
-                            // String fields). Same `expect` rationale as
-                            // the `Ok(event)` arm above.
-                            let payload = serde_json::to_vec(&snapshot).expect(
-                                "SubscribeDirectoryInitial is statically Serialize; a \
-                                 serialise failure here means the snapshot type grew a \
-                                 fallible field — update this site to surface Status::internal \
-                                 instead of panicking",
-                            );
-                            let chunk = InvokeStreamChunk {
-                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                                payload,
-                                ..InvokeStreamChunk::default()
-                            };
-                            return Some((Ok(chunk), (events, presence_weak)));
-                        }
-                        Err(RecvError::Closed) => return None,
+                match events.recv().await {
+                    Ok(event) => {
+                        // `PresenceEventDelta` is `Online { String }` /
+                        // `Offline { String, &'static str }` — both
+                        // variants are statically `Serialize` and
+                        // never fail to encode. `expect` rather than
+                        // `.ok()?` so a future field that introduces
+                        // a fallible serialise mode trips a panic
+                        // with a self-documenting message instead of
+                        // silently terminating the stream — the
+                        // subscriber's `Closed` is otherwise
+                        // indistinguishable from a normal shutdown.
+                        let payload = serde_json::to_vec(&PresenceEventDelta::from(event)).expect(
+                            "PresenceEventDelta is statically Serialize; a serialise \
+                             failure here means the type grew a fallible field — update \
+                             this site to surface Status::internal instead of panicking",
+                        );
+                        let chunk = InvokeStreamChunk {
+                            content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                            payload,
+                            ..InvokeStreamChunk::default()
+                        };
+                        Some((Ok(chunk), (events, presence_weak)))
                     }
+                    Err(RecvError::Lagged(_)) => {
+                        // Re-snapshot recovery: emit a fresh
+                        // initial frame so the subscriber's
+                        // state converges with the registry.
+                        // If the registry has been dropped under
+                        // us, end the stream gracefully.
+                        let presence = presence_weak.upgrade()?;
+                        let snapshot =
+                            federation_wrappers::build_subscribe_directory_initial(&presence);
+                        drop(presence);
+                        // `SubscribeDirectoryInitial` is statically
+                        // `Serialize` (Vec<AgentSummary> of two
+                        // String fields). Same `expect` rationale as
+                        // the `Ok(event)` arm above.
+                        let payload = serde_json::to_vec(&snapshot).expect(
+                            "SubscribeDirectoryInitial is statically Serialize; a \
+                             serialise failure here means the snapshot type grew a \
+                             fallible field — update this site to surface Status::internal \
+                             instead of panicking",
+                        );
+                        let chunk = InvokeStreamChunk {
+                            content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                            payload,
+                            ..InvokeStreamChunk::default()
+                        };
+                        Some((Ok(chunk), (events, presence_weak)))
+                    }
+                    Err(RecvError::Closed) => None,
                 }
             },
         );
@@ -3495,77 +3492,69 @@ impl DaemonInvocationService {
                 // hb_ms from now.
                 hb.tick().await;
 
-                loop {
-                    tokio::select! {
-                        recv = events.recv() => {
-                            match recv {
-                                Ok(event) => {
-                                    let evt = presence_event_to_directory_event(&event);
-                                    let payload = serde_json::to_vec(&evt).expect(
-                                        "DirectoryEvent is statically Serialize; a serialise \
-                                         failure here means the type grew a fallible field \
-                                         — update this site to surface Status::internal \
-                                         instead of panicking",
-                                    );
-                                    let chunk = InvokeStreamChunk {
-                                        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                                        payload,
-                                        ..InvokeStreamChunk::default()
-                                    };
-                                    return Some((
-                                        Ok(chunk),
-                                        (events, presence_weak, hb_ms),
-                                    ));
-                                }
-                                Err(RecvError::Lagged(_)) => {
-                                    // Slow consumer; emit a
-                                    // fresh Snapshot so the
-                                    // receiver's view converges
-                                    // with the registry.
-                                    let presence = presence_weak.upgrade()?;
-                                    let snap_evt =
-                                        federation_wrappers::build_subscribe_directory_v2_snapshot(
-                                            &presence,
-                                        );
-                                    drop(presence);
-                                    let payload = serde_json::to_vec(&snap_evt).expect(
-                                        "DirectoryEvent::Snapshot is statically Serialize",
-                                    );
-                                    let _ = DirectoryEvent::Snapshot { entries: vec![] };
-                                    let chunk = InvokeStreamChunk {
-                                        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                                        payload,
-                                        ..InvokeStreamChunk::default()
-                                    };
-                                    return Some((
-                                        Ok(chunk),
-                                        (events, presence_weak, hb_ms),
-                                    ));
-                                }
-                                Err(RecvError::Closed) => return None,
+                tokio::select! {
+                    recv = events.recv() => {
+                        match recv {
+                            Ok(event) => {
+                                let evt = presence_event_to_directory_event(&event);
+                                let payload = serde_json::to_vec(&evt).expect(
+                                    "DirectoryEvent is statically Serialize; a serialise \
+                                     failure here means the type grew a fallible field \
+                                     — update this site to surface Status::internal \
+                                     instead of panicking",
+                                );
+                                let chunk = InvokeStreamChunk {
+                                    content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                    payload,
+                                    ..InvokeStreamChunk::default()
+                                };
+                                Some((Ok(chunk), (events, presence_weak, hb_ms)))
                             }
+                            Err(RecvError::Lagged(_)) => {
+                                // Slow consumer; emit a
+                                // fresh Snapshot so the
+                                // receiver's view converges
+                                // with the registry.
+                                let presence = presence_weak.upgrade()?;
+                                let snap_evt =
+                                    federation_wrappers::build_subscribe_directory_v2_snapshot(
+                                        &presence,
+                                    );
+                                drop(presence);
+                                let payload = serde_json::to_vec(&snap_evt).expect(
+                                    "DirectoryEvent::Snapshot is statically Serialize",
+                                );
+                                let _ = DirectoryEvent::Snapshot { entries: vec![] };
+                                let chunk = InvokeStreamChunk {
+                                    content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                    payload,
+                                    ..InvokeStreamChunk::default()
+                                };
+                                Some((Ok(chunk), (events, presence_weak, hb_ms)))
+                            }
+                            Err(RecvError::Closed) => None,
                         }
-                        _ = hb.tick() => {
-                            // 30s elapsed without a real event;
-                            // emit Heartbeat so the subscriber's
-                            // 60s idle-timeout watcher does not
-                            // tear down a healthy stream.
-                            let now_ms = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as i64)
-                                .unwrap_or(0);
-                            let hb_evt = DirectoryEvent::Heartbeat {
-                                sent_at_unix_ms: now_ms,
-                            };
-                            let payload = serde_json::to_vec(&hb_evt)
-                                .expect("DirectoryEvent::Heartbeat is statically Serialize");
-                            let chunk = InvokeStreamChunk {
-                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                                payload,
-                                ..InvokeStreamChunk::default()
-                            };
-                            return Some((Ok(chunk), (events, presence_weak, hb_ms)));
-                        }
+                    }
+                    _ = hb.tick() => {
+                        // 30s elapsed without a real event;
+                        // emit Heartbeat so the subscriber's
+                        // 60s idle-timeout watcher does not
+                        // tear down a healthy stream.
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let hb_evt = DirectoryEvent::Heartbeat {
+                            sent_at_unix_ms: now_ms,
+                        };
+                        let payload = serde_json::to_vec(&hb_evt)
+                            .expect("DirectoryEvent::Heartbeat is statically Serialize");
+                        let chunk = InvokeStreamChunk {
+                            content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                            payload,
+                            ..InvokeStreamChunk::default()
+                        };
+                        Some((Ok(chunk), (events, presence_weak, hb_ms)))
                     }
                 }
             },

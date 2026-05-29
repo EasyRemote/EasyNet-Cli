@@ -362,14 +362,17 @@ mod tests {
     /// $SHELL keeps the test deterministic + fast (true exits with 0
     /// immediately, so close path doesn't race the spawn).
     fn true_spec() -> PtyCreateSpec {
-        let mut s = PtyCreateSpec::default();
-        s.command = Some("/usr/bin/true".to_string());
         // /usr/bin/true exists on macOS; on some Linux distros true
         // is at /bin/true. Pick whichever exists.
-        if !std::path::Path::new("/usr/bin/true").exists() {
-            s.command = Some("/bin/true".to_string());
+        let command = if std::path::Path::new("/usr/bin/true").exists() {
+            "/usr/bin/true"
+        } else {
+            "/bin/true"
+        };
+        PtyCreateSpec {
+            command: Some(command.to_string()),
+            ..PtyCreateSpec::default()
         }
-        s
     }
 
     #[test]
@@ -417,8 +420,10 @@ mod tests {
     #[test]
     fn create_reports_spawn_error_clearly() {
         let svc = PtyService::new();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some("/this/path/should/not/exist/ever".to_string());
+        let spec = PtyCreateSpec {
+            command: Some("/this/path/should/not/exist/ever".to_string()),
+            ..PtyCreateSpec::default()
+        };
         let err = svc.create(spec).unwrap_err();
         let msg = format!("{err}");
         assert!(

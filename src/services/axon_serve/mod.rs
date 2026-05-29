@@ -54,6 +54,12 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+// The axon service boundary is tonic-shaped: generated server traits
+// and handler adapters return `tonic::Status` by value. Boxing it in
+// local helpers would add mapping noise while the public trait still
+// has to use `Status`, so this module owns the exception.
+#![allow(clippy::result_large_err)]
+
 pub mod admission_facade;
 pub mod boot;
 pub mod daemon_invocation_service;

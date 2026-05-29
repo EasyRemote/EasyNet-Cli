@@ -106,7 +106,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // advertised-agent store immediately, so a downstream
     // `device list` from any peer hub shows the device gone the
     // instant `device reset --force` returns.
-    if let Some(creds) = config::load_credentials().ok() {
+    if let Ok(creds) = config::load_credentials() {
         if let Some(ref state) = runtime_state {
             if state.pid.is_some_and(net::is_pid_alive) {
                 let device_uri = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);

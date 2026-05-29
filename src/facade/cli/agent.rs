@@ -2394,8 +2394,8 @@ fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyhow::Result<(
     }
     let latest = chat_sessions::latest_session(agent).unwrap_or_default();
     println!(
-        "{:<38} {:<22} {:>6}  {}",
-        "SESSION_ID", "LAST_TURN_AT", "TURNS", "PROMPT"
+        "{:<38} {:<22} {:>6}  PROMPT",
+        "SESSION_ID", "LAST_TURN_AT", "TURNS"
     );
     for s in &sessions {
         let marker = if s.session_id == latest { "*" } else { " " };

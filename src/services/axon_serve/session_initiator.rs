@@ -385,6 +385,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_ura: String,
@@ -966,6 +967,7 @@ impl Drop for OutboxGuard {
 /// if a future change wires SIGHUP-driven trust reloads through
 /// the supervisor, this value should become a cell snapshot
 /// rather than an owned `PathBuf`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_ura: String,
@@ -1311,7 +1313,6 @@ pub fn build_session_envelope_open_with_seed(
             }],
             ..EnvelopeOpen::default()
         })),
-        ..InvokeBidiUp::default()
     }
 }
 

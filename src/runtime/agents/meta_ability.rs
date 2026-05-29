@@ -328,7 +328,7 @@ fn list_abilities_handler(
             if by_name.contains_key(&(public_name.clone(), owner.to_string())) {
                 continue;
             }
-            let transport_hints = crate::runtime::agents::discovery_hints_for(&registry, &name);
+            let transport_hints = crate::runtime::agents::discovery_hints_for(registry, &name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
             // (chat ability + the family that follows it), surface

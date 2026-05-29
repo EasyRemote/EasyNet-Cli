@@ -1143,8 +1143,8 @@ mod tests {
         // claude's seeded chat manifest plus weather; codex's
         // summarize must NOT appear.
         assert!(names.iter().all(|n| n.starts_with("claude.")));
-        assert!(names.iter().any(|n| *n == "claude.weather"));
-        assert!(!names.iter().any(|n| *n == "codex.summarize"));
+        assert!(names.contains(&"claude.weather"));
+        assert!(!names.contains(&"codex.summarize"));
     }
 
     #[test]

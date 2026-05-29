@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn empty_provider_yields_empty_tools() {
-        let arc = build_bridge_registry(|| vec![]);
+        let arc = build_bridge_registry(std::vec::Vec::new);
         let handler = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
         let resp = handler(json!({})).unwrap();
         assert_eq!(resp["tools"].as_array().unwrap().len(), 0);

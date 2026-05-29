@@ -403,7 +403,7 @@ additionalProperties = false
         let schema = &parsed["input_schema"];
         assert_eq!(schema["type"].as_str().unwrap(), "object");
         assert_eq!(schema["required"].as_array().unwrap().len(), 1);
-        assert_eq!(schema["additionalProperties"].as_bool().unwrap(), false);
+        assert!(!schema["additionalProperties"].as_bool().unwrap());
         let props = schema.get("properties").unwrap();
         assert_eq!(
             props["encoding"]["enum"].as_array().unwrap()[0]

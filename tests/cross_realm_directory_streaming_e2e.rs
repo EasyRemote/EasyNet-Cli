@@ -113,10 +113,7 @@ impl FederationClient for InProcessStreamingForwarder {
         // a clean `Stream<Item = DirectoryEvent>`.
         let events = inner.filter_map(|item| async move {
             match item {
-                Ok(chunk) => match serde_json::from_slice::<DirectoryEvent>(&chunk.payload) {
-                    Ok(evt) => Some(evt),
-                    Err(_) => None, // drop malformed; mirrors production wrapper
-                },
+                Ok(chunk) => serde_json::from_slice::<DirectoryEvent>(&chunk.payload).ok(),
                 Err(_) => None,
             }
         });

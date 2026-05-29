@@ -563,7 +563,7 @@ impl McpConnection {
         });
         let write_result = {
             let mut stdin = self.stdin.lock().await;
-            write_stdio_message(&mut *stdin, &self.stdio_framing, &req).await
+            write_stdio_message(&mut stdin, &self.stdio_framing, &req).await
         };
         if let Err(e) = write_result {
             // Pull our entry back out so a future response (won't come
@@ -1007,7 +1007,7 @@ async fn spawn_and_initialize(spec: &McpServerSpec) -> anyhow::Result<McpConnect
     });
     {
         let mut stdin_guard = conn.stdin.lock().await;
-        write_stdio_message(&mut *stdin_guard, &conn.stdio_framing, &notif).await?;
+        write_stdio_message(&mut stdin_guard, &conn.stdio_framing, &notif).await?;
     }
     Ok(conn)
 }

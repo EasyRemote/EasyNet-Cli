@@ -1474,12 +1474,11 @@ mod tests {
         // no schema_version. We read it as implicit v1 and do not
         // fail — otherwise every pre-existing dev install would
         // break on upgrade.
-        let toml = format!(
-            "name = \"chat\"\n\
+        let toml = "name = \"chat\"\n\
              description = \"x\"\n\
              [input_schema]\n\
              type = \"object\"\n"
-        );
+            .to_string();
         let m = AbilityManifest::from_toml_str(&toml).unwrap();
         assert_eq!(m.name(), "chat");
     }

@@ -83,7 +83,7 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
     let entries = fetch_directory_entries(self_uri.as_deref())?;
     let nodes: Vec<Value> = entries
         .into_iter()
-        .filter(|e| is_device_entry(e))
+        .filter(is_device_entry)
         .map(|e| project_directory_entry(e, self_uri.as_deref()))
         .collect();
 

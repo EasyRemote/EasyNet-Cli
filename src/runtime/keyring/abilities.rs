@@ -119,11 +119,13 @@ pub fn handle_list(handle: &KeyringHandle, args: Value) -> Result<Value> {
         .filter(|e| {
             status_filter
                 .as_deref()
-                .map(|s| match (s, &e.status) {
-                    ("active", KeyStatus::Active) => true,
-                    ("retired", KeyStatus::Retired) => true,
-                    ("revoked", KeyStatus::Revoked) => true,
-                    _ => false,
+                .map(|s| {
+                    matches!(
+                        (s, &e.status),
+                        ("active", KeyStatus::Active)
+                            | ("retired", KeyStatus::Retired)
+                            | ("revoked", KeyStatus::Revoked)
+                    )
                 })
                 .unwrap_or(true)
         })
@@ -464,51 +466,51 @@ pub fn register_for_owner(reg: &mut AxonAbilityCatalog, owner: &str, handle: Arc
 
     let h = handle.clone();
     reg.register_rpc(
-        &name("create"),
+        name("create"),
         Arc::new(move |args| handle_create(&h, args)),
     );
     let h = handle.clone();
-    reg.register_rpc(&name("list"), Arc::new(move |args| handle_list(&h, args)));
+    reg.register_rpc(name("list"), Arc::new(move |args| handle_list(&h, args)));
     let h = handle.clone();
     reg.register_rpc(
-        &name("get_public"),
+        name("get_public"),
         Arc::new(move |args| handle_get_public(&h, args)),
     );
     let h = handle.clone();
-    reg.register_rpc(&name("sign"), Arc::new(move |args| handle_sign(&h, args)));
+    reg.register_rpc(name("sign"), Arc::new(move |args| handle_sign(&h, args)));
     let h = handle.clone();
     reg.register_rpc(
-        &name("rotate"),
+        name("rotate"),
         Arc::new(move |args| handle_rotate(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("revoke"),
+        name("revoke"),
         Arc::new(move |args| handle_revoke(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("expire_set"),
+        name("expire_set"),
         Arc::new(move |args| handle_expire_set(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("bind_subject"),
+        name("bind_subject"),
         Arc::new(move |args| handle_bind_subject(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("peer_add"),
+        name("peer_add"),
         Arc::new(move |args| handle_peer_add(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("peer_list"),
+        name("peer_list"),
         Arc::new(move |args| handle_peer_list(&h, args)),
     );
     let h = handle.clone();
     reg.register_rpc(
-        &name("federate_user_identity_token"),
+        name("federate_user_identity_token"),
         Arc::new(move |args| handle_federate_user_identity_token(&h, args)),
     );
 }
@@ -557,7 +559,7 @@ mod tests {
 
         let pub_view = handle_get_public(&h, json!({"key_id": key_id})).unwrap();
         assert_eq!(pub_view["status"], json!("active"));
-        assert!(pub_view["public_key"].as_str().unwrap().len() > 0);
+        assert!(!pub_view["public_key"].as_str().unwrap().is_empty());
     }
 
     #[test]

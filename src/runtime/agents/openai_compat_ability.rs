@@ -523,7 +523,7 @@ fn project_model_id_with_identity(
 // form before forwarding to the chat-base ability. The agent gets
 // bytes, not URIs — it doesn't need protocol awareness.
 
-fn deref_easynet_uris_in_messages(messages: &mut Vec<Value>) {
+fn deref_easynet_uris_in_messages(messages: &mut [Value]) {
     for msg in messages.iter_mut() {
         let Some(content) = msg.get_mut("content") else {
             continue;

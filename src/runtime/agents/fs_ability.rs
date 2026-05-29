@@ -257,12 +257,12 @@ fn handler_read(args: Value) -> Result<Value> {
 /// The double check defends against `/proc/self/cwd/../dev/zero`
 /// or symlinks pointing at `/dev/zero`.
 fn is_blocked_read_path(path: &str) -> bool {
-    if BLOCKED_READ_PATHS.iter().any(|&b| b == path) {
+    if BLOCKED_READ_PATHS.contains(&path) {
         return true;
     }
     if let Ok(canon) = std::fs::canonicalize(Path::new(path)) {
         if let Some(s) = canon.to_str() {
-            return BLOCKED_READ_PATHS.iter().any(|&b| b == s);
+            return BLOCKED_READ_PATHS.contains(&s);
         }
     }
     false

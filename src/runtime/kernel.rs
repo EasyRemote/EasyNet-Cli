@@ -698,7 +698,7 @@ mod tests {
 
         // Pull the pending request off the broadcast.
         let pending = pending_rx.recv().await.expect("pending broadcast");
-        assert_eq!(pending.prompt.contains("ghost-agent"), true);
+        assert!(pending.prompt.contains("ghost-agent"));
 
         // Decide Deny; the kernel's gate_permission returns Deny;
         // invoke returns a Failed receipt.

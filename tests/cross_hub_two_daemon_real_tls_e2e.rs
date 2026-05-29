@@ -70,9 +70,10 @@ use easynet_cli::services::axon_serve::federation_wrappers::{
     ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
 };
 
-/// One daemon's filesystem layout for the test. Owns the tempdir
-/// + child handle so dropping the harness kills the daemon and
-/// removes its config.
+/// One daemon's filesystem layout for the test.
+///
+/// Owns the tempdir + child handle so dropping the harness kills
+/// the daemon and removes its config.
 struct DaemonHarness {
     /// Tempdir rooted as `HOME` for this daemon. The daemon writes
     /// `daemon-config.toml`, `realm-trust.toml`, and `daemon.sock`

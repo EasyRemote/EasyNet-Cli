@@ -60,42 +60,42 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.node.list",
         OwnerKind::Device,
-        Arc::new(|args| list_nodes_handler(args)),
+        Arc::new(list_nodes_handler),
     );
     reg.register_rpc_with_owner(
         "device.node.describe",
         OwnerKind::Device,
-        Arc::new(|args| describe_node_handler(args)),
+        Arc::new(describe_node_handler),
     );
     reg.register_rpc_with_owner(
         "device.node.remove",
         OwnerKind::Device,
-        Arc::new(|args| remove_node_handler(args)),
+        Arc::new(remove_node_handler),
     );
     reg.register_rpc_with_owner(
         "device.ability.deploy",
         OwnerKind::Device,
-        Arc::new(|args| deploy_ability_handler(args)),
+        Arc::new(deploy_ability_handler),
     );
     reg.register_rpc_with_owner(
         "device.ability.uninstall",
         OwnerKind::Device,
-        Arc::new(|args| uninstall_ability_handler(args)),
+        Arc::new(uninstall_ability_handler),
     );
     reg.register_rpc_with_owner(
         "device.remote.exec",
         OwnerKind::Device,
-        Arc::new(|args| exec_remote_handler(args)),
+        Arc::new(exec_remote_handler),
     );
     reg.register_rpc_with_owner(
         "device.node.register",
         OwnerKind::Device,
-        Arc::new(|args| register_self_handler(args)),
+        Arc::new(register_self_handler),
     );
     reg.register_rpc_with_owner(
         "device.node.deregister",
         OwnerKind::Device,
-        Arc::new(|args| deregister_self_handler(args)),
+        Arc::new(deregister_self_handler),
     );
 }
 

@@ -1402,16 +1402,11 @@ struct AttachmentSpec {
     encoding: AttachmentEncoding,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum AttachmentEncoding {
+    #[default]
     Utf8,
     Base64,
-}
-
-impl Default for AttachmentEncoding {
-    fn default() -> Self {
-        Self::Utf8
-    }
 }
 
 impl ChatArgs {
@@ -1504,17 +1499,12 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
 /// duplicated structure is intentional: callers reason about each
 /// independently and reusing the type makes "what does include mean
 /// here" an obvious cross-reference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SelectionMode {
+    #[default]
     Auto,
     None,
     Explicit,
-}
-
-impl Default for SelectionMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Debug, Clone, Default)]

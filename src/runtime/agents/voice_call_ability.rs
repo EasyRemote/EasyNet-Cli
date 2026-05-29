@@ -97,42 +97,42 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.voice.create_call",
         OwnerKind::Device,
-        Arc::new(|args| create_call_handler(args)),
+        Arc::new(create_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.show_call",
         OwnerKind::Device,
-        Arc::new(|args| show_call_handler(args)),
+        Arc::new(show_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.join_call",
         OwnerKind::Device,
-        Arc::new(|args| join_call_handler(args)),
+        Arc::new(join_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.leave_call",
         OwnerKind::Device,
-        Arc::new(|args| leave_call_handler(args)),
+        Arc::new(leave_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.end_call",
         OwnerKind::Device,
-        Arc::new(|args| end_call_handler(args)),
+        Arc::new(end_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.watch_call",
         OwnerKind::Device,
-        Arc::new(|args| watch_call_handler(args)),
+        Arc::new(watch_call_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.report_metrics",
         OwnerKind::Device,
-        Arc::new(|args| report_metrics_handler(args)),
+        Arc::new(report_metrics_handler),
     );
     reg.register_rpc_with_owner(
         "device.voice.list_calls",
         OwnerKind::Device,
-        Arc::new(|args| list_calls_handler(args)),
+        Arc::new(list_calls_handler),
     );
 }
 

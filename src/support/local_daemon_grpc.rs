@@ -41,7 +41,7 @@ pub(crate) fn probe_accepting(path: &Path) -> bool {
         if !path.exists() {
             return false;
         }
-        return std::os::unix::net::UnixStream::connect(path).is_ok();
+        std::os::unix::net::UnixStream::connect(path).is_ok()
     }
 
     #[cfg(windows)]
@@ -198,7 +198,7 @@ impl LocalDaemonAbilityClient {
                     return Ok(client);
                 }
             }
-            return Ok(Self::for_agent_management_in_process_test_only());
+            Ok(Self::for_agent_management_in_process_test_only())
         }
 
         #[cfg(not(test))]
@@ -283,7 +283,7 @@ impl LocalDaemonAbilityClient {
     pub(crate) fn for_agent_management(_caller_ura: Option<String>) -> anyhow::Result<Self> {
         #[cfg(test)]
         {
-            return Ok(Self {});
+            Ok(Self {})
         }
         #[cfg(not(test))]
         anyhow::bail!(
@@ -299,7 +299,7 @@ impl LocalDaemonAbilityClient {
     ) -> anyhow::Result<serde_json::Value> {
         #[cfg(test)]
         {
-            return invoke_agent_management_in_process(function_name, _payload_json);
+            invoke_agent_management_in_process(function_name, _payload_json)
         }
         #[cfg(not(test))]
         anyhow::bail!(

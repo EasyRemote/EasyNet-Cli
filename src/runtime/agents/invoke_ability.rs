@@ -179,7 +179,7 @@ pub fn dispatch(
                         target,
                         &qualified,
                         &parsed.args,
-                        result.as_ref().map_err(|e| e),
+                        result.as_ref(),
                         elapsed_ms,
                         &parsed.metadata,
                     );

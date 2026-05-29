@@ -371,6 +371,7 @@ pub fn build_registry_with_runtime(
 /// agents into `LocalRuntime`. Tests pass an empty cell —
 /// `device.agent.start` then writes `agents.json` and op_events
 /// `hot_agent_runtime_sync_skipped` instead of also touching the runtime.
+#[allow(clippy::too_many_arguments)]
 pub fn build_registry_with_services(
     sessions: Arc<SessionService>,
     perms: Arc<PermissionService>,
@@ -1018,7 +1019,7 @@ fn init_keyring_for_daemon(
     let path = std::env::var("EASYNET_KEYRING_PATH")
         .map(std::path::PathBuf::from)
         .ok()
-        .map_or_else(|| default_keyring_path(), |p| Ok(p))?;
+        .map_or_else(default_keyring_path, Ok)?;
     let pass = std::env::var("EASYNET_KEYRING_PASS").unwrap_or_else(|_| {
         // Local-fast default. Operators wanting stronger isolation
         // set EASYNET_KEYRING_PASS to a real secret. The literal
@@ -1040,6 +1041,7 @@ fn init_keyring_for_daemon(
 /// `LocalRuntime` + dispatch handle are wired. Passed through to
 /// the `device.agent.start` / `.stop` handlers so post-boot agent
 /// additions are registered into `LocalRuntime`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_registry_for_daemon(
     sessions: Arc<SessionService>,
     perms: Arc<PermissionService>,

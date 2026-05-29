@@ -776,7 +776,7 @@ mod tests {
             Some("0.0.0.0:50051".parse::<SocketAddr>().unwrap())
         );
         assert_eq!(
-            cfg.tls_cert_pem().map(Path::to_str).flatten(),
+            cfg.tls_cert_pem().and_then(Path::to_str),
             Some("/etc/easynet/tls/cert.pem")
         );
     }

@@ -584,16 +584,16 @@ fn upsert_self_trusted_agent(
     public_key_b64: &str,
     added_at_unix_ms: u64,
 ) -> anyhow::Result<String> {
-    upsert_trusted_agent_inner(
+    upsert_trusted_agent_inner(TrustedAgentUpsert {
         raw,
         agent_ura,
         public_key_b64,
-        "device",
-        None,
-        None,
-        None,
+        role: "device",
+        origin_tenant_id: None,
+        hub_uri: None,
+        tls_ca_pem_path: None,
         added_at_unix_ms,
-    )
+    })
 }
 
 fn upsert_hub_trusted_agent(
@@ -605,33 +605,46 @@ fn upsert_hub_trusted_agent(
     tls_ca_pem_path: Option<&Path>,
     added_at_unix_ms: u64,
 ) -> anyhow::Result<String> {
-    upsert_trusted_agent_inner(
+    upsert_trusted_agent_inner(TrustedAgentUpsert {
         raw,
         agent_ura,
         public_key_b64,
-        "hub",
-        Some(origin_tenant_id),
-        Some(hub_uri),
+        role: "hub",
+        origin_tenant_id: Some(origin_tenant_id),
+        hub_uri: Some(hub_uri),
         tls_ca_pem_path,
         added_at_unix_ms,
-    )
+    })
 }
 
 /// Generic [[trusted_agent]] upsert. Device rows stay append-only;
 /// hub rows are upgraded in place so legacy v4.1.4 entries gain the
 /// schema-B `origin_tenant_id` / `hub_uri` / `tls_ca_pem_path`
 /// fields required by device-mode `<self>.session` bootstrap.
-fn upsert_trusted_agent_inner(
-    raw: &str,
-    agent_ura: &str,
-    public_key_b64: &str,
-    role: &str,
-    origin_tenant_id: Option<&str>,
-    hub_uri: Option<&str>,
-    tls_ca_pem_path: Option<&Path>,
+struct TrustedAgentUpsert<'a> {
+    raw: &'a str,
+    agent_ura: &'a str,
+    public_key_b64: &'a str,
+    role: &'a str,
+    origin_tenant_id: Option<&'a str>,
+    hub_uri: Option<&'a str>,
+    tls_ca_pem_path: Option<&'a Path>,
     added_at_unix_ms: u64,
-) -> anyhow::Result<String> {
+}
+
+fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<String> {
     use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
+
+    let TrustedAgentUpsert {
+        raw,
+        agent_ura,
+        public_key_b64,
+        role,
+        origin_tenant_id,
+        hub_uri,
+        tls_ca_pem_path,
+        added_at_unix_ms,
+    } = upsert;
 
     let mut doc: DocumentMut = if raw.trim().is_empty() {
         DocumentMut::new()

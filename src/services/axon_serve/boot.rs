@@ -1214,13 +1214,9 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
 fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
     use crate::services::keyring::{MasterKeySource, Vault, VaultError};
 
-    if std::env::var("EASYNET_KEYRING_PASSPHRASE")
+    std::env::var("EASYNET_KEYRING_PASSPHRASE")
         .ok()
-        .filter(|v| !v.is_empty())
-        .is_none()
-    {
-        return None;
-    }
+        .filter(|v| !v.is_empty())?;
     let path = if let Ok(p) = std::env::var("EASYNET_KEYRING_VAULT_PATH") {
         std::path::PathBuf::from(p)
     } else {
@@ -1657,7 +1653,7 @@ fn spawn_federated_directory_poll_task(
                 // verbatim so the op-event field renders as
                 // `peer_realm=tenant-a` (auto-quoted only if whitespace)
                 // instead of Rust's `"tenant-a"` Debug literal.
-                let err_msg = format!("{err}");
+                let err_msg = err.to_string();
                 crate::op_event!(
                     component = federation_directory,
                     kind = poll_peer_failed,
@@ -2072,7 +2068,7 @@ tls_key_pem = {key:?}
         // before reaching the bind stage". Wrap in
         // `catch_unwind` so a panic surfaces as a test failure
         // rather than aborting the test process.
-        let result = std::panic::AssertUnwindSafe(async {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Errors from the TLS bind are acceptable — what
             // matters is that the federation client + peers
             // wire-up did not panic before we got there.
@@ -2083,11 +2079,11 @@ tls_key_pem = {key:?}
                     crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
                 ),
             );
-        });
+        }));
         // futures::FutureExt::catch_unwind would be nicer; we
         // use std::panic::catch_unwind via a synchronous wrapper
         // because the construction path itself is synchronous up
         // through `with_federation_client`.
-        let _ = result;
+        result.expect("hub-mode sidecar construction must not panic before bind");
     }
 }

@@ -507,8 +507,10 @@ mod tests {
         // contain "hi". A regression in either the writer (T2) or
         // the reader (T1) trips this.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command());
+        let spec = PtyCreateSpec {
+            command: Some(shell_command()),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /bin/sh");
 
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
@@ -557,8 +559,10 @@ mod tests {
         // sending a resize, then a stdin echo, and observing the
         // stdin still round-trips.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command());
+        let spec = PtyCreateSpec {
+            command: Some(shell_command()),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /bin/sh");
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
@@ -602,12 +606,14 @@ mod tests {
         // /bin/true exits immediately; the exit-watcher should
         // emit exactly one `exit` frame. Pins T3.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(if std::path::Path::new("/usr/bin/true").exists() {
-            "/usr/bin/true".to_string()
-        } else {
-            "/bin/true".to_string()
-        });
+        let spec = PtyCreateSpec {
+            command: Some(if std::path::Path::new("/usr/bin/true").exists() {
+                "/usr/bin/true".to_string()
+            } else {
+                "/bin/true".to_string()
+            }),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /usr/bin/true");
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
@@ -636,8 +642,10 @@ mod tests {
         // a future "paste-mode" marker) must NOT close the session.
         // Send junk, then a valid stdin, observe stdin still works.
         let svc = fresh_service();
-        let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command());
+        let spec = PtyCreateSpec {
+            command: Some(shell_command()),
+            ..PtyCreateSpec::default()
+        };
         let id = svc.create(spec).expect("spawn /bin/sh");
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 

@@ -363,6 +363,7 @@ enum AgentCycleOutcome {
 /// failed (transport / driver / agent not registered) — those map
 /// to `errors[]` in the envelope. Skip is `Ok(Skip)`, normal
 /// speech is `Ok(Speak(reply))`.
+#[allow(clippy::too_many_arguments)]
 fn run_agent_cycle(
     room_id: &str,
     agent: &str,

@@ -155,7 +155,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     })?;
     let skill_md_path = skill_dir.join("SKILL.md");
     let hash = content_hash(&body);
-    let size_bytes = body.as_bytes().len() as u64;
+    let size_bytes = body.len() as u64;
     crate::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display()))?;
 
@@ -393,10 +393,10 @@ fn write_file_handler(args: Value) -> anyhow::Result<Value> {
         .get("content")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("skill.write_file: missing `content` string"))?;
-    if content.as_bytes().len() as u64 > MAX_SKILL_FILE_BYTES {
+    if content.len() as u64 > MAX_SKILL_FILE_BYTES {
         anyhow::bail!(
             "skill.write_file: content is {} bytes; cap is {} bytes",
-            content.as_bytes().len(),
+            content.len(),
             MAX_SKILL_FILE_BYTES
         );
     }
@@ -419,7 +419,7 @@ fn write_file_handler(args: Value) -> anyhow::Result<Value> {
         "owner_agent_id": owner_id,
         "skill_name": skill_name,
         "path": rel_wire,
-        "size_bytes": content.as_bytes().len() as u64,
+        "size_bytes": content.len() as u64,
         "content_hash": hash,
     });
     receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));

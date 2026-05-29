@@ -199,7 +199,7 @@ fn parsed_owner_label(owner_agent_ura: &str) -> Option<String> {
 fn inferred_cost_kind(
     descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
 ) -> &'static str {
-    if descriptor.source.starts_with("agent:") && descriptor.metadata.get("exec_kind").is_none() {
+    if descriptor.source.starts_with("agent:") && !descriptor.metadata.contains_key("exec_kind") {
         return "llm_metered";
     }
     "unknown"
@@ -1193,8 +1193,10 @@ mod tests {
         let _h = crate::facade::cli::test_support::HomeGuard::new();
         // Pre-populate local-agents.json with a host URI; build_stdio_server
         // must pick it up.
-        let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_ura = "easynet:///r/acme/device/01DEV".into();
+        let file = crate::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
+            ..crate::persistence::local_agents::LocalAgentsFile::default()
+        };
         crate::persistence::local_agents::save(&file).unwrap();
 
         let cfg = StdioServerConfig {
@@ -1252,7 +1254,7 @@ mod tests {
         std::fs::create_dir_all(workspace_root.join("abilities")).unwrap();
         std::fs::write(
             workspace_root.join("agent.toml"),
-            &format!("name = \"{agent}\"\nruntime = \"claude-code\"\n"),
+            format!("name = \"{agent}\"\nruntime = \"claude-code\"\n"),
         )
         .unwrap();
         std::fs::write(
@@ -1381,7 +1383,7 @@ mod tests {
         std::fs::create_dir_all(workspace_root.join("abilities")).unwrap();
         std::fs::write(
             workspace_root.join("agent.toml"),
-            &format!("name = \"{agent}\"\nruntime = \"claude-code\"\n"),
+            format!("name = \"{agent}\"\nruntime = \"claude-code\"\n"),
         )
         .unwrap();
         // MCP-backed ability whose [exec] kind = "mcp" would normally
@@ -1494,8 +1496,11 @@ mod tests {
 
     /// Counts progress reports — used to assert the InvokeMcpProvider
     /// emits the expected per-call pulses.
+    type CountingReports =
+        std::sync::Arc<std::sync::Mutex<Vec<(f64, Option<f64>, Option<String>)>>>;
+
     struct CountingSink {
-        reports: std::sync::Arc<std::sync::Mutex<Vec<(f64, Option<f64>, Option<String>)>>>,
+        reports: CountingReports,
     }
     impl easynet_axon::mcp::ProgressSink for CountingSink {
         fn report(

@@ -272,7 +272,7 @@ impl StopPlan {
             }
             Err(e) => {
                 self.renderer.stage_failed("cleanup-state", &format!("{e}"));
-                Err(e.into())
+                Err(e)
             }
         }
     }

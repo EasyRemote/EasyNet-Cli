@@ -523,13 +523,13 @@ fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<Str
         // (we don't expect nested CallExpr today but FieldValue::Object
         // could hold them once the parser grows that surface).
         for field in &c.arguments {
-            visit_field_value(&field.value, out);
+            visit_field_value(&field.value);
         }
     }
-    fn visit_field_value(v: &FieldValue, out: &mut Vec<String>) {
+    fn visit_field_value(v: &FieldValue) {
         if let FieldValue::Object(fields) = v {
             for f in fields {
-                visit_field_value(&f.value, out);
+                visit_field_value(&f.value);
             }
         }
     }
@@ -559,6 +559,7 @@ fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<Str
 /// JSON outcome describing what happened at every stage so the
 /// operator reading the mission.think envelope can audit the
 /// publish step without grep'ing the daemon log.
+#[allow(clippy::too_many_arguments)]
 fn run_curator_turn(
     registry: &Arc<AxonAbilityCatalog>,
     owner: &str,

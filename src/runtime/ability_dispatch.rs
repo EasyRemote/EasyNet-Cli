@@ -1456,7 +1456,7 @@ impl AxonAbilityCatalog {
         // Hot-reload side: union dynamic names so a freshly reflected
         // MCP tool shows up in `meta.list_abilities` immediately.
         for k in self.list_dynamic_abilities() {
-            if !names.iter().any(|n| *n == k) {
+            if !names.contains(&k) {
                 names.push(k);
             }
         }

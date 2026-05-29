@@ -198,7 +198,7 @@ fn wrap_with_sandbox(
             "pure_compute" => "pure_compute",
             _ => "unknown",
         };
-        return Ok((wrapped, leaked));
+        Ok((wrapped, leaked))
     }
     #[cfg(not(target_os = "macos"))]
     {

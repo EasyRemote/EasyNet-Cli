@@ -49,8 +49,6 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-#![cfg(feature = "axon-pb")]
-
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -176,8 +174,8 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
         return Ok(());
     }
     println!(
-        "{:<58} {:<14} {:<10} {:<14} {}",
-        "AGENT_URI", "NODE_ID", "STATUS", "ORIGIN_REALM", "HUB_ENDPOINT"
+        "{:<58} {:<14} {:<10} {:<14} HUB_ENDPOINT",
+        "AGENT_URI", "NODE_ID", "STATUS", "ORIGIN_REALM"
     );
     for entry in &entries {
         let agent_ura = entry

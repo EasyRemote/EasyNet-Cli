@@ -186,7 +186,7 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
         println!("No published projects.");
         return Ok(());
     }
-    println!("{:<24} {:<10} {}", "PROJECT", "VISIBILITY", "URL");
+    println!("{:<24} {:<10} URL", "PROJECT", "VISIBILITY");
     for p in projects {
         let id = p.get("project_id").and_then(Value::as_str).unwrap_or("?");
         let vis = p.get("visibility").and_then(Value::as_str).unwrap_or("?");

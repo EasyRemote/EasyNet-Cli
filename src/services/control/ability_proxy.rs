@@ -1358,8 +1358,10 @@ mod tests {
 
     #[test]
     fn observe_health_attaches_selfsigned_header_when_host_ura_known() {
-        let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_ura = "easynet:///r/acme/device/01DEV".into();
+        let file = crate::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
+            ..crate::persistence::local_agents::LocalAgentsFile::default()
+        };
         let p = proxy_with_local_agents(file);
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-receipt-1".into(),
@@ -1392,8 +1394,10 @@ mod tests {
         // Selfsigned for hosted-profile abilities, the verifier
         // would silently accept an attestation-less receipt.
         use crate::runtime::hosted_receipt::SigningModel;
-        let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_ura = "easynet:///r/acme/device/01DEV".into();
+        let mut file = crate::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
+            ..crate::persistence::local_agents::LocalAgentsFile::default()
+        };
         crate::persistence::local_agents::upsert_hosted_agent(
             &mut file,
             "consent",

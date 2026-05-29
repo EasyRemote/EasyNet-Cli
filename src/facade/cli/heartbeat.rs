@@ -106,7 +106,7 @@ impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
         // failure (its standard contract), so an abilty-level
         // hub rejection still propagates here while a transient
         // dropped connection self-heals.
-        let device_uri = crate::ura::device_ura(&tenant, &node_id);
+        let device_uri = crate::ura::device_ura(tenant, node_id);
         self.bridge.with_bridge(|br| {
             let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
                 br,
@@ -114,7 +114,7 @@ impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
             );
             crate::runtime::advertise::heartbeat(&invoker, tenant, tenant)
                 .map(|_| serde_json::json!({"ok": true}))
-                .map_err(|msg| easynet_axon::error::AxonError::Bridge(msg))
+                .map_err(easynet_axon::error::AxonError::Bridge)
         })
     }
 }
@@ -391,7 +391,7 @@ pub fn run_daemon() -> anyhow::Result<()> {
             device_uri.clone(),
         );
         crate::runtime::advertise::revoke_agent(&invoker, &tenant, &tenant, &device_uri, reason)
-            .map_err(|e| easynet_axon::error::AxonError::Bridge(e))
+            .map_err(easynet_axon::error::AxonError::Bridge)
     });
     if outcome == HeartbeatOutcome::NodeRejected {
         config::delete_credentials().ok();

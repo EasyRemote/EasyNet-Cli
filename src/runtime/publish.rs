@@ -980,7 +980,7 @@ mod tests {
             .filter_map(|a| a["name"].as_str())
             .collect();
         assert!(
-            names.iter().any(|n| *n == "alice.chat"),
+            names.contains(&"alice.chat"),
             "alice.chat must appear in advertised abilities for {alice_uri:?}; got names = {names:?}"
         );
         // Every advertised ability under the alice agent URA must
@@ -996,7 +996,8 @@ mod tests {
         // hardened; we pin the honest contract here so a future
         // regression on the **per-agent** metadata path is what
         // surfaces, not a synthetic device-profile expectation.
-        for ability_name in &["alice.chat"] {
+        {
+            let ability_name = &"alice.chat";
             let descriptor = abilities
                 .iter()
                 .find(|a| a["name"].as_str() == Some(*ability_name))
@@ -1079,7 +1080,7 @@ mod tests {
             .filter_map(|a| a["name"].as_str())
             .collect();
         assert!(
-            names.iter().any(|n| *n == "device.fs.read"),
+            names.contains(&"device.fs.read"),
             "device descriptors must survive per-agent stitch; got names = {names:?}"
         );
     }

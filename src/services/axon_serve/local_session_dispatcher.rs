@@ -491,6 +491,12 @@ impl LocalAxonSessionDispatcher {
     }
 }
 
+impl Default for LocalAxonSessionDispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait::async_trait]
 impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
     /// Receive a hub-pushed Dispatch frame, run the named ability
@@ -1081,7 +1087,7 @@ mod tests {
         let rt = easynet_axon::invocation::LocalRuntime::new();
         rt.register_ability(
             "test.echo",
-            crate::runtime::ability_dispatch::rpc_handler_to_ability_fn(Arc::new(|args| Ok(args))),
+            crate::runtime::ability_dispatch::rpc_handler_to_ability_fn(Arc::new(Ok)),
         )
         .await
         .unwrap();

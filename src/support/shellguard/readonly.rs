@@ -259,7 +259,7 @@ pub fn evaluate(commands: &[SimpleCommand]) -> ReadOnlyVerdict {
         // 3. Per-tool sub-rules.
         if head == "git" {
             let sub = cmd.argv.get(1).map(String::as_str).unwrap_or("");
-            if !GIT_READ_ONLY_SUBCOMMANDS.iter().any(|&n| n == sub) {
+            if !GIT_READ_ONLY_SUBCOMMANDS.contains(&sub) {
                 return ReadOnlyVerdict::Rejected {
                     argv_index: idx,
                     reason: ReadOnlyRejection::GitNotReadOnly {
@@ -281,8 +281,7 @@ pub fn evaluate(commands: &[SimpleCommand]) -> ReadOnlyVerdict {
                             | "--rename-section"
                             | "--remove-section"
                             | "--edit"
-                    ) || (!arg.starts_with('-') && false/* setting form is `key value` — hard to detect statically; skip */)
-                    {
+                    ) {
                         return ReadOnlyVerdict::Rejected {
                             argv_index: idx,
                             reason: ReadOnlyRejection::WriteFlag {
