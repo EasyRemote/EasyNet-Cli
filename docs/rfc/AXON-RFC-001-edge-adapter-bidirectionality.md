@@ -96,13 +96,13 @@ callable.
 
 ### Registry self-reference via OnceLock seam
 
-Both bridge call handlers need an `Arc<LocalAbilityRegistry>` to
-dispatch into other local abilities. The chicken-and-egg —
-registering a handler that needs a reference to the registry
-being built — resolves via deferred initialisation: register
-first, then `Arc::new(reg)` wraps it, then the build site sets
-the OnceLock. Same shape `admin_status_ability` uses for its
-ability-count provider. The lock is shared across both bridges
+Both bridge call handlers need access to the daemon-owned Axon
+`LocalRuntime` to dispatch into other local abilities. The
+chicken-and-egg — registering a handler that needs a reference to
+the catalogue being built — resolves via deferred initialisation:
+register first, then publish the runtime-backed handle through the
+build site's OnceLock. Same shape `admin_status_ability` uses for
+its ability-count provider. The lock is shared across both bridges
 since they target the same registry; one allocation, two
 consumers.
 

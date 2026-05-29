@@ -1,4 +1,4 @@
-# C-M3a Design — `LocalAbilityRegistry.register_bidi` + IPC InvokeBidi routing
+# C-M3a Design — daemon `LocalRuntime` Bidi registration + IPC InvokeBidi routing
 
 Status: **DRAFT — review before code**
 Author: Silan Hu
@@ -9,9 +9,11 @@ Scope: CLI only. Backend `RealClient.InvokeBidi` already exists; Axon FFI alread
 
 ## Goal
 
-Add the third call mode to the CLI's local ability registry + IPC control plane:
+Historical design for adding the third call mode to the CLI daemon's local
+ability surface + IPC control plane. The current architecture registers these
+abilities into the daemon-owned Axon `LocalRuntime`.
 
-| Call mode  | Registry method        | IPC inbound frame                          | IPC outbound frames                              | Status today |
+| Call mode  | Runtime registration   | IPC inbound frame                          | IPC outbound frames                              | Status today |
 |------------|------------------------|--------------------------------------------|--------------------------------------------------|--------------|
 | RPC        | `register_rpc`         | `Invoke{request_id, ability, args}`        | one `Result` / `Error`                           | done |
 | Stream     | `register_stream`      | `Subscribe / Cancel`                       | N `Frame` + `Terminal` / `Error`                 | done |
@@ -117,7 +119,8 @@ pub fn get_bidi(&self, ability: &str) -> Option<&LocalBidiHandler>;
 
 `list_abilities()` extends to include bidi keys (union of rpc + stream + bidi).
 
-`CallMode::Bidi` added to the enum. `AbilityDispatcher::execute_bidi(target) -> anyhow::Result<BidiSource>` parallels `execute_rpc / execute_stream`.
+`CallMode::Bidi` added to the enum. Runtime-backed execution helpers route the
+target through Axon's `LocalRuntime` instead of a parallel dispatcher.
 
 ### D8. ability_proxy wiring
 
@@ -209,7 +212,7 @@ Matches the task's "≥500 LOC" estimate.
 
 Single PR (`C-M3a`), commits split as:
 1. `frames.rs` + `CallMode::Bidi` (no behavior).
-2. `LocalAbilityRegistry.register_bidi / get_bidi / list_abilities` + `AbilityDispatcher::execute_bidi`.
+2. Runtime-backed `register_bidi / get_bidi / list_abilities` + Bidi execution helper.
 3. `ability_proxy` bidi arms + per-connection `BidiRegistry`.
 4. `server.rs` plumbing.
 5. Echo handler + e2e test.

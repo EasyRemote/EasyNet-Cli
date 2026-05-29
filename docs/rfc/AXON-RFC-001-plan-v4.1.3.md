@@ -186,7 +186,7 @@ pins their reasons so a future audit cannot quietly skip them:
 
 | Ability | Blocker | Tracked under |
 |---|---|---|
-| `mcp.bridge.call_tool` | Needs `LocalAbilityRegistry` self-reference seam (interior-mutable registry or build-time Arc<self>) | C-M9a-ii |
+| `mcp.bridge.call_tool` | Needs daemon `LocalRuntime` self-call through the Axon ability surface | C-M9a-ii |
 | `mcp.client.list` / `mcp.client.call` | Needs MCP client library | C-M9b |
 | `a2a.bridge.send_task` | Same registry self-reference issue as `mcp.bridge.call_tool` | C-M10-ii |
 | `a2a.client.send_task` | Same as `mcp.client.*` (needs A2A client library) | C-M10-iii |

@@ -6,10 +6,10 @@ Status: snapshot taken 2026-04-27 against `rfc-001-impl` HEAD (commit
 ## Method
 
 Cross-checked the binding §18 table in
-`docs/rfc/AXON-RFC-001-plan-v4.1.2.md` against the live `LocalAbilityRegistry`
-built by `runtime::agents::build_registry_with_services`. Source of truth for
-the live side: the `pub const ABILITY_*` declarations + `register_*` calls
-in `src/runtime/agents/`.
+`docs/rfc/AXON-RFC-001-plan-v4.1.2.md` against the daemon-hosted Axon
+`LocalRuntime` catalogue built by `runtime::agents::build_registry_with_services`.
+Source of truth for the live side: the `pub const ABILITY_*` declarations +
+`register_*` calls in `src/runtime/agents/`.
 
 ## Coverage by profile
 
