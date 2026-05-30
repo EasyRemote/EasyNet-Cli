@@ -95,11 +95,6 @@ impl LoopStore {
         }
         Ok(())
     }
-
-    #[allow(dead_code)]
-    pub fn dir(&self) -> &std::path::Path {
-        &self.dir
-    }
 }
 
 #[cfg(test)]

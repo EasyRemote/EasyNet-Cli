@@ -42,7 +42,6 @@
 
 use std::os::raw::{c_char, c_void};
 
-use crate::ffi::client::IpcClient;
 use crate::ffi::errors::{
     set_last_error, ERR_ABILITY_FAILED, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
     ERR_NULL_POINTER,
@@ -632,13 +631,6 @@ pub unsafe extern "C" fn easynet_subscription_cancel(
     }
     crate::ffi::errors::clear_last_error();
     crate::ffi::errors::EASYNET_OK
-}
-
-/// Marker — `IpcClient` is referenced by tests but unused in this
-/// module's production path. Suppress the unused-import lint.
-#[allow(dead_code)]
-fn _mark_ipc_client_used() -> Option<&'static IpcClient> {
-    None
 }
 
 #[cfg(test)]

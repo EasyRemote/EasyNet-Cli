@@ -30,7 +30,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use console::style;
 use crossbeam_queue::SegQueue;
-use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -465,67 +464,6 @@ pub trait StepDispatcher {
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError>;
 }
 
-/// Dispatcher that borrows a `DendriteBridge`.
-///
-/// **Device-only**: this dispatcher does not load the agent registry
-/// and cannot dispatch to agent targets. It is used by `mcp::handlers::run_mission`
-/// and tests where only device dispatch is in scope. Agent targets
-/// produce a hard error so the wrong dispatcher is never silently used.
-///
-/// This cannot be used for true parallel dispatch because
-/// `DendriteBridge` is `!Send`/`!Sync`. The engine will automatically
-/// fall back to sequential dispatch for phases when
-/// `clone_for_thread()` returns an error.
-pub struct BorrowedBridgeDispatcher<'a> {
-    bridge: &'a DendriteBridge,
-}
-
-impl<'a> BorrowedBridgeDispatcher<'a> {
-    pub fn new(bridge: &'a DendriteBridge) -> Self {
-        Self { bridge }
-    }
-}
-
-impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
-    fn dispatch(
-        &self,
-        tenant: &str,
-        target: &IrTarget,
-        ability: &AbilityName,
-        arguments: &Value,
-        _timeout_ms: Option<u64>,
-    ) -> Result<Value, EalError> {
-        match target {
-            IrTarget::Device { node_id } => {
-                let _ = &self.bridge;
-                dispatch_remote_via_forward_invoke(tenant, node_id, ability.as_str(), arguments)
-            }
-            // Agent target on a Device-only dispatcher is a planner /
-            // call-site contract violation, not a transient failure —
-            // categorise as Validation so retries don't fire and so
-            // operators see "validation_error" in the trace, not the
-            // misleading "unavailable".
-            IrTarget::Agent(_) => Err(EalError::Validation(
-                "BorrowedBridgeDispatcher cannot dispatch to agent targets; \
-                 use AgentAwareDispatcher (e.g. via run_mission_inproc)"
-                    .to_string(),
-            )),
-        }
-    }
-
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-        // The cannot-clone outcome is the *signal* to the parallel
-        // dispatch path that it must fall back to sequential — see
-        // `dispatch_batch`. `Internal` is the right category here:
-        // this is not a caller bug, just a structural property of the
-        // borrowed-bridge dispatcher being `!Send`.
-        Err(EalError::Internal(
-            "BorrowedBridgeDispatcher cannot be cloned for threads (bridge is !Send/!Sync)"
-                .to_string(),
-        ))
-    }
-}
-
 // ── Agent-Aware Dispatcher ──
 //
 // Matches on `IrTarget` to choose between agent CLI dispatch (via
@@ -826,21 +764,6 @@ fn build_agent_prompt(function_name: &str, arguments: &Value) -> String {
         }
     }
     parts.join("\n\n")
-}
-
-// ── Execute with DendriteBridge (convenience) ──
-
-/// Execute a mission using a borrowed bridge (sequential fallback).
-///
-/// This is the legacy path kept for callers that already hold a bridge.
-#[allow(dead_code)]
-pub fn execute(
-    bridge: &DendriteBridge,
-    tenant: &str,
-    ir: &MissionIr,
-) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = BorrowedBridgeDispatcher::new(bridge);
-    execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
 /// Execute using a pooled, agent-aware dispatcher.

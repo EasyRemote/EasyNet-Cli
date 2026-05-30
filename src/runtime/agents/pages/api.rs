@@ -43,7 +43,6 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use once_cell::sync::Lazy;
@@ -337,13 +336,6 @@ pub(crate) fn register_api_abilities_for_project(
         );
     }
     names.len()
-}
-
-/// Path on disk for the api manifest of a given verb (used in
-/// tests). Always relative to the published folder root.
-#[allow(dead_code)]
-pub fn manifest_relpath(verb: &str) -> PathBuf {
-    PathBuf::from(format!("api/{verb}.toml"))
 }
 
 #[cfg(test)]

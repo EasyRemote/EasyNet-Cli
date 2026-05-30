@@ -375,27 +375,6 @@ impl AdmissionFacade {
         self.run_full_admission(envelope, ability, &open.initial_args)
     }
 
-    /// Direct-envelope entrypoint reserved for the PR-2 InvokeBidi
-    /// path that does NOT carry an EnvelopeOpen — surface kept stable
-    /// so existing callers compile. Defers to the loopback-only
-    /// fast path; full admission requires the (ability, args) tuple
-    /// the other entrypoints supply.
-    ///
-    /// PR-7 note: this is the URI-only transitional gate. The bidi path
-    /// has migrated to `verify_envelope_for_bidi`. Remove once
-    /// PR-2's session bidi handler also supplies (ability, args).
-    pub fn verify_envelope_uri_only(&self, envelope: &Envelope) -> Result<(), Status> {
-        let caller_ura = caller_ura_required(envelope)?;
-        if self.is_loopback(caller_ura) {
-            return Ok(());
-        }
-        let snapshot = self.trust_anchor.snapshot();
-        if snapshot.lookup(caller_ura).is_some() {
-            return Ok(());
-        }
-        Err(permission_denied_unknown_caller(caller_ura))
-    }
-
     // ── Internal pipeline ────────────────────────────────────────
 
     /// Path-conditional admission per DEC-013 Option D.

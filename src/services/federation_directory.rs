@@ -791,19 +791,16 @@ pub async fn poll_once(
 /// boundary — unit-testable without a tokio + tonic harness.
 pub struct RemoteDirectoryClient {
     peer_realm: String,
-    #[allow(dead_code)]
-    peer_hub_uri: String,
     fsm: SubscriberFsm,
     view: DirectoryView,
 }
 
 impl RemoteDirectoryClient {
     #[must_use]
-    pub fn new(peer_realm: String, peer_hub_uri: String) -> Self {
+    pub fn new(peer_realm: String) -> Self {
         let view = DirectoryView::new(peer_realm.clone());
         Self {
             peer_realm,
-            peer_hub_uri,
             fsm: SubscriberFsm::new(),
             view,
         }
@@ -1020,7 +1017,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
     };
     use rand::RngCore;
 
-    let mut client = RemoteDirectoryClient::new(peer_realm.clone(), peer_hub_uri.clone());
+    let mut client = RemoteDirectoryClient::new(peer_realm.clone());
     loop {
         // Honour cancel before doing anything expensive.
         if cancel.try_recv().is_ok() {
@@ -1760,10 +1757,7 @@ mod tests {
 
     #[test]
     fn remote_directory_client_starts_disconnected_with_empty_view() {
-        let client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let client = RemoteDirectoryClient::new("realm-b".to_string());
         assert_eq!(client.peer_realm(), "realm-b");
         assert!(matches!(client.fsm_state(), &SubscriberState::Disconnected));
         assert!(client.view_snapshot().entries.is_empty());
@@ -1771,10 +1765,7 @@ mod tests {
 
     #[test]
     fn remote_directory_client_apply_event_drives_fsm_and_view_together() {
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         client
             .apply_event(&DirectoryEvent::Snapshot {
@@ -1798,10 +1789,7 @@ mod tests {
 
     #[test]
     fn remote_directory_client_apply_event_protocol_violation_does_not_mutate_view() {
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         // Upsert before Snapshot → ProtocolViolation. The FSM
         // drops to Disconnected; the view MUST stay empty so the
@@ -1822,10 +1810,7 @@ mod tests {
 
     #[test]
     fn remote_directory_client_dial_err_returns_growing_backoff() {
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         assert_eq!(client.on_dial_err(), 2_000);
         assert_eq!(client.on_dial_err(), 4_000);
         assert_eq!(client.on_dial_err(), 8_000);
@@ -2392,10 +2377,7 @@ mod tests {
         // flips locally + publishes; cell snapshot reflects
         // the stale annotation.
         let cell = SharedFederatedDirectoryView::default();
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         client
             .apply_event(&DirectoryEvent::Snapshot {
@@ -2436,10 +2418,7 @@ mod tests {
         // Idempotency guard against a supervisor stuck in
         // reconnect cycles churning the cell.
         let cell = SharedFederatedDirectoryView::default();
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         client
             .apply_event(&DirectoryEvent::Snapshot {
@@ -2486,10 +2465,7 @@ mod tests {
 
         // realm-b client publishes its (still empty) view; the
         // realm-c slot must remain intact.
-        let client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let client = RemoteDirectoryClient::new("realm-b".to_string());
         client.publish_to_cell(&cell);
 
         let snap = cell.snapshot();
@@ -2507,10 +2483,7 @@ mod tests {
         // Simulate the wire-side stream as a sequence of three
         // events: Snapshot, Upsert, Remove. Consumer drives the
         // FSM, the view, AND publishes to the cell after each.
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
@@ -2558,10 +2531,7 @@ mod tests {
         // the timeout window → consumer returns IdleTimeout +
         // FSM transitions to Disconnected so the supervisor's
         // outer loop reconnects with backoff.
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
@@ -2584,10 +2554,7 @@ mod tests {
     async fn consume_with_idle_timeout_returns_stream_ended_on_natural_close() {
         // Stream yields a Snapshot then ends — natural close
         // → StreamEnded outcome (not IdleTimeout).
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
@@ -2623,10 +2590,7 @@ mod tests {
         // accumulate elapsed-since-stream-start and trip
         // around the 2nd or 3rd frame.
         use futures::StreamExt;
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
@@ -2664,10 +2628,7 @@ mod tests {
     async fn consume_with_idle_timeout_protocol_violation_aborts() {
         // FSM rejects an Upsert before Snapshot → consumer
         // returns ProtocolViolation, distinct from IdleTimeout.
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
@@ -2686,10 +2647,7 @@ mod tests {
         // → ProtocolViolation propagates as the consume's
         // error return, so the per-peer task tears down +
         // reconnects with backoff.
-        let mut client = RemoteDirectoryClient::new(
-            "realm-b".to_string(),
-            "https://hub-b.example:50443".to_string(),
-        );
+        let mut client = RemoteDirectoryClient::new("realm-b".to_string());
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
