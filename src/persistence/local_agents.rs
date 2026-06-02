@@ -4,16 +4,16 @@
 // File: src/persistence/local_agents.rs
 //
 // Owns ~/.easynet/local-agents.json — the persistent map from
-// (profile, name) → canonical Agent URI for every Agent this
-// daemon hosts. Mode 0600 because URIs are bound to keys whose
+// (profile, name) → canonical Agent URA for every Agent this
+// daemon hosts. Mode 0600 because URAs are bound to keys whose
 // rotation requires hub coordination.
 //
 // Why this exists
 // ---------------
-// Per RFC §1.4 the device-profile MUST mint canonical URIs for each
+// Per RFC §1.4 the device-profile MUST mint canonical URAs for each
 // hosted Agent (consent, policy, mcp, llm-profile-per-sub-agent) on
 // first boot, then reuse them across daemon restarts. Without
-// persistence the device would re-mint URIs on every restart and
+// persistence the device would re-mint URAs on every restart and
 // the hub would accumulate dead-but-present entries — eventually
 // the realm directory would fill with stale Agents whose hosting
 // daemon disappeared three reboots ago.
@@ -37,7 +37,7 @@
 // What this file is NOT
 // ---------------------
 // - Not a credentials store. The host device's keypair lives in
-//   `private.pem` (per §3 Step A). This file records URIs only.
+//   `private.pem` (per §3 Step A). This file records URAs only.
 // - Not a hub directory mirror. The cached RealmDirectory replicas
 //   live in axon-runtime memory, populated from
 //   `federation.heartbeat` deltas.
@@ -120,7 +120,7 @@ pub fn save(file: &LocalAgentsFile) -> anyhow::Result<()> {
 /// Look up a hosted Agent's URA by `(profile, name)`. Returns the
 /// URA if present, `None` otherwise. Used by the publish layer to
 /// decide whether to mint a fresh URA or reuse an existing one.
-pub fn lookup_hosted_uri(file: &LocalAgentsFile, profile: &str, name: &str) -> Option<String> {
+pub fn lookup_hosted_ura(file: &LocalAgentsFile, profile: &str, name: &str) -> Option<String> {
     file.hosted_agents
         .iter()
         .find(|e| e.profile == profile && e.name == name)
@@ -201,17 +201,17 @@ mod tests {
             host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
-        upsert_hosted_agent(&mut f, "llm", "claude", "uri-v1");
-        let replaced = upsert_hosted_agent(&mut f, "llm", "claude", "uri-v2");
+        upsert_hosted_agent(&mut f, "llm", "claude", "ura-v1");
+        let replaced = upsert_hosted_agent(&mut f, "llm", "claude", "ura-v2");
         assert!(replaced);
         assert_eq!(f.hosted_agents.len(), 1);
-        assert_eq!(f.hosted_agents[0].agent_ura, "uri-v2");
+        assert_eq!(f.hosted_agents[0].agent_ura, "ura-v2");
     }
 
     #[test]
     fn upsert_pre_join_records_unset_signing_authority() {
         let mut f = LocalAgentsFile::default();
-        upsert_hosted_agent(&mut f, "consent", "default", "uri-c");
+        upsert_hosted_agent(&mut f, "consent", "default", "ura-c");
         assert_eq!(
             f.hosted_agents[0].signing_authority, "hosted_by:<unset>",
             "pre-join entries must be flagged so operators know to re-save after join"
@@ -219,15 +219,15 @@ mod tests {
     }
 
     #[test]
-    fn lookup_returns_uri_when_present() {
+    fn lookup_returns_ura_when_present() {
         let mut f = LocalAgentsFile::default();
-        upsert_hosted_agent(&mut f, "mcp", "default", "uri-mcp");
+        upsert_hosted_agent(&mut f, "mcp", "default", "ura-mcp");
         assert_eq!(
-            lookup_hosted_uri(&f, "mcp", "default"),
-            Some("uri-mcp".to_string())
+            lookup_hosted_ura(&f, "mcp", "default"),
+            Some("ura-mcp".to_string())
         );
-        assert_eq!(lookup_hosted_uri(&f, "mcp", "other"), None);
-        assert_eq!(lookup_hosted_uri(&f, "llm", "default"), None);
+        assert_eq!(lookup_hosted_ura(&f, "mcp", "other"), None);
+        assert_eq!(lookup_hosted_ura(&f, "llm", "default"), None);
     }
 
     #[test]
@@ -236,8 +236,8 @@ mod tests {
             host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
-        upsert_hosted_agent(&mut f, "llm", "claude", "uri-llm");
-        upsert_hosted_agent(&mut f, "consent", "default", "uri-c");
+        upsert_hosted_agent(&mut f, "llm", "claude", "ura-llm");
+        upsert_hosted_agent(&mut f, "consent", "default", "ura-c");
 
         let json = serde_json::to_string_pretty(&f).unwrap();
         let back: LocalAgentsFile = serde_json::from_str(&json).unwrap();
@@ -255,7 +255,7 @@ mod tests {
                 {
                     "profile": "llm",
                     "name": "claude",
-                    "agent_ura": "uri-1",
+                    "agent_ura": "ura-1",
                     "signing_authority": "hosted_by:easynet:///r/acme/device/01DEV",
                     "first_seen_at": "2026-04-27T00:00:00Z",
                     "future_field": "ignored"

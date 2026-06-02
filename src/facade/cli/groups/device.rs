@@ -307,18 +307,18 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     } else {
         anyhow::bail!(
             "cannot resolve node {trimmed:?}: pass a canonical \
-             `easynet:///r/<realm>/device/<id>` URI or pair this device first"
+             `easynet:///r/<realm>/device/<id>` URA or pair this device first"
         );
     };
 
-    let local_uri = if !local_tenant.is_empty() && !local_node.is_empty() {
+    let local_ura = if !local_tenant.is_empty() && !local_node.is_empty() {
         crate::ura::device_ura(&local_tenant, &local_node)
     } else {
         String::new()
     };
-    if !local_uri.is_empty() && local_uri == target_ura {
+    if !local_ura.is_empty() && local_ura == target_ura {
         anyhow::bail!(
-            "refusing to revoke this device's own URI ({local_uri}); use \
+            "refusing to revoke this device's own URA ({local_ura}); use \
              `easynet device reset` to clear local credentials and \
              deregister cleanly."
         );
@@ -335,7 +335,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         }
     }
 
-    invoke_revoke(&target_ura, &args.reason, local_uri.as_str())
+    invoke_revoke(&target_ura, &args.reason, local_ura.as_str())
         .with_context(|| format!("revoke {target_ura}"))?;
 
     output::success(&format!("removed {}", args.node_id));
@@ -343,13 +343,13 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn canonicalize_remove_target_ura(uri: &str) -> anyhow::Result<String> {
-    crate::support::federation_invoke::parse_node_uri(uri)
+fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
+    crate::support::federation_invoke::parse_node_ura(ura)
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn canonicalize_remove_target_ura(uri: &str) -> anyhow::Result<String> {
-    Ok(uri.to_string())
+fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
+    Ok(ura.to_string())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -413,7 +413,7 @@ fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Valu
     let _ = local_tenant;
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
 
-    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
+    let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "device.node.describe",
         serde_json::json!({"node_id": "local"}),

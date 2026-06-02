@@ -262,12 +262,10 @@ pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
 // owned by this module. Moving it elsewhere would split the persistence
 // logic without a corresponding gain.
 //
-// One known scope-bounded exception: `mcp::handlers::run_mission` currently
-// uses its own `BorrowedBridgeDispatcher` path that does not flow through
-// `run_mission_inproc`. That path cannot dispatch to agents — only to
-// devices via the bridge — so the dispatch invariant in
-// `runtime::dispatch::send_to_agent` does not fire on it. Migrating that
-// handler is tracked as a follow-up PR.
+// The former MCP mission handler bypass has been collapsed onto this entry:
+// `runtime::agents::mission_ability` and `runtime::agents::eal_executor` both
+// delegate here. Keep this comment in sync with the grep invariant above; a
+// second production mission execution path is a release blocker, not a TODO.
 
 /// Options for `run_mission_inproc`. Kept narrow on purpose: anything that
 /// is not strictly required by both the CLI `mission run` path and the
@@ -490,6 +488,7 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
 
     match exec {
         Ok(report) => {
+            meta.duration_ms = report.total_elapsed_ms;
             meta.steps_completed = report.steps_completed;
             meta.steps_failed = report.steps_failed;
             // The interpreter returns Ok even when individual steps fail

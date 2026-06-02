@@ -148,11 +148,11 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
 /// daemon's id, when relevant, belongs in a separate context
 /// line, not in the per-row identity columns.
 fn extract_columns(entry: &Value) -> (String, String, String, String) {
-    let owner_uri = entry
+    let owner_ura = entry
         .get("owner_agent_ura")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let parsed = parse_ura(owner_uri).ok();
+    let parsed = parse_ura(owner_ura).ok();
 
     // KIND is read straight from the owner URA kind — that's the
     // authoritative classifier. The legacy `fulfilled_by`
@@ -183,7 +183,7 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
             URAKind::Hub => (dash(), "hub".to_string(), dash()),
             _ => (dash(), dash(), dash()),
         },
-        // Unparseable owner URI. We do not invent owner kinds from
+        // Unparseable owner URA. We do not invent owner kinds from
         // the ability-name namespace — the daemon's synth path
         // (`meta_ability::list_abilities_handler`) is responsible
         // for emitting a parseable URA, and a row that surfaces
@@ -209,11 +209,11 @@ enum GroupKey {
     Agent {
         user: String,
         agent: String,
-        uri: String,
+        ura: String,
     },
     User {
         user: String,
-        uri: String,
+        ura: String,
     },
     Device(String),
     Other,
@@ -222,12 +222,12 @@ enum GroupKey {
 impl GroupKey {
     fn header(&self) -> String {
         match self {
-            GroupKey::Hub(uri) => format!("HUB ({uri})"),
-            GroupKey::Agent { user, agent, uri } => {
-                format!("AGENT {user}.{agent} ({uri})")
+            GroupKey::Hub(ura) => format!("HUB ({ura})"),
+            GroupKey::Agent { user, agent, ura } => {
+                format!("AGENT {user}.{agent} ({ura})")
             }
-            GroupKey::User { user, uri } => format!("USER {user} ({uri})"),
-            GroupKey::Device(uri) => format!("DEVICE / SYSTEM ({uri})"),
+            GroupKey::User { user, ura } => format!("USER {user} ({ura})"),
+            GroupKey::Device(ura) => format!("DEVICE / SYSTEM ({ura})"),
             GroupKey::Other => "OTHER".to_string(),
         }
     }
@@ -245,23 +245,23 @@ impl GroupKey {
 }
 
 fn group_for(entry: &Value) -> GroupKey {
-    let owner_uri = entry
+    let owner_ura = entry
         .get("owner_agent_ura")
         .and_then(Value::as_str)
         .unwrap_or("");
-    match parse_ura(owner_uri) {
+    match parse_ura(owner_ura) {
         Ok(p) => match p.kind {
-            URAKind::Hub => GroupKey::Hub(owner_uri.to_string()),
+            URAKind::Hub => GroupKey::Hub(owner_ura.to_string()),
             URAKind::Agent => GroupKey::Agent {
                 user: p.user_id,
                 agent: p.agent_id,
-                uri: owner_uri.to_string(),
+                ura: owner_ura.to_string(),
             },
             URAKind::User => GroupKey::User {
                 user: p.user_id,
-                uri: owner_uri.to_string(),
+                ura: owner_ura.to_string(),
             },
-            URAKind::Device => GroupKey::Device(owner_uri.to_string()),
+            URAKind::Device => GroupKey::Device(owner_ura.to_string()),
             _ => GroupKey::Other,
         },
         Err(_) => GroupKey::Other,
@@ -411,7 +411,7 @@ fn fetch_remote_catalogue(node: &str) -> anyhow::Result<Vec<Value>> {
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
+    let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "device.meta.list_abilities",
         serde_json::json!({}),
@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn group_for_emits_other_for_unparseable_owner_uri() {
+    fn group_for_emits_other_for_unparseable_owner_ura() {
         let bad = json!({
             "name": "stray.thing",
             "owner_agent_ura": "not-a-ura",
@@ -774,7 +774,7 @@ mod tests {
                 < GroupKey::Agent {
                     user: "u".into(),
                     agent: "a".into(),
-                    uri: "x".into()
+                    ura: "x".into()
                 }
                 .section_order()
         );
@@ -782,19 +782,19 @@ mod tests {
             GroupKey::Agent {
                 user: "u".into(),
                 agent: "a".into(),
-                uri: "x".into()
+                ura: "x".into()
             }
             .section_order()
                 < GroupKey::User {
                     user: "u".into(),
-                    uri: "x".into()
+                    ura: "x".into()
                 }
                 .section_order()
         );
         assert!(
             GroupKey::User {
                 user: "u".into(),
-                uri: "x".into()
+                ura: "x".into()
             }
             .section_order()
                 < GroupKey::Device("x".into()).section_order()

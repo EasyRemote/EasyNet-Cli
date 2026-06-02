@@ -724,12 +724,12 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
         let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
         match method {
             "turn/completed" => break,
-            "item/completed" => {
-                if msg.pointer("/params/item/type").and_then(|v| v.as_str()) == Some("agentMessage")
-                {
-                    if let Some(text) = msg.pointer("/params/item/text").and_then(|v| v.as_str()) {
-                        final_message = text.to_string();
-                    }
+            "item/completed"
+                if msg.pointer("/params/item/type").and_then(|v| v.as_str())
+                    == Some("agentMessage") =>
+            {
+                if let Some(text) = msg.pointer("/params/item/text").and_then(|v| v.as_str()) {
+                    final_message = text.to_string();
                 }
             }
             _ => {}

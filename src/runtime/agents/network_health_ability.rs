@@ -13,13 +13,13 @@
 // ---------------
 //   {
 //     "joined":              bool,
-//     "host_device_uri":     string|null,
+//     "host_device_ura":     string|null,
 //     "hosted_agent_count":  number,
 //     "peer_count":          number,
 //     "links": [
 //       {"target": "local-daemon", "status": "reachable", ...},
 //       {"target": "realm-hub", "status": "reachable" | "unreachable", ...},
-//       {"target": "<peer-agent-uri>", "status": "reachable" | "probe_failed", ...}
+//       {"target": "<peer-agent-ura>", "status": "reachable" | "probe_failed", ...}
 //     ],
 //     "latency_ms":          number|null,  // federation.resolve latency
 //     "schema":              "v2",
@@ -69,8 +69,8 @@ fn handler() -> anyhow::Result<Value> {
         self_node.map(|n| n.paired).unwrap_or(false) || !local.host_device_agent_ura.is_empty();
     let host_ura: Value = if !local.host_device_agent_ura.is_empty() {
         Value::String(local.host_device_agent_ura.clone())
-    } else if let Some(uri) = self_node.and_then(|n| n.agent_ura.clone()) {
-        Value::String(uri)
+    } else if let Some(ura) = self_node.and_then(|n| n.agent_ura.clone()) {
+        Value::String(ura)
     } else {
         Value::Null
     };
@@ -113,7 +113,7 @@ fn handler() -> anyhow::Result<Value> {
 
     Ok(json!({
         "joined": joined,
-        "host_device_uri": host_ura,
+        "host_device_ura": host_ura,
         "hosted_agent_count": local.hosted_agents.len(),
         "peer_count": peer_count,
         "links": Value::Array(links),
@@ -157,7 +157,7 @@ mod tests {
         let resp = handler().unwrap();
         for field in [
             "joined",
-            "host_device_uri",
+            "host_device_ura",
             "hosted_agent_count",
             "links",
             "latency_ms",

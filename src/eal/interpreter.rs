@@ -7,7 +7,7 @@
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
 //   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When parallel dispatch is unavailable (BorrowedBridgeDispatcher), falls back to sequential.
+//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
 //
 // Core Capabilities:
 //   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
@@ -19,7 +19,7 @@
 //
 // Dispatch Abstraction:
 //   `trait StepDispatcher` decouples execution from transport. Production uses
-//   BorrowedBridgeDispatcher or AgentAwareDispatcher; tests inject MockDispatcher.
+//   AgentAwareDispatcher; tests inject MockDispatcher or a non-cloneable dispatcher.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -169,7 +169,6 @@ pub const TRACE_CAP_TAIL: usize = 500;
 /// pre-size its own buffers to the same ceiling. Not used directly by
 /// the interpreter; the two slots are checked independently in
 /// [`CappedTraceBuffer::push`].
-#[allow(dead_code)]
 pub const TRACE_CAP_TOTAL: usize = TRACE_CAP_HEAD + TRACE_CAP_TAIL;
 
 /// In-memory bounded buffer for `StepTrace` entries.
@@ -193,6 +192,11 @@ struct CappedTraceBuffer {
 
 impl CappedTraceBuffer {
     fn new() -> Self {
+        debug_assert_eq!(
+            TRACE_CAP_TOTAL,
+            TRACE_CAP_HEAD + TRACE_CAP_TAIL,
+            "TRACE_CAP_TOTAL must remain the documented retained-trace ceiling"
+        );
         Self {
             head: Vec::with_capacity(TRACE_CAP_HEAD.min(64)),
             tail: std::collections::VecDeque::with_capacity(TRACE_CAP_TAIL.min(64)),
@@ -320,7 +324,6 @@ pub enum StepOutcome {
 // ── Public execution result ──
 
 pub struct ExecutionReport {
-    #[allow(dead_code)]
     pub total_elapsed_ms: u64,
     pub steps_completed: usize,
     pub steps_failed: usize,
@@ -346,8 +349,7 @@ use crate::eal::ir::IrTarget;
 /// (海峰 + 凉冰, 2026-05-03). Every cross-device step routes
 /// through `federation.forward_invoke` against the target device
 /// URA — the same surface `easynet ability invoke --node` uses.
-/// Pre-cut every `BorrowedBridgeDispatcher` / `AgentAwareDispatcher` /
-/// `PooledBridgeDispatcher` returned `EalError::Unavailable` for
+/// Pre-cut dispatchers returned `EalError::Unavailable` for
 /// `IrTarget::Device`; this helper actually performs the call so
 /// EAL programs can target peer devices uniformly with the rest
 /// of the CLI.
@@ -404,14 +406,14 @@ fn dispatch_remote_via_forward_invoke(
         }
 
         let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
-            crate::support::federation_invoke::parse_node_uri(trimmed)
-                .map_err(|e| EalError::Validation(format!("parse target URI: {e}")))?
+            crate::support::federation_invoke::parse_node_ura(trimmed)
+                .map_err(|e| EalError::Validation(format!("parse target URA: {e}")))?
         } else if !tenant.is_empty() {
             crate::ura::device_ura(tenant, trimmed)
         } else {
             return Err(EalError::Validation(format!(
                 "cannot resolve EAL device target {trimmed:?}: no tenant in scope; \
-                 pass a canonical `easynet:///r/<realm>/device/<id>` URI"
+                 pass a canonical `easynet:///r/<realm>/device/<id>` URA"
             )));
         };
 
@@ -1015,11 +1017,10 @@ fn dispatch_batch(
             let thread_dispatcher = match dispatcher.clone_for_thread() {
                 Ok(d) => d,
                 Err(e) => {
-                    // `BorrowedBridgeDispatcher::clone_for_thread`
-                    // returns `EalError::Internal` to *signal* "fall
-                    // back to sequential" — but here, in the parallel
-                    // path, hitting it means a structural setup error
-                    // (a !Send dispatcher reached the parallel path).
+                    // Non-cloneable dispatchers return `EalError::Internal`
+                    // to signal "fall back to sequential". Reaching that
+                    // branch here means a structural setup error: a dispatcher
+                    // that cannot cross worker threads reached the parallel path.
                     // Render to display form (preserves error_code in
                     // the trace) and surface it as a step error.
                     collector.push((
@@ -2736,7 +2737,8 @@ mod tests {
 
     #[test]
     fn fallback_to_sequential_when_not_cloneable() {
-        // Non-cloneable dispatcher simulates BorrowedBridgeDispatcher
+        // Non-cloneable dispatcher simulates a production dispatcher that
+        // cannot safely cross rayon worker threads.
         struct SeqOnlyDispatcher(Arc<AtomicU32>);
         impl StepDispatcher for SeqOnlyDispatcher {
             fn dispatch(

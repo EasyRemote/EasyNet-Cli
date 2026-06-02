@@ -124,7 +124,7 @@ impl Drop for PendingHandle {
 
 /// Per-call-id pending entry. Carries the `target_ura` of the
 /// device the caller is waiting on so a `PresenceEvent::Offline`
-/// for that URI can fail-fast every outstanding waiter targeting
+/// for that URA can fail-fast every outstanding waiter targeting
 /// it (PR-N6 mid-flight cancellation: pre-fix the daemon's
 /// `forward_invoke` `await_reply()` blocked indefinitely when the
 /// target session dropped, surfacing on the operator side as a
@@ -162,7 +162,7 @@ impl PendingDispatchMap {
         Self::default()
     }
 
-    /// Register a new pending dispatch with no target URI. Kept for
+    /// Register a new pending dispatch with no target URA. Kept for
     /// callers that haven't been wired to the cancel-on-offline path
     /// yet — they simply won't be auto-cancelled when the target
     /// goes offline (the legacy "wait until oneshot drops" behaviour).
@@ -171,8 +171,8 @@ impl PendingDispatchMap {
     }
 
     /// Register a new pending dispatch keyed to a specific
-    /// `target_ura`. When that URI's session goes offline the
-    /// daemon's presence-event watcher calls `cancel_for(uri,
+    /// `target_ura`. When that URA's session goes offline the
+    /// daemon's presence-event watcher calls `cancel_for(ura,
     /// "target_offline")` to release every outstanding waiter
     /// immediately, instead of letting the caller block on the
     /// HTTP / gRPC request timeout (30s) for a session that's

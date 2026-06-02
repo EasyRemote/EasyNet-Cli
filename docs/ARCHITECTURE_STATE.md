@@ -191,9 +191,10 @@ to be re-opened by an alignment session.
   newtype; future may become `Ability { name, version }`. The IR
   field name was deliberately chosen as `ability` (not
   `ability_name`) to leave room.
-- **MCP `run_mission` handler unification.** Currently uses
-  `BorrowedBridgeDispatcher` (device-only). Migrating it to
-  `run_mission_inproc` is a separate scope-bounded change.
+- **MCP mission handler unification.** Closed: MCP-facing mission
+  handlers now delegate through `run_mission_inproc`. A second
+  production mission execution path is no longer an acknowledged
+  exception; it is a release blocker.
 
 ## Pointers
 

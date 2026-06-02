@@ -47,11 +47,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_cli::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_cli::pb::axon::v1::invocation_server::InvocationServer;
-use easynet_cli::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
-use easynet_cli::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use easynet_cli::pb::axon::v1::{
+use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+use easynet_axon::pb::axon::v1::{
     AgentIdentity, BinaryChunk, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
     InvokeBidiUp, InvokeServerStreamRequest, StreamDescriptor,
 };
@@ -270,6 +270,18 @@ struct DeviceSession {
 impl DeviceSession {
     fn up(&self) -> &mpsc::Sender<InvokeBidiUp> {
         self.up_tx.as_ref().expect("up_tx not yet dropped")
+    }
+
+    async fn close_gracefully(mut self) {
+        self.up_tx.take();
+        if let Some(handle) = self.drain.take() {
+            match tokio::time::timeout(STEP_TIMEOUT, handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) if err.is_cancelled() => {}
+                Ok(Err(err)) => panic!("device session drain task failed: {err}"),
+                Err(_) => panic!("device session drain task did not finish after graceful close"),
+            }
+        }
     }
 }
 
@@ -507,7 +519,7 @@ async fn session_graceful_close_emits_stream_closed_offline() {
             other => panic!("expected Online event, got {other:?}"),
         }
 
-        drop(device);
+        device.close_gracefully().await;
 
         match tokio::time::timeout(STEP_TIMEOUT, events.recv())
             .await
@@ -754,6 +766,7 @@ async fn run_round_trip() {
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
+        subject_ura: None,
         ability: "test.echo".to_string(),
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -874,6 +887,7 @@ async fn run_round_trip_via_local_dispatcher() {
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
+        subject_ura: None,
         ability: "test.echo".to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),

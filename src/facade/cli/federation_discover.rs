@@ -28,7 +28,7 @@
 //   next reconnect window (~5 s).
 // - Filter by realm directly. Use `--user-id` for the
 //   user-binding-driven privacy filter (INV-5 default), or
-//   pass `--agent-uri` for a single-URI lookup. A "show entries
+//   pass `--agent-ura` for a single-URA lookup. A "show entries
 //   from realm X" surface lands when the operator-audit RFC
 //   adds a multi-realm filter argument.
 //
@@ -56,12 +56,12 @@ use clap::Args;
 use console::style;
 use serde_json::{json, Value};
 
-use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::services::axon_serve::ProtoEnvelope;
+use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 
 #[derive(Debug, Args)]
 pub struct DiscoverArgs {
-    /// Filter to a single agent URI. When set, the daemon
+    /// Filter to a single agent URA. When set, the daemon
     /// returns at most one matching entry across all federated
     /// peers (lex tie-break on peer realm).
     #[arg(long)]
@@ -69,7 +69,7 @@ pub struct DiscoverArgs {
 
     /// Filter cross-realm entries by the calling user's
     /// federated bindings (PR-N4 INV-5 privacy default). Only
-    /// entries whose URI is on the calling daemon's own realm
+    /// entries whose URA is on the calling daemon's own realm
     /// or has a recorded binding for 'user-id' are returned.
     /// Absent ⇒ unfiltered (operator / audit query path).
     #[arg(long = "user-id")]
@@ -95,24 +95,24 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
         );
     }
 
-    // Build the request. Use the daemon's own loopback URI as
+    // Build the request. Use the daemon's own loopback URA as
     // caller — the daemon's admission gate has a loopback
     // bypass so operator-side calls bypass the strict signature
     // pipeline. PR-N5 will replace this with a real signed
     // operator envelope when the user-as-subject surface lands.
     let mut req_args = json!({});
-    if let Some(uri) = args.agent_ura.as_deref() {
-        req_args["agent_ura"] = Value::String(uri.to_string());
+    if let Some(ura) = args.agent_ura.as_deref() {
+        req_args["agent_ura"] = Value::String(ura.to_string());
     }
     if let Some(user) = args.local_user_id.as_deref() {
         req_args["local_user_id"] = Value::String(user.to_string());
     }
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
-    // Caller URI: derive from credentials.json so the daemon's
+    // Caller URA: derive from credentials.json so the daemon's
     // loopback bypass admits us. If credentials are missing,
-    // fall back to a generic operator URI; the daemon will
-    // reject if its trust set hasn't been wired for that URI.
+    // fall back to a generic operator URA; the daemon will
+    // reject if its trust set hasn't been wired for that URA.
     let caller_ura = crate::persistence::config::load_credentials()
         .ok()
         .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id))
@@ -126,7 +126,7 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
         .build()
         .context("build tokio runtime for federation discover")?;
 
-    let response: crate::pb::axon::v1::InvokeResponse = {
+    let response: easynet_axon::pb::axon::v1::InvokeResponse = {
         runtime.block_on(async move {
             let channel = crate::support::local_daemon_grpc::connect_channel(
                 socket_path.clone(),

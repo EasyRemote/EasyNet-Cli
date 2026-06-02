@@ -65,7 +65,7 @@ pub struct AuthSession {
     /// Display nickname returned by the backend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nickname: Option<String>,
-    /// Stable username slug used in canonical user/agent URIs.
+    /// Stable username slug used in canonical user/agent URAs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
 }
@@ -695,7 +695,7 @@ fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::V
 fn describe_node_remote(node: &str, local_tenant: &str) -> anyhow::Result<serde_json::Value> {
     let _ = local_tenant;
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
+    let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "device.node.describe",
         serde_json::json!({"node_id": "local"}),
@@ -913,8 +913,8 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
     }
     // Backend's `/api/v1/agents` shape (listAgentsLogic.go) is
     // {agent_id, display_name, node_id, tags, skills:[...]} — no
-    // top-level `uri` or `status` fields. The pre-fix renderer
-    // looked for `uri` / `status` and printed `-` for every row,
+    // top-level `ura` or `status` fields. The pre-fix renderer
+    // looked for `ura` / `status` and printed `-` for every row,
     // which made every agent look offline / unidentified even when
     // the response carried real data. Render the device that hosts
     // each agent (NODE_ID) and the skill count so the operator
@@ -926,7 +926,7 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
     for a in &resp.items {
         let agent_id = a
             .get("agent_id")
-            .or_else(|| a.get("uri"))
+            .or_else(|| a.get("ura"))
             .and_then(|v| v.as_str())
             .unwrap_or("-");
         let name = a

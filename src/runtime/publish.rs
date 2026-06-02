@@ -41,7 +41,15 @@ use crate::runtime::agents::profiles::{
     self as profiles_mod,
     bootstrap::{self, BootstrapOutcome, BootstrapPlan, UraMinter, UuidMinter},
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use ed25519_dalek::SigningKey;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+/// Fixed protocol constant from Axon's historical deterministic
+/// subject-auth derivation. Do not change: existing trust anchors
+/// and keyring rows depend on the derived public keys staying stable.
+const SUBJECT_AUTH_DERIVE_CONTEXT: &str = "axon-client-sdk-ed25519-v1";
 
 /// Per-call summary returned by `republish_abilities_via_advertise`.
 /// Each row is one Agent the daemon advertised — either the device
@@ -88,7 +96,7 @@ pub fn republish_abilities_via_advertise<I: AbilityInvoker>(
 }
 
 /// Same as `republish_abilities_via_advertise` but accepts a
-/// custom URI minter. Used by tests with a deterministic minter.
+/// custom URA minter. Used by tests with a deterministic minter.
 pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     invoker: &I,
     tenant_id: &str,
@@ -136,8 +144,8 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // RFC-002: pass host_node_id so federation.forward_invoke can
     // route inbound forward requests to this daemon's local-tool
     // dispatch surface. Falls back to the legacy node-less form
-    // when host_device_ura lacks an `/agent/<id>` suffix.
-    let host_node_id = host_node_id_from_uri(&plan.host_device_ura);
+    // when host_device_ura lacks a `/device/<id>` suffix.
+    let host_node_id = host_node_id_from_ura(&plan.host_device_ura);
     let device_outcome = advertise::advertise_self_signed_device_with_host_node(
         invoker,
         tenant_id,
@@ -156,10 +164,10 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
 
     // Lookup tables from bootstrap_outcomes for the descriptor
     // advertise step that follows.
-    let consent_uri = first_uri(&bootstrap_outcomes, "consent", "default");
-    let policy_uri = first_uri(&bootstrap_outcomes, "policy", "default");
-    let mcp_uri = first_uri(&bootstrap_outcomes, "mcp", "default");
-    let llm_uris: Vec<(String, String)> = bootstrap_outcomes
+    let consent_ura = first_ura(&bootstrap_outcomes, "consent", "default");
+    let policy_ura = first_ura(&bootstrap_outcomes, "policy", "default");
+    let mcp_ura = first_ura(&bootstrap_outcomes, "mcp", "default");
+    let llm_uras: Vec<(String, String)> = bootstrap_outcomes
         .iter()
         .filter(|o| o.profile == "llm")
         .map(|o| (o.name.clone(), o.agent_ura.clone()))
@@ -186,10 +194,10 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // computed once from the live registry.
     let mut descriptors = profiles_mod::all_descriptors_for_host(
         &plan.host_device_ura,
-        consent_uri.as_deref(),
-        policy_uri.as_deref(),
-        mcp_uri.as_deref(),
-        &llm_uris,
+        consent_ura.as_deref(),
+        policy_ura.as_deref(),
+        mcp_ura.as_deref(),
+        &llm_uras,
     );
     if let Some(host_node_id) = host_node_id.clone() {
         for descriptor in &mut descriptors {
@@ -198,7 +206,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                 .insert("host_node_id".into(), host_node_id.clone());
         }
     }
-    stamp_llm_agent_metadata(&mut descriptors, plan, &llm_uris);
+    stamp_llm_agent_metadata(&mut descriptors, plan, &llm_uras);
 
     // Step 5b: advertise the abilities OWNED by each user-installed
     // agent (e.g. `alice.chat` and any per-agent verbs declared in
@@ -210,7 +218,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // cannot invoke per-agent abilities through the UI.
     //
     // Read the live registry once, look up each user agent's URA
-    // in `llm_uris` (bootstrap minted these earlier), call
+    // in `llm_uras` (bootstrap minted these earlier), call
     // `abilities_for(name, entry)` to get the per-agent specs, and
     // convert to AbilityDescriptors owned by the user-agent URA.
     // A registry-load failure degrades to "no per-agent advertise
@@ -220,7 +228,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     match crate::registry::agents::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
-                let owner_uri = match llm_uris
+                let owner_ura = match llm_uras
                     .iter()
                     .find(|(n, _)| n == name)
                     .map(|(_, u)| u.clone())
@@ -232,7 +240,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                 for spec in specs {
                     let desc = crate::runtime::ability_descriptor::AbilityDescriptor::new(
                         spec.name(),
-                        &owner_uri,
+                        &owner_ura,
                         crate::runtime::ability_descriptor::Visibility::Scoped,
                     );
                     match desc {
@@ -259,7 +267,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                         }
                         Err(e) => {
                             outcomes.push(PublishOutcome {
-                                agent_ura: owner_uri.clone(),
+                                agent_ura: owner_ura.clone(),
                                 label: format!("agent-ability/{}", spec.name()),
                                 result: Err(format!("descriptor build failed: {e}")),
                             });
@@ -287,11 +295,11 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
             .or_default()
             .push(d);
     }
-    for (owner_uri, abilities) in by_owner {
+    for (owner_ura, abilities) in by_owner {
         let result =
-            advertise::advertise_abilities(invoker, tenant_id, &plan.realm, &owner_uri, &abilities);
+            advertise::advertise_abilities(invoker, tenant_id, &plan.realm, &owner_ura, &abilities);
         outcomes.push(PublishOutcome {
-            agent_ura: owner_uri.clone(),
+            agent_ura: owner_ura.clone(),
             label: format!("abilities/{}", abilities.len()),
             result: result.map(|_| ()),
         });
@@ -325,10 +333,10 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
 ///     so the hub-shaped subject is purely a bridge admission key,
 ///     not an actual hub-routing decision.
 ///   * `tenant_id` — runtime key namespace.
-///   * `realm` — used to construct the URI's subject_value. Any non-
+///   * `realm` — used to construct the URA's subject_value. Any non-
 ///     empty value works since runtime.* is intercepted by ability
 ///     name; we reuse the daemon's joined realm for consistency with
-///     federation.advertise URIs.
+///     federation.advertise URAs.
 ///   * `node_id` — the local device's node id from `~/.easynet/credentials.json`.
 ///   * `dispatch_endpoint` — `ipc://<absolute-path>`. Typically
 ///     `runtime_dispatch::dispatch_endpoint_uri()`.
@@ -482,12 +490,12 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
 /// Mirrors `AxonClient::default_auth_for_subject` in the SDK:
 ///
 ///   * For prv/org subjects it derives directly from the FULL
-///     subject_id string (`derive_subject_auth(subject_id, tenant)`).
+///     subject_id string (`tenant_id + subject_id + protocol context`).
 ///   * For pub-visibility subjects it derives from the bare
 ///     owner_id string (`derive_owner_auth(owner_id, tenant)`).
 ///
 /// We bootstrap the prv-visibility key here because the entire
-/// daemon-owned-ability call path uses URIs that canonicalize to a
+/// daemon-owned-ability call path uses URAs that canonicalize to a
 /// prv subject; a key derived under any other subject would fail
 /// `verify_easynet_subject_key_binding` even though the math is
 /// otherwise identical. If/when a public-visibility caller is
@@ -501,7 +509,7 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
 /// translation step on the runtime side.
 pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
     let subject_id = format!("easynet:prv:reg:agent.{node_id}");
-    derive_subject_public_key_b64(tenant_id, &subject_id)
+    derive_subject_keypair(tenant_id, &subject_id).1
 }
 
 /// Hub-profile counterpart of `derive_owner_public_key_b64`. Returns
@@ -513,27 +521,22 @@ pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> Str
 /// register both — see `bootstrap_self_identity_via_runtime`.
 pub(crate) fn derive_hub_public_key_b64(tenant_id: &str, realm: &str) -> String {
     let subject_id = format!("easynet:prv:hub:{realm}");
-    derive_subject_public_key_b64(tenant_id, &subject_id)
+    derive_subject_keypair(tenant_id, &subject_id).1
 }
 
-fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
-    let (_seed, pk_b64) = derive_subject_keypair(tenant_id, subject_id);
-    pk_b64
-}
-
-/// Extract the host device node id from a host-device URI.
+/// Extract the host device node id from a host-device URA.
 ///
-/// v4.1.5 §A.URA-7: the only valid device URI shape is
+/// v4.1.5 §A.URA-7: the only valid device URA shape is
 /// `easynet:///r/<realm>/device/<node-id>`. Legacy
 /// `r/{prv,org}/reg/{device,agent}.<id>?tenant_id=<t>` and
-/// `r/<realm>/agent/<bare-id>` (URI v2 transitional) shapes are
+/// `r/<realm>/agent/<bare-id>` (URA v2 transitional) shapes are
 /// rejected per memory `feedback_no_legacy_ura.md`.
-fn host_node_id_from_uri(uri: &str) -> Option<String> {
-    // v4.1.5 §A.URA-7: device URIs are `easynet:///r/<realm>/device/<id>`.
+fn host_node_id_from_ura(ura: &str) -> Option<String> {
+    // v4.1.5 §A.URA-7: device URAs are `easynet:///r/<realm>/device/<id>`.
     // Legacy `reg/{device,agent}.<id>?tenant_id=<t>` shapes are rejected
     // per memory `feedback_no_legacy_ura.md` (strict v4.1.5 only;
-    // route every URI parse through `parse_ura`).
-    let parsed = crate::ura::parse_ura(uri).ok()?;
+    // route every URA parse through `parse_ura`).
+    let parsed = crate::ura::parse_ura(ura).ok()?;
     if parsed.kind == crate::ura::URAKind::Device && !parsed.device_id.is_empty() {
         return Some(parsed.device_id);
     }
@@ -545,24 +548,19 @@ fn host_node_id_from_uri(uri: &str) -> Option<String> {
 /// the daemon can both publish the public key AND mirror the seed
 /// into the keyring (RFC-002 P3) without re-deriving in two places.
 pub(crate) fn derive_subject_keypair(tenant_id: &str, subject_id: &str) -> ([u8; 32], String) {
-    use base64::Engine as _;
-    use ed25519_dalek::SigningKey;
-    use sha2::{Digest, Sha256};
-
-    const DERIVE_CONTEXT: &str = "axon-client-sdk-ed25519-v1";
     let mut hasher = Sha256::new();
     hasher.update(tenant_id.as_bytes());
     hasher.update(b":");
     hasher.update(subject_id.as_bytes());
     hasher.update(b":");
-    hasher.update(DERIVE_CONTEXT.as_bytes());
+    hasher.update(SUBJECT_AUTH_DERIVE_CONTEXT.as_bytes());
     let digest = hasher.finalize();
+
     let mut seed = [0_u8; 32];
     seed.copy_from_slice(&digest[..32]);
     let signing = SigningKey::from_bytes(&seed);
-    let pk_b64 =
-        base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
-    (seed, pk_b64)
+    let public_key_b64 = BASE64_STANDARD.encode(signing.verifying_key().to_bytes());
+    (seed, public_key_b64)
 }
 
 /// Build the JSON args for a single `runtime.register_local_tool`
@@ -658,7 +656,7 @@ fn advertise_outcome_to_publish_outcome(
     }
 }
 
-fn first_uri(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option<String> {
+fn first_ura(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option<String> {
     outcomes
         .iter()
         .find(|o| o.profile == profile && o.name == name)
@@ -668,15 +666,15 @@ fn first_uri(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option
 fn stamp_llm_agent_metadata(
     descriptors: &mut [crate::runtime::ability_descriptor::AbilityDescriptor],
     plan: &BootstrapPlan,
-    llm_uris: &[(String, String)],
+    llm_uras: &[(String, String)],
 ) {
     for sub in &plan.llm_sub_agents {
-        let Some((_, owner_uri)) = llm_uris.iter().find(|(name, _)| name == &sub.name) else {
+        let Some((_, owner_ura)) = llm_uras.iter().find(|(name, _)| name == &sub.name) else {
             continue;
         };
         for descriptor in descriptors
             .iter_mut()
-            .filter(|d| d.owner_agent_ura == *owner_uri)
+            .filter(|d| d.owner_agent_ura == *owner_ura)
         {
             descriptor
                 .metadata
@@ -710,7 +708,7 @@ mod tests {
     use std::cell::RefCell;
 
     /// Recording fake invoker; mirrors the one in advertise.rs but
-    /// counts calls per resource URI so we can assert the expected
+    /// counts calls per resource URA so we can assert the expected
     /// federation.* sequence happened.
     struct CountingInvoker {
         calls: RefCell<Vec<(String, Value)>>,
@@ -823,41 +821,41 @@ mod tests {
     }
 
     #[test]
-    fn host_node_id_from_uri_accepts_only_v415_device_shape() {
+    fn host_node_id_from_ura_accepts_only_v415_device_shape() {
         // v4.1.5 canonical device URA — the only accepted shape.
         assert_eq!(
-            host_node_id_from_uri("easynet:///r/acme/device/01DEV"),
+            host_node_id_from_ura("easynet:///r/acme/device/01DEV"),
             Some("01DEV".into())
         );
 
         // Legacy `agent/<bare-uuid>` and `reg/{device,agent}.<id>?tenant_id=...`
         // forms are rejected per memory `feedback_no_legacy_ura.md`.
-        assert_eq!(host_node_id_from_uri("easynet:///r/acme/agent/01DEV"), None);
+        assert_eq!(host_node_id_from_ura("easynet:///r/acme/agent/01DEV"), None);
         assert_eq!(
-            host_node_id_from_uri("easynet:///r/prv/reg/device.01DEV?tenant_id=acme"),
+            host_node_id_from_ura("easynet:///r/prv/reg/device.01DEV?tenant_id=acme"),
             None
         );
         assert_eq!(
-            host_node_id_from_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
+            host_node_id_from_ura("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
             None
         );
         assert_eq!(
-            host_node_id_from_uri("easynet:///r/acme/agent/user.alice"),
+            host_node_id_from_ura("easynet:///r/acme/agent/user.alice"),
             None,
             "agent URA is never a device host"
         );
 
         // Other kinds remain rejected.
         assert_eq!(
-            host_node_id_from_uri("easynet:///r/acme/resource/01HZ8/fs/etc/hosts"),
+            host_node_id_from_ura("easynet:///r/acme/resource/01HZ8/fs/etc/hosts"),
             None
         );
-        assert_eq!(host_node_id_from_uri("easynet:///r/acme/hub"), None);
-        assert_eq!(host_node_id_from_uri("easynet:///r/acme/user/alice"), None);
+        assert_eq!(host_node_id_from_ura("easynet:///r/acme/hub"), None);
+        assert_eq!(host_node_id_from_ura("easynet:///r/acme/user/alice"), None);
 
         // Malformed inputs — strict parser returns Err, we map to None.
-        assert_eq!(host_node_id_from_uri(""), None);
-        assert_eq!(host_node_id_from_uri("not-a-uri"), None);
+        assert_eq!(host_node_id_from_ura(""), None);
+        assert_eq!(host_node_id_from_ura("not-a-ura"), None);
     }
 
     #[test]
@@ -946,7 +944,7 @@ mod tests {
 
         // Locate the `alice` URA via the persisted local-agents file.
         let file_back = local_agents::load().expect("load local-agents.json");
-        let alice_uri = &file_back
+        let alice_ura = &file_back
             .hosted_agents
             .iter()
             .find(|e| e.profile == "llm" && e.name == "alice")
@@ -963,11 +961,11 @@ mod tests {
             .iter()
             .find(|(u, p)| {
                 u.contains("federation.advertise_abilities")
-                    && p["agent_ura"].as_str() == Some(alice_uri.as_str())
+                    && p["agent_ura"].as_str() == Some(alice_ura.as_str())
             })
             .unwrap_or_else(|| {
                 panic!(
-                    "expected an advertise_abilities call owned by {alice_uri:?}; \
+                    "expected an advertise_abilities call owned by {alice_ura:?}; \
                      resource_seq = {:?}",
                     calls.iter().map(|(u, _)| u).collect::<Vec<_>>()
                 )
@@ -981,7 +979,7 @@ mod tests {
             .collect();
         assert!(
             names.contains(&"alice.chat"),
-            "alice.chat must appear in advertised abilities for {alice_uri:?}; got names = {names:?}"
+            "alice.chat must appear in advertised abilities for {alice_ura:?}; got names = {names:?}"
         );
         // Every advertised ability under the alice agent URA must
         // carry the base runtime+model metadata so the frontend's
@@ -1018,7 +1016,7 @@ mod tests {
         // group; alice's row must be Ok.
         let alice_row = outcomes
             .iter()
-            .find(|o| o.agent_ura == *alice_uri && o.label.starts_with("abilities/"))
+            .find(|o| o.agent_ura == *alice_ura && o.label.starts_with("abilities/"))
             .expect("alice's abilities-advertise outcome row must exist");
         assert!(
             alice_row.result.is_ok(),
@@ -1062,7 +1060,7 @@ mod tests {
         // The device-owner advertise must still carry at least one
         // device-level ability (fs.read is the canary — it has been
         // in the device profile since Tier 2.5 baseline locomotion).
-        // URI v4.1.4: device-profile self-URI uses the `device/` role
+        // URA v4.1.4: device-profile self-URA uses the `device/` role
         // segment (was the v1 `agent/` shape).
         let calls = invoker.calls();
         let device_advert = calls
@@ -1107,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn republish_persists_local_agents_file_with_minted_uris() {
+    fn republish_persists_local_agents_file_with_minted_uras() {
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(good_reply());
         let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
@@ -1147,13 +1145,13 @@ mod tests {
     }
 
     #[test]
-    fn second_republish_reuses_persisted_uris_no_duplicate_advertise() {
+    fn second_republish_reuses_persisted_uras_no_duplicate_advertise() {
         let _h = HomeGuard::new();
         let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let invoker_a = CountingInvoker::new(good_reply());
         let _ = republish_with_minter(&invoker_a, "tenant", &plan, &CountingMinter::new());
         let first_calls = invoker_a.calls();
-        let consent_uri_v1 = first_calls
+        let consent_ura_v1 = first_calls
             .iter()
             .find_map(|(u, p)| {
                 if u.contains("federation.advertise_agent")
@@ -1168,11 +1166,11 @@ mod tests {
             .expect("first run must have advertised consent/default");
 
         // Second run with a fresh minter — if the persistence path
-        // works, we must NOT mint a new URI; the second advertise
+        // works, we must NOT mint a new URA; the second advertise
         // must carry the same URA as the first.
         let invoker_b = CountingInvoker::new(good_reply());
         let _ = republish_with_minter(&invoker_b, "tenant", &plan, &CountingMinter::new());
-        let consent_uri_v2 = invoker_b
+        let consent_ura_v2 = invoker_b
             .calls()
             .iter()
             .find_map(|(u, p)| {
@@ -1188,14 +1186,14 @@ mod tests {
             .expect("second run must still advertise consent/default");
 
         assert_eq!(
-            consent_uri_v1, consent_uri_v2,
+            consent_ura_v1, consent_ura_v2,
             "second republish must reuse the persisted URA for consent/default"
         );
     }
 
     #[test]
-    fn register_local_tools_uses_canonical_runtime_admin_uri() {
-        // Fake invokers observe the exact URI the CLI now sends on
+    fn register_local_tools_uses_canonical_runtime_admin_ura() {
+        // Fake invokers observe the exact URA the CLI now sends on
         // the wire: canonical hub-owned runtime ability URA only.
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(serde_json::json!({"ack": true}));
@@ -1214,13 +1212,13 @@ mod tests {
             "register must walk at least one ability"
         );
         // Every call must hit the canonical hub-owned runtime ability
-        // URI.
+        // URA.
         let calls = invoker.calls();
         assert_eq!(calls.len(), outcomes.len(), "1 call per ability");
-        for (uri, payload) in &calls {
+        for (ura, payload) in &calls {
             assert_eq!(
-                uri, "easynet:///r/acme/ability/hub.runtime.register_local_tool",
-                "register URI must stay canonical at the business layer"
+                ura, "easynet:///r/acme/ability/hub.runtime.register_local_tool",
+                "register URA must stay canonical at the business layer"
             );
             assert_eq!(payload["tenant_id"], "tenant");
             assert_eq!(payload["node_id"], "node-01DEV");

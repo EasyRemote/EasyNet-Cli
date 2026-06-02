@@ -109,8 +109,8 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     if let Ok(creds) = config::load_credentials() {
         if let Some(ref state) = runtime_state {
             if state.pid.is_some_and(net::is_pid_alive) {
-                let device_uri = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
-                match invoke_federation_revoke_for_reset(&device_uri) {
+                let device_ura = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
+                match invoke_federation_revoke_for_reset(&device_ura) {
                     Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
                     Err(e) => output::warn(&format!(
                         "federation.revoke failed (continuing local reset): {e}"
@@ -139,16 +139,16 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_federation_revoke_for_reset(device_uri: &str) -> anyhow::Result<()> {
+fn invoke_federation_revoke_for_reset(device_ura: &str) -> anyhow::Result<()> {
     crate::support::federation_invoke::invoke_federation_revoke(
-        device_uri,
+        device_ura,
         "device-reset",
-        Some(device_uri),
+        Some(device_ura),
     )
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn invoke_federation_revoke_for_reset(_device_uri: &str) -> anyhow::Result<()> {
+fn invoke_federation_revoke_for_reset(_device_ura: &str) -> anyhow::Result<()> {
     Err(crate::support::local_invoke::federation_not_wired_error(
         "deregistering this device on reset",
     ))

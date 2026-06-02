@@ -14,7 +14,7 @@
 // Why a separate process
 // ----------------------
 // 1. Process isolation. Backend / daemon / CLI never hold the raw
-//    seed bytes — they request `sign(self_uri, canonical_bytes)`
+//    seed bytes — they request `sign(self_ura, canonical_bytes)`
 //    over a UDS socket and receive a 64-byte signature back. A
 //    compromised callee cannot exfiltrate the key.
 // 2. ACL surface. UDS file mode 0600 + per-user owner is the
@@ -266,7 +266,7 @@ pub struct Vault {
 // Manual `Debug` so the master key never lands in a log line. The
 // derived `Debug` would print every byte of `master_key` —
 // catastrophic for ops who tail the daemon log. We keep `path` and
-// the entry URIs (no seeds) which is plenty for an operator
+// the entry URAs (no seeds) which is plenty for an operator
 // debugging "which vault did this process open and what entries
 // are in it".
 impl std::fmt::Debug for Vault {
@@ -275,7 +275,7 @@ impl std::fmt::Debug for Vault {
             .field("path", &self.path)
             .field("master_key", &"<redacted>")
             .field("salt_len", &self.salt.len())
-            .field("entry_uris", &self.entries.keys().collect::<Vec<_>>())
+            .field("entry_uras", &self.entries.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -396,25 +396,25 @@ impl Vault {
     }
 
     /// Sign `canonical_bytes` with the keypair indexed by
-    /// `self_uri`. Looks up by primary_self first, then by
+    /// `self_ura`. Looks up by primary_self first, then by
     /// role_overlays — so backend can sign as `r/<r>/hub` even
     /// though the vault entry is keyed by `r/<r>/device/<uuid>`.
     /// Returns the 64-byte ed25519 signature.
-    pub fn sign(&self, self_uri: &str, canonical_bytes: &[u8]) -> Result<Signature, VaultError> {
-        let entry = self.lookup(self_uri)?;
+    pub fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, VaultError> {
+        let entry = self.lookup(self_ura)?;
         let signing_key = signing_key_from_entry(entry)?;
         Ok(signing_key.sign(canonical_bytes))
     }
 
-    /// Return the public key for `self_uri`. Same lookup rule as
+    /// Return the public key for `self_ura`. Same lookup rule as
     /// `sign`.
-    pub fn derive_pubkey(&self, self_uri: &str) -> Result<VerifyingKey, VaultError> {
-        let entry = self.lookup(self_uri)?;
+    pub fn derive_pubkey(&self, self_ura: &str) -> Result<VerifyingKey, VaultError> {
+        let entry = self.lookup(self_ura)?;
         let signing_key = signing_key_from_entry(entry)?;
         Ok(signing_key.verifying_key())
     }
 
-    /// Export the raw 32-byte Ed25519 seed for `self_uri`.
+    /// Export the raw 32-byte Ed25519 seed for `self_ura`.
     ///
     /// Phase 3D bridge: the daemon's `boot::load_daemon_identity`
     /// stores the seed (not a `SigningKey`) inside `DaemonIdentity`
@@ -426,8 +426,8 @@ impl Vault {
     /// `derive_subject_keypair` path" requirement.
     ///
     /// Same role-overlay lookup rules as `sign` / `derive_pubkey`.
-    pub fn export_seed(&self, self_uri: &str) -> Result<[u8; ED25519_SEED_LEN], VaultError> {
-        let entry = self.lookup(self_uri)?;
+    pub fn export_seed(&self, self_ura: &str) -> Result<[u8; ED25519_SEED_LEN], VaultError> {
+        let entry = self.lookup(self_ura)?;
         let seed = hex::decode(&entry.seed_hex)
             .map_err(|e| VaultError::Corrupt(format!("seed_hex decode: {e}")))?;
         seed.as_slice()
@@ -435,7 +435,7 @@ impl Vault {
             .map_err(|_| VaultError::BadSeedLen { got: seed.len() })
     }
 
-    /// List all primary_self URIs the vault holds.
+    /// List all primary_self URAs the vault holds.
     pub fn list(&self) -> Vec<String> {
         let mut out: Vec<String> = self.entries.keys().cloned().collect();
         out.sort();
@@ -443,7 +443,7 @@ impl Vault {
     }
 
     /// Forget an entry. Idempotent — forgetting a non-existent
-    /// URI returns Ok. The hard-fail variant lives in
+    /// URA returns Ok. The hard-fail variant lives in
     /// `forget_strict` for the rare caller that wants to
     /// distinguish "I just removed it" from "it wasn't there".
     pub fn forget(&mut self, primary_self: &str) {
@@ -489,26 +489,26 @@ impl Vault {
 
     /// Return whether an entry exists. Cheap; does not unseal the
     /// keypair.
-    pub fn contains(&self, self_uri: &str) -> bool {
-        self.entries.contains_key(self_uri)
+    pub fn contains(&self, self_ura: &str) -> bool {
+        self.entries.contains_key(self_ura)
             || self
                 .entries
                 .values()
-                .any(|e| e.role_overlays.iter().any(|o| o == self_uri))
+                .any(|e| e.role_overlays.iter().any(|o| o == self_ura))
     }
 
-    fn lookup(&self, self_uri: &str) -> Result<&KeyringEntry, VaultError> {
-        if let Some(entry) = self.entries.get(self_uri) {
+    fn lookup(&self, self_ura: &str) -> Result<&KeyringEntry, VaultError> {
+        if let Some(entry) = self.entries.get(self_ura) {
             return Ok(entry);
         }
         // Role-overlay lookup. RFC-001 v4.1.5 §3.5: same keypair
         // signs as different URAs.
         for entry in self.entries.values() {
-            if entry.role_overlays.iter().any(|o| o == self_uri) {
+            if entry.role_overlays.iter().any(|o| o == self_ura) {
                 return Ok(entry);
             }
         }
-        Err(VaultError::NotFound(self_uri.to_string()))
+        Err(VaultError::NotFound(self_ura.to_string()))
     }
 }
 
@@ -624,14 +624,14 @@ pub enum KeyringRequest {
         seed_hex: String,
     },
     /// Sign canonical bytes with the keypair indexed by
-    /// `self_uri`.
+    /// `self_ura`.
     Sign {
-        self_uri: String,
+        self_ura: String,
         canonical_bytes_b64: String,
     },
-    /// Return the public key for `self_uri`.
-    DerivePubkey { self_uri: String },
-    /// List every primary_self URI the vault holds.
+    /// Return the public key for `self_ura`.
+    DerivePubkey { self_ura: String },
+    /// List every primary_self URA the vault holds.
     List,
     /// Remove an entry.
     Forget { primary_self: String },
@@ -675,7 +675,7 @@ pub fn vault_error_to_response(err: VaultError) -> KeyringResponse {
 }
 
 /// Default UDS path for the keyring daemon. Phase 3E will
-/// replace this with a self-URI-derived path; v1 ships the flat
+/// replace this with a self-URA-derived path; v1 ships the flat
 /// path so the daemon can boot before any URA is known.
 pub const DEFAULT_KEYRING_SOCKET_REL: &str = ".easynet/keyring.sock";
 
@@ -722,13 +722,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
-        let device_uri = "easynet:///r/localhost/device/dev-uuid".to_string();
-        vault.put(&device_uri, vec![], fresh_seed_hex()).unwrap();
+        let device_ura = "easynet:///r/localhost/device/dev-uuid".to_string();
+        vault.put(&device_ura, vec![], fresh_seed_hex()).unwrap();
         vault.seal().unwrap();
 
-        let pubkey = vault.derive_pubkey(&device_uri).unwrap();
+        let pubkey = vault.derive_pubkey(&device_ura).unwrap();
         let msg = b"axiom canonical bytes";
-        let sig = vault.sign(&device_uri, msg).unwrap();
+        let sig = vault.sign(&device_ura, msg).unwrap();
         pubkey.verify(msg, &sig).expect("sig verifies");
     }
 
@@ -737,14 +737,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
-        let device_uri = "easynet:///r/localhost/device/dev-uuid".to_string();
-        let hub_uri = "easynet:///r/localhost/hub".to_string();
+        let device_ura = "easynet:///r/localhost/device/dev-uuid".to_string();
+        let hub_endpoint = "easynet:///r/localhost/hub".to_string();
         vault
-            .put(&device_uri, vec![hub_uri.clone()], fresh_seed_hex())
+            .put(&device_ura, vec![hub_endpoint.clone()], fresh_seed_hex())
             .unwrap();
 
-        let pubkey_via_device = vault.derive_pubkey(&device_uri).unwrap();
-        let pubkey_via_hub = vault.derive_pubkey(&hub_uri).unwrap();
+        let pubkey_via_device = vault.derive_pubkey(&device_ura).unwrap();
+        let pubkey_via_hub = vault.derive_pubkey(&hub_endpoint).unwrap();
         assert_eq!(
             pubkey_via_device.to_bytes(),
             pubkey_via_hub.to_bytes(),
@@ -752,8 +752,8 @@ mod tests {
         );
 
         let msg = b"role overlay test";
-        let sig_device = vault.sign(&device_uri, msg).unwrap();
-        let sig_hub = vault.sign(&hub_uri, msg).unwrap();
+        let sig_device = vault.sign(&device_ura, msg).unwrap();
+        let sig_hub = vault.sign(&hub_endpoint, msg).unwrap();
         assert_eq!(
             sig_device.to_bytes(),
             sig_hub.to_bytes(),
@@ -765,18 +765,18 @@ mod tests {
     fn seal_and_reopen_preserves_entries() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
-        let device_uri = "easynet:///r/localhost/device/dev-uuid".to_string();
+        let device_ura = "easynet:///r/localhost/device/dev-uuid".to_string();
         let seed = fresh_seed_hex();
 
         {
             let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
-            vault.put(&device_uri, vec![], seed.clone()).unwrap();
+            vault.put(&device_ura, vec![], seed.clone()).unwrap();
             vault.seal().unwrap();
         }
 
         let vault2 = Vault::open(&path, &explicit_pass()).unwrap();
-        assert_eq!(vault2.list(), vec![device_uri.clone()]);
-        assert_eq!(vault2.entries[&device_uri].seed_hex, seed);
+        assert_eq!(vault2.list(), vec![device_ura.clone()]);
+        assert_eq!(vault2.entries[&device_ura].seed_hex, seed);
     }
 
     #[test]
@@ -804,9 +804,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
-        let uri = "easynet:///r/r/device/u".to_string();
-        vault.put(&uri, vec![], fresh_seed_hex()).unwrap();
-        let err = vault.put(&uri, vec![], fresh_seed_hex()).unwrap_err();
+        let ura = "easynet:///r/r/device/u".to_string();
+        vault.put(&ura, vec![], fresh_seed_hex()).unwrap();
+        let err = vault.put(&ura, vec![], fresh_seed_hex()).unwrap_err();
         assert!(matches!(err, VaultError::AlreadyExists(_)));
     }
 
@@ -815,10 +815,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
-        let uri = "easynet:///r/r/device/u".to_string();
-        vault.put(&uri, vec![], fresh_seed_hex()).unwrap();
-        vault.forget(&uri);
-        let err = vault.sign(&uri, b"x").unwrap_err();
+        let ura = "easynet:///r/r/device/u".to_string();
+        vault.put(&ura, vec![], fresh_seed_hex()).unwrap();
+        vault.forget(&ura);
+        let err = vault.sign(&ura, b"x").unwrap_err();
         assert!(matches!(err, VaultError::NotFound(_)));
     }
 
@@ -827,10 +827,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
-        let uri = "easynet:///r/r/device/u".to_string();
-        vault.put(&uri, vec![], fresh_seed_hex()).unwrap();
-        vault.forget_strict(&uri).expect("removes once");
-        let err = vault.forget_strict(&uri).unwrap_err();
+        let ura = "easynet:///r/r/device/u".to_string();
+        vault.put(&ura, vec![], fresh_seed_hex()).unwrap();
+        vault.forget_strict(&ura).expect("removes once");
+        let err = vault.forget_strict(&ura).unwrap_err();
         assert!(matches!(err, VaultError::NotFound(_)));
     }
 
@@ -865,10 +865,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
-        vault.put("z-uri", vec![], fresh_seed_hex()).unwrap();
-        vault.put("a-uri", vec![], fresh_seed_hex()).unwrap();
-        vault.put("m-uri", vec![], fresh_seed_hex()).unwrap();
-        assert_eq!(vault.list(), vec!["a-uri", "m-uri", "z-uri"]);
+        vault.put("z-ura", vec![], fresh_seed_hex()).unwrap();
+        vault.put("a-ura", vec![], fresh_seed_hex()).unwrap();
+        vault.put("m-ura", vec![], fresh_seed_hex()).unwrap();
+        assert_eq!(vault.list(), vec!["a-ura", "m-ura", "z-ura"]);
     }
 
     #[test]
@@ -901,17 +901,17 @@ mod tests {
     #[test]
     fn keyring_request_response_serde_round_trip() {
         let req = KeyringRequest::Sign {
-            self_uri: "easynet:///r/r/device/u".into(),
+            self_ura: "easynet:///r/r/device/u".into(),
             canonical_bytes_b64: encode_b64(b"hello"),
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: KeyringRequest = serde_json::from_str(&json).unwrap();
         match back {
             KeyringRequest::Sign {
-                self_uri,
+                self_ura,
                 canonical_bytes_b64,
             } => {
-                assert_eq!(self_uri, "easynet:///r/r/device/u");
+                assert_eq!(self_ura, "easynet:///r/r/device/u");
                 assert_eq!(canonical_bytes_b64, encode_b64(b"hello"));
             }
             other => panic!("wrong variant: {other:?}"),

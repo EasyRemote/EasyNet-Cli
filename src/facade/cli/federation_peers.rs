@@ -4,22 +4,22 @@
 // File: src/facade/cli/federation_peers.rs
 //
 // Reads the local daemon's federation-peer config from disk and
-// prints the canonical URIs an operator can pass to
-// `easynet ability invoke --node <peer-uri> ...`. Closes the
-// "I know cross-hub forwarding works but I have no idea what URI
+// prints the canonical URAs an operator can pass to
+// `easynet ability invoke --node <peer-ura> ...`. Closes the
+// "I know cross-hub forwarding works but I have no idea what URA
 // to put after `--node`" gap operators reported during PR-N1
 // user-flow review.
 //
 // Sources enumerated
 // ------------------
 // 1. `~/.easynet/daemon-config.toml` `[daemon.federated_peers]`
-//    table — the operator-curated `tenant → hub_uri` map. Every
+//    table — the operator-curated `tenant → hub_endpoint` map. Every
 //    entry here is a tenant the local daemon will route
 //    cross-hub `federation.forward_invoke` calls to.
 // 2. `<EASYNET_REALM_TRUST_PATH or /etc/easynet/realm-trust.toml>`
 //    `[[trusted_agent]]` blocks with `role = "hub"`. These are
 //    the peer hubs the cross-hub dialer's TLS gate accepts. The
-//    schema-B fields (`origin_tenant_id`, `hub_uri`,
+//    schema-B fields (`origin_tenant_id`, `hub_endpoint`,
 //    `tls_ca_pem_path`) print alongside so the operator sees
 //    the complete trust picture in one command.
 //
@@ -46,12 +46,12 @@
 // scripts:
 //
 //     {
-//       "federated_peers": {"<tenant>": "<hub_uri>", ...},
+//       "federated_peers": {"<tenant>": "<hub_endpoint>", ...},
 //       "trusted_hubs": [
 //         {
 //           "agent_ura": "...",
 //           "origin_tenant_id": "...",
-//           "hub_uri": "...",
+//           "hub_endpoint": "...",
 //           "tls_ca_pem_path": "..."
 //         },
 //         ...
@@ -81,15 +81,25 @@ fn daemon_config_path() -> PathBuf {
 }
 
 /// Default realm-trust.toml location, mirrors the daemon's
-/// `services::realm_trust_anchor::DEFAULT_REALM_TRUST_PATH`. The
-/// `EASYNET_REALM_TRUST_PATH` env override is the same one the
-/// daemon honours so this subcommand and the daemon stay aligned
-/// in test deployments.
+/// `services::axon_serve::boot::trust_anchor_path_from_env_or_default`.
+/// The `EASYNET_REALM_TRUST_PATH` env override is the same one the
+/// daemon honours so this subcommand and the daemon stay aligned in
+/// test deployments. Host-mode installs usually cannot write
+/// `/etc/easynet`, so they fall back to `~/.easynet/realm-trust.toml`.
 fn realm_trust_path() -> PathBuf {
     if let Some(p) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
         return PathBuf::from(p);
     }
-    PathBuf::from("/etc/easynet/realm-trust.toml")
+    let etc = PathBuf::from("/etc/easynet/realm-trust.toml");
+    if let Ok(meta) = std::fs::metadata(&etc) {
+        if meta.is_file() && meta.len() > 0 {
+            return etc;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".easynet/realm-trust.toml");
+    }
+    PathBuf::from(".easynet/realm-trust.toml")
 }
 
 #[derive(Debug, Args)]
@@ -113,7 +123,7 @@ struct TrustedHubEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     origin_tenant_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    hub_uri: Option<String>,
+    hub_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls_ca_pem_path: Option<String>,
 }
@@ -136,15 +146,15 @@ pub fn run(args: PeersArgs) -> anyhow::Result<()> {
 }
 
 fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[TrustedHubEntry]) {
-    output::info("federated_peers (operator-curated tenant → hub_uri map)");
+    output::info("federated_peers (operator-curated tenant → hub_endpoint map)");
     if federated_peers.is_empty() {
         output::detail(
             "(empty)",
             "no [daemon.federated_peers] entries; cross-tenant routing is disabled",
         );
     } else {
-        for (tenant, hub_uri) in federated_peers {
-            output::detail(tenant, hub_uri);
+        for (tenant, hub_endpoint) in federated_peers {
+            output::detail(tenant, hub_endpoint);
         }
     }
     eprintln!();
@@ -161,8 +171,8 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
             if let Some(t) = &hub.origin_tenant_id {
                 output::detail("  origin_tenant_id", t);
             }
-            if let Some(u) = &hub.hub_uri {
-                output::detail("  hub_uri", u);
+            if let Some(u) = &hub.hub_endpoint {
+                output::detail("  hub_endpoint", u);
             }
             if let Some(p) = &hub.tls_ca_pem_path {
                 output::detail("  tls_ca_pem_path", p);
@@ -232,8 +242,8 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
                     .get("origin_tenant_id")
                     .and_then(|i| i.as_str())
                     .map(str::to_string),
-                hub_uri: table
-                    .get("hub_uri")
+                hub_endpoint: table
+                    .get("hub_endpoint")
                     .and_then(|i| i.as_str())
                     .map(str::to_string),
                 tls_ca_pem_path: table
@@ -301,8 +311,8 @@ mod tests {
                         .get("origin_tenant_id")
                         .and_then(|i| i.as_str())
                         .map(str::to_string),
-                    hub_uri: table
-                        .get("hub_uri")
+                    hub_endpoint: table
+                        .get("hub_endpoint")
                         .and_then(|i| i.as_str())
                         .map(str::to_string),
                     tls_ca_pem_path: table
@@ -370,7 +380,7 @@ public_key_b64 = "CCCC"
 role = "hub"
 added_at_unix_ms = 1700000000002
 origin_tenant_id = "peer-realm"
-hub_uri = "https://peer-hub.example:50443"
+hub_endpoint = "https://peer-hub.example:50443"
 tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
 "#;
         let hubs = parse_trusted_hubs_from(raw);
@@ -378,7 +388,7 @@ tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
         assert_eq!(hubs[0].agent_ura, "easynet:///r/peer-realm/hub");
         assert_eq!(hubs[0].origin_tenant_id.as_deref(), Some("peer-realm"));
         assert_eq!(
-            hubs[0].hub_uri.as_deref(),
+            hubs[0].hub_endpoint.as_deref(),
             Some("https://peer-hub.example:50443")
         );
         assert_eq!(
@@ -403,7 +413,7 @@ added_at_unix_ms = 1700000000000
     #[test]
     fn realm_trust_hub_entry_missing_schema_b_fields_is_listed() {
         // Legacy hub entries (predating PR-N1 schema-B) lack
-        // origin_tenant_id / hub_uri / tls_ca_pem_path. The
+        // origin_tenant_id / hub_endpoint / tls_ca_pem_path. The
         // listing surface still includes them so the operator
         // sees the trust set as-is and can decide to fill in
         // the missing fields (or remove the entry).
@@ -417,7 +427,7 @@ added_at_unix_ms = 1700000000002
         let hubs = parse_trusted_hubs_from(raw);
         assert_eq!(hubs.len(), 1);
         assert_eq!(hubs[0].origin_tenant_id, None);
-        assert_eq!(hubs[0].hub_uri, None);
+        assert_eq!(hubs[0].hub_endpoint, None);
         assert_eq!(hubs[0].tls_ca_pem_path, None);
     }
 

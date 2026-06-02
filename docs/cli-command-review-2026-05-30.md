@@ -48,10 +48,11 @@ Every other service (`ControlPlane`, `Policy`, `Capability`, `Federation`, `Miss
 `// RFC-001 P1.2.x: <Service> service collapsed` comment. Their request/response **messages still
 exist** (transitional), but the **RPCs are gone** — each is now an ability called via `Invoke`.
 
-**Why this matters for the whole doc:** a former call like `GetNodeTrust` is not a dead end — it is now
-the ability **`identity.get_trust`**, callable today as `easynet ability invoke identity.get_trust …`.
-So the gaps this review names are mostly **CLI ergonomics gaps** (no friendly `trust show` verb), not
-**protocol gaps** (the ability exists). That is a *better* story: less to build in Axon, more in the CLI.
+**Why this matters for the whole doc:** a former call like `GetNodeTrust` is not a dead end — RFC-001
+restates it as the ability **`identity.get_trust`**. But a restated ability name is not enough by
+itself: CLI implementation should treat each row as **message exists; callable ability must be
+confirmed/published** unless the current Axon runtime has a registered handler. That is the difference
+between cheap CLI ergonomics and cross-repo protocol/ability-publication work.
 
 **RPC → ability map for the abilities this doc references** (from RFC-001 mapping §):
 
@@ -172,7 +173,7 @@ pass so `auth` = identity only.
 | `agent resolve <ura>` | **MISSING** | P1 | roadmap (`ResolveAgent`) | URA → agent descriptor. Today only nodes resolve, not agents. |
 | `agent register <ura> ...` | **MISSING** | P1 | roadmap (`RegisterAgent`) | Give an agent a network identity, not just a local wrapper. |
 | `agent migrate <name> --to <node>` | **MISSING** | P2 | roadmap (`MigrateAgent`) | Move an agent (with memory) across owned nodes. |
-| `agent trust <node\|agent>` | **MISSING** | P0 | proto (`GetNodeTrust` control.proto:177) | See §4. |
+| `agent trust <node\|agent>` | **MISSING** | P0 | message exists; callable ability unverified (`identity.get_trust`) | See §4. |
 
 **Review note:** today "agent" means "a local wrapper around Claude/Codex." The product spec says an
 agent is "a first-class citizen with identity, memory, relationships, reputation, economic capability."
@@ -272,14 +273,14 @@ confer it, after which the learner is its new owner — never a silent `pull`.*
 | `ability study <ability>` | **MISSING** | P2 | ontology-only (read-only `meta.acquire`) | Acquire the *contract/behaviour* to understand it — no runnable copy. |
 | `ability forget <ability>` | **MISSING** | P2 | ontology-only (`meta.forget` ontology:221 — no handler yet) | Drop a learned ability (unlearn). |
 
-### Missing — RELEASE PIPELINE (P1, all proto-backed)
+### Missing — RELEASE PIPELINE (P1, message-backed; callable abilities require confirmation)
 | Command | Status | Pri | Backing | What it's for |
 |---|---|---|---|---|
 | `ability sign <pkg>` | **MISSING** | P1 | proto (`SignPackage` capability.proto:121) | Trust-root counter-signature for distribution. |
 | `ability promote <name> --channel stable` | **MISSING** | P1 | proto (`PromotePackage` capability.proto:137) | Canary → stable channel advance. |
 | `ability rollout <name> --stages ...` | **MISSING** | P2 | proto (`CreateRollout` capability.proto:165) | Staged rollout with SLO gates. |
 | `ability rollback <name>` | **MISSING** | P1 | proto (`RollbackCapability` capability.proto) | Revert a bad version. |
-| `ability consent grant\|revoke <ability>` | **MISSING** | P1 | proto (`GrantConsent` capability.proto:392) | User approval workflow for sensitive abilities. |
+| `ability consent grant\|revoke <ability>` | **MISSING** | P1 | message exists; callable `capability.*`/`consent.*` ability unverified | User approval workflow for sensitive abilities. |
 
 **Review note:** the CLI flattens a real release pipeline (`publish→sign→promote→rollout→install→
 activate→rollback/revoke + consent`) down to `deploy`/`uninstall`. Fine for a solo owner; insufficient
@@ -537,22 +538,24 @@ The three questions are really **one** question: *does EasyNet have an object mo
 > **Corrected after audit.** `TrustLevel` is *not* only in federation TLS plumbing — it is a field on
 > `NodeDescriptor` (types.proto:671) and is **actively used in the authorization path**
 > (`resilience.rs:714` hardcodes "install requires PRIVILEGED, admin requires ELEVATED"). What's missing
-> is the **user-facing surface**: no `trust show`/`trust set` verb, and the get/set are now abilities
-> (`identity.get_trust`/`identity.set_trust`, RFC-001) not RPCs — so this is a CLI-exposure gap over an
-> *already-operational* trust model, not a from-scratch build.
+> is the **user-facing surface**: no `trust show`/`trust set` verb, and the get/set are now intended
+> abilities (`identity.get_trust`/`identity.set_trust`, RFC-001) rather than RPCs. The data messages
+> exist, but callable ability publication must be confirmed in Axon before this can be treated as
+> cheap CLI exposure.
 >
 > (original note) `trust` today also appears in federation TLS cert plumbing. There is no user-facing
 > trust surface, despite Axon modeling it fully.
 
 | Command | Status | Pri | Backing | What it's for |
 |---|---|---|---|---|
-| `trust show <agent\|node>` | **MISSING** | **P0** | proto (`GetNodeTrust` control.proto:177) | Trust level (UNTRUSTED→PRIVILEGED), reputation, history. Answers *"should I call this stranger?"* |
-| `trust set <node> --level elevated` | **MISSING** | **P0** | proto (`SetNodeTrust` control.proto:194) | Operator raises/lowers trust on a peer. |
-| `trust list` | **MISSING** | P1 | proto (`ListNodes` + trust field) | Who do I trust, and at what level? |
+| `trust show <agent\|node>` | **MISSING** | **P0** | message exists; callable ability unverified (`identity.get_trust`) | Trust level (UNTRUSTED→PRIVILEGED), reputation, history. Answers *"should I call this stranger?"* |
+| `trust set <node> --level elevated` | **MISSING** | **P0** | message exists; callable ability unverified (`identity.set_trust`) | Operator raises/lowers trust on a peer. |
+| `trust list` | **MISSING** | P1 | message exists; callable ability unverified | Who do I trust, and at what level? |
 
 **Review note:** you cannot run a marketplace where strangers transact without a trust display. Axon
-already has the levels and get/set RPCs — this is *exposure work*, not protocol work. **This is the
-cheapest P0 to ship.**
+already has the trust ontology and messages, but the callable surface is the load-bearing question:
+until `identity.get_trust` / `identity.set_trust` are confirmed as published abilities, this is a
+protocol/ability-publication dependency, not pure CLI exposure.
 
 ---
 
@@ -565,7 +568,7 @@ cheapest P0 to ship.**
 > and run what. Without it, "the capability never leaves your machine" is a slogan, not an enforced
 > guarantee the owner can configure.
 
-### The model Axon already has (so this is exposure, not protocol work for most of it)
+### The model Axon already has (messages exist; callable abilities still need confirmation)
 
 - **Policy engine** — `PolicyRule { effect: allow|deny, action, condition, priority }` where `condition`
   is an expression like `"trust_level >= STANDARD && node.labels.region == 'cn-east'"`. Grouped into a
@@ -583,18 +586,18 @@ cheapest P0 to ship.**
 
 | Command | Status | Pri | Backing | What it's for |
 |---|---|---|---|---|
-| `policy list` | **MISSING** | **P0** | proto (`ListPolicies` policy.proto:150) | What rules govern my node/abilities right now? |
-| `policy show <id>` | **MISSING** | P1 | proto (`GetPolicy` policy.proto:139) | Inspect one policy set's rules. |
-| `policy create --rule "deny action=exec unless trust>=STANDARD"` | **MISSING** | **P0** | proto (`CreatePolicy` policy.proto:116) | Author an allow/deny rule. The core authz verb. |
-| `policy update <id> ...` | **MISSING** | P1 | proto (`UpdatePolicy` policy.proto:128) | Edit rules in place. |
-| `policy simulate <invocation>` | **MISSING** | P1 | proto (`PolicySimulate` policy.proto:71) | Dry-run: *would this call be allowed, and which rule fires?* Huge for debugging. |
-| `policy why <invocation-id>` | **MISSING** | P1 | proto (`GetDecision` policy.proto:195) | Explain a past allow/deny decision (the `deny_reasons` codes). |
-| `policy override create --ability X --node Y --ttl 1h --effect allow` | **MISSING** | P1 | proto (`CreateOverride` policy.proto:165) | Break-glass / time-boxed grant for debugging. |
-| `policy override revoke <id>` | **MISSING** | P1 | proto (`RevokeOverride` policy.proto:182) | Close the break-glass window. |
-| `permission grant <agent> --scope execute --ability X` | **MISSING** | **P0** | proto (`GrantConsent` capability.proto:392) | Let a *specific caller* use a scoped ability/resource. |
-| `permission revoke <consent-id>` | **MISSING** | **P0** | proto (`RevokeConsent` capability.proto:409) | Withdraw access. |
-| `permission list [--agent] [--ability]` | **MISSING** | P1 | proto (`ListConsents` capability.proto:431) | Who can touch what, at what scope? The audit view. |
-| `ability set-visibility <name> --public\|--private\|--scoped <agents>` | **MISSING** | P1 | proto (ability visibility / `authorized_agents`) | Control who can even *discover/see* an ability. |
+| `policy list` | **MISSING** | **P0** | message exists; callable `policy.*` ability unverified | What rules govern my node/abilities right now? |
+| `policy show <id>` | **MISSING** | P1 | message exists; callable `policy.*` ability unverified | Inspect one policy set's rules. |
+| `policy create --rule "deny action=exec unless trust>=STANDARD"` | **MISSING** | **P0** | message exists; callable `policy.*` ability unverified | Author an allow/deny rule. The core authz verb. |
+| `policy update <id> ...` | **MISSING** | P1 | message exists; callable `policy.*` ability unverified | Edit rules in place. |
+| `policy simulate <invocation>` | **MISSING** | P1 | message exists; callable `policy.*` ability unverified | Dry-run: *would this call be allowed, and which rule fires?* Huge for debugging. |
+| `policy why <invocation-id>` | **MISSING** | P1 | message exists; callable `policy.*` ability unverified | Explain a past allow/deny decision (the `deny_reasons` codes). |
+| `policy override create --ability X --node Y --ttl 1h --effect allow` | **MISSING** | P1 | message exists; callable `policy.*` ability unverified | Break-glass / time-boxed grant for debugging. |
+| `policy override revoke <id>` | **MISSING** | P1 | message exists; callable `policy.*` ability unverified | Close the break-glass window. |
+| `permission grant <agent> --scope execute --ability X` | **MISSING** | **P0** | message exists; callable `capability.*` ability unverified | Let a *specific caller* use a scoped ability/resource. |
+| `permission revoke <consent-id>` | **MISSING** | **P0** | message exists; callable `capability.*` ability unverified | Withdraw access. |
+| `permission list [--agent] [--ability]` | **MISSING** | P1 | message exists; callable `capability.*` ability unverified | Who can touch what, at what scope? The audit view. |
+| `ability set-visibility <name> --public\|--private\|--scoped <agents>` | **MISSING** | P1 | message exists; callable ability unverified | Control who can even *discover/see* an ability. |
 
 **Review note (this is the important one):** trust (§4) answers *"how much do I trust this stranger?"*
 Permission (§4.5) answers *"what is this caller actually allowed to do to my service, data, and
@@ -605,8 +608,9 @@ resources?"* — and it must work at **three granularities the model already sup
 
 A marketplace where I can't say *"agent B may call ability X but only read, not write, and only if
 trust ≥ STANDARD"* is not safe to open to strangers. **This is co-equal P0 with Trust — they are the
-two halves of the same control plane.** Most of it is exposure work (proto exists); only the
-ergonomics of `--rule "..."` condition authoring need design.
+two halves of the same control plane.** The messages exist, but CLI work must be sequenced behind
+confirmation that Axon publishes the callable `policy.*` / `capability.*` abilities; only after that
+does this become mostly CLI exposure plus `--rule "..."` ergonomics design.
 
 **Discussion needed:**
 - Do we ship `policy` and `permission` as **two command groups** (rules vs scoped grants), or unify
@@ -640,33 +644,115 @@ EasyNet-Ledger/Agreement is on the Axon roadmap before we spec the CLI side.**
 
 ## SECTION 6 — Mission / EAL (orchestration)
 
+> **Ontology anchor (decided 2026-05-31) — Mission is a SCRIPT, not a workflow.**
+> Per `EasyNet-Axon/document/concepts/CONCEPT_MODEL.md:59–68`: Mission is a **compile-time artifact** —
+> EAL → Mission IR (a declarative DAG) → **expanded into one or more Invocations**. It is explicitly
+> *not* a runtime first-class entity (CONCEPT_MODEL.md:4 supersedes prior drafts that treated it as
+> one). "Mission state" is just the aggregate of its expanded Invocations.
+>
+> **Consequence — the only runtime-addressable object is the Invocation.** This is the line that keeps
+> Axon from growing a second runtime entity:
+>
+> | Allowed (Invocation-addressed) | Forbidden (would require a Mission Runtime State Store) |
+> |---|---|
+> | `retry(invocation_id)` ✅ | `retry(step_id)` ❌ |
+> | `cancel(invocation_id)` ✅ | `patch(step_state)` ❌ |
+> | `watch(invocation_id)` ✅ | `resume(step_n)` ❌ |
+> | `receipt(invocation_id)` ✅ | |
+>
+> A step-level retry forces the system to remember "which step, which failed, which retried" — i.e. a
+> checkpoint/scheduler/step-transition store. The moment that store exists, Mission **is** a Workflow
+> Instance and Axon has reinvented Temporal / Airflow / Dagster / Prefect. **We refuse that.** Retry is
+> *re-invoke*: a new Invocation linked to the old one via `causal_context`/`causal_binding`
+> (types.proto:343, invoke.proto:696) — `old invocation → new invocation`. Three-layer closure holds:
+> **L0 EAL script → L1 Invocation → L2 Receipt**, with no fourth runtime entity.
+
+> **The compiler analogy (the design constitution for EAL).** "Don't over-engineer Mission" does NOT
+> mean "don't optimize." It means **optimize in the right layer.** EAL maps cleanly onto a compiler
+> stack, and the codebase already reflects it (`src/eal/planner.rs` is an analyzer+lowering pass that
+> does phase assignment, topological lowering, cycle/type checks, parallel-when-independent scheduling):
+>
+> | Compiler concept | EasyNet layer |
+> |---|---|
+> | source / IR | **EAL → Mission IR** |
+> | compiler (planner / optimizer) | **`src/eal/planner.rs`** (analyze → assign phases → lower to IR) |
+> | ISA + execution substrate | **Axon runtime** |
+> | instruction | **Invocation** |
+> | execution trace / commit log | **Receipt** |
+>
+> Because optimization lives in the **compiler/runtime** layers — not in a mutable Mission object —
+> aggressive optimization is *encouraged*, and none of it grows a second runtime entity:
+>
+> | ✅ Allowed (compiler/runtime optimization) | ❌ Forbidden (mission grows a runtime body) |
+> |---|---|
+> | compile-time DAG rewrite | mission-owned mutable state |
+> | cost-based routing | mission-level checkpoint |
+> | operator fusion | mission-level control plane |
+> | speculative execution | step object lifecycle |
+> | memoization | |
+> | parallel scheduling | |
+> | retry-policy lowering (compile retries into the IR; runtime executes them as re-invokes) | |
+>
+> **One line:** *EAL may be like a query plan; it must not be like a workflow engine.* Its value is
+> turning agent execution into an **optimizable, auditable, rewritable Invocation program** — exactly
+> the leverage a query optimizer gives SQL, with none of the stateful-orchestrator baggage.
+
 | Command | Status | Pri | Notes |
 |---|---|---|---|
-| `mission compile <FILE> [--emit-ir]` | SHIPPED | — | |
-| `mission run <FILE> [--trace]` | SHIPPED | — | |
-| `mission list [--limit] [--format]` | SHIPPED | — | |
+| `mission compile <FILE> [--emit-ir]` | SHIPPED | — | EAL → Mission IR. Pure compile step. |
+| `mission run <FILE> [--trace]` | SHIPPED | — | Compile + **expand IR into Invocations**. Produces a `root_invocation` with children. |
+| `mission list [--limit] [--format]` | SHIPPED | — | Lists past runs (= past root invocations). |
 | `mission show <ID> [--trace]` | SHIPPED | — | |
-| `mission cancel <ID>` | SHIPPED | — | |
 | `mission discuss <AGENTS>... [--prompt] [--rounds]` | SHIPPED | — | |
 | `mission think [--worker] [--judge] [--curator] [--cycles]` | SHIPPED | — | |
-| `mission abort <ID>` | **MISSING** | P2 | proto (`AbortMission` mission.proto:123) | Hard kill vs graceful `cancel`. |
-| `mission retry-step <ID> <STEP>` | **MISSING** | P2 | proto (`RetryStep` mission.proto:139) | Step-level recovery. |
-| `mission timeline <ID>` | **MISSING** | P2 | proto (`GetMissionTimeline` mission.proto:223) | Visual DAG progress. |
-| `mission watch <ID> [--tui]` | **MISSING** | **P1** | proto-ability (`mission.watch` via InvokeStream ← `WatchMission`; MissionControl collapsed at mission.proto:22) | Stream live mission events; `--tui` = the master-detail tracking UI (§6.1). Bumped P2→P1: only window that *shows* the protocol's value (signed receipts, phases, distributed scheduling). NB: there is **no `WatchMission` RPC** — it's the ability `mission.watch` carried over `InvokeStream`; `MissionEvent` is a message at mission.proto:294. |
-| `mission run <FILE> --watch` | **MISSING** | P1 | same | Inline render of a mission you just launched (vs `watch <id>` to re-attach to a running one). |
 
-**Review note:** this domain is the strongest differentiator and already good. The missing pieces are
-*operability* under failure (abort/retry/timeline/watch) — matters once missions run unattended.
+### Operate on the Invocation, not the Mission (the runtime verbs live here)
+
+> `mission run` is the only "mission" verb at runtime — it *launches*. Everything after launch addresses
+> the **Invocation tree**, because that's the only thing that exists at runtime.
+
+| Command | Status | Pri | Backing | What it's for |
+|---|---|---|---|---|
+| `invocation watch <id> [--tui]` | **MISSING** | **P1** | proto-rpc (`InvokeStream` invoke.proto:93) | Stream a root invocation's causal subtree live; `--tui` = the tracking UI (§6.1). The only window that *shows* the protocol's value (signed receipts + IR phases + scheduling). |
+| `invocation cancel <id>` | PARTIAL (as `mission cancel`) | P1 | proto-ability (`meta.cancel`) | Cancel the root invocation; cancellation propagates down the causal subtree. Today spelled `mission cancel`; should generalize to any invocation id. |
+| `invocation retry <id>` | **MISSING** | P1 | proto-ability (`meta.acquire`/re-invoke; linked via `causal_context` types.proto:343) | **Re-invoke**: spawn a *new* Invocation from a failed one, linked by `receipt.causal_parent`. NOT step-retry. |
+| `invocation receipt <id>` | SHIPPED (as `invocation show/trace`) | — | proto (`InvocationReceipt` invoke.proto:659) | Already covered in §8. |
+
+### ❌ Deleted — workflow-model verbs that would reintroduce a second runtime entity
+
+> These were in an earlier draft. **Removed on ontology grounds**, not complexity grounds.
+
+| Removed command | Why it's forbidden |
+|---|---|
+| ~~`mission retry-step <ID> <STEP>`~~ | Requires addressable, stateful steps → Mission Runtime State Store → Workflow Instance. Use `invocation retry <child-id>` instead. |
+| ~~`mission resume-step`~~ / ~~`mission patch-step`~~ | Implies checkpoint + step-transition state. Same regression. |
+| ~~`mission abort <ID>`~~ | Folds into `invocation cancel <root-id>` (hard vs graceful is a flag on the invocation, not a separate mission control plane). |
+| ~~`mission timeline <ID>`~~ | Not a workflow execution graph — it's the **causal tree of invocations**, rendered by `invocation watch --tui`. |
+
+> **⚠️ Conflict with current RFC-001 mapping:** the restatement doc (mapping §, line 262) currently
+> restates `RetryStep` → ability **`mission.retry_step`** with a `{mission_id, step_id}` signature —
+> i.e. it bakes the workflow model into the protocol. **This review formally objects:** that ability
+> should be dropped in favor of re-invoke. Flag for the Axon team to amend the mapping.
+
+**Review note:** this domain is the strongest differentiator and already good — *because* Mission is a
+script (a compiler front-end for `invoke`), not a workflow engine. Operability under failure is handled
+at the **Invocation** layer (`invocation retry/cancel/watch`), not by a mission control plane. That
+distinction is what keeps Axon's runtime to a single primitive and out of the Temporal/Airflow lane.
 
 ---
 
-## SECTION 6.1 — Mission Tracking TUI (master-detail) — P1
+## SECTION 6.1 — Invocation Causal-Tree TUI (master-detail) — P1
 
-> Sketched from two real screenshots. This is `mission watch --tui`: a full-screen, three-pane,
-> live-updating view of a running mission. **Every visible element maps to an existing protocol
-> *message* — no new wire schema is needed to render this.** Caveat from audit: the data arrives via
-> the **`mission.watch` ability over `InvokeStream`**, not a `WatchMission` RPC (none exists — RFC-001
-> collapsed MissionControl). The one schema change that *should* happen is small and important
+> **Renders an Invocation Causal Tree, NOT a Workflow Execution Graph.** This is the visual consequence
+> of §6's ontology: there is no workflow object to monitor — there is a `root_invocation` and its
+> causal subtree, each node a child Invocation with its own signed Receipt. Spelled `invocation watch
+> <root-id> --tui`. A full-screen, three-pane, live view.
+>
+> **Every visible element maps to an existing protocol *message* — no new wire schema needed to
+> render.** Data arrives via `InvokeStream` (invoke.proto:93), the surviving RPC. The left "Phases"
+> pane is the EAL→IR phase partition (compile-time), the middle rows are **child invocations** (not
+> workflow steps), the right pane is one **Receipt**. The one schema change that *should* happen is
+> small and important
 > (cost/usage into the receipt — see §6.2).
 
 ### Why this is P1, not P2 (product argument)
@@ -684,7 +770,7 @@ user sees in one glance *why EasyNet, not a bare agent script.*
 ```
   easynet mission watch <id> --tui
 
-  ┌─ Phases ──┬─ Steps (master) ─────────┬─ Detail = one InvocationReceipt ───────┐
+  ┌─ Phases ──┬─ Child invocations ──────┬─ Detail = one InvocationReceipt ───────┐
   │ ✓Inventory│ ✓ cls:ura      18.6k 34s │  ✓ Completed · Opus 4.8 · 57s          │ state+timestamps
   │ ▶Classify │ ▶ cls:AgentId  42.1k 57s │  caller → callee → subject  (signed)   │ axiom 7-tuple binding
   │  Synth..  │   cls:NodeId   …         │  cost: 42.1k tok / $0.0x   ◀ §6.2 gap  │ ECONOMIC (receipt field TBD)
@@ -700,7 +786,7 @@ user sees in one glance *why EasyNet, not a bare agent script.*
 |---|---|---|
 | `39/72 agents · 9m12s` header | `MissionSummary.completed_steps/total_steps` + `total_elapsed_ms` (mission.proto:269-277) | ✅ |
 | Left **Phases** tree (Inventory/Classify/Synthesize) | EAL phase partitioning (`planner.rs`, already computes `phase_of`) | ✅ EasyNet-unique |
-| Step rows + ✓/▶/○ status dots | `MissionStep` + `MissionStepState` (Pending/Dispatched/Running/Completed/Failed, mission.proto:147) | ✅ |
+| Child-invocation rows + ✓/▶/○ status dots | each row is a **child Invocation**, dot = its `InvocationState`; the IR's `MissionStep` is the *compile-time* origin, but at runtime the addressable thing is the invocation (state enum at types.proto:871) | ✅ |
 | `Opus 4.8 (1M context)` per row | callee agent/model (`MissionStep.target_node` + agent registry) | ✅ |
 | `1–43 of 68 ↓` pagination | `ListMissions` keyset cursor (mission.proto:262) | ✅ |
 | Live refresh (✓ lighting up) | `WatchMission` stream → `MissionEvent` (mission.proto:289) | ✅ |
@@ -843,8 +929,8 @@ leave them silently uncovered (silent omission reads as "covered").
 ## Priority rollup (what to build, in order)
 
 **P0 — the product becomes itself:**
-1. `trust show` / `trust set` — cheapest P0, pure exposure of `GetNodeTrust`/`SetNodeTrust`.
-2. **`policy` + `permission`** — the authorization control plane (§4.5). Co-equal with trust: protects service, data, resources. Proto exists (`Policy` service + `GrantConsent`/`Override`); mostly exposure work.
+1. `trust show` / `trust set` — P0, but blocked on confirming/publishing callable `identity.get_trust` / `identity.set_trust`; messages alone are not enough.
+2. **`policy` + `permission`** — the authorization control plane (§4.5). Co-equal with trust: protects service, data, resources. Messages exist, but callable `policy.*` / `capability.*` ability publication is the cross-repo dependency.
 3. `discover "<intent>"` — the marketplace moment; `ListFederatedNodes` filtering ships today, semantic ranking is roadmap.
 4. `wallet` / `agreement` — **blocked on Axon protocol** (Ledger + Agreement primitive). Flag as cross-repo dependency.
 
@@ -853,7 +939,7 @@ leave them silently uncovered (silent omission reads as "covered").
 > touch your machine. They are the two halves of one control plane.
 
 **P1 — credible for cross-owner publishing:**
-4. `ability sign` / `promote` / `rollback` / `consent` — proto-backed release pipeline subset.
+4. `ability sign` / `promote` / `rollback` / `consent` — message-backed release pipeline subset; callable ability publication must be verified before implementation is scoped as CLI-only.
 5. **The object-model project (§3.7 + §3.8)** — *not three commands, one coherent model.* In order: (a) implement `visibility`/`authorized_agents` so encapsulation is real (today it's an honor system); (b) parse the URA `family` segment into `ParsedURA`; (c) build a minimal `PolicyRule.condition` evaluator that can read `ability.family` + prefix-match (`aris.*`) — today admission is 2 hardcoded checks and `condition` is never read. Only *after* (b)+(c) does §3.7's "family-scoped policy for free" become true; today it's a prerequisite chain, not a freebie. Object model is for encapsulation/discovery/authorization — **never** addressing/routing.
 6. **`ability teach` / `learn` (§2.5 + §3, GET route B)** — owner-driven capability transfer. `learn`/`forget` meta-semantics already exist (`meta.acquire`/`meta.forget`, ontology:220–221); the gap is the cross-owner `teach` half + the `InstallPolicy` safety gate (capability.proto:235–239). Depends on `visibility` (P1.5a) being real first.
 7. `agent register` / `resolve` — agent-as-network-citizen.
@@ -865,7 +951,7 @@ leave them silently uncovered (silent omission reads as "covered").
 **P2 — operability & polish:**
 12. `ability from-cli` / `from-openapi` / `from-mcp` (§3.5) — first-class front door for adapters that already ship.
 13. `ability study` (read-only learn) / `forget` (unlearn) — round out GET route B.
-14. `mission abort` / `retry-step` / `timeline` — failure-mode operability (the rest of §6).
+14. `invocation retry` / `cancel` (generalize from `mission cancel`) — failure-mode operability at the **Invocation** layer (§6). NOT `mission retry-step` (deleted on ontology grounds — would reintroduce a workflow state store).
 15. `health` / `slo` / `burn-rate` / `events`.
 16. Naming cleanup: `auth` → identity-only; finish `agent discuss` → `mission discuss`.
 

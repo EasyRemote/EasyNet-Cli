@@ -115,7 +115,7 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
+    let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "process.exec",
         payload,

@@ -135,13 +135,13 @@ impl KeyringHandle {
             .cloned()
     }
 
-    pub fn find_peer_by_uri(&self, peer_uri: &str) -> Option<PeerEntry> {
+    pub fn find_peer_by_ura(&self, peer_ura: &str) -> Option<PeerEntry> {
         self.inner
             .lock()
             .unwrap()
             .peer_table
             .iter()
-            .find(|p| p.peer_uri == peer_uri)
+            .find(|p| p.peer_ura == peer_ura)
             .cloned()
     }
 
@@ -305,7 +305,7 @@ impl KeyringHandle {
     /// it equals sha256(public_key); otherwise compute and store it.
     pub fn peer_add(
         &self,
-        peer_uri: &str,
+        peer_ura: &str,
         public_key_b64: &str,
         fingerprint_b64: Option<&str>,
         via_hub: Option<&str>,
@@ -321,7 +321,7 @@ impl KeyringHandle {
         let now = chrono::Utc::now().timestamp_millis();
 
         // Update existing or insert new.
-        if let Some(p) = ring.peer_table.iter_mut().find(|p| p.peer_uri == peer_uri) {
+        if let Some(p) = ring.peer_table.iter_mut().find(|p| p.peer_ura == peer_ura) {
             // Re-add of the same peer: refresh, preserving status.
             p.public_key_b64 = public_key_b64.to_string();
             p.fingerprint_b64 = fp_b64;
@@ -332,7 +332,7 @@ impl KeyringHandle {
         }
 
         ring.peer_table.push(PeerEntry {
-            peer_uri: peer_uri.to_string(),
+            peer_ura: peer_ura.to_string(),
             fingerprint_b64: fp_b64,
             public_key_b64: public_key_b64.to_string(),
             status: PeerStatus::Trusted,
@@ -482,13 +482,13 @@ mod tests {
             "easynet:///r/test.local/agent/u.bob",
             &pk,
             None,
-            Some("hub-uri"),
+            Some("hub-ura"),
         )
         .unwrap();
         let p = h
-            .find_peer_by_uri("easynet:///r/test.local/agent/u.bob")
+            .find_peer_by_ura("easynet:///r/test.local/agent/u.bob")
             .unwrap();
-        assert_eq!(p.via_hub.as_deref(), Some("hub-uri"));
+        assert_eq!(p.via_hub.as_deref(), Some("hub-ura"));
         assert_eq!(p.public_key_b64, pk);
     }
 

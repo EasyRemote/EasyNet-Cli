@@ -13,7 +13,7 @@
 // `dispatch_federation_forward_invoke` is a transport-layer entry
 // point — its job is to admit the caller, sign the peer envelope,
 // dial, and unwrap the peer's reply. *How* the daemon picks the
-// peer hub URI is a routing policy, and a routing policy that has
+// peer hub URA is a routing policy, and a routing policy that has
 // grown from one source (operator-curated `federated_peers`) to two
 // (operator-curated map + observed federation directory) and will
 // grow to three when capability-aware routing lands.
@@ -93,9 +93,9 @@ use crate::services::federation_directory::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubResolution {
     /// Static `federated_peers` entry — operator declared this
-    /// `tenant → hub_uri` mapping in `daemon-config.toml`.
+    /// `tenant → hub_endpoint` mapping in `daemon-config.toml`.
     Static { hub_endpoint: String },
-    /// Federated directory fallback — no static entry; the URI
+    /// Federated directory fallback — no static entry; the URA
     /// comes from the directory sync's observation of this device
     /// on a peer hub. `target_ura` is included so the caller can
     /// emit a telemetry event with the exact device that triggered
@@ -110,7 +110,7 @@ pub enum HubResolution {
 }
 
 impl HubResolution {
-    /// Convenience accessor for call sites that only need the URI
+    /// Convenience accessor for call sites that only need the URA
     /// and have already decided how to react to the variant.
     #[must_use]
     pub fn hub_endpoint(&self) -> Option<&str> {
@@ -166,9 +166,9 @@ impl<'a> HubResolver<'a> {
     pub fn resolve(&self, target_tenant: &str, target_ura: &str) -> HubResolution {
         // Source 1: static, operator-declared. Always consulted.
         let peers_snapshot = self.static_peers.snapshot();
-        if let Some(uri) = peers_snapshot.get(target_tenant) {
+        if let Some(ura) = peers_snapshot.get(target_tenant) {
             return HubResolution::Static {
-                hub_endpoint: uri.clone(),
+                hub_endpoint: ura.clone(),
             };
         }
 
@@ -194,7 +194,7 @@ impl<'a> HubResolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::federation_directory::{DirectoryEntry, DirectoryEvent, DirectoryView};
+    use crate::services::federation_directory::{DirectoryEntry, DirectoryView};
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -205,17 +205,15 @@ mod tests {
     ) -> SharedFederatedDirectoryView {
         let cell = SharedFederatedDirectoryView::default();
         let mut view = DirectoryView::new(peer_realm.to_string());
-        view.apply_frame(&DirectoryEvent::Snapshot {
-            entries: vec![DirectoryEntry {
-                agent_ura: agent_ura.to_string(),
-                node_id: "node-x".to_string(),
-                display_name: None,
-                status: "active".to_string(),
-                origin_realm: None,
-                hub_endpoint: hub_endpoint.map(str::to_string),
-                last_seen_unix_ms: Some(1_700_000_000_000),
-            }],
-        });
+        view.replace_entries(vec![DirectoryEntry {
+            agent_ura: agent_ura.to_string(),
+            node_id: "node-x".to_string(),
+            display_name: None,
+            status: "active".to_string(),
+            origin_realm: None,
+            hub_endpoint: hub_endpoint.map(str::to_string),
+            last_seen_unix_ms: Some(1_700_000_000_000),
+        }]);
         let mut peers = BTreeMap::new();
         peers.insert(peer_realm.to_string(), Arc::new(view));
         cell.replace(peers);

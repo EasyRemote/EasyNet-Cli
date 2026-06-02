@@ -119,7 +119,7 @@ mod tests {
         let outcome = FederationInitOutcome::Installed {
             tenant: "acme.com".into(),
             realm: "acme.com".into(),
-            device_uri: "easynet:///r/acme.com/device/laptop-1".into(),
+            device_ura: "easynet:///r/acme.com/device/laptop-1".into(),
         };
         FederationStatusProbe::set(outcome);
         let v = FederationStatusProbe::render();

@@ -72,7 +72,7 @@ pub fn description_list() -> &'static str {
 }
 
 /// JSON Schema for device.terminal.create input. All fields
-/// optional; the service fills VT100 defaults (80×24, no env,
+/// optional; the service fills VT100 defaults (80×24, terminal env,
 /// host shell).
 pub fn input_schema_create() -> Value {
     json!({
@@ -271,7 +271,7 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
 
     let cwd = args.get("cwd").and_then(Value::as_str).map(str::to_string);
 
-    let env: HashMap<String, String> = match args.get("env") {
+    let mut env: HashMap<String, String> = match args.get("env") {
         None | Some(Value::Null) => HashMap::new(),
         Some(Value::Object(map)) => map
             .iter()
@@ -283,6 +283,7 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
             .collect::<anyhow::Result<HashMap<_, _>>>()?,
         Some(other) => anyhow::bail!("`env` must be an object, got {other}"),
     };
+    normalize_terminal_env(&mut env);
 
     Ok(PtyCreateSpec {
         cols,
@@ -292,6 +293,21 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         cwd,
         env,
     })
+}
+
+fn normalize_terminal_env(env: &mut HashMap<String, String>) {
+    let term_is_missing_or_dumb = env
+        .get("TERM")
+        .map(|value| {
+            let trimmed = value.trim();
+            trimmed.is_empty() || trimmed == "dumb"
+        })
+        .unwrap_or(true);
+    if term_is_missing_or_dumb {
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+    }
+    env.entry("COLORTERM".to_string())
+        .or_insert_with(|| "truecolor".to_string());
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -519,6 +535,44 @@ mod tests {
         assert_eq!(spec.command_args, vec!["-c", "echo hi"]);
         assert_eq!(spec.cwd.as_deref(), Some("/tmp"));
         assert_eq!(spec.env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(
+            spec.env.get("TERM").map(String::as_str),
+            Some("xterm-256color")
+        );
+        assert_eq!(
+            spec.env.get("COLORTERM").map(String::as_str),
+            Some("truecolor")
+        );
+    }
+
+    #[test]
+    fn parse_create_spec_preserves_explicit_terminal_env() {
+        let spec = parse_create_spec(&json!({
+            "env": {
+                "TERM": "screen-256color",
+                "COLORTERM": "24bit"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            spec.env.get("TERM").map(String::as_str),
+            Some("screen-256color")
+        );
+        assert_eq!(spec.env.get("COLORTERM").map(String::as_str), Some("24bit"));
+    }
+
+    #[test]
+    fn parse_create_spec_replaces_dumb_terminal_env() {
+        let spec = parse_create_spec(&json!({
+            "env": {
+                "TERM": "dumb"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            spec.env.get("TERM").map(String::as_str),
+            Some("xterm-256color")
+        );
     }
 
     #[test]

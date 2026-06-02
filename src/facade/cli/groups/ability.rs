@@ -292,7 +292,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
+    let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "easynet.discover",
         serde_json::json!({}),

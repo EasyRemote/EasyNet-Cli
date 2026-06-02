@@ -147,7 +147,7 @@ fn call_tool_handler(
         _ => {
             return Ok(error_response(
                 "`name` is required and must be a non-empty string",
-            ))
+            ));
         }
     };
     let arguments = args.get("arguments").cloned().unwrap_or(Value::Null);

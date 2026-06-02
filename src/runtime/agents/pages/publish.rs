@@ -49,7 +49,7 @@ use super::state::{
 /// returns:
 /// ```json
 /// {
-///   "project_uri": "easynet:///r/<realm>/resource/<user>.<project_id>/",
+///   "project_ura": "easynet:///r/<realm>/resource/<user>.<project_id>/",
 ///   "url_root":    "https://<realm>/web/<user>/<project_id>/"
 /// }
 /// ```
@@ -131,11 +131,11 @@ pub fn handle_publish(
     // can find them without any legacy resolver path.
     super::register_project_abilities(registry.as_ref(), user, project_id);
 
-    let project_uri = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
+    let project_ura = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
     let url_root = super::pages_public_url_root(realm, user, project_id);
 
     Ok(json!({
-        "project_uri": project_uri,
+        "project_ura": project_ura,
         "url_root":    url_root,
         "user":        user,
         "project_id":  project_id,

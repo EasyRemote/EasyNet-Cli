@@ -128,6 +128,8 @@ pub struct AbilityProxy {
     /// to every successful Result frame. Wrapped in Arc so cloning
     /// the proxy per-connection stays cheap.
     local_agents: Arc<crate::persistence::local_agents::LocalAgentsFile>,
+    /// Host signing backend for §A12 hosted receipt attestations.
+    receipt_identity: Option<Arc<dyn crate::services::self_identity::SelfIdentity>>,
 }
 
 impl AbilityProxy {
@@ -150,6 +152,9 @@ impl AbilityProxy {
             local_runtime,
             resolver,
             local_agents,
+            receipt_identity: Some(Arc::new(
+                crate::services::self_identity::KeyringClient::default_path(),
+            )),
         }
     }
 
@@ -168,6 +173,7 @@ impl AbilityProxy {
             local_runtime,
             resolver,
             local_agents: Arc::new(local_agents),
+            receipt_identity: None,
         }
     }
 
@@ -220,6 +226,9 @@ impl AbilityProxy {
             local_runtime,
             resolver,
             local_agents,
+            receipt_identity: Some(Arc::new(
+                crate::services::self_identity::KeyringClient::default_path(),
+            )),
         }
     }
 
@@ -790,11 +799,23 @@ impl AbilityProxy {
                 // (pre-join state, missing hosted profile, etc.), we
                 // emit no header and the wire stays at the pre-RFC
                 // shape.
-                let receipt_header = crate::runtime::dispatch_receipt::header_for_ability(
-                    &ability_for_receipt,
-                    &self.local_agents,
-                    llm_sub_for_receipt.as_deref(),
-                );
+                let receipt_header =
+                    crate::runtime::dispatch_receipt::header_for_ability_with_attestation(
+                        &ability_for_receipt,
+                        &self.local_agents,
+                        llm_sub_for_receipt.as_deref(),
+                        &|callee_ura: &str, host_ura: &str| {
+                            let identity = self.receipt_identity.as_ref()?;
+                            let canonical =
+                                easynet_axon::invocation::canonical_host_attestation_bytes(
+                                    callee_ura, host_ura,
+                                );
+                            identity
+                                .sign(host_ura, &canonical)
+                                .ok()
+                                .map(|sig| sig.to_bytes().to_vec())
+                        },
+                    );
                 vec![OutgoingFrame::Result {
                     request_id,
                     value,
@@ -1480,17 +1501,19 @@ mod tests {
     /// session per §D2; the closure returns immediately with a
     /// transport-axis BidiSource.
     fn proxy_with_echo_bidi() -> AbilityProxy {
-        use crate::runtime::ability_dispatch::{BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND};
+        use crate::runtime::ability_dispatch::{
+            BidiOutputFrame, BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND,
+        };
         let runtime = LocalRuntime::new();
         let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
         let handler: LocalBidiHandler = Arc::new(|_args: serde_json::Value| {
             let (xport_to_handler_tx, mut handler_rx) =
                 tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
             let (handler_tx, xport_from_handler_rx) =
-                tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+                tokio::sync::mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
             tokio::spawn(async move {
                 while let Some(frame) = handler_rx.recv().await {
-                    if handler_tx.send(frame).await.is_err() {
+                    if handler_tx.send(BidiOutputFrame::json(frame)).await.is_err() {
                         // Forwarder gone; treat as graceful exit.
                         break;
                     }

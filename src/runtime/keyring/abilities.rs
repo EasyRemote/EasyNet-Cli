@@ -200,7 +200,7 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
     let source_realm = parse_realm_from_user_ura(&source_user_ura).ok_or_else(|| {
         anyhow!(
             "device-subject {source_user_ura:?} is not a canonical \
-             easynet:///r/<realm>/user/<id> URI"
+             easynet:///r/<realm>/user/<id> URA"
         )
     })?;
     if source_realm == target_realm {
@@ -259,13 +259,13 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
     }))
 }
 
-/// Parse the realm slice from a canonical EasyNet user URI
+/// Parse the realm slice from a canonical EasyNet user URA
 /// (`easynet:///r/<realm>/user/<id>`). Returns `None` for any
 /// malformed or non-user shape. Inlined here rather than imported from
 /// `services::axon_serve` to keep the keyring layer free of an
 /// `axon-pb` feature dependency.
-fn parse_realm_from_user_ura(uri: &str) -> Option<String> {
-    let parsed = parse_ura(uri).ok()?;
+fn parse_realm_from_user_ura(ura: &str) -> Option<String> {
+    let parsed = parse_ura(ura).ok()?;
     (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
 
@@ -430,11 +430,11 @@ pub fn handle_bind_subject(handle: &KeyringHandle, args: Value) -> Result<Value>
 }
 
 pub fn handle_peer_add(handle: &KeyringHandle, args: Value) -> Result<Value> {
-    let peer_uri = require_str(&args, "peer_uri")?;
+    let peer_ura = require_str(&args, "peer_ura")?;
     let public_key = require_str(&args, "public_key")?;
     let fingerprint = args.get("fingerprint").and_then(|v| v.as_str());
     let via_hub = args.get("via_hub").and_then(|v| v.as_str());
-    let added = handle.peer_add(peer_uri, public_key, fingerprint, via_hub)?;
+    let added = handle.peer_add(peer_ura, public_key, fingerprint, via_hub)?;
     Ok(json!({ "added": added }))
 }
 
@@ -444,7 +444,7 @@ pub fn handle_peer_list(handle: &KeyringHandle, _args: Value) -> Result<Value> {
         .into_iter()
         .map(|p| {
             json!({
-                "peer_uri":       p.peer_uri,
+                "peer_ura":       p.peer_ura,
                 "fingerprint":    p.fingerprint_b64,
                 "public_key":     p.public_key_b64,
                 "status":         match p.status { PeerStatus::Trusted => "trusted", PeerStatus::Suspended => "suspended", PeerStatus::Revoked => "revoked" },
@@ -607,7 +607,7 @@ mod tests {
         let added = handle_peer_add(
             &h,
             json!({
-                "peer_uri": "easynet:///r/org/reg/agent.alice",
+                "peer_ura": "easynet:///r/org/reg/agent.alice",
                 "public_key": pk,
                 "via_hub": "easynet:///r/org/reg/agent.alice-hub"
             }),
@@ -618,7 +618,7 @@ mod tests {
         let peers = listed["peers"].as_array().unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(
-            peers[0]["peer_uri"],
+            peers[0]["peer_ura"],
             json!("easynet:///r/org/reg/agent.alice")
         );
         assert_eq!(peers[0]["status"], json!("trusted"));
@@ -803,10 +803,10 @@ mod tests {
     }
 
     #[test]
-    fn federate_user_identity_token_requires_canonical_uri() {
-        // Subject set to a non-canonical URI. Reject.
+    fn federate_user_identity_token_requires_canonical_ura() {
+        // Subject set to a non-canonical URA. Reject.
         let (h, _d) = handle();
-        h.set_device_subject("not-a-canonical-uri".to_string())
+        h.set_device_subject("not-a-canonical-ura".to_string())
             .unwrap();
         handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
         let err = handle_federate_user_identity_token(

@@ -71,8 +71,8 @@ use easynet_axon::invocation::axiom::{
     InvocationEnvelope, SubjectIdentity, UraProfile,
 };
 use easynet_axon::invocation::LocalRuntime;
-use easynet_cli::pb::axon::v1::invocation_server::Invocation;
-use easynet_cli::pb::axon::v1::{
+use easynet_axon::pb::axon::v1::invocation_server::Invocation;
+use easynet_axon::pb::axon::v1::{
     AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
     InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
 };
@@ -228,7 +228,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         })
         .expect("append device-A");

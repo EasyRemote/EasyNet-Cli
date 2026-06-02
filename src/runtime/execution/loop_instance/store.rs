@@ -16,7 +16,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::persistence::tenant_paths::{ensure, TenantKind};
-use crate::runtime::domain::{LoopId, LoopInstance, TenantId};
+#[cfg(test)]
+use crate::runtime::domain::LoopId;
+use crate::runtime::domain::{LoopInstance, TenantId};
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -87,7 +89,7 @@ impl LoopStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn delete(&self, id: &LoopId) -> anyhow::Result<()> {
         let p = self.dir.join(format!("{}.json", id.as_str()));
         if p.exists() {

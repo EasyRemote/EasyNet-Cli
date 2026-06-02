@@ -74,7 +74,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiOutputFrame, BidiSource};
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_FILE_TRANSFER: &str = "device.fs.transfer";
@@ -130,7 +130,8 @@ fn open_handler(args: Value) -> anyhow::Result<BidiSource> {
     //                          IPC reads xport_from_handler_rx
     //                          and emits RecvBidi
     let (xport_to_handler_tx, xport_to_handler_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
-    let (xport_from_handler_tx, xport_from_handler_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_from_handler_tx, xport_from_handler_rx) =
+        mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
 
     match parsed.mode {
         Mode::Upload => spawn_upload(parsed.path, xport_to_handler_rx, xport_from_handler_tx),
@@ -186,7 +187,7 @@ impl ParsedArgs {
 fn spawn_upload(
     path: PathBuf,
     mut from_client: mpsc::Receiver<Value>,
-    to_client: mpsc::Sender<Value>,
+    to_client: mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
         // Path safety. We don't allow writes to /dev/* or similar
@@ -297,10 +298,10 @@ fn spawn_upload(
                     // client adding a hint-frame doesn't blow up
                     // the transfer.
                     let _ = to_client
-                        .send(json!({
+                        .send(BidiOutputFrame::json(json!({
                             "type": "warn",
                             "message": format!("unknown frame type {other:?}; ignored"),
-                        }))
+                        })))
                         .await;
                 }
             }
@@ -324,11 +325,11 @@ fn spawn_upload(
 
         let sha = hex_lower(&hasher.finalize());
         let _ = to_client
-            .send(json!({
+            .send(BidiOutputFrame::json(json!({
                 "type": "complete",
                 "sha256": sha,
                 "bytes": total,
-            }))
+            })))
             .await;
     });
 }
@@ -336,7 +337,7 @@ fn spawn_upload(
 /// Download pump: open the file, stream chunks, hash on the fly.
 /// On EOF emit `{type:"complete"}`. On error emit
 /// `{type:"error"}` and bail.
-fn spawn_download(path: PathBuf, to_client: mpsc::Sender<Value>) {
+fn spawn_download(path: PathBuf, to_client: mpsc::Sender<BidiOutputFrame>) {
     tokio::spawn(async move {
         // Path safety on the read side too.
         if let Some(s) = path.to_str() {
@@ -399,7 +400,9 @@ fn spawn_download(path: PathBuf, to_client: mpsc::Sender<Value>) {
                 };
                 let chunk = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                 if chunk_sender
-                    .blocking_send(json!({"type": "chunk", "data": chunk}))
+                    .blocking_send(BidiOutputFrame::json(
+                        json!({"type": "chunk", "data": chunk}),
+                    ))
                     .is_err()
                 {
                     // Forwarder gone. Bail without an error frame
@@ -417,11 +420,11 @@ fn spawn_download(path: PathBuf, to_client: mpsc::Sender<Value>) {
             Ok(Ok((total, digest))) if !digest.is_empty() => {
                 let sha = hex_lower_bytes(&digest);
                 let _ = to_client
-                    .send(json!({
+                    .send(BidiOutputFrame::json(json!({
                         "type": "complete",
                         "sha256": sha,
                         "bytes": total,
-                    }))
+                    })))
                     .await;
             }
             Ok(Ok(_)) => {
@@ -441,13 +444,13 @@ fn spawn_download(path: PathBuf, to_client: mpsc::Sender<Value>) {
 /// Emit an `{type:"error"}` terminal frame. Consumers (the IPC
 /// layer + downstream backend pumps) interpret this as the
 /// session-failed terminal — the backend then sets HTTP 502.
-async fn emit_error(to_client: &mpsc::Sender<Value>, code: &str, message: &str) {
+async fn emit_error(to_client: &mpsc::Sender<BidiOutputFrame>, code: &str, message: &str) {
     let _ = to_client
-        .send(json!({
+        .send(BidiOutputFrame::json(json!({
             "type": "error",
             "code": code,
             "message": message,
-        }))
+        })))
         .await;
 }
 
@@ -529,7 +532,7 @@ mod tests {
     /// frames or `timeout`, whichever comes first. Mirrors the
     /// helper in pty_attach_ability tests.
     async fn drain_handler_emit(
-        rx: &mut mpsc::Receiver<Value>,
+        rx: &mut mpsc::Receiver<BidiOutputFrame>,
         max: usize,
         timeout: Duration,
     ) -> Vec<Value> {
@@ -539,7 +542,7 @@ mod tests {
             let remaining = deadline.checked_duration_since(tokio::time::Instant::now());
             let Some(remaining) = remaining else { break };
             match tokio::time::timeout(remaining, rx.recv()).await {
-                Ok(Some(v)) => out.push(v),
+                Ok(Some(v)) => out.push(v.into_json_value().expect("file transfer emits JSON")),
                 Ok(None) => break,
                 Err(_) => break,
             }

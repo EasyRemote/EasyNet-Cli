@@ -234,7 +234,7 @@ fn handler_read(args: Value) -> Result<Value> {
         other => {
             return Err(anyhow!(
                 "fs.read: unknown encoding {other:?}; expected \"binary\" or \"utf8\""
-            ))
+            ));
         }
     };
 

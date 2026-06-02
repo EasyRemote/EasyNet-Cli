@@ -134,7 +134,7 @@ fn send_task_handler(
         _ => {
             return Ok(error_response(
                 "`agent_name` is required and must be a non-empty string",
-            ))
+            ));
         }
     };
     let skill_name = match args.get("skill_name").and_then(Value::as_str) {
@@ -142,7 +142,7 @@ fn send_task_handler(
         _ => {
             return Ok(error_response(
                 "`skill_name` is required and must be a non-empty string",
-            ))
+            ));
         }
     };
     let task_args = args.get("args").cloned().unwrap_or(Value::Null);

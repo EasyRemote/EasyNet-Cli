@@ -6,7 +6,7 @@
 // When the IPC dispatcher returns a result for a local ability, it
 // must attach a §A12 receipt header so the caller can verify which
 // Agent the result came from. This module centralises the
-// "ability_name + local-agents.json + host_device_uri →
+// "ability_name + local-agents.json + host_device_ura →
 // HostedAgentReceiptHeader" lookup that the proxy needs on every
 // successful dispatch.
 //
@@ -35,10 +35,9 @@
 //
 // What this module does NOT do
 // -----------------------------
-// - Does not sign anything. P5 backend SDK rewrite ships the
-//   actual ed25519 signing pass; until then, the staging shape
-//   carries an empty host_attestation, which is honest about the
-//   pre-signing state.
+// - Does not own private keys. Callers must provide the host
+//   attestation signature for hosted receipts. If they cannot, this
+//   module returns `None` rather than emitting an unverifiable header.
 // - Does not load local-agents.json itself. Callers pass the file
 //   (loaded once at startup or refreshed on advertise) so this
 //   module stays pure.
@@ -46,9 +45,30 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::persistence::local_agents::{lookup_hosted_uri, LocalAgentsFile};
+use crate::persistence::local_agents::{lookup_hosted_ura, LocalAgentsFile};
 use crate::runtime::agents::profiles::{consent, device, llm, mcp as mcp_profile, policy};
 use crate::runtime::hosted_receipt::HostedAgentReceiptHeader;
+
+pub trait HostAttestationProvider {
+    fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>>;
+}
+
+impl<F> HostAttestationProvider for F
+where
+    F: Fn(&str, &str) -> Option<Vec<u8>>,
+{
+    fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>> {
+        self(callee_ura, host_ura)
+    }
+}
+
+struct NoHostAttestation;
+
+impl HostAttestationProvider for NoHostAttestation {
+    fn host_attestation(&self, _callee_ura: &str, _host_ura: &str) -> Option<Vec<u8>> {
+        None
+    }
+}
 
 /// Build a receipt header for the given ability, given the daemon's
 /// local-agents.json snapshot. Returns:
@@ -70,6 +90,15 @@ pub fn header_for_ability(
     file: &LocalAgentsFile,
     llm_sub_agent_name: Option<&str>,
 ) -> Option<HostedAgentReceiptHeader> {
+    header_for_ability_with_attestation(ability_name, file, llm_sub_agent_name, &NoHostAttestation)
+}
+
+pub fn header_for_ability_with_attestation(
+    ability_name: &str,
+    file: &LocalAgentsFile,
+    llm_sub_agent_name: Option<&str>,
+    attestation_provider: &impl HostAttestationProvider,
+) -> Option<HostedAgentReceiptHeader> {
     let host_ura = file.host_device_agent_ura.as_str();
     if host_ura.is_empty() {
         return None;
@@ -86,10 +115,9 @@ pub fn header_for_ability(
     // prefixes only. We recognise the shape here so chat dispatch
     // attaches a header to the right LLM-profile URA.
     if let Some((agent, "chat")) = ability_name.split_once('.') {
-        let callee_ura = lookup_hosted_uri(file, "llm", agent)?;
-        let attestation_placeholder = b"P5-pending".to_vec();
-        return HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, attestation_placeholder)
-            .ok();
+        let callee_ura = lookup_hosted_ura(file, "llm", agent)?;
+        let host_attestation = attestation_provider.host_attestation(&callee_ura, host_ura)?;
+        return HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, host_attestation).ok();
     }
 
     // Hosted abilities: the dispatching Agent is the host (device-
@@ -113,13 +141,9 @@ pub fn header_for_ability(
         return None;
     };
 
-    let callee_ura = lookup_hosted_uri(file, profile_key, name)?;
-    // host_attestation is the staging-mode placeholder until P5
-    // signing lands. Empty would fail the constructor's invariant
-    // check, so we use a single-byte sentinel that flags "P5 not
-    // yet wired" without breaking the schema.
-    let attestation_placeholder = b"P5-pending".to_vec();
-    HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, attestation_placeholder).ok()
+    let callee_ura = lookup_hosted_ura(file, profile_key, name)?;
+    let host_attestation = attestation_provider.host_attestation(&callee_ura, host_ura)?;
+    HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, host_attestation).ok()
 }
 
 #[cfg(test)]
@@ -135,6 +159,15 @@ mod tests {
         }
     }
 
+    fn test_attestation(callee: &str, host: &str) -> Option<Vec<u8>> {
+        let signing_key = easynet_axon::invocation::signing_key_from_bytes(&[0xA7; 32]);
+        Some(easynet_axon::invocation::sign_host_attestation(
+            &signing_key,
+            callee,
+            host,
+        ))
+    }
+
     #[test]
     fn device_ability_emits_selfsigned_header() {
         let file = file_with("easynet:///r/acme/device/01DEV");
@@ -146,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn consent_ability_emits_hosted_by_header_when_uri_persisted() {
+    fn consent_ability_emits_hosted_by_header_when_ura_persisted() {
         let mut file = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
@@ -154,8 +187,13 @@ mod tests {
             "default",
             "easynet:///r/acme/agent/u1.01CON",
         );
-        let h = header_for_ability("device.consent.subscribe", &file, None)
-            .expect("consent ability must produce a header");
+        let h = header_for_ability_with_attestation(
+            "device.consent.subscribe",
+            &file,
+            None,
+            &test_attestation,
+        )
+        .expect("consent ability must produce a header");
         assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01CON");
         assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
         match &h.model {
@@ -165,13 +203,14 @@ mod tests {
             } => {
                 assert_eq!(host_ura, "easynet:///r/acme/device/01DEV");
                 assert!(!host_attestation.is_empty());
+                assert_eq!(host_attestation.len(), 64);
             }
             _ => panic!("expected HostedBy"),
         }
     }
 
     #[test]
-    fn consent_ability_returns_none_when_consent_uri_missing_from_file() {
+    fn consent_ability_returns_none_when_consent_ura_missing_from_file() {
         // local-agents.json doesn't yet have a consent row (e.g.
         // bootstrap hasn't run). Better to return None than mint a
         // header pointing at a URA the hub doesn't know about.
@@ -195,8 +234,13 @@ mod tests {
         // the ability — return None.
         assert!(header_for_ability("conversation.send", &file, None).is_none());
         // With a name the lookup succeeds.
-        let h = header_for_ability("conversation.send", &file, Some("claude"))
-            .expect("named LLM ability must produce a header");
+        let h = header_for_ability_with_attestation(
+            "conversation.send",
+            &file,
+            Some("claude"),
+            &test_attestation,
+        )
+        .expect("named LLM ability must produce a header");
         assert_eq!(
             h.callee_agent_ura,
             "easynet:///r/acme/agent/u1.01LLM-claude"
@@ -212,8 +256,13 @@ mod tests {
             "claude",
             "easynet:///r/acme/agent/u1.01LLM",
         );
-        let h = header_for_ability("skill.alive-video", &file, Some("claude"))
-            .expect("skill.* with sub_agent must produce a header");
+        let h = header_for_ability_with_attestation(
+            "skill.alive-video",
+            &file,
+            Some("claude"),
+            &test_attestation,
+        )
+        .expect("skill.* with sub_agent must produce a header");
         assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01LLM");
     }
 
@@ -226,8 +275,13 @@ mod tests {
             "default",
             "easynet:///r/acme/agent/u1.01MCP",
         );
-        let h = header_for_ability("device.mcp.bridge.list_tools", &file, None)
-            .expect("mcp.bridge ability must produce a header");
+        let h = header_for_ability_with_attestation(
+            "device.mcp.bridge.list_tools",
+            &file,
+            None,
+            &test_attestation,
+        )
+        .expect("mcp.bridge ability must produce a header");
         assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01MCP");
         assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
     }
@@ -253,7 +307,7 @@ mod tests {
             "claude",
             "easynet:///r/acme/agent/u1.01LLM",
         );
-        let h = header_for_ability("claude.chat", &file, None)
+        let h = header_for_ability_with_attestation("claude.chat", &file, None, &test_attestation)
             .expect("`<agent>.chat` must produce a header without sub_agent param");
         assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01LLM");
         assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
@@ -274,6 +328,21 @@ mod tests {
         let file = file_with("easynet:///r/acme/device/01DEV");
         assert!(header_for_ability("federation.heartbeat", &file, None).is_none());
         assert!(header_for_ability("totally.unknown", &file, None).is_none());
+    }
+
+    #[test]
+    fn hosted_ability_without_attestation_yields_none() {
+        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        upsert_hosted_agent(
+            &mut file,
+            "consent",
+            "default",
+            "easynet:///r/acme/agent/u1.01CON",
+        );
+        assert!(
+            header_for_ability("device.consent.subscribe", &file, None).is_none(),
+            "hosted receipt headers require a real host attestation"
+        );
     }
 
     #[test]

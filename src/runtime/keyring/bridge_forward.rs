@@ -154,7 +154,7 @@ impl CliForwardInvoker for BridgeForwardInvoker {
         // Two checks: peer table (TOFU-recorded peers) and the
         // local agent registry's bound_subject (the operator can
         // pre-seed peers via keyring.peer_add).
-        if self.keyring.find_peer_by_uri(target_ura).is_some() {
+        if self.keyring.find_peer_by_ura(target_ura).is_some() {
             return true;
         }
         if self
@@ -209,10 +209,10 @@ mod tests {
         // bridge handle. Instead exercise the keyring lookup
         // directly — that's the load-bearing invariant.
         assert!(h
-            .find_peer_by_uri("easynet:///r/silan.localhost/device/silan-laptop")
+            .find_peer_by_ura("easynet:///r/silan.localhost/device/silan-laptop")
             .is_some());
         assert!(h
-            .find_peer_by_uri("easynet:///r/ghost.localhost/device/nope")
+            .find_peer_by_ura("easynet:///r/ghost.localhost/device/nope")
             .is_none());
     }
 

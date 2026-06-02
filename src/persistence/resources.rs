@@ -266,7 +266,7 @@ pub fn save(file: &ResourcesFile) -> anyhow::Result<()> {
 /// minted on first sight. Centralised so every consumer (upsert,
 /// tests, future federation.advertise hook) agrees on the shape.
 pub fn build_resource_ura(realm: &str, resource_id: &str) -> String {
-    // URI v2: resource_id is opaque tail; this convenience helper
+    // URA v2: resource_id is opaque tail; this convenience helper
     // takes a pre-composed `<kind>.<id>` value and just slots it in
     // — keeps backward-compat with existing callers that don't
     // know about the kind+id split.
@@ -285,7 +285,7 @@ pub fn lookup_by_hardware_id<'a>(
 
 /// Look up an entry by its full resource URA. Used by media
 /// handlers to map subject → entry at invocation time.
-pub fn lookup_by_uri<'a>(file: &'a ResourcesFile, resource_ura: &str) -> Option<&'a ResourceEntry> {
+pub fn lookup_by_ura<'a>(file: &'a ResourcesFile, resource_ura: &str) -> Option<&'a ResourceEntry> {
     file.resources
         .iter()
         .find(|e| e.resource_ura == resource_ura)
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn upsert_inserts_when_hardware_id_absent() {
         let mut f = empty();
-        let uri = upsert_resource(
+        let ura = upsert_resource(
             &mut f,
             ResourceUpsert {
                 owner_agent: "easynet:///r/acme/device/01DEV",
@@ -411,7 +411,7 @@ mod tests {
                 )
             },
         );
-        assert!(uri.starts_with(&crate::ura::realm_resource_prefix("acme")));
+        assert!(ura.starts_with(&crate::ura::realm_resource_prefix("acme")));
         assert_eq!(f.resources.len(), 1);
         assert_eq!(f.resources[0].kind, ResourceType::Mic);
         assert_eq!(f.resources[0].hardware_id, "BuiltInMic-AAPL-0001");
@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn upsert_returns_stable_uri_across_calls_for_same_hardware_id() {
+    fn upsert_returns_stable_ura_across_calls_for_same_hardware_id() {
         // INV-RESOURCE-ULID-STABLE: re-scanning the same hardware
         // MUST surface the same resource_ura. Without this, every
         // reboot orphans every prior receipt referencing that
@@ -476,12 +476,12 @@ mod tests {
     }
 
     #[test]
-    fn lookup_by_uri_finds_existing_entry() {
+    fn lookup_by_ura_finds_existing_entry() {
         let mut f = empty();
-        let uri = upsert_resource(&mut f, spec(ResourceType::Mic, "h1", "Mic 1"));
-        let entry = lookup_by_uri(&f, &uri).expect("must find by uri");
+        let ura = upsert_resource(&mut f, spec(ResourceType::Mic, "h1", "Mic 1"));
+        let entry = lookup_by_ura(&f, &ura).expect("must find by ura");
         assert_eq!(entry.hardware_id, "h1");
-        assert!(lookup_by_uri(&f, "easynet:///r/acme/resource/missing").is_none());
+        assert!(lookup_by_ura(&f, "easynet:///r/acme/resource/missing").is_none());
     }
 
     #[test]

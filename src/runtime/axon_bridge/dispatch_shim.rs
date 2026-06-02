@@ -33,12 +33,13 @@
 use std::sync::Arc;
 
 use easynet_axon::invocation::{
-    AxonError, BidiInvocationHandle, CallerSignature, InvocationEnvelope, InvocationHandle,
-    InvocationState, LocalRuntime, StreamingInvocationHandle, SubjectIdentity,
+    fresh_nonce, AgentIdentity, AxonError, BidiInvocationHandle, CallerSignature, CausalContext,
+    InvocationEnvelope, InvocationHandle, InvocationState, LocalRuntime, StreamingInvocationHandle,
+    SubjectIdentity, UraProfile,
 };
 
-use crate::pb::axon::v1 as pb;
-use crate::runtime::axon_bridge::wire_conv;
+use easynet_axon::invocation::wire;
+use easynet_axon::pb::axon::v1 as pb;
 
 /// Canonical wire dispatch for call sites where this shim owns strict
 /// admission. The caller signature is mandatory because the next step is
@@ -105,20 +106,20 @@ pub fn admitted_from_wire_parts(
     let callee = envelope.callee.unwrap_or_else(|| caller.clone());
     let signature = envelope.caller_signature.map(Into::into);
 
-    let caller_sdk = caller.into();
-    let callee_sdk: easynet_axon::invocation::AgentIdentity = callee.into();
+    let caller_sdk = wire::try_agent_identity_from_wire(caller)?;
+    let callee_sdk = wire::try_agent_identity_from_wire(callee)?;
     // Subject defaulting per RFC 001 §5.1: if the wire omits it,
     // mirror callee. Doing this at the boundary keeps every
     // downstream consumer (admission, audit, ledger) seeing a
     // populated subject without sprinkling `if subject.is_none()`
     // through the call graph.
-    let subject_sdk: SubjectIdentity = envelope
-        .subject
-        .map(Into::into)
-        .unwrap_or_else(|| SubjectIdentity::from_callee(&callee_sdk));
+    let subject_sdk: SubjectIdentity = match envelope.subject {
+        Some(subject) => wire::try_subject_identity_from_wire(subject)?,
+        None => SubjectIdentity::from_callee(&callee_sdk),
+    };
 
-    let nonce = wire_conv::try_invocation_nonce(envelope.invocation_nonce)?;
-    let causal_context = wire_conv::causal_context_from_wire(envelope.causal_context)?;
+    let nonce = wire::try_invocation_nonce(envelope.invocation_nonce)?;
+    let causal_context = wire::causal_context_from_wire(envelope.causal_context)?;
 
     let envelope_sdk = InvocationEnvelope::from_wire_parts(
         caller_sdk,
@@ -305,6 +306,47 @@ pub async fn open_stream_admitted(
     Ok(handle)
 }
 
+pub async fn open_stream_local(
+    runtime: &Arc<LocalRuntime>,
+    ability: &str,
+    args: Vec<u8>,
+) -> Result<StreamingInvocationHandle, AxonError> {
+    runtime.invoke_stream_async(ability, args, None, None).await
+}
+
+pub async fn open_stream_local_with_subject(
+    runtime: &Arc<LocalRuntime>,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    args: Vec<u8>,
+) -> Result<StreamingInvocationHandle, AxonError> {
+    let caller = AgentIdentity::new(
+        "easynet:///r/_system/agent/_system.local",
+        UraProfile::EasynetStrictV2,
+    );
+    let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
+    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
+    let envelope = InvocationEnvelope::from_wire_parts(
+        caller,
+        callee,
+        subject,
+        fresh_nonce(),
+        CausalContext::None,
+        ability,
+        &args,
+    );
+    open_stream_admitted(
+        runtime,
+        AdmittedWireDispatch {
+            envelope,
+            signature: None,
+            payload: args,
+        },
+    )
+    .await
+}
+
 pub async fn open_bidi_admitted(
     runtime: &Arc<LocalRuntime>,
     wire: AdmittedWireDispatch,
@@ -365,6 +407,43 @@ pub async fn dispatch_rpc_local(
             error: Some(err),
         },
     }
+}
+
+/// Trust-domain local dispatch that still binds the inner invocation
+/// to an explicit callee/subject pair. `<self>.invoke_remote` uses this
+/// when the transport target is a device but the acted-on object is a
+/// resource such as a camera, microphone, or display.
+pub async fn dispatch_rpc_local_with_subject(
+    runtime: &Arc<LocalRuntime>,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    args: Vec<u8>,
+) -> RpcDispatchOutcome {
+    let caller = AgentIdentity::new(
+        "easynet:///r/_system/agent/_system.local",
+        UraProfile::EasynetStrictV2,
+    );
+    let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
+    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
+    let envelope = InvocationEnvelope::from_wire_parts(
+        caller,
+        callee,
+        subject,
+        fresh_nonce(),
+        CausalContext::None,
+        ability,
+        &args,
+    );
+    dispatch_rpc_admitted(
+        runtime,
+        AdmittedWireDispatch {
+            envelope,
+            signature: None,
+            payload: args,
+        },
+    )
+    .await
 }
 
 /// Project an `RpcDispatchOutcome` into the (payload, error_string)

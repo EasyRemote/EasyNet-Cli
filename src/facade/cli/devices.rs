@@ -54,7 +54,7 @@ use crate::support::{
     output::{self, OutputFormat},
 };
 
-/// Display length for short device IDs in table output. URI v4.1.4
+/// Display length for short device IDs in table output. URA v4.1.4
 /// device-ids are bare UUIDs (8-4-4-4-12, total 36 chars); we trim
 /// to the leading 8 hex chars + a trailing ellipsis so the table
 /// stays scannable.
@@ -76,15 +76,15 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         .as_ref()
         .map(|c| c.node_id.clone())
         .unwrap_or_default();
-    let self_uri = creds
+    let self_ura = creds
         .as_ref()
         .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id));
 
-    let entries = fetch_directory_entries(self_uri.as_deref())?;
+    let entries = fetch_directory_entries(self_ura.as_deref())?;
     let nodes: Vec<Value> = entries
         .into_iter()
         .filter(is_device_entry)
-        .map(|e| project_directory_entry(e, self_uri.as_deref()))
+        .map(|e| project_directory_entry(e, self_ura.as_deref()))
         .collect();
 
     let filtered: Vec<Value> = nodes
@@ -145,28 +145,28 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn fetch_directory_entries(self_uri: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    crate::support::federation_invoke::invoke_federation_discover(None, self_uri)
+fn fetch_directory_entries(self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
+    crate::support::federation_invoke::invoke_federation_discover(None, self_ura)
         .context("invoke federation.discover for device list")
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn fetch_directory_entries(_self_uri: Option<&str>) -> anyhow::Result<Vec<Value>> {
+fn fetch_directory_entries(_self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
     Err(crate::support::local_invoke::federation_not_wired_error(
         "listing devices via federation.discover",
     ))
 }
 
 /// True when a `DirectoryEntry` projects an URA-kind = `device`
-/// agent. Anything else (`agent/<user>.<agent>`, hub URIs,
-/// resource URIs) is a non-device row and gets dropped from the
+/// agent. Anything else (`agent/<user>.<agent>`, hub URAs,
+/// resource URAs) is a non-device row and gets dropped from the
 /// device-list view.
 fn is_device_entry(entry: &Value) -> bool {
-    let uri = entry.get("agent_ura").and_then(Value::as_str).unwrap_or("");
-    if uri.is_empty() {
+    let ura = entry.get("agent_ura").and_then(Value::as_str).unwrap_or("");
+    if ura.is_empty() {
         return false;
     }
-    crate::ura::parse_ura(uri)
+    crate::ura::parse_ura(ura)
         .map(|p| !p.device_id.is_empty() && p.agent_id.is_empty())
         .unwrap_or(false)
 }
@@ -178,7 +178,7 @@ fn is_device_entry(entry: &Value) -> bool {
 /// candidate), `status: "draining"` → `state: "DRAINING"`. Any
 /// other value lands as `state: "UNKNOWN"` rather than crashing
 /// the renderer.
-fn project_directory_entry(entry: Value, self_uri: Option<&str>) -> Value {
+fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> Value {
     let agent_ura = entry
         .get("agent_ura")
         .and_then(Value::as_str)
@@ -213,7 +213,7 @@ fn project_directory_entry(entry: Value, self_uri: Option<&str>) -> Value {
         .get("hub_endpoint")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let is_self = self_uri.map(|u| u == agent_ura).unwrap_or(false);
+    let is_self = self_ura.map(|u| u == agent_ura).unwrap_or(false);
 
     let mut row = json!({
         "node_id": node_id,

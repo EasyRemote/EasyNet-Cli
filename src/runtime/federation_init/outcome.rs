@@ -67,7 +67,7 @@ pub enum FederationInitOutcome {
     Installed {
         tenant: String,
         realm: String,
-        device_uri: String,
+        device_ura: String,
     },
 
     /// A prior call to the same init function already populated
@@ -79,7 +79,7 @@ pub enum FederationInitOutcome {
     AlreadyInstalled {
         tenant: String,
         realm: String,
-        device_uri: String,
+        device_ura: String,
     },
 
     /// Federation was wanted (federated tenant, no env opt-out)
@@ -121,13 +121,13 @@ mod tests {
         assert!(FederationInitOutcome::Installed {
             tenant: "t".into(),
             realm: "r".into(),
-            device_uri: "u".into(),
+            device_ura: "u".into(),
         }
         .is_operational());
         assert!(FederationInitOutcome::AlreadyInstalled {
             tenant: "t".into(),
             realm: "r".into(),
-            device_uri: "u".into(),
+            device_ura: "u".into(),
         }
         .is_operational());
         assert!(!FederationInitOutcome::Disabled { reason: "x".into() }.is_operational());

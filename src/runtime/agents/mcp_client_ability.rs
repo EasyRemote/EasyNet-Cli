@@ -155,7 +155,7 @@ async fn call_handler(svc: &Arc<McpClientService>, args: Value) -> anyhow::Resul
         _ => {
             return Ok(error_response(
                 "`server` is required and must be a non-empty string",
-            ))
+            ));
         }
     };
     let tool_name = match args.get("name").and_then(Value::as_str) {
@@ -163,7 +163,7 @@ async fn call_handler(svc: &Arc<McpClientService>, args: Value) -> anyhow::Resul
         _ => {
             return Ok(error_response(
                 "`name` is required and must be a non-empty string",
-            ))
+            ));
         }
     };
     let arguments = args

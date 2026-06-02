@@ -2159,12 +2159,12 @@ mod tests {
         let kernel = Kernel::new(Arc::new(NoopGateway));
         kernel.set_local_runtime(Arc::clone(&rt));
 
-        let device_uri = crate::ura::device_ura("localhost", "a");
+        let device_ura = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {
-            caller: device_uri.clone(),
-            callee: device_uri.clone(),
+            caller: device_ura.clone(),
+            callee: device_ura.clone(),
             ability: "alice.chat".into(),
-            subject: device_uri,
+            subject: device_ura,
             nonce_hex: "aa".repeat(16),
             causal_context: CausalContext::Null,
             args: json!({"prompt": "hi"}),

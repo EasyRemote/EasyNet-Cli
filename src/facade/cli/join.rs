@@ -50,7 +50,7 @@ struct PairingPreflight {
     node_id: String,
     /// Realm hub's Ed25519 pubkey (base64). The cold-start
     /// cross-machine fix: backend surfaces this here so the
-    /// device can write the hub's `(uri, pubkey, role=hub)` row
+    /// device can write the hub's `(ura, pubkey, role=hub)` row
     /// into its local `realm-trust.toml` during join, without
     /// needing on-host access to `~/.easynet-hub/<realm>/
     /// identity.json`. Empty on pre-v4.1.4 hubs (legacy fallback
@@ -289,7 +289,7 @@ fn run_join_stages(
         ),
     }
 
-    // LB-52 Gap 3 — mirror this device's own `(uri, pubkey,
+    // LB-52 Gap 3 — mirror this device's own `(ura, pubkey,
     // role=Device)` self-entry into the local realm-trust.toml so
     // a co-located hub-mode daemon admits this device on
     // `<self>.session` without a separate
@@ -312,7 +312,7 @@ fn run_join_stages(
 }
 
 /// Push a fresh device keypair into the keyring under the
-/// canonical self URI + hub-role overlay. Phase 3C bridge: when
+/// canonical self URA + hub-role overlay. Phase 3C bridge: when
 /// the keyring is reachable, this is the production secret
 /// When the operator paired AFTER starting the local runtime, the
 /// initial boot missed the joined credentials and therefore never ran
@@ -367,7 +367,7 @@ fn refresh_running_runtime_after_join(creds: &config::Credentials) {
 /// the operator should see.
 fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
     use crate::services::self_identity::{
-        canonical_self_uris, fresh_seed_hex, KeyringClient, SelfIdentityError,
+        canonical_self_uras, fresh_seed_hex, KeyringClient, SelfIdentityError,
     };
 
     let realm = creds.tenant_id.trim();
@@ -375,7 +375,7 @@ fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<
     if realm.is_empty() || node_id.is_empty() {
         anyhow::bail!("credentials missing realm or node_id");
     }
-    let (primary_self, role_overlays) = canonical_self_uris(realm, node_id);
+    let (primary_self, role_overlays) = canonical_self_uras(realm, node_id);
 
     let client = KeyringClient::default_path();
     // Probe reachability with a lightweight `list` first so the
@@ -427,11 +427,38 @@ fn pairing_status_error_message(code: u16, body: &str) -> String {
     }
 }
 
-fn validate_pairing_response(creds: config::Credentials) -> anyhow::Result<config::Credentials> {
-    if creds.node_id.is_empty() {
+fn validate_pairing_response(
+    envelope: easynet_axon::DeviceJoinCredentialEnvelope,
+) -> anyhow::Result<easynet_axon::DeviceJoinCredentialEnvelope> {
+    if envelope.node_id.is_empty() {
         anyhow::bail!("pairing response missing node_id");
     }
-    Ok(creds)
+    if envelope.credential_token.is_empty() {
+        anyhow::bail!("pairing response missing credential_token");
+    }
+    if envelope.hub_endpoint.is_empty() {
+        anyhow::bail!("pairing response missing hub_endpoint");
+    }
+    if envelope.realm.is_empty() {
+        anyhow::bail!("pairing response missing realm");
+    }
+    Ok(envelope)
+}
+
+fn credentials_from_join_envelope(
+    envelope: easynet_axon::DeviceJoinCredentialEnvelope,
+) -> config::Credentials {
+    config::Credentials {
+        node_id: envelope.node_id,
+        credential_token: envelope.credential_token,
+        hub_endpoint: envelope.hub_endpoint,
+        tenant_id: envelope.realm,
+        deploy_signature: envelope.deploy_signature,
+        hub_api_base: None,
+        username: envelope.username.filter(|v| !v.trim().is_empty()),
+        hub_pubkey_b64: None,
+        hub_tls_ca_pem_b64: None,
+    }
 }
 
 /// Bridge the migration window where the backend may not yet return
@@ -439,7 +466,7 @@ fn validate_pairing_response(creds: config::Credentials) -> anyhow::Result<confi
 /// logged-in auth session that does know it. This keeps
 /// `credentials.json` rich enough for hosted-agent bootstrap on the
 /// first post-join runtime boot, instead of persisting `<unjoined>`
-/// placeholder URIs until a later manual repair.
+/// placeholder URAs until a later manual repair.
 fn backfill_credentials_username_from_auth_session(creds: &mut config::Credentials) {
     if creds
         .username
@@ -653,13 +680,13 @@ fn validate_pairing_token(
     // Hub's OpenAPI spec under /api/v1/devices/pairing). If `into_json`
     // fails, the bytes we got back are either not JSON at all (a proxy
     // inserted an HTML error page, a middlebox rewrote the response) or
-    // the JSON shape no longer matches `config::Credentials` (the CLI
-    // and Hub are on incompatible versions). Either way, the underlying
+    // the JSON shape no longer matches Axon's join credential envelope
+    // (the CLI and Hub are on incompatible versions). Either way, the underlying
     // serde error is noise to an operator — they need to know *what to
     // do*, not which field's tag didn't match. We keep the raw cause in
     // the error chain via `context`, so `--verbose` / log scrapers still
     // surface the full detail, while the top-line stays operator-friendly.
-    let creds: config::Credentials = resp.into_json().map_err(|e| {
+    let envelope: easynet_axon::DeviceJoinCredentialEnvelope = resp.into_json().map_err(|e| {
         anyhow::Error::from(e).context(
             "Hub returned an unreadable pairing response — the Hub is likely on an \
              incompatible version, or a proxy rewrote the response. Verify the Hub URL \
@@ -667,18 +694,18 @@ fn validate_pairing_token(
         )
     })?;
 
-    let creds = validate_pairing_response(creds)?;
-    if creds.node_id != preflight.node_id {
+    let envelope = validate_pairing_response(envelope)?;
+    if envelope.node_id != preflight.node_id {
         anyhow::bail!(
             "Hub returned node_id {} but pairing preflight reserved {}; aborting to avoid \
              booting with mismatched identity",
-            creds.node_id,
+            envelope.node_id,
             preflight.node_id
         );
     }
     // URA v4.1.4: realm_str() picks `realm` first, falls back to
     // legacy `tenant_id`. Both v4.1.4 and pre-v4.1.4 hubs round-trip.
-    let creds_realm = creds.realm_str();
+    let creds_realm = envelope.realm_str();
     if creds_realm != preflight.tenant_id {
         anyhow::bail!(
             "Hub returned realm {} but pairing preflight reserved {}; aborting to avoid \
@@ -692,7 +719,7 @@ fn validate_pairing_token(
     // on-disk credentials so the follow-up trust auto-wire can
     // populate `realm-trust.toml` plus any local pinned CA file
     // without needing on-host access to hub-local files.
-    let mut creds = creds;
+    let mut creds = credentials_from_join_envelope(envelope);
     if !preflight.hub_public_key_b64.trim().is_empty() {
         creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.trim().to_string());
     }
@@ -716,7 +743,7 @@ fn derive_device_public_key_hex(tenant_id: &str, node_id: &str) -> anyhow::Resul
     use anyhow::Context as _;
     use base64::Engine as _;
 
-    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
     let (_seed, public_key_b64) =
         crate::runtime::publish::derive_subject_keypair(tenant_id, &subject_id);
     let public_key = base64::engine::general_purpose::STANDARD
@@ -761,19 +788,33 @@ mod tests {
 
     #[test]
     fn validate_pairing_response_rejects_empty_node_id() {
-        let creds = config::Credentials {
+        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
             node_id: String::new(),
             credential_token: "cred".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
-            hub_api_base: None,
-            username: None,
-            hub_pubkey_b64: None,
-            hub_tls_ca_pem_b64: None,
+            ..Default::default()
         };
-        let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
+        let err = validate_pairing_response(envelope).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
+    }
+
+    #[test]
+    fn credentials_from_join_envelope_projects_axon_wire_shape() {
+        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "axon://easynet.run:50051".into(),
+            realm: "tenant".into(),
+            deploy_signature: "sig".into(),
+            username: Some("alice".into()),
+            ..Default::default()
+        };
+        let creds = credentials_from_join_envelope(envelope);
+        assert_eq!(creds.node_id, "node");
+        assert_eq!(creds.tenant_id, "tenant");
+        assert_eq!(creds.username.as_deref(), Some("alice"));
     }
 
     #[test]

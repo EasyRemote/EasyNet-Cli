@@ -32,10 +32,12 @@
 //
 // What lives here
 // ---------------
-//   * a2a.client.send_task — { target_node_uri, agent_name,
+//   * a2a.client.send_task — { target_node_ura, agent_name,
 //                              skill_name, args }. Resolves to
 //                              ability `<agent_name>.<skill_name>`
-//                              on the named remote node.
+//                              on the named remote node. The legacy
+//                              `target_node_uri` field remains accepted
+//                              during the URI-to-URA naming migration.
 //
 // What does NOT live here yet
 // ---------------------------
@@ -73,8 +75,10 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 
 /// `a2a.client.send_task` handler.
 ///
-/// Args: `{ "target_node_uri": "<URI>", "agent_name": "<agent>",
+/// Args: `{ "target_node_ura": "<URA>", "agent_name": "<agent>",
 ///          "skill_name": "<verb>", "args": <json-value> }`.
+/// The legacy `target_node_uri` spelling is accepted as a read-only
+/// alias so older planners do not fail during the URI-to-URA rename.
 ///
 /// Routes through `federation.forward_invoke` against the target
 /// device URA — the same unified path
@@ -88,7 +92,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// `a2a.bridge.send_task` (the inbound side) returns, so a planner
 /// that handles the inbound shape handles the outbound shape too.
 fn send_task_handler(args: Value) -> anyhow::Result<Value> {
-    let target_node = match required_nonempty_string(&args, "target_node_uri") {
+    let target_node = match target_node_field(&args) {
         Ok(s) => s,
         Err(msg) => return Ok(error_response(&msg)),
     };
@@ -107,9 +111,9 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
     #[cfg(feature = "axon-pb")]
     {
         let target_ura = if crate::ura::parse_ura(target_node.trim()).is_ok() {
-            match crate::support::federation_invoke::parse_node_uri(&target_node) {
-                Ok(uri) => uri,
-                Err(e) => return Ok(error_response(&format!("parse target_node_uri: {e}"))),
+            match crate::support::federation_invoke::parse_node_ura(&target_node) {
+                Ok(ura) => ura,
+                Err(e) => return Ok(error_response(&format!("parse target_node_ura: {e}"))),
             }
         } else {
             // Bare uuid path: wrap in the local daemon's realm.
@@ -121,8 +125,8 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
                 }
                 _ => {
                     return Ok(error_response(
-                        "target_node_uri must be a canonical \
-                         `easynet:///r/<realm>/device/<id>` URI when no local \
+                        "target_node_ura must be a canonical \
+                         `easynet:///r/<realm>/device/<id>` URA when no local \
                          credentials are available",
                     ));
                 }
@@ -175,9 +179,18 @@ fn error_response(message: &str) -> Value {
 pub fn send_task_input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["target_node_uri", "agent_name", "skill_name"],
+        "required": ["agent_name", "skill_name"],
+        "anyOf": [
+            { "required": ["target_node_ura"] },
+            { "required": ["target_node_uri"] }
+        ],
         "properties": {
-            "target_node_uri": {"type": "string", "minLength": 1},
+            "target_node_ura": {"type": "string", "minLength": 1},
+            "target_node_uri": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Deprecated alias for target_node_ura; accepted during the URI-to-URA migration window."
+            },
             "agent_name": {"type": "string", "minLength": 1},
             "skill_name": {"type": "string", "minLength": 1},
             "args": {
@@ -186,6 +199,18 @@ pub fn send_task_input_schema() -> Value {
         },
         "additionalProperties": false,
     })
+}
+
+fn target_node_field(args: &Value) -> Result<String, String> {
+    match required_nonempty_string(args, "target_node_ura") {
+        Ok(value) => Ok(value),
+        Err(primary) => match required_nonempty_string(args, "target_node_uri") {
+            Ok(value) => Ok(value),
+            Err(_) => Err(format!(
+                "{primary}; legacy alias `target_node_uri` is also accepted"
+            )),
+        },
+    }
 }
 
 pub fn send_task_description() -> &'static str {
@@ -218,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn send_task_missing_target_node_uri_returns_ok_false() {
+    fn send_task_missing_target_node_ura_returns_ok_false() {
         let arc = fresh_registry();
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
@@ -229,7 +254,7 @@ mod tests {
         assert_eq!(resp["ok"], false);
         let err = resp["error"].as_str().unwrap();
         assert!(
-            err.contains("`target_node_uri`"),
+            err.contains("`target_node_ura`"),
             "error must name the missing field; got {err:?}"
         );
     }
@@ -239,7 +264,7 @@ mod tests {
         let arc = fresh_registry();
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
-            "target_node_uri": "easynet:///r/acme/node/N1",
+            "target_node_ura": "easynet:///r/acme/node/N1",
             "skill_name": "chat",
         }))
         .unwrap();
@@ -252,7 +277,7 @@ mod tests {
         let arc = fresh_registry();
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
-            "target_node_uri": "easynet:///r/acme/node/N1",
+            "target_node_ura": "easynet:///r/acme/node/N1",
             "agent_name": "claude",
         }))
         .unwrap();
@@ -265,7 +290,7 @@ mod tests {
         let arc = fresh_registry();
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
-            "target_node_uri": "",
+            "target_node_ura": "",
             "agent_name": "claude",
             "skill_name": "chat",
         }))
@@ -286,7 +311,7 @@ mod tests {
         let arc = fresh_registry();
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
-            "target_node_uri": "easynet:///r/acme/device/N1",
+            "target_node_ura": "easynet:///r/acme/device/N1",
             "agent_name": "claude",
             "skill_name": "chat",
         }))
@@ -303,16 +328,48 @@ mod tests {
     }
 
     #[test]
-    fn send_task_input_schema_requires_three_string_fields() {
+    fn send_task_accepts_legacy_target_node_uri_alias() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let arc = fresh_registry();
+        let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
+        let resp = handler(json!({
+            "target_node_uri": "easynet:///r/acme/device/N1",
+            "agent_name": "claude",
+            "skill_name": "chat",
+        }))
+        .unwrap();
+        assert_eq!(resp["ok"], false);
+        let msg = resp["error"].as_str().unwrap();
+        assert!(
+            !msg.contains("target_node_ura"),
+            "legacy alias must be accepted before transport/config validation; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn send_task_input_schema_requires_agent_skill_and_either_target_spelling() {
         let s = send_task_input_schema();
         let req = s["required"].as_array().unwrap();
-        for field in ["target_node_uri", "agent_name", "skill_name"] {
+        for field in ["agent_name", "skill_name"] {
             assert!(
                 req.iter().any(|v| v == field),
                 "required field {field} missing from schema"
             );
             assert_eq!(s["properties"][field]["minLength"], 1);
         }
+        assert!(!req.iter().any(|v| v == "target_node_ura"));
+        assert_eq!(s["properties"]["target_node_ura"]["minLength"], 1);
+        assert_eq!(s["properties"]["target_node_uri"]["minLength"], 1);
+        assert!(
+            s["anyOf"]
+                .as_array()
+                .expect("target spelling anyOf exists")
+                .iter()
+                .any(|v| v["required"].as_array().is_some_and(|fields| {
+                    fields.iter().any(|field| field == "target_node_uri")
+                })),
+            "schema must keep legacy target_node_uri alias during migration"
+        );
         assert_eq!(s["additionalProperties"], false);
     }
 }

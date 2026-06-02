@@ -27,21 +27,17 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
-/// Module-local sync→async bridge for the ability-dispatch hot
-/// path. Every future driven through this helper only touches
-/// in-memory state — the registry's `Arc<Mutex<…>>` cells and
-/// `LocalRuntime`'s own async mutex. None of them await tokio
-/// resources (timers, sockets, IPC).
+/// Module-local sync→async bridge for the ability-dispatch registry
+/// path. These calls sit on catalogue construction and discovery,
+/// not per-frame dispatch, so correctness under all runtime hosts is
+/// more important than the cheapest possible no-runtime fallback.
 ///
-/// On that contract, the cheap `UseFuturesExecutor` fallback is
-/// correct: it drives the future on the calling thread when there
-/// is no tokio runtime, without paying the cost of spinning up a
-/// fresh current-thread tokio runtime. Any future addition that
-/// would await a tokio resource MUST reach for
-/// `crate::support::async_bridge::run_blocking` directly with
-/// `NoRuntimeFallback::BuildCurrentThreadTokio` rather than
-/// extending this helper — otherwise the in-memory-only
-/// invariant is silently broken.
+/// In particular, feature-expanded registration can enter SDK-backed
+/// paths that rely on tokio wakeups. Driving those futures with
+/// `futures::executor::block_on` from a current-thread tokio test
+/// runtime can park forever. Use the tokio fallback so single-thread
+/// callers are offloaded to a fresh helper runtime instead of
+/// re-entering or starving the active one.
 fn block_on_runtime_sync<F>(future: F) -> F::Output
 where
     F: Future + Send,
@@ -49,7 +45,7 @@ where
 {
     crate::support::async_bridge::run_blocking(
         future,
-        crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
     )
 }
 
@@ -209,7 +205,38 @@ pub struct BidiSource {
     /// Transport READ end. The forwarder reads here and emits each
     /// value as `RecvBidi`; the handler's matching Sender is what
     /// produces them.
-    pub from_client: mpsc::Receiver<Value>,
+    pub from_client: mpsc::Receiver<BidiOutputFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BidiOutputFrame {
+    pub payload: Vec<u8>,
+    pub content_type: String,
+}
+
+impl BidiOutputFrame {
+    pub fn json(value: Value) -> Self {
+        Self {
+            payload: serde_json::to_vec(&value)
+                .expect("serde_json::Value serialization should not fail"),
+            content_type: "application/json".to_string(),
+        }
+    }
+
+    pub fn binary(payload: impl Into<Vec<u8>>, content_type: impl Into<String>) -> Self {
+        Self {
+            payload: payload.into(),
+            content_type: content_type.into(),
+        }
+    }
+
+    pub fn into_json_value(self) -> anyhow::Result<Value> {
+        if self.payload.is_empty() {
+            return Ok(Value::Object(Default::default()));
+        }
+        serde_json::from_slice(&self.payload)
+            .map_err(|err| anyhow::anyhow!("bidi output frame is not JSON: {err}"))
+    }
 }
 
 /// One in-process bidi handler. Per design §D2 the closure runs at
@@ -427,7 +454,9 @@ async fn run_bidi_source(
     loop {
         if to_client.is_none() {
             match from_client.recv().await {
-                Some(value) => emit_json_progress(&ctx, value).await?,
+                Some(frame) => {
+                    ctx.emit_progress(frame.payload, frame.content_type).await?;
+                }
                 None => break,
             }
             continue;
@@ -453,7 +482,7 @@ async fn run_bidi_source(
             }
             outbound = from_client.recv() => {
                 match outbound {
-                    Some(value) => emit_json_progress(&ctx, value).await?,
+                    Some(frame) => ctx.emit_progress(frame.payload, frame.content_type).await?,
                     None => break,
                 }
             }
@@ -1918,7 +1947,8 @@ fn runtime_bidi_source(
                     };
 
                 let (to_client, mut to_runtime) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
-                let (from_runtime, from_client) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                let (from_runtime, from_client) =
+                    mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
                 let runtime_input = source.to_client;
                 let mut runtime_output = source.from_client;
 
@@ -1934,7 +1964,7 @@ fn runtime_bidi_source(
                                 &frame,
                             ) {
                                 Ok(value) => {
-                                    let _ = from_runtime.send(value).await;
+                                    let _ = from_runtime.send(BidiOutputFrame::json(value)).await;
                                 }
                                 Err(err) => {
                                     let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
@@ -1980,10 +2010,20 @@ fn runtime_bidi_source(
                             break;
                         };
                         if !frame.payload.is_empty() {
-                            if let Ok(value) =
-                                crate::runtime::local_runtime_invoker::ability_frame_to_json(&frame)
+                            let output_frame = if frame.content_type == "application/json"
+                                || frame.content_type.is_empty()
                             {
-                                if from_runtime.send(value).await.is_err() {
+                                match crate::runtime::local_runtime_invoker::ability_frame_to_json(
+                                    &frame,
+                                ) {
+                                    Ok(value) => Ok(BidiOutputFrame::json(value)),
+                                    Err(err) => Err(anyhow::anyhow!("{err}")),
+                                }
+                            } else {
+                                Ok(BidiOutputFrame::binary(frame.payload, frame.content_type))
+                            };
+                            if let Ok(output_frame) = output_frame {
+                                if from_runtime.send(output_frame).await.is_err() {
                                     break;
                                 }
                             }
@@ -2280,7 +2320,8 @@ mod tests {
     /// the loop — that path is tested at the IPC layer (commit 4).
     fn trivial_bidi_handler() -> LocalBidiHandler {
         Arc::new(|_args: Value| {
-            let (_to_handler_tx, from_client) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+            let (_to_handler_tx, from_client) =
+                mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
             let (to_client, _to_client_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
             Ok(BidiSource {
                 from_client,
@@ -2357,7 +2398,7 @@ mod tests {
                 let (client_to_handler_tx, mut client_to_handler_rx) =
                     mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
                 let (handler_to_client_tx, handler_to_client_rx) =
-                    mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                    mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
                 // Forwarder side of the BidiSource is what we hand
                 // back to the caller — it sees the *handler input*
                 // sender (so it can push frames in) and the handler
@@ -2365,7 +2406,11 @@ mod tests {
                 // handler keeps the opposite ends.
                 tokio::spawn(async move {
                     while let Some(v) = client_to_handler_rx.recv().await {
-                        if handler_to_client_tx.send(v).await.is_err() {
+                        if handler_to_client_tx
+                            .send(BidiOutputFrame::json(v))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -2396,7 +2441,7 @@ mod tests {
             // via from_client. End-to-end through the spawned loop.
             src.to_client.send(json!({"hello": 1})).await.unwrap();
             let echoed = src.from_client.recv().await.expect("echo arrives");
-            assert_eq!(echoed, json!({"hello": 1}));
+            assert_eq!(echoed.into_json_value().unwrap(), json!({"hello": 1}));
         });
     }
 
@@ -2565,7 +2610,7 @@ mod tests {
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,
@@ -2576,7 +2621,7 @@ mod tests {
             Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,
@@ -2750,7 +2795,7 @@ mod tests {
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,
@@ -2761,7 +2806,7 @@ mod tests {
             Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,

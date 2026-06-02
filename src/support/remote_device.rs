@@ -11,7 +11,7 @@
 // Several CLI surfaces historically open-coded the same routing rule:
 //
 //   1. If the user passes a canonical `easynet:///r/<realm>/device/<id>`
-//      URI, validate and use it directly.
+//      URA, validate and use it directly.
 //   2. If the user passes a bare UUID, first ask the local daemon's
 //      federated directory (`federation.discover`) whether that node is
 //      currently known under a DIFFERENT realm.
@@ -33,13 +33,13 @@
 use anyhow::anyhow;
 use serde_json::Value;
 
-/// Best-effort caller URI for federation-forwarded requests.
+/// Best-effort caller URA for federation-forwarded requests.
 ///
 /// When local credentials are present and non-empty, returns the
-/// canonical device URI for this caller. Otherwise returns `None` and
+/// canonical device URA for this caller. Otherwise returns `None` and
 /// the lower-level federation helper falls back to its own synthetic
 /// `easynet:///r/cli/device/local` caller.
-pub(crate) fn caller_device_uri_from_credentials() -> Option<String> {
+pub(crate) fn caller_device_ura_from_credentials() -> Option<String> {
     crate::persistence::config::load_credentials()
         .ok()
         .filter(|creds| !creds.tenant_id.trim().is_empty() && !creds.node_id.trim().is_empty())
@@ -65,14 +65,14 @@ pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
                 Some(tenant.to_string())
             }
         });
-    resolve_target_device_uri_with_lookup(
+    resolve_target_device_ura_with_lookup(
         node,
         local_tenant.as_deref(),
-        lookup_node_uri_in_directory,
+        lookup_node_ura_in_directory,
     )
 }
 
-fn resolve_target_device_uri_with_lookup<F>(
+fn resolve_target_device_ura_with_lookup<F>(
     node: &str,
     local_tenant: Option<&str>,
     lookup: F,
@@ -82,10 +82,10 @@ where
 {
     let trimmed = node.trim();
     if crate::ura::parse_ura(trimmed).is_ok() {
-        return crate::support::federation_invoke::parse_node_uri(trimmed);
+        return crate::support::federation_invoke::parse_node_ura(trimmed);
     }
-    if let Some(uri) = lookup(trimmed) {
-        return Ok(uri);
+    if let Some(ura) = lookup(trimmed) {
+        return Ok(ura);
     }
     if let Some(local_tenant) = local_tenant.filter(|tenant| !tenant.is_empty()) {
         return Ok(crate::ura::device_ura(local_tenant, trimmed));
@@ -93,7 +93,7 @@ where
     Err(anyhow!(
         "cannot resolve node {trimmed:?}: federation.discover returned no match and \
          no local realm is wired (pair this device first or pass a canonical \
-         `easynet:///r/<realm>/device/<id>` URI)"
+         `easynet:///r/<realm>/device/<id>` URA)"
     ))
 }
 
@@ -101,12 +101,12 @@ where
 /// whose `node_id` equals `node`. Returns the entry's canonical
 /// device URA. Best-effort only: discover failures must not block the
 /// legacy local-realm fallback.
-fn lookup_node_uri_in_directory(node: &str) -> Option<String> {
+fn lookup_node_ura_in_directory(node: &str) -> Option<String> {
     let entries = crate::support::federation_invoke::invoke_federation_discover(None, None).ok()?;
     for entry in entries {
         if entry.get("node_id").and_then(Value::as_str) == Some(node) {
-            if let Some(uri) = entry.get("agent_ura").and_then(Value::as_str) {
-                return Some(uri.to_string());
+            if let Some(ura) = entry.get("agent_ura").and_then(Value::as_str) {
+                return Some(ura.to_string());
             }
         }
     }
@@ -118,16 +118,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_uri_passes_through() {
-        let uri = "easynet:///r/peer/device/node-1";
-        let resolved = resolve_target_device_uri_with_lookup(uri, Some("local"), |_| None)
-            .expect("canonical URI");
-        assert_eq!(resolved, uri);
+    fn canonical_ura_passes_through() {
+        let ura = "easynet:///r/peer/device/node-1";
+        let resolved = resolve_target_device_ura_with_lookup(ura, Some("local"), |_| None)
+            .expect("canonical URA");
+        assert_eq!(resolved, ura);
     }
 
     #[test]
     fn directory_hit_beats_local_realm_fallback() {
-        let resolved = resolve_target_device_uri_with_lookup("node-1", Some("realm-a"), |_| {
+        let resolved = resolve_target_device_ura_with_lookup("node-1", Some("realm-a"), |_| {
             Some("easynet:///r/realm-b/device/node-1".to_string())
         })
         .expect("directory hit");
@@ -136,14 +136,14 @@ mod tests {
 
     #[test]
     fn local_realm_fallback_is_used_when_directory_misses() {
-        let resolved = resolve_target_device_uri_with_lookup("node-2", Some("realm-a"), |_| None)
+        let resolved = resolve_target_device_ura_with_lookup("node-2", Some("realm-a"), |_| None)
             .expect("fallback");
         assert_eq!(resolved, "easynet:///r/realm-a/device/node-2");
     }
 
     #[test]
     fn missing_directory_and_realm_surfaces_actionable_error() {
-        let err = resolve_target_device_uri_with_lookup("node-3", None, |_| None)
+        let err = resolve_target_device_ura_with_lookup("node-3", None, |_| None)
             .expect_err("missing realm must fail");
         let msg = err.to_string();
         assert!(

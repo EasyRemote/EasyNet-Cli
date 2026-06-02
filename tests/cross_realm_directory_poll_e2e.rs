@@ -39,13 +39,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use easynet_cli::pb::axon::v1::invocation_server::Invocation;
-use easynet_cli::pb::axon::v1::{InvokeRequest, InvokeResponse};
+use easynet_axon::pb::axon::v1::invocation_server::Invocation;
+use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse};
 use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
 use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::federation_client::{FederationClient, FederationClientError, HubUri};
 use easynet_cli::services::federation_directory::{
-    poll_once, DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+    poll_once, DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
 };
 use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
@@ -66,8 +66,8 @@ impl FederationClient for InProcessForwarder {
         _target_hub: &HubUri,
         mut request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
-        request.envelope = Some(easynet_cli::pb::axon::v1::Envelope {
-            caller: Some(easynet_cli::pb::axon::v1::AgentIdentity {
+        request.envelope = Some(easynet_axon::pb::axon::v1::Envelope {
+            caller: Some(easynet_axon::pb::axon::v1::AgentIdentity {
                 ura: self.peer_loopback_uri.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
@@ -102,17 +102,15 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     // Pre-populate: pretend A already knows about a peer in
     // realm-c (a transitive view).
     let mut realm_c_view = DirectoryView::new("realm-c".to_string());
-    realm_c_view.apply_frame(&DirectoryEvent::Snapshot {
-        entries: vec![DirectoryEntry {
-            agent_ura: "easynet:///r/realm-c/device/device-X".to_string(),
-            node_id: "device-X".to_string(),
-            display_name: Some("third-party-device".to_string()),
-            status: "active".to_string(),
-            origin_realm: None, // chokepoint will stamp realm-c
-            hub_endpoint: Some("https://hub-c.example:50443".to_string()),
-            last_seen_unix_ms: Some(1_714_500_000_000),
-        }],
-    });
+    realm_c_view.replace_entries(vec![DirectoryEntry {
+        agent_ura: "easynet:///r/realm-c/device/device-X".to_string(),
+        node_id: "device-X".to_string(),
+        display_name: Some("third-party-device".to_string()),
+        status: "active".to_string(),
+        origin_realm: None, // chokepoint will stamp realm-c
+        hub_endpoint: Some("https://hub-c.example:50443".to_string()),
+        last_seen_unix_ms: Some(1_714_500_000_000),
+    }]);
     let mut a_map = std::collections::BTreeMap::new();
     a_map.insert("realm-c".to_string(), Arc::new(realm_c_view));
     daemon_a_directory.replace(a_map);
@@ -188,17 +186,15 @@ async fn discover_dispatch_returns_what_poll_populated() {
     );
     let daemon_a_directory = SharedFederatedDirectoryView::default();
     let mut realm_c = DirectoryView::new("realm-c".to_string());
-    realm_c.apply_frame(&DirectoryEvent::Upsert {
-        entry: DirectoryEntry {
-            agent_ura: "easynet:///r/realm-c/device/device-Y".to_string(),
-            node_id: "device-Y".to_string(),
-            display_name: None,
-            status: "active".to_string(),
-            origin_realm: None,
-            hub_endpoint: None,
-            last_seen_unix_ms: None,
-        },
-    });
+    realm_c.replace_entries(vec![DirectoryEntry {
+        agent_ura: "easynet:///r/realm-c/device/device-Y".to_string(),
+        node_id: "device-Y".to_string(),
+        display_name: None,
+        status: "active".to_string(),
+        origin_realm: None,
+        hub_endpoint: None,
+        last_seen_unix_ms: None,
+    }]);
     let mut a_map = std::collections::BTreeMap::new();
     a_map.insert("realm-c".to_string(), Arc::new(realm_c));
     daemon_a_directory.replace(a_map);
@@ -243,8 +239,8 @@ async fn discover_dispatch_returns_what_poll_populated() {
     // surfaces the populated cell.
     let resp = daemon_b
         .invoke(tonic::Request::new(InvokeRequest {
-            envelope: Some(easynet_cli::pb::axon::v1::Envelope {
-                caller: Some(easynet_cli::pb::axon::v1::AgentIdentity {
+            envelope: Some(easynet_axon::pb::axon::v1::Envelope {
+                caller: Some(easynet_axon::pb::axon::v1::AgentIdentity {
                     ura: daemon_b_loopback.to_string(),
                     profile: "easynet-strict-v2".to_string(),
                 }),

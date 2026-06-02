@@ -7,7 +7,7 @@
 // (mic.subscribe, camera.subscribe, …). A consumer wishing to record
 // "Chrome" calls `meta.list_resources(types=["application"])`, picks
 // the application's `resource_ura`, then invokes
-// `screen.subscribe(subject=<that uri>)`.
+// `screen.subscribe(subject=<that ura>)`.
 //
 // Wire shape (RFC-005 v3.2 A9):
 //

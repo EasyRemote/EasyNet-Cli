@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn target_with_subject_builder_attaches_uri() {
+    fn target_with_subject_builder_attaches_ura() {
         // The builder is the dispatcher-side path: a caller that
         // already has a resolved target can attach a subject after
         // the fact (used by the IPC layer translator that resolves

@@ -87,7 +87,7 @@ pub fn handle(
     }
     validate_public_key_b64(&args.public_key_b64)?;
 
-    let parsed_realm = parse_realm_from_uri(&args.agent_ura).ok_or_else(|| {
+    let parsed_realm = parse_realm_from_ura(&args.agent_ura).ok_or_else(|| {
         Status::invalid_argument(format!(
             "<self>.revoke_user_pubkey: agent_ura `{}` does not match the canonical user URA",
             args.agent_ura,
@@ -145,19 +145,19 @@ fn validate_public_key_b64(raw: &str) -> Result<(), Status> {
 
 /// Strip the canonical `easynet:///r/{realm}/...` prefix and return
 /// the realm component. Mirrors register_device_pubkey's parser so
-/// the two surfaces accept the same URI shape.
-fn parse_realm_from_uri(uri: &str) -> Option<String> {
-    crate::ura::parse_ura(uri).ok().map(|parsed| parsed.realm)
+/// the two surfaces accept the same URA shape.
+fn parse_realm_from_ura(ura: &str) -> Option<String> {
+    crate::ura::parse_ura(ura).ok().map(|parsed| parsed.realm)
 }
 
 fn realm_error_to_status(err: RealmTrustError) -> Status {
     match err {
-        RealmTrustError::InvalidUriForRole {
+        RealmTrustError::InvalidUraForRole {
             agent_ura,
             role,
             detail,
         } => Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: {role} URI `{agent_ura}` invalid: {detail}"
+            "<self>.revoke_user_pubkey: {role} URA `{agent_ura}` invalid: {detail}"
         )),
         RealmTrustError::WriteFailed { path, source } => Status::internal(format!(
             "<self>.revoke_user_pubkey: write {path:?}: {source}"
@@ -200,7 +200,7 @@ mod tests {
                 role: TrustedAgentRole::User,
                 added_at_unix_ms: 1_714_000_000_000,
                 origin_tenant_id: None,
-                hub_uri: None,
+                hub_endpoint: None,
                 tls_ca_pem_path: None,
             })
             .expect("seed user entry");

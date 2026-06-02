@@ -12,7 +12,7 @@
 //
 // Pass criteria for the user-agent ability fix:
 //   * One `federation.advertise_abilities` call per user agent
-//   * Owner URI in that payload matches the user-agent URA bootstrap
+//   * Owner URA in that payload matches the user-agent URA bootstrap
 //     minted in local-agents.json
 //   * The abilities array contains `<agent>.chat`
 //
@@ -132,8 +132,8 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     println!("-- advertise_agent --");
-    for (uri, payload) in &calls {
-        if uri.contains("federation.advertise_agent") {
+    for (ura, payload) in &calls {
+        if ura.contains("federation.advertise_agent") {
             let agent_ura = payload["agent_ura"].as_str().unwrap_or("?");
             let auth = &payload["signing_authority"];
             println!("  agent_ura = {agent_ura}");
@@ -143,8 +143,8 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     println!("-- advertise_abilities --");
-    for (uri, payload) in &calls {
-        if uri.contains("federation.advertise_abilities") {
+    for (ura, payload) in &calls {
+        if ura.contains("federation.advertise_abilities") {
             let owner = payload["agent_ura"].as_str().unwrap_or("?");
             let abilities = payload["abilities"].as_array().cloned().unwrap_or_default();
             let names: Vec<&str> = abilities
@@ -188,8 +188,8 @@ fn main() -> anyhow::Result<()> {
             }
         };
 
-        let found = calls.iter().any(|(uri, payload)| {
-            uri.contains("federation.advertise_abilities")
+        let found = calls.iter().any(|(ura, payload)| {
+            ura.contains("federation.advertise_abilities")
                 && payload["agent_ura"].as_str() == Some(agent_ura.as_str())
                 && payload["abilities"]
                     .as_array()

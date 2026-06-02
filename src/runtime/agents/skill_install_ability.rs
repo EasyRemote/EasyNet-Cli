@@ -130,8 +130,8 @@ fn remove_handler(args: Value) -> anyhow::Result<Value> {
         "name": name,
         "agent": agent,
     });
-    if let Some(uri) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, name)) {
-        receipt["resource_ura"] = json!(uri);
+    if let Some(ura) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, name)) {
+        receipt["resource_ura"] = json!(ura);
     }
     Ok(receipt)
 }
@@ -160,9 +160,9 @@ fn upgrade_handler(args: Value) -> anyhow::Result<Value> {
 
 fn record_with_resource_ura(record: InstallRecord, agent_ura: Option<&str>) -> Value {
     let mut value = serde_json::to_value(&record).unwrap_or(Value::Null);
-    if let Some(uri) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, &record.name)) {
+    if let Some(ura) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, &record.name)) {
         if let Some(obj) = value.as_object_mut() {
-            obj.insert("resource_ura".to_string(), json!(uri));
+            obj.insert("resource_ura".to_string(), json!(ura));
         }
     }
     value

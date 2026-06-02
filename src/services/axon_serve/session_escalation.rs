@@ -434,11 +434,11 @@ fn build_session_request_up_chunk(
     call_id: [u8; 16],
     ability: &str,
     args: &[u8],
-) -> crate::pb::axon::v1::BinaryChunk {
-    use crate::pb::axon::v1::BinaryChunk;
+) -> easynet_axon::pb::axon::v1::BinaryChunk {
     use crate::services::axon_serve::invoke_remote_initiator::{
         SessionContentEnvelope, SessionDispatch,
     };
+    use easynet_axon::pb::axon::v1::BinaryChunk;
 
     let dispatch = SessionDispatch::Request {
         call_id,
@@ -460,7 +460,7 @@ fn build_session_request_up_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pb::axon::v1::InvokeBidiUp;
+    use easynet_axon::pb::axon::v1::InvokeBidiUp;
 
     #[tokio::test]
     async fn escalate_resolves_when_correlation_completes() {
@@ -468,14 +468,14 @@ mod tests {
         // up_rx, decodes the Request frame, and feeds the
         // matching RequestResult back into the correlation table.
         let correlation = EscalationCorrelation::new();
-        let (up_tx, mut up_rx) = mpsc::channel::<crate::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, mut up_rx) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
         let handle =
             spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
 
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
             while let Some(frame) = up_rx.recv().await {
-                use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+                use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
                 let chunk = match frame.payload {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
@@ -513,7 +513,7 @@ mod tests {
         // never decode/complete. The dispatch handler must surface
         // `UpstreamTimeout` rather than hanging forever.
         let correlation = EscalationCorrelation::new();
-        let (up_tx, _up_rx_held) = mpsc::channel::<crate::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, _up_rx_held) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
         let handle =
             spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
 
@@ -536,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn escalate_surfaces_upstream_failure_when_up_channel_closes() {
         let correlation = EscalationCorrelation::new();
-        let (up_tx, up_rx) = mpsc::channel::<crate::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, up_rx) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
         // Drop the receiver immediately so the consumer's send
         // fails on the very first item.
         drop(up_rx);
@@ -651,7 +651,7 @@ mod tests {
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
             while let Some(frame) = up_rx.recv().await {
-                use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+                use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
                 let chunk = match frame.payload {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,

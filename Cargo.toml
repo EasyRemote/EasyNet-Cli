@@ -15,17 +15,14 @@ build = "build.rs"
 # to use the generated types (that is a follow-up commit / PR-SYS).
 proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
 
-# Compile axon `axon/v1/*.proto` into a `pb` module exposing the
-# tonic server-side `Invocation` trait that RFC-003 PR-1 implements.
-# Off by default — daemon-side `axon_serve` module gates its build on
-# this feature to keep the no-protoc developer path working. Pulls in
-# tonic-build (build) + tonic + prost (runtime).
+# Enable Axon's SDK-owned `pb` module exposing the tonic server-side
+# `Invocation` trait that RFC-003 PR-1 implements. Off by default —
+# daemon-side `axon_serve` gates its build on this feature so the
+# default developer path stays proto-free. The SDK owns Axon proto
+# codegen; CLI must not compile `../EasyNet-Axon/.../proto` directly.
 axon-pb = [
+    "easynet-axon/grpc",
     "dep:tonic",
-    "dep:prost",
-    "dep:prost-types",
-    "dep:tonic-build",
-    "dep:prost-build",
     # PR-N1 commit 8/N CLI bridge needs the UDS-over-tonic adapters.
     "dep:tower",
     "dep:hyper-util",
@@ -363,19 +360,9 @@ optional = true
 version = "0.13"
 optional = true
 
-# tonic-build generates the server-side `Invocation` trait + types
-# from `axon/v1/*.proto` under the `axon-pb` feature. Path resolution
-# in build.rs is `../EasyNet-Axon/core/runtime-rs/client-sdk/proto` —
-# the same path the EasyNet-Federation-MVP `common/build.rs` uses;
-# kept consistent so the two crates compile against bytewise-identical
-# proto sets. RFC-003 spec §0 forbids modifying axon repo, and this
-# build-system entry honours that — we read the canonical .proto only.
-[build-dependencies.tonic-build]
-version = "0.12"
-optional = true
-
-# tonic runtime dependency for the generated Invocation server +
-# tonic::Status etc. Only needed when `axon-pb` is on.
+# tonic runtime dependency for Invocation server/client plumbing and
+# `tonic::Status`. The generated Axon message/stub types now come from
+# `easynet-axon/grpc`, not from this crate's build script.
 [dependencies.tonic]
 version = "0.12"
 # `tls-roots` adds the rustls-native-certs probe so dialing

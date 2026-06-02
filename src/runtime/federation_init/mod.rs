@@ -31,7 +31,7 @@
 //     credentials, `*.localhost` tenant). Daemon runs in fully
 //     local-only mode; cross-device invokes return
 //     `target_not_registered` like before.
-//   * `Installed { tenant, realm, device_uri }` — invoker is
+//   * `Installed { tenant, realm, device_ura }` — invoker is
 //     registered; the next federation-shaped invoke routes
 //     through the bridge.
 //   * `AlreadyInstalled { ... }` — second call after a successful
@@ -183,8 +183,8 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
     };
 
     // ── Prereq: keyring must hold a device subject ─────────────
-    let device_uri = match ensure_device_subject(keyring, creds) {
-        Ok(uri) => uri,
+    let device_ura = match ensure_device_subject(keyring, creds) {
+        Ok(ura) => ura,
         Err(reason) => {
             return FederationInitOutcome::Failed {
                 stage: FederationStage::KeyringBind,
@@ -205,13 +205,13 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
         return FederationInitOutcome::AlreadyInstalled {
             tenant: creds.tenant_id.clone(),
             realm: creds.tenant_id.clone(),
-            device_uri,
+            device_ura,
         };
     }
     FederationInitOutcome::Installed {
         tenant: creds.tenant_id.clone(),
         realm: creds.tenant_id.clone(),
-        device_uri,
+        device_ura,
     }
 }
 
@@ -220,7 +220,7 @@ fn ensure_device_subject(
     creds: &Credentials,
 ) -> Result<String, String> {
     match keyring.device_subject() {
-        Some(uri) => Ok(uri),
+        Some(ura) => Ok(ura),
         None => {
             // Synthesise + bind on first install. Subsequent calls
             // re-use the bound subject so re-installs are idempotent.

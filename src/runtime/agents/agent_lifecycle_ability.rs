@@ -561,8 +561,8 @@ where
 }
 
 fn agent_ura_for_name(name: &str) -> String {
-    if let Some(uri) = local_agents_ura_for_name(name) {
-        return uri;
+    if let Some(ura) = local_agents_ura_for_name(name) {
+        return ura;
     }
     let (realm, user_id) = crate::persistence::config::load_credentials()
         .ok()
@@ -601,12 +601,12 @@ fn stop_agent_name_from_args(args: &Value) -> anyhow::Result<String> {
         .filter(|s| !s.is_empty());
     match (name, agent_ura) {
         (Some(name), None) => Ok(name.to_string()),
-        (None, Some(uri)) => agent_name_from_ura(uri),
-        (Some(name), Some(uri)) => {
-            let from_uri = agent_name_from_ura(uri)?;
-            if from_uri != name {
+        (None, Some(ura)) => agent_name_from_ura(ura),
+        (Some(name), Some(ura)) => {
+            let from_ura = agent_name_from_ura(ura)?;
+            if from_ura != name {
                 anyhow::bail!(
-                    "device.agent.stop: `name` ({name}) does not match `agent_ura` ({from_uri})"
+                    "device.agent.stop: `name` ({name}) does not match `agent_ura` ({from_ura})"
                 );
             }
             Ok(name.to_string())
@@ -617,8 +617,8 @@ fn stop_agent_name_from_args(args: &Value) -> anyhow::Result<String> {
     }
 }
 
-fn agent_name_from_ura(uri: &str) -> anyhow::Result<String> {
-    let parsed = crate::ura::parse_ura(uri)
+fn agent_name_from_ura(ura: &str) -> anyhow::Result<String> {
+    let parsed = crate::ura::parse_ura(ura)
         .map_err(|err| anyhow::anyhow!("device.agent.stop: invalid `agent_ura`: {err}"))?;
     if parsed.kind != crate::ura::URAKind::Agent {
         anyhow::bail!("device.agent.stop: `agent_ura` must be an Agent URA");
@@ -628,7 +628,7 @@ fn agent_name_from_ura(uri: &str) -> anyhow::Result<String> {
         .and_then(|file| {
             file.hosted_agents
                 .into_iter()
-                .find(|entry| entry.profile == "llm" && entry.agent_ura == uri)
+                .find(|entry| entry.profile == "llm" && entry.agent_ura == ura)
         })
     {
         return Ok(entry.name);

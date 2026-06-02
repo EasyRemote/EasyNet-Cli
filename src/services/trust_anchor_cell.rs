@@ -36,7 +36,7 @@
 // holder panicked while holding the lock. We recover via
 // `into_inner()` so a single buggy panic in the writer doesn't
 // wedge the daemon's admission gate. The `RealmTrustAnchor`'s
-// invariants are upheld by construction (URI uniqueness checked
+// invariants are upheld by construction (URA uniqueness checked
 // in `from_entries` / `append_agent` before insert), so post-
 // poison reads see a structurally-valid anchor.
 //
@@ -55,7 +55,7 @@ use crate::services::realm_trust_anchor::RealmTrustAnchor;
 ///
 /// DEC-N5 §5: every `replace` bumps a monotonic
 /// `cert_anchor_generation` counter so the federation client's
-/// channel pool can key cached channels by `(hub_uri, generation)`.
+/// channel pool can key cached channels by `(hub_endpoint, generation)`.
 /// A SIGHUP reload that swaps the anchor (and therefore the per-
 /// peer `tls_ca_pem_path`) bumps the counter, the next dial misses
 /// the cache, and a fresh channel is built against the new CA.
@@ -97,7 +97,7 @@ impl SharedTrustAnchor {
 
     /// DEC-N5 §5 generation counter. Read with `Acquire` so it
     /// pairs with `replace`'s `Release` write. The federation
-    /// client uses `(hub_uri, generation)` as its channel cache
+    /// client uses `(hub_endpoint, generation)` as its channel cache
     /// key — a bump invalidates cached channels for the next
     /// dial without disturbing in-flight calls on the old channel.
     pub fn cert_anchor_generation(&self) -> u64 {
@@ -136,14 +136,14 @@ mod tests {
     use super::*;
     use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
 
-    fn agent(uri: &str) -> TrustedAgent {
+    fn agent(ura: &str) -> TrustedAgent {
         TrustedAgent {
-            agent_ura: uri.to_string(),
+            agent_ura: ura.to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Backend,
             added_at_unix_ms: 1_714_492_800_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         }
     }
@@ -210,7 +210,7 @@ mod tests {
         // DEC-N5 §5: every successful `replace` bumps the
         // monotonic generation counter by exactly 1. Boot starts
         // at generation 0; the first reload publishes generation 1.
-        // CrossHubDialer keys its channel pool by `(hub_uri,
+        // CrossHubDialer keys its channel pool by `(hub_endpoint,
         // generation)` so a bump invalidates cached channels for
         // the next dial — old channels stay valid for in-flight
         // calls per DEC-N5 §5 explicit contract.

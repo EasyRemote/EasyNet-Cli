@@ -388,6 +388,25 @@ fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
 
     let mut cmd = std::process::Command::new(&bin_path);
     cmd.env("EASYNET_NODE_ID", node_id);
+    cmd.stdin(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // Background runtime must outlive the CLI process and any
+        // transient terminal/session used to launch it.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::signal(libc::SIGHUP, libc::SIG_IGN) == libc::SIG_ERR {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
     // EASYNET_PAGES_PORT is inherited from this process's environment
     // (Command's default). The daemon parses it; the CLI does not.
     // Daemon's IPC + dispatch logs go to a known file so operators
@@ -498,7 +517,7 @@ pub(crate) fn republish_via_federation_best_effort(
             return;
         }
     };
-    // Pin the caller URI for hub-shaped federation calls so the
+    // Pin the caller URA for hub-shaped federation calls so the
     // bridge stamps `envelope.caller.uri` to a canonical URA —
     // `plan.host_device_ura` already carries that shape (see
     // `build_bootstrap_plan_from`).
@@ -625,7 +644,7 @@ fn build_bootstrap_plan(
 }
 
 /// Resolve the hosted-agent owner slug used in canonical
-/// `agent/<user>.<id>` URIs.
+/// `agent/<user>.<id>` URAs.
 ///
 /// Primary source is `credentials.json.username`, which the pairing
 /// flow persists once the backend returns the stable username slug.
@@ -634,7 +653,7 @@ fn build_bootstrap_plan(
 /// fall back to `auth.json.username`. We deliberately do NOT fall back
 /// to JWT `user_id` because backend visibility filters anchor on the
 /// stable username slug, and swapping in the UUID would mint another
-/// invisible-but-plausible URI instead of surfacing the missing data.
+/// invisible-but-plausible URA instead of surfacing the missing data.
 pub(crate) fn bootstrap_username_for(creds: &config::Credentials) -> String {
     if let Some(username) = creds
         .username
@@ -661,7 +680,7 @@ pub(crate) fn bootstrap_username_for(creds: &config::Credentials) -> String {
 /// node_id, username)` triple already in scope without re-loading
 /// credentials. The third argument is the stable username slug the
 /// backend resolves for this user and anchors under `user/` / `agent/`
-/// URIs; pass empty when the device is not yet joined or the slug is
+/// URAs; pass empty when the device is not yet joined or the slug is
 /// genuinely unavailable.
 pub(crate) fn build_bootstrap_plan_from(
     tenant_id: &str,

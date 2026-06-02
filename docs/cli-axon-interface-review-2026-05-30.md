@@ -104,8 +104,9 @@ CLI 正在做"从自带实现迁移到直接消费 Axon"的过程（`src/runtime
 
 这是整条接口最大的缺失，也是最容易被误判的一处。
 
-CLI 的命令审查把 **trust（§4）/ policy+permission（§4.5）/ federation actions（§8）** 都标成 "proto-backed = 今天就有"。
-但结合 R1 的事实：**那些 service 是空壳，方法不存在**。所以真实情况是：
+命令审查的早期口径曾把 **trust（§4）/ policy+permission（§4.5）/ federation actions（§8）**
+都误判成 "proto-backed = 今天就有"。结合 R1 的事实：**那些 service 是空壳，方法不存在**。
+所以真实情况是：
 
 | 控制面动词 | Axon 现状 | 缺口性质 |
 |---|---|---|
@@ -114,7 +115,7 @@ CLI 的命令审查把 **trust（§4）/ policy+permission（§4.5）/ federatio
 | `permission grant/revoke`（GrantConsent） | 消息在，`CapabilityLifecycle` service 为空 | **协议缺口** |
 | `federation join/nodes`（ListFederatedNodes） | 消息在，`Federation` service 为空 | **协议缺口** |
 
-- **PM 结论（最重要的一条）**：命令审查里"这是 exposure work, not protocol work"的判断，对**消息**成立、对**调用接口**不成立。
+- **PM 结论（最重要的一条）**：旧口径里的"纯 CLI 暴露"判断，对**消息**成立、对**调用接口**不成立。
   RFC-001 的逻辑是"这些都重述为 ability"——所以**真正缺失的，是 Axon 把这些控制面能力以 ability 名义正式发布的那一层**
   （ability 命名空间：`identity.* / policy.* / capability.* / federation.*`，RFC-001 §5 列了，但**落地状态未知**）。
   在 CLI 动工前，**必须先向 Axon 确认这些 ability 命名空间是否已实现可调用**，否则 P0 工作量会被严重低估。

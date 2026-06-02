@@ -65,7 +65,7 @@ fn hub_ability_resource_ura(realm: &str, ability_name: &str) -> String {
     crate::ura::hub_ability_ura(realm, ability_name)
 }
 
-/// Build the canonical hub-owned ability URI for
+/// Build the canonical hub-owned ability URA for
 /// `federation.advertise_agent`.
 pub fn advertise_agent_resource_ura(realm: &str, _tenant_id: &str) -> String {
     let _ = _tenant_id;
@@ -77,7 +77,7 @@ pub fn advertise_abilities_resource_ura(realm: &str, _tenant_id: &str) -> String
     hub_ability_resource_ura(realm, FED_ADVERTISE_ABILITIES_ABILITY_NAME)
 }
 
-/// Build the canonical hub-owned ability URI for
+/// Build the canonical hub-owned ability URA for
 /// `federation.resolve`. Inbound counterpart to `advertise_*`:
 /// peers query this to discover what every other agent in the realm
 /// has published.
@@ -86,7 +86,7 @@ pub fn resolve_resource_ura(realm: &str, _tenant_id: &str) -> String {
     hub_ability_resource_ura(realm, FED_RESOLVE_ABILITY_NAME)
 }
 
-/// Build the canonical hub-owned ability URI for
+/// Build the canonical hub-owned ability URA for
 /// `federation.revoke`. Used by the CLI shutdown path to remove the
 /// daemon's own directory entry.
 pub fn revoke_resource_ura(realm: &str, _tenant_id: &str) -> String {
@@ -94,7 +94,7 @@ pub fn revoke_resource_ura(realm: &str, _tenant_id: &str) -> String {
     hub_ability_resource_ura(realm, FED_REVOKE_ABILITY_NAME)
 }
 
-/// Build the canonical hub-owned ability URI for
+/// Build the canonical hub-owned ability URA for
 /// `federation.heartbeat`. Periodic invocation keeps the daemon's
 /// directory entry alive.
 pub fn heartbeat_resource_ura(realm: &str, _tenant_id: &str) -> String {
@@ -137,15 +137,15 @@ pub struct BridgeAbilityInvoker<'a> {
     /// indefinitely if the runtime is wedged — operators see a
     /// failed advertise in logs and re-run later.
     pub timeout_ms: u64,
-    /// Caller URI to stamp on every envelope this invoker emits
-    /// when the resource URI's subject is hub-shaped. The bridge's
+    /// Caller URA to stamp on every envelope this invoker emits
+    /// when the resource URA's subject is hub-shaped. The bridge's
     /// unsigned-invoke path uses this as the `caller.uri` field
     /// instead of synthesising one from the subject_id (which for
     /// `easynet:prv:hub:<realm>` would otherwise produce a
     /// nonsensical `agents/easynet:prv:hub:<realm>` literal). Empty
     /// string means "fall back to SDK default", which is correct
     /// for tests and pre-join callers that don't yet know their
-    /// own agent URI.
+    /// own agent URA.
     pub caller_ura_for_hub: String,
 }
 
@@ -161,9 +161,9 @@ impl<'a> BridgeAbilityInvoker<'a> {
         }
     }
 
-    /// Same as `new` but pins the caller URI to use on hub-shaped
+    /// Same as `new` but pins the caller URA to use on hub-shaped
     /// federation calls. Production callers (the daemon boot path)
-    /// build this with their own device-profile Agent URI; tests
+    /// build this with their own device-profile Agent URA; tests
     /// keep using `new()` so the SDK fallback is exercised.
     pub fn with_caller_ura(
         bridge: &'a easynet_axon::dendrite_bridge::DendriteBridge,
@@ -184,9 +184,9 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         resource_ura: &str,
         payload_json: Value,
     ) -> Result<Value, String> {
-        // Build the subject_id from the URI shape so the runtime's
+        // Build the subject_id from the URA shape so the runtime's
         // `verify_easynet_invocation_metadata` (security.rs:222)
-        // sees a subject that matches the URI's parsed
+        // sees a subject that matches the URA's parsed
         // `<visibility>:<subject_type>:<subject_value>` decomposition.
         //
         // Two canonical shapes the daemon legitimately calls:
@@ -197,10 +197,10 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         //      so we override to the same `easynet:prv:hub:<realm>`.
         //
         // Pre-fix every call passed `subject_id = None`, which the
-        // SDK defaulted to the agent form. Hub-owned ability URIs
+        // SDK defaulted to the agent form. Hub-owned ability URAs
         // therefore got `agent.<node>` as subject and the runtime
         // rejected with AXON_EASYNET_SUBJECT_MISMATCH
-        // ("subject_id does not match resource URI subject"), even
+        // ("subject_id does not match resource URA subject"), even
         // though the daemon's bootstrap_self_identity had succeeded
         // and topology had the key.
         let subject_id = subject_id_from_resource_ura(resource_ura);
@@ -216,16 +216,16 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         //    `runtime.register_local_tool` (which is daemon-internal,
         //    same-process admin) gets rejected with
         //    AXON_EASYNET_SUBJECT_MISMATCH because the verifier expects
-        //    `agent.<owner>` shaped subjects but the URI is hub-shaped.
+        //    `agent.<owner>` shaped subjects but the URA is hub-shaped.
         //    Pre-fix this caused 0/N runtime.register_local_tool calls
         //    to succeed at boot — the daemon's local abilities were
         //    advertised to peers but not dispatchable cross-process.
         //
         // 2. `easynet.caller_ura_override` — only set for hub-shaped
-        //    subjects when the daemon has a joined caller URI to
+        //    subjects when the daemon has a joined caller URA to
         //    pin. Without it the bridge's unsigned-invoke path
         //    synthesises `agents/easynet:prv:hub:<realm>` which the
-        //    runtime's caller-URI check rejects.
+        //    runtime's caller-URA check rejects.
         let mut map = std::collections::HashMap::new();
         map.insert("easynet.resource_ura".to_string(), resource_ura.to_string());
         if subject_id
@@ -254,7 +254,7 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
 }
 
 /// Derive the canonical `subject_id` an envelope should carry for a
-/// given EasyNet resource URI. Returns `None` for URIs the helper
+/// given EasyNet resource URA. Returns `None` for URAs the helper
 /// doesn't recognise (the SDK falls back to its default
 /// `easynet:prv:reg:agent.<owner>` form, which is fine for non-hub
 /// callers). Legacy `.../abilities/...` resource shapes are retired
@@ -362,7 +362,7 @@ pub fn advertise_abilities<I: AbilityInvoker>(
 /// `prefix` filters by `agent_ura_prefix` server-side — pass an empty
 /// string for "every agent". `include_abilities` is the load-bearing
 /// flag for `<self>.discover(scope: "easynet")`: without it every
-/// peer record is just `{uri, status}` with no descriptors, and the
+/// peer record is just `{ura, status}` with no descriptors, and the
 /// LLM can't pick a candidate.
 ///
 /// Errors are stringified per the AbilityInvoker contract — the
@@ -422,7 +422,7 @@ pub fn resolve_agents_with_filter<I: AbilityInvoker>(
 
 /// `federation.revoke` invocation. Removes the named Agent from the
 /// realm directory. The CLI shutdown path calls this on the
-/// daemon's own device-profile URI to clean up its directory
+/// daemon's own device-profile URA to clean up its directory
 /// presence — replaces the deprecated `bridge.deregister_node`
 /// gRPC call.
 ///
@@ -457,7 +457,7 @@ pub fn heartbeat<I: AbilityInvoker>(
     invoker: &I,
     tenant_id: &str,
     realm: &str,
-) -> Result<(), String> {
+) -> Result<crate::runtime::federation_client::HeartbeatReceipt, String> {
     let resource_ura = heartbeat_resource_ura(realm, tenant_id);
     // AXON-RFC-001 v4.1.7 hub-broadcast contract: pass the
     // device's last-seen hub-abilities revision so the hub can
@@ -477,21 +477,20 @@ pub fn heartbeat<I: AbilityInvoker>(
     // that doesn't speak the contract leaves the store unchanged
     // (same as before this PR landed).
     let body = unwrap_result_json(response);
-    if let Ok(receipt) =
+    let receipt =
         serde_json::from_value::<crate::runtime::federation_client::HeartbeatReceipt>(body)
-    {
-        let diff = receipt.hub_abilities_diff;
-        let added_n = diff.added.len();
-        let removed_n = diff.removed.len();
-        if added_n != 0 || removed_n != 0 {
-            store.apply_diff(diff);
-            eprintln!(
-                "[heartbeat] hub-broadcast diff: +{added_n} -{removed_n} (rev now {})",
-                store.revision()
-            );
-        }
+            .unwrap_or_default();
+    let diff = receipt.hub_abilities_diff.clone();
+    let added_n = diff.added.len();
+    let removed_n = diff.removed.len();
+    if added_n != 0 || removed_n != 0 {
+        store.apply_diff(diff);
+        eprintln!(
+            "[heartbeat] hub-broadcast diff: +{added_n} -{removed_n} (rev now {})",
+            store.revision()
+        );
     }
-    Ok(())
+    Ok(receipt)
 }
 
 /// RFC-002 §5.1 federation.resolve_key client. Returns the public
@@ -616,7 +615,7 @@ mod tests {
     use std::cell::RefCell;
 
     /// In-memory fake invoker that records every call and returns a
-    /// canned reply. Lets us assert the resource URI shape, the
+    /// canned reply. Lets us assert the resource URA shape, the
     /// payload contents, and the receipt-parsing path without a
     /// running axon-runtime.
     struct RecordingInvoker {
@@ -810,7 +809,7 @@ mod tests {
 
     #[test]
     fn advertise_abilities_targets_correct_resource_ura() {
-        // Fake invokers observe the canonical business-layer URI.
+        // Fake invokers observe the canonical business-layer URA.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
         assert_eq!(

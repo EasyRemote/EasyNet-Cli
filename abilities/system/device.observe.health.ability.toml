@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "device.observe.health"
-description = "Round-trip smoke ability. Returns the caller's args plus a daemon timestamp. Use to confirm the dispatch path is wired between peer and local handlers."
+description = "Local health probe. Returns Axon observe.health status fields plus smoke diagnostics."
 
 [input_schema]
 type = "object"

@@ -89,7 +89,7 @@ pub struct InvokeArgs {
     #[arg(long)]
     pub raw: bool,
     /// AXIOM envelope subject — the resource the ability acts on,
-    /// expressed as a canonical resource URI
+    /// expressed as a canonical resource URA
     /// ('easynet:///r/<realm>/resource/<id>'). Required by abilities
     /// whose contract pins behaviour on a specific resource (e.g.
     /// 'camera.snapshot', which uses the subject to look up the
@@ -98,7 +98,7 @@ pub struct InvokeArgs {
     /// Per INV-SUBJECT-ENVELOPE the subject MUST come from the
     /// envelope, not from --args — passing it via --args
     /// {"subject": "..."} is rejected by the handler.
-    #[arg(long, value_name = "URI")]
+    #[arg(long, value_name = "URA")]
     pub subject: Option<String>,
 }
 
@@ -108,16 +108,16 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // `support::federation_invoke` helper. The path requires the
     // `axon-pb` feature (production builds) — minimal builds still
     // bail with the legacy message.
-    let node_uri: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
+    let node_ura: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
         None => None,
         Some("") => bail!(
             "--node was given but empty; omit the flag to dispatch locally, \
-             or pass a real `easynet:///r/<tenant>/device/<node>` URI"
+             or pass a real `easynet:///r/<tenant>/device/<node>` URA"
         ),
         Some(node) => {
             #[cfg(feature = "axon-pb")]
             {
-                Some(crate::support::federation_invoke::parse_node_uri(node)?)
+                Some(crate::support::federation_invoke::parse_node_ura(node)?)
             }
             #[cfg(not(feature = "axon-pb"))]
             {
@@ -146,15 +146,15 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // Cross-hub dispatch when `--node` is set; local dispatch
     // otherwise. Both paths surface the same unwrap-or-raw result
     // shape so a script piping to `jq` doesn't have to branch.
-    let (result, fulfilled_label) = match node_uri.as_deref() {
+    let (result, fulfilled_label) = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
         Some(target) => {
-            // Resolve a real caller URI from credentials.json when
+            // Resolve a real caller URA from credentials.json when
             // available — the CLI's hardcoded fallback
             // `easynet:///r/cli/device/local` is rejected by the
             // local daemon's admission gate the moment the device
             // it runs against is paired (the daemon's realm-trust
-            // anchor knows about its own device URI but not about
+            // anchor knows about its own device URA but not about
             // the generic CLI placeholder). Pass-through to
             // `invoke_via_federation_forward`'s `caller_ura`
             // surface; None there preserves the legacy default
@@ -163,7 +163,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // the `/agent/local` shape which fails strict
             // §A.URA-3 parsing — agent tail must be
             // `<user-uuid>.<agent-id>`.)
-            // URI v4.1.4 Phase 2F: caller URI for an `easynet
+            // URA v4.1.4 Phase 2F: caller URA for an `easynet
             // ability invoke --node ...` originating from a daemon
             // is the daemon's *device* URA, not an agent URA. The
             // legacy `/agent/<node>` shape collapsed devices into
@@ -182,7 +182,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             (value, format!("federation.forward_invoke target={target}"))
         }
         // The `not(axon-pb)` arm of `--node` already bailed above;
-        // this match is reachable only via `node_uri == None`.
+        // this match is reachable only via `node_ura == None`.
         #[cfg(not(feature = "axon-pb"))]
         Some(_) => unreachable!("--node bail handled above when axon-pb is off"),
         None => {
@@ -255,8 +255,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn non_canonical_node_uri_returns_actionable_error() {
-        // PR-N1 commit 8/N: `--node` now accepts the cross-hub URI
+    fn non_canonical_node_ura_returns_actionable_error() {
+        // PR-N1 commit 8/N: `--node` now accepts the cross-hub URA
         // shape `easynet:///r/<tenant>/device/<node>`. A non-
         // canonical input (bare hostname, https URL, etc.) is
         // rejected with a typed error before any IPC, so a typo
@@ -271,7 +271,7 @@ mod tests {
         });
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
-        // axon-pb on: parse_node_uri error mentions canonical URI
+        // axon-pb on: parse_node_ura error mentions canonical URA
         // shape. axon-pb off: the legacy "not wired" message still
         // mentions `--node`. Either is acceptable as an operator-
         // actionable error.

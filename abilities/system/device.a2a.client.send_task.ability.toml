@@ -4,8 +4,9 @@ description = "Outbound A2A: dispatch an RPC Invoke against a remote node's abil
 
 [input_schema]
 type = "object"
-required = ["target_node_uri", "agent_name", "skill_name"]
+required = ["agent_name", "skill_name"]
 additionalProperties = false
+anyOf = [{ required = ["target_node_ura"] }, { required = ["target_node_uri"] }]
 
 [input_schema.properties.agent_name]
 type = "string"
@@ -18,6 +19,11 @@ description = "Free-form per-skill args; shape per the remote skill's input_sche
 type = "string"
 minLength = 1
 
+[input_schema.properties.target_node_ura]
+type = "string"
+minLength = 1
+
 [input_schema.properties.target_node_uri]
 type = "string"
+description = "Deprecated alias for target_node_ura; accepted during the URI-to-URA migration window."
 minLength = 1

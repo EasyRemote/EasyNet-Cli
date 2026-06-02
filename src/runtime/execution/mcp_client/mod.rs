@@ -323,13 +323,11 @@ impl McpServerSpec {
                     );
                 }
                 match &self.auth {
-                    Some(AuthSpec::BearerEnv { env }) => {
-                        if env.is_empty() {
-                            anyhow::bail!(
-                                "MCP server `{}`: auth.bearer_env requires non-empty `env`",
-                                self.name
-                            );
-                        }
+                    Some(AuthSpec::BearerEnv { env }) if env.is_empty() => {
+                        anyhow::bail!(
+                            "MCP server `{}`: auth.bearer_env requires non-empty `env`",
+                            self.name
+                        );
                     }
                     Some(AuthSpec::Bearer { token }) if !token.is_empty() => {
                         // Loud reminder at boot. We do not bail —

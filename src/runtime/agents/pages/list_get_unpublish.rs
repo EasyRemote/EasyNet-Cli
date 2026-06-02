@@ -78,12 +78,12 @@ pub fn handle_get(
         .unwrap_or(0);
     let url_root = super::pages_public_url_root(realm, user, project_id);
     let dev_listener_url_root = super::pages_dev_listener_url_root(user, project_id, listener_port);
-    let project_uri = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
+    let project_ura = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
 
     Ok(json!({
         "user":                      user,
         "project_id":                project_id,
-        "project_uri":               project_uri,
+        "project_ura":               project_ura,
         "folder":                    h.canonical_root.display().to_string(),
         "visibility":                h.visibility.as_str(),
         "started_at_ms":             started_at_ms,

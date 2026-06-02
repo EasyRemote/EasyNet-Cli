@@ -39,5 +39,3 @@
 pub mod dispatch_shim;
 pub mod hot_agent_registrar;
 pub mod runtime_factory;
-#[cfg(feature = "axon-pb")]
-pub mod wire_conv;
