@@ -190,11 +190,13 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         .context("ensure daemon-config.toml for device mode")?;
     let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
 
-    let mut daemon_handle = spawn_easynet_daemon(&creds.node_id);
-    let control_socket = crate::services::control::transport::default_socket_path();
+    let mut daemon_handle = crate::daemon::DaemonConfig::device(&creds.node_id)
+        .and_then(|cfg| cfg.start())
+        .context("start easynet-daemon")?;
+    let control_socket = daemon_handle.control_endpoint().to_path_buf();
     let boot = super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
-        daemon_handle.as_mut(),
+        daemon_handle.child_mut(),
         super::start_boot_watcher::BootContext {
             pages_start_port: pages_start_hint,
         },
@@ -208,12 +210,8 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // here, so this branch is defence-in-depth only).
     let pages_listener_port = super::start_boot_watcher::final_pages_port(boot.pages_port)
         .ok_or_else(|| anyhow::anyhow!("daemon reported Ready without binding a pages port"))?;
-    let sockets = DaemonSockets {
-        control_socket,
-        grpc_socket: crate::support::local_daemon_grpc::resolve_socket_path(),
-    };
-    let pid = discover_existing_daemon_pid();
-    let endpoint = sockets.grpc_socket.display().to_string();
+    let pid = daemon_handle.pid();
+    let endpoint = daemon_handle.invocation_endpoint().display().to_string();
 
     let state = config::RuntimeState {
         endpoint: endpoint.clone(),
@@ -228,7 +226,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     config::save(&state)?;
 
     output::success("EasyNet daemon started");
-    let control_socket = sockets.control_socket.display().to_string();
+    let control_socket = daemon_handle.control_endpoint().display().to_string();
     let hub_api = creds.api_base();
     let pages_url_root = format!(
         "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
@@ -285,198 +283,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     } else {
         output::info("Daemon running in background. Use 'easynet stop' to stop.");
         Ok(())
-    }
-}
-
-/// Re-publish every Agent's directory entry + descriptor list to
-/// the realm hub via `federation.advertise_*`. Replaces the two
-/// pre-RFC-001 helpers (`republish_all_agents_best_effort` +
-/// `republish_system_abilities_best_effort`) with the single
-/// federation-shaped path.
-///
-/// Steps:
-///   1. Build a `BootstrapPlan` from credentials + the loaded
-///      AgentRegistry. Today every host enables consent; policy /
-///      mcp default off until the [profiles] config wiring lands.
-///   2. Hand the plan to `runtime::publish::republish_abilities_via_advertise`.
-///   3. Render outcomes — one warn per failed advertise; one
-///      info line summarising successes.
-///
-/// Spawn the easynet-daemon child process so its UDS listeners are
-/// up before `runtime.register_local_tool` advertises their paths to
-/// the runtime. Returns the spawned `Child` so the caller (or its
-/// drop on shutdown) can terminate it; v1 leaves orphaning to the
-/// process supervisor (operators usually run this in a session that
-/// gets SIGTERMed on Ctrl-C, which propagates to the child).
-///
-/// Best-effort: a spawn failure is logged but never aborts startup.
-/// In that degraded state, the runtime accepts register calls and
-/// the registered endpoint is recorded, but every actual Invoke
-/// falling back to `runtime_local_tools` will fail at the UDS
-/// connect step until the operator manually starts the daemon.
-/// Probe whether an `easynet-daemon` is accepting on the canonical
-/// `~/.easynet/control.sock`. Returns `true` only if the path
-/// exists AND a connect succeeds — a stale socket file (left after
-/// a daemon crash) returns `false` because the connect refuses.
-///
-/// Unix-only; on non-Unix targets the daemon's IPC plane uses
-/// Named Pipes, and the spawn-twice race that motivates this
-/// probe is a Unix-specific failure mode.
-fn probe_daemon_alive() -> bool {
-    crate::support::local_daemon_grpc::probe_accepting(
-        &crate::services::control::transport::default_socket_path(),
-    )
-}
-
-#[derive(Debug, Clone)]
-struct DaemonSockets {
-    control_socket: std::path::PathBuf,
-    grpc_socket: std::path::PathBuf,
-}
-
-fn discover_existing_daemon_pid() -> Option<u32> {
-    let pid_path = crate::persistence::config::easynet_daemon_pid_path();
-    if let Some(pid) = std::fs::read_to_string(&pid_path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .filter(|pid| net::is_pid_alive(*pid))
-    {
-        return Some(pid);
-    }
-
-    #[cfg(windows)]
-    {
-        return None;
-    }
-
-    #[cfg(not(windows))]
-    {
-        let output = std::process::Command::new("pgrep")
-            .args(["-f", "easynet-daemon"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .find(|pid| *pid != std::process::id() && net::is_pid_alive(*pid))
-    }
-}
-
-fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
-    // Liveness probe: if a daemon is already accepting on the
-    // canonical control.sock, do not spawn a second one. A second
-    // spawn races against the first for the runtime-dispatch
-    // socket bind (one-process), and the loser exits silently —
-    // leaving a "half-broken" setup that swallows dispatches. The
-    // pidfile alone does not catch this case (an operator who
-    // hand-spawned the daemon for a test never wrote one). Probe
-    // the actual UDS so any healthy responder, however spawned,
-    // counts as "already running".
-    if probe_daemon_alive() {
-        let sock = crate::services::control::transport::default_socket_path();
-        output::info(&format!(
-            "easynet-daemon already accepting on {} — leaving it in place",
-            sock.display()
-        ));
-        return None;
-    }
-
-    // Resolve the daemon binary: env override > sibling of current
-    // exe > PATH. The env override exists because the test stack
-    // uses an out-of-tree build; production installers drop both
-    // binaries into /usr/local/bin so the sibling lookup wins.
-    let bin_path = std::env::var_os("EASYNET_DAEMON_BIN")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("easynet-daemon")))
-        })
-        .unwrap_or_else(|| std::path::PathBuf::from("easynet-daemon"));
-
-    let mut cmd = std::process::Command::new(&bin_path);
-    cmd.env("EASYNET_NODE_ID", node_id);
-    cmd.stdin(std::process::Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // Background runtime must outlive the CLI process and any
-        // transient terminal/session used to launch it.
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::signal(libc::SIGHUP, libc::SIG_IGN) == libc::SIG_ERR {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    // EASYNET_PAGES_PORT is inherited from this process's environment
-    // (Command's default). The daemon parses it; the CLI does not.
-    // Daemon's IPC + dispatch logs go to a known file so operators
-    // can tail without guessing where stderr landed.
-    let log_dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join(".easynet")
-        .join("logs");
-    let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = log_dir.join("easynet-daemon.log");
-    if let Ok(f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        if let Ok(f2) = f.try_clone() {
-            cmd.stdout(std::process::Stdio::from(f2));
-        }
-        cmd.stderr(std::process::Stdio::from(f));
-    }
-    match cmd.spawn() {
-        Ok(child) => {
-            // Record the daemon's pid so `easynet runtime stop` can
-            // signal it deterministically. Best-effort: a write
-            // failure means stop will fall back to the (correct)
-            // pgrep-style sweep, but we want the pidfile to be the
-            // authoritative path so a second `runtime start` doesn't
-            // race with a still-alive ghost daemon (load-bearing —
-            // the runtime-dispatch socket bind is one-process and a
-            // second daemon's responder exits silently, leaving a
-            // half-broken setup that swallows chat connections).
-            let pid = child.id();
-            let pid_path = crate::persistence::config::easynet_daemon_pid_path();
-            if let Some(parent) = pid_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Err(e) = std::fs::write(&pid_path, pid.to_string()) {
-                output::warn(&format!(
-                    "could not write daemon pidfile {}: {e}; \
-                     `runtime stop` will fall back to pgrep",
-                    pid_path.display()
-                ));
-            }
-            output::detail_dim(
-                "daemon",
-                &format!(
-                    "spawned {} (pid {pid}; log: {})",
-                    bin_path.display(),
-                    log_path.display()
-                ),
-            );
-            Some(child)
-        }
-        Err(e) => {
-            output::warn(&format!(
-                "failed to spawn easynet-daemon ({}): {e}; control.sock + runtime-dispatch.sock will not be available",
-                bin_path.display()
-            ));
-            None
-        }
     }
 }
 
@@ -747,7 +553,9 @@ where
 /// not a hub/both-mode config. Split out from `run_as_hub` so the
 /// "hub never starts a raw runtime" exit criterion is unit-testable
 /// without spawning a daemon.
-fn resolve_hub_config(args: &StartArgs) -> anyhow::Result<crate::persistence::daemon_config::DaemonConfig> {
+fn resolve_hub_config(
+    args: &StartArgs,
+) -> anyhow::Result<crate::persistence::daemon_config::DaemonConfig> {
     use crate::persistence::daemon_config::{self, DaemonConfig, DaemonMode};
 
     let config_path = daemon_config::default_config_path();
@@ -793,21 +601,19 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     let cfg = resolve_hub_config(args)?;
     let realm = cfg.realm().to_string();
 
-    let mut daemon_handle = spawn_easynet_daemon("hub");
-    let control_socket = crate::services::control::transport::default_socket_path();
+    let mut daemon_handle = crate::daemon::DaemonConfig::hub()
+        .start()
+        .context("start hub easynet-daemon")?;
+    let control_socket = daemon_handle.control_endpoint().to_path_buf();
     super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
-        daemon_handle.as_mut(),
+        daemon_handle.child_mut(),
         super::start_boot_watcher::BootContext {
             pages_start_port: None,
         },
     )?;
-    let sockets = DaemonSockets {
-        control_socket,
-        grpc_socket: crate::support::local_daemon_grpc::resolve_socket_path(),
-    };
-    let pid = discover_existing_daemon_pid();
-    let endpoint = sockets.grpc_socket.display().to_string();
+    let pid = daemon_handle.pid();
+    let endpoint = daemon_handle.invocation_endpoint().display().to_string();
 
     let state = config::RuntimeState {
         endpoint: endpoint.clone(),
@@ -822,7 +628,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     config::save(&state)?;
 
     output::success("EasyNet hub started");
-    let control_socket = sockets.control_socket.display().to_string();
+    let control_socket = daemon_handle.control_endpoint().display().to_string();
     let listen_tcp = cfg
         .listen_tcp()
         .map(|a| a.to_string())
@@ -840,10 +646,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     output::kv_section(&rows);
     output::step(&format!(
         "Devices can join with: easynet start --hub axon://<this-ip>:{}",
-        listen_tcp
-            .rsplit(':')
-            .next()
-            .unwrap_or("50051"),
+        listen_tcp.rsplit(':').next().unwrap_or("50051"),
     ));
 
     if args.foreground {

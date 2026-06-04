@@ -61,15 +61,6 @@ pub fn detail(key: &str, value: &str) {
     eprintln!("  {key}: {value}");
 }
 
-/// Like [`detail`] but the entire line renders dim. Use for
-/// secondary breadcrumbs whose presence is informational ("daemon
-/// spawned at /usr/local/bin/easynet-daemon, log at …") and that
-/// shouldn't compete with the foreground stage stream for the
-/// reader's attention.
-pub fn detail_dim(key: &str, value: &str) {
-    eprintln!("{}", style(format!("  {key}: {value}")).dim());
-}
-
 /// Render a vertically-aligned key/value block. Every key gets
 /// padded with spaces so the values start at the same column,
 /// regardless of how long individual keys are. Keys render in
