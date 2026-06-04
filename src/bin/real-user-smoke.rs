@@ -51,6 +51,7 @@ fn target(ability: &str, args: Value) -> InvocationTarget {
         normalized_args: args,
         call_mode: CallMode::Rpc,
         subject: None,
+        causal_context: None,
     }
 }
 
@@ -419,6 +420,7 @@ fn main() -> anyhow::Result<()> {
                     }),
                     call_mode: CallMode::Rpc,
                     subject: None,
+                    causal_context: None,
                 })
             })
             .await
@@ -460,6 +462,7 @@ fn main() -> anyhow::Result<()> {
                     normalized_args: json!({}),
                     call_mode: CallMode::Rpc,
                     subject: None,
+                    causal_context: None,
                 })
             })
             .await
@@ -494,6 +497,7 @@ fn main() -> anyhow::Result<()> {
                 }),
                 call_mode: CallMode::Stream,
                 subject: None,
+                causal_context: None,
             };
             match dispatcher_for_codex.execute_stream(codex_target) {
                 Ok(stream) => print_stream_frames(&rt, "Codex", stream),
@@ -517,6 +521,7 @@ fn main() -> anyhow::Result<()> {
             }),
             call_mode: CallMode::Stream,
             subject: None,
+            causal_context: None,
         };
         let stream = dispatcher_for_stream
             .execute_stream(stream_target)

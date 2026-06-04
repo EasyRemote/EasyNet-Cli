@@ -135,6 +135,7 @@ fn run_handler(args: Value) -> anyhow::Result<Value> {
     let opts = crate::facade::cli::mission_runs::MissionRunOpts {
         source_label: Some(label),
         trace_path: None,
+        invocation_context: None,
     };
 
     let result = crate::facade::cli::mission_runs::run_mission_inproc(&source, opts)?;

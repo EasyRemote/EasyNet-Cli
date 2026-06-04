@@ -196,6 +196,7 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
             normalized_args: serde_json::json!({"location": "Berlin"}),
             call_mode: CallMode::Stream,
             subject: None,
+            causal_context: None,
         },
     )
     .await

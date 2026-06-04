@@ -127,6 +127,7 @@ mod tests {
             normalized_args: json!({"hello": "world"}),
             call_mode: CallMode::Rpc,
             subject: None,
+            causal_context: None,
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(resp["status"], "healthy");
