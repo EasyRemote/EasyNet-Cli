@@ -7,7 +7,7 @@
 //
 // Lifecycle:
 // - Ensures no runtime is already running (checks ~/.easynet/runtime.json).
-// - Uses `ServerConfig` from the Axon SDK to auto-start a local runtime on a free port.
+// - Both device and hub modes start `easynet-daemon` (mode=device / mode=hub) — the single product policy owner — not a raw Axon runtime.
 // - If credentials exist (from `easynet join`), registers the node and starts heartbeat.
 // - In foreground mode: blocks on Ctrl-C, then gracefully deregisters + shuts down.
 // - In background mode: forks a heartbeat daemon process, detaches the runtime.
@@ -15,12 +15,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 
 use anyhow::Context;
 use clap::Args;
-use easynet_axon::server::ServerConfig;
 
 use crate::persistence::config;
 use crate::support::{net, output, shutdown::ShutdownSignal};
@@ -74,6 +72,15 @@ pub struct StartArgs {
     /// Bind address for Hub mode (default: 0.0.0.0:50051)
     #[arg(long, default_value = config::DEFAULT_BIND)]
     pub bind: String,
+    /// TLS certificate (PEM) for Hub mode's public TCP listener.
+    /// Required the first time a hub starts without a daemon-config.toml;
+    /// used to scaffold one. A public hub cannot run without TLS.
+    #[arg(long)]
+    pub cert: Option<std::path::PathBuf>,
+    /// TLS private key (PEM) for Hub mode's public TCP listener.
+    /// Pairs with --cert.
+    #[arg(long)]
+    pub key: Option<std::path::PathBuf>,
     /// Run in foreground (block until Ctrl-C)
     #[arg(long)]
     pub foreground: bool,
@@ -96,6 +103,8 @@ impl StartArgs {
             token: None,
             as_hub: false,
             bind: config::DEFAULT_BIND.into(),
+            cert: None,
+            key: None,
             foreground: true,
             no_mcp,
             insecure: false,
@@ -116,6 +125,8 @@ impl StartArgs {
             token: None,
             as_hub: false,
             bind: config::DEFAULT_BIND.into(),
+            cert: None,
+            key: None,
             foreground: false,
             no_mcp: false,
             insecure: false,
@@ -730,146 +741,129 @@ where
 
 // ── Hub mode ────────────────────────────────────────────────────────────────
 
-fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
-    // Clear env vars to prevent SDK from connecting to an existing endpoint or hub.
-    apply_env_patch(&env_patch_for_hub());
+/// Resolve the hub-mode daemon config, scaffolding it from `--cert` /
+/// `--key` when none exists. Fails fast (no daemon spawn, no raw
+/// axon-runtime) when the config is absent without TLS material or is
+/// not a hub/both-mode config. Split out from `run_as_hub` so the
+/// "hub never starts a raw runtime" exit criterion is unit-testable
+/// without spawning a daemon.
+fn resolve_hub_config(args: &StartArgs) -> anyhow::Result<crate::persistence::daemon_config::DaemonConfig> {
+    use crate::persistence::daemon_config::{self, DaemonConfig, DaemonMode};
 
-    let tenant = args.tenant.clone();
-
-    let mut cfg = ServerConfig::default()
-        .endpoint(&args.bind)
-        .insecure(args.insecure);
-    if let Some(ref t) = args.token {
-        cfg = cfg.hub_join_token(t);
+    let config_path = daemon_config::default_config_path();
+    if !config_path.exists() {
+        match (&args.cert, &args.key) {
+            (Some(cert), Some(key)) => {
+                daemon_config::ensure_hub_config(&args.bind, &args.tenant, cert, key)
+                    .context("scaffold hub daemon-config.toml")?;
+            }
+            _ => anyhow::bail!(
+                "hub mode needs a TLS-bearing daemon config at {}.\n\
+                 Either pass --cert <cert.pem> --key <key.pem> to scaffold one, \
+                 or author it by hand:\n  \
+                 [daemon]\n  mode = \"hub\"\n  realm = \"{}\"\n  \
+                 listen_tcp = \"{}\"\n  tls_cert_pem = \"<path/to/cert.pem>\"\n  \
+                 tls_key_pem = \"<path/to/key.pem>\"\n\
+                 A public hub cannot run without TLS.",
+                config_path.display(),
+                args.tenant,
+                args.bind,
+            ),
+        }
     }
+    let cfg = DaemonConfig::load(&config_path)
+        .with_context(|| format!("load hub daemon config at {}", config_path.display()))?;
+    if !matches!(cfg.mode(), DaemonMode::Hub | DaemonMode::Both) {
+        anyhow::bail!(
+            "daemon config at {} is mode={:?}, not hub/both — \
+             set `mode = \"hub\"` to start as a hub",
+            config_path.display(),
+            cfg.mode(),
+        );
+    }
+    Ok(cfg)
+}
 
-    let srv = cfg.start().context("start hub")?;
+fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
+    // Hub mode runs through `easynet-daemon` (mode=hub), the same policy
+    // owner as device mode — not a raw axon-runtime. A hub binds a
+    // public TCP+TLS Invocation listener, so its config MUST carry
+    // `listen_tcp` + TLS material; the daemon refuses to bind TCP in
+    // plaintext (load Invariant 2).
+    let cfg = resolve_hub_config(args)?;
+    let realm = cfg.realm().to_string();
 
-    let endpoint = srv.url().to_string();
-    let pid = net::discover_pid_from_endpoint(&endpoint);
+    let mut daemon_handle = spawn_easynet_daemon("hub");
+    let control_socket = crate::services::control::transport::default_socket_path();
+    super::start_boot_watcher::wait_for_daemon_boot(
+        &control_socket,
+        daemon_handle.as_mut(),
+        super::start_boot_watcher::BootContext {
+            pages_start_port: None,
+        },
+    )?;
+    let sockets = DaemonSockets {
+        control_socket,
+        grpc_socket: crate::support::local_daemon_grpc::resolve_socket_path(),
+    };
+    let pid = discover_existing_daemon_pid();
+    let endpoint = sockets.grpc_socket.display().to_string();
 
     let state = config::RuntimeState {
         endpoint: endpoint.clone(),
-        runtime_kind: config::RuntimeKind::AxonBridge,
+        runtime_kind: config::RuntimeKind::DaemonOnly,
         pid,
         hub: None,
-        tenant: Some(tenant),
+        tenant: Some(realm),
         label: Some("hub".to_string()),
         started_at: Some(chrono::Utc::now().to_rfc3339()),
         credential_verified: None, // Not applicable in hub mode.
     };
     config::save(&state)?;
 
-    output::success(&format!("Hub started on {endpoint}"));
-    if let Some(pid) = pid {
-        output::detail("pid", &pid.to_string());
+    output::success("EasyNet hub started");
+    let control_socket = sockets.control_socket.display().to_string();
+    let listen_tcp = cfg
+        .listen_tcp()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| args.bind.clone());
+    let mut rows = vec![
+        ("daemon_socket", endpoint.as_str()),
+        ("control_socket", control_socket.as_str()),
+        ("listen_tcp", listen_tcp.as_str()),
+        ("realm", cfg.realm()),
+    ];
+    let pid_display = pid.map(|pid| pid.to_string());
+    if let Some(ref pid) = pid_display {
+        rows.push(("pid", pid.as_str()));
     }
-    output::step("Devices can join with: easynet start --hub axon://<this-ip>:50051");
+    output::kv_section(&rows);
+    output::step(&format!(
+        "Devices can join with: easynet start --hub axon://<this-ip>:{}",
+        listen_tcp
+            .rsplit(':')
+            .next()
+            .unwrap_or("50051"),
+    ));
 
     if args.foreground {
-        let shutdown = ShutdownSignal::new();
-        install_ctrlc_handler(&shutdown);
-        output::info("Running in foreground (Ctrl-C to stop)...");
-        shutdown.wait();
-        drop(srv);
-        config::remove()?;
-        output::success("Hub stopped");
+        run_foreground_with_daemon_hub()
     } else {
-        let _ = ManuallyDrop::new(srv);
         output::info("Hub running in background. Use 'easynet stop' to stop.");
+        Ok(())
     }
+}
+
+/// Foreground hub: block until Ctrl-C, then leave the daemon running
+/// (the same lifecycle contract as background — `easynet stop` owns
+/// teardown). The daemon is a detached child; we only hold the console.
+fn run_foreground_with_daemon_hub() -> anyhow::Result<()> {
+    let shutdown = ShutdownSignal::new();
+    install_ctrlc_handler(&shutdown);
+    output::info("Running in foreground (Ctrl-C to detach)...");
+    shutdown.wait();
+    output::info("Detached. Hub still running — use 'easynet stop' to stop it.");
     Ok(())
-}
-
-// ── Environment setup (pre-thread) ─────────────────────────────────────────
-
-/// Environment variables the Axon SDK needs, grouped for `init_env_vars()`.
-struct EnvPatch {
-    sets: Vec<(&'static str, String)>,
-    removes: Vec<&'static str>,
-}
-
-/// Apply environment variable patch.
-///
-/// # Safety
-/// Must be called on the main thread before any `std::thread::spawn` or `ServerConfig::start`.
-/// `assert_single_threaded()` guards against accidental misuse.
-fn apply_env_patch(patch: &EnvPatch) {
-    assert_single_threaded();
-    // SAFETY: assert_single_threaded() verified no other threads exist.
-    unsafe {
-        for (k, v) in &patch.sets {
-            std::env::set_var(k, v);
-        }
-        for k in &patch.removes {
-            std::env::remove_var(k);
-        }
-    }
-}
-
-/// Panic if other threads are running. Guards `apply_env_patch` against UB.
-///
-/// On Linux, counts `/proc/self/task` entries.
-/// On macOS, uses `pthread_num_threads_np()` from libc.
-/// On other platforms, this is a no-op — call-site discipline required.
-fn assert_single_threaded() {
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(entries) = std::fs::read_dir("/proc/self/task") {
-            let count = entries.count();
-            assert!(
-                count <= 1,
-                "apply_env_patch called with {count} threads running — must be single-threaded"
-            );
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::mem::MaybeUninit;
-        extern "C" {
-            fn task_threads(
-                target_task: libc::c_uint,
-                act_list: *mut *mut libc::c_uint,
-                act_list_cnt: *mut libc::c_uint,
-            ) -> libc::c_int;
-            fn mach_task_self() -> libc::c_uint;
-            fn vm_deallocate(target_task: libc::c_uint, address: usize, size: usize)
-                -> libc::c_int;
-        }
-        let mut thread_list = MaybeUninit::<*mut libc::c_uint>::uninit();
-        let mut thread_count = MaybeUninit::<libc::c_uint>::uninit();
-        // SAFETY: Mach kernel call to enumerate threads in the current task.
-        let kr = unsafe {
-            task_threads(
-                mach_task_self(),
-                thread_list.as_mut_ptr(),
-                thread_count.as_mut_ptr(),
-            )
-        };
-        if kr == 0 {
-            let count = unsafe { thread_count.assume_init() };
-            let list = unsafe { thread_list.assume_init() };
-            // Free the Mach-allocated thread list.
-            unsafe {
-                vm_deallocate(
-                    mach_task_self(),
-                    list as usize,
-                    count as usize * std::mem::size_of::<libc::c_uint>(),
-                );
-            }
-            assert!(
-                count <= 1,
-                "apply_env_patch called with {count} threads running — must be single-threaded"
-            );
-        }
-    }
-}
-
-fn env_patch_for_hub() -> EnvPatch {
-    EnvPatch {
-        sets: Vec::new(),
-        removes: vec!["EASYNET_AXON_ENDPOINT", "AXON_HUB"],
-    }
 }
 
 // ── Credential verification ─────────────────────────────────────────────────
@@ -945,6 +939,62 @@ mod tests {
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         }
+    }
+
+    fn hub_args(cert: Option<&str>, key: Option<&str>) -> StartArgs {
+        StartArgs {
+            hub: config::DEFAULT_HUB.into(),
+            tenant: "tenant-hub".into(),
+            label: None,
+            token: None,
+            as_hub: true,
+            bind: "0.0.0.0:50051".into(),
+            cert: cert.map(std::path::PathBuf::from),
+            key: key.map(std::path::PathBuf::from),
+            foreground: false,
+            no_mcp: false,
+            insecure: false,
+        }
+    }
+
+    #[test]
+    fn hub_without_config_or_tls_flags_fails_fast() {
+        // Exit criterion: hub must NOT start a raw axon-runtime. With no
+        // config and no --cert/--key, resolution fails before any spawn.
+        let _g = HomeGuard::new();
+        let err = resolve_hub_config(&hub_args(None, None))
+            .expect_err("hub without TLS config must fail fast");
+        let msg = err.to_string();
+        assert!(msg.contains("TLS-bearing daemon config"), "got: {msg}");
+        assert!(msg.contains("--cert"), "must guide operator: {msg}");
+    }
+
+    #[test]
+    fn hub_with_tls_flags_scaffolds_hub_mode_config() {
+        // --cert/--key scaffold a mode=hub config that resolves to the
+        // daemon-owned hub path (DaemonMode::Hub), never a bridge.
+        use crate::persistence::daemon_config::DaemonMode;
+        let _g = HomeGuard::new();
+        let cfg = resolve_hub_config(&hub_args(Some("/tmp/c.pem"), Some("/tmp/k.pem")))
+            .expect("hub with TLS flags must resolve");
+        assert_eq!(cfg.mode(), DaemonMode::Hub);
+        assert_eq!(cfg.realm(), "tenant-hub");
+        assert!(
+            cfg.hub_endpoint().is_none(),
+            "a hub has no upstream hub of its own"
+        );
+    }
+
+    #[test]
+    fn hub_rejects_device_mode_config() {
+        // An existing device-mode config must not be silently started as
+        // a hub — fail fast with mode guidance.
+        let _g = HomeGuard::new();
+        crate::persistence::daemon_config::ensure_minimal_device_config(&test_creds())
+            .expect("seed device config");
+        let err = resolve_hub_config(&hub_args(Some("/tmp/c.pem"), Some("/tmp/k.pem")))
+            .expect_err("device-mode config must be rejected for hub start");
+        assert!(err.to_string().contains("not hub/both"), "got: {err}");
     }
 
     #[test]
