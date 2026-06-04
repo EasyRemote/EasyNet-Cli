@@ -1,7 +1,7 @@
 // EasyNet CLI — `<self>.session` device-side LocalAxonSessionDispatcher
 // =================================================================
 //
-// File: src/services/axon_serve/local_session_dispatcher.rs
+// File: src/services/invocation_transport/local_session_dispatcher.rs
 //
 // Device-side `<self>.session` dispatcher. It decodes
 // `SessionDispatch::Dispatch{call_id, ability, args}`, routes the
@@ -31,10 +31,10 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::services::axon_serve::invoke_remote_initiator::{
+use crate::services::invocation_transport::invoke_remote_initiator::{
     call_id_hex, SessionContentEnvelope, SessionDispatch,
 };
-use crate::services::axon_serve::session_initiator::{
+use crate::services::invocation_transport::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
@@ -57,8 +57,9 @@ pub struct LocalAxonSessionDispatcher {
     /// never receive `RequestResult` frames). When set, inbound
     /// `SessionDispatch::RequestResult` frames are routed here
     /// by `call_id`, completing the awaiting dispatcher future.
-    escalation_correlation:
-        Option<Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>>,
+    escalation_correlation: Option<
+        Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
+    >,
     /// Active same-hub remote bidi sessions keyed by dispatcher
     /// call_id. The hub opens the local bidi on the device, then
     /// subsequent `SessionDispatch::BidiInput` frames route through
@@ -154,7 +155,9 @@ impl LocalAxonSessionDispatcher {
     #[must_use]
     pub fn with_escalation_correlation(
         mut self,
-        correlation: Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
+        correlation: Arc<
+            crate::services::invocation_transport::session_escalation::EscalationCorrelation,
+        >,
     ) -> Self {
         self.escalation_correlation = Some(correlation);
         self

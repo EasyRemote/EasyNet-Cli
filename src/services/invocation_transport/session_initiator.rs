@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — <self>.session initiator (device side)
+// EasyNet CLI — invocation_transport — <self>.session initiator (device side)
 // ====================================================================
 //
-// File: src/services/axon_serve/session_initiator.rs
+// File: src/services/invocation_transport/session_initiator.rs
 // Description: Device-side caller for `<self>.session`. At daemon
 //              boot a device opens one long-lived `InvokeBidi`
 //              stream against its configured hub, sends frame 0 =
@@ -368,7 +368,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
     escalation_outbox: Option<
-        &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
+        &crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
     >,
     ability_catalog: &[String],
 ) -> Result<(), SessionError> {
@@ -393,7 +393,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
     escalation_outbox: Option<
-        &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
+        &crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
     >,
     ability_catalog: &[String],
     idle_timeout: Duration,
@@ -482,10 +482,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // already configures both directions; the client side must too.
     let mut client = InvocationClient::new(channel)
         .max_decoding_message_size(
-            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
         )
         .max_encoding_message_size(
-            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
         );
 
     // Membership prelude (URA v4.1.4 dev unblock): axon-runtime hub
@@ -937,12 +937,14 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
 /// `UpstreamFailure { reason: "no live <self>.session bidi" }`
 /// to in-flight escalations until the supervisor reconnects.
 struct OutboxGuard {
-    outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+    outbox: Option<crate::services::invocation_transport::session_escalation::SharedSessionOutbox>,
 }
 
 impl OutboxGuard {
     fn new(
-        outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+        outbox: Option<
+            crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
+        >,
     ) -> Self {
         Self { outbox }
     }
@@ -974,7 +976,9 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<PathBuf>,
     dispatcher: Arc<D>,
-    escalation_outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+    escalation_outbox: Option<
+        crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
+    >,
     ability_catalog: Vec<String>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -1089,7 +1093,7 @@ async fn send_federation_join_prelude(
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
 
-    let request = crate::services::axon_serve::ProtoEnvelope::caller_only(caller_ura)
+    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
         .and_then(|env| env.invoke_request("federation.join", arguments))
         .map_err(|e| tonic::Status::invalid_argument(format!("federation.join prelude: {e}")))?;
 
@@ -1188,7 +1192,7 @@ async fn send_advertise_agent_prelude(
         tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
     })?;
 
-    let request = crate::services::axon_serve::ProtoEnvelope::caller_only(caller_ura)
+    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
         .and_then(|env| env.invoke_request("federation.advertise_agent", arguments))
         .map_err(|e| {
             tonic::Status::invalid_argument(format!("federation.advertise_agent prelude: {e}"))
@@ -1222,7 +1226,7 @@ async fn send_advertise_abilities_prelude(
         ))
     })?;
 
-    let request = crate::services::axon_serve::ProtoEnvelope::caller_only(caller_ura)
+    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
         .and_then(|env| env.invoke_request("federation.advertise_abilities", arguments))
         .map_err(|e| {
             tonic::Status::invalid_argument(format!("federation.advertise_abilities prelude: {e}"))

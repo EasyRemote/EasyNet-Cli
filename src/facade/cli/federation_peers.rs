@@ -81,7 +81,7 @@ fn daemon_config_path() -> PathBuf {
 }
 
 /// Default realm-trust.toml location, mirrors the daemon's
-/// `services::axon_serve::boot::trust_anchor_path_from_env_or_default`.
+/// `services::invocation_transport::boot::trust_anchor_path_from_env_or_default`.
 /// The `EASYNET_REALM_TRUST_PATH` env override is the same one the
 /// daemon honours so this subcommand and the daemon stay aligned in
 /// test deployments. Host-mode installs usually cannot write

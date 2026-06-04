@@ -387,7 +387,7 @@ fn invoke_local_daemon_ability_with_caller_and_subject(
         .to_string();
     let arguments = serde_json::to_vec(&payload_json)
         .with_context(|| format!("encode {function_name} args"))?;
-    let request = crate::services::axon_serve::ProtoEnvelope::targeted(
+    let request = crate::services::invocation_transport::ProtoEnvelope::targeted(
         caller_ura.clone(),
         caller_ura,
         subject_ura,

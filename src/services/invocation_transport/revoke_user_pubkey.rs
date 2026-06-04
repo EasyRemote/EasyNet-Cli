@@ -1,7 +1,7 @@
 // EasyNet CLI — `<self>.revoke_user_pubkey` ability handler
 // ===========================================================
 //
-// File: src/services/axon_serve/revoke_user_pubkey.rs
+// File: src/services/invocation_transport/revoke_user_pubkey.rs
 // DEC-EU §revocation. Removes a (user_ura, public_key_b64) entry
 // from the daemon's `realm-trust.toml` and re-publishes the shared
 // trust-anchor cell so subsequent admission calls cannot use the

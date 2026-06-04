@@ -1,7 +1,7 @@
 // EasyNet CLI — `<self>.list_user_pubkeys` ability handler
 // ==========================================================
 //
-// File: src/services/axon_serve/list_user_pubkeys.rs
+// File: src/services/invocation_transport/list_user_pubkeys.rs
 // DEC-EU §multi-host-list. Read-only inventory of the realm-trust
 // entries registered under a given user URI. Backend's list
 // endpoint calls this instead of reading the TOML directly, so

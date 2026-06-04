@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — <self>.invoke_remote initiator (device side)
+// EasyNet CLI — invocation_transport — <self>.invoke_remote initiator (device side)
 // =========================================================================
 //
-// File: src/services/axon_serve/invoke_remote_initiator.rs
+// File: src/services/invocation_transport/invoke_remote_initiator.rs
 // Description: Device-side caller for `<self>.invoke_remote`. Opens a
 //              per-call `InvokeBidi` stream against the daemon, sends
 //              frame 0 = `EnvelopeOpen` carrying the cross-device
@@ -389,10 +389,10 @@ pub async fn invoke_remote(
     // the rationale on why 1 GiB.
     let mut client = InvocationClient::new(channel)
         .max_decoding_message_size(
-            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
         )
         .max_encoding_message_size(
-            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
         );
     let response = client
         .invoke_bidi(tonic::Request::new(ReceiverStream::new(up_rx)))

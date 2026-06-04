@@ -1,6 +1,6 @@
 # JSON control caller inventory
 
-Date: 2026-06-04
+Date: 2026-06-04; updated 2026-06-05 for CLI plugin Invocation migration.
 
 Scope: EasyNet-Cli only. This inventory covers the length-prefixed JSON
 control socket frame types `Invoke`, `Subscribe`, `OpenBidi`, `SendBidi`, and
@@ -33,14 +33,13 @@ Backend exclusion search:
 
 ```text
 rg -n "IncomingFrame::(Invoke|Subscribe|OpenBidi|SendBidi|CloseBidi)" \
-  src/services/axon_serve src/runtime src/support src/facade -g '!target'
+  src/services/invocation_transport src/runtime src/support src/facade -g '!target'
 ```
 
-The backend exclusion search returns only the two facade JSON-control callers:
-`src/facade/cli/start_boot_watcher.rs:155` and
-`src/facade/cli/groups/plugin.rs:216`. No `src/services/axon_serve`,
-`src/runtime`, or `src/support` backend/runtime path constructs a target JSON
-control frame.
+The backend exclusion search now returns only the facade boot watcher JSON-control
+caller: `src/facade/cli/start_boot_watcher.rs:155`. No
+`src/services/invocation_transport`, `src/runtime`, `src/support`, or CLI
+plugin path constructs a target JSON control product-ability frame.
 
 ## Production caller inventory
 
@@ -49,14 +48,13 @@ control frame.
 | language binding | C ABI `easynet_ability_invoke` | `Invoke` | Yes. This is the exported product ability RPC entry for non-Rust bindings. | `src/ffi/mod.rs:5` says the C ABI is consumed by Go, Python, Node, Swift, and Java bindings; `src/ffi/ability.rs:5` names `easynet_ability_invoke`; the function constructs `IncomingFrame::Invoke` at `src/ffi/ability.rs:155`; it sends through `IpcClient::round_trip` at `src/ffi/ability.rs:189`; `round_trip` serializes the frame and decodes one `OutgoingFrame` at `src/ffi/client.rs:216`. | Product ability caller over legacy JSON control. |
 | language binding | C ABI `easynet_ability_subscribe` | `Subscribe` | Yes. This is the exported product ability streaming entry for non-Rust bindings. | `src/ffi/ability.rs:5` names `easynet_ability_subscribe`; the reader task constructs `IncomingFrame::Subscribe` at `src/ffi/ability.rs:461`; it serializes and sends at `src/ffi/ability.rs:467`; the stream loop decodes `Frame`/`Terminal`/`Error` at `src/ffi/ability.rs:551`. | Product ability caller over legacy JSON control. |
 | boot/status path | `easynet start` boot watcher | `Subscribe` | No. This is lifecycle/status only. | `src/facade/cli/start_boot_watcher.rs:5` describes waiting for daemon boot and translating boot events to UI; it constructs `IncomingFrame::Subscribe` at `src/facade/cli/start_boot_watcher.rs:155`; the ability is `WATCH_BOOT_ABILITY` (`system.watch_boot`) from `src/services/control/server.rs:64`; it sends at `src/facade/cli/start_boot_watcher.rs:161`. | Boot/status lifecycle caller. |
-| CLI command | `easynet plugin ...` daemon plugin status/reload path | `Invoke` | No. This is plugin lifecycle/diagnostics, not general product ability invocation. | `src/facade/cli/groups/plugin.rs:20` describes plugin package lifecycle and daemon boot-state inspection; the file states this is not ability invocation at `src/facade/cli/groups/plugin.rs:22`; `invoke_plugin_control_ability` constructs `IncomingFrame::Invoke` at `src/facade/cli/groups/plugin.rs:216`; status and reload select daemon plugin lifecycle abilities at `src/facade/cli/groups/plugin.rs:175` and `src/facade/cli/groups/plugin.rs:179`. | CLI lifecycle/diagnostics caller over legacy JSON control. |
 
 ## Target frames with no production JSON caller
 
 | Category | Frames | Product ability caller | Evidence | Classification |
 |---|---:|---|---|---|
 | language binding | `OpenBidi`, `SendBidi`, `CloseBidi` | No production caller in the current C ABI. | The only production FFI constructors are `Invoke` at `src/ffi/ability.rs:155` and `Subscribe` at `src/ffi/ability.rs:461`; `rg` finds no `IncomingFrame::OpenBidi`, `IncomingFrame::SendBidi`, or `IncomingFrame::CloseBidi` under `src/ffi`. | No language-binding JSON bidi caller exists today. |
-| CLI command | `OpenBidi`, `SendBidi`, `CloseBidi` | No production caller. | The only facade constructors are the boot `Subscribe` at `src/facade/cli/start_boot_watcher.rs:155` and plugin `Invoke` at `src/facade/cli/groups/plugin.rs:216`. | No CLI JSON bidi caller exists today. |
+| CLI command | `Invoke`, `OpenBidi`, `SendBidi`, `CloseBidi` | No production caller. | The only facade constructor is the boot `Subscribe` at `src/facade/cli/start_boot_watcher.rs:155`; plugin status/reload now uses daemon Invocation instead of JSON control. | No CLI JSON product-ability or bidi caller exists today. |
 | backend | `Invoke`, `Subscribe`, `OpenBidi`, `SendBidi`, `CloseBidi` | No backend JSON-control caller in EasyNet-Cli. | Backend-like local ability calls route through Axon gRPC `daemon.sock`: `src/support/local_invoke.rs:5`, `src/support/local_invoke.rs:57`, and `src/support/local_daemon_grpc.rs:338`; the Axon server side is separately served on `daemon.sock`, distinct from `control.sock`, at `src/services/control/server.rs:23`. | Backend category is empty for JSON control callers; backend/product ability traffic is already on Axon Invocation gRPC where applicable. |
 
 ## Daemon internal receiver and compatibility paths
@@ -98,11 +96,14 @@ Product ability callers already off JSON control:
   calls `invoke_local_ability_with_subject`; `src/support/local_invoke.rs:57`
   declares this helper the canonical CLI entry; `src/support/local_daemon_grpc.rs:338`
   invokes daemon-hosted abilities through Axon gRPC.
+- CLI plugin status/reload uses `DaemonClient::invoke(DaemonInvocation)` on
+  `daemon.sock`; `src/facade/cli/groups/plugin.rs:223` builds the Invocation and
+  `src/facade/cli/groups/plugin.rs:245` derives the subject from paired device
+  credentials, falling back to a local loopback device URA when unpaired.
 
 Lifecycle, diagnostics, or boot/status callers still on JSON control:
 
 - `easynet start` boot progress watcher via `system.watch_boot`.
-- `easynet plugin ...` daemon status/reload helper.
 
 ## Demotion checklist
 
@@ -116,7 +117,7 @@ Before demoting JSON control from product ability transport:
   `InvokeStream` while preserving callback delivery, the dedicated dispatcher
   thread rationale at `src/ffi/ability.rs:470`, and idempotent cancellation
   semantics at `src/ffi/ability.rs:599`.
-- [ ] Move plugin lifecycle/status commands off `control.sock` and through the
+- [x] Move plugin lifecycle/status commands off `control.sock` and through the
   canonical CLI ability helper or another Axon Invocation path; preserve the
   daemon-down fallback behavior in `src/facade/cli/groups/plugin.rs:201`.
 - [ ] Replace `system.watch_boot` JSON `Subscribe` with a boot/status transport

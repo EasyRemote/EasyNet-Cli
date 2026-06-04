@@ -58,11 +58,11 @@ actionable from the backend repo alone.
 | Step | Plan item | Priority | Status | Evidence | Remainder |
 |---|---|---|---|---|---|
 | 1 | Unify Hub + device under easynet-daemon | P0 | **DONE (this branch)** | `run_as_hub` runs through `easynet-daemon mode=hub`, records `DaemonOnly` (`src/facade/cli/start.rs`); `ensure_hub_config` (`daemon_config.rs`); AxonBridge kept for legacy only. 3 commits on `codex/f07-hub-device-unify-2026-06-05`. | None. |
-| 2 | Promote daemon Invocation transport to first-class | P1 | **DONE** | `services::invocation_transport` façade (`src/services/invocation_transport.rs`); `start_daemon_invocation_transport` (`axon_serve/boot.rs:184`); unary/stream/bidi implemented (`daemon_invocation_service.rs:982/1104/1148`) + 115 tests. The residual "sidecar" word elsewhere refers to *plugin-host* sidecars — a different concept; must not be renamed. | None. |
-| 3 | daemon SDK lifecycle + client APIs in `libeasynet_cli` | P1 | **NOT_STARTED** | No `start_daemon` / `DaemonHandle` / `DaemonClient` / `invocation_endpoint` / `invoke()` public surface exists (grep finds only a doc-comment mention). | Build the public daemon SDK. **Gates Step 4.** Plan: do not stabilize while Step 1 was unfinished — Step 1 now done, so unblocked. |
-| 4 | Replace ability+args FFI with complete Invocation FFI | P2 | **NOT_STARTED** | FFI still `easynet_ability_invoke` (ability+args) at `src/ffi/ability.rs:102/155`; no `easynet_invocation_invoke` / stream / bidi. These are the Step-5 inventory's 4 MUST_MIGRATE callers. | Add complete-Invocation FFI threading `subject`/causal context. **Depends on Step 3.** |
-| 5 | JSON control caller inventory | P0 | **DONE** | `docs/json-control-caller-inventory.md` (commit `1af95db`). 4 MUST_MIGRATE, backend confirmed absent, G1–G12 gate. | None. |
-| 6 | Demote JSON control | P3 | **BLOCKED** | The 4 MUST_MIGRATE callers still construct `IncomingFrame::Invoke/Subscribe` (`ffi/ability.rs:155/461`, `plugin.rs:216`). | Cannot start until Steps 3+4 give those callers a daemon-Invocation replacement. Gate = inventory G9 (empty re-sweep). |
+| 2 | Promote daemon Invocation transport to first-class | P1 | **DONE** | `services::invocation_transport` module tree (`src/services/invocation_transport/`); `start_daemon_invocation_transport` (`invocation_transport/boot.rs:184`); unary/stream/bidi implemented (`daemon_invocation_service.rs:982/1104/1148`) + 115 tests. The residual "sidecar" word elsewhere refers to *plugin-host* sidecars — a different concept; must not be renamed. | None. |
+| 3 | daemon SDK lifecycle + client APIs in `libeasynet_cli` | P1 | **DONE (this branch)** | `easynet_cli::daemon::{DaemonConfig, DaemonHandle, DaemonClient, DaemonInvocation, start_daemon, stop_daemon}` (`src/daemon.rs`); `DaemonHandle::{control_endpoint, invocation_endpoint, status, stop}`; `DaemonClient::invoke(DaemonInvocation)` submits a complete unary Axon Invocation over `daemon.sock`; `facade::cli::start` now reuses the SDK lifecycle path. | Stream/bidi and C ABI bindings are intentionally left to Step 4. |
+| 4 | Replace ability+args FFI with complete Invocation FFI | P2 | **NOT_STARTED** | FFI still `easynet_ability_invoke` (ability+args) at `src/ffi/ability.rs:102/155`; no `easynet_invocation_invoke` / stream / bidi. These are the Step-5 inventory's 3 remaining MUST_MIGRATE callers. | Add complete-Invocation FFI threading `subject`/causal context. **Now unblocked by Step 3.** |
+| 5 | JSON control caller inventory | P0 | **DONE** | `docs/json-control-caller-inventory.md` (commit `1af95db`, updated in this branch). 3 remaining MUST_MIGRATE FFI callers, CLI plugin migrated, backend confirmed absent, G1–G12 gate. | None. |
+| 6 | Demote JSON control | P3 | **BLOCKED** | The 3 remaining MUST_MIGRATE FFI callers still construct `IncomingFrame::Invoke/Subscribe` (`ffi/ability.rs:155/461`) plus cancel at `ffi/ability.rs:541`; CLI plugin is already on daemon Invocation. | Cannot start until Step 4 gives the remaining FFI callers a daemon-Invocation replacement. Gate = inventory G9 (empty re-sweep). |
 | 7 | Remove/shrink CLI-owned Invocation semantics | P1 | **NOT_STARTED** | `src/runtime/invocation.rs:104` defines a CLI-owned `Invocation` with its **own** `canonical_bytes()` (:157) + `invocation_id_of` (:200) — a second canonical source. **Live**, used by `runtime/kernel.rs:41` and `easynet-daemon.rs:51` (not dead code). | Reduce to an adapter over Axon canonical bytes, or prove equivalence + delegate. Real refactor; touches the daemon kernel. Sequence after Step 4 so callers already use Axon Invocation. |
 
 ---
@@ -73,16 +73,16 @@ The cross-repo work is mostly **already done**. The genuine remaining sequence i
 chain inside EasyNet-Cli, plus one blocked backend item:
 
 ```
-Step 3 (daemon SDK)  ──▶  Step 4 (complete-Invocation FFI)  ──▶  Step 6 (demote JSON control)
-                                                              └─▶  Step 7 (shrink CLI Invocation)
+Step 4 (complete-Invocation FFI)  ──▶  Step 6 (demote JSON control)
+                                    └─▶  Step 7 (shrink CLI Invocation)
 
 backend delegation proof  ──(blocked on daemon admission gate format)──
 ```
 
 - **Steps 1, 2, 5** — DONE. **Axon** — nothing to change. **Backend** — done except one
   blocked item.
-- **Step 3** is the next actionable unit (now unblocked by Step 1). It gates Step 4, which
-  gates Steps 6 and 7.
+- **Step 3** is now complete in this branch. Step 4 is the next actionable unit; it gates
+  Steps 6 and 7.
 - Step 7's CLI `Invocation` is a live kernel type, so it is a real refactor, not a deletion.
 
 ## Baseline caveat

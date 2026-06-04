@@ -216,8 +216,8 @@ async fn main() -> anyhow::Result<()> {
     //   * the registry's `device.agent.start` / `.stop` handler
     //     closures (capture an Arc clone via
     //     `agent_lifecycle_ability::register`), and
-    //   * the boot sidecar's post-`LocalRuntime` wiring
-    //     (`start_axon_serve_sidecar`) which populates the cell
+    //   * the Invocation transport's post-`LocalRuntime` wiring
+    //     (`start_daemon_invocation_transport`) which populates the cell
     //     ONCE with the actual `HotAgentRegistrar` after
     //     `LocalRuntime` + `dispatch_handle` are wired.
     //
@@ -260,31 +260,32 @@ async fn main() -> anyhow::Result<()> {
         resolver,
     );
 
-    // RFC-003 PR-1 sidecar: gRPC InvocationServer (transport plane).
+    // Daemon Invocation transport: gRPC InvocationServer.
     // Start this BEFORE any other daemon listener binds so
     // `daemon-config.toml` is validated at the top of the boot order
     // rather than after control/runtime-dispatch sockets already
     // exist. That keeps the PR-1 "load config before any listener
-    // bind" invariant honest even while axon_serve is still a soft
-    // dependency.
+    // bind" invariant honest whenever the feature-gated transport is compiled in.
     #[cfg(feature = "axon-pb")]
     {
-        boot_bus.emit_started("axon-serve-sidecar");
-        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(
-            Arc::clone(&local_runtime),
-            invocation_ledger,
-            Arc::clone(&hot_agent_registrar_cell),
-            Some(Arc::clone(&built_registry.plugin_runtime_manager)),
-        ) {
-            eprintln!("[axon-serve] sidecar boot failed: {e:#}");
-            boot_bus.emit_failed("axon-serve-sidecar", e.to_string());
+        boot_bus.emit_started("daemon-invocation-transport");
+        if let Err(e) =
+            easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
+                Arc::clone(&local_runtime),
+                invocation_ledger,
+                Arc::clone(&hot_agent_registrar_cell),
+                Some(Arc::clone(&built_registry.plugin_runtime_manager)),
+            )
+        {
+            eprintln!("[daemon-invocation] transport boot failed: {e:#}");
+            boot_bus.emit_failed("daemon-invocation-transport", e.to_string());
             return Err(e);
         }
-        boot_bus.emit_ok("axon-serve-sidecar");
+        boot_bus.emit_ok("daemon-invocation-transport");
     }
     #[cfg(not(feature = "axon-pb"))]
     {
-        boot_bus.emit_skipped("axon-serve-sidecar");
+        boot_bus.emit_skipped("daemon-invocation-transport");
     }
 
     // Optional sidecar: heartbeat. Run on a dedicated OS thread
@@ -320,7 +321,7 @@ async fn main() -> anyhow::Result<()> {
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
     boot_bus.emit_ok("schedule-tick");
 
-    // Step-3 sidecar: runtime-dispatch UDS responder. Listens on a
+    // Step-3 runtime-dispatch UDS responder. Listens on a
     // separate socket from `control.sock` because the runtime side
     // talks newline-delimited single-line JSON, while the CLI/MCP IPC
     // server speaks length-delimited frames. axon-runtime opens this

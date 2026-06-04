@@ -262,7 +262,7 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
 /// Parse the realm slice from a canonical EasyNet user URA
 /// (`easynet:///r/<realm>/user/<id>`). Returns `None` for any
 /// malformed or non-user shape. Inlined here rather than imported from
-/// `services::axon_serve` to keep the keyring layer free of an
+/// `services::invocation_transport` to keep the keyring layer free of an
 /// `axon-pb` feature dependency.
 fn parse_realm_from_user_ura(ura: &str) -> Option<String> {
     let parsed = parse_ura(ura).ok()?;

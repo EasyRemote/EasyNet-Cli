@@ -16,7 +16,7 @@
 #                            plane. Speaks to LocalRuntime through
 #                            one resolver + the syscall boundary
 #                            types. The narrowest allowlist.
-#   * services/axon_serve/ — the daemon's gRPC Invocation server.
+#   * services/invocation_transport/ — the daemon's gRPC Invocation server.
 #                            Wider allowlist; covers ability
 #                            dispatch, agents catalog, keyring,
 #                            publish, execution, advertise,
@@ -116,7 +116,7 @@ if [ -d "src/services/control" ]; then
 fi
 
 # ── Rule 2 ────────────────────────────────────────────────────────
-# services/axon_serve/ — daemon's gRPC Invocation server.
+# services/invocation_transport/ — daemon's gRPC Invocation server.
 #
 # Wider permitted set, listed explicitly so a new import surfaces
 # in code review rather than slipping into an unchecked tree.
@@ -148,17 +148,27 @@ fi
 #                           reads to publish the local catalogue.
 #   * axon_bridge         — Axon-SDK glue (admission/dispatch
 #                           shim, key resolver, runtime factory,
-#                           hot agent registrar). axon_serve is
-#                           the natural consumer: the gRPC server
+#                           hot agent registrar). The Invocation
+#                           transport is the natural consumer: the gRPC server
 #                           translates each wire frame into an
 #                           Axon LocalRuntime invocation through
 #                           the bridge.
+#   * ability_wire        — daemon-facing wire profile registry for
+#                           local bidi abilities. The transport
+#                           reads codec metadata from this boundary;
+#                           it does not inspect plugin packages or
+#                           own execution policy.
+#   * plugin_host         — daemon plugin runtime manager handle
+#                           injected at boot so Invocation dispatch
+#                           can execute already-loaded plugin-backed
+#                           abilities. Package install/load policy
+#                           remains in runtime/plugin_host.
 #
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
-if [ -d "src/services/axon_serve" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|agents|keyring|publish|execution|advertise|federation_client|abilities|axon_bridge'
-    serve_files=$(find src/services/axon_serve -name '*.rs' | sort)
+if [ -d "src/services/invocation_transport" ]; then
+    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|agents|keyring|publish|execution|advertise|federation_client|abilities|axon_bridge|ability_wire|plugin_host'
+    serve_files=$(find src/services/invocation_transport -name '*.rs' | sort)
     for f in $serve_files; do
         awk '
             /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { in_test = 1 }
@@ -170,7 +180,7 @@ if [ -d "src/services/axon_serve" ]; then
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
         | grep -vE "crate::runtime::(${serve_allowed})\b" > /tmp/kb_serve.$$ || true
     if [ -s /tmp/kb_serve.$$ ]; then
-        echo "ERROR: services/axon_serve/ may not import these runtime modules:"
+        echo "ERROR: services/invocation_transport/ may not import these runtime modules:"
         cat /tmp/kb_serve.$$
         echo "  Permitted: crate::runtime::{${serve_allowed}}"
         violations=$((violations + 1))

@@ -52,19 +52,20 @@ The `subject` field on an `IncomingFrame` carries the **causal context** — the
 |---|---:|---:|---:|---|
 | `language_binding` | 4 | 3 (+1 test harness) | 3 | yes |
 | `backend` | 0 | 0 | 0 | **CONFIRM_ABSENT** |
-| `cli_command` | 2 | 1 | 1 | partial |
+| `cli_command` | 2 | 0 | 0 | migrated/retained |
 | `boot_status` | 6 | 0 | 0 | retained-as-control |
 | `daemon_internal` | 26 | 0 | 0 | no (handler side) |
 | `test` | 40 | 0 | 0 | no (compat pins) |
 
-### MUST_MIGRATE total: **4**
+### MUST_MIGRATE total: **3**
 
 | # | Caller | Frame | Why it blocks demotion |
 |---|---|---|---|
 | 1 | `src/ffi/ability.rs:155` | `Invoke` | FFI RPC-style ability call; `subject: None` (`:159`) — receipt-chain gap. |
 | 2 | `src/ffi/ability.rs:461` | `Subscribe` | FFI streaming ability call; `subject: None` (`:465`) — receipt-chain gap. |
 | 3 | `src/ffi/ability.rs:541` | `Cancel` | FFI subscription cancel emitted from the streaming reader task. |
-| 4 | `src/facade/cli/groups/plugin.rs:216` | `Invoke` | `easynet plugin` invokes the `device.plugin.reload` / `device.plugin.status` product abilities; `subject: None` (`:219`). |
+
+Migrated in this branch: `src/facade/cli/groups/plugin.rs` no longer constructs `IncomingFrame::Invoke`. `device.plugin.reload` / `device.plugin.status` now route through `DaemonClient::invoke(DaemonInvocation)` over `daemon.sock`, with the subject derived from paired device credentials and a loopback fallback for unpaired local CLI contexts.
 
 One additional FFI site (`src/ffi/client.rs:327`) is `UPDATE_AFTER_MIGRATION` — a test harness that round-trips `Invoke` against a real daemon and must be re-pointed at the Invocation path post-migration, not deleted.
 
@@ -80,7 +81,7 @@ This corroborates commit-plan line 59 (backend uses daemon gRPC over `daemon.soc
 
 ### Demotion-readiness verdict
 
-**NOT YET READY.** Four `MUST_MIGRATE` product-ability callers (3 FFI + 1 CLI plugin) still construct product-ability `Invoke`/`Subscribe`/`Cancel` frames against JSON control. JSON-control `Invoke`/`Subscribe`/`OpenBidi` cannot be removed until all four are re-homed onto the Invocation primitive **with real `subject` causal context**, and the `ffi/client.rs:327` harness is updated. The `boot_status`, `daemon_internal`, and `test` populations impose no blockers. See §4 sequencing and §5 gate.
+**NOT YET READY.** Three remaining `MUST_MIGRATE` product-ability callers in the FFI layer still construct product-ability `Invoke`/`Subscribe`/`Cancel` frames against JSON control. JSON-control `Invoke`/`Subscribe`/`OpenBidi` cannot be removed until all three are re-homed onto the Invocation primitive **with real `subject` causal context**, and the `ffi/client.rs:327` harness is updated. The CLI plugin caller is already migrated; the `boot_status`, `daemon_internal`, and `test` populations impose no blockers. See §4 sequencing and §5 gate.
 
 ---
 
@@ -109,10 +110,10 @@ This corroborates commit-plan line 59 (backend uses daemon gRPC over `daemon.soc
 
 | Caller (file:line) | Frame(s) | Subject | Description | Verdict |
 |---|---|---|---|---|
-| `src/facade/cli/groups/plugin.rs:216` | Invoke | None (`:219`) | `easynet plugin` invokes the `device.plugin.reload` / `device.plugin.status` product abilities (`plugin_lifecycle_ability::RELOAD_ABILITY` / `STATUS_ABILITY`) to notify the daemon of plugin package changes. | **MUST_MIGRATE** |
-| `src/facade/cli/start_boot_watcher.rs:155` | Subscribe | None (`:159`) | `easynet start` boot watcher subscribes to `system.watch_boot` (`WATCH_BOOT_ABILITY`, `src/services/control/server.rs:65`) to stream daemon boot events to the CLI UI. | UPDATE_AFTER_MIGRATION |
+| `src/facade/cli/groups/plugin.rs:223` | Axon `Invocation` | Device URA / loopback fallback | `easynet plugin` invokes the `device.plugin.reload` / `device.plugin.status` product abilities (`plugin_lifecycle_ability::RELOAD_ABILITY` / `STATUS_ABILITY`) through `DaemonClient::invoke(DaemonInvocation)`. | MIGRATED_THIS_BRANCH |
+| `src/facade/cli/start_boot_watcher.rs:155` | Subscribe | None (`:159`) | `easynet start` boot watcher subscribes to `system.watch_boot` (`WATCH_BOOT_ABILITY`, `src/services/control/server.rs:65`) to stream daemon boot events to the CLI UI. | KEEP_AS_CONTROL |
 
-**Notes.** `plugin.rs:216` calls genuine product abilities (`device.plugin.*`) and must move to the Invocation primitive per Step 5. `start_boot_watcher.rs:155` subscribes to `system.watch_boot`, which is **boot/status control-plane traffic** — it is *retained* on JSON control (or moves to a dedicated boot/status endpoint per Step 6), not forced through product Invocation; it is listed here only because it physically constructs a frame from a CLI command. No `OpenBidi`/`SendBidi`/`CloseBidi` frames are constructed anywhere under `src/facade/cli/` — bidi construction appears only in daemon handlers and tests.
+**Notes.** `plugin.rs` calls genuine product abilities (`device.plugin.*`) and has moved to the Invocation primitive per Step 5/G3. `start_boot_watcher.rs:155` subscribes to `system.watch_boot`, which is **boot/status control-plane traffic** — it is *retained* on JSON control (or moves to a dedicated boot/status endpoint per Step 6), not forced through product Invocation; it is listed here only because it physically constructs a frame from a CLI command. No `OpenBidi`/`SendBidi`/`CloseBidi` frames are constructed anywhere under `src/facade/cli/` — bidi construction appears only in daemon handlers and tests.
 
 ### 3.4 `boot_status`
 
@@ -218,28 +219,32 @@ All 26 sites RECEIVE inbound frames and CONSTRUCT outbound responses; none const
 
 ### Prerequisites (commit-plan Steps 3 & 4)
 
-The four `MUST_MIGRATE` callers cannot move until the destination surface exists and is receipt-complete:
+The remaining three `MUST_MIGRATE` FFI callers cannot move until the destination surface exists and is receipt-complete:
 
-- **Step 3 — daemon SDK.** A first-class daemon-side SDK exposing the Invocation primitive (`InvocationClient` over `daemon.sock`, `src/support/local_daemon_grpc.rs:417`) with an ergonomic invoke/subscribe/cancel API that accepts and threads `subject` causal context. Until this exists, callers have nowhere correct to land.
+- **Step 3 — daemon SDK.** Implemented in this branch as `easynet_cli::daemon` (`src/daemon.rs`): lifecycle, endpoint discovery, status, stop, and unary complete-Invocation `DaemonClient::invoke(DaemonInvocation)` over `daemon.sock`.
 - **Step 4 — complete-Invocation FFI.** The FFI layer must expose the Invocation primitive end-to-end (invoke / subscribe / cancel) *with* `subject` propagation from the foreign-language binding, so the FFI callers can move without re-introducing the receipt-chain gap (§1).
 
-Neither the daemon SDK (Step 3) nor the complete-Invocation FFI (Step 4) may be assumed by this document; they are upstream gates.
+The daemon SDK (Step 3) now exists in this branch and was enough to move the CLI plugin caller. Complete-Invocation FFI (Step 4) remains the upstream gate for moving the FFI callers.
 
 ### Migration order
 
-1. **`src/facade/cli/groups/plugin.rs:216` (CLI plugin Invoke).** Lowest blast radius and a clean template: a single repo-local CLI command already adjacent to the gRPC path (`invoke_local_daemon_ability_with_subject`, `src/support/local_daemon_grpc.rs:346`). Re-home `device.plugin.reload` / `device.plugin.status` onto the Invocation primitive and supply a real `subject` (replacing the `:219` `None`). Verify: `easynet plugin` reload/status round-trips over `daemon.sock`; receipt carries causal context.
+Completed in this branch:
+
+1. **DONE — `src/facade/cli/groups/plugin.rs` (CLI plugin Invoke).** `device.plugin.reload` / `device.plugin.status` now use `DaemonClient::invoke(DaemonInvocation)` and supply a real subject from paired credentials, falling back to `ura://device/cli/local` only when the CLI is unpaired.
    *Prereq: Step 3.*
 
-2. **`src/ffi/ability.rs:155` (FFI Invoke).** Move `easynet_ability_invoke` to the Invocation primitive; thread `subject` from the binding (replacing `:159` `None`). Verify against the FFI round-trip harness.
+Remaining order:
+
+1. **`src/ffi/ability.rs:155` (FFI Invoke).** Move `easynet_ability_invoke` to the Invocation primitive; thread `subject` from the binding (replacing `:159` `None`). Verify against the FFI round-trip harness.
    *Prereq: Steps 3 + 4.*
 
-3. **`src/ffi/ability.rs:461` (FFI Subscribe).** Move `easynet_ability_subscribe` streaming path; thread `subject` (replacing `:465` `None`).
+2. **`src/ffi/ability.rs:461` (FFI Subscribe).** Move `easynet_ability_subscribe` streaming path; thread `subject` (replacing `:465` `None`).
    *Prereq: Steps 3 + 4.*
 
-4. **`src/ffi/ability.rs:541` (FFI Cancel).** Move the cancellation path emitted by the streaming reader task to the Invocation primitive's cancel semantics. Sequenced last because it is coupled to the Subscribe lifecycle migrated in step 3.
-   *Prereq: Steps 3 + 4; depends on step 3 above.*
+3. **`src/ffi/ability.rs:541` (FFI Cancel).** Move the cancellation path emitted by the streaming reader task to the Invocation primitive's cancel semantics. Sequenced last because it is coupled to the Subscribe lifecycle migrated in step 2.
+   *Prereq: Steps 3 + 4; depends on step 2 above.*
 
-5. **`src/ffi/client.rs:327` (FFI test harness) — UPDATE_AFTER_MIGRATION.** Once 2–4 land, re-point this round-trip test at the Invocation path so it exercises the production FFI surface. Keep it in the suite; do not delete.
+4. **`src/ffi/client.rs:327` (FFI test harness) — UPDATE_AFTER_MIGRATION.** Once 1–3 land, re-point this round-trip test at the Invocation path so it exercises the production FFI surface. Keep it in the suite; do not delete.
 
 ### What does NOT block demotion
 
@@ -253,9 +258,9 @@ Neither the daemon SDK (Step 3) nor the complete-Invocation FFI (Step 4) may be 
 
 JSON-control `Invoke` / `Subscribe` / `OpenBidi` may be removed **only when every box below is checked.** This is the explicit exit criterion for commit-plan Step 6.
 
-- [ ] **G1 — Daemon SDK (Step 3) merged.** Invocation primitive exposed over `daemon.sock` with `subject` threading.
+- [x] **G1 — Daemon SDK (Step 3) implemented in this branch.** Unary Invocation primitive exposed over `daemon.sock` with explicit `subject` threading.
 - [ ] **G2 — Complete-Invocation FFI (Step 4) merged.** FFI invoke/subscribe/cancel on the Invocation primitive, with `subject` propagated from the binding.
-- [ ] **G3 — `src/facade/cli/groups/plugin.rs:216` migrated.** `device.plugin.*` no longer constructs `IncomingFrame::Invoke`; routes through the Invocation primitive with a real `subject`.
+- [x] **G3 — `src/facade/cli/groups/plugin.rs` migrated.** `device.plugin.*` no longer constructs `IncomingFrame::Invoke`; routes through the Invocation primitive with a real `subject`.
 - [ ] **G4 — `src/ffi/ability.rs:155` migrated.** `easynet_ability_invoke` off JSON control; `subject` no longer `None`.
 - [ ] **G5 — `src/ffi/ability.rs:461` migrated.** `easynet_ability_subscribe` off JSON control; `subject` no longer `None`.
 - [ ] **G6 — `src/ffi/ability.rs:541` migrated.** FFI Cancel routed through Invocation cancel semantics.
@@ -272,7 +277,7 @@ When G1–G12 hold, `Invoke`/`Subscribe`/`OpenBidi` are safe to remove from the 
 
 ## 6. Baseline Caveat
 
-This inventory is **current-working-tree evidence**, captured on branch `codex/f07-json-control-caller-inventory-2026-06-04`. Every claim is traced to a `file:line` verified against the tree at authoring time (FFI callers at `src/ffi/ability.rs:155/461/541` with `subject: None` at `:159/:465`; CLI callers at `plugin.rs:216` and `start_boot_watcher.rs:155`; backend absence via `find`-confirmed zero `.go` files and zero `backend/` dirs; gRPC routing via `src/support/local_daemon_grpc.rs:417`).
+This inventory is **current-working-tree evidence**, updated on branch `codex/f07-hub-device-unify-2026-06-05`. Every claim is traced to a `file:line` verified against the tree at update time (remaining FFI callers at `src/ffi/ability.rs:155/461/541` with `subject: None` at `:159/:465`; migrated CLI plugin caller in `src/facade/cli/groups/plugin.rs`; retained boot watcher at `start_boot_watcher.rs:155`; backend absence via `find`-confirmed zero `.go` files and zero `backend/` dirs; gRPC routing via `src/support/local_daemon_grpc.rs:417`).
 
 Line numbers and caller populations **will drift** as Steps 3–6 land. Before any actual removal of JSON-control `Invoke`/`Subscribe`/`OpenBidi`:
 

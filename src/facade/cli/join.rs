@@ -246,7 +246,7 @@ fn run_join_stages(
     // `stage_skipped("(reason)")` on failure so the user can read
     // the join's posture from one glance at the stage column.
 
-    // Without daemon-config.toml the daemon's axon_serve sidecar
+    // Without daemon-config.toml the daemon Invocation transport
     // refuses to bind the gRPC UDS (no daemon-config = silent
     // skip), so backend's `daemon_grpc.Client` never finds the
     // socket and `axon: disconnected` pins forever — every

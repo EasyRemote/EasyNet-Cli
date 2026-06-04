@@ -18,13 +18,13 @@
 //
 // What this module is NOT
 // -----------------------
-// - It is **not** the gRPC server. `services/axon_serve` owns that.
+// - It is **not** the gRPC server. `services/invocation_transport` owns that.
 // - It is **not** the realm trust anchor (`realm-trust.toml`). That
 //   file is read by `services/realm_trust_anchor` and is authored by
 //   the device-pairing flow shipping in PR-7. The daemon uses both
 //   files at boot but they have distinct lifecycles.
 // - It does **not** rebuild listeners or TLS state after boot. The
-//   SIGHUP coordinator in `services::axon_serve::boot` deliberately
+//   SIGHUP coordinator in `services::invocation_transport::boot` deliberately
 //   hot-reloads only cells whose runtime owners are built for
 //   replacement: `federated_peers` and `[daemon.quota]`. Mode,
 //   socket paths, TCP listeners, TLS cert/key paths, hub endpoint,
@@ -404,7 +404,7 @@ pub struct DaemonConfig {
     /// federation client. Until the directory sync's transport
     /// layer ratchets to "endpoints only flow from authenticated
     /// peers", the safer default is "operator-declared peers only".
-    /// See [`crate::services::axon_serve::hub_resolver`] for the
+    /// See [`crate::services::invocation_transport::hub_resolver`] for the
     /// resolver-side enforcement and the threat-model write-up.
     allow_directory_auto_route: bool,
     /// #185: per-consumer invocation quota policy (caps applied per

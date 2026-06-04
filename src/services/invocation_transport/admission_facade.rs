@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — admission gate facade
+// EasyNet CLI — invocation_transport — admission gate facade
 // ==================================================
 //
-// File: src/services/axon_serve/admission_facade.rs
+// File: src/services/invocation_transport/admission_facade.rs
 // Description: Per-RPC admission check the dispatcher consults
 //              before routing into a federation wrapper or any
 //              ability handler.
@@ -126,11 +126,11 @@ use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
-use crate::services::axon_serve::federated_key_resolver::{
-    FederatedKeyResolver, SharedFederatedKeyCache,
-};
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
+use crate::services::invocation_transport::federated_key_resolver::{
+    FederatedKeyResolver, SharedFederatedKeyCache,
+};
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
@@ -252,7 +252,7 @@ impl AdmissionFacade {
     }
 
     /// Construct a facade against a shared trust-anchor cell. Used
-    /// by `start_axon_serve_sidecar` so the same cell is shared
+    /// by `start_daemon_invocation_transport` so the same cell is shared
     /// with the `<self>.register_device_pubkey` handler — a
     /// successful register publishes the new anchor and the next
     /// admission snapshot reflects it without daemon restart.
@@ -261,9 +261,9 @@ impl AdmissionFacade {
         trust_anchor: SharedTrustAnchor,
         daemon_ura: Option<String>,
     ) -> Self {
-        let self_realm = daemon_ura
-            .as_deref()
-            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_ura);
+        let self_realm = daemon_ura.as_deref().and_then(
+            crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura,
+        );
         Self {
             trust_anchor,
             daemon_ura,
@@ -412,9 +412,9 @@ impl AdmissionFacade {
         daemon_ura: Option<String>,
         replay_store: SharedNonceReplayStore,
     ) -> Self {
-        let self_realm = daemon_ura
-            .as_deref()
-            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_ura);
+        let self_realm = daemon_ura.as_deref().and_then(
+            crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura,
+        );
         Self {
             trust_anchor: SharedTrustAnchor::new(trust_anchor),
             daemon_ura,
@@ -438,7 +438,7 @@ impl AdmissionFacade {
     /// hub mapped by `federated_peers[caller_tenant]`.
     ///
     /// Production daemons call this in
-    /// `start_axon_serve_sidecar` after wiring the dialer; test
+    /// `start_daemon_invocation_transport` after wiring the dialer; test
     /// / smoke setups omit it and behave as PR-7
     /// `TrustAnchorKeyResolver` did (local-only).
     #[must_use]
@@ -739,7 +739,7 @@ impl AdmissionFacade {
 /// realm parser as `<self>.register_device_pubkey` so all canonical
 /// role tails stay accepted.
 fn parse_realm_from_ura(ura: &str) -> Option<String> {
-    crate::services::axon_serve::register_device_pubkey::parse_realm_from_ura(ura)
+    crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura(ura)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -989,7 +989,7 @@ fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
 // short-circuits to identical local behavior when no
 // federation client is wired and falls through to a peer
 // hub's `federation.resolve_key` ability when it is. See
-// `services::axon_serve::federated_key_resolver`.
+// `services::invocation_transport::federated_key_resolver`.
 
 #[cfg(test)]
 mod tests {

@@ -206,6 +206,6 @@ CLI 正在做"从自带实现迁移到直接消费 Axon"的过程（`src/runtime
 
 *事实来源：Axon SDK `sdk/rust/src/`、proto `core/proto/axon/v1/*.proto`、RFC-001
 `docs/rfc/AXON-RFC-001-restatement-mapping.md`；CLI `Cargo.toml` / `build.rs` 边界注释、
-`src/runtime/axon_bridge/`、`src/services/axon_serve/`。命令级 gap 见
+`src/runtime/axon_bridge/`、`src/services/invocation_transport/`。命令级 gap 见
 [`cli-command-review-2026-05-30.md`](./cli-command-review-2026-05-30.md)，本文与其互补——
 那篇问"CLI 该有哪些命令"，本文问"两仓库这条接口冗余/缺失在哪"。*

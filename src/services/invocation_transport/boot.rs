@@ -1,15 +1,15 @@
-// EasyNet CLI — axon_serve — daemon boot wiring
-// ===============================================
+// EasyNet CLI — daemon Invocation transport boot wiring
+// =====================================================
 //
-// File: src/services/axon_serve/boot.rs
+// File: src/services/invocation_transport/boot.rs
 // Description: Loads RFC-003 PR-1 configuration from disk and brings
-//              the gRPC InvocationServer online as a sidecar inside
-//              the existing easynet-daemon process.
+//              the gRPC InvocationServer online as the daemon's
+//              first-class Invocation transport.
 //
 // What this module does
 // ---------------------
-// `boot::start_axon_serve_sidecar(...)` is the one function the
-// daemon binary calls to bring the new transport plane online. It:
+// `boot::start_daemon_invocation_transport(...)` is the one function
+// the daemon binary calls to bring the Invocation transport online. It:
 //
 // 1. Loads `~/.easynet/daemon-config.toml` via `DaemonConfig::load`.
 //    A missing or malformed file is a soft failure — we log and
@@ -57,17 +57,17 @@
 //   path.
 // - Pre-create the UDS file's parent directory. The existing daemon
 //   already ensures `~/.easynet/` exists before the control.sock
-//   bind earlier in `main`; this sidecar runs after, so the
+//   bind earlier in `main`; this transport runs after, so the
 //   directory is guaranteed present.
 //
 // Failure handling
 // ----------------
 // Each failure in the boot path is logged to stderr with a short
-// `[axon-serve]` prefix and returns without panicking. The daemon
+// `[daemon-invocation]` prefix and returns without panicking. The daemon
 // process keeps running; operators see the error in the logs and
 // fix the config / cert / trust file. The driving rationale: PR-1
 // ships in parallel with axon-runtime still serving production
-// traffic, so an axon_serve misconfiguration must not take the
+// traffic, so a daemon Invocation transport misconfiguration must not take the
 // daemon down.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -91,11 +91,11 @@ use tokio_stream::wrappers::UnixListenerStream;
 
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
 use crate::runtime::publish::derive_subject_keypair;
-use crate::services::axon_serve::admission_facade::AdmissionFacade;
-use crate::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
-use crate::services::axon_serve::local_session_dispatcher::LocalAxonSessionDispatcher;
-use crate::services::axon_serve::session_initiator::run_session_supervisor;
-use crate::services::axon_serve::session_initiator::SessionSigningSeed;
+use crate::services::invocation_transport::admission_facade::AdmissionFacade;
+use crate::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
+use crate::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
+use crate::services::invocation_transport::session_initiator::run_session_supervisor;
+use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
@@ -165,8 +165,8 @@ impl AsyncWrite for NamedPipeGrpcIo {
     }
 }
 
-/// Bring the RFC-003 transport plane online as a sidecar to the
-/// existing easynet-daemon process.
+/// Bring the daemon Invocation transport online inside the
+/// `easynet-daemon` process.
 ///
 /// Returns `Ok(())` whether or not any listener was spawned — a
 /// missing daemon-config.toml is the legitimate "this device is not
@@ -181,7 +181,7 @@ impl AsyncWrite for NamedPipeGrpcIo {
 /// constructed below so post-boot `device.agent.start` invocations
 /// land their `<agent>.{chat,discover,invoke}` rows into the live
 /// Axon runtime instead of skipping runtime registration.
-pub fn start_axon_serve_sidecar(
+pub fn start_daemon_invocation_transport(
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
     hot_agent_registrar_cell: Arc<
@@ -196,7 +196,7 @@ pub fn start_axon_serve_sidecar(
             let config_path_display = format!("{}", config_path.display());
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = transport_plane_config_missing,
                 config_path = config_path_display,
                 error = err_msg,
@@ -293,7 +293,7 @@ pub fn start_axon_serve_sidecar(
             let prior = presence.insert(ura.clone(), noop_tx);
             if prior.is_none() {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = device_mode_self_presence_seeded,
                     self_ura = ura,
                     message = "drain task holds receiver; self-targeted invokes route through Axon LocalRuntime",
@@ -422,7 +422,7 @@ pub fn start_axon_serve_sidecar(
                         let ledger_dir_display = format!("{}", config.ledger_dir().display());
                         let err_msg = format!("{err}");
                         crate::op_event!(
-                            component = axon_serve,
+                            component = daemon_invocation,
                             kind = invocation_ledger_disabled,
                             ledger_dir = ledger_dir_display,
                             error = err_msg,
@@ -440,7 +440,7 @@ pub fn start_axon_serve_sidecar(
     //
     // The daemon creates the Axon `LocalRuntime` before building
     // abilities, so registration lands directly in the runtime.
-    // This sidecar only installs transport-plane configuration:
+    // This transport only installs transport-plane configuration:
     //   * a `RealmTrustAnchorKeyResolver` over the SAME
     //     `trust_anchor_cell` admission uses, so signature
     //     verification inside `invoke_externally_signed_*` sees
@@ -464,7 +464,7 @@ pub fn start_axon_serve_sidecar(
     {
         let err_msg = err.to_string();
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = axon_local_runtime_admin_install_failed,
             level = "warn",
             error = err_msg,
@@ -483,32 +483,32 @@ pub fn start_axon_serve_sidecar(
     //
     // The cell is normally populated by `build_registry_with_services`,
     // so `.get()` returns `Some`. We log + skip when absent to keep
-    // smoke tests that boot only the sidecar (without a full registry
+    // smoke tests that boot only the transport (without a full registry
     // build) green: those tests don't call `device.agent.start`, so a
     // pending registrar is observably harmless.
     if let Some(registrar) = hot_agent_registrar_cell.get() {
         registrar.set_runtime(Arc::clone(&local_runtime));
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = hot_agent_registrar_runtime_attached,
             message = "HotAgentRegistrar.runtime attached; \
                        device.agent.start can now register into LocalRuntime",
         );
     } else {
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = hot_agent_registrar_cell_empty,
             level = "warn",
             message = "hot_agent_registrar_cell empty at boot — \
                        device.agent.start runtime registration will be skipped \
-                       (sidecar booted without a populated registry?)",
+                       (Invocation transport booted without a populated registry?)",
         );
     }
 
     let runtime_ability_count = futures::executor::block_on(local_runtime.list_abilities()).len();
     let runtime_ability_count_str = runtime_ability_count.to_string();
     crate::op_event!(
-        component = axon_serve,
+        component = daemon_invocation,
         kind = axon_local_runtime_wired,
         has_ledger_sink = resolved_ledger.is_some().to_string().as_str(),
         runtime_abilities = runtime_ability_count_str.as_str(),
@@ -524,7 +524,7 @@ pub fn start_axon_serve_sidecar(
                 Err(err) => {
                     let error = err.to_string();
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = ability_wire_registry_load_failed,
                         level = "warn",
                         error = error.as_str(),
@@ -538,9 +538,11 @@ pub fn start_axon_serve_sidecar(
     service = service.with_local_runtime(Arc::clone(&local_runtime));
     service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
 
-    if let Ok(seed) = crate::services::axon_serve::daemon_invocation_service::read_hub_identity_seed(
-        config.realm(),
-    ) {
+    if let Ok(seed) =
+        crate::services::invocation_transport::daemon_invocation_service::read_hub_identity_seed(
+            config.realm(),
+        )
+    {
         service = service.with_hub_signing_seed(seed);
     }
 
@@ -579,10 +581,11 @@ pub fn start_axon_serve_sidecar(
     // run unchanged.
     let escalation_state = if matches!(config.mode(), DaemonMode::Device) {
         let correlation =
-            crate::services::axon_serve::session_escalation::EscalationCorrelation::new();
-        let outbox = crate::services::axon_serve::session_escalation::SharedSessionOutbox::new();
+            crate::services::invocation_transport::session_escalation::EscalationCorrelation::new();
+        let outbox =
+            crate::services::invocation_transport::session_escalation::SharedSessionOutbox::new();
         let handle = std::sync::Arc::new(
-            crate::services::axon_serve::session_escalation::spawn_escalation_consumer_with_outbox(
+            crate::services::invocation_transport::session_escalation::spawn_escalation_consumer_with_outbox(
                 Arc::clone(&correlation),
                 outbox.clone(),
             ),
@@ -695,7 +698,7 @@ pub fn start_axon_serve_sidecar(
             );
         } else {
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = device_mode_session_supervisor_not_started,
                 reason = "missing_hub_endpoint_or_device_identity",
                 message = "device-mode daemon missing either hub_endpoint or credentials.json device identity; outbound `<self>.session` not started",
@@ -717,8 +720,8 @@ fn spawn_session_supervisor(
     identity: DaemonIdentity,
     hub_ca_pem_path: Option<std::path::PathBuf>,
     escalation_state: Option<(
-        Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
-        crate::services::axon_serve::session_escalation::SharedSessionOutbox,
+        Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
+        crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
     )>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
@@ -761,7 +764,7 @@ fn spawn_session_supervisor(
     };
     let caller_ura_display = identity.caller_ura.clone();
     crate::op_event!(
-        component = axon_serve,
+        component = daemon_invocation,
         kind = device_mode_dialing_self_session,
         hub_endpoint = hub_endpoint,
         caller_ura = caller_ura_display,
@@ -831,7 +834,7 @@ fn spawn_uds_listener(
                 let uds_path_display = format!("{}", uds_path.display());
                 let err_msg = format!("{err}");
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = uds_unlink_failed,
                     uds_path = uds_path_display,
                     error = err_msg,
@@ -843,7 +846,7 @@ fn spawn_uds_listener(
 
     let listener = tokio::net::UnixListener::bind(&uds_path).map_err(|err| {
         anyhow::anyhow!(
-            "failed to bind axon_serve UDS at {}: {err}",
+            "failed to bind daemon Invocation UDS at {}: {err}",
             uds_path.display()
         )
     })?;
@@ -862,7 +865,7 @@ fn spawn_uds_listener(
             let uds_path_display = format!("{}", uds_path.display());
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = uds_chmod_failed,
                 uds_path = uds_path_display,
                 error = err_msg,
@@ -873,7 +876,7 @@ fn spawn_uds_listener(
 
     let uds_path_display = format!("{}", uds_path.display());
     crate::op_event!(
-        component = axon_serve,
+        component = daemon_invocation,
         kind = grpc_invocation_server_listening,
         transport = "uds",
         uds_path = uds_path_display,
@@ -899,7 +902,7 @@ fn spawn_uds_listener(
         if let Err(err) = result {
             let err_msg = format!("{err:#}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = grpc_server_exited_with_error,
                 transport = "uds",
                 error = err_msg,
@@ -921,12 +924,15 @@ fn spawn_uds_listener(
         .ok_or_else(|| anyhow::anyhow!("daemon-config named-pipe path is not valid UTF-8"))?
         .to_string();
     let mut listener = PipeListener::bind(pipe_name.clone()).map_err(|err| {
-        anyhow::anyhow!("failed to bind axon_serve named pipe {}: {err}", pipe_name)
+        anyhow::anyhow!(
+            "failed to bind daemon Invocation named pipe {}: {err}",
+            pipe_name
+        )
     })?;
 
     let pipe_name_log = pipe_name.clone();
     crate::op_event!(
-        component = axon_serve,
+        component = daemon_invocation,
         kind = grpc_invocation_server_listening,
         transport = "named_pipe",
         pipe_name = pipe_name_log,
@@ -965,7 +971,7 @@ fn spawn_uds_listener(
         if let Err(err) = result {
             let err_msg = format!("{err:#}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = grpc_server_exited_with_error,
                 transport = "named_pipe",
                 error = err_msg,
@@ -982,7 +988,7 @@ fn spawn_uds_listener(
     _service: DaemonInvocationService,
 ) -> anyhow::Result<()> {
     anyhow::bail!(
-        "axon_serve local listener is unavailable on this platform until the local transport \
+        "daemon Invocation local listener is unavailable on this platform until the local transport \
          backend lands"
     )
 }
@@ -1013,13 +1019,13 @@ fn spawn_tcp_tls_listener(
 
     let cert_pem = std::fs::read(cert_path).map_err(|err| {
         anyhow::anyhow!(
-            "axon-serve: failed to read tls_cert_pem at {}: {err}",
+            "daemon-invocation: failed to read tls_cert_pem at {}: {err}",
             cert_path.display()
         )
     })?;
     let key_pem = std::fs::read(key_path).map_err(|err| {
         anyhow::anyhow!(
-            "axon-serve: failed to read tls_key_pem at {}: {err}",
+            "daemon-invocation: failed to read tls_key_pem at {}: {err}",
             key_path.display()
         )
     })?;
@@ -1031,7 +1037,7 @@ fn spawn_tcp_tls_listener(
     let cert_path_display = format!("{}", cert_path.display());
     let key_path_display = format!("{}", key_path.display());
     crate::op_event!(
-        component = axon_serve,
+        component = daemon_invocation,
         kind = grpc_invocation_server_listening,
         transport = "tcp_tls",
         listen_tcp = listen_tcp_display,
@@ -1056,7 +1062,7 @@ fn spawn_tcp_tls_listener(
             .tcp_keepalive(Some(Duration::from_secs(15))),
         Err(err) => {
             return Err(anyhow::anyhow!(
-                "axon-serve: tls_config rejected by tonic: {err}"
+                "daemon-invocation: tls_config rejected by tonic: {err}"
             ));
         }
     };
@@ -1073,7 +1079,7 @@ fn spawn_tcp_tls_listener(
         if let Err(err) = result {
             let err_msg = format!("{err:#}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = grpc_server_exited_with_error,
                 transport = "tcp_tls",
                 error = err_msg,
@@ -1226,7 +1232,7 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
         Err(err) => {
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = runtime_self_bootstrap_skipped,
                 node_id = node_id,
                 reason = "connect_local_runtime_bridge_failed",
@@ -1246,14 +1252,14 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
     {
         Ok(()) => {
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = runtime_self_bootstrap_registered,
                 node_id = node_id,
             );
         }
         Err(msg) => {
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = runtime_self_bootstrap_failed,
                 node_id = node_id,
                 error = msg,
@@ -1284,7 +1290,7 @@ fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
         Err(err) => {
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = keyring_master_key_source_failed,
                 error = err_msg,
             );
@@ -1297,7 +1303,7 @@ fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
         Err(err) => {
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = keyring_open_failed,
                 error = err_msg,
             );
@@ -1307,7 +1313,7 @@ fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
     match vault.export_seed(self_ura) {
         Ok(seed) => {
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = keyring_daemon_seed_resolved,
                 self_ura = self_ura,
             );
@@ -1317,7 +1323,7 @@ fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
         Err(err) => {
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = keyring_export_seed_failed,
                 self_ura = self_ura,
                 error = err_msg,
@@ -1428,7 +1434,7 @@ fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
             let path_display = format!("{}", path.display());
             if anchor.is_empty() {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = realm_trust_anchor_empty,
                     path = path_display,
                     message = "admission gate will reject every external caller until PR-7 pairing flow populates it",
@@ -1436,7 +1442,7 @@ fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
             } else {
                 let entry_count = anchor.len();
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = realm_trust_anchor_loaded,
                     path = path_display,
                     entries = entry_count,
@@ -1448,7 +1454,7 @@ fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
             let path_display = format!("{}", path.display());
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = realm_trust_anchor_load_failed,
                 path = path_display,
                 error = err_msg,
@@ -1505,7 +1511,7 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
             }
         });
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = demo_presence_seed_registered,
             seed_ura = seed_ura,
             message = "test fixture; do not use in production",
@@ -1549,7 +1555,7 @@ fn spawn_unified_sighup_reload_task(
     daemon_config_path: PathBuf,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
     quota_gate: SharedUsageQuotaGate,
-    federated_key_cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
+    federated_key_cache: crate::services::invocation_transport::federated_key_resolver::SharedFederatedKeyCache,
 ) {
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
@@ -1559,7 +1565,7 @@ fn spawn_unified_sighup_reload_task(
             Err(err) => {
                 let err_msg = format!("{err}");
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = sighup_reload_handler_install_failed,
                     error = err_msg,
                 );
@@ -1573,7 +1579,7 @@ fn spawn_unified_sighup_reload_task(
             match reload_trust_anchor_cell_from(&trust_anchor_path, &trust_anchor_cell) {
                 Ok(len) => {
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = sighup_trust_anchor_reloaded,
                         step = "1/3",
                         path = trust_anchor_path_display,
@@ -1583,7 +1589,7 @@ fn spawn_unified_sighup_reload_task(
                 Err(err) => {
                     let err_msg = format!("{err}");
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = sighup_trust_anchor_reload_failed,
                         step = "1/3",
                         path = trust_anchor_path_display,
@@ -1607,7 +1613,7 @@ fn spawn_unified_sighup_reload_task(
                         "disabled"
                     };
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = sighup_daemon_config_reloaded,
                         step = "2/3",
                         path = daemon_config_path_display,
@@ -1618,7 +1624,7 @@ fn spawn_unified_sighup_reload_task(
                 Err(err) => {
                     let err_msg = format!("{err}");
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = sighup_daemon_config_reload_failed,
                         step = "2/3",
                         path = daemon_config_path_display,
@@ -1633,7 +1639,7 @@ fn spawn_unified_sighup_reload_task(
             // the freshly-loaded trust anchor + peer map.
             federated_key_cache.flush();
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = sighup_federated_key_cache_flushed,
                 step = "3/3",
                 message = "cross-realm pubkeys will re-resolve on next admission",
@@ -1649,7 +1655,7 @@ fn spawn_unified_sighup_reload_task(
     _daemon_config_path: PathBuf,
     _federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
     _quota_gate: SharedUsageQuotaGate,
-    _federated_key_cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
+    _federated_key_cache: crate::services::invocation_transport::federated_key_resolver::SharedFederatedKeyCache,
 ) {
 }
 
@@ -2004,7 +2010,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_axon_serve_sidecar_returns_ok_when_config_missing() {
+    async fn start_daemon_invocation_transport_returns_ok_when_config_missing() {
         // Point HOME at an empty temp dir so the loader sees no
         // daemon-config.toml. This is the production-realistic case
         // for any device that has not yet been migrated to PR-1.
@@ -2013,7 +2019,7 @@ mod tests {
         std::env::set_var("HOME", temp.path());
 
         // No panic, no error — soft skip is the contract.
-        start_axon_serve_sidecar(
+        start_daemon_invocation_transport(
             easynet_axon::invocation::LocalRuntime::new(),
             None,
             Arc::new(
@@ -2087,7 +2093,7 @@ added_at_unix_ms = 1714492800000
         // Smoke-only: verify a hub-mode daemon boots with a
         // federated_peers map populated. We can't easily reach
         // into the constructed `DaemonInvocationService` (the
-        // sidecar takes ownership), so the contract this asserts
+        // transport takes ownership), so the contract this asserts
         // is "boot returns Ok without panicking on the
         // CrossHubDialer + with_federated_peers wire-up". The
         // real-world canary smoke test (operator-side) does the
@@ -2104,7 +2110,7 @@ added_at_unix_ms = 1714492800000
         // Hub mode requires listen_tcp + cert + key. The cert
         // material does not need to be valid X.509 for the boot
         // smoke — `tls_config` parses on TLS handshake, which
-        // does not run from `start_axon_serve_sidecar` (it's a
+        // does not run from `start_daemon_invocation_transport` (it's a
         // detached task that never receives a connection in
         // this test).
         let cert_path = easynet_dir.join("test-cert.pem");
@@ -2148,7 +2154,7 @@ tls_key_pem = {key:?}
             // Errors from the TLS bind are acceptable — what
             // matters is that the federation client + peers
             // wire-up did not panic before we got there.
-            let _ = start_axon_serve_sidecar(
+            let _ = start_daemon_invocation_transport(
                 easynet_axon::invocation::LocalRuntime::new(),
                 None,
                 Arc::new(
@@ -2161,6 +2167,6 @@ tls_key_pem = {key:?}
         // use std::panic::catch_unwind via a synchronous wrapper
         // because the construction path itself is synchronous up
         // through `with_federation_client`.
-        result.expect("hub-mode sidecar construction must not panic before bind");
+        result.expect("hub-mode Invocation transport construction must not panic before bind");
     }
 }

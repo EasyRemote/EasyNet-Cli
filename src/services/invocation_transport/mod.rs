@@ -1,7 +1,7 @@
-// EasyNet CLI — Services Layer — Axon Invocation gRPC server
-// ===========================================================
+// EasyNet CLI — Services Layer — daemon Invocation transport
+// ==========================================================
 //
-// File: src/services/axon_serve/mod.rs
+// File: src/services/invocation_transport/mod.rs
 // Description: Daemon-side implementation of the axon
 //              `pb::axon::v1::invocation_server::Invocation` trait
 //              (Invoke / InvokeStream / InvokeBidi).
@@ -18,10 +18,11 @@
 //   start of every RPC method but never re-implements them
 // - Ability dispatch — `runtime::ability_dispatch` continues to own
 //   the AxonAbilityCatalog and the registered handler set; this
-//   module routes inbound RPC calls into that registry
+//   module routes inbound RPC calls into that runtime surface
 // - Federation `<self>.session` / `<self>.invoke_remote` reverse-
-//   channel state — that lives in the future `presence_registry`
-//   module which a follow-up commit on this branch introduces
+//   channel liveness — that lives in `presence_registry` and the
+//   session-specific modules below, not in the top-level service
+//   namespace
 //
 // What it does own
 // ----------------
@@ -29,18 +30,17 @@
 //    `tonic` trait impl
 // 2. The boundary error mapping from internal typed errors to
 //    `tonic::Status`
-// 3. The construction recipe that wires admission gate + presence
-//    registry + ability dispatcher together at daemon boot
+// 3. The construction recipe that wires admission gate, presence
+//    registry, Axon LocalRuntime, plugin runtime manager, invocation
+//    ledger, federation dialers, and local session dispatch together
+//    at daemon boot
 //
-// PR-1 staging
-// ------------
-// This commit lands the module structure + a service struct + a
-// `tonic` impl that returns `Status::unimplemented` for every
-// method. It compiles, registers, and refuses every call. The real
-// dispatch logic (PresenceRegistry wiring, federation.* wrappers,
-// AxonAbilityCatalog forwarding) lands in subsequent commits on
-// the same `rfc-001-impl` branch — each as a self-contained logical
-// change per CTO directive 06 §3.5.
+// What it does NOT own
+// --------------------
+// This module is not a second Axon runtime and not a product policy
+// singleton. It embeds Axon protocol/runtime primitives inside
+// `easynet-daemon`, while EasyNet product policy remains daemon-owned
+// and Axon protocol semantics remain Axon-owned.
 //
 // Why feature-gated
 // -----------------
@@ -77,7 +77,7 @@ pub mod session_escalation;
 pub mod session_initiator;
 
 pub use admission_facade::AdmissionFacade;
-pub use boot::start_axon_serve_sidecar;
+pub use boot::start_daemon_invocation_transport;
 pub use daemon_invocation_service::DaemonInvocationService;
 pub use invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
 pub use invoke_remote_initiator::{

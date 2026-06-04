@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — DaemonInvocationService
+// EasyNet CLI — invocation_transport — DaemonInvocationService
 // ===================================================
 //
-// File: src/services/axon_serve/daemon_invocation_service.rs
+// File: src/services/invocation_transport/daemon_invocation_service.rs
 // Description: Concrete implementation of axon's
 //              `pb::axon::v1::invocation_server::Invocation` trait
 //              for the new daemon transport plane.
@@ -130,8 +130,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::services::axon_serve::admission_facade::AdmissionFacade;
-use crate::services::axon_serve::federation_wrappers::{
+use crate::services::federated_peers_cell::SharedFederatedPeers;
+use crate::services::federation_client::FederationClient;
+use crate::services::invocation_transport::admission_facade::AdmissionFacade;
+use crate::services::invocation_transport::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
     ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
     ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES,
@@ -140,23 +142,23 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
-use crate::services::axon_serve::invoke_remote_initiator::{
+use crate::services::invocation_transport::invoke_remote_initiator::{
     call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionContentEnvelope,
     SessionDispatch, SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
-use crate::services::axon_serve::list_user_pubkeys::{
+use crate::services::invocation_transport::list_user_pubkeys::{
     handle as handle_list_user_pubkeys, ABILITY_SELF_LIST_USER_PUBKEYS,
 };
-use crate::services::axon_serve::register_device_pubkey::{
+use crate::services::invocation_transport::register_device_pubkey::{
     handle as handle_register_device_pubkey, parse_realm_from_ura,
     ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
 };
-use crate::services::axon_serve::revoke_user_pubkey::{
+use crate::services::invocation_transport::revoke_user_pubkey::{
     handle as handle_revoke_user_pubkey, ABILITY_SELF_REVOKE_USER_PUBKEY,
 };
-use crate::services::axon_serve::session_initiator::{SessionSigningSeed, ABILITY_SELF_SESSION};
-use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_client::FederationClient;
+use crate::services::invocation_transport::session_initiator::{
+    SessionSigningSeed, ABILITY_SELF_SESSION,
+};
 use crate::services::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
 };
@@ -257,7 +259,7 @@ pub struct DaemonInvocationService {
     /// `Status::failed_precondition` (the daemon was booted without
     /// the trust-write surface — typically a smoke-test setup).
     /// Production daemons always attach one at boot from
-    /// `start_axon_serve_sidecar`.
+    /// `start_daemon_invocation_transport`.
     register_pubkey: Option<RegisterPubkeyContext>,
     /// Daemon realm carried explicitly for `<self>.session`
     /// admission-time cross-realm rejection. `None` means the
@@ -304,7 +306,7 @@ pub struct DaemonInvocationService {
     /// (the default), the federation dispatcher refuses to dial a
     /// peer hub whose endpoint came from an observed
     /// `federated_directory` entry — see
-    /// [`crate::services::axon_serve::hub_resolver`] for the
+    /// [`crate::services::invocation_transport::hub_resolver`] for the
     /// threat model. Wiring lands inline rather than as a `Builder`
     /// because the flag's value never changes within a daemon
     /// lifetime (no SIGHUP-driven runtime toggle): the security
@@ -335,9 +337,11 @@ pub struct DaemonInvocationService {
     /// `None` ⇒ this daemon owns its own PresenceRegistry
     /// (hub or both mode), so the existing dispatch arm runs
     /// unchanged. Boot wires `Some` only under
-    /// `mode = "device"` per `boot.rs::start_axon_serve_sidecar`.
+    /// `mode = "device"` per `boot.rs::start_daemon_invocation_transport`.
     escalation: Option<
-        std::sync::Arc<crate::services::axon_serve::session_escalation::SessionEscalationHandle>,
+        std::sync::Arc<
+            crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
+        >,
     >,
     /// Workspace-scoped invocation ledger. Boot wires this to
     /// `<ledger_dir>/invocations.redb`; tests may inject a temp
@@ -479,7 +483,7 @@ impl DaemonInvocationService {
                             // stable snake_case wire label; no Debug
                             // double-quoting at the op-event boundary.
                             crate::op_event!(
-                                component = axon_serve,
+                                component = daemon_invocation,
                                 kind = presence_offline_cancel,
                                 target_ura = ura,
                                 reason = reason,
@@ -562,7 +566,7 @@ impl DaemonInvocationService {
     pub fn with_session_escalation(
         mut self,
         handle: std::sync::Arc<
-            crate::services::axon_serve::session_escalation::SessionEscalationHandle,
+            crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
         >,
     ) -> Self {
         self.escalation = Some(handle);
@@ -657,7 +661,7 @@ impl DaemonInvocationService {
     /// reloads (operator editing `[daemon.federated_peers]`)
     /// republish into the dispatcher's view within ~50ms — same
     /// cadence as the trust-anchor reload landed by commit 9/N.
-    /// Production `start_axon_serve_sidecar` uses this builder; the
+    /// Production `start_daemon_invocation_transport` uses this builder; the
     /// SIGHUP task in `boot.rs` calls `cell.replace(...)` on
     /// successful TOML reload.
     #[must_use]
@@ -808,7 +812,7 @@ impl DaemonInvocationService {
                 "true"
             };
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = self_target_miss_for_agent_ura,
                 target_ura = target_ura,
                 realm = agent_target.realm.as_str(),
@@ -1344,7 +1348,7 @@ impl DaemonInvocationService {
                 Err(err) => {
                     let err_msg = format!("{err}");
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = ledger_record_skipped,
                         shape = "unary",
                         error = err_msg,
@@ -1355,7 +1359,7 @@ impl DaemonInvocationService {
         if let Err(err) = ledger.put(&record) {
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = ledger_write_failed,
                 shape = "unary",
                 invocation_ura = record.invocation_ura,
@@ -1451,7 +1455,7 @@ impl DaemonInvocationService {
             );
         }
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = dispatch_local_rpc_fallback_axon_first,
             ability = ability,
         );
@@ -1816,7 +1820,7 @@ impl DaemonInvocationService {
         for peer_hub_url in peer_hub_urls {
             let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = proxy_list_user_devices_skip_untrusted_peer,
                     peer_hub_url = peer_hub_url,
                 );
@@ -1824,7 +1828,7 @@ impl DaemonInvocationService {
             };
             let Some(peer_realm) = peer_entry.origin_tenant_id.clone() else {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = proxy_list_user_devices_skip_peer_missing_origin_tenant,
                     peer_hub_url = peer_hub_url,
                 );
@@ -1879,7 +1883,7 @@ impl DaemonInvocationService {
                 Err(err) => {
                     let err_msg = err.to_string();
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = proxy_list_user_devices_fanout_error,
                         error = err_msg,
                     );
@@ -1942,7 +1946,7 @@ impl DaemonInvocationService {
         for peer_hub_url in peer_hub_urls {
             let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = proxy_resolve_skip_untrusted_peer,
                     peer_hub_url = peer_hub_url,
                 );
@@ -2006,7 +2010,7 @@ impl DaemonInvocationService {
                 Err(err) => {
                     let err_msg = err.to_string();
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = proxy_resolve_fanout_error,
                         error = err_msg,
                     );
@@ -2129,7 +2133,7 @@ impl DaemonInvocationService {
         let target_tenant_field = target_tenant.as_deref().unwrap_or("<none>");
         let local_tenant_field = local_tenant.unwrap_or("<none>");
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_dispatch,
             target_ura = request.target_ura,
             target_tenant = target_tenant_field,
@@ -2300,7 +2304,7 @@ impl DaemonInvocationService {
                                                 Err(err) => {
                                                     let err_msg = format!("{err}");
                                                     crate::op_event!(
-                                                        component = axon_serve,
+                                                        component = daemon_invocation,
                                                         kind = forward_invoke_peer_response_malformed,
                                                         scope = "same_tenant_fanout",
                                                         error = err_msg,
@@ -2322,7 +2326,7 @@ impl DaemonInvocationService {
                                     Err(err) => {
                                         let err_msg = format!("{err}");
                                         crate::op_event!(
-                                            component = axon_serve,
+                                            component = daemon_invocation,
                                             kind = forward_invoke_same_tenant_cross_hub_miss,
                                             peer_realm = peer_realm,
                                             peer_hub_endpoint = peer_hub_endpoint,
@@ -2416,7 +2420,7 @@ impl DaemonInvocationService {
                                                 Err(err) => {
                                                     let err_msg = format!("{err}");
                                                     crate::op_event!(
-                                                        component = axon_serve,
+                                                        component = daemon_invocation,
                                                         kind = forward_invoke_peer_response_malformed,
                                                         scope = "same_tenant_fanout",
                                                         error = err_msg,
@@ -2438,7 +2442,7 @@ impl DaemonInvocationService {
                                     Err(err) => {
                                         let err_msg = format!("{err}");
                                         crate::op_event!(
-                                            component = axon_serve,
+                                            component = daemon_invocation,
                                             kind = forward_invoke_same_tenant_cross_hub_miss,
                                             peer_realm = peer_realm,
                                             peer_hub_endpoint = peer_hub_endpoint,
@@ -2484,17 +2488,17 @@ impl DaemonInvocationService {
         // to the next call, matching the admission gate's per-call
         // snapshot pattern. See `hub_resolver.rs` for the precedence
         // contract and the per-source rationale.
-        let resolution = crate::services::axon_serve::hub_resolver::HubResolver::new(
+        let resolution = crate::services::invocation_transport::hub_resolver::HubResolver::new(
             &self.federated_peers,
             &self.federated_directory,
             self.allow_directory_auto_route,
         )
         .resolve(&target_tenant, &request.target_ura);
         let target_hub_endpoint: String = match resolution {
-            crate::services::axon_serve::hub_resolver::HubResolution::Static { hub_endpoint } => {
+            crate::services::invocation_transport::hub_resolver::HubResolution::Static { hub_endpoint } => {
                 hub_endpoint
             }
-            crate::services::axon_serve::hub_resolver::HubResolution::DirectoryFallback {
+            crate::services::invocation_transport::hub_resolver::HubResolution::DirectoryFallback {
                 hub_endpoint,
                 target_ura,
             } => {
@@ -2504,7 +2508,7 @@ impl DaemonInvocationService {
                 // instead of declaring tenants explicitly in
                 // daemon-config.toml.
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = auto_route,
                     source = "federated_directory",
                     target_tenant = target_tenant,
@@ -2513,7 +2517,7 @@ impl DaemonInvocationService {
                 );
                 hub_endpoint
             }
-            crate::services::axon_serve::hub_resolver::HubResolution::Offline => {
+            crate::services::invocation_transport::hub_resolver::HubResolution::Offline => {
                 record_offline_receipt();
                 return Err(Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -2591,7 +2595,7 @@ impl DaemonInvocationService {
                         Err(err) => {
                             let err_msg = format!("{err}");
                             crate::op_event!(
-                                component = axon_serve,
+                                component = daemon_invocation,
                                 kind = forward_invoke_peer_response_malformed,
                                 scope = "cross_tenant",
                                 error = err_msg,
@@ -2609,7 +2613,7 @@ impl DaemonInvocationService {
                     };
                 let result_bytes_len = peer_body.result_bytes.len();
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = forward_invoke_cross_tenant_ok,
                     target_ura = request.target_ura,
                     target_hub_endpoint = target_hub_endpoint,
@@ -2635,7 +2639,7 @@ impl DaemonInvocationService {
                 // by hand.
                 let err_msg = format!("{err}");
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = forward_invoke_peer_dial_failed,
                     target_ura = request.target_ura,
                     target_hub_endpoint = target_hub_endpoint,
@@ -2764,7 +2768,7 @@ impl DaemonInvocationService {
         }
 
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_local_presence_dispatch_awaiting_reply,
             target_ura = request.target_ura,
             ability = inner_payload.ability,
@@ -2794,7 +2798,7 @@ impl DaemonInvocationService {
         let result_bytes_len = result_bytes.len();
         let error_field = error.as_deref().unwrap_or("<none>");
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_local_presence_dispatch_result,
             target_ura = request.target_ura,
             ability = inner_payload.ability,
@@ -2857,7 +2861,7 @@ impl DaemonInvocationService {
         }
 
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_self_target_dispatch,
             target_ura = request.target_ura,
             ability = inner_payload.ability,
@@ -2887,7 +2891,7 @@ impl DaemonInvocationService {
         }
         if result_bytes.is_empty() {
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = forward_invoke_self_target_empty_result,
                 target_ura = request.target_ura,
                 ability = inner_payload.ability,
@@ -2935,7 +2939,7 @@ impl DaemonInvocationService {
         args: &[u8],
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = invoke_remote_self_target_dispatch,
             subject = subject_device,
             ability = ability,
@@ -3049,7 +3053,7 @@ impl DaemonInvocationService {
         }
 
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = invoke_bidi_remote_bridge,
             ability = ability,
             target_ura = target_ura,
@@ -3271,7 +3275,7 @@ impl DaemonInvocationService {
                         &[],
                         true,
                     ))),
-                    "axon_serve",
+                    "daemon_invocation",
                     &format!("remote_bidi_eof call_id={call_id}"),
                 );
             }
@@ -3306,7 +3310,7 @@ impl DaemonInvocationService {
         mut up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = invoke_bidi_local_runtime_dispatch,
             ability = ability,
         );
@@ -3390,7 +3394,7 @@ impl DaemonInvocationService {
                 if frame.sequence != expected_up_sequence {
                     let frame_sequence = frame.sequence;
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = invoke_bidi_frame_sequence_violated,
                         reason = REASON_BIDI_FRAME_SEQUENCE,
                         expected = expected_up_sequence,
@@ -3977,7 +3981,7 @@ impl DaemonInvocationService {
                             &[],
                             true,
                         ))),
-                        "axon_serve",
+                        "daemon_invocation",
                         &format!("invoke_remote_stream_cancel call_id={call_id}"),
                     );
                 }
@@ -4079,7 +4083,7 @@ impl DaemonInvocationService {
         let registration = self.presence.insert_tracked(caller_ura.clone(), down_tx);
         let displaced_prior = registration.displaced.is_some();
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = self_session_admitted,
             caller = caller_ura,
             displaced_prior = displaced_prior,
@@ -4386,7 +4390,7 @@ fn map_local_bidi_handler_frame(
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = invoke_bidi_local_runtime_warning,
                         handler = "pty",
                         message = message,
@@ -4464,7 +4468,7 @@ fn map_local_bidi_handler_frame(
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = invoke_bidi_local_runtime_warning,
                         handler = "file_transfer",
                         message = message,
@@ -4647,7 +4651,7 @@ impl DaemonInvocationService {
     async fn escalate_forward_invoke(
         &self,
         handle: &std::sync::Arc<
-            crate::services::axon_serve::session_escalation::SessionEscalationHandle,
+            crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
         >,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
@@ -5163,7 +5167,7 @@ async fn drain_session_up_stream(
                 // string, so we converged on the op_event shape.
                 let id_hex = call_id_hex(&call_id);
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = session_accept_request_frame,
                     call_id = id_hex,
                     ability = ability,
@@ -5498,7 +5502,7 @@ pub(crate) fn build_peer_envelope(
         Status::invalid_argument(format!("peer envelope subject URA is invalid: {err}"))
     })?;
 
-    let profile = crate::services::axon_serve::DEFAULT_URA_PROFILE.to_string();
+    let profile = crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string();
     forwarded.caller = Some(AgentIdentity {
         ura: caller_ura,
         profile: profile.clone(),
@@ -5724,7 +5728,7 @@ pub(crate) fn read_hub_identity_seed(realm: &str) -> Result<[u8; 32], String> {
 // now observable via:
 //   * the dispatched invocation's `InvocationLedger` row, written
 //     when the target reaches a terminal state, and
-//   * `op_event!(component = axon_serve, kind = forward_invoke_*)`
+//   * `op_event!(component = daemon_invocation, kind = forward_invoke_*)`
 //     log lines for transport-level miss / fail diagnostics.
 //
 // The trade-off (documented in src/services/mod.rs): admission-time
@@ -7960,7 +7964,7 @@ mod tests {
 
     // ── PR-3 commit 1/3 — <self>.invoke_remote helpers + early returns ────
 
-    use crate::services::axon_serve::invoke_remote_initiator::{
+    use crate::services::invocation_transport::invoke_remote_initiator::{
         InvokeRemoteUp, ABILITY_INVOKE_REMOTE,
     };
     use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
@@ -8741,15 +8745,15 @@ mod tests {
         assert_eq!(subject.ura, "easynet:///r/local/device/dev-a");
         assert_eq!(
             caller.profile,
-            crate::services::axon_serve::DEFAULT_URA_PROFILE
+            crate::services::invocation_transport::DEFAULT_URA_PROFILE
         );
         assert_eq!(
             callee.profile,
-            crate::services::axon_serve::DEFAULT_URA_PROFILE
+            crate::services::invocation_transport::DEFAULT_URA_PROFILE
         );
         assert_eq!(
             subject.profile,
-            crate::services::axon_serve::DEFAULT_URA_PROFILE
+            crate::services::invocation_transport::DEFAULT_URA_PROFILE
         );
         assert_eq!(env.invocation_nonce.len(), 16);
     }
@@ -10129,11 +10133,11 @@ mod tests {
         // result. The dispatcher's response must carry exactly
         // those bytes — proving the device-mode path didn't
         // short-circuit to a local-presence answer.
-        use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch;
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
         use tokio::sync::mpsc;
 
@@ -10200,10 +10204,10 @@ mod tests {
         // surfaces on the unary wire as the same `failed_precondition
         // (target_offline)` reason the existing hub-mode arm uses,
         // so a CLI doesn't need to branch on mode.
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use tokio::sync::mpsc;
 
         let correlation = EscalationCorrelation::new();
@@ -10215,7 +10219,7 @@ mod tests {
 
         // Fake hub: complete every Request with TargetOffline.
         tokio::spawn(async move {
-            use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
+            use crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch;
             use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
             while let Some(frame) = up_rx.recv().await {
                 let chunk = match frame.payload {
@@ -10260,10 +10264,10 @@ mod tests {
         // built-in timeout fires (we use the short-timeout
         // builder) and the unary path surfaces
         // `Status::deadline_exceeded`.
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use tokio::sync::mpsc;
 
         let correlation = EscalationCorrelation::new();
@@ -10479,11 +10483,11 @@ mod tests {
         // request → forward_invoke local-fast-path → push to
         // PresenceRegistry → response bytes round-trip back via
         // RequestResult → device caller receives the bytes.
-        use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch;
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use crate::services::presence_registry::DispatchSender;
         use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
         use tokio::sync::mpsc;

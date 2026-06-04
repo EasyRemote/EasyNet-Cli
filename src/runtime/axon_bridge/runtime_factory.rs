@@ -3,7 +3,7 @@
 //! Centralises the "build Axon's runtime + install KeyResolver +
 //! install LedgerSink" recipe so that:
 //!
-//!   * production boot (`services::axon_serve::boot::start_axon_serve_sidecar`)
+//!   * production boot (`services::invocation_transport::start_daemon_invocation_transport`)
 //!     gets the runtime wired the same way every time, and
 //!   * integration tests can call the same factory with a tempdir
 //!     ledger + a stub trust anchor without duplicating the
@@ -45,7 +45,7 @@ pub fn build_local_runtime(
 
 /// Install daemon-specific admission and ledger adapters onto an
 /// already-created runtime. Daemon boot uses this when ability
-/// registration has to happen before `axon_serve` finishes loading
+/// registration has to happen before `invocation_transport` finishes loading
 /// the transport config and trust anchor.
 pub fn configure_local_runtime(
     runtime: &Arc<LocalRuntime>,

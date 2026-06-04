@@ -23,7 +23,8 @@
 //! The `AxonAbilityCatalog` is constructed *before* the Axon
 //! `LocalRuntime` (registry comes from
 //! `runtime::agents::build_registry_with_services` in the daemon's
-//! Stage 2; runtime comes later in `axon_serve::start_..._sidecar`).
+//! Stage 2; runtime comes later in
+//! `invocation_transport::start_daemon_invocation_transport`).
 //! But `device.agent.start`'s handler closure has to be installed at
 //! registry-build time. We bridge that by parking the
 //! [`LocalRuntime`] handle in an internal [`OnceLock`]: the
@@ -368,7 +369,7 @@ mod tests {
     async fn register_agent_before_set_runtime_no_ops_with_runtime_not_ready_flag() {
         // Pre-`set_runtime` (i.e. during the brief boot window
         // between `build_registry_with_services` and
-        // `start_axon_serve_sidecar`'s `set_runtime` call), the
+        // `start_daemon_invocation_transport`'s `set_runtime` call), the
         // registrar must NOT panic — it logs an op_event and
         // returns `runtime_not_ready: true`. The agent still lands
         // on disk via the lifecycle handler's prior `save_agents`,

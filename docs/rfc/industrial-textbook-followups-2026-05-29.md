@@ -12,10 +12,10 @@ The in-PR fixes (kernel-boundary CI, dead-code prune, ProcessSingleton diagnosti
 
 **Motivation.** Single file, single impl block, 17 fields on the struct, 15+ `with_*` builders, three `impl` segments spanning thousands of lines each. Holds five disjoint concerns: federation wrapper dispatch, self-targeted ability arms, pubkey lifecycle, bidi-stream machinery, invoke_remote correlation + ledger record building. A reviewer cannot hold the impl in mind; new arms accrete to whichever block was nearest in `git blame`.
 
-**Proposed shape.** Convert `src/services/axon_serve/daemon_invocation_service.rs` into a module directory:
+**Proposed shape.** Convert `src/services/invocation_transport/daemon_invocation_service.rs` into a module directory:
 
 ```
-src/services/axon_serve/daemon_invocation_service/
+src/services/invocation_transport/daemon_invocation_service/
 ├── mod.rs                  # Invocation trait impl (~300 lines: routes by function_name)
 ├── state.rs                # DaemonInvocationService struct + Builder
 ├── federation_arms.rs      # dispatch_federation_* helpers
@@ -42,7 +42,7 @@ Each sibling module takes a borrowed slice of `Service` fields rather than the w
 2. `cargo check --features axon-pb --tests` clean before + after each commit.
 3. Production module's public surface (`pub struct DaemonInvocationService`, `pub fn new`, all `pub fn with_*`, all `impl Invocation for ...` arms) unchanged.
 4. Each test file's `#[test]` count matches the pre-split state.
-5. After landing: max single-file LoC under `services/axon_serve/daemon_invocation_service/` is ≤ 2 000.
+5. After landing: max single-file LoC under `services/invocation_transport/daemon_invocation_service/` is ≤ 2 000.
 
 **Sequencing risk.** PR-B (Builder::build()) reshapes the `Service` struct; PR-A should land FIRST so the per-arm files exist when the struct contracts. Landing PR-B first creates a wave of merge conflicts when PR-A moves arms whose Builder signatures just changed.
 
@@ -113,7 +113,7 @@ let svc = DaemonInvocationServiceBuilder::new(presence, admission)
 
 **Ship criteria.**
 1. Every `with_*` call in the daemon's boot path is gone (replaced by group struct construction).
-2. No dispatch arm in `services/axon_serve/daemon_invocation_service/` issues `Status::failed_precondition("daemon was constructed without ...")` — the equivalent rejections live in `Builder::build()`.
+2. No dispatch arm in `services/invocation_transport/daemon_invocation_service/` issues `Status::failed_precondition("daemon was constructed without ...")` — the equivalent rejections live in `Builder::build()`.
 3. `ConfigError` enum has one variant per validated invariant; each variant carries a human-actionable message naming the missing capability and the boot step that would supply it.
 4. `cargo check --features axon-pb --tests` + boundary script + every boot integration test passes unchanged.
 
@@ -281,8 +281,8 @@ src/runtime/skill_store/
 
 **Motivation.** The current diff lands four families of name drift that no PR-A–PR-F PR will reach individually:
 
-- **`dispatch` is overloaded** across three layers — `runtime/ability_dispatch.rs` (handler registration / conversion), `services/control/runtime_dispatch.rs` (control-plane routing), `services/axon_serve/daemon_invocation_service.rs` (gRPC fn_name arms). `git grep dispatch` returns three unrelated meanings.
-- **`local_*` prefix** is split across four different scopes — `runtime/local_runtime_invoker.rs` (CLI JSON adapter), `services/axon_serve/local_session_dispatcher.rs` (device session dispatcher, 1 512 LoC), `support/local_invoke.rs` (daemon-side fallback invoke), `support/local_daemon_grpc.rs` (socket-path resolver). Four meanings, one prefix.
+- **`dispatch` is overloaded** across three layers — `runtime/ability_dispatch.rs` (handler registration / conversion), `services/control/runtime_dispatch.rs` (control-plane routing), `services/invocation_transport/daemon_invocation_service.rs` (gRPC fn_name arms). `git grep dispatch` returns three unrelated meanings.
+- **`local_*` prefix** is split across four different scopes — `runtime/local_runtime_invoker.rs` (CLI JSON adapter), `services/invocation_transport/local_session_dispatcher.rs` (device session dispatcher, 1 512 LoC), `support/local_invoke.rs` (daemon-side fallback invoke), `support/local_daemon_grpc.rs` (socket-path resolver). Four meanings, one prefix.
 - **`refresh` verb**, while now adequately documented in `device.agent.refresh`'s description (this PR), still has two reading paths an operator may confuse.
 - **MCP namespace shape** open per PR-E (`mcp_<server>_<tool>` vs `<agent>.mcp_<server>_<tool>` vs `device.mcp.<server>.<tool>`); PR-E owns the policy choice, PR-G owns the codebase sweep when PR-E decides.
 
@@ -292,12 +292,12 @@ src/runtime/skill_store/
 
 - `runtime/ability_dispatch.rs::rpc_handler_to_ability_fn` and siblings → `into_axon_ability_*` (action-only nouns; the file-level doc names the conversion contract).
 - `services/control/runtime_dispatch.rs` → keeps `dispatch_` (control-plane routing IS dispatch).
-- `services/axon_serve/daemon_invocation_service.rs` arms → rename `dispatch_*` arms to `route_*` arms (they branch on `function_name`; that's routing, not dispatch).
+- `services/invocation_transport/daemon_invocation_service.rs` arms → rename `dispatch_*` arms to `route_*` arms (they branch on `function_name`; that's routing, not dispatch).
 - Add a 3-line table in `docs/design/daemon-layers-v1.md` naming the three meanings + the layer that owns each.
 
 ### G-2 `local_*` prefix rename
 
-- `services/axon_serve/local_session_dispatcher.rs` → `session_dispatch.rs` (drop the `local_`; sessions are by definition device-side).
+- `services/invocation_transport/local_session_dispatcher.rs` → `session_dispatch.rs` (drop the `local_`; sessions are by definition device-side).
 - `support/local_invoke.rs` → leave name (canonical CLI surface).
 - `support/local_daemon_grpc.rs` → leave name (the prefix here means "talks to the local daemon over a UDS").
 - `runtime/local_runtime_invoker.rs` → leave name (the prefix here means "drives the local Axon LocalRuntime"), but add a header section explaining the `local_*` semantic in each module so `git grep local_` returns interpretable hits.
@@ -351,7 +351,7 @@ PR-F  skill_store split + TempDir replacement (standalone)
 PR-G  cross-cutting naming sweep              (lands after PR-E for the MCP shape)
 ```
 
-PR-A and PR-B together delete the largest source of structural debt in `services/axon_serve/`. PR-C delivers the same payoff for `runtime/agents/agent_lifecycle_ability.rs`. PR-D + PR-E close the wire/contract polishing. PR-F and PR-G ship after the bigger structural moves so they don't conflict.
+PR-A and PR-B together delete the largest source of structural debt in `services/invocation_transport/`. PR-C delivers the same payoff for `runtime/agents/agent_lifecycle_ability.rs`. PR-D + PR-E close the wire/contract polishing. PR-F and PR-G ship after the bigger structural moves so they don't conflict.
 
 ---
 
@@ -372,7 +372,7 @@ The current PR's contribution toward each follow-up:
 
 These are the items the second-pass review identified that were small enough to land in the same PR without breaking the "reviewable" bound. Each is independent and grep-anchored:
 
-- **Status-code policy docstring** at top of `services/axon_serve/daemon_invocation_service.rs` — three explicit classes (internal / invalid_argument / failed_precondition) plus not_found / permission_denied / unimplemented, each with a one-paragraph definition naming the caller's expected response. Future arm authors have the policy in front of them.
+- **Status-code policy docstring** at top of `services/invocation_transport/daemon_invocation_service.rs` — three explicit classes (internal / invalid_argument / failed_precondition) plus not_found / permission_denied / unimplemented, each with a one-paragraph definition naming the caller's expected response. Future arm authors have the policy in front of them.
 - **`device.agent.{start,stop,refresh}` hard-Err on missing tokio runtime** when the hot registrar IS wired. The previous code returned a silent `runtime_not_ready` envelope that operators could mistake for the legitimate boot-window state. Now: registrar empty + no tokio = `runtime_not_ready` envelope + warn-class op_event; registrar wired + no tokio = anyhow::bail with the exact wiring step that's missing.
 - **`block_on_runtime` wrapper deleted** in `runtime/local_runtime_invoker.rs`; three call sites now reach `support::async_bridge::run_blocking(..., NoRuntimeFallback::BuildCurrentThreadTokio)` directly. `block_on_runtime_sync` retained in `ability_dispatch.rs` (7 call sites, all under the same in-memory-only invariant, documented in the helper's docstring).
 - **`stamp_bidi_down_sequence` helper extracted** in `daemon_invocation_service.rs`; the two byte-identical `stamp_sequence` methods on `LocalBidiDownStream` and `SessionDownStream` now both delegate. Future PR-A's per-arm split can move them anywhere without splitting the saturating_add semantic.

@@ -14,7 +14,7 @@
 // What lives here
 // ---------------
 // - `FederationClient` trait — the abstract surface
-//   `axon_serve::federation_wrappers::handle_forward_invoke` will
+//   `invocation_transport::federation_wrappers::handle_forward_invoke` will
 //   consume in PR-N1 commit 3/N. Sync trait method shape mirrors
 //   `daemon_grpc::Client::Invoke` so the federation client can be
 //   swapped for tests + future protocol versions without touching

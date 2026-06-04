@@ -44,7 +44,7 @@ Search shows ~75 active references to `<self>.` across the daemon, federation, k
 - If I am persisting it (descriptor, receipt, audit log, federation advertise payload), do I substitute the resolved actor or keep the alias?
 - If I am rendering it to a human / LLM / hub-side filter, which form do I show?
 
-The answers diverge across modules. `runtime/agents/mod.rs:791,1285,1657,1777` filter on `name.starts_with("<self>.keyring.")` to special-case Layer B. `services/axon_serve/admission_facade.rs:1710` hard-codes `<self>.session` as a dispatch target. `runtime/agents/discover_ability.rs:232` puts `<self>.discover` into LLM-facing prompt copy. `services/axon_serve/register_device_pubkey.rs:73` exposes `<self>.register_device_pubkey` as a public constant on the wire. None of these sites can locally tell whether their fix is consistent with the others — every new `<self>` reference adds an O(N) verification burden across the pre-existing N references.
+The answers diverge across modules. `runtime/agents/mod.rs:791,1285,1657,1777` filter on `name.starts_with("<self>.keyring.")` to special-case Layer B. `services/invocation_transport/admission_facade.rs:1710` hard-codes `<self>.session` as a dispatch target. `runtime/agents/discover_ability.rs:232` puts `<self>.discover` into LLM-facing prompt copy. `services/invocation_transport/register_device_pubkey.rs:73` exposes `<self>.register_device_pubkey` as a public constant on the wire. None of these sites can locally tell whether their fix is consistent with the others — every new `<self>` reference adds an O(N) verification burden across the pre-existing N references.
 
 ### 4. The hub side speaks the alias too
 
@@ -129,7 +129,7 @@ This stage closes the open hole in this PR's design — that owner resolution ha
 
 **Scope:**
 - `runtime/agents/mod.rs:571` (keyring registration), all keyring abilities, `<self>.session`, `<self>.register_device_pubkey`, `<self>.api_key.*` (where it is in fact device-bundled), `<self>.pages.*`.
-- `services/axon_serve/admission_facade.rs:1710`, `services/axon_serve/register_device_pubkey.rs:73` and friends.
+- `services/invocation_transport/admission_facade.rs:1710`, `services/invocation_transport/register_device_pubkey.rs:73` and friends.
 - `EasyNet-Axon` hub-side admission and bidi acceptors.
 - `EasyNet` Go SDK if it carries any `<self>.*` constants.
 
@@ -137,7 +137,7 @@ This stage closes the open hole in this PR's design — that owner resolution ha
 1. Hub registers both names as aliases of the same handler. Cross-repo PRs land in the same release window.
 2. Device migrates to the new names; CLI / federation / keyring all dial `device.*`.
 3. After one full release cycle with no `<self>.*` dials observed in hub admission telemetry, hub drops the legacy aliases.
-4. `services/axon_serve/register_device_pubkey.rs` exposes `ABILITY_DEVICE_REGISTER_DEVICE_PUBKEY` as the canonical constant; the legacy const stays for one release as `#[deprecated]`.
+4. `services/invocation_transport/register_device_pubkey.rs` exposes `ABILITY_DEVICE_REGISTER_DEVICE_PUBKEY` as the canonical constant; the legacy const stays for one release as `#[deprecated]`.
 
 **Wire impact:** breaking for any third-party device speaking `<self>.session` raw. Documented in the AXON-RFC-001 v4.1.6 changelog (this RFC bump becomes the carrier).
 
@@ -211,8 +211,8 @@ The following narrow, in-place fixes have landed on the path to the staged migra
 
 * EasyNet-Cli `runtime/agents/mod.rs` registers keyring under owner `"device"` instead of the legacy `"<self>"` literal. 11 catalogue rows shift accordingly.
 * All `name.starts_with("<self>.keyring.")` filters and the test-fixture `format!("<self>.keyring.{verb}")` updated.
-* Doc / error-message references in `runtime/keyring/`, `runtime/agents/meta_ability.rs`, `services/axon_serve/federation_wrappers.rs` updated.
-* `services/axon_serve/session_initiator.rs::SYSTEM_NAMESPACES` adds `"device"` to the skip set so the new namespace does not get advertised as an agent.
+* Doc / error-message references in `runtime/keyring/`, `runtime/agents/meta_ability.rs`, `services/invocation_transport/federation_wrappers.rs` updated.
+* `services/invocation_transport/session_initiator.rs::SYSTEM_NAMESPACES` adds `"device"` to the skip set so the new namespace does not get advertised as an agent.
 * EasyNet/backend `daemon_grpc/remote_routing.go::daemonInternalAbility()` adds a `device.*` arm alongside the existing `<self>.*` arm so hub-mode invocations of `device.keyring.federate_user_identity_token` route to raw Invoke instead of being wrapped in `invoke_remote`.
 * EasyNet/backend wire-pinned constants (`AbilityInvokeRemote`, `abilityRegisterDevicePubkey`) marked with `TODO(RFC-001 v4.1.6)` comments; literals unchanged.
 
@@ -220,7 +220,7 @@ Wire impact: zero. Keyring is daemon-internal; the rename does not cross the dev
 
 ### HF-2 — Frontend Agents page restored (2026-05-05)
 
-The session-prelude algorithm in `services/axon_serve/session_initiator.rs` derives "agents this device hosts" by splitting `ability_catalog` entries on the first `.` and taking the first segment as the agent name. This conflates system namespaces (`fs`, `fleet`, `voice`, …) with real sub-agent identities. Without filtering, the device advertises ~29 fake agents to the hub on every session reconnect, displacing real sub-agents from the Frontend Agents page.
+The session-prelude algorithm in `services/invocation_transport/session_initiator.rs` derives "agents this device hosts" by splitting `ability_catalog` entries on the first `.` and taking the first segment as the agent name. This conflates system namespaces (`fs`, `fleet`, `voice`, …) with real sub-agent identities. Without filtering, the device advertises ~29 fake agents to the hub on every session reconnect, displacing real sub-agents from the Frontend Agents page.
 
 Fix: explicit `SYSTEM_NAMESPACES` constant listing all 24 system namespaces plus `01HUB`, `device`, `<self>`. The prelude scanner skips any entry whose first segment is in this set. Number of agents advertised drops 29 → 4 (the real `codex`, `web-builder`, plus synthesised `pages` / `files`).
 

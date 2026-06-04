@@ -1,7 +1,7 @@
 // EasyNet CLI — `<self>.register_device_pubkey` ability handler
 // ==============================================================
 //
-// File: src/services/axon_serve/register_device_pubkey.rs
+// File: src/services/invocation_transport/register_device_pubkey.rs
 // Description: PR-7 commit 5/N. Daemon-side handler for the
 //              `<self>.register_device_pubkey` ability that the
 //              EasyNet backend invokes from

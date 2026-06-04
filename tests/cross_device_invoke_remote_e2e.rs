@@ -55,14 +55,14 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity, BinaryChunk, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
     InvokeBidiUp, InvokeServerStreamRequest, StreamDescriptor,
 };
-use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
-use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::axon_serve::invoke_remote_initiator::{
+use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
+use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
     InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
-use easynet_cli::services::axon_serve::local_session_dispatcher::LocalAxonSessionDispatcher;
-use easynet_cli::services::axon_serve::session_initiator::{
+use easynet_cli::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
+use easynet_cli::services::invocation_transport::session_initiator::{
     SessionFrameDispatcher, SessionUpSender, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
 };
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
@@ -828,7 +828,7 @@ async fn run_round_trip() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::services::axon_serve::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::services::invocation_transport::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 
@@ -945,7 +945,7 @@ async fn run_round_trip_via_local_dispatcher() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::services::axon_serve::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::services::invocation_transport::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 

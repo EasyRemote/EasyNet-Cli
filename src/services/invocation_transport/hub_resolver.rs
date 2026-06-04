@@ -1,7 +1,7 @@
 // EasyNet CLI — HubResolver
 // =========================
 //
-// File: src/services/axon_serve/hub_resolver.rs
+// File: src/services/invocation_transport/hub_resolver.rs
 // Description: Resolves a cross-tenant `target_tenant` (plus the full
 //              `target_ura` for directory lookups) to a peer hub
 //              endpoint that `forward_invoke` should dial. Owns the

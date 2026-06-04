@@ -322,7 +322,7 @@ fn start_agent_handler(
             anyhow::anyhow!(
                 "device.agent.start: hot_registrar is wired but no tokio runtime is \
                  available on the calling thread — handler must be driven from a \
-                 tokio worker (see daemon boot in `axon_serve::boot`)"
+                 tokio worker (see daemon boot in `invocation_transport::boot`)"
             )
         })?;
         Some(outcome)
@@ -423,7 +423,7 @@ fn stop_agent_handler(
                     anyhow::anyhow!(
                         "device.agent.stop: hot_registrar is wired but no tokio runtime is \
                      available on the calling thread — handler must be driven from a \
-                     tokio worker (see daemon boot in `axon_serve::boot`)"
+                     tokio worker (see daemon boot in `invocation_transport::boot`)"
                     )
                 })?,
             )
@@ -525,7 +525,7 @@ fn refresh_agents_handler(
         return Err(anyhow::anyhow!(
             "device.agent.refresh: hot_registrar is wired but no tokio runtime is \
              available on the calling thread — handler must be driven from a \
-             tokio worker (see daemon boot in `axon_serve::boot`)"
+             tokio worker (see daemon boot in `invocation_transport::boot`)"
         ));
     };
 

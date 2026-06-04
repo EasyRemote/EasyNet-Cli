@@ -36,7 +36,7 @@
 // -----------------------
 // - The admission gate itself — that lives in `easynet-axon`'s
 //   `invocation::admission` module and is consulted from
-//   `services::axon_serve::daemon_invocation_service` (commit 7b/9)
+//   `services::invocation_transport::daemon_invocation_service` (commit 7b/9)
 // - The `realm-trust.toml` *writer* — pairing flow lives in PR-7
 // - SIGHUP reload — PR-7 wires the reload signal handler; PR-1
 //   reads once at boot

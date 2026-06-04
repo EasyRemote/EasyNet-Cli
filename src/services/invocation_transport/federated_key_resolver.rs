@@ -1,7 +1,7 @@
 // EasyNet CLI — FederatedKeyResolver (PR-N2 commit 1/N)
 // =======================================================
 //
-// File: src/services/axon_serve/federated_key_resolver.rs
+// File: src/services/invocation_transport/federated_key_resolver.rs
 // Description: KeyResolver wrapping the local TrustAnchorKeyResolver
 //              with cross-realm fall-through to a peer hub's
 //              `federation.resolve_key` ability via the PR-N1
@@ -345,7 +345,7 @@ impl FederatedKeyResolver {
         };
 
         let caller_tenant =
-            crate::services::axon_serve::daemon_invocation_service::parse_tenant_from_ura(
+            crate::services::invocation_transport::daemon_invocation_service::parse_tenant_from_ura(
                 agent_ura,
             )
             .ok_or_else(|| unknown_agent_ura(agent_ura, "malformed_ura"))?;
@@ -405,10 +405,10 @@ impl FederatedKeyResolver {
             return Err(unknown_agent_ura(agent_ura, "missing_self_realm"));
         };
         let local_hub_ura = crate::ura::hub_ura(self_realm);
-        let request = crate::services::axon_serve::ProtoEnvelope::caller_only(local_hub_ura)
+        let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(local_hub_ura)
             .and_then(|env| {
                 env.invoke_request(
-                    crate::services::axon_serve::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+                    crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
                     args_bytes,
                 )
             })
