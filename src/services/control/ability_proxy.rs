@@ -341,8 +341,9 @@ impl AbilityProxy {
                 subscription_id,
                 ability,
                 args,
+                subject,
             } => {
-                self.handle_subscribe_async(subscription_id, ability, args, out, cancel)
+                self.handle_subscribe_async(subscription_id, ability, args, subject, out, cancel)
                     .await;
             }
             IncomingFrame::Cancel { subscription_id } => {
@@ -471,6 +472,7 @@ impl AbilityProxy {
         subscription_id: String,
         ability: String,
         args: serde_json::Value,
+        subject: Option<String>,
         out: mpsc::Sender<OutgoingFrame>,
         cancel: &CancelRegistry,
     ) {
@@ -479,10 +481,7 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
-            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
-            // carry an AXIOM `subject` field at this IPC layer.
-            // When the wire schema grows it, extract here.
-            subject: None,
+            subject,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -666,7 +665,8 @@ impl AbilityProxy {
                 subscription_id,
                 ability,
                 args,
-            } => self.handle_subscribe(subscription_id, ability, args),
+                subject,
+            } => self.handle_subscribe(subscription_id, ability, args, subject),
             IncomingFrame::Cancel { subscription_id } => {
                 vec![OutgoingFrame::Error {
                     request_id: None,
@@ -849,16 +849,14 @@ impl AbilityProxy {
         subscription_id: String,
         ability: String,
         args: serde_json::Value,
+        subject: Option<String>,
     ) -> Vec<OutgoingFrame> {
         let plan = InvocationPlan {
             ability,
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
-            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
-            // carry an AXIOM `subject` field at this IPC layer.
-            // When the wire schema grows it, extract here.
-            subject: None,
+            subject,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -1327,6 +1325,7 @@ mod tests {
             subscription_id: "sub-1".into(),
             ability: "device.session.attach".into(),
             args: json!({"session_id": "no-such-session"}),
+            subject: None,
         });
         // Last frame must be Terminal regardless of how many Frame
         // envelopes preceded it — that is the v1 contract for any

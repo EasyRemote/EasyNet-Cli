@@ -62,6 +62,8 @@ pub enum IncomingFrame {
         ability: String,
         #[serde(default)]
         args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<String>,
     },
     /// Early-terminate an in-flight subscription. Server responds
     /// with a `Terminal` envelope on the matching subscription_id.
@@ -214,6 +216,34 @@ mod tests {
                 assert_eq!(ability, "observe.health");
             }
             _ => panic!("expected Invoke variant after round-trip"),
+        }
+    }
+
+    #[test]
+    fn subscribe_frame_round_trips_optional_subject() {
+        let f = IncomingFrame::Subscribe {
+            subscription_id: "sub-42".into(),
+            ability: "device.camera.subscribe".into(),
+            args: serde_json::json!({"fps": 5}),
+            subject: Some("easynet:///r/localhost/resource/cam".into()),
+        };
+        let s = serde_json::to_string(&f).unwrap();
+        let back: IncomingFrame = serde_json::from_str(&s).unwrap();
+        match back {
+            IncomingFrame::Subscribe {
+                subscription_id,
+                ability,
+                subject,
+                ..
+            } => {
+                assert_eq!(subscription_id, "sub-42");
+                assert_eq!(ability, "device.camera.subscribe");
+                assert_eq!(
+                    subject.as_deref(),
+                    Some("easynet:///r/localhost/resource/cam")
+                );
+            }
+            _ => panic!("expected Subscribe variant after round-trip"),
         }
     }
 

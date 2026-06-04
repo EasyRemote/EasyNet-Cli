@@ -136,6 +136,9 @@ pub(crate) mod mission_runs;
 /// `<user>.pages.{publish,unpublish,list,get}` and the
 /// `<user>.<project_id>.page.fetch` family.
 pub(crate) mod pages;
+/// #185 - `easynet quota` owner verb to inspect/edit the per-consumer
+/// invocation quota policy (`[daemon.quota]`).
+pub(crate) mod quota_cmd;
 pub(crate) mod reset;
 pub(crate) mod skill;
 pub(crate) mod skill_install;
@@ -293,6 +296,7 @@ const HELP_TEMPLATE: &str = "\
   \x1b[1;36m[Maintenance]\x1b[0m
     \x1b[1mself\x1b[0m                 Update, check version, or uninstall EasyNet CLI
     \x1b[1mdoctor\x1b[0m               Health check — runtime, bridge, agents, MCP connectivity
+    \x1b[1mquota\x1b[0m                Inspect or edit the per-consumer invocation quota policy
     \x1b[1mcompletion\x1b[0m           Emit a shell completion script (bash/zsh/fish/powershell)
     \x1b[1mhelp\x1b[0m                 Print this message or the help of the given subcommand
 
@@ -430,6 +434,10 @@ pub enum Command {
     #[command(display_order = 51)]
     Doctor(doctor::DoctorArgs),
 
+    /// Inspect or edit the per-consumer invocation quota policy.
+    #[command(display_order = 53)]
+    Quota(quota_cmd::QuotaArgs),
+
     /// Emit a shell completion script (bash/zsh/fish/powershell).
     #[command(display_order = 52)]
     Completion(completion::CompletionArgs),
@@ -461,6 +469,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // Cross-cutting
         Command::SelfCmd(args) => groups::selfcmd::run(args),
         Command::Doctor(args) => doctor::run(args),
+        Command::Quota(args) => quota_cmd::run(args),
         Command::Completion(args) => completion::run::<App>(args),
 
         // Top-level shortcuts — forward to the same impl the layered

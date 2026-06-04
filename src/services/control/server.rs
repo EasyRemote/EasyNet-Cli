@@ -605,6 +605,7 @@ mod tests {
                 subscription_id: "boot-sub".into(),
                 ability: WATCH_BOOT_ABILITY.into(),
                 args: serde_json::json!({}),
+                subject: None,
             },
             out_tx,
             &cancel,

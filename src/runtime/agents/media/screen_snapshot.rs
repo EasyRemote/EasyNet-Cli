@@ -35,7 +35,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
+use crate::persistence::resources::{self, lookup_by_ura, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext};
 use crate::runtime::agents::media_abilities::{ABILITY_SCREEN_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
@@ -229,7 +229,7 @@ fn handler(
     })?;
 
     let file = resources::load().unwrap_or_default();
-    let entry = lookup_by_uri(&file, subject).ok_or_else(|| {
+    let entry = lookup_by_ura(&file, subject).ok_or_else(|| {
         anyhow::anyhow!(
             "{ABILITY_SCREEN_SNAPSHOT}: subject {subject} not found in \
              local resources table; reason={REASON_RESOURCE_NOT_FOUND}"

@@ -427,7 +427,7 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
             return None;
         }
     };
-    let path = config.billing_dir().join("invocations.redb");
+    let path = config.ledger_dir().join("invocations.redb");
     match easynet_axon::invocation::InvocationLedger::open(&path) {
         Ok(ledger) => Some(Arc::new(ledger)),
         Err(err) => {
@@ -520,7 +520,7 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                         fire.schedule_id, fire.fire_at, fire.catch_up
                     ),
                 };
-                let local_device_uri =
+                let local_device_ura =
                     easynet_cli::ura::device_ura("default", entry.target_node.as_str());
                 let schedule_subject_ura = easynet_cli::ura::resource_dot_ura(
                     "default",
@@ -528,8 +528,8 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     "",
                 );
                 let inv = match Invocation::try_new(
-                    local_device_uri.clone(),
-                    local_device_uri,
+                    local_device_ura.clone(),
+                    local_device_ura,
                     format!("{}.chat", agent),
                     schedule_subject_ura,
                     CausalContext::Null,

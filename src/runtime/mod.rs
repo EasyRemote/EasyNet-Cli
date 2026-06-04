@@ -107,6 +107,7 @@ pub mod execution;
 // PR-ATTACH onwards extends this).
 pub mod ability_descriptor;
 pub mod ability_dispatch;
+pub mod ability_wire;
 pub mod advertise;
 pub mod agents;
 /// Bridge layer between CLI's existing services (RealmTrustAnchor,

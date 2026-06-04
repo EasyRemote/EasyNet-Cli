@@ -462,6 +462,7 @@ async fn run_subscription(
         subscription_id: wire_sub_id.clone(),
         ability,
         args,
+        subject: None,
     };
     let bytes = serde_json::to_vec(&req)?;
     framed.send(Bytes::from(bytes)).await?;

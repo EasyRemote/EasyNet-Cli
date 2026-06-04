@@ -18,7 +18,11 @@ parsed by [`src/persistence/daemon_config.rs`](/Users/macbook.silan.tech/Documen
 2. If `listen_tcp` is set, both `tls_cert_pem` and `tls_key_pem` must be set.
 3. The daemon UDS is bound with mode `0600`; local backend/CLI clients are expected to connect through this path instead of a public TCP socket.
 4. `device` mode requires `hub_endpoint`, because `<self>.session` is maintained as an outbound long-lived bidi to the hub.
-5. Config is read once at boot. Certificate rotation and config changes take effect on restart.
+5. Listener-shaping config is read once at boot. `mode`, `listen_tcp`, TLS paths,
+   `hub_endpoint`, `realm`, `uds_path`, and `ledger_dir` changes take effect on
+   restart.
+6. SIGHUP hot-reloads only the daemon-config cells designed for live
+   replacement: `[daemon.federated_peers]` and `[daemon.quota]`.
 
 ## Example: device
 
@@ -52,7 +56,10 @@ uds_path = "~/.easynet/daemon.sock"
 - Current pairing-flow updates through `<self>.register_device_pubkey`
   republish the in-memory trust anchor immediately. Manual edits to
   `realm-trust.toml` can be reloaded with `sudo kill -HUP $(pidof easynet-daemon)`.
-  Restart is still the safe fallback if you are also rotating config or cert files.
+  The same SIGHUP pass also reloads `[daemon.federated_peers]` and
+  `[daemon.quota]` from `daemon-config.toml`. Restart is still required if you
+  are rotating config that shapes listeners, identity, ledger path, hub endpoint,
+  realm, or cert files.
 - The new `easynet-daemon` binary contains no flag-selectable "v1 transport"
   path. Rollback means reinstalling an older daemon binary, not toggling a config
   switch inside the current one.

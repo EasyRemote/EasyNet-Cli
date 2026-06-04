@@ -10,7 +10,7 @@
 //   1. Reads `EnvelopeContext.subject` (per **INV-SUBJECT-ENVELOPE**:
 //      handler MUST get subject from the envelope, NOT from args).
 //   2. Resolves subject → `ResourceEntry` via
-//      `persistence::resources::lookup_by_uri`.
+//      `persistence::resources::lookup_by_ura`.
 //   3. Branches per **INV-RESOURCE-VALIDITY**:
 //        * subject absent     → InvalidArgument with reason="subject_required"
 //        * URI not in table   → terminal failure with reason="resource_not_found"
@@ -55,7 +55,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
+use crate::persistence::resources::{self, lookup_by_ura, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext};
 use crate::runtime::agents::media_abilities::{ABILITY_CAMERA_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
@@ -321,7 +321,7 @@ fn handler(
     // resource_unavailable branch lands when the real backend can
     // probe the device (cpal::Device::default_input_config() / etc).
     let file = resources::load().unwrap_or_default();
-    let entry = lookup_by_uri(&file, subject).ok_or_else(|| {
+    let entry = lookup_by_ura(&file, subject).ok_or_else(|| {
         anyhow::anyhow!(
             "{ABILITY_CAMERA_SNAPSHOT}: subject {subject} not found in \
              local resources table; reason={REASON_RESOURCE_NOT_FOUND}"
@@ -383,7 +383,7 @@ mod tests {
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     /// Build a one-resource ResourcesFile and return its URA. The
-    /// caller passes the file to `lookup_by_uri` via the on-disk
+    /// caller passes the file to `lookup_by_ura` via the on-disk
     /// path; tests that need to round-trip through the real handler
     /// must use HomeGuard so `resources::load` reads the right path.
     fn seed_camera(file: &mut ResourcesFile, hardware_id: &str) -> String {
