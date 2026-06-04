@@ -128,6 +128,8 @@ pub struct AbilityProxy {
     /// to every successful Result frame. Wrapped in Arc so cloning
     /// the proxy per-connection stays cheap.
     local_agents: Arc<crate::persistence::local_agents::LocalAgentsFile>,
+    /// Host signing backend for §A12 hosted receipt attestations.
+    receipt_identity: Option<Arc<dyn crate::services::self_identity::SelfIdentity>>,
 }
 
 impl AbilityProxy {
@@ -150,6 +152,9 @@ impl AbilityProxy {
             local_runtime,
             resolver,
             local_agents,
+            receipt_identity: Some(Arc::new(
+                crate::services::self_identity::KeyringClient::default_path(),
+            )),
         }
     }
 
@@ -168,6 +173,7 @@ impl AbilityProxy {
             local_runtime,
             resolver,
             local_agents: Arc::new(local_agents),
+            receipt_identity: None,
         }
     }
 
@@ -220,6 +226,9 @@ impl AbilityProxy {
             local_runtime,
             resolver,
             local_agents,
+            receipt_identity: Some(Arc::new(
+                crate::services::self_identity::KeyringClient::default_path(),
+            )),
         }
     }
 
@@ -332,8 +341,9 @@ impl AbilityProxy {
                 subscription_id,
                 ability,
                 args,
+                subject,
             } => {
-                self.handle_subscribe_async(subscription_id, ability, args, out, cancel)
+                self.handle_subscribe_async(subscription_id, ability, args, subject, out, cancel)
                     .await;
             }
             IncomingFrame::Cancel { subscription_id } => {
@@ -364,8 +374,9 @@ impl AbilityProxy {
                 session_id,
                 ability,
                 args,
+                subject,
             } => {
-                self.handle_bidi_open_async(session_id, ability, args, out, bidi)
+                self.handle_bidi_open_async(session_id, ability, args, subject, out, bidi)
                     .await;
             }
             IncomingFrame::SendBidi { session_id, frame } => {
@@ -462,6 +473,7 @@ impl AbilityProxy {
         subscription_id: String,
         ability: String,
         args: serde_json::Value,
+        subject: Option<String>,
         out: mpsc::Sender<OutgoingFrame>,
         cancel: &CancelRegistry,
     ) {
@@ -470,10 +482,7 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
-            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
-            // carry an AXIOM `subject` field at this IPC layer.
-            // When the wire schema grows it, extract here.
-            subject: None,
+            subject,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -527,6 +536,7 @@ impl AbilityProxy {
         session_id: String,
         ability: String,
         args: serde_json::Value,
+        subject: Option<String>,
         out: mpsc::Sender<OutgoingFrame>,
         bidi: &BidiRegistry,
     ) {
@@ -560,8 +570,7 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Bidi,
-            // PR-DISPATCHER-SUBJECT: see Stream sites above.
-            subject: None,
+            subject,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -657,7 +666,8 @@ impl AbilityProxy {
                 subscription_id,
                 ability,
                 args,
-            } => self.handle_subscribe(subscription_id, ability, args),
+                subject,
+            } => self.handle_subscribe(subscription_id, ability, args, subject),
             IncomingFrame::Cancel { subscription_id } => {
                 vec![OutgoingFrame::Error {
                     request_id: None,
@@ -790,11 +800,23 @@ impl AbilityProxy {
                 // (pre-join state, missing hosted profile, etc.), we
                 // emit no header and the wire stays at the pre-RFC
                 // shape.
-                let receipt_header = crate::runtime::dispatch_receipt::header_for_ability(
-                    &ability_for_receipt,
-                    &self.local_agents,
-                    llm_sub_for_receipt.as_deref(),
-                );
+                let receipt_header =
+                    crate::runtime::dispatch_receipt::header_for_ability_with_attestation(
+                        &ability_for_receipt,
+                        &self.local_agents,
+                        llm_sub_for_receipt.as_deref(),
+                        &|callee_ura: &str, host_ura: &str| {
+                            let identity = self.receipt_identity.as_ref()?;
+                            let canonical =
+                                easynet_axon::invocation::canonical_host_attestation_bytes(
+                                    callee_ura, host_ura,
+                                );
+                            identity
+                                .sign(host_ura, &canonical)
+                                .ok()
+                                .map(|sig| sig.to_bytes().to_vec())
+                        },
+                    );
                 vec![OutgoingFrame::Result {
                     request_id,
                     value,
@@ -828,16 +850,14 @@ impl AbilityProxy {
         subscription_id: String,
         ability: String,
         args: serde_json::Value,
+        subject: Option<String>,
     ) -> Vec<OutgoingFrame> {
         let plan = InvocationPlan {
             ability,
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
-            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
-            // carry an AXIOM `subject` field at this IPC layer.
-            // When the wire schema grows it, extract here.
-            subject: None,
+            subject,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -1306,6 +1326,7 @@ mod tests {
             subscription_id: "sub-1".into(),
             ability: "device.session.attach".into(),
             args: json!({"session_id": "no-such-session"}),
+            subject: None,
         });
         // Last frame must be Terminal regardless of how many Frame
         // envelopes preceded it — that is the v1 contract for any
@@ -1480,17 +1501,19 @@ mod tests {
     /// session per §D2; the closure returns immediately with a
     /// transport-axis BidiSource.
     fn proxy_with_echo_bidi() -> AbilityProxy {
-        use crate::runtime::ability_dispatch::{BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND};
+        use crate::runtime::ability_dispatch::{
+            BidiOutputFrame, BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND,
+        };
         let runtime = LocalRuntime::new();
         let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
         let handler: LocalBidiHandler = Arc::new(|_args: serde_json::Value| {
             let (xport_to_handler_tx, mut handler_rx) =
                 tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
             let (handler_tx, xport_from_handler_rx) =
-                tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+                tokio::sync::mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
             tokio::spawn(async move {
                 while let Some(frame) = handler_rx.recv().await {
-                    if handler_tx.send(frame).await.is_err() {
+                    if handler_tx.send(BidiOutputFrame::json(frame)).await.is_err() {
                         // Forwarder gone; treat as graceful exit.
                         break;
                     }
@@ -1505,6 +1528,45 @@ mod tests {
         });
         reg.register_bidi("bidi.echo", handler);
         let _registry = Arc::new(reg);
+        let resolver: Arc<dyn TargetResolver> =
+            Arc::new(LocalNodeResolver::new(NodeId::new("self")));
+        AbilityProxy::new_with_runtime(Arc::new(StubKernel), runtime, resolver)
+    }
+
+    /// Build a proxy with an envelope-aware bidi handler that publishes the
+    /// subject it saw during OpenBidi. This pins the control-plane boundary:
+    /// subject belongs to the invocation envelope, not `args`.
+    fn proxy_with_subject_echo_bidi() -> AbilityProxy {
+        use crate::runtime::ability_dispatch::{
+            BidiOutputFrame, BidiSource, EnvelopeContext, LocalBidiHandlerWithEnvelope, OwnerKind,
+            BIDI_CHANNEL_BOUND,
+        };
+        let runtime = LocalRuntime::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
+        let handler: LocalBidiHandlerWithEnvelope =
+            Arc::new(|env: EnvelopeContext, args: serde_json::Value| {
+                if args.get("subject").is_some() {
+                    anyhow::bail!("subject must not be accepted through args");
+                }
+                let subject = env
+                    .subject
+                    .ok_or_else(|| anyhow::anyhow!("missing envelope subject"))?;
+                let (xport_to_handler_tx, mut handler_rx) =
+                    tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+                let (handler_tx, xport_from_handler_rx) =
+                    tokio::sync::mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
+                tokio::spawn(async move {
+                    let _ = handler_tx
+                        .send(BidiOutputFrame::json(json!({ "subject": subject })))
+                        .await;
+                    while handler_rx.recv().await.is_some() {}
+                });
+                Ok(BidiSource {
+                    to_client: xport_to_handler_tx,
+                    from_client: xport_from_handler_rx,
+                })
+            });
+        reg.register_bidi_with_envelope_and_owner("bidi.subject_echo", OwnerKind::Device, handler);
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(NodeId::new("self")));
         AbilityProxy::new_with_runtime(Arc::new(StubKernel), runtime, resolver)
@@ -1557,6 +1619,7 @@ mod tests {
                     session_id: "sess-1".into(),
                     ability: "bidi.echo".into(),
                     args: json!({}),
+                    subject: None,
                 },
                 tx.clone(),
                 &cancel,
@@ -1617,6 +1680,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_bidi_forwards_subject_into_envelope_context() {
+        let proxy = proxy_with_subject_echo_bidi();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<OutgoingFrame>(64);
+        let cancel: CancelRegistry =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let bidi: BidiRegistry = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
+        proxy
+            .handle_async(
+                IncomingFrame::OpenBidi {
+                    session_id: "sess-subject".into(),
+                    ability: "bidi.subject_echo".into(),
+                    args: json!({}),
+                    subject: Some("easynet:///r/acme/resource/display.primary".into()),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        drop(tx);
+
+        let frames = drain_n(&mut rx, 2).await;
+        assert!(
+            frames.iter().any(|frame| matches!(
+                frame,
+                OutgoingFrame::RecvBidi { frame, .. }
+                    if frame["subject"] == "easynet:///r/acme/resource/display.primary"
+            )),
+            "OpenBidi subject must reach EnvelopeContext, got {frames:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn close_bidi_emits_exactly_one_terminal() {
         // Pins §I2 in the simplest path: one CloseBidi, one Terminal.
         // A regression that fired Terminal twice (e.g. forgetting the
@@ -1628,6 +1725,7 @@ mod tests {
                     session_id: "sess-once".into(),
                     ability: "bidi.echo".into(),
                     args: json!({}),
+                    subject: None,
                 },
                 tx.clone(),
                 &cancel,
@@ -1672,6 +1770,7 @@ mod tests {
                     session_id: "sess-dup".into(),
                     ability: "bidi.echo".into(),
                     args: json!({}),
+                    subject: None,
                 },
                 tx.clone(),
                 &cancel,
@@ -1686,6 +1785,7 @@ mod tests {
                     session_id: "sess-dup".into(),
                     ability: "bidi.echo".into(),
                     args: json!({}),
+                    subject: None,
                 },
                 tx.clone(),
                 &cancel,
@@ -1752,6 +1852,7 @@ mod tests {
                     session_id: "sess-ghost".into(),
                     ability: "bidi.does-not-exist".into(),
                     args: json!({}),
+                    subject: None,
                 },
                 tx.clone(),
                 &cancel,
@@ -1887,6 +1988,7 @@ mod tests {
                     session_id: "sess-cancel".into(),
                     ability: "bidi.echo".into(),
                     args: json!({}),
+                    subject: None,
                 },
                 tx.clone(),
                 &cancel,

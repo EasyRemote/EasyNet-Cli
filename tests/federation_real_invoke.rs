@@ -208,10 +208,10 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
     // axon side expects (ForwardInvokeArgs schema).
     let captures = hub.into_captures();
     assert_eq!(captures.len(), 1, "exactly one forward call");
-    let (uri, payload) = &captures[0];
+    let (ura, payload) = &captures[0];
     assert!(
-        uri == "easynet:///r/silan.localhost/ability/hub.federation.forward_invoke",
-        "URI shape: {uri}"
+        ura == "easynet:///r/silan.localhost/ability/hub.federation.forward_invoke",
+        "URA shape: {ura}"
     );
     assert_eq!(payload["target_ura"], target_ura);
     assert_eq!(payload["ability_name"], "chat.echo");
@@ -332,17 +332,17 @@ fn keyring_peer_table_drives_knows_target() {
     );
 
     // Insert a peer.
-    let peer_uri = "easynet:///r/silan.localhost/device/peer-laptop";
+    let peer_ura = "easynet:///r/silan.localhost/device/peer-laptop";
     let entry = k.create_entry("peer-fingerprint", None).unwrap();
-    k.peer_add(peer_uri, &entry.public_key_b64, None, None)
+    k.peer_add(peer_ura, &entry.public_key_b64, None, None)
         .expect("peer_add");
     assert!(
-        k.find_peer_by_uri(peer_uri).is_some(),
+        k.find_peer_by_ura(peer_ura).is_some(),
         "peer table lookup hits"
     );
 
-    // A genuinely unknown URI must miss both paths.
+    // A genuinely unknown URA must miss both paths.
     let unknown = "easynet:///r/silan.localhost/device/never-seen";
     assert!(k.find_active_entry_by_subject(unknown).is_none());
-    assert!(k.find_peer_by_uri(unknown).is_none());
+    assert!(k.find_peer_by_ura(unknown).is_none());
 }

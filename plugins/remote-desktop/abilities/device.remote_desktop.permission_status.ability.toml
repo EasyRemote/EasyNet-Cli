@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "device.remote_desktop.permission_status"
+description = "Report whether this host process has the OS screen-capture permission required by the native remote desktop media pipeline."
+
+[input_schema]
+type = "object"
+additionalProperties = false

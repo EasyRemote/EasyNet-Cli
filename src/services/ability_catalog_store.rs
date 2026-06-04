@@ -11,7 +11,7 @@
 // store the wrapper was a no-op stub that ack'd the call but
 // dropped the descriptors on the floor — so when the backend later
 // asked `federation.resolve(IncludeAbilities=true)` to drive the
-// `/api/v1/abilities` catalog, the response carried URIs but no
+// `/api/v1/abilities` catalog, the response carried URAs but no
 // abilities and the Frontend showed an empty catalog despite every
 // device having advertised one.
 //
@@ -26,11 +26,11 @@
 //
 // Lifecycle
 // ---------
-// Re-advertise overwrites prior abilities by the same agent URI —
+// Re-advertise overwrites prior abilities by the same agent URA —
 // idempotent, and the daemon-side advertise loop in
 // `runtime/publish.rs` re-emits on every boot anyway. Eviction
 // happens implicitly when an agent's `<self>.session` drops: the
-// PresenceRegistry removes the URI; the catalog entry stays
+// PresenceRegistry removes the URA; the catalog entry stays
 // orphaned but the resolve filter prefix never visits it again
 // (the resolve filter walks `presence.snapshot()` not the catalog
 // store), so "list abilities for online devices" surfaces only
@@ -43,7 +43,7 @@
 // The advertise call IS admitted by the same `<self>.session`
 // trust gate as every other federation.* ability — the wrapper
 // runs after admission, so a malicious caller cannot stuff the
-// catalog with someone else's URI without first owning that URI's
+// catalog with someone else's URA without first owning that URA's
 // signing key.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
@@ -55,7 +55,7 @@ use dashmap::DashMap;
 use serde_json::Value;
 
 /// Stores the most recent `abilities[]` advertised by each
-/// agent URI. Cheap clone (`Arc` wrapper); shared between the
+/// agent URA. Cheap clone (`Arc` wrapper); shared between the
 /// advertise dispatch handler and the resolve dispatch handler
 /// inside `DaemonInvocationService`.
 #[derive(Debug, Clone, Default)]
@@ -84,12 +84,12 @@ impl AbilityCatalogStore {
     }
 
     /// Return the abilities[] for an agent, or `None` when no
-    /// advertise has landed yet for that URI.
+    /// advertise has landed yet for that URA.
     pub fn get(&self, agent_ura: &str) -> Option<Vec<Value>> {
         self.inner.get(agent_ura).map(|entry| entry.clone())
     }
 
-    /// Total number of agent URIs with stored abilities. Used by
+    /// Total number of agent URAs with stored abilities. Used by
     /// `daemon outstanding`-style smoke tests.
     pub fn len(&self) -> usize {
         self.inner.len()
@@ -130,9 +130,9 @@ mod tests {
     #[test]
     fn upsert_overwrites_prior_entry() {
         let store = AbilityCatalogStore::new();
-        store.upsert("uri".into(), vec![json!({"name": "v1"})]);
-        store.upsert("uri".into(), vec![json!({"name": "v2"})]);
-        let got = store.get("uri").unwrap();
+        store.upsert("ura".into(), vec![json!({"name": "v1"})]);
+        store.upsert("ura".into(), vec![json!({"name": "v2"})]);
+        let got = store.get("ura").unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0]["name"], "v2");
     }
@@ -140,9 +140,9 @@ mod tests {
     #[test]
     fn upsert_empty_list_stores_empty_not_none() {
         let store = AbilityCatalogStore::new();
-        store.upsert("uri".into(), Vec::new());
+        store.upsert("ura".into(), Vec::new());
         let got = store
-            .get("uri")
+            .get("ura")
             .expect("empty advertise still surfaces a row");
         assert!(got.is_empty());
     }

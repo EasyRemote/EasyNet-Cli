@@ -413,7 +413,8 @@ fn invoke_local_daemon_ability_with_caller_and_subject(
                 socket_path.display()
             )
         })?;
-        let mut client = crate::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client =
+            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         let response = client.invoke(request).await.map_err(|status| {
             anyhow!(
                 "daemon error invoking {function_name} through Axon \

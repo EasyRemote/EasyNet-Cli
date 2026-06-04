@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::persistence::daemon_config::{default_billing_dir, default_config_path, DaemonConfig};
+use crate::persistence::daemon_config::{default_config_path, default_ledger_dir, DaemonConfig};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
@@ -365,8 +365,8 @@ fn subject_filter_values(value: &Value) -> anyhow::Result<Vec<String>> {
 
 fn ledger_path_from_config() -> PathBuf {
     DaemonConfig::load(&default_config_path())
-        .map(|config| config.billing_dir().join("invocations.redb"))
-        .unwrap_or_else(|_| default_billing_dir().join("invocations.redb"))
+        .map(|config| config.ledger_dir().join("invocations.redb"))
+        .unwrap_or_else(|_| default_ledger_dir().join("invocations.redb"))
 }
 
 fn ledger_resource_ura() -> Option<String> {

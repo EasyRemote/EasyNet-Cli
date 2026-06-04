@@ -107,6 +107,7 @@ pub mod execution;
 // PR-ATTACH onwards extends this).
 pub mod ability_descriptor;
 pub mod ability_dispatch;
+pub mod ability_wire;
 pub mod advertise;
 pub mod agents;
 /// Bridge layer between CLI's existing services (RealmTrustAnchor,
@@ -125,6 +126,7 @@ pub mod axon_bridge;
 pub mod dispatch_receipt;
 pub mod federation_client;
 pub mod hosted_receipt;
+pub mod plugin_host;
 pub mod provisional_ura;
 pub mod publish;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.

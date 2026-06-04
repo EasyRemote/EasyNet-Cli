@@ -20,4 +20,10 @@ Cargo.lock
 
 # Claude Code project-local sidecar.
 .claude/
+
+# Local PR-review work notes generated during multi-agent review loops.
+/pr/
+
+# Local review transcripts generated during branch audits.
+/*-user-case.txt
 docker/hub-pages/full/vendor/

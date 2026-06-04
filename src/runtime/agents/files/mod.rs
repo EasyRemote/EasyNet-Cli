@@ -32,7 +32,7 @@
 //
 // Three abilities registered:
 //   <user>.files.put    — write {filename, bytes_b64, content_type?}
-//                         → {uri, sha256, size, content_type}
+//                         → {ura, sha256, size, content_type}
 //   <user>.files.get    — read {sha256} or {path: "<sha256>"}
 //                         → {bytes_b64, content_type, sha256}
 //   <user>.files.list   — read {} → {items: [{sha256, size, ...}]}

@@ -33,9 +33,6 @@
 // - Real ability dispatch — the proxy still returns its v1 skeleton
 //   `Error` envelope (see ability_proxy.rs). PR-INVOCATION-EXEC-
 //   UNITY swaps that for the real Kernel::invoke path.
-// - Cleanup of `control.json` on graceful shutdown. The current
-//   implementation drops the daemon's exit cleanup back to the OS
-//   removing the temp socket; a follow-up adds a SIGTERM handler.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -608,6 +605,7 @@ mod tests {
                 subscription_id: "boot-sub".into(),
                 ability: WATCH_BOOT_ABILITY.into(),
                 args: serde_json::json!({}),
+                subject: None,
             },
             out_tx,
             &cancel,
@@ -730,7 +728,7 @@ mod tests {
     #[tokio::test]
     async fn end_to_end_bidi_round_trip_echoes_three_frames_then_terminal() {
         use crate::runtime::ability_dispatch::{
-            AxonAbilityCatalog, BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND,
+            AxonAbilityCatalog, BidiOutputFrame, BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND,
         };
         use crate::runtime::domain::NodeId;
         use crate::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
@@ -747,10 +745,10 @@ mod tests {
             let (xport_to_handler_tx, mut handler_rx) =
                 mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
             let (handler_tx, xport_from_handler_rx) =
-                mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+                mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
             tokio::spawn(async move {
                 while let Some(frame) = handler_rx.recv().await {
-                    if handler_tx.send(frame).await.is_err() {
+                    if handler_tx.send(BidiOutputFrame::json(frame)).await.is_err() {
                         break;
                     }
                 }
@@ -803,6 +801,7 @@ mod tests {
                 session_id: "e2e-1".into(),
                 ability: "bidi.echo".into(),
                 args: serde_json::json!({}),
+                subject: None,
             },
         )
         .await;

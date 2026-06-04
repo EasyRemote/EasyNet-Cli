@@ -72,15 +72,15 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
         prompt: &str,
         kind: LoopInvocationKind,
     ) -> anyhow::Result<String> {
-        let local_device_uri = crate::ura::device_ura("default", self.local_node.as_str());
+        let local_device_ura = crate::ura::device_ura("default", self.local_node.as_str());
         let loop_subject_ura = crate::ura::resource_dot_ura(
             "default",
             &format!("loop.{}", loop_id.as_str()),
             &format!("{}/{}", kind.as_str(), iter),
         );
         let invocation = Invocation::try_new(
-            local_device_uri.clone(),
-            local_device_uri,
+            local_device_ura.clone(),
+            local_device_ura,
             format!("{}.chat", worker_agent.as_str()),
             loop_subject_ura,
             CausalContext::Null,

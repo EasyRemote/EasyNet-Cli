@@ -68,7 +68,7 @@ mod tests {
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         };
         let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
@@ -121,7 +121,7 @@ mod tests {
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         };
         let new_anchor = RealmTrustAnchor::from_entries(vec![new_entry]).expect("anchor");

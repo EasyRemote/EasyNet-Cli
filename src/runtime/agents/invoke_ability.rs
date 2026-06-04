@@ -1062,7 +1062,7 @@ mod tests {
     #[test]
     fn forward_invoke_routes_federation_target_through_invoker() {
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|uri| crate::ura::parse_ura(uri).is_ok());
+        fwd::set_test_knower(|ura| crate::ura::parse_ura(ura).is_ok());
         fwd::set_test_router(|target, ability, args| {
             assert_eq!(target, "easynet:///r/exp-realm/device/alice-node");
             assert_eq!(ability, "ping");
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn forward_invoke_propagates_typed_remote_error() {
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|uri| crate::ura::parse_ura(uri).is_ok());
+        fwd::set_test_knower(|ura| crate::ura::parse_ura(ura).is_ok());
         fwd::set_test_router(|_t, _a, _x| {
             Err(anyhow::anyhow!("AXON_TARGET_OFFLINE: peer unreachable"))
         });

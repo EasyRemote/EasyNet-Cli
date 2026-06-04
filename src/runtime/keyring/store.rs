@@ -104,7 +104,8 @@ pub enum PeerStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerEntry {
-    pub peer_uri: String,
+    #[serde(alias = "peer_uri")]
+    pub peer_ura: String,
     pub fingerprint_b64: String, // sha256(public_key)
     pub public_key_b64: String,
     pub status: PeerStatus,

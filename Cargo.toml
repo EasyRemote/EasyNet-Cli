@@ -7,6 +7,8 @@ license = "Apache-2.0"
 build = "build.rs"
 
 [features]
+default = []
+
 # Compile schemas/*.proto into Rust types via prost-build. Off by
 # default in v1 so developers without protoc installed can still
 # build the CLI; feature gate flips on once the proto-generated
@@ -15,17 +17,14 @@ build = "build.rs"
 # to use the generated types (that is a follow-up commit / PR-SYS).
 proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
 
-# Compile axon `axon/v1/*.proto` into a `pb` module exposing the
-# tonic server-side `Invocation` trait that RFC-003 PR-1 implements.
-# Off by default — daemon-side `axon_serve` module gates its build on
-# this feature to keep the no-protoc developer path working. Pulls in
-# tonic-build (build) + tonic + prost (runtime).
+# Enable Axon's SDK-owned `pb` module exposing the tonic server-side
+# `Invocation` trait that RFC-003 PR-1 implements. Off by default —
+# daemon-side `axon_serve` gates its build on this feature so the
+# default developer path stays proto-free. The SDK owns Axon proto
+# codegen; CLI must not compile `../EasyNet-Axon/.../proto` directly.
 axon-pb = [
+    "easynet-axon/grpc",
     "dep:tonic",
-    "dep:prost",
-    "dep:prost-types",
-    "dep:tonic-build",
-    "dep:prost-build",
     # PR-N1 commit 8/N CLI bridge needs the UDS-over-tonic adapters.
     "dep:tower",
     "dep:hyper-util",
@@ -37,6 +36,17 @@ axon-pb = [
 # Demo / e2e scripts pass `--features demo-fixture` to opt in. See
 # `services::axon_serve::boot::maybe_seed_demo_presence`.
 demo-fixture = []
+
+# Compile the in-tree remote desktop plugin package and its media transport
+# stack. Off by default so the core CLI/daemon build is not coupled to the
+# experimental WebRTC/OpenH264/native-capture dependency surface.
+remote-desktop = [
+    "dep:openh264",
+    "dep:webrtc",
+    "dep:rtc",
+    "dep:objc2-screen-capture-kit",
+    "dep:objc2-video-toolbox",
+]
 
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
 # library + multiple bins. The library target carries all the
@@ -195,6 +205,15 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 # surfaces the permission-denied case as
 # reason="resource_unavailable" rather than a panic.
 xcap = "0.9"
+# Remote desktop diagnostic media path. OpenH264 is built into the CLI
+# artifact via the crate's source feature, so users do not need ffmpeg or
+# any other system encoder installed for baseline H.264 streaming.
+openh264 = { version = "0.9", optional = true }
+# Remote desktop production media transport. This is Rust-native WebRTC
+# signaling/media glue for device-side RTP/SRTP; EasyNet invocation carries
+# SDP/ICE only, not desktop media frames.
+webrtc = { version = "0.20.0-alpha.1", optional = true }
+rtc = { version = "0.20.0-alpha.1", optional = true }
 toml = "0.8"
 toml_edit = "0.23"
 # Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.
@@ -318,6 +337,38 @@ optional = true
 version = "0.1"
 optional = true
 
+# Native Apple media dependencies. The objc2 foundation/core crates are
+# unconditional on macOS because `camera.snapshot` uses AVFoundation even when
+# the remote-desktop plugin is off. ScreenCaptureKit and VideoToolbox remain
+# optional and are enabled only by the `remote-desktop` plugin feature.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2-foundation = "0.3"
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-core-foundation = "0.3"
+objc2-screen-capture-kit = { version = "0.3", features = [
+    "SCStream",
+    "SCShareableContent",
+    "SCError",
+    "objc2-core-media",
+    "objc2-core-graphics",
+    "objc2-core-foundation",
+    "block2",
+    "dispatch2",
+    "libc",
+], optional = true }
+objc2-video-toolbox = { version = "0.3", features = [
+    "VTCompressionSession",
+    "VTCompressionProperties",
+    "VTBase",
+    "VTErrors",
+    "objc2-core-media",
+    "objc2-core-video",
+], optional = true }
+
 [dev-dependencies]
 # Used by `tests/cross_device_invoke_remote_e2e.rs` to construct
 # a `tower::service_fn` connector that adapts a `tokio::net::UnixStream`
@@ -363,19 +414,9 @@ optional = true
 version = "0.13"
 optional = true
 
-# tonic-build generates the server-side `Invocation` trait + types
-# from `axon/v1/*.proto` under the `axon-pb` feature. Path resolution
-# in build.rs is `../EasyNet-Axon/core/runtime-rs/client-sdk/proto` —
-# the same path the EasyNet-Federation-MVP `common/build.rs` uses;
-# kept consistent so the two crates compile against bytewise-identical
-# proto sets. RFC-003 spec §0 forbids modifying axon repo, and this
-# build-system entry honours that — we read the canonical .proto only.
-[build-dependencies.tonic-build]
-version = "0.12"
-optional = true
-
-# tonic runtime dependency for the generated Invocation server +
-# tonic::Status etc. Only needed when `axon-pb` is on.
+# tonic runtime dependency for Invocation server/client plumbing and
+# `tonic::Status`. The generated Axon message/stub types now come from
+# `easynet-axon/grpc`, not from this crate's build script.
 [dependencies.tonic]
 version = "0.12"
 # `tls-roots` adds the rustls-native-certs probe so dialing

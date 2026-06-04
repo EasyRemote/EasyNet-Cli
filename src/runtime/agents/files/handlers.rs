@@ -5,7 +5,7 @@
 //   put — write client-supplied bytes to the content-addressed
 //         store; return the canonical URA + sha256.
 //   get — read a blob by sha256; return base-64 bytes +
-//         content_type. Accepts a v4.1.5 URA in `uri` field as
+//         content_type. Accepts a v4.1.5 URA in `ura` field as
 //         shorthand for the sha256 (parses out the trailing path
 //         segment).
 //   list — list every blob in the store with size + sha256.
@@ -53,7 +53,7 @@ fn mime_from_filename(filename: &str) -> &'static str {
 /// content-addressed store.
 ///
 /// args: { filename: string, bytes_b64: string, content_type?: string }
-/// reply: { uri, sha256, size, content_type }
+/// reply: { ura, sha256, size, content_type }
 pub fn handle_put(user: &str, realm: &str, root: &Path, args: Value) -> anyhow::Result<Value> {
     let filename = args
         .get("filename")
@@ -89,10 +89,10 @@ pub fn handle_put(user: &str, realm: &str, root: &Path, args: Value) -> anyhow::
     }
 
     let content_type = provided_ct.unwrap_or_else(|| mime_from_filename(&filename).to_string());
-    let uri = state::blob_uri(realm, user, &sha256_hex);
+    let ura = state::blob_ura(realm, user, &sha256_hex);
 
     Ok(json!({
-        "uri": uri,
+        "ura": ura,
         "sha256": sha256_hex,
         "size": bytes.len(),
         "content_type": content_type,
@@ -104,21 +104,21 @@ pub fn handle_put(user: &str, realm: &str, root: &Path, args: Value) -> anyhow::
 ///
 /// args (one of):
 ///   { sha256: "<hex>" }
-///   { uri: "easynet:///r/<realm>/resource/<u>.files/<sha256>" }
+///   { ura: "easynet:///r/<realm>/resource/<u>.files/<sha256>" }
 ///   { path: "<sha256>" }     // RFC-006-B page.fetch shape compat
 ///
 /// reply: { bytes_b64, content_type, sha256, size }
 pub fn handle_get(root: &Path, args: Value) -> anyhow::Result<Value> {
     let sha = if let Some(s) = args.get("sha256").and_then(Value::as_str) {
         s.to_string()
-    } else if let Some(uri) = args.get("uri").and_then(Value::as_str) {
-        sha256_from_uri(uri)?
+    } else if let Some(ura) = args.get("ura").and_then(Value::as_str) {
+        sha256_from_ura(ura)?
     } else if let Some(path) = args.get("path").and_then(Value::as_str) {
         // page.fetch-shape compat: leading slash optional, trailing
         // path becomes the sha256.
         path.trim_start_matches('/').to_string()
     } else {
-        anyhow::bail!("files.get: provide one of {{sha256, uri, path}}");
+        anyhow::bail!("files.get: provide one of {{sha256, ura, path}}");
     };
 
     let blob_path = state::blob_path(root, &sha)
@@ -156,7 +156,7 @@ pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow
             items.push(json!({
                 "sha256": name,
                 "size": size,
-                "uri": state::blob_uri(realm, user, name),
+                "ura": state::blob_ura(realm, user, name),
             }));
         }
     }
@@ -165,12 +165,12 @@ pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow
 
 /// Parse the trailing path segment of a v4.1.5 resource URA as
 /// the sha256-hex blob id.
-fn sha256_from_uri(uri: &str) -> anyhow::Result<String> {
+fn sha256_from_ura(ura: &str) -> anyhow::Result<String> {
     // easynet:///r/<realm>/resource/<u>.files/<sha256>
-    let parsed = crate::ura::parse_ura(uri)
-        .map_err(|e| anyhow::anyhow!("files: invalid URA `{uri}`: {e}"))?;
+    let parsed = crate::ura::parse_ura(ura)
+        .map_err(|e| anyhow::anyhow!("files: invalid URA `{ura}`: {e}"))?;
     if !matches!(parsed.kind, crate::ura::URAKind::Resource) {
-        anyhow::bail!("files: URA `{uri}` is not a resource URA");
+        anyhow::bail!("files: URA `{ura}` is not a resource URA");
     }
     let path = parsed.path.trim_start_matches('/');
     if path.len() != 64 || !path.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -234,7 +234,7 @@ mod tests {
         let sha = put["sha256"].as_str().unwrap();
         assert_eq!(sha.len(), 64);
         assert_eq!(
-            put["uri"].as_str().unwrap(),
+            put["ura"].as_str().unwrap(),
             crate::ura::resource_dot_ura("test.local", "alice.files", sha)
         );
 
@@ -245,9 +245,9 @@ mod tests {
     }
 
     #[test]
-    fn get_accepts_uri_form() {
+    fn get_accepts_ura_form() {
         let root = fresh_root();
-        let body = b"hello via uri".to_vec();
+        let body = b"hello via ura".to_vec();
         let put = handle_put(
             "alice",
             "test.local",
@@ -258,9 +258,9 @@ mod tests {
             }),
         )
         .unwrap();
-        let uri = put["uri"].as_str().unwrap();
+        let ura = put["ura"].as_str().unwrap();
 
-        let got = handle_get(root.path(), json!({ "uri": uri })).unwrap();
+        let got = handle_get(root.path(), json!({ "ura": ura })).unwrap();
         let decoded = STANDARD.decode(got["bytes_b64"].as_str().unwrap()).unwrap();
         assert_eq!(decoded, body);
     }

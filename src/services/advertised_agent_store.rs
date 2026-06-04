@@ -9,15 +9,15 @@
 // online/offline bit actually lives on the host device's live
 // `<self>.session`. PresenceRegistry alone therefore cannot answer
 // "which `/agent/<user>.<agent>` rows should federation.resolve
-// surface right now?" — it only knows about device URIs.
+// surface right now?" — it only knows about device URAs.
 //
 // This store keeps the host linkage:
 //
-//   hosted agent URI -> host device URI
+//   hosted agent URA -> host device URA
 //
 // `federation.resolve` combines this with PresenceRegistry:
-// hosted agents are active exactly when their host device URI is
-// present. Self-signed agents fall back to their own URI.
+// hosted agents are active exactly when their host device URA is
+// present. Self-signed agents fall back to their own URA.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -111,13 +111,13 @@ mod tests {
     fn remove_deletes_row() {
         let store = AdvertisedAgentStore::new();
         let record = AdvertisedAgentRecord {
-            agent_ura: "uri".into(),
+            agent_ura: "ura".into(),
             public_key_hex: String::new(),
             host_node_id: None,
             signing_authority: AdvertisedAgentSigningAuthority::SelfSigned,
         };
         store.upsert(record.clone());
-        assert_eq!(store.remove("uri"), Some(record));
-        assert!(store.get("uri").is_none());
+        assert_eq!(store.remove("ura"), Some(record));
+        assert!(store.get("ura").is_none());
     }
 }

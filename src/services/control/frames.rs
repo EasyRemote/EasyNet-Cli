@@ -62,6 +62,8 @@ pub enum IncomingFrame {
         ability: String,
         #[serde(default)]
         args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<String>,
     },
     /// Early-terminate an in-flight subscription. Server responds
     /// with a `Terminal` envelope on the matching subscription_id.
@@ -72,11 +74,18 @@ pub enum IncomingFrame {
     /// the handler ends, or the connection drops. Server emits zero
     /// or more `RecvBidi` frames followed by exactly one `Terminal`
     /// envelope.
+    ///
+    /// `subject` carries the same AXIOM envelope subject as Invoke and
+    /// Subscribe. Bidi abilities such as `device.remote_desktop.attach` bind
+    /// session admission to a resource/session subject; dropping this field at
+    /// OpenBidi would create a second, incomplete invocation primitive.
     OpenBidi {
         session_id: String,
         ability: String,
         #[serde(default)]
         args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<String>,
     },
     /// Push one client→handler frame onto an opened bidi session.
     /// Frames are delivered to the handler in client emission order
@@ -218,6 +227,34 @@ mod tests {
     }
 
     #[test]
+    fn subscribe_frame_round_trips_optional_subject() {
+        let f = IncomingFrame::Subscribe {
+            subscription_id: "sub-42".into(),
+            ability: "device.camera.subscribe".into(),
+            args: serde_json::json!({"fps": 5}),
+            subject: Some("easynet:///r/localhost/resource/cam".into()),
+        };
+        let s = serde_json::to_string(&f).unwrap();
+        let back: IncomingFrame = serde_json::from_str(&s).unwrap();
+        match back {
+            IncomingFrame::Subscribe {
+                subscription_id,
+                ability,
+                subject,
+                ..
+            } => {
+                assert_eq!(subscription_id, "sub-42");
+                assert_eq!(ability, "device.camera.subscribe");
+                assert_eq!(
+                    subject.as_deref(),
+                    Some("easynet:///r/localhost/resource/cam")
+                );
+            }
+            _ => panic!("expected Subscribe variant after round-trip"),
+        }
+    }
+
+    #[test]
     fn unknown_incoming_variant_fails_with_protocol_level_error() {
         // A client sending a frame with `type: "nope"` must get a
         // parse failure the server can map to `codes::PROTOCOL`,
@@ -271,19 +308,29 @@ mod tests {
             session_id: "s-1".into(),
             ability: "device.terminal.attach".into(),
             args: serde_json::json!({"node":"01DEV"}),
+            subject: Some("easynet:///r/localhost/resource/terminal/session-1".into()),
         };
         let s = serde_json::to_string(&f).unwrap();
         assert!(s.contains("\"type\":\"open_bidi\""), "discriminator: {s}");
         assert!(s.contains("\"session_id\":\"s-1\""));
+        assert!(
+            s.contains("\"subject\":\"easynet:///r/localhost/resource/terminal/session-1\""),
+            "OpenBidi must carry AXIOM subject when present: {s}"
+        );
         let back: IncomingFrame = serde_json::from_str(&s).unwrap();
         match back {
             IncomingFrame::OpenBidi {
                 session_id,
                 ability,
+                subject,
                 ..
             } => {
                 assert_eq!(session_id, "s-1");
                 assert_eq!(ability, "device.terminal.attach");
+                assert_eq!(
+                    subject.as_deref(),
+                    Some("easynet:///r/localhost/resource/terminal/session-1")
+                );
             }
             _ => panic!("expected OpenBidi after round-trip"),
         }

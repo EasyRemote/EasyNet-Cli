@@ -35,7 +35,7 @@
 
 use rand::RngCore;
 
-use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
+use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
 
 pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 

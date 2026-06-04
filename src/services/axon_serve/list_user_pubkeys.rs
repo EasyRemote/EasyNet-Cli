@@ -103,7 +103,7 @@ mod tests {
                     role: TrustedAgentRole::User,
                     added_at_unix_ms: 1_700_000_000_000 + u64::from(seed),
                     origin_tenant_id: None,
-                    hub_uri: None,
+                    hub_endpoint: None,
                     tls_ca_pem_path: None,
                 })
                 .expect("append");

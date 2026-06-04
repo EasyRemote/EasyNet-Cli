@@ -156,6 +156,7 @@ async fn subscribe_boot_events(
         subscription_id: BOOT_SUBSCRIPTION_ID.into(),
         ability: WATCH_BOOT_ABILITY.into(),
         args: serde_json::json!({}),
+        subject: None,
     };
     framed
         .send(Bytes::from(serde_json::to_vec(&req)?))

@@ -50,11 +50,61 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
 /// Reserved env-var keys at the subprocess boundary. Kept here, not in
 /// dispatch.rs, so any future read/write site goes through this module.
 const ENV_MISSION_ID: &str = "EASYNET_MISSION_ID";
 const ENV_AGENT_DEPTH: &str = "EASYNET_AGENT_DEPTH";
 const ENV_ORIGIN_AGENT: &str = "EASYNET_ORIGIN_AGENT";
+const ENV_PARENT_INVOCATION: &str = "EASYNET_PARENT_INVOCATION";
+
+/// Parent AXIOM invocation context carried by a mission/EAL dispatch root.
+///
+/// This is the daemon-local projection of the AXIOM fields that an EAL-backed
+/// plugin invocation received from `EnvelopeContext`. It exists so mission
+/// dispatch, subprocess env propagation, and audit payloads do not pass loose
+/// JSON maps internally.
+///
+/// What this is NOT: a canonical invocation object, signature carrier, or
+/// receipt builder. Axon still owns canonical seven-tuple encoding and receipt
+/// semantics; this type only preserves the parent tuple while daemon-owned EAL
+/// orchestration runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParentInvocationContext {
+    /// AXIOM 7-tuple `caller`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
+    /// AXIOM 7-tuple `callee`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callee: Option<String>,
+    /// AXIOM 7-tuple `ability`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ability: Option<String>,
+    /// AXIOM 7-tuple `subject`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// AXIOM 7-tuple `nonce`, kept as raw bytes to match `EnvelopeContext`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_nonce: Option<Vec<u8>>,
+    /// Host-side projection of AXIOM `causal_context`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_context: Option<Value>,
+}
+
+impl ParentInvocationContext {
+    /// Convert the typed context into the JSON shape exposed to plugin EAL
+    /// templates and persisted in mission metadata.
+    pub fn to_json_value(&self) -> Value {
+        serde_json::to_value(self).expect("ParentInvocationContext serializes")
+    }
+
+    /// Parse a JSON context supplied by the plugin-host boundary.
+    pub fn from_json_value(value: Value) -> serde_json::Result<Self> {
+        serde_json::from_value(value)
+    }
+}
 
 /// Typed mission context for one cross-agent dispatch chain.
 ///
@@ -83,6 +133,16 @@ pub struct DispatchContext {
     /// the audit log so operators can attribute a dispatch chain to the
     /// agent that started it.
     pub origin_agent: Option<String>,
+
+    /// Parent AXIOM invocation context for mission/EAL executions that were
+    /// themselves triggered by an ability invocation.
+    ///
+    /// What this is NOT: a replacement for Axon's canonical receipt model.
+    /// It is the daemon-owned propagation channel that lets child dispatch and
+    /// agent subprocesses preserve the parent caller/callee/subject/causal
+    /// tuple while Axon remains the sole owner of canonical invocation and
+    /// receipt construction.
+    pub parent_invocation: Option<ParentInvocationContext>,
 }
 
 impl DispatchContext {
@@ -93,7 +153,17 @@ impl DispatchContext {
             depth: 0,
             mission_run_dir: Some(mission_run_dir),
             origin_agent: None,
+            parent_invocation: None,
         }
+    }
+
+    /// Attach parent invocation context to a mission root.
+    pub fn with_parent_invocation(
+        mut self,
+        parent_invocation: Option<ParentInvocationContext>,
+    ) -> Self {
+        self.parent_invocation = parent_invocation;
+        self
     }
 
     /// Derive a child context for the next link in the dispatch chain.
@@ -122,6 +192,7 @@ impl DispatchContext {
             depth: self.depth.saturating_add(1),
             mission_run_dir: self.mission_run_dir.clone(),
             origin_agent,
+            parent_invocation: self.parent_invocation.clone(),
         }
     }
 
@@ -140,6 +211,11 @@ impl DispatchContext {
         if let Some(origin) = &self.origin_agent {
             if !origin.is_empty() {
                 env.insert(ENV_ORIGIN_AGENT.to_string(), origin.clone());
+            }
+        }
+        if let Some(parent_invocation) = &self.parent_invocation {
+            if let Ok(serialized) = serde_json::to_string(parent_invocation) {
+                env.insert(ENV_PARENT_INVOCATION.to_string(), serialized);
             }
         }
     }
@@ -163,11 +239,15 @@ impl DispatchContext {
         let origin_agent = std::env::var(ENV_ORIGIN_AGENT)
             .ok()
             .filter(|s| !s.is_empty());
+        let parent_invocation = std::env::var(ENV_PARENT_INVOCATION)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<ParentInvocationContext>(&raw).ok());
         Some(Self {
             mission_id,
             depth,
             mission_run_dir: None,
             origin_agent,
+            parent_invocation,
         })
     }
 }
@@ -239,6 +319,7 @@ mod tests {
             depth,
             mission_run_dir: None,
             origin_agent: None,
+            parent_invocation: None,
         }
     }
 
@@ -317,6 +398,13 @@ mod tests {
             depth: 3,
             mission_run_dir: None,
             origin_agent: Some("claude".to_string()),
+            parent_invocation: Some(
+                ParentInvocationContext::from_json_value(serde_json::json!({
+                    "caller": "easynet:///r/acme/agent/alice",
+                    "subject": "easynet:///r/acme/resource/doc",
+                }))
+                .expect("typed parent invocation context"),
+            ),
         };
         parent.serialize_to_env(&mut env);
         assert_eq!(
@@ -328,6 +416,10 @@ mod tests {
             env.get(ENV_ORIGIN_AGENT).map(String::as_str),
             Some("claude")
         );
+        assert!(env
+            .get(ENV_PARENT_INVOCATION)
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .is_some_and(|value| value["subject"] == "easynet:///r/acme/resource/doc"));
 
         // Mirror serialize_to_env → process env → from_env.
         // We do the env mutation under a mutex because std::env::set_var
@@ -337,13 +429,23 @@ mod tests {
         std::env::set_var(ENV_MISSION_ID, env.get(ENV_MISSION_ID).unwrap());
         std::env::set_var(ENV_AGENT_DEPTH, env.get(ENV_AGENT_DEPTH).unwrap());
         std::env::set_var(ENV_ORIGIN_AGENT, env.get(ENV_ORIGIN_AGENT).unwrap());
+        std::env::set_var(
+            ENV_PARENT_INVOCATION,
+            env.get(ENV_PARENT_INVOCATION).unwrap(),
+        );
         let recovered = DispatchContext::from_env().expect("present");
         std::env::remove_var(ENV_MISSION_ID);
         std::env::remove_var(ENV_AGENT_DEPTH);
         std::env::remove_var(ENV_ORIGIN_AGENT);
+        std::env::remove_var(ENV_PARENT_INVOCATION);
         assert_eq!(recovered.mission_id, "mission-42");
         assert_eq!(recovered.depth, 3);
         assert_eq!(recovered.origin_agent.as_deref(), Some("claude"));
+        let parent = recovered.parent_invocation.as_ref().unwrap();
+        assert_eq!(
+            parent.caller.as_deref(),
+            Some("easynet:///r/acme/agent/alice")
+        );
     }
 
     #[test]

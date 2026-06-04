@@ -107,7 +107,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
         .get("token")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("daemon returned no token"))?;
-    let key_uri = result.get("key_uri").and_then(Value::as_str).unwrap_or("?");
+    let key_ura = result.get("key_ura").and_then(Value::as_str).unwrap_or("?");
 
     if !a.no_cache {
         api_key_ability::write_local_default_token(token)?;
@@ -117,7 +117,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         println!("API key created.");
-        println!("  key_uri: {key_uri}");
+        println!("  key_ura: {key_ura}");
         println!("  token:   {token}");
         if !a.no_cache {
             println!("  cached:  ~/.easynet/api_keys.local.toml (used by 'easynet llm-api')");

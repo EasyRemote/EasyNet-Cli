@@ -229,7 +229,7 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
             }
         }
         KeyringRequest::Sign {
-            self_uri,
+            self_ura,
             canonical_bytes_b64,
         } => {
             use base64::Engine;
@@ -241,16 +241,16 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
                 }
             };
             let guard = vault.lock().await;
-            match guard.sign(&self_uri, &bytes) {
+            match guard.sign(&self_ura, &bytes) {
                 Ok(sig) => KeyringResponse::Signature {
                     signature_b64: base64::engine::general_purpose::STANDARD.encode(sig.to_bytes()),
                 },
                 Err(e) => vault_error_to_response(e),
             }
         }
-        KeyringRequest::DerivePubkey { self_uri } => {
+        KeyringRequest::DerivePubkey { self_ura } => {
             let guard = vault.lock().await;
-            match guard.derive_pubkey(&self_uri) {
+            match guard.derive_pubkey(&self_ura) {
                 Ok(pk) => KeyringResponse::PublicKey {
                     public_key_b64: {
                         use base64::Engine;

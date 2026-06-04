@@ -12,7 +12,7 @@
 //
 // What lives here
 // ---------------
-//   * meta.describe — `{ uri, identity_summary, abilities_summary,
+//   * meta.describe — `{ ura, identity_summary, abilities_summary,
 //                         metadata }` for the host device-profile.
 //                     identity_summary surfaces the canonical URA
 //                     and signing-authority hint; abilities_summary
@@ -113,7 +113,7 @@ fn describe_handler(
     let descriptors = descriptors_provider();
 
     // Identity comes from local-agents.json. Pre-join state surfaces
-    // as uri:"self" so a caller still sees a well-formed describe
+    // as ura:"self" so a caller still sees a well-formed describe
     // response — they can re-poll after the daemon completes join.
     let local = crate::persistence::local_agents::load().unwrap_or_default();
     let host_ura = if local.host_device_agent_ura.is_empty() {
@@ -152,7 +152,7 @@ fn describe_handler(
     }
 
     Ok(json!({
-        "uri": host_ura,
+        "ura": host_ura,
         "identity_summary": {
             "signing_authority": signing_authority,
         },
@@ -276,12 +276,12 @@ fn list_abilities_handler(
             .map(|c| c.tenant_id.trim().to_string())
             .filter(|s| !s.is_empty());
         let local = crate::persistence::local_agents::load().unwrap_or_default();
-        let device_owner_uri = if local.host_device_agent_ura.is_empty() {
+        let device_owner_ura = if local.host_device_agent_ura.is_empty() {
             None
         } else {
             Some(local.host_device_agent_ura.clone())
         };
-        let hub_owner_uri = realm.as_deref().map(crate::ura::hub_ura);
+        let hub_owner_ura = realm.as_deref().map(crate::ura::hub_ura);
         // user-segment used for `OwnerKind::Agent(...)` resolution.
         // Captured at registration time from the same
         // `PagesIdentity` the registry build used, so the synth
@@ -310,9 +310,9 @@ fn list_abilities_handler(
             // metadata is intentional — synth drops entries it
             // cannot stamp authoritatively.
             let owner_string = match registry.lookup_owner(&name) {
-                Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => hub_owner_uri.clone(),
+                Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => hub_owner_ura.clone(),
                 Some(crate::runtime::ability_dispatch::OwnerKind::Device) => {
-                    device_owner_uri.clone()
+                    device_owner_ura.clone()
                 }
                 Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) => {
                     match (realm.as_deref(), user_segment.as_deref()) {
@@ -332,7 +332,7 @@ fn list_abilities_handler(
                     // M0 commit 6 will tighten this to a panic /
                     // hard error once every register site has been
                     // converted.
-                    device_owner_uri.clone()
+                    device_owner_ura.clone()
                 }
             };
             let Some(owner) = owner_string.as_deref() else {
@@ -435,7 +435,7 @@ fn synthesize_hot_hosted_agent_descriptors(
 
     for (agent_name, entry) in agents.agents {
         let Some(owner_ura) =
-            crate::persistence::local_agents::lookup_hosted_uri(local, "llm", &agent_name)
+            crate::persistence::local_agents::lookup_hosted_ura(local, "llm", &agent_name)
         else {
             continue;
         };

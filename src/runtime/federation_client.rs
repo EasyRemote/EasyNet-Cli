@@ -235,10 +235,40 @@ pub struct AdvertiseAgentReceipt {
     pub replaced_prior: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct HeartbeatResponseHeader {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub permanent: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct HeartbeatRejectedNode {
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct HeartbeatReceipt {
+    #[serde(default)]
     pub membership_status: String,
+    #[serde(default)]
     pub realm_directory_size: u64,
+    /// Axon proto-compatible response header. Older hub wrappers used
+    /// top-level `permanent` / `status`; keep those aliases below so
+    /// heartbeat callers can consume either bridge shape without
+    /// reintroducing JSON inspection in the CLI state machine.
+    #[serde(default)]
+    pub header: Option<HeartbeatResponseHeader>,
+    #[serde(default)]
+    pub permanent: bool,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub rejected_nodes: Vec<HeartbeatRejectedNode>,
     /// AXON-RFC-001 v4.1.7 hub-broadcast contract: incremental
     /// update of hub-published abilities since the caller's
     /// `since_abilities_revision`. Defaults to an empty diff at
@@ -278,7 +308,7 @@ pub struct ResolveFilter {
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ResolvedAgent {
-    pub uri: String,
+    pub ura: String,
     pub status: String,
     #[serde(default)]
     pub host_node_id: Option<String>,
@@ -450,8 +480,8 @@ mod tests {
     fn resolved_agents_list_parses_status_strings() {
         let body = json!({
             "agents": [
-                {"uri": "easynet:///r/acme/hub", "status": "active"},
-                {"uri": "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8", "status": "revoked"}
+                {"ura": "easynet:///r/acme/hub", "status": "active"},
+                {"ura": "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8", "status": "revoked"}
             ]
         });
         let parsed: ResolveReceipt = parse_receipt_value(&body).unwrap();

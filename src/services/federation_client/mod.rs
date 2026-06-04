@@ -43,7 +43,7 @@
 //   pinning. PR-N1 commit 1/N treats `realm_trust_anchor` as
 //   read-only and reserves the schema bump for commit 2/N.
 // - No `DaemonConfig::federated_peers` map. Per PR-N1 spec
-//   §commit 3/N the operator-configured `tenant → hub_uri` mapping
+//   §commit 3/N the operator-configured `tenant → hub_endpoint` mapping
 //   lands when the real handler rewrite needs it. PR-N1 commit 1/N
 //   exposes the trait against a hub URI provided directly by the
 //   caller; mapping resolution belongs upstream.

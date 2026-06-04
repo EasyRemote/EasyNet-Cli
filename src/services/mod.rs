@@ -115,7 +115,7 @@ pub mod realm_trust_anchor;
 pub mod pending_dispatch;
 
 /// Reload-friendly cell holding the daemon's current
-/// operator-curated `tenant → hub_uri` map (PR-N1 commit 10/N —
+/// operator-curated `tenant → hub_endpoint` map (PR-N1 commit 10/N —
 /// closes the LB-37 §2.3 fallback Scope A defer note). Mirrors
 /// `trust_anchor_cell` so SIGHUP-triggered `daemon-config.toml`
 /// reloads republish the federated_peers map without daemon
@@ -154,6 +154,14 @@ pub mod hub_published_ability_store;
 /// only; persistence is a Week-5+ topic.
 pub mod nonce_replay_store;
 
+/// Per-(consumer-URA, ability) usage quota counter (#185). Meters an
+/// already-admitted caller against a per-window cap and surfaces the
+/// result as the Axon `RateLimitInfo` contract on invoke responses.
+/// In-memory tumbling-window state, peer to `nonce_replay_store`;
+/// enforcement is serving-node runtime state, the wire shape stays
+/// Axon's.
+pub mod usage_quota_store;
+
 /// Reload-friendly wrapper around the daemon's `RealmTrustAnchor`.
 /// `<self>.register_device_pubkey` (PR-7 commit 5/N) appends an
 /// entry, persists via atomic rename, then `replace`s the cell so
@@ -175,7 +183,7 @@ pub mod trust_anchor_key_resolver;
 pub mod keyring;
 
 /// SelfIdentity client (RFC-001 plan v4.1.5 Phase 3B). Typed
-/// `sign(self_uri, canonical_bytes) -> Signature` handle backed
+/// `sign(self_ura, canonical_bytes) -> Signature` handle backed
 /// by the `easynet-keyring` daemon's UDS or an in-process
 /// `Vault`. Boot wiring picks the impl; callsites take an
 /// `Arc<dyn SelfIdentity>` and never touch raw seed bytes.
@@ -214,3 +222,19 @@ pub mod federation_directory;
 // concern of its own. Keeping a re-export here would only
 // reintroduce the false hierarchy. Search by name (`axon_bridge`)
 // or by symbol — every public type is unchanged.
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    #[test]
+    fn quota_meters_user_abilities_but_exempts_control_plane() {
+        let meters = crate::services::axon_serve::daemon_invocation_service::quota_meters_function;
+
+        assert!(meters("device.observe.health"));
+        assert!(meters("agent.todo.run"));
+
+        assert!(!meters("federation.heartbeat"));
+        assert!(!meters("federation.forward_invoke"));
+        assert!(!meters("<self>.register_device_pubkey"));
+        assert!(!meters("<self>.session"));
+    }
+}

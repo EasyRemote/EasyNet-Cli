@@ -153,8 +153,8 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        let project_uri = result
-            .get("project_uri")
+        let project_ura = result
+            .get("project_ura")
             .and_then(Value::as_str)
             .unwrap_or("?");
         let url_root = result
@@ -162,7 +162,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
             .and_then(Value::as_str)
             .unwrap_or("?");
         println!("Published.");
-        println!("  project_uri:  {project_uri}");
+        println!("  project_ura:  {project_ura}");
         println!("  url_root:     {url_root}");
     }
     Ok(())
@@ -218,9 +218,9 @@ fn run_show(a: ShowArgs) -> anyhow::Result<()> {
         result.get("user").and_then(Value::as_str).unwrap_or("?")
     );
     println!(
-        "  project_uri:  {}",
+        "  project_ura:  {}",
         result
-            .get("project_uri")
+            .get("project_ura")
             .and_then(Value::as_str)
             .unwrap_or("?")
     );

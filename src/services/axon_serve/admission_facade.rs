@@ -10,9 +10,9 @@
 // ------------------------------------------------------------------
 // 1. Reads the `Envelope` from an inbound `pb::axon::v1::InvokeRequest`
 //    (or its server-stream / bidi counterpart)
-// 2. **Loopback bypass**: callers presenting the daemon's own URI
+// 2. **Loopback bypass**: callers presenting the daemon's own URA
 //    are admitted without crypto — the daemon trusts itself
-// 3. **Trust-anchor membership** (always): unknown caller URIs are
+// 3. **Trust-anchor membership** (always): unknown caller URAs are
 //    rejected with `permission_denied` before any structural work,
 //    so unrelated callers cannot push entries into the replay store
 // 4. **Path-conditional admission by `TrustedAgent.role`** (DEC-013
@@ -24,7 +24,7 @@
 //             `KeyResolver`                  (RFC 001 §5.2 step 3)
 //          d. `NonceReplayStore::check_and_record` against the
 //             daemon-shared store            (RFC 001 §5.2 step 4)
-//      - **Device** → URI-only for unsigned device callers; if the
+//      - **Device** → URA-only for unsigned device callers; if the
 //        device already carries a real signature+nonce the same
 //        strict 4-step pipeline runs immediately. This keeps
 //        deployed unsigned devices alive while letting PR-2/PR-7
@@ -35,13 +35,13 @@
 
 // Why path-conditional, not strict-everywhere
 // -------------------------------------------
-// PR-7 commit 4/N upgrades the gate from URI-only to strict crypto.
+// PR-7 commit 4/N upgrades the gate from URA-only to strict crypto.
 // `kernel.rs:609/689/742/774` show 4 device-side call sites that
 // emit unsigned envelopes today; an unconditional strict gate
 // PermissionDenies every deployed device immediately, forcing
 // re-pair on every host. DEC-013 keeps the strict semantics on the
 // Backend/Hub paths (which do sign — PR-7 commit 2/N landed
-// backend signing) while leaving the Device path at the PR-1 URI-
+// backend signing) while leaving the Device path at the PR-1 URA-
 // only behaviour until PR-8 introduces device sign-on-send. The
 // `TrustedAgent.role` field (set at pairing time per PR-7 commit
 // 5/N's `<self>.register_device_pubkey`) is the dispatch axis;
@@ -60,8 +60,8 @@
 // **This commit makes the existing PR-6 e2e test (`go test
 // -tags=e2e`) fail until PR-7 commit 6/N lands.** The e2e test
 // formerly exercised an unsigned envelope and observed a
-// `PermissionDenied` from the URI-not-in-trust-anchor branch. With
-// the upgraded gate, an unsigned envelope from a non-loopback URI
+// `PermissionDenied` from the URA-not-in-trust-anchor branch. With
+// the upgraded gate, an unsigned envelope from a non-loopback URA
 // fails `validate_signature_structure` (signature_algorithm_empty)
 // and the wire-visible reason changes from `permission_denied` to
 // `invalid_argument` with reason `AXON_CALLER_SIGNATURE_INVALID`.
@@ -73,13 +73,13 @@
 //
 // Invariants
 // ----------
-// **Invariant 1 (caller URI required)**: Every inbound RPC must
+// **Invariant 1 (caller URA required)**: Every inbound RPC must
 // carry an `Envelope` with a non-empty `caller.ura`. The dispatcher
 // receives `Status::invalid_argument` for any RPC missing this; it
 // is a wire-level requirement, not a policy choice.
 //
-// **Invariant 2 (loopback bypass)**: When the caller URI matches
-// the daemon's configured URI, admission accepts without consulting
+// **Invariant 2 (loopback bypass)**: When the caller URA matches
+// the daemon's configured URA, admission accepts without consulting
 // the trust anchor or the replay store. The daemon trusts itself —
 // `<self>.*` abilities and admin RPCs originate from the daemon's
 // own process and need not sign.
@@ -92,7 +92,7 @@
 // verify against the trust anchor's public-key entry rejects with
 // the same reason; a nonce already observed inside the dedup
 // window rejects with `AXON_NONCE_REPLAY`. The `Device` path keeps
-// URI-only admission for unsigned device callers, but any device
+// URA-only admission for unsigned device callers, but any device
 // envelope that already carries signature material runs the same
 // strict pipeline immediately.
 //
@@ -126,10 +126,6 @@ use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
-use crate::pb::axon::v1::{
-    causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvokeRequest,
-    InvokeServerStreamRequest,
-};
 use crate::services::axon_serve::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
@@ -138,6 +134,11 @@ use crate::services::federation_client::FederationClient;
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use crate::services::usage_quota_store::{QuotaDenyReason, SharedUsageQuotaGate};
+use easynet_axon::pb::axon::v1::{
+    causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvokeRequest,
+    InvokeServerStreamRequest, RateLimitInfo,
+};
 
 /// Per-RPC admission gate consulted by `DaemonInvocationService`
 /// before routing into a federation wrapper or fallthrough handler.
@@ -145,7 +146,7 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 /// Holds:
 /// - `Arc<RealmTrustAnchor>` — the trust set authored by PR-7's
 ///   pairing flow and read at boot by the daemon binary
-/// - `daemon_uri` — the daemon's own canonical URI (loopback bypass)
+/// - `daemon_ura` — the daemon's own canonical URA (loopback bypass)
 /// - `replay_store` — the daemon-shared `SharedNonceReplayStore` so
 ///   replay windows hold across all admissions
 ///
@@ -155,12 +156,12 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 #[derive(Clone)]
 pub struct AdmissionFacade {
     trust_anchor: SharedTrustAnchor,
-    daemon_uri: Option<String>,
+    daemon_ura: Option<String>,
     replay_store: SharedNonceReplayStore,
     /// **PR-N2 commit 1/N**. Cross-hub federation client used by
     /// `FederatedKeyResolver` to dial a peer hub's
     /// `federation.resolve_key` ability when the local trust
-    /// anchor has no entry for a cross-realm caller URI. `None`
+    /// anchor has no entry for a cross-realm caller URA. `None`
     /// in single-realm/test builds — the resolver collapses to
     /// local-only behavior in that case (mirrors PR-7's
     /// `TrustAnchorKeyResolver`).
@@ -173,9 +174,9 @@ pub struct AdmissionFacade {
     federated_peers: SharedFederatedPeers,
     /// **PR-N2 commit 1/N**. The local realm string used for
     /// the same-realm-vs-cross-realm decision in
-    /// `FederatedKeyResolver`. Derived from `daemon_uri` when
+    /// `FederatedKeyResolver`. Derived from `daemon_ura` when
     /// not supplied directly. `None` in test builds with no
-    /// daemon URI wired.
+    /// daemon URA wired.
     self_realm: Option<String>,
     /// **C3b** TTL cache shared across every per-admission
     /// `FederatedKeyResolver` instance. Without this share, the
@@ -184,13 +185,33 @@ pub struct AdmissionFacade {
     /// handler holds a clone too so a trust-anchor reload can
     /// flush all cached cross-realm pubkeys atomically.
     federated_key_cache: SharedFederatedKeyCache,
+    /// Whether the loopback bypass (Invariant 2) is honoured for
+    /// this facade. The bypass is a pure URA string-match
+    /// (`caller_ura == daemon_ura`), so any caller that can reach
+    /// the listener and spoof the daemon's own URA would otherwise
+    /// skip the trust anchor, signature, and replay checks. That is
+    /// only safe on a genuinely loopback-only transport: the daemon
+    /// serves the *same* `InvocationServer` over both a 0600 UDS and
+    /// a TCP+TLS socket (see `boot::spawn_tcp_tls_listener`), and the
+    /// TCP socket is off-box reachable. So the UDS-fed facade keeps
+    /// `loopback_trusted = true` and the TCP-fed facade sets it to
+    /// `false`, forcing every TCP caller — including a daemon-URA
+    /// spoofer — through the full strict pipeline. Defaults to `true`
+    /// so existing single-listener / test wiring is unchanged.
+    loopback_trusted: bool,
+    /// #185: reloadable per-consumer usage-quota gate. The gate is
+    /// always present so SIGHUP can enable quota after boot; it is
+    /// disabled internally when `[daemon.quota]` is absent. Loopback
+    /// self calls remain exempt here because the daemon must not
+    /// throttle its own `<self>.*` administrative surface.
+    quota: SharedUsageQuotaGate,
 }
 
 impl std::fmt::Debug for AdmissionFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AdmissionFacade")
             .field("trust_anchor", &self.trust_anchor)
-            .field("daemon_uri", &self.daemon_uri)
+            .field("daemon_ura", &self.daemon_ura)
             .field("replay_store", &self.replay_store)
             .field(
                 "federation_client",
@@ -201,14 +222,16 @@ impl std::fmt::Debug for AdmissionFacade {
             )
             .field("federated_peers", &self.federated_peers)
             .field("self_realm", &self.self_realm)
+            .field("loopback_trusted", &self.loopback_trusted)
+            .field("quota_configured", &self.quota.policy().is_some())
             .finish()
     }
 }
 
 impl AdmissionFacade {
     /// Construct a facade against the supplied trust anchor and
-    /// daemon URI. Production callers thread the daemon's
-    /// `credentials.json`-derived URI through; tests typically pass
+    /// daemon URA. Production callers thread the daemon's
+    /// `credentials.json`-derived URA through; tests typically pass
     /// `None`.
     ///
     /// The trust anchor is wrapped in a fresh `SharedTrustAnchor`
@@ -224,8 +247,8 @@ impl AdmissionFacade {
     /// store per daemon process (RFC 001 §5.2 step 4 invariant: one
     /// shared dedup window across the daemon's lifetime).
     #[must_use]
-    pub fn new(trust_anchor: Arc<RealmTrustAnchor>, daemon_uri: Option<String>) -> Self {
-        Self::with_trust_anchor_cell(SharedTrustAnchor::new(trust_anchor), daemon_uri)
+    pub fn new(trust_anchor: Arc<RealmTrustAnchor>, daemon_ura: Option<String>) -> Self {
+        Self::with_trust_anchor_cell(SharedTrustAnchor::new(trust_anchor), daemon_ura)
     }
 
     /// Construct a facade against a shared trust-anchor cell. Used
@@ -236,19 +259,21 @@ impl AdmissionFacade {
     #[must_use]
     pub fn with_trust_anchor_cell(
         trust_anchor: SharedTrustAnchor,
-        daemon_uri: Option<String>,
+        daemon_ura: Option<String>,
     ) -> Self {
-        let self_realm = daemon_uri
+        let self_realm = daemon_ura
             .as_deref()
-            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri);
+            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_ura);
         Self {
             trust_anchor,
-            daemon_uri,
+            daemon_ura,
             replay_store: SharedNonceReplayStore::new(),
             federation_client: None,
             federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
             self_realm,
             federated_key_cache: SharedFederatedKeyCache::new(),
+            loopback_trusted: true,
+            quota: SharedUsageQuotaGate::disabled(),
         }
     }
 
@@ -263,14 +288,108 @@ impl AdmissionFacade {
         self.trust_anchor.snapshot()
     }
 
-    /// The daemon's own canonical URI. Used by per-ability
+    /// The daemon's own canonical URA. Used by per-ability
     /// admission filters that need to recognise the loopback
     /// caller (eg. `federation.list_user_devices` in N3-5
     /// admits the daemon talking to itself without requiring
-    /// a Hub trust entry for its own URI).
+    /// a Hub trust entry for its own URA).
     #[must_use]
-    pub fn daemon_uri(&self) -> Option<&str> {
-        self.daemon_uri.as_deref()
+    pub fn daemon_ura(&self) -> Option<&str> {
+        self.daemon_ura.as_deref()
+    }
+
+    /// Set whether this facade honours the loopback bypass
+    /// (Invariant 2). Boot wires the UDS-fed service with `true`
+    /// (the daemon's own process reaches itself over the 0600 socket
+    /// and need not sign) and the TCP+TLS-fed service with `false`,
+    /// so an off-box caller that spoofs the daemon URA cannot skip
+    /// the strict trust-anchor / signature / replay pipeline.
+    #[must_use]
+    pub fn with_loopback_trusted(mut self, loopback_trusted: bool) -> Self {
+        self.loopback_trusted = loopback_trusted;
+        self
+    }
+
+    /// #185: attach the reloadable per-consumer usage-quota gate.
+    /// Boot wires the same gate into the SIGHUP reload coordinator so
+    /// `[daemon.quota]` edits can affect the next admission without a
+    /// daemon restart.
+    #[must_use]
+    pub fn with_quota_gate(mut self, gate: SharedUsageQuotaGate) -> Self {
+        self.quota = gate;
+        self
+    }
+
+    /// #185: meter an already-admitted unary caller. MUST be called
+    /// only after `verify_invoke` has returned `Ok` for this request.
+    ///
+    /// Returns:
+    /// - `Ok(None)` — no metering applies (quota off, the caller is
+    ///   the daemon's own loopback/self URA, or the caller is
+    ///   unmetered by policy). The response carries no `RateLimitInfo`.
+    /// - `Ok(Some(info))` — the call is within budget; `info` is the
+    ///   post-decrement quota status to surface on the response.
+    /// - `Err(status)` — the window budget is exhausted, the bounded
+    ///   store is saturated, or the key material violates the quota
+    ///   key-size contract. Exhaustion/saturation use
+    ///   `ResourceExhausted`; key contract violations use
+    ///   `InvalidArgument`.
+    pub fn check_quota(&self, request: &InvokeRequest) -> Result<Option<RateLimitInfo>, Status> {
+        self.check_quota_for_ability(request, &request.function_name)
+    }
+
+    /// #185: meter an already-admitted unary caller against an explicit
+    /// ability name. `federation.forward_invoke` uses this to charge the
+    /// caller for the inner user ability while keeping the top-level
+    /// federation wrapper itself exempt as control-plane traffic.
+    pub fn check_quota_for_ability(
+        &self,
+        request: &InvokeRequest,
+        ability: &str,
+    ) -> Result<Option<RateLimitInfo>, Status> {
+        let Some(envelope) = request.envelope.as_ref() else {
+            return Ok(None);
+        };
+        let caller_ura = caller_ura_required(envelope)?;
+
+        // The daemon never meters itself: loopback/self calls
+        // (`<self>.*` abilities, admin RPCs) bypass quota exactly as
+        // they bypass the trust anchor.
+        if self.is_loopback(caller_ura) {
+            return Ok(None);
+        }
+
+        let Some(decision) = self
+            .quota
+            .check_and_record(caller_ura, ability, axon_now_ms())
+        else {
+            return Ok(None);
+        };
+
+        if decision.allowed {
+            let info = RateLimitInfo {
+                quota_remaining: decision.quota_remaining,
+                quota_limit: decision.quota_limit,
+                reset_at_unix_ms: decision.reset_at_unix_ms,
+                retry_after_ms: decision.retry_after_ms,
+            };
+            return Ok(Some(info));
+        }
+        match decision.deny_reason {
+            Some(QuotaDenyReason::KeyTooLarge) => Err(Status::invalid_argument(format!(
+                "AXON_QUOTA_KEY_TOO_LARGE caller={caller_ura} ability={ability}"
+            ))),
+            Some(QuotaDenyReason::StoreSaturated) => Err(Status::resource_exhausted(format!(
+                "AXON_QUOTA_STORE_SATURATED caller={caller_ura} ability={ability} retry_after_ms={}",
+                decision.retry_after_ms
+            ))),
+            Some(QuotaDenyReason::BudgetExhausted) | None => {
+                Err(Status::resource_exhausted(format!(
+                    "AXON_QUOTA_EXHAUSTED caller={caller_ura} ability={ability} retry_after_ms={}",
+                    decision.retry_after_ms
+                )))
+            }
+        }
     }
 
     /// Snapshot the shared federated-key cache. Boot-time SIGHUP
@@ -290,20 +409,22 @@ impl AdmissionFacade {
     #[must_use]
     pub fn with_replay_store(
         trust_anchor: Arc<RealmTrustAnchor>,
-        daemon_uri: Option<String>,
+        daemon_ura: Option<String>,
         replay_store: SharedNonceReplayStore,
     ) -> Self {
-        let self_realm = daemon_uri
+        let self_realm = daemon_ura
             .as_deref()
-            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri);
+            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_ura);
         Self {
             trust_anchor: SharedTrustAnchor::new(trust_anchor),
-            daemon_uri,
+            daemon_ura,
             replay_store,
             federation_client: None,
             federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
             self_realm,
             federated_key_cache: SharedFederatedKeyCache::new(),
+            loopback_trusted: true,
+            quota: SharedUsageQuotaGate::disabled(),
         }
     }
 
@@ -311,7 +432,7 @@ impl AdmissionFacade {
     /// federation client + operator-curated federated_peers
     /// cell. When set, the strict admission path constructs a
     /// `FederatedKeyResolver` instead of `TrustAnchorKeyResolver`,
-    /// which means a cross-realm caller whose URI is missing
+    /// which means a cross-realm caller whose URA is missing
     /// from the local trust anchor falls through to a
     /// `federation.resolve_key` ability call against the peer
     /// hub mapped by `federated_peers[caller_tenant]`.
@@ -375,38 +496,17 @@ impl AdmissionFacade {
         self.run_full_admission(envelope, ability, &open.initial_args)
     }
 
-    /// Direct-envelope entrypoint reserved for the PR-2 InvokeBidi
-    /// path that does NOT carry an EnvelopeOpen — surface kept stable
-    /// so existing callers compile. Defers to the loopback-only
-    /// fast path; full admission requires the (ability, args) tuple
-    /// the other entrypoints supply.
-    ///
-    /// PR-7 note: this is the URI-only transitional gate. The bidi path
-    /// has migrated to `verify_envelope_for_bidi`. Remove once
-    /// PR-2's session bidi handler also supplies (ability, args).
-    pub fn verify_envelope_uri_only(&self, envelope: &Envelope) -> Result<(), Status> {
-        let caller_ura = caller_ura_required(envelope)?;
-        if self.is_loopback(caller_ura) {
-            return Ok(());
-        }
-        let snapshot = self.trust_anchor.snapshot();
-        if snapshot.lookup(caller_ura).is_some() {
-            return Ok(());
-        }
-        Err(permission_denied_unknown_caller(caller_ura))
-    }
-
     // ── Internal pipeline ────────────────────────────────────────
 
     /// Path-conditional admission per DEC-013 Option D.
     ///
     /// Order:
-    /// 1. Caller URI required (Invariant 1).
+    /// 1. Caller URA required (Invariant 1).
     /// 2. Loopback bypass (Invariant 2).
-    /// 3. Trust-anchor membership: unknown URI → `permission_denied`.
+    /// 3. Trust-anchor membership: unknown URA → `permission_denied`.
     /// 4. Path by `TrustedAgent.role`:
     ///    - `Backend`    → strict 4-step §5.2 pipeline (signs envelopes)
-    ///    - `Device`     → URI-only no-op (devices don't sign yet —
+    ///    - `Device`     → URA-only no-op (devices don't sign yet —
     ///                     PR-8 flips this arm to strict once
     ///                     device-side sign-on-send lands)
     ///    - `Hub`        → strict 4-step (cross-realm federation)
@@ -439,7 +539,7 @@ impl AdmissionFacade {
 
         // Trust-anchor membership precedes any structural check.
         // Unknown callers reject with `permission_denied` — the
-        // DEC-013 entry contract says "URI-not-in-trust-set" surfaces
+        // DEC-013 entry contract says "URA-not-in-trust-set" surfaces
         // before any attempt at envelope/signature parsing, so an
         // unrelated caller cannot waste structure-validation cycles
         // and never has its (possibly malformed) nonce considered.
@@ -468,13 +568,13 @@ impl AdmissionFacade {
         };
 
         match trusted.role {
-            // Device path: URI-only admission until PR-8 device-side
+            // Device path: URA-only admission until PR-8 device-side
             // sign-on-send lands. No envelope/signature/replay work —
             // device runtime today emits unsigned envelopes (kernel.rs
             // 4 sites: caller_signature: None) and DEC-013 explicitly
             // refuses to break already-deployed devices.
             //
-            // PR-10 commit 4/N: emit a receipt even on this URI-only
+            // PR-10 commit 4/N: emit a receipt even on this URA-only
             // path so the audit pipeline sees the call happen. The
             // `reason` annotation `"unsigned_caller_ura_admitted"`
             // distinguishes this from a strict-path admit; PR-8
@@ -505,7 +605,7 @@ impl AdmissionFacade {
             // strict 4-step gate as Backend/Hub — the entire point
             // of promoting user from Subject to Caller is that the
             // user's signature is independently verifiable, so
-            // there is no URI-only fallback arm for User the way
+            // there is no URA-only fallback arm for User the way
             // there is for unsigned Device callers.
             TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::User => {
                 self.run_strict_admission(envelope, ability, args, snapshot)
@@ -540,48 +640,25 @@ impl AdmissionFacade {
         let axiom_signature = build_axiom_signature(envelope.caller_signature.as_ref())
             .map_err(axon_error_to_status)?;
 
-        // DEC-EU §multi-device. The SDK's `KeyResolver` trait takes
-        // only a URI; for User-role callers the URI is 1:N and a
-        // bare lookup picks the lex-smallest registered pubkey,
-        // which silently fails verify for every other device. The
-        // pinned resolver keys on (URI, envelope-presented pubkey)
-        // and refuses any pubkey not registered under that URI.
-        //
-        // Non-user callers continue to use FederatedKeyResolver
-        // because their URI is 1:1 (hub/backend/device) and the
-        // cross-hub `federation.resolve_key` dial is meaningful
-        // for them. User cross-realm roaming is a known followup
-        // (see federation_wrappers::handle_resolve_key, which now
-        // accepts presented_pubkey_b64 — the cross-hub dialer
-        // needs a parallel patch in federated_key_resolver.rs to
-        // forward it; tracked under DEC-EU §multi-realm-resolve).
-        let resolver: Box<dyn KeyResolver> = if envelope_caller_is_user(envelope) {
-            let pubkey_b64 = envelope_presented_pubkey_b64(envelope);
-            Box::new(
-                crate::services::axon_serve::pinned_user_key_resolver::PinnedUserKeyResolver::new(
-                    trust_anchor,
-                    pubkey_b64,
-                ),
-            )
-        } else {
-            // **PR-N2 commit 1/N**. Build a `FederatedKeyResolver`
-            // that wraps the per-call snapshot trust anchor with
-            // the daemon-shared federation client + federated_peers
-            // cell. Same-realm callers short-circuit on the local
-            // anchor lookup (zero added latency); cross-realm
-            // callers fall through to a peer hub's
-            // `federation.resolve_key` ability iff the operator
-            // marked their tenant as federated.
-            Box::new(
-                FederatedKeyResolver::new(
-                    trust_anchor,
-                    self.federation_client.clone(),
-                    self.federated_peers.snapshot(),
-                    self.self_realm.clone(),
-                )
-                .with_cache(self.federated_key_cache.clone()),
-            )
-        };
+        // DEC-EU §multi-device. User URAs are 1:N, so the resolver must
+        // key local and cross-realm lookup on the envelope-presented
+        // public key. FederatedKeyResolver now owns both paths: same-realm
+        // user calls pin against `lookup_user_by_pubkey`; cross-realm user
+        // calls forward `presented_pubkey_b64` to the peer hub's
+        // `federation.resolve_key` handler. Non-user callers keep the
+        // existing one-key local-first behavior.
+        let mut federated_resolver = FederatedKeyResolver::new(
+            trust_anchor,
+            self.federation_client.clone(),
+            self.federated_peers.snapshot(),
+            self.self_realm.clone(),
+        )
+        .with_cache(self.federated_key_cache.clone());
+        if envelope_caller_is_user(envelope) {
+            federated_resolver = federated_resolver
+                .with_presented_pubkey_b64(envelope_presented_pubkey_b64(envelope));
+        }
+        let resolver: Box<dyn KeyResolver> = Box::new(federated_resolver);
 
         let result = self.replay_store.with_inner(|store| {
             run_admission(
@@ -608,8 +685,16 @@ impl AdmissionFacade {
     }
 
     fn is_loopback(&self, caller_ura: &str) -> bool {
-        match self.daemon_uri.as_deref() {
-            Some(self_uri) => caller_ura == self_uri,
+        // Off-box transports never get the bypass, even on an exact
+        // daemon-URA match: the same URA an attacker can put in
+        // `caller.ura` would otherwise skip the entire strict
+        // pipeline. Only the loopback-only (UDS) listener wires a
+        // facade with `loopback_trusted = true`.
+        if !self.loopback_trusted {
+            return false;
+        }
+        match self.daemon_ura.as_deref() {
+            Some(self_ura) => caller_ura == self_ura,
             None => false,
         }
     }
@@ -617,10 +702,10 @@ impl AdmissionFacade {
     /// **PR-N2 commit 1/N**. Decide whether `caller_ura` belongs to
     /// a federated peer realm — i.e. a realm the operator has
     /// explicitly opted into by adding a `[daemon.federated_peers]`
-    /// map entry mapping `tenant → hub_uri`.
+    /// map entry mapping `tenant → hub_endpoint`.
     ///
     /// Returns `true` iff:
-    ///   - the URI parses to a non-self tenant
+    ///   - the URA parses to a non-self tenant
     ///   - the federated_peers cell holds an entry for that tenant
     ///   - a federation client is wired (without one, the strict
     ///     path's FederatedKeyResolver has no way to dial the peer
@@ -630,7 +715,7 @@ impl AdmissionFacade {
             return false;
         };
         let _ = client; // presence-only check; resolver does the dial
-        let Some(caller_tenant) = parse_realm_from_uri(caller_ura) else {
+        let Some(caller_tenant) = parse_realm_from_ura(caller_ura) else {
             return false;
         };
         if let Some(self_realm) = self.self_realm.as_deref() {
@@ -644,7 +729,7 @@ impl AdmissionFacade {
 }
 
 /// **PR-N2 commit 1/N**. Parse the realm component from a canonical
-/// EasyNet URI (`easynet:///r/<realm>/...`). Returns the realm slice
+/// EasyNet URA (`easynet:///r/<realm>/...`). Returns the realm slice
 /// when the shape matches, `None` otherwise. Shared by
 /// `is_federated_caller` and the cross-realm gate.
 ///
@@ -653,8 +738,8 @@ impl AdmissionFacade {
 /// device sessions register under `.../device/<id>`. Reuse the same
 /// realm parser as `<self>.register_device_pubkey` so all canonical
 /// role tails stay accepted.
-fn parse_realm_from_uri(uri: &str) -> Option<String> {
-    crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri(uri)
+fn parse_realm_from_ura(ura: &str) -> Option<String> {
+    crate::services::axon_serve::register_device_pubkey::parse_realm_from_ura(ura)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -667,7 +752,7 @@ fn parse_realm_from_uri(uri: &str) -> Option<String> {
 
 /// Extract `caller.ura` and reject as `invalid_argument` if absent
 /// or empty. Shared by every entrypoint so the wire-level
-/// "caller URI required" message is identical across surfaces.
+/// "caller URA required" message is identical across surfaces.
 fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
     envelope
         .caller
@@ -676,14 +761,14 @@ fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
         .filter(|u| !u.is_empty())
         .ok_or_else(|| {
             Status::invalid_argument(
-                "envelope.caller.ura is required (Invariant 1: caller URI required)",
+                "envelope.caller.ura is required (Invariant 1: caller URA required)",
             )
         })
 }
 
 fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
     Status::permission_denied(format!(
-        "caller URI `{caller_ura}` is not in the realm trust anchor; \
+        "caller URA `{caller_ura}` is not in the realm trust anchor; \
          pairing-flow registration via `<self>.register_device_pubkey` \
          (PR-7 commit 5/N) populates the trust set",
     ))
@@ -831,7 +916,7 @@ fn receipt_hash_from_bytes(bytes: &[u8]) -> Result<[u8; 32], InvocationError> {
 /// `signature_algorithm_empty`, which is the correct wire-visible
 /// outcome.
 fn build_axiom_signature(
-    proto: Option<&crate::pb::axon::v1::CallerSignature>,
+    proto: Option<&easynet_axon::pb::axon::v1::CallerSignature>,
 ) -> Result<AxiomCallerSignature, InvocationError> {
     Ok(match proto {
         Some(sig) => AxiomCallerSignature {
@@ -860,8 +945,8 @@ fn envelope_carries_signature_material(envelope: &Envelope) -> bool {
 }
 
 /// DEC-EU §multi-device: returns true iff `envelope.caller.ura`
-/// parses to a User-kind URA. Drives the PinnedUserKeyResolver
-/// branch in `run_strict_admission`.
+/// parses to a User-kind URA. Gates whether `run_strict_admission`
+/// pins the `FederatedKeyResolver` to the envelope-presented pubkey.
 fn envelope_caller_is_user(envelope: &Envelope) -> bool {
     let Some(caller) = envelope.caller.as_ref() else {
         return false;
@@ -876,20 +961,20 @@ fn envelope_caller_is_user(envelope: &Envelope) -> bool {
 /// via `caller_signature.key_id_hint`. The backend encodes the
 /// signer's raw 32-byte Ed25519 verifying key as base64 and stores
 /// it in this field; the daemon admission gate trims and returns it
-/// verbatim so `PinnedUserKeyResolver` can pin the verify key to
+/// verbatim so `FederatedKeyResolver` can pin the verify key to
 /// exactly the one the browser used to sign.
 ///
 /// The pubkey hint is `key_id_hint` not a new proto field because
 /// `types.proto` already documents `key_id_hint` as "non-trustworthy
 /// hint, verifiers MUST resolve independently" — exactly our use:
 /// the daemon doesn't trust the hint blindly, it confirms the hint's
-/// pubkey is registered under the Caller URI in `realm-trust.toml`
+/// pubkey is registered under the Caller URA in `realm-trust.toml`
 /// before treating it as the verify key.
 ///
 /// Empty when the envelope is hub / device / backend-signed (those
 /// callers don't need pubkey disambiguation), or when the caller
 /// neglected to set the hint (a programming error; downstream
-/// PinnedUserKeyResolver surfaces `unknown_agent_ura` and admission
+/// `FederatedKeyResolver` surfaces `unknown_agent_ura` and admission
 /// rejects).
 fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
     envelope
@@ -909,30 +994,30 @@ fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pb::axon::v1::{
+    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use easynet_axon::pb::axon::v1::{
         AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature,
         SubjectIdentity as PbSubjectIdentity,
     };
-    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
     use ed25519_dalek::{Signer, SigningKey};
 
-    fn agent(uri: &str) -> PbAgentIdentity {
+    fn agent(ura: &str) -> PbAgentIdentity {
         PbAgentIdentity {
-            ura: uri.to_string(),
+            ura: ura.to_string(),
             ..PbAgentIdentity::default()
         }
     }
 
-    fn subject(uri: &str) -> PbSubjectIdentity {
+    fn subject(ura: &str) -> PbSubjectIdentity {
         PbSubjectIdentity {
-            ura: uri.to_string(),
+            ura: ura.to_string(),
             ..PbSubjectIdentity::default()
         }
     }
 
-    fn envelope_with_caller(uri: &str) -> Envelope {
+    fn envelope_with_caller(ura: &str) -> Envelope {
         Envelope {
-            caller: Some(agent(uri)),
+            caller: Some(agent(ura)),
             callee: Some(agent("easynet:///r/realm/hub")),
             subject: Some(subject("easynet:///r/realm/hub")),
             invocation_nonce: vec![0x11u8; 16],
@@ -949,34 +1034,34 @@ mod tests {
         }
     }
 
-    fn entry_with_role(uri: &str, public_key_b64: String, role: TrustedAgentRole) -> TrustedAgent {
+    fn entry_with_role(ura: &str, public_key_b64: String, role: TrustedAgentRole) -> TrustedAgent {
         TrustedAgent {
-            agent_ura: uri.to_string(),
+            agent_ura: ura.to_string(),
             public_key_b64,
             role,
             added_at_unix_ms: 1_714_492_800_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         }
     }
 
-    fn backend_entry(uri: &str, public_key_b64: String) -> TrustedAgent {
-        entry_with_role(uri, public_key_b64, TrustedAgentRole::Backend)
+    fn backend_entry(ura: &str, public_key_b64: String) -> TrustedAgent {
+        entry_with_role(ura, public_key_b64, TrustedAgentRole::Backend)
     }
 
-    fn device_entry(uri: &str, public_key_b64: String) -> TrustedAgent {
-        entry_with_role(uri, public_key_b64, TrustedAgentRole::Device)
+    fn device_entry(ura: &str, public_key_b64: String) -> TrustedAgent {
+        entry_with_role(ura, public_key_b64, TrustedAgentRole::Device)
     }
 
     /// Anchor populated with `Backend`-role entries (zero-bytes
     /// public key — tests that exercise the strict path supply a
     /// real key separately). Backend role keeps the strict §5.2
     /// pipeline live for these tests after DEC-013.
-    fn backend_anchor(uris: &[&str]) -> Arc<RealmTrustAnchor> {
+    fn backend_anchor(uras: &[&str]) -> Arc<RealmTrustAnchor> {
         Arc::new(
             RealmTrustAnchor::from_entries(
-                uris.iter()
+                uras.iter()
                     .map(|u| {
                         backend_entry(
                             u,
@@ -1052,12 +1137,12 @@ mod tests {
         )
     }
 
-    // ── URI/loopback gate (preserved from PR-1) ────────────────────
+    // ── URA/loopback gate (preserved from PR-1) ────────────────────
 
     #[test]
     fn empty_anchor_rejects_external_caller_with_permission_denied() {
         // DEC-013: trust-anchor membership is the first non-loopback
-        // check, so a URI not in the anchor short-circuits to
+        // check, so a URA not in the anchor short-circuits to
         // permission_denied without ever exercising the §5.2
         // pipeline.
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
@@ -1088,11 +1173,11 @@ mod tests {
         let req = invoke_request(Some(Envelope::default()));
         let err = facade.verify_invoke(&req).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("caller URI required"));
+        assert!(err.message().contains("caller URA required"));
     }
 
     #[test]
-    fn daemon_uri_loopback_bypasses_anchor_and_replay() {
+    fn daemon_ura_loopback_bypasses_anchor_and_replay() {
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
             Some("easynet:///r/realm/hub".to_string()),
@@ -1121,6 +1206,138 @@ mod tests {
         assert!(facade.replay_store.is_empty());
     }
 
+    #[test]
+    fn tcp_origin_facade_does_not_honour_loopback_bypass_for_daemon_ura_spoof() {
+        // #66: the same DaemonInvocationService is served over a
+        // loopback-only UDS and an off-box TCP+TLS socket. The UDS-fed
+        // facade trusts the loopback bypass; the TCP-fed facade must
+        // not. An unsigned envelope spoofing the daemon's own URA is
+        // admitted by the former and rejected (forced through the
+        // strict pipeline) by the latter — with no replay pollution on
+        // either path.
+        let daemon_ura = "easynet:///r/realm/hub";
+        let req = invoke_request(Some(envelope_with_caller(daemon_ura)));
+
+        let uds_facade = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(daemon_ura.to_string()),
+        );
+        uds_facade
+            .verify_invoke(&req)
+            .expect("UDS-origin loopback bypass still admits the daemon's own URA");
+
+        let tcp_facade = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(daemon_ura.to_string()),
+        )
+        .with_loopback_trusted(false);
+        let err = tcp_facade
+            .verify_invoke(&req)
+            .expect_err("TCP-origin facade must not honour the loopback bypass");
+        // The spoofed daemon URA is not in the (empty) trust anchor, so
+        // the strict path rejects it as an unknown caller rather than
+        // silently admitting it.
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            tcp_facade.replay_store.is_empty(),
+            "an unknown-caller reject must never touch the replay store"
+        );
+    }
+
+    // ── #185 usage quota ───────────────────────────────────────────
+
+    #[test]
+    fn quota_off_leaves_response_unmetered() {
+        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
+        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/agent/a.b")));
+        assert_eq!(
+            facade.check_quota(&req).expect("no metering configured"),
+            None,
+            "without [daemon.quota] the gate must not attach RateLimitInfo"
+        );
+    }
+
+    #[test]
+    fn quota_meters_then_exhausts_external_caller() {
+        use crate::persistence::daemon_config::QuotaConfig;
+        use crate::services::usage_quota_store::SharedUsageQuotaGate;
+
+        let caller = "easynet:///r/realm/agent/a.b";
+        let config = QuotaConfig::new(2, 10_000, std::collections::BTreeMap::new());
+        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None)
+            .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
+        let req = invoke_request(Some(envelope_with_caller(caller)));
+
+        // First two calls are within the cap and surface decreasing
+        // remaining budget.
+        let first = facade.check_quota(&req).expect("first within cap");
+        assert_eq!(first.as_ref().map(|i| i.quota_remaining), Some(1));
+        let second = facade.check_quota(&req).expect("second within cap");
+        assert_eq!(second.as_ref().map(|i| i.quota_remaining), Some(0));
+
+        // Third exceeds the cap → ResourceExhausted with the wire
+        // reason and a retry hint.
+        let err = facade.check_quota(&req).expect_err("third over cap");
+        assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+        assert!(
+            err.message().contains("AXON_QUOTA_EXHAUSTED"),
+            "wire reason must be AXON_QUOTA_EXHAUSTED, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn quota_exempts_loopback_self_caller() {
+        use crate::persistence::daemon_config::QuotaConfig;
+        use crate::services::usage_quota_store::SharedUsageQuotaGate;
+
+        let daemon_ura = "easynet:///r/realm/hub";
+        // A cap of 1, but the daemon calling itself must never be
+        // metered — it would otherwise self-throttle its own `<self>.*`
+        // abilities.
+        let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
+        let facade = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(daemon_ura.to_string()),
+        )
+        .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
+        let req = invoke_request(Some(envelope_with_caller(daemon_ura)));
+
+        for _ in 0..5 {
+            assert_eq!(
+                facade.check_quota(&req).expect("loopback never throttled"),
+                None,
+                "the daemon's own URA is exempt from quota"
+            );
+        }
+    }
+
+    #[test]
+    fn quota_rejects_oversized_ability_key_as_invalid_argument() {
+        use crate::persistence::daemon_config::QuotaConfig;
+        use crate::services::usage_quota_store::{
+            SharedUsageQuotaGate, MAX_QUOTA_ABILITY_NAME_BYTES,
+        };
+
+        let caller = "easynet:///r/realm/agent/a.b";
+        let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
+        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None)
+            .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
+        let req = invoke_request(Some(envelope_with_caller(caller)));
+        let ability = "a".repeat(MAX_QUOTA_ABILITY_NAME_BYTES + 1);
+
+        let err = facade
+            .check_quota_for_ability(&req, &ability)
+            .expect_err("oversized quota key must be rejected");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("AXON_QUOTA_KEY_TOO_LARGE"),
+            "wire reason must name quota key bound, got: {}",
+            err.message()
+        );
+    }
+
     // ── Full §5.2 pipeline ─────────────────────────────────────────
 
     #[test]
@@ -1131,7 +1348,7 @@ mod tests {
         //
         // Caller URA shape note: trust-anchor entries under the
         // Backend role MUST be hub URAs (`from_entries` enforces
-        // role-URI canonicality). We model the external caller as
+        // role-URA canonicality). We model the external caller as
         // a peer-realm hub so the URA shape is contract-valid while
         // the realm distinction keeps it outside the daemon's
         // loopback bypass.
@@ -1156,7 +1373,7 @@ mod tests {
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
         // Backend-role trust entries MUST be hub URAs per
-        // `canonical_uri_for_role`. We use distinct peer-realm hub
+        // `canonical_ura_for_role`. We use distinct peer-realm hub
         // URAs across tests so the daemon-shared replay store sees
         // distinct (caller, nonce) pairs even when tests interleave.
         let caller_ura = "easynet:///r/peer-signer-a/hub";
@@ -1184,7 +1401,7 @@ mod tests {
     // (`strict_admission_records_receipt`,
     //  `loopback_admission_does_not_record_receipt`,
     //  `replay_rejection_records_rejected_receipt`,
-    //  `device_uri_only_records_annotated_receipt`).
+    //  `device_ura_only_records_annotated_receipt`).
     // Successful admission is now observed via the
     // `LedgerSink`-installed `InvocationLedger` at terminal time;
     // rejected admission is observed via the wire-level gRPC
@@ -1262,8 +1479,8 @@ mod tests {
     }
 
     #[test]
-    fn signed_caller_unknown_uri_rejected_with_permission_denied() {
-        // DEC-013: a caller URI absent from the trust anchor never
+    fn signed_caller_unknown_ura_rejected_with_permission_denied() {
+        // DEC-013: a caller URA absent from the trust anchor never
         // reaches the §5.2 pipeline; membership miss short-circuits
         // to permission_denied. The signature is valid in shape but
         // we never bother verifying it — the trust-anchor lookup is
@@ -1282,7 +1499,7 @@ mod tests {
         );
         let err = facade
             .verify_invoke(&req)
-            .expect_err("unknown caller URI must reject");
+            .expect_err("unknown caller URA must reject");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(err.message().contains("not in the realm trust anchor"));
     }
@@ -1363,10 +1580,10 @@ mod tests {
     /// byte string — Device-arm callers never have their key resolved
     /// (no signature verification under DEC-013), so the byte content
     /// is immaterial.
-    fn device_anchor(uri: &str) -> Arc<RealmTrustAnchor> {
+    fn device_anchor(ura: &str) -> Arc<RealmTrustAnchor> {
         Arc::new(
             RealmTrustAnchor::from_entries(vec![device_entry(
-                uri,
+                ura,
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             )])
             .expect("anchor"),
@@ -1382,7 +1599,7 @@ mod tests {
             _target_hub: &crate::services::federation_client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
-            crate::pb::axon::v1::InvokeResponse,
+            easynet_axon::pb::axon::v1::InvokeResponse,
             crate::services::federation_client::FederationClientError,
         > {
             Err(
@@ -1395,13 +1612,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_realm_from_uri_accepts_hub_and_device_shapes() {
+    fn parse_realm_from_ura_accepts_hub_and_device_shapes() {
         assert_eq!(
-            parse_realm_from_uri("easynet:///r/peer-realm/hub"),
+            parse_realm_from_ura("easynet:///r/peer-realm/hub"),
             Some("peer-realm".to_string())
         );
         assert_eq!(
-            parse_realm_from_uri("easynet:///r/peer-realm/device/device-123"),
+            parse_realm_from_ura("easynet:///r/peer-realm/device/device-123"),
             Some("peer-realm".to_string())
         );
     }
@@ -1424,10 +1641,10 @@ mod tests {
 
     #[test]
     fn device_role_admits_unsigned_envelope_per_dec013() {
-        // The DEC-013 boundary: a device URI in the trust anchor
+        // The DEC-013 boundary: a device URA in the trust anchor
         // admits without signature, without nonce recording, and
         // without crypto. PR-8 will flip this arm to strict — for
-        // PR-7 ship, it preserves URI-only PR-1 semantics for
+        // PR-7 ship, it preserves URA-only PR-1 semantics for
         // already-deployed devices.
         let caller_ura = "easynet:///r/realm/device/device-A";
         let facade = AdmissionFacade::new(
@@ -1503,20 +1720,20 @@ mod tests {
         // working — same trust anchor, two policies.
         let backend_signing = SigningKey::from_bytes(&[0xC0u8; 32]);
         let backend_pub_b64 = BASE64_STANDARD.encode(backend_signing.verifying_key().to_bytes());
-        // Backend role demands a hub URA per `canonical_uri_for_role`,
+        // Backend role demands a hub URA per `canonical_ura_for_role`,
         // and the strict pipeline must NOT be short-circuited by the
         // loopback bypass — so we route the caller through a
-        // peer-realm hub URA. The daemon's self URI (set below as
+        // peer-realm hub URA. The daemon's self URA (set below as
         // the second `AdmissionFacade::new` arg) stays in the local
-        // `realm` so caller_ura != self_uri and the strict path runs.
+        // `realm` so caller_ura != self_ura and the strict path runs.
         let backend_uri = "easynet:///r/peer-role-dispatch/hub";
-        let device_uri = "easynet:///r/realm/device/device-C";
+        let device_ura = "easynet:///r/realm/device/device-C";
 
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![
                 backend_entry(backend_uri, backend_pub_b64),
                 device_entry(
-                    device_uri,
+                    device_ura,
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 ),
             ])
@@ -1525,7 +1742,7 @@ mod tests {
         let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         // Device caller: unsigned, admitted.
-        let device_req = invoke_request(Some(envelope_with_caller(device_uri)));
+        let device_req = invoke_request(Some(envelope_with_caller(device_ura)));
         facade
             .verify_invoke(&device_req)
             .expect("device arm admits unsigned");

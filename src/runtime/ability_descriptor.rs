@@ -135,13 +135,13 @@ impl AbilityClass {
 /// Modeled as an enum so an empty `Vec` cannot accidentally mean
 /// "no restriction" — it means "explicit deny-all" (None).
 ///
-/// Uses serde `tag = "kind", content = "uris"` so the wire shape is
+/// Uses serde `tag = "kind", content = "uras"` so the wire shape is
 /// unambiguous: `{"kind":"any"}`, `{"kind":"none"}`, or
-/// `{"kind":"only_matching","uris":["…"]}`. Adjacent-tagged because
+/// `{"kind":"only_matching","uras":["…"]}`. Adjacent-tagged because
 /// internally-tagged would conflict with the named-content shape
 /// for the OnlyMatching variant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "uris", rename_all = "snake_case")]
+#[serde(tag = "kind", content = "uras", rename_all = "snake_case")]
 #[derive(Default)]
 pub enum ScopeRule {
     /// No restriction on this axis. Used together with the visibility
@@ -162,18 +162,18 @@ pub enum ScopeRule {
 
 impl ScopeRule {
     /// `true` iff this rule admits the given URA.
-    pub fn admits(&self, candidate_uri: &str) -> bool {
+    pub fn admits(&self, candidate_ura: &str) -> bool {
         match self {
             ScopeRule::Any => true,
             ScopeRule::None => false,
             ScopeRule::OnlyMatching(allowed) => allowed
                 .iter()
-                .any(|allow| uri_matches_with_path_boundary(allow, candidate_uri)),
+                .any(|allow| uri_matches_with_path_boundary(allow, candidate_ura)),
         }
     }
 }
 
-/// Path-boundary URI matcher. A bare equality match passes; a
+/// Path-boundary URA matcher. A bare equality match passes; a
 /// prefix match requires the next character after the prefix to
 /// be `/` or end-of-string. This blocks the
 /// `dev-1` → `dev-1-attacker` confusion class without forcing
@@ -312,7 +312,7 @@ pub struct AbilityDescriptor {
     ///
     /// Field name kept as `owner_agent_ura` for wire-compat with
     /// every existing daemon. §A.URA-5's "agent owns the ability"
-    /// rule applies to ABILITY URIs (`/ability/<...>`-shaped) — it
+    /// rule applies to ABILITY URAs (`/ability/<...>`-shaped) — it
     /// does not constrain who may publish a descriptor for a
     /// device-built-in or hub-built-in verb. A device publishing
     /// `shell.run` is the canonical pattern, not a violation.
@@ -1008,11 +1008,11 @@ mod tests {
     }
 
     #[test]
-    fn scope_rule_only_matching_serializes_with_uri_list() {
+    fn scope_rule_only_matching_serializes_with_ura_list() {
         let rule = ScopeRule::OnlyMatching(vec!["a".into(), "b".into()]);
         let json = serde_json::to_value(&rule).unwrap();
         assert_eq!(json["kind"], "only_matching");
-        assert_eq!(json["uris"], serde_json::json!(["a", "b"]));
+        assert_eq!(json["uras"], serde_json::json!(["a", "b"]));
         let back: ScopeRule = serde_json::from_value(json).unwrap();
         assert_eq!(back, rule);
     }

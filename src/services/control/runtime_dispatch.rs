@@ -157,7 +157,7 @@ pub fn dispatch_socket_path() -> PathBuf {
     crate::persistence::config::state_dir().join(DEFAULT_RUNTIME_DISPATCH_SOCK_NAME)
 }
 
-/// Build the matching `ipc://...` URI the daemon registers as the
+/// Build the matching `ipc://...` URA the daemon registers as the
 /// `dispatch_endpoint`. Always uses the resolved socket path; an
 /// integration test can predict-then-verify without re-deriving the
 /// override logic.
@@ -633,8 +633,8 @@ mod tests {
         let _g = ENV_LOCK.lock().unwrap();
         let prev = std::env::var("EASYNET_RUNTIME_DISPATCH_SOCK").ok();
         std::env::set_var("EASYNET_RUNTIME_DISPATCH_SOCK", "/tmp/x.sock");
-        let uri = dispatch_endpoint_uri();
-        assert_eq!(uri, "ipc:///tmp/x.sock");
+        let ura = dispatch_endpoint_uri();
+        assert_eq!(ura, "ipc:///tmp/x.sock");
         match prev {
             Some(v) => std::env::set_var("EASYNET_RUNTIME_DISPATCH_SOCK", v),
             None => std::env::remove_var("EASYNET_RUNTIME_DISPATCH_SOCK"),

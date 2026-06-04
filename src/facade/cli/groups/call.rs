@@ -165,12 +165,12 @@ fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
         let realm = creds.realm_str().trim();
         let node_id = creds.node_id.trim();
         if !realm.is_empty() && !node_id.is_empty() {
-            let hub_uri = crate::ura::hub_ura(realm);
+            let hub_ura = crate::ura::hub_ura(realm);
             let caller_ura = crate::ura::device_ura(realm, node_id);
             return crate::support::federation_invoke::invoke_via_federation_forward(
                 ability,
                 args,
-                &hub_uri,
+                &hub_ura,
                 Some(&caller_ura),
             )
             .with_context(|| format!("invoke {ability} against realm hub"));
@@ -306,8 +306,6 @@ fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
         "rtt_ms": args.rtt_ms,
         "jitter_ms": args.jitter_ms,
         "packet_loss_ratio": args.loss,
-        "concealed_samples": 0,
-        "audio_level_dbov": -26.0,
     });
     let _ = invoke_call_signaling(
         "device.voice.report_metrics",

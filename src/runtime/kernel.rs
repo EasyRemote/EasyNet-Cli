@@ -682,12 +682,12 @@ mod tests {
         // blocks waiting for the decision.
         let k_clone = Arc::clone(&k);
         let invoke_task = tokio::task::spawn_blocking(move || {
-            let device_uri = crate::ura::device_ura("localhost", "a");
+            let device_ura = crate::ura::device_ura("localhost", "a");
             let inv = Invocation {
-                caller: device_uri.clone(),
-                callee: device_uri.clone(),
+                caller: device_ura.clone(),
+                callee: device_ura.clone(),
                 ability: "ghost-agent.chat".into(),
-                subject: device_uri,
+                subject: device_ura,
                 nonce_hex: "11".repeat(16),
                 causal_context: CausalContext::Null,
                 args: json!({"prompt": "do the thing"}),
@@ -729,12 +729,12 @@ mod tests {
         let k = Kernel::new(Arc::new(NoopGateway));
         k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let device_uri = crate::ura::device_ura("localhost", "a");
+        let device_ura = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {
-            caller: device_uri.clone(),
-            callee: device_uri.clone(),
+            caller: device_ura.clone(),
+            callee: device_ura.clone(),
             ability: "ghost-agent.chat".into(),
-            subject: device_uri,
+            subject: device_ura,
             nonce_hex: "00".repeat(16),
             causal_context: CausalContext::Null,
             args: json!({"prompt": "hi"}),
@@ -762,12 +762,12 @@ mod tests {
         // Kernel directly know the safe shape to expect.
         let k = Kernel::new(Arc::new(NoopGateway));
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let device_uri = crate::ura::device_ura("localhost", "a");
+        let device_ura = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {
-            caller: device_uri.clone(),
-            callee: device_uri.clone(),
+            caller: device_ura.clone(),
+            callee: device_ura.clone(),
             ability: "alice.chat".into(),
-            subject: device_uri,
+            subject: device_ura,
             nonce_hex: "ff".repeat(16),
             causal_context: CausalContext::Null,
             args: json!({"prompt": "hi"}),

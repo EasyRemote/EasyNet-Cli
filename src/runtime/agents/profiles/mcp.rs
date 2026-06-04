@@ -20,7 +20,7 @@
 //! What this file provides today
 //! -----------------------------
 //!   - `owns(ability_name)`            : prefix check
-//!   - `descriptors_for(owner_uri)`    : §1.6 descriptors emitter
+//!   - `descriptors_for(owner_ura)`    : §1.6 descriptors emitter
 //!   - `InvokeMcpProvider`             : the McpToolProvider impl that
 //!     translates every `tools/list` and `tools/call` into a local
 //!     Invoke surface. Production stdio servers call back into the
@@ -647,11 +647,11 @@ fn per_agent_workspace_descriptors(
     let mut out: Vec<AbilityDescriptor> = Vec::new();
 
     let to_descriptor = |s: crate::runtime::abilities::AgentAbilitySpec,
-                         owner_uri: &str,
+                         owner_ura: &str,
                          source: String,
                          metadata: Vec<(&'static str, String)>|
      -> Option<AbilityDescriptor> {
-        AbilityDescriptor::new(s.name().to_string(), owner_uri, Visibility::Scoped)
+        AbilityDescriptor::new(s.name().to_string(), owner_ura, Visibility::Scoped)
             .ok()
             .map(|mut d| {
                 // AgentAbilitySpec calls its JSON-Schema field
@@ -669,7 +669,7 @@ fn per_agent_workspace_descriptors(
             })
     };
 
-    // Phase 1: this agent's own abilities. Owner URI uses the
+    // Phase 1: this agent's own abilities. Owner URA uses the
     // agent's own name. The agent's `<agent_name>.chat` ability is
     // filtered out — it is the outgoing surface, not something to
     // expose AS a tool to the LLM running INSIDE it (that would
@@ -682,11 +682,11 @@ fn per_agent_workspace_descriptors(
         .map(|manifest| (manifest.qualified_name(agent_name), manifest))
         .collect();
     let own_specs = crate::runtime::abilities::abilities_for(agent_name, entry);
-    let own_owner_uri = format!("agent://{agent_name}");
+    let own_owner_ura = format!("agent://{agent_name}");
     let self_chat = format!("{agent_name}.chat");
     for s in own_specs.into_iter().filter(|s| s.name() != self_chat) {
         let metadata = metadata_for_agent_ability(agent_name, own_manifests.get(s.name()));
-        if let Some(d) = to_descriptor(s, &own_owner_uri, format!("agent:{agent_name}"), metadata) {
+        if let Some(d) = to_descriptor(s, &own_owner_ura, format!("agent:{agent_name}"), metadata) {
             out.push(d);
         }
     }
@@ -727,7 +727,7 @@ fn per_agent_workspace_descriptors(
                 crate::runtime::agents::invoke_ability::description(),
             ),
         ] {
-            if let Ok(d) = AbilityDescriptor::new(name, &own_owner_uri, Visibility::Scoped) {
+            if let Ok(d) = AbilityDescriptor::new(name, &own_owner_ura, Visibility::Scoped) {
                 let mut d = d
                     .with_input_schema(schema)
                     .with_source("kernel:built-in:self-bundle")
@@ -1172,7 +1172,7 @@ mod tests {
              got descriptor_count = 0"
         );
         // The pre-join fallback anchors on "self"; the descriptors
-        // we get must reference this URI as owner.
+        // we get must reference this URA as owner.
         let owners: std::collections::HashSet<String> = configured
             .provider
             .descriptors
@@ -1188,7 +1188,7 @@ mod tests {
     #[test]
     fn build_stdio_server_anchors_descriptors_on_persisted_host_ura_when_present() {
         let _h = crate::facade::cli::test_support::HomeGuard::new();
-        // Pre-populate local-agents.json with a host URI; build_stdio_server
+        // Pre-populate local-agents.json with a host URA; build_stdio_server
         // must pick it up.
         let file = crate::persistence::local_agents::LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),

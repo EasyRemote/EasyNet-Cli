@@ -5,7 +5,7 @@
 //
 // Typed sign-only handle for the device's Ed25519 keypair. Every
 // EasyNet process on a host (the Rust daemon, the CLI, future
-// host-mode tooling) calls `SelfIdentity::sign(self_uri,
+// host-mode tooling) calls `SelfIdentity::sign(self_ura,
 // canonical_bytes) -> Signature` instead of holding the seed
 // itself. Backed by the `easynet-keyring` daemon's UDS. The trait
 // is intentionally narrow: a caller can sign and read public
@@ -68,20 +68,20 @@ pub enum SelfIdentityError {
 }
 
 /// The minimal contract every callsite needs. Caller passes a
-/// `self_uri` (e.g. `easynet:///r/<realm>/hub` or
+/// `self_ura` (e.g. `easynet:///r/<realm>/hub` or
 /// `easynet:///r/<realm>/device/<uuid>`) and the canonical bytes
 /// to sign; gets back a 64-byte ed25519 signature.
 pub trait SelfIdentity: Send + Sync {
     /// Sign `canonical_bytes` with the keypair indexed by
-    /// `self_uri`. Role-overlay lookup applies on the keyring
+    /// `self_ura`. Role-overlay lookup applies on the keyring
     /// side: a vault entry's `primary_self` and any of its
     /// `role_overlays` resolve to the same keypair.
-    fn sign(&self, self_uri: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError>;
+    fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError>;
 
-    /// Return the public key for `self_uri`. Useful at boot when
+    /// Return the public key for `self_ura`. Useful at boot when
     /// the daemon needs to publish its pubkey into the realm
     /// directory or write a trust-anchor entry.
-    fn public_key(&self, self_uri: &str) -> Result<VerifyingKey, SelfIdentityError>;
+    fn public_key(&self, self_ura: &str) -> Result<VerifyingKey, SelfIdentityError>;
 
     /// Best-effort health probe. Default is a `list` round-trip.
     /// Backends override if they have a cheaper check.
@@ -219,10 +219,10 @@ impl KeyringClient {
 }
 
 impl SelfIdentity for KeyringClient {
-    fn sign(&self, self_uri: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+    fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
         use base64::Engine;
         let req = KeyringRequest::Sign {
-            self_uri: self_uri.to_string(),
+            self_ura: self_ura.to_string(),
             canonical_bytes_b64: base64::engine::general_purpose::STANDARD.encode(canonical_bytes),
         };
         match self.rpc(&req)? {
@@ -245,9 +245,9 @@ impl SelfIdentity for KeyringClient {
         }
     }
 
-    fn public_key(&self, self_uri: &str) -> Result<VerifyingKey, SelfIdentityError> {
+    fn public_key(&self, self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
         let req = KeyringRequest::DerivePubkey {
-            self_uri: self_uri.to_string(),
+            self_ura: self_ura.to_string(),
         };
         match self.rpc(&req)? {
             KeyringResponse::PublicKey { public_key_b64 } => {
@@ -376,20 +376,20 @@ impl InMemoryVault {
 }
 
 impl SelfIdentity for InMemoryVault {
-    fn sign(&self, self_uri: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+    fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
         let guard = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         guard
-            .sign(self_uri, canonical_bytes)
+            .sign(self_ura, canonical_bytes)
             .map_err(|e| SelfIdentityError::Rejected {
                 kind: "vault".into(),
                 message: e.to_string(),
             })
     }
 
-    fn public_key(&self, self_uri: &str) -> Result<VerifyingKey, SelfIdentityError> {
+    fn public_key(&self, self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
         let guard = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         guard
-            .derive_pubkey(self_uri)
+            .derive_pubkey(self_ura)
             .map_err(|e| SelfIdentityError::Rejected {
                 kind: "vault".into(),
                 message: e.to_string(),
@@ -402,19 +402,19 @@ impl SelfIdentity for InMemoryVault {
 // Phase 3C bridge for `easynet device join`. The pairing flow
 // receives a fresh `(node_id, realm)` from the hub; this helper
 // mints a random Ed25519 seed locally and pushes it into the
-// keyring under the canonical device URI plus a hub-role overlay
+// keyring under the canonical device URA plus a hub-role overlay
 // so the same keypair signs both. Best-effort: if the keyring
 // daemon is offline, log + continue. v4.1.5 deterministic
 // derivation in `boot.rs::load_daemon_identity` keeps the daemon
 // signing as a fallback so the join itself never fails on
 // keyring offline.
 
-/// Build the canonical self URIs for this device. Returns
+/// Build the canonical self URAs for this device. Returns
 /// `(primary_self, role_overlays)`. v4.1.4 shape:
 ///   primary  = `easynet:///r/<realm>/device/<node_id>`
 ///   overlay  = `easynet:///r/<realm>/hub` (so backend-as-hub on
 ///              this host signs with the same keypair)
-pub fn canonical_self_uris(realm: &str, node_id: &str) -> (String, Vec<String>) {
+pub fn canonical_self_uras(realm: &str, node_id: &str) -> (String, Vec<String>) {
     let realm = realm.trim();
     let node_id = node_id.trim();
     let primary = crate::ura::device_ura(realm, node_id);
@@ -456,12 +456,12 @@ mod tests {
         hex::encode(s)
     }
 
-    fn make_in_memory_vault(uri: &str, overlays: Vec<String>) -> InMemoryVault {
+    fn make_in_memory_vault(ura: &str, overlays: Vec<String>) -> InMemoryVault {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("v.enc");
         let pass = MasterKeySource::Explicit("test-passphrase-for-self-identity".into());
         let mut v = Vault::open_or_init(&path, &pass).unwrap();
-        v.put(uri, overlays, seed_hex()).unwrap();
+        v.put(ura, overlays, seed_hex()).unwrap();
         std::mem::forget(dir); // keep tempdir alive for vault path
         InMemoryVault::new(v)
     }
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_unknown_uri_rejected() {
+    fn in_memory_unknown_ura_rejected() {
         let id = make_in_memory_vault("known", vec![]);
         let err = id.sign("unknown", b"x").unwrap_err();
         match err {

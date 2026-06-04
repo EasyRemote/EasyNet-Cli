@@ -5,7 +5,7 @@
 // Description: Device-side caller for `<self>.session`. At daemon
 //              boot a device opens one long-lived `InvokeBidi`
 //              stream against its configured hub, sends frame 0 =
-//              `EnvelopeOpen` carrying the caller URI, then keeps
+//              `EnvelopeOpen` carrying the caller URA, then keeps
 //              the stream open for the lifetime of the daemon —
 //              this is the canonical reverse channel through which
 //              the hub pushes `<self>.invoke_remote` and
@@ -36,7 +36,7 @@
 // The device side's job is therefore:
 //
 //   1. Dial hub. Once.
-//   2. Send EnvelopeOpen frame 0 with caller URI from
+//   2. Send EnvelopeOpen frame 0 with caller URA from
 //      `credentials.json`.
 //   3. Loop: read `InvokeBidiDown` frames, dispatch each into the
 //      local in-process invocation pipeline, write the reply (or
@@ -48,7 +48,7 @@
 // What this commit lands
 // ----------------------
 // - The `dial_and_run_session(...)` function: takes hub endpoint,
-//   caller URI, signing key, and a frame dispatcher; opens one
+//   caller URA, signing key, and a frame dispatcher; opens one
 //   bidi, runs forever (until error / shutdown).
 // - `SessionFrameDispatcher` trait: the local-side handler
 //   implementation. Trait so PR-3 commit 3/3 (integration test)
@@ -101,9 +101,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Status;
 
-use crate::pb::axon::v1::invocation_client::InvocationClient;
-use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use crate::pb::axon::v1::{
+use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+use easynet_axon::pb::axon::v1::{
     AgentIdentity, BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen,
     InvocationTarget, InvokeBidiDown, InvokeBidiUp, StreamDescriptor, SubjectIdentity,
 };
@@ -196,7 +196,7 @@ pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SESSION_UP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
 
-/// Default URI profile used when the session frame carries a signed
+/// Default URA profile used when the session frame carries a signed
 /// envelope. Empty profile fields canonicalise to the same value, but
 /// populating the string keeps the wire explicit and easier to inspect.
 const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
@@ -346,10 +346,10 @@ impl Drop for SessionUpHeartbeatTask {
 /// down-stream (returns `Ok(())`) or a transport error occurs
 /// (returns `Err(...)`).
 ///
-/// `caller_ura` is the device's canonical URI per spec §5.1
+/// `caller_ura` is the device's canonical URA per spec §5.1
 /// (`easynet:///r/{tenant_id}/agent/{node_id}`). PR-1 staging
-/// admits a missing `caller_signature` if the URI is in the
-/// hub's realm trust anchor (or matches the hub's own URI for
+/// admits a missing `caller_signature` if the URA is in the
+/// hub's realm trust anchor (or matches the hub's own URA for
 /// loopback); PR-7 closes the loop with real ed25519 signing.
 ///
 /// `hub_ca_pem_path` pins the hub's TLS CA when set, mirroring the
@@ -360,7 +360,7 @@ impl Drop for SessionUpHeartbeatTask {
 /// `ClientTlsConfig::ca_certificate` so a self-signed hub cert
 /// rooted at an operator-pinned CA validates. Production daemons
 /// resolve the path from `realm-trust.toml`'s Hub-role entry whose
-/// `hub_uri` matches `hub_endpoint`.
+/// `hub_endpoint` matches `hub_endpoint`.
 pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_ura: String,
@@ -489,7 +489,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         );
 
     // Membership prelude (URA v4.1.4 dev unblock): axon-runtime hub
-    // returns `AXON_MEMBERSHIP_REQUIRED` for any caller whose URI is
+    // returns `AXON_MEMBERSHIP_REQUIRED` for any caller whose URA is
     // not in its membership table. The genesis exception is
     // `federation.join`, which the runtime accepts unsigned. We send
     // one before opening `<self>.session` so a fresh axon-runtime
@@ -726,10 +726,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // `target_offline`.
         if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
             for synthetic in ["pages", "files"] {
-                let uri = crate::ura::agent_ura(&realm, &user_segment, synthetic);
-                if seen.insert(uri.clone()) {
+                let ura = crate::ura::agent_ura(&realm, &user_segment, synthetic);
+                if seen.insert(ura.clone()) {
                     entries.push(AdvertiseEntry {
-                        agent_ura: uri,
+                        agent_ura: ura,
                         short_label: format!("{user_segment}.{synthetic}"),
                     });
                 }
@@ -837,7 +837,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
     let outbound_tx = SessionUpSender::new(up_tx.clone());
 
-    // Frame 0: EnvelopeOpen carrying caller URI + ability name
+    // Frame 0: EnvelopeOpen carrying caller URA + ability name
     // `<self>.session`. When boot resolved a deterministic device
     // seed from credentials we sign the canonical bytes here; older
     // sparse fixtures still degrade to the unsigned PR-2 shape.
@@ -1056,7 +1056,7 @@ fn next_backoff(current: Duration) -> Duration {
 /// Send a one-shot `federation.join@1` over the same gRPC channel
 /// the session bidi will open on. Genesis exception in axon-runtime
 /// (`signature_policy=RequireSigned` allows this ability unsigned),
-/// so the call uses an envelope with caller URI only — no signing
+/// so the call uses an envelope with caller URA only — no signing
 /// material — and a minimal JoinFederationRequest payload.
 ///
 /// We treat both success and "already member" as positive outcomes;
@@ -1065,7 +1065,7 @@ fn next_backoff(current: Duration) -> Duration {
 /// downstream — if join was needed but failed, the bidi surfaces
 /// the right status and the supervisor backs off.
 async fn send_federation_join_prelude(
-    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     caller_ura: &str,
 ) -> Result<(), tonic::Status> {
     // Wire shape mirrors `federation_wrappers::JoinRequest`:
@@ -1142,7 +1142,7 @@ async fn send_federation_join_prelude(
 /// gRPC channel the session bidi will open on. Publishes the device
 /// daemon's locally-registered ability names to the hub's
 /// `AbilityCatalogStore` so the backend's `/api/v1/abilities` page
-/// can project them under the device's URI.
+/// can project them under the device's URA.
 ///
 /// Each ability is represented by a JSON object with `name` and
 /// `tool_name` fields — the minimum the catalog projection needs.
@@ -1157,7 +1157,7 @@ async fn send_federation_join_prelude(
 /// to this device's bidi sender via
 /// `lookup_target_with_agent_fallback`.
 async fn send_advertise_agent_prelude(
-    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     caller_ura: &str,
     agent_ura: &str,
     host_node_id: Option<&str>,
@@ -1198,7 +1198,7 @@ async fn send_advertise_agent_prelude(
 }
 
 async fn send_advertise_abilities_prelude(
-    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     caller_ura: &str,
     ability_names: &[String],
 ) -> Result<(), tonic::Status> {
@@ -1259,7 +1259,7 @@ pub fn build_session_envelope_open_with_seed(
         // `<self>.session` is the device presenting its own long-
         // lived reverse channel; callee + subject both point at the
         // caller device so the signed tuple is stable and self-
-        // describing even before a future hub-URI contract lands.
+        // describing even before a future hub-URA contract lands.
         callee: Some(AgentIdentity {
             ura: caller_ura.to_string(),
             profile: DEFAULT_URA_PROFILE.to_string(),
@@ -1386,8 +1386,8 @@ mod tests {
     use super::*;
     use std::net::SocketAddr;
 
-    use crate::pb::axon::v1::invocation_server::{Invocation, InvocationServer};
-    use crate::pb::axon::v1::{
+    use easynet_axon::pb::axon::v1::invocation_server::{Invocation, InvocationServer};
+    use easynet_axon::pb::axon::v1::{
         InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
     };
     use futures::stream;
@@ -1510,19 +1510,24 @@ mod tests {
             let frames = vec![
                 Ok(InvokeBidiDown {
                     sequence: 0,
-                    payload: Some(crate::pb::axon::v1::invoke_bidi_down::Payload::Receipt(
-                        crate::pb::axon::v1::InvocationReceipt {
-                            state: crate::pb::axon::v1::InvocationState::Admitted as i32,
-                            ..crate::pb::axon::v1::InvocationReceipt::default()
-                        },
-                    )),
+                    payload: Some(
+                        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::Receipt(
+                            easynet_axon::pb::axon::v1::InvocationReceipt {
+                                state: easynet_axon::invocation::InvocationState::Admitted
+                                    .to_wire_i32(),
+                                ..easynet_axon::pb::axon::v1::InvocationReceipt::default()
+                            },
+                        ),
+                    ),
                     ..InvokeBidiDown::default()
                 }),
                 Ok(InvokeBidiDown {
                     sequence: 9,
-                    payload: Some(crate::pb::axon::v1::invoke_bidi_down::Payload::Control(
-                        BidiControl::default(),
-                    )),
+                    payload: Some(
+                        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                            BidiControl::default(),
+                        ),
+                    ),
                     ..InvokeBidiDown::default()
                 }),
             ];
@@ -1669,7 +1674,7 @@ mod tests {
     async fn invalid_endpoint_returns_invalid_endpoint_error() {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let result = dial_and_run_session(
-            "not a valid uri".to_string(),
+            "not a valid ura".to_string(),
             "easynet:///r/realm/device/n1".to_string(),
             None,
             None,

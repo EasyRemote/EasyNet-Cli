@@ -338,12 +338,12 @@ fi
 # operator-facing tail directly (`.<name>`) instead of the older
 # profile-prefixed `.llm-<name>` form. Reject uuid-hash tails.
 hosted_json="$HOME/.easynet/local-agents.json"
-if ! jq -e '.hosted_agents[] | select(.agent_uri | contains(".codex"))' "$hosted_json" >/dev/null; then
+if ! jq -e '.hosted_agents[] | select(.agent_ura | contains(".codex"))' "$hosted_json" >/dev/null; then
     echo "[FAIL] codex hosted agent missing or mis-minted (expected URA tail .codex):" >&2
     jq '.hosted_agents' "$hosted_json" >&2
     exit 1
 fi
-if ! jq -e '.hosted_agents[] | select(.agent_uri | contains(".claude"))' "$hosted_json" >/dev/null; then
+if ! jq -e '.hosted_agents[] | select(.agent_ura | contains(".claude"))' "$hosted_json" >/dev/null; then
     echo "[FAIL] claude hosted agent missing or mis-minted (expected URA tail .claude):" >&2
     jq '.hosted_agents' "$hosted_json" >&2
     exit 1

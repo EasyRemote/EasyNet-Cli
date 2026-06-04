@@ -136,6 +136,9 @@ pub(crate) mod mission_runs;
 /// `<user>.pages.{publish,unpublish,list,get}` and the
 /// `<user>.<project_id>.page.fetch` family.
 pub(crate) mod pages;
+/// #185 — `easynet quota` owner verb to inspect/edit the per-consumer
+/// invocation quota policy (`[daemon.quota]`).
+pub(crate) mod quota_cmd;
 pub(crate) mod reset;
 pub(crate) mod skill;
 pub(crate) mod skill_install;
@@ -286,6 +289,7 @@ const HELP_TEMPLATE: &str = "\
 
   \x1b[1;36m[Runtime]\x1b[0m
     \x1b[1mruntime\x1b[0m              Manage the local Axon runtime (start, stop, status)
+    \x1b[1mplugin\x1b[0m               Manage daemon ability-extension plugin packages
     \x1b[1mmcp\x1b[0m                  MCP server — expose device abilities to AI assistants
     \x1b[1mfederation\x1b[0m           Inspect cross-hub peers and trusted hubs
     \x1b[1minvocation\x1b[0m           Audit invocation records, show one record, inspect traces
@@ -293,6 +297,7 @@ const HELP_TEMPLATE: &str = "\
   \x1b[1;36m[Maintenance]\x1b[0m
     \x1b[1mself\x1b[0m                 Update, check version, or uninstall EasyNet CLI
     \x1b[1mdoctor\x1b[0m               Health check — runtime, bridge, agents, MCP connectivity
+    \x1b[1mquota\x1b[0m                Inspect or edit the per-consumer invocation quota policy
     \x1b[1mcompletion\x1b[0m           Emit a shell completion script (bash/zsh/fish/powershell)
     \x1b[1mhelp\x1b[0m                 Print this message or the help of the given subcommand
 
@@ -409,16 +414,20 @@ pub enum Command {
     #[command(display_order = 40)]
     Runtime(groups::runtime::RuntimeArgs),
 
-    /// MCP server — expose device abilities to AI assistants.
+    /// Manage daemon ability-extension plugin packages.
     #[command(display_order = 41)]
+    Plugin(groups::plugin::PluginArgs),
+
+    /// MCP server — expose device abilities to AI assistants.
+    #[command(display_order = 42)]
     Mcp(groups::mcp::McpArgs),
 
     /// Federation — inspect cross-hub peers and trusted hubs.
-    #[command(display_order = 42)]
+    #[command(display_order = 43)]
     Federation(groups::federation::FederationArgs),
 
     /// Invocation audit — list records, show one record, inspect traces.
-    #[command(display_order = 43)]
+    #[command(display_order = 44)]
     Invocation(groups::invocation::InvocationArgs),
 
     // ── Maintenance (50-59) ──────────────────────────────────────────────
@@ -429,6 +438,10 @@ pub enum Command {
     /// Health check — runtime, bridge, agents, MCP connectivity.
     #[command(display_order = 51)]
     Doctor(doctor::DoctorArgs),
+
+    /// Inspect or edit the per-consumer invocation quota policy.
+    #[command(display_order = 53)]
+    Quota(quota_cmd::QuotaArgs),
 
     /// Emit a shell completion script (bash/zsh/fish/powershell).
     #[command(display_order = 52)]
@@ -453,6 +466,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::ApiKey(args) => api_key_cli::run(args),
         Command::LlmApi(args) => llm_api::run(args),
         Command::Runtime(args) => groups::runtime::run(args),
+        Command::Plugin(args) => groups::plugin::run(args),
         Command::Mcp(args) => groups::mcp::run(args),
         Command::Federation(args) => groups::federation::run(args),
         Command::Invocation(args) => groups::invocation::run(args),
@@ -461,6 +475,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // Cross-cutting
         Command::SelfCmd(args) => groups::selfcmd::run(args),
         Command::Doctor(args) => doctor::run(args),
+        Command::Quota(args) => quota_cmd::run(args),
         Command::Completion(args) => completion::run::<App>(args),
 
         // Top-level shortcuts — forward to the same impl the layered

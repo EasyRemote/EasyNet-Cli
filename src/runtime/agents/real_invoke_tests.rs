@@ -137,7 +137,16 @@ fn target(name: &str, args: Value) -> InvocationTarget {
         // get None. The `with_subject` builder lets per-test code
         // attach one when exercising INV-SUBJECT-ENVELOPE paths.
         subject: None,
+        causal_context: None,
     }
+}
+
+#[cfg(feature = "remote-desktop")]
+fn remote_desktop_test_consent_causal_context() -> easynet_axon::invocation::CausalContext {
+    easynet_axon::invocation::CausalContext::Scalar(easynet_axon::invocation::ReceiptRef {
+        receipt_ura: "easynet:///r/acme/invocation/test-local-consent/receipt/1".to_string(),
+        receipt_hash: [0x42; 32],
+    })
 }
 
 fn invoke(name: &str, args: Value) -> Value {
@@ -178,7 +187,7 @@ fn real_observe_network_health_describes_the_node() {
     let resp = dispatcher_for(reg)
         .execute_rpc(target("device.observe.network_health", json!({})))
         .expect("device.observe.network_health");
-    // Actual shape: `{view, schema, joined, host_device_uri,
+    // Actual shape: `{view, schema, joined, host_device_ura,
     // hosted_agent_count, latency_ms, links: [...]}`. We assert
     // a few load-bearing fields so a regression that empties
     // the response would surface.
@@ -572,7 +581,13 @@ fn real_voice_join_call_transitions_call_to_active() {
     let show = dispatcher
         .execute_rpc(target("device.voice.show_call", json!({"call_id": cid})))
         .expect("show");
+    // `state` carries the legacy label for back-compat; `state_proto`
+    // carries the Axon contract name.
     assert_eq!(show.get("state").and_then(Value::as_str), Some("active"));
+    assert_eq!(
+        show.get("state_proto").and_then(Value::as_str),
+        Some("VOICE_CALL_STATE_ACTIVE")
+    );
 }
 
 #[test]
@@ -1950,6 +1965,40 @@ fn every_published_ability_has_a_real_invoke_test() {
     );
 }
 
+#[test]
+fn real_device_plugin_status_reports_runtime_surface() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let status = d
+        .execute_rpc(target("device.plugin.status", json!({})))
+        .expect("device.plugin.status must dispatch through plugin lifecycle ability");
+    assert_eq!(status["ok"], true);
+    assert!(
+        status["abilities"].is_array(),
+        "device.plugin.status must report runtime ability rows: {status}"
+    );
+}
+
+#[test]
+fn real_device_plugin_reload_reports_registration_diff() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let report = d
+        .execute_rpc(target("device.plugin.reload", json!({})))
+        .expect("device.plugin.reload must dispatch through plugin lifecycle ability");
+    assert_eq!(report["ok"], true);
+    assert!(
+        report["registered_abilities"].is_array(),
+        "device.plugin.reload must include registered_abilities: {report}"
+    );
+    assert!(
+        report["unregistered_abilities"].is_array(),
+        "device.plugin.reload must include unregistered_abilities: {report}"
+    );
+}
+
 // ════════════════════════════════════════════════════════════════
 // Category E: Stream / Bidi
 // ════════════════════════════════════════════════════════════════
@@ -2208,6 +2257,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     while std::time::Instant::now() < deadline {
         match tokio::time::timeout(std::time::Duration::from_millis(500), from.recv()).await {
             Ok(Some(f)) => {
+                let f = f.into_json_value().expect("device.fs.transfer emits JSON");
                 if f["type"] == "complete" {
                     got_complete = true;
                     break;
@@ -2262,15 +2312,39 @@ fn assert_routed_to_media_stub(ability: &str, err: &anyhow::Error) {
     );
 }
 
+fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
+    let mut file = crate::persistence::resources::ResourcesFile::default();
+    let ura = crate::persistence::resources::upsert_resource(
+        &mut file,
+        crate::persistence::resources::ResourceUpsert {
+            realm: "acme",
+            owner_agent: "easynet:///r/acme/device/real-invoke",
+            kind: crate::persistence::resources::ResourceType::Display,
+            binding: crate::persistence::resources::ResourceBinding::LocalDevice,
+            hardware_id,
+            display_name: "Real Invoke Display",
+            metadata: json!({}),
+        },
+    );
+    crate::persistence::resources::save(&file).expect("save real-invoke display resource");
+    ura
+}
+
 #[test]
-fn real_mic_subscribe_routes_to_media_stub() {
+fn real_mic_subscribe_routes_to_subject_gate() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
-    let mut t = target("device.mic.subscribe", json!({}));
+    let mut t = target("device.mic.subscribe", json!({}))
+        .with_subject("easynet:///r/acme/resource/missing-real-invoke-mic");
     t.call_mode = CallMode::Stream;
-    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("device.mic.subscribe", &err);
+    let err = d
+        .execute_stream(t)
+        .expect_err("missing mic subject must reject before opening hardware");
+    assert!(
+        err.to_string().contains("resource_not_found"),
+        "device.mic.subscribe must route to media subject gate; got {err}"
+    );
 }
 
 #[test]
@@ -2302,25 +2376,230 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
 }
 
 #[test]
-fn real_screen_subscribe_routes_to_media_stub() {
+fn real_screen_subscribe_with_no_subject_returns_subject_required() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("device.screen.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
-    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("device.screen.subscribe", &err);
+    let err = d
+        .execute_stream(t)
+        .expect_err("screen.subscribe without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "screen.subscribe: expected reason=subject_required; got {err}"
+    );
 }
 
 #[test]
-fn real_screen_snapshot_routes_to_media_stub() {
+fn real_screen_snapshot_with_no_subject_returns_subject_required() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("device.screen.snapshot", json!({})))
-        .expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("device.screen.snapshot", &err);
+        .expect_err("screen.snapshot without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "screen.snapshot: expected reason=subject_required; got {err}"
+    );
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_permission_status_reports_contract() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let status = d
+        .execute_rpc(target("device.remote_desktop.permission_status", json!({})))
+        .expect("remote_desktop.permission_status must dispatch");
+    assert_eq!(
+        status["permission"], "screen_capture",
+        "permission_status must report the screen capture permission contract"
+    );
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_request_permission_reports_contract() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let status = d
+        .execute_rpc(target(
+            "device.remote_desktop.request_permission",
+            json!({}),
+        ))
+        .expect("remote_desktop.request_permission must dispatch");
+    assert_eq!(
+        status["permission"], "screen_capture",
+        "request_permission must report the screen capture permission contract"
+    );
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_create_session_requires_envelope_subject() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target("device.remote_desktop.create_session", json!({})))
+        .expect_err("remote_desktop.create_session without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "create_session must reject missing subject with subject_required; got {err}"
+    );
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let subject = seed_real_invoke_display_resource("remote-desktop-real-invoke-display");
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+
+    let created = d
+        .execute_rpc(
+            target(
+                "device.remote_desktop.create_session",
+                json!({
+                    "session_id": "rd-real-invoke",
+                    "mode": "view_only",
+                    "lease_ttl_ms": 5000,
+                }),
+            )
+            .with_subject(subject.clone())
+            .with_causal_context(remote_desktop_test_consent_causal_context()),
+        )
+        .expect("remote_desktop.create_session must create a session");
+    assert_eq!(created["session_id"], "rd-real-invoke");
+    let token = created["session_token"]
+        .as_str()
+        .expect("create_session must return session_token")
+        .to_string();
+
+    let shown = d
+        .execute_rpc(
+            target(
+                "device.remote_desktop.show_session",
+                json!({"session_id": "rd-real-invoke", "session_token": token}),
+            )
+            .with_subject(subject.clone())
+            .with_causal_context(remote_desktop_test_consent_causal_context()),
+        )
+        .expect("remote_desktop.show_session must dispatch");
+    assert_eq!(shown["session_id"], "rd-real-invoke");
+    assert!(
+        shown.get("session_token").is_none(),
+        "show_session must not leak session_token"
+    );
+    let token = created["session_token"].as_str().unwrap().to_string();
+
+    let signaled = d
+        .execute_rpc(
+            target(
+                "device.remote_desktop.set_description",
+                json!({
+                    "session_id": "rd-real-invoke",
+                    "session_token": token,
+                    "side": "local",
+                    "description": {"type": "answer", "sdp": "v=0"}
+                }),
+            )
+            .with_subject(subject.clone())
+            .with_causal_context(remote_desktop_test_consent_causal_context()),
+        )
+        .expect("remote_desktop.set_description must dispatch");
+    assert_eq!(signaled["state"], "negotiating");
+    let token = created["session_token"].as_str().unwrap().to_string();
+
+    let candidate_view = d
+        .execute_rpc(
+            target(
+                "device.remote_desktop.add_ice_candidate",
+                json!({
+                    "session_id": "rd-real-invoke",
+                    "session_token": token,
+                    "candidate": {"candidate": "candidate:1"}
+                }),
+            )
+            .with_subject(subject.clone())
+            .with_causal_context(remote_desktop_test_consent_causal_context()),
+        )
+        .expect("remote_desktop.add_ice_candidate must dispatch");
+    assert_eq!(candidate_view["signaling"]["ice_candidate_count"], 1);
+    let token = created["session_token"].as_str().unwrap().to_string();
+
+    let mut watch = target(
+        "device.remote_desktop.watch_events",
+        json!({"session_id": "rd-real-invoke", "session_token": token}),
+    )
+    .with_subject(subject.clone())
+    .with_causal_context(remote_desktop_test_consent_causal_context());
+    watch.call_mode = CallMode::Stream;
+    let events = d
+        .execute_stream(watch)
+        .expect("remote_desktop.watch_events must dispatch")
+        .into_snapshot();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "ICE_CANDIDATE_ADDED"),
+        "watch_events must include the ICE candidate event: {events:?}"
+    );
+    let token = created["session_token"].as_str().unwrap().to_string();
+
+    let refreshed = d
+        .execute_rpc(
+            target(
+                "device.remote_desktop.refresh_lease",
+                json!({
+                    "session_id": "rd-real-invoke",
+                    "session_token": token,
+                    "lease_ttl_ms": 5000
+                }),
+            )
+            .with_subject(subject.clone())
+            .with_causal_context(remote_desktop_test_consent_causal_context()),
+        )
+        .expect("remote_desktop.refresh_lease must dispatch");
+    assert_eq!(refreshed["session_id"], "rd-real-invoke");
+    let token = created["session_token"].as_str().unwrap().to_string();
+
+    let ended = d
+        .execute_rpc(
+            target(
+                "device.remote_desktop.end_session",
+                json!({"session_id": "rd-real-invoke", "session_token": token}),
+            )
+            .with_subject(subject)
+            .with_causal_context(remote_desktop_test_consent_causal_context()),
+        )
+        .expect("remote_desktop.end_session must dispatch");
+    assert_eq!(ended["state"], "closed");
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut attach = target(
+        "device.remote_desktop.attach",
+        json!({"session_id": "missing-real-invoke-session"}),
+    );
+    attach.call_mode = CallMode::Bidi;
+    let err = d
+        .execute_bidi(attach)
+        .expect_err("remote_desktop.attach with missing session must reject");
+    assert!(
+        err.to_string().contains("session_not_found"),
+        "attach must route to the remote desktop session gate; got {err}"
+    );
 }
 
 #[test]

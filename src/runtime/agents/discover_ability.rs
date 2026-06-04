@@ -319,10 +319,10 @@ fn resolve_via_federation(
         ));
     }
 
-    // Pin the caller URI to the daemon's own device-profile Agent
+    // Pin the caller URA to the daemon's own device-profile Agent
     // URA. Without this the bridge synthesises a hub-literal caller
     // (`agents/easynet:prv:hub:<realm>`) and the hub's membership
-    // gate rejects with AXON_MEMBERSHIP_REQUIRED — same caller-URI
+    // gate rejects with AXON_MEMBERSHIP_REQUIRED — same caller-URA
     // fix we apply at the daemon-boot advertise call site (see
     // `facade::cli::start::republish_via_federation_best_effort`).
     let device_caller_ura = crate::ura::device_ura(tenant, &creds.node_id);
@@ -363,7 +363,7 @@ fn resolve_via_federation(
             // pick a candidate the hub knows is gone.
             continue;
         }
-        let owner = agent.uri.clone();
+        let owner = agent.ura.clone();
         for desc in agent.abilities {
             let bare_ability = desc
                 .get("name")

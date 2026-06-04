@@ -46,8 +46,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use easynet_cli::pb::axon::v1::invocation_server::Invocation;
-use easynet_cli::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
+use easynet_axon::pb::axon::v1::invocation_server::Invocation;
+use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
 use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::axon_serve::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
@@ -89,8 +89,8 @@ impl FederationClient for InProcessStreamingForwarder {
         // Build a request stamped with the peer's loopback URI
         // so daemon A's admission gate admits via the bypass.
         let request = InvokeServerStreamRequest {
-            envelope: Some(easynet_cli::pb::axon::v1::Envelope {
-                caller: Some(easynet_cli::pb::axon::v1::AgentIdentity {
+            envelope: Some(easynet_axon::pb::axon::v1::Envelope {
+                caller: Some(easynet_axon::pb::axon::v1::AgentIdentity {
                     ura: self.peer_loopback_uri.clone(),
                     profile: "easynet-strict-v2".to_string(),
                 }),

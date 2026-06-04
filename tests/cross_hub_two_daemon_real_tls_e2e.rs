@@ -64,8 +64,8 @@ use tokio::process::{Child, Command};
 use tokio::time::{sleep, timeout};
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
 
-use easynet_cli::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_cli::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
 use easynet_cli::services::axon_serve::federation_wrappers::{
     ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
 };
@@ -81,7 +81,7 @@ struct DaemonHarness {
     home: tempfile::TempDir,
     child: Child,
     /// `https://127.0.0.1:<port>` — the TCP+TLS hub URI peers dial.
-    hub_uri: String,
+    hub_endpoint: String,
     /// Path to the leaf cert PEM. Used by the OTHER daemon's
     /// `realm-trust.toml` as the pinned CA the cross-hub dialer
     /// trusts. `Certificate::from_pem` accepts a self-signed
@@ -173,20 +173,20 @@ tls_key_pem = {key:?}
         cert = cert_pem_path.to_string_lossy(),
         key = key_pem_path.to_string_lossy(),
     );
-    for (tenant, hub_uri) in federated_peers {
-        body.push_str(&format!("{tenant:?} = {hub_uri:?}\n"));
+    for (tenant, hub_endpoint) in federated_peers {
+        body.push_str(&format!("{tenant:?} = {hub_endpoint:?}\n"));
     }
     body
 }
 
 /// Build a `realm-trust.toml` body that lists the peer daemons the
 /// caller daemon is allowed to dial cross-hub. Each entry carries
-/// the schema-B `origin_tenant_id` / `hub_uri` / `tls_ca_pem_path`
+/// the schema-B `origin_tenant_id` / `hub_endpoint` / `tls_ca_pem_path`
 /// fields so `lookup_peer_hub` admits the dial gate.
 fn realm_trust_body(peers: &[(String, String, String, PathBuf)]) -> String {
-    // (agent_ura, origin_tenant_id, hub_uri, ca_path)
+    // (agent_ura, origin_tenant_id, hub_endpoint, ca_path)
     let mut body = String::new();
-    for (i, (agent_ura, origin_tenant_id, hub_uri, ca_path)) in peers.iter().enumerate() {
+    for (i, (agent_ura, origin_tenant_id, hub_endpoint, ca_path)) in peers.iter().enumerate() {
         body.push_str(&format!(
             r#"
 [[trusted_agent]]
@@ -195,7 +195,7 @@ public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = {ts}
 origin_tenant_id = {origin_tenant_id:?}
-hub_uri = {hub_uri:?}
+hub_endpoint = {hub_endpoint:?}
 tls_ca_pem_path = {ca_path:?}
 "#,
             ts = 1_714_492_800_000_u64 + (i as u64),
@@ -213,7 +213,7 @@ async fn spawn_daemon(
     label: &'static str,
     realm: &str,
     listen_tcp_port: u16,
-    cross_hub_peers: Vec<(String, String, String)>, // (peer_agent_ura, peer_tenant, peer_hub_uri)
+    cross_hub_peers: Vec<(String, String, String)>, // (peer_agent_ura, peer_tenant, peer_hub_endpoint)
 ) -> DaemonHarness {
     let home = tempfile::tempdir().expect("daemon home tempdir");
     let easynet_dir = home.path().join(".easynet");
@@ -231,7 +231,7 @@ async fn spawn_daemon(
     // Build the federated_peers map keyed by tenant.
     let federated_peers: Vec<(String, String)> = cross_hub_peers
         .iter()
-        .map(|(_, tenant, hub_uri)| (tenant.clone(), hub_uri.clone()))
+        .map(|(_, tenant, hub_endpoint)| (tenant.clone(), hub_endpoint.clone()))
         .collect();
 
     let listen_tcp = format!("127.0.0.1:{listen_tcp_port}");
@@ -254,7 +254,7 @@ async fn spawn_daemon(
     let realm_trust_path = easynet_dir.join("realm-trust.toml");
     let realm_trust_peers: Vec<(String, String, String, PathBuf)> = cross_hub_peers
         .iter()
-        .map(|(agent_ura, tenant, hub_uri)| {
+        .map(|(agent_ura, tenant, hub_endpoint)| {
             // The peer's cert path was passed in by the caller via
             // the cross_hub_peers tuple — but the tuple shape doesn't
             // carry it. Default to a sentinel that the caller then
@@ -263,7 +263,7 @@ async fn spawn_daemon(
             (
                 agent_ura.clone(),
                 tenant.clone(),
-                hub_uri.clone(),
+                hub_endpoint.clone(),
                 PathBuf::from("/dev/null"),
             )
         })
@@ -284,7 +284,7 @@ async fn spawn_daemon(
     DaemonHarness {
         home,
         child,
-        hub_uri: format!("https://127.0.0.1:{listen_tcp_port}"),
+        hub_endpoint: format!("https://127.0.0.1:{listen_tcp_port}"),
         cert_pem_path: cert_path,
     }
 }
@@ -295,7 +295,7 @@ async fn spawn_daemon(
 /// other's cert path.
 fn rewrite_realm_trust(
     home: &Path,
-    peers: &[(String, String, String, PathBuf)], // (agent_ura, tenant, hub_uri, ca_path)
+    peers: &[(String, String, String, PathBuf)], // (agent_ura, tenant, hub_endpoint, ca_path)
 ) -> std::io::Result<()> {
     let path = home.join(".easynet").join("realm-trust.toml");
     std::fs::write(path, realm_trust_body(peers))
@@ -402,7 +402,7 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     let tls = ClientTlsConfig::new()
         .ca_certificate(ca)
         .domain_name("localhost");
-    let endpoint = Endpoint::from_shared(daemon_a.hub_uri.clone())
+    let endpoint = Endpoint::from_shared(daemon_a.hub_endpoint.clone())
         .expect("endpoint")
         .tls_config(tls)
         .expect("tls config")

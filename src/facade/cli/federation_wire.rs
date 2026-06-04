@@ -10,7 +10,7 @@
 // was missing was the populate-on-join step: when this device
 // pairs, the local hub-mode daemon (if any) needs that mapping
 // so cross-hub `federation.forward_invoke` calls targeting the
-// just-joined tenant resolve a hub URI.
+// just-joined tenant resolve a hub URA.
 //
 // This module owns one helper: `auto_wire_federated_peer_from_
 // credentials`. Called from `easynet join` after credentials
@@ -228,7 +228,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     // e2e session that pointed the daemon at a localhost listener)
     // leaves a stale value here that survives subsequent joins
     // — the device then dials the OLD hub and surfaces as
-    // "PermissionDenied: caller URI is not in the realm trust
+    // "PermissionDenied: caller URA is not in the realm trust
     // anchor" or as "transport error" against an unreachable host.
     //
     // CRITICAL: this MUST be `creds.hub_endpoint` (the device-to-
@@ -288,7 +288,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     Ok(())
 }
 
-/// LB-52 Gap 3 — mirror the just-paired device's own `(uri, pubkey,
+/// LB-52 Gap 3 — mirror the just-paired device's own `(ura, pubkey,
 /// role=Device)` entry into the local realm-trust.toml so a
 /// co-located hub-mode daemon admits this device on
 /// `<self>.session` without a separate
@@ -355,7 +355,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         }
     };
 
-    // URI v4.1.4 Phase 2F: device URA, not agent URA. The trust
+    // URA v4.1.4 Phase 2F: device URA, not agent URA. The trust
     // anchor stores the daemon's device identity under the
     // `/device/` role segment; emitting the legacy `/agent/`
     // shape would land in a parallel namespace the parser
@@ -370,11 +370,11 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    // Two entries: the device's own URI (role=device) AND the
-    // local realm's hub URI (role=hub). The hub entry is what
+    // Two entries: the device's own URA (role=device) AND the
+    // local realm's hub URA (role=hub). The hub entry is what
     // admits backend's federation.* calls into the daemon's
     // admission gate; without it, every backend → daemon dispatch
-    // 401s with "caller URI ... is not in the realm trust anchor"
+    // 401s with "caller URA ... is not in the realm trust anchor"
     // and the device pins as REMOVED forever.
     //
     // The hub pubkey: cross-machine cold-start (hub in US, CLI in
@@ -385,7 +385,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // stashes it on `Credentials.hub_pubkey_b64`. Prefer that when
     // present; fall back to the on-disk file lookup for single-host
     // dev rigs where the device + hub share `$HOME`.
-    let hub_uri = crate::ura::hub_ura(creds.tenant_id.trim());
+    let hub_ura = crate::ura::hub_ura(creds.tenant_id.trim());
     let hub_pubkey_b64_opt: Option<String> = creds
         .hub_pubkey_b64
         .as_ref()
@@ -412,7 +412,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
             eprintln!(
                 "[easynet join] could not persist hub TLS CA PEM ({err}); continuing without \
                  a local CA pin. Self-signed hub dials may fail until you write \
-                 `tls_ca_pem_path` for {hub_uri} by hand."
+                 `tls_ca_pem_path` for {hub_ura} by hand."
             );
             None
         }
@@ -421,7 +421,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     let updated = match hub_pubkey_b64_opt {
         Some(hub_pubkey_b64) => match upsert_hub_trusted_agent(
             &after_device,
-            &hub_uri,
+            &hub_ura,
             &hub_pubkey_b64,
             creds.tenant_id.trim(),
             creds.hub_endpoint.trim(),
@@ -433,7 +433,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
                 eprintln!(
                     "[easynet join] could not append hub entry to realm-trust.toml ({err}); \
                      backend's federation.* calls will be admission-rejected until you \
-                     add `[[trusted_agent]] role = \"hub\"' for {hub_uri} by hand."
+                     add `[[trusted_agent]] role = \"hub\"' for {hub_ura} by hand."
                 );
                 after_device
             }
@@ -590,7 +590,7 @@ fn upsert_self_trusted_agent(
         public_key_b64,
         role: "device",
         origin_tenant_id: None,
-        hub_uri: None,
+        hub_endpoint: None,
         tls_ca_pem_path: None,
         added_at_unix_ms,
     })
@@ -601,7 +601,7 @@ fn upsert_hub_trusted_agent(
     agent_ura: &str,
     public_key_b64: &str,
     origin_tenant_id: &str,
-    hub_uri: &str,
+    hub_endpoint: &str,
     tls_ca_pem_path: Option<&Path>,
     added_at_unix_ms: u64,
 ) -> anyhow::Result<String> {
@@ -611,7 +611,7 @@ fn upsert_hub_trusted_agent(
         public_key_b64,
         role: "hub",
         origin_tenant_id: Some(origin_tenant_id),
-        hub_uri: Some(hub_uri),
+        hub_endpoint: Some(hub_endpoint),
         tls_ca_pem_path,
         added_at_unix_ms,
     })
@@ -619,7 +619,7 @@ fn upsert_hub_trusted_agent(
 
 /// Generic [[trusted_agent]] upsert. Device rows stay append-only;
 /// hub rows are upgraded in place so legacy v4.1.4 entries gain the
-/// schema-B `origin_tenant_id` / `hub_uri` / `tls_ca_pem_path`
+/// schema-B `origin_tenant_id` / `hub_endpoint` / `tls_ca_pem_path`
 /// fields required by device-mode `<self>.session` bootstrap.
 struct TrustedAgentUpsert<'a> {
     raw: &'a str,
@@ -627,7 +627,7 @@ struct TrustedAgentUpsert<'a> {
     public_key_b64: &'a str,
     role: &'a str,
     origin_tenant_id: Option<&'a str>,
-    hub_uri: Option<&'a str>,
+    hub_endpoint: Option<&'a str>,
     tls_ca_pem_path: Option<&'a Path>,
     added_at_unix_ms: u64,
 }
@@ -641,7 +641,7 @@ fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<
         public_key_b64,
         role,
         origin_tenant_id,
-        hub_uri,
+        hub_endpoint,
         tls_ca_pem_path,
         added_at_unix_ms,
     } = upsert;
@@ -681,8 +681,8 @@ fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<
         if let Some(v) = origin_tenant_id {
             existing.insert("origin_tenant_id", value(v));
         }
-        if let Some(v) = hub_uri {
-            existing.insert("hub_uri", value(v));
+        if let Some(v) = hub_endpoint {
+            existing.insert("hub_endpoint", value(v));
         }
         if let Some(v) = tls_ca_pem_path {
             existing.insert("tls_ca_pem_path", value(v.display().to_string()));
@@ -699,8 +699,8 @@ fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<
     if let Some(v) = origin_tenant_id {
         row.insert("origin_tenant_id", value(v));
     }
-    if let Some(v) = hub_uri {
-        row.insert("hub_uri", value(v));
+    if let Some(v) = hub_endpoint {
+        row.insert("hub_endpoint", value(v));
     }
     if let Some(v) = tls_ca_pem_path {
         row.insert("tls_ca_pem_path", value(v.display().to_string()));
@@ -711,14 +711,14 @@ fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<
 }
 
 /// TOML edit step: insert-or-update `[daemon.federated_peers]
-/// <tenant_id> = <hub_uri>` while preserving every other field
+/// <tenant_id> = <hub_endpoint>` while preserving every other field
 /// in the file. Operator-authored daemon-config.toml files often
 /// carry hand-formatted comments; using `toml_edit` (rather than
 /// `toml::to_string` round-trip) keeps that formatting intact.
 fn upsert_federated_peer_in_toml(
     raw: &str,
     tenant_id: &str,
-    hub_uri: &str,
+    hub_endpoint: &str,
 ) -> anyhow::Result<String> {
     use toml_edit::{value, DocumentMut, Item, Table};
 
@@ -742,18 +742,18 @@ fn upsert_federated_peer_in_toml(
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[daemon.federated_peers] is not a TOML table"))?;
     peers_table.set_implicit(false);
-    peers_table.insert(tenant_id, value(hub_uri));
+    peers_table.insert(tenant_id, value(hub_endpoint));
 
     Ok(doc.to_string())
 }
 
-/// Set `[daemon].hub_endpoint = <hub_uri>` in the daemon-config TOML
+/// Set `[daemon].hub_endpoint = <hub_endpoint>` in the daemon-config TOML
 /// document, preserving every other field. Mirrors the `toml_edit`
 /// discipline of `upsert_federated_peer_in_toml` so operator hand-
 /// formatting / comments survive intact. Idempotent: if the existing
 /// value already matches, the returned string is byte-identical to
 /// the input (the caller can skip the atomic write).
-fn upsert_daemon_hub_endpoint_in_toml(raw: &str, hub_uri: &str) -> anyhow::Result<String> {
+fn upsert_daemon_hub_endpoint_in_toml(raw: &str, hub_endpoint: &str) -> anyhow::Result<String> {
     use toml_edit::{value, DocumentMut, Item, Table};
 
     let mut doc: DocumentMut = raw.parse().context("parse daemon-config.toml")?;
@@ -765,7 +765,7 @@ fn upsert_daemon_hub_endpoint_in_toml(raw: &str, hub_uri: &str) -> anyhow::Resul
     let daemon_table = daemon_item
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[daemon] is not a TOML table"))?;
-    daemon_table.insert("hub_endpoint", value(hub_uri));
+    daemon_table.insert("hub_endpoint", value(hub_endpoint));
 
     Ok(doc.to_string())
 }
@@ -959,7 +959,7 @@ realm = "r1"
 # operator note: this file is read at boot
 [daemon]
 mode = "hub"
-# realm picks the URI prefix
+# realm picks the URA prefix
 realm = "production"
 listen_tcp = "127.0.0.1:50443"
 "#;
@@ -1091,8 +1091,8 @@ listen_tcp = "127.0.0.1:50443"
     }
 
     #[test]
-    fn upsert_self_trusted_agent_idempotent_when_uri_already_present() {
-        // An existing row with our URI is left untouched even if
+    fn upsert_self_trusted_agent_idempotent_when_ura_already_present() {
+        // An existing row with our URA is left untouched even if
         // the pubkey differs — the canonical
         // `<self>.register_device_pubkey` writer (or an operator
         // edit) is authoritative.
@@ -1275,7 +1275,7 @@ added_at_unix_ms = 1
         assert_eq!(
             hub_row.get("agent_ura").and_then(|v| v.as_str()),
             Some("easynet:///r/tenant-a/hub"),
-            "hub URI is the realm-singleton shape; admits backend's federation.* dispatches",
+            "hub URA is the realm-singleton shape; admits backend's federation.* dispatches",
         );
 
         // The hub pubkey we wrote came from the staged seed
@@ -1298,7 +1298,7 @@ added_at_unix_ms = 1
              resolve the local hub via lookup_peer_hub(...)",
         );
         assert_eq!(
-            hub_row.get("hub_uri").and_then(|v| v.as_str()),
+            hub_row.get("hub_endpoint").and_then(|v| v.as_str()),
             Some("https://hub-a:50443"),
             "hub trust row must pin the exact public hub endpoint runtime dials",
         );

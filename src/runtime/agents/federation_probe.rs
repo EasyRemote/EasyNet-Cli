@@ -196,8 +196,8 @@ pub(crate) fn collect_device_view() -> DeviceNetworkView {
         if agent.status != "active" || !is_device_profile_agent(&agent) {
             continue;
         }
-        if let Some(node_id) = node_id_from_agent_ura(&agent.uri) {
-            device_agents.entry(node_id).or_insert(agent.uri);
+        if let Some(node_id) = node_id_from_agent_ura(&agent.ura) {
+            device_agents.entry(node_id).or_insert(agent.ura);
         }
     }
 
@@ -308,14 +308,14 @@ fn resolve_device_record_with_filter(
         if agent.status != "active" || !is_device_profile_agent(&agent) {
             continue;
         }
-        let Some(resolved_node_id) = node_id_from_agent_ura(&agent.uri) else {
+        let Some(resolved_node_id) = node_id_from_agent_ura(&agent.ura) else {
             continue;
         };
         if resolved_node_id != node_id {
             continue;
         }
 
-        let agent_realm = crate::ura::realm_from_ura(&agent.uri);
+        let agent_realm = crate::ura::realm_from_ura(&agent.ura);
         let is_self = resolved_node_id == creds.node_id && agent_realm == creds.tenant_id;
         let probe = if is_self {
             ProbeOutcome {
@@ -326,7 +326,7 @@ fn resolve_device_record_with_filter(
                 latency_ms: None,
             }
         } else {
-            probe_remote_device(invoker, &creds.tenant_id, &creds.tenant_id, &agent.uri)
+            probe_remote_device(invoker, &creds.tenant_id, &creds.tenant_id, &agent.ura)
         };
 
         return Ok(Some(ResolvedDeviceRecord {
@@ -337,7 +337,7 @@ fn resolve_device_record_with_filter(
                 } else {
                     agent_realm
                 },
-                agent_ura: Some(agent.uri.clone()),
+                agent_ura: Some(agent.ura.clone()),
                 is_self,
                 paired: true,
                 hub_endpoint: if is_self && !creds.hub_endpoint.trim().is_empty() {
@@ -374,9 +374,9 @@ pub(crate) fn node_to_json(node: &DeviceNodeSnapshot) -> Value {
     })
 }
 
-/// Extract the node id from a canonical device-profile URI.
-pub(crate) fn node_id_from_agent_ura(uri: &str) -> Option<String> {
-    if let Ok(parsed) = crate::ura::parse_ura(uri) {
+/// Extract the node id from a canonical device-profile URA.
+pub(crate) fn node_id_from_agent_ura(ura: &str) -> Option<String> {
+    if let Ok(parsed) = crate::ura::parse_ura(ura) {
         return if parsed.device_id.is_empty() {
             None
         } else {
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn node_id_from_v414_device_uri_extracts_uuid() {
-        // URI v4.1.4: device-profile URA is `device/<uuid>`.
+        // URA v4.1.4: device-profile URA is `device/<uuid>`.
         let uuid = "4065c47a-ec6f-4330-87a5-0d69787709b8";
         assert_eq!(
             node_id_from_agent_ura(&crate::ura::device_ura("localhost", uuid)),
@@ -510,12 +510,12 @@ mod tests {
         assert_eq!(
             node_id_from_agent_ura("easynet:///r/acme/agent/01DEV"),
             None,
-            "legacy collapsed device URI must no longer project as a device"
+            "legacy collapsed device URA must no longer project as a device"
         );
         assert_eq!(
             node_id_from_agent_ura("easynet:///r/acme/agent/alice.claude"),
             None,
-            "real agent URIs must not parse as devices"
+            "real agent URAs must not parse as devices"
         );
         assert_eq!(
             node_id_from_agent_ura("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn device_profile_detection_requires_health_plus_device_surface() {
         let device = ResolvedAgent {
-            uri: "easynet:///r/acme/device/01DEV".into(),
+            ura: "easynet:///r/acme/device/01DEV".into(),
             status: "active".into(),
             host_node_id: None,
             abilities: vec![
@@ -536,7 +536,7 @@ mod tests {
             ],
         };
         let hosted = ResolvedAgent {
-            uri: "easynet:///r/acme/agent/u1.01LLM".into(),
+            ura: "easynet:///r/acme/agent/u1.01LLM".into(),
             status: "active".into(),
             host_node_id: None,
             abilities: vec![json!({"name": "alice.chat"})],
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn resolved_device_record_keeps_cross_tenant_realm_and_abilities() {
         let agent = ResolvedAgent {
-            uri: "easynet:///r/realm-b/device/01DEV".into(),
+            ura: "easynet:///r/realm-b/device/01DEV".into(),
             status: "active".into(),
             host_node_id: None,
             abilities: vec![
@@ -577,13 +577,13 @@ mod tests {
                 json!({"name": "shell.run"}),
             ],
         };
-        let resolved_node_id = node_id_from_agent_ura(&agent.uri).expect("node id");
-        let realm = crate::ura::realm_from_ura(&agent.uri);
+        let resolved_node_id = node_id_from_agent_ura(&agent.ura).expect("node id");
+        let realm = crate::ura::realm_from_ura(&agent.ura);
         let record = ResolvedDeviceRecord {
             node: DeviceNodeSnapshot {
                 node_id: resolved_node_id,
                 tenant_id: realm,
-                agent_ura: Some(agent.uri.clone()),
+                agent_ura: Some(agent.ura.clone()),
                 is_self: false,
                 paired: true,
                 hub_endpoint: None,

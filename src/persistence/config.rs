@@ -389,7 +389,7 @@ pub struct Credentials {
     pub node_id: String,
     pub credential_token: String,
     pub hub_endpoint: String,
-    // URI v4.1.4 backend renamed the wire field `tenant_id` → `realm`
+    // URA v4.1.4 backend renamed the wire field `tenant_id` → `realm`
     // for every device-pairing response (CreatePairingResp,
     // PairingPreflightResp, DeviceResp).
     //
@@ -411,7 +411,7 @@ pub struct Credentials {
     /// When absent, derived from `hub_endpoint` by stripping scheme/port and using HTTPS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_api_base: Option<String>,
-    /// URI v2 username — stable slug for the user this device is
+    /// URA v2 username — stable slug for the user this device is
     /// paired to. Optional during the migration window; populated
     /// by the Phase 14 backend in validate-pairing responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -419,7 +419,7 @@ pub struct Credentials {
     /// Realm hub's Ed25519 pubkey (base64), captured during pairing
     /// preflight. Cross-machine cold-start fix (hub in US, CLI in
     /// SG): the device's `auto_wire_self_realm_trust` step needs
-    /// this to write the hub's `(uri, pubkey, role=hub)` row into
+    /// this to write the hub's `(ura, pubkey, role=hub)` row into
     /// `realm-trust.toml` without needing on-host access to the
     /// hub's `~/.easynet-hub/<realm>/identity.json`. Empty when
     /// paired against a pre-v4.1.4 hub (legacy fallback path reads

@@ -31,10 +31,10 @@
 // Realm cross-boundary rule
 // -------------------------
 // `role = "device"` is allowed to register an out-of-realm
-// `agent_ura`. Production pairing stamps device URIs under the
+// `agent_ura`. Production pairing stamps device URAs under the
 // owning user's realm (`tenant_id = user_id`) while the hosting
 // daemon may run a platform realm (for example
-// `easynet-platform`). The trust anchor is keyed by full URI, not
+// `easynet-platform`). The trust anchor is keyed by full URA, not
 // by daemon-local realm, so rejecting those device entries would
 // make the pairing flow fundamentally incompatible with the
 // production topology.
@@ -151,7 +151,7 @@ pub fn handle(
 
     let role = parse_role(&args.role)?;
 
-    let parsed_realm = parse_realm_from_uri(&args.agent_ura).ok_or_else(|| {
+    let parsed_realm = parse_realm_from_ura(&args.agent_ura).ok_or_else(|| {
         Status::invalid_argument(format!(
             "<self>.register_device_pubkey: agent_ura `{}` does not match the URA \
              supported canonical/legacy trust-entry shape",
@@ -159,7 +159,7 @@ pub fn handle(
         ))
     })?;
     // Device roams across realms by design (a laptop paired to
-    // realm A keeps its URI when re-anchoring at realm B). Every
+    // realm A keeps its URA when re-anchoring at realm B). Every
     // other role — including User — must register in its home
     // realm. User cross-realm roaming (DEC-EU §multi-realm) does
     // NOT happen via remote registration; instead the visiting
@@ -190,14 +190,14 @@ pub fn handle(
         // dial cross-hub, so the federation fields are always
         // `None` here.
         origin_tenant_id: None,
-        hub_uri: None,
+        hub_endpoint: None,
         tls_ca_pem_path: None,
     };
 
     // Build the next anchor by snapshotting current entries +
     // appending the new one. `append_agent` enforces Invariant 1
-    // (URI uniqueness) and rejects duplicates with a structured
-    // `DuplicateUri`.
+    // (URA uniqueness) and rejects duplicates with a structured
+    // `DuplicateUra`.
     let snapshot = cell.snapshot();
     let mut next_entries: Vec<TrustedAgent> = snapshot.entries_sorted();
     let mut next_anchor =
@@ -261,13 +261,13 @@ fn validate_public_key_b64(raw: &str) -> Result<(), Status> {
 }
 
 /// Extract the realm component from a URA `easynet:///r/{realm}/...`
-/// URI. Returns `None` if the URI does not match the URA shape;
+/// URA. Returns `None` if the URA does not match the URA shape;
 /// the caller surfaces that as `invalid_argument`. We match on
 /// the canonical `easynet:///r/` prefix per RFC 001 §3.1; non-canon
 /// prefixes (`easynet://...`, query-stringed, etc.) fall through
-/// to `None` so a malformed URI reaches the user not the disk.
-pub(crate) fn parse_realm_from_uri(uri: &str) -> Option<String> {
-    crate::ura::parse_ura(uri).ok().map(|parsed| parsed.realm)
+/// to `None` so a malformed URA reaches the user not the disk.
+pub(crate) fn parse_realm_from_ura(ura: &str) -> Option<String> {
+    crate::ura::parse_ura(ura).ok().map(|parsed| parsed.realm)
 }
 
 fn now_unix_ms() -> u64 {
@@ -278,13 +278,13 @@ fn now_unix_ms() -> u64 {
 }
 
 /// Map a `RealmTrustError` to an appropriate `tonic::Status`.
-/// `DuplicateUri` is `already_exists` (idempotent retry contract:
-/// re-registering the same URI is a caller bug, not a transient
+/// `DuplicateUra` is `already_exists` (idempotent retry contract:
+/// re-registering the same URA is a caller bug, not a transient
 /// condition); IO errors are `internal` so callers know to look
 /// at daemon logs.
 fn realm_error_to_status(err: RealmTrustError) -> Status {
     match err {
-        RealmTrustError::DuplicateUri { agent_ura } => Status::already_exists(format!(
+        RealmTrustError::DuplicateUra { agent_ura } => Status::already_exists(format!(
             "<self>.register_device_pubkey: agent_ura `{agent_ura}` already in trust set",
         )),
         RealmTrustError::DuplicateUserPubkey { agent_ura } => Status::already_exists(format!(
@@ -304,12 +304,12 @@ fn realm_error_to_status(err: RealmTrustError) -> Status {
         RealmTrustError::SerializeFailed { path, source } => Status::internal(format!(
             "<self>.register_device_pubkey: serialize {path:?}: {source}"
         )),
-        RealmTrustError::InvalidUriForRole {
+        RealmTrustError::InvalidUraForRole {
             agent_ura,
             role,
             detail,
         } => Status::invalid_argument(format!(
-            "<self>.register_device_pubkey: trusted {role} URI `{agent_ura}` is invalid: {detail}"
+            "<self>.register_device_pubkey: trusted {role} URA `{agent_ura}` is invalid: {detail}"
         )),
     }
 }
@@ -321,9 +321,9 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    fn args_bytes(uri: &str, key: &str, role: &str) -> Vec<u8> {
+    fn args_bytes(ura: &str, key: &str, role: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "agent_ura": uri,
+            "agent_ura": ura,
             "public_key_b64": key,
             "role": role
         }))
@@ -370,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_realm_device_uri_is_allowed() {
+    fn cross_realm_device_ura_is_allowed() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
         let args = args_bytes("easynet:///r/r2/device/intruder", &test_pub_b64(), "device");
@@ -402,12 +402,12 @@ mod tests {
     }
 
     #[test]
-    fn malformed_uri_rejected_with_invalid_argument() {
+    fn malformed_ura_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("not-a-ura-uri", &test_pub_b64(), "device");
+        let args = args_bytes("not-a-ura-ura", &test_pub_b64(), "device");
 
-        let err = handle(&args, "r1", &path, &cell).expect_err("must reject malformed URI");
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject malformed URA");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("URA"));
     }
@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_uri_rejected_with_already_exists() {
+    fn duplicate_ura_rejected_with_already_exists() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
         let args = args_bytes("easynet:///r/r1/device/dup", &test_pub_b64(), "device");
@@ -523,17 +523,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_realm_from_uri_handles_canonical_shape() {
+    fn parse_realm_from_ura_handles_canonical_shape() {
         assert_eq!(
-            parse_realm_from_uri("easynet:///r/realm-x/device/n1"),
+            parse_realm_from_ura("easynet:///r/realm-x/device/n1"),
             Some("realm-x".to_string())
         );
         assert_eq!(
-            parse_realm_from_uri("easynet:///r/abc/hub"),
+            parse_realm_from_ura("easynet:///r/abc/hub"),
             Some("abc".to_string())
         );
-        assert_eq!(parse_realm_from_uri("easynet:///r//device/n1"), None);
-        assert_eq!(parse_realm_from_uri("https://example.com"), None);
-        assert_eq!(parse_realm_from_uri("easynet://r/x/device/n1"), None); // missing third slash
+        assert_eq!(parse_realm_from_ura("easynet:///r//device/n1"), None);
+        assert_eq!(parse_realm_from_ura("https://example.com"), None);
+        assert_eq!(parse_realm_from_ura("easynet://r/x/device/n1"), None); // missing third slash
     }
 }

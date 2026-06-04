@@ -1167,11 +1167,13 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         &eal_source,
         MissionRunOpts {
             source_label: Some(format!("agent send {}", args.name)),
-            // `--trace <path>` plumbing — currently unused; the mission
-            // runner always writes the full trace into the run dir.
-            // TODO: thread this through if/when `MissionRunOpts` grows
-            // a real trace export.
+            // `--trace <path>` is accepted by the CLI but the mission
+            // runner's authoritative trace remains the run directory.
+            // Keep the path on MissionRunOpts so a future export layer
+            // has the caller's requested destination without inventing
+            // a second mission execution path.
             trace_path: args.trace.clone(),
+            invocation_context: None,
         },
     )?;
 

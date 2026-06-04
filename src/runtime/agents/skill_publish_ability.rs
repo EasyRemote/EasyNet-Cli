@@ -471,7 +471,7 @@ fn package_resource_ura_from_args(
     verb: &str,
     skill_name: &str,
 ) -> anyhow::Result<String> {
-    let uri = args
+    let ura = args
         .as_object()
         .and_then(|obj| obj.get("resource_ura"))
         .and_then(Value::as_str)
@@ -479,8 +479,8 @@ fn package_resource_ura_from_args(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("{verb}: missing/empty `resource_ura`"))?;
 
-    let parsed = crate::ura::parse_ura(uri)
-        .map_err(|e| anyhow::anyhow!("{verb}: invalid resource_ura {uri:?}: {e}"))?;
+    let parsed = crate::ura::parse_ura(ura)
+        .map_err(|e| anyhow::anyhow!("{verb}: invalid resource_ura {ura:?}: {e}"))?;
     if parsed.kind != crate::ura::URAKind::Resource {
         anyhow::bail!(
             "{verb}: resource_ura must be a resource URA, got {}",
@@ -488,7 +488,7 @@ fn package_resource_ura_from_args(
         );
     }
     if parsed.namespace.is_some() || !parsed.user_id.starts_with("agent.") {
-        anyhow::bail!("{verb}: resource_ura must identify an agent skill package, got {uri:?}");
+        anyhow::bail!("{verb}: resource_ura must identify an agent skill package, got {ura:?}");
     }
     let expected_path = format!("skill/{skill_name}");
     if parsed.path.trim_end_matches('/') != expected_path {
@@ -497,7 +497,7 @@ fn package_resource_ura_from_args(
             parsed.path
         );
     }
-    Ok(uri.trim_end_matches('/').to_string())
+    Ok(ura.trim_end_matches('/').to_string())
 }
 
 fn skill_file_resource_ura(package_ura: &str, rel_path: &str) -> String {

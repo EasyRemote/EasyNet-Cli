@@ -45,13 +45,16 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
-use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
+use crate::persistence::resources::{self, lookup_by_ura, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
+use crate::runtime::agents::media::resource_subject;
 use crate::runtime::agents::media_abilities::{ABILITY_MIC_SUBSCRIBE, REASON_SUBJECT_IN_ARGS};
 
 pub const REASON_SUBJECT_REQUIRED: &str = "subject_required";
 pub const REASON_RESOURCE_NOT_FOUND: &str = "resource_not_found";
+pub const REASON_RESOURCE_TABLE_UNAVAILABLE: &str =
+    resource_subject::REASON_RESOURCE_TABLE_UNAVAILABLE;
 pub const REASON_RESOURCE_TYPE_MISMATCH: &str = "resource_type_mismatch";
 pub const REASON_RESOURCE_UNAVAILABLE: &str = "resource_unavailable";
 
@@ -334,8 +337,13 @@ fn handler(
              mic); reason={REASON_SUBJECT_REQUIRED}"
         )
     })?;
-    let file = resources::load().unwrap_or_default();
-    let entry = lookup_by_uri(&file, subject).ok_or_else(|| {
+    let file = resources::load().map_err(|err| {
+        anyhow::anyhow!(
+            "{ABILITY_MIC_SUBSCRIBE}: local resources table could not be loaded; \
+             reason={REASON_RESOURCE_TABLE_UNAVAILABLE}; source={err}"
+        )
+    })?;
+    let entry = lookup_by_ura(&file, subject).ok_or_else(|| {
         anyhow::anyhow!(
             "{ABILITY_MIC_SUBSCRIBE}: subject {subject} not found in local \
              resources table; reason={REASON_RESOURCE_NOT_FOUND}"
@@ -383,7 +391,7 @@ mod tests {
     fn handler_returns_live_stream_with_pcm_frame_when_subject_resolves() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
-        let uri = seed_mic(&mut file, "h-mic-e2e");
+        let ura = seed_mic(&mut file, "h-mic-e2e");
         resources::save(&file).unwrap();
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
@@ -393,7 +401,8 @@ mod tests {
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
             normalized_args: json!({"sample_rate": 48000, "channels": 1, "codec": "opus"}),
             call_mode: CallMode::Stream,
-            subject: Some(uri),
+            subject: Some(ura),
+            causal_context: None,
         };
         let src = dispatcher.execute_stream(target).unwrap();
         let frame = match src {
@@ -425,17 +434,8 @@ mod tests {
     #[test]
     fn handler_rejects_missing_subject() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
-        register_synthetic(&mut reg);
-        let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: None,
-        };
-        let err = dispatcher.execute_stream(target).unwrap_err();
+        let backend: Arc<dyn MicBackend> = Arc::new(SyntheticMicBackend);
+        let err = handler(&backend, EnvelopeContext::default(), json!({})).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_REQUIRED));
     }
 
@@ -443,7 +443,7 @@ mod tests {
     fn handler_rejects_camera_subject_with_resource_type_mismatch() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
-        let cam_uri = upsert_resource(
+        let cam_ura = upsert_resource(
             &mut file,
             ResourceUpsert {
                 realm: "acme",
@@ -464,7 +464,8 @@ mod tests {
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Stream,
-            subject: Some(cam_uri),
+            subject: Some(cam_ura),
+            causal_context: None,
         };
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH));
@@ -482,9 +483,42 @@ mod tests {
             normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
             call_mode: CallMode::Stream,
             subject: Some("easynet:///r/acme/resource/01MIC".into()),
+            causal_context: None,
         };
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_IN_ARGS));
+    }
+
+    #[test]
+    fn handler_reports_corrupt_resources_table_as_table_unavailable() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let path = resources::path();
+        std::fs::create_dir_all(path.parent().expect("resources path has parent"))
+            .expect("create state dir");
+        std::fs::write(&path, b"{not-json").expect("write corrupt resources table");
+
+        let mut reg = AxonAbilityCatalog::new();
+        register_synthetic(&mut reg);
+        let dispatcher = Arc::new(reg);
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
+            normalized_args: json!({}),
+            call_mode: CallMode::Stream,
+            subject: Some("easynet:///r/acme/resource/01MIC".into()),
+            causal_context: None,
+        };
+
+        let err = dispatcher.execute_stream(target).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(REASON_RESOURCE_TABLE_UNAVAILABLE),
+            "expected reason={REASON_RESOURCE_TABLE_UNAVAILABLE}; got: {message}"
+        );
+        assert!(
+            !message.contains(REASON_RESOURCE_NOT_FOUND),
+            "corrupt table must not be misreported as a missing resource: {message}"
+        );
     }
 
     #[test]

@@ -88,7 +88,7 @@ impl KeyResolver for PeerKeyringResolver {
     fn resolve(&self, agent_ura: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
         let peer = self
             .keyring
-            .find_peer_by_uri(agent_ura)
+            .find_peer_by_ura(agent_ura)
             .ok_or(KeyResolveError::Unknown)?;
         if peer.status != super::store::PeerStatus::Trusted {
             return Err(KeyResolveError::Unknown);
@@ -131,26 +131,26 @@ pub fn default_chain(keyring: Arc<KeyringHandle>) -> ChainResolver {
 
 // ── FederatedUserResolver (PR-N4 commit 4/N) ───────────────────────
 
-/// Resolver for "is this cross-realm URI bound to a known local
+/// Resolver for "is this cross-realm URA bound to a known local
 /// user?" — distinct from the `KeyResolver` trait above (which
-/// answers "what is this URI's verifying key").
+/// answers "what is this URA's verifying key").
 ///
 /// **PR-N4 spec §commit 4/N**. Wraps the local keyring + the
 /// `FederatedBindingsStore` from commit 3/N in a chain:
 ///
 ///   1. **local-first**: if `agent_ura`'s realm matches
-///      `local_realm`, the URI's user-id is the URI itself —
+///      `local_realm`, the URA's user-id is the URA itself —
 ///      no federated lookup needed (and INV-3 says the user
 ///      always speaks for themselves on their home realm).
 ///   2. **federated fallback**: otherwise, look up
 ///      `(parsed_realm, agent_ura)` in the bindings store.
 ///      Some(local_user_id) ⇒ the cross-realm user has been
-///      consumed-bound; None ⇒ the URI belongs to a federated
+///      consumed-bound; None ⇒ the URA belongs to a federated
 ///      realm but the user has not opted into binding (INV-5
 ///      privacy default).
 ///
 /// Used by `<self>.discover` Tier-3 to filter cross-realm
-/// directory entries: only show devices whose URI's realm has
+/// directory entries: only show devices whose URA's realm has
 /// a binding for the calling user.
 pub struct FederatedUserResolver {
     local_realm: String,
@@ -159,21 +159,21 @@ pub struct FederatedUserResolver {
 
 /// Outcome of `FederatedUserResolver::resolve_user`. A typed
 /// enum rather than `Option<String>` so the caller can
-/// distinguish "URI is local" (== return verbatim) from
-/// "URI is bound to local_user_id" from "URI is from a
+/// distinguish "URA is local" (== return verbatim) from
+/// "URA is bound to local_user_id" from "URA is from a
 /// federated realm we have no binding for".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FederatedUserOutcome {
-    /// URI's realm == `local_realm`; the URI is the user-id.
+    /// URA's realm == `local_realm`; the URA is the user-id.
     Local,
-    /// URI is in a federated realm with a known binding;
+    /// URA is in a federated realm with a known binding;
     /// `local_user_id` is who they map to here.
     BoundLocalUser(String),
-    /// URI's realm is not the local realm and no binding
-    /// exists. Caller filters this URI out of cross-realm
+    /// URA's realm is not the local realm and no binding
+    /// exists. Caller filters this URA out of cross-realm
     /// surfaces (INV-5 privacy default).
     NotBound,
-    /// URI did not parse as a canonical EasyNet URI.
+    /// URA did not parse as a canonical EasyNet URA.
     /// Distinct from `NotBound` so audit can flag malformed
     /// inputs separately.
     Malformed,
@@ -191,7 +191,7 @@ impl FederatedUserResolver {
         }
     }
 
-    /// Resolve a URI to a federated-binding outcome.
+    /// Resolve a URA to a federated-binding outcome.
     #[must_use]
     pub fn resolve_user(&self, user_ura: &str) -> FederatedUserOutcome {
         let Some(realm) = parse_realm_from_user_ura(user_ura) else {
@@ -207,14 +207,14 @@ impl FederatedUserResolver {
     }
 }
 
-/// Parse the realm slice from a canonical EasyNet user URI
+/// Parse the realm slice from a canonical EasyNet user URA
 /// (`easynet:///r/<realm>/user/<id>`). Mirrors
 /// `runtime::keyring::abilities::parse_realm_from_user_ura` —
 /// duplicated rather than re-exported to keep the resolver
 /// layer free of any cross-module imports beyond
 /// `super::federated_bindings`.
-fn parse_realm_from_user_ura(uri: &str) -> Option<String> {
-    let parsed = parse_ura(uri).ok()?;
+fn parse_realm_from_user_ura(ura: &str) -> Option<String> {
+    let parsed = parse_ura(ura).ok()?;
     (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
 
@@ -333,18 +333,18 @@ mod tests {
     }
 
     #[test]
-    fn federated_user_resolver_malformed_uri_returns_malformed() {
+    fn federated_user_resolver_malformed_ura_returns_malformed() {
         let bindings = Arc::new(FederatedBindingsStore::in_memory());
         let resolver = FederatedUserResolver::new("realm-b", bindings);
-        let outcome = resolver.resolve_user("not-a-canonical-uri");
+        let outcome = resolver.resolve_user("not-a-canonical-ura");
         assert_eq!(outcome, FederatedUserOutcome::Malformed);
     }
 
     #[test]
     fn federated_user_resolver_binding_for_other_user_does_not_match() {
-        // Binding exists for one user URI; querying a different
-        // URI in the same realm must NOT match (the resolver
-        // keys on full URI, not just realm).
+        // Binding exists for one user URA; querying a different
+        // URA in the same realm must NOT match (the resolver
+        // keys on full URA, not just realm).
         let bindings = Arc::new(FederatedBindingsStore::in_memory());
         bindings
             .record_binding(
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(
             outcome,
             FederatedUserOutcome::NotBound,
-            "different URI in same realm must not match an existing binding"
+            "different URA in same realm must not match an existing binding"
         );
     }
 }

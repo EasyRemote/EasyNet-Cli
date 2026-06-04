@@ -161,6 +161,7 @@ pub mod orchestration_ability;
 pub mod pages;
 pub mod permission_ability;
 pub mod ping;
+pub mod plugin_lifecycle_ability;
 pub mod policy_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile,
 /// structured-execution member. `process.exec` spawns one
@@ -302,18 +303,18 @@ impl PagesIdentity {
 }
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
-/// ability handler. Suitable for early-boot smoke tests + the
-/// `published_ability_names` helper that the discovery publisher
-/// consumes. Tests get fresh empty sub-services and an empty agent
-/// registry; the daemon bin calls `build_registry_with_services`
-/// instead with its real Kernel handles + loaded agents.
+/// ability handler plus deterministic builtin plugin abilities.
+/// Suitable for early-boot smoke tests + the `published_ability_names`
+/// helper that the discovery publisher consumes. Tests get fresh empty
+/// sub-services and an empty agent registry; the daemon bin calls
+/// `build_registry_with_services` instead with its real Kernel handles
+/// + loaded agents.
 ///
-/// **No env-var read**: the registry shape is determined by the
-/// arguments alone. Tests that don't care about the user-rooted
-/// surface pass a default `PagesIdentity` (user = None) and get
-/// a deterministic catalogue regardless of any leaked env state.
+/// **No env-var or user plugin-store read**: builtin plugin shape is
+/// determined by the compile-time feature set and current target
+/// platform only. Installed plugin packages remain daemon-only state.
 pub fn build_registry() -> Arc<AxonAbilityCatalog> {
-    build_registry_with_services(
+    build_registry_with_services_result_inner(
         Arc::new(SessionService::new()),
         Arc::new(PermissionService::new()),
         Arc::new(DiscussService::new()),
@@ -329,7 +330,27 @@ pub fn build_registry() -> Arc<AxonAbilityCatalog> {
         // skips runtime sync with an op_event. The agent still lands
         // in `agents.json`.
         Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
+        PluginRegistryMode::BuiltinOnlyDeterministic,
     )
+    .catalog
+}
+
+fn build_system_registry() -> Arc<AxonAbilityCatalog> {
+    build_registry_with_services_result_inner(
+        Arc::new(SessionService::new()),
+        Arc::new(PermissionService::new()),
+        Arc::new(DiscussService::new()),
+        Arc::new(ScheduleService::new()),
+        Arc::new(LoopService::new()),
+        None,
+        &AgentRegistry::default(),
+        Arc::new(Vec::new()),
+        PagesIdentity::default(),
+        None,
+        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
+        PluginRegistryMode::None,
+    )
+    .catalog
 }
 
 /// Build the standard system catalogue and write every registered
@@ -371,8 +392,19 @@ pub fn build_registry_with_runtime(
 /// agents into `LocalRuntime`. Tests pass an empty cell —
 /// `device.agent.start` then writes `agents.json` and op_events
 /// `hot_agent_runtime_sync_skipped` instead of also touching the runtime.
+/// Result of constructing the daemon's local ability registry.
+///
+/// What this is NOT: a runtime executor. `catalog` owns handler metadata and
+/// registration side tables; `plugin_runtime_manager` owns plugin package/load
+/// state so boot-time services can derive wire/surface projections from the
+/// same snapshot that registered plugin abilities.
+pub struct BuiltAbilityRegistry {
+    pub catalog: Arc<AxonAbilityCatalog>,
+    pub plugin_runtime_manager: Arc<crate::runtime::plugin_host::PluginRuntimeManager>,
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn build_registry_with_services(
+pub fn build_registry_with_services_result(
     sessions: Arc<SessionService>,
     perms: Arc<PermissionService>,
     discuss: Arc<DiscussService>,
@@ -384,7 +416,92 @@ pub fn build_registry_with_services(
     pages_identity: PagesIdentity,
     local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
     hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
-) -> Arc<AxonAbilityCatalog> {
+) -> BuiltAbilityRegistry {
+    build_registry_with_services_result_inner(
+        sessions,
+        perms,
+        discuss,
+        schedule,
+        loop_svc,
+        invocation_ledger,
+        agents,
+        loaders,
+        pages_identity,
+        local_runtime,
+        hot_agent_registrar_cell,
+        PluginRegistryMode::DefaultDaemon,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PluginRegistryMode {
+    /// Do not include package-owned plugin abilities. Used for system descriptor
+    /// generation, where plugin descriptors are rendered separately from the
+    /// plugin package index.
+    None,
+    /// Include compile-time builtin plugin packages without reading `$HOME` or
+    /// env-disable gates. Used by `published_abilities()` and smoke tests.
+    BuiltinOnlyDeterministic,
+    /// Load builtin plus installed plugin packages using daemon boot policy.
+    DefaultDaemon,
+}
+
+fn build_plugin_runtime_manager(
+    mode: PluginRegistryMode,
+) -> Arc<crate::runtime::plugin_host::PluginRuntimeManager> {
+    match mode {
+        PluginRegistryMode::None => Arc::new(
+            crate::runtime::plugin_host::PluginRuntimeManager::from_state(
+                crate::runtime::plugin_host::PluginRuntimeState::from_index(
+                    crate::runtime::plugin_host::PluginPackageIndex::default(),
+                ),
+            ),
+        ),
+        PluginRegistryMode::BuiltinOnlyDeterministic => {
+            let state = match crate::runtime::plugin_host::PluginPackageIndex::builtin() {
+                Ok(index) => {
+                    crate::runtime::plugin_host::PluginRuntimeState::from_index_with_planner(
+                        index,
+                        crate::runtime::plugin_host::PluginLoadPlanner::current_without_env_gates(),
+                    )
+                }
+                Err(err) => {
+                    let error = err.to_string();
+                    crate::op_event!(
+                        component = plugin_host,
+                        kind = deterministic_builtin_index_failed,
+                        error = error.as_str(),
+                        message =
+                            "deterministic builtin plugin index failed; daemon core abilities remain registered",
+                    );
+                    crate::runtime::plugin_host::PluginRuntimeState::from_index(
+                        crate::runtime::plugin_host::PluginPackageIndex::default(),
+                    )
+                }
+            };
+            Arc::new(crate::runtime::plugin_host::PluginRuntimeManager::from_state(state))
+        }
+        PluginRegistryMode::DefaultDaemon => {
+            Arc::new(crate::runtime::plugin_host::PluginRuntimeManager::new())
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_registry_with_services_result_inner(
+    sessions: Arc<SessionService>,
+    perms: Arc<PermissionService>,
+    discuss: Arc<DiscussService>,
+    schedule: Arc<ScheduleService>,
+    loop_svc: Arc<LoopService>,
+    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    agents: &AgentRegistry,
+    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
+    pages_identity: PagesIdentity,
+    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
+    plugin_registry_mode: PluginRegistryMode,
+) -> BuiltAbilityRegistry {
     let mut reg = match local_runtime {
         Some(runtime) => AxonAbilityCatalog::new_with_runtime(runtime),
         None => AxonAbilityCatalog::new(),
@@ -500,6 +617,37 @@ pub fn build_registry_with_services(
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.
     voice_call_ability::register(&mut reg);
+    // Stateful device plugins. Package discovery, boot-time load decisions, and
+    // handler registration stay separate so install/remove/update state cannot
+    // leak into runtime call semantics.
+    let plugin_runtime_manager = build_plugin_runtime_manager(plugin_registry_mode);
+    match plugin_registry_mode {
+        PluginRegistryMode::None => {}
+        PluginRegistryMode::BuiltinOnlyDeterministic => {
+            if let Err(err) = plugin_runtime_manager.register_current_plugins(&mut reg) {
+                let error = err.to_string();
+                crate::op_event!(
+                    component = plugin_host,
+                    kind = deterministic_builtin_registration_failed,
+                    error = error.as_str(),
+                    message =
+                        "deterministic builtin plugin registration failed; daemon core abilities remain registered",
+                );
+            }
+        }
+        PluginRegistryMode::DefaultDaemon => {
+            if let Err(err) = plugin_runtime_manager.register_default_plugins(&mut reg) {
+                let error = err.to_string();
+                crate::op_event!(
+                    component = plugin_host,
+                    kind = default_registration_failed,
+                    error = error.as_str(),
+                    message =
+                        "default plugin host registration failed; daemon core abilities remain registered",
+                );
+            }
+        }
+    }
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -520,6 +668,11 @@ pub fn build_registry_with_services(
     // — can close over it. Set once after `Arc::new(reg)` below.
     let local_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
         Arc::new(std::sync::OnceLock::new());
+    plugin_lifecycle_ability::register(
+        &mut reg,
+        Arc::clone(&local_registry_handle),
+        Arc::clone(&plugin_runtime_manager),
+    );
 
     // Phase 5c. Construct the hot runtime registrar HERE so it can
     // close over the exact same `loaders` Arc + `local_registry_handle`
@@ -919,7 +1072,40 @@ pub fn build_registry_with_services(
     // compute its own once the background reflection pass finishes.
     reflection_plan.apply(Arc::clone(&mcp_client_svc), Arc::clone(&arc));
 
-    arc
+    BuiltAbilityRegistry {
+        catalog: arc,
+        plugin_runtime_manager,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_registry_with_services(
+    sessions: Arc<SessionService>,
+    perms: Arc<PermissionService>,
+    discuss: Arc<DiscussService>,
+    schedule: Arc<ScheduleService>,
+    loop_svc: Arc<LoopService>,
+    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    agents: &AgentRegistry,
+    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
+    pages_identity: PagesIdentity,
+    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
+) -> Arc<AxonAbilityCatalog> {
+    build_registry_with_services_result(
+        sessions,
+        perms,
+        discuss,
+        schedule,
+        loop_svc,
+        invocation_ledger,
+        agents,
+        loaders,
+        pages_identity,
+        local_runtime,
+        hot_agent_registrar_cell,
+    )
+    .catalog
 }
 
 /// Daemon-side convenience wrapper. Loads the agent registry and
@@ -989,6 +1175,34 @@ pub fn build_registry_for_daemon(
     local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
     hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
 ) -> Arc<AxonAbilityCatalog> {
+    build_registry_for_daemon_result(
+        sessions,
+        perms,
+        discuss,
+        schedule,
+        loop_svc,
+        invocation_ledger,
+        loaders,
+        pages_identity,
+        local_runtime,
+        hot_agent_registrar_cell,
+    )
+    .catalog
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_registry_for_daemon_result(
+    sessions: Arc<SessionService>,
+    perms: Arc<PermissionService>,
+    discuss: Arc<DiscussService>,
+    schedule: Arc<ScheduleService>,
+    loop_svc: Arc<LoopService>,
+    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
+    pages_identity: PagesIdentity,
+    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
+) -> BuiltAbilityRegistry {
     let agents = match crate::registry::agents::load_agents() {
         Ok(r) => r,
         Err(e) => {
@@ -1005,7 +1219,7 @@ pub fn build_registry_for_daemon(
     };
     let loaders = loaders
         .unwrap_or_else(|| Arc::new(context_loaders::default_loaders(Arc::clone(&schedule))));
-    build_registry_with_services(
+    build_registry_with_services_result(
         sessions,
         perms,
         discuss,
@@ -1096,7 +1310,7 @@ pub fn is_canonical_or_unmapped(name: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct SystemAbilityMetadata {
     pub name: String,
-    pub description: &'static str,
+    pub description: String,
     pub input_schema: serde_json::Value,
     pub hints: crate::runtime::ability_descriptor::AbilityHints,
 }
@@ -1113,6 +1327,22 @@ pub struct SystemAbilityMetadata {
 /// agent name varies per install.
 pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
     let registry = build_registry();
+    published_abilities_from_registry(&registry)
+}
+
+/// Every descriptor-owned daemon system ability, independent of runtime plugin
+/// installation state.
+///
+/// What this is NOT: the live daemon discovery surface. It deliberately builds
+/// the catalogue with plugin package registration disabled so descriptor
+/// generation cannot read `$HOME/.easynet/plugins` or write user-local plugin
+/// descriptors by accident.
+pub fn published_system_abilities() -> Vec<SystemAbilityMetadata> {
+    let registry = build_system_registry();
+    published_abilities_from_registry(&registry)
+}
+
+fn published_abilities_from_registry(registry: &AxonAbilityCatalog) -> Vec<SystemAbilityMetadata> {
     registry
         .list_abilities()
         .into_iter()
@@ -1125,12 +1355,21 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
         // schema lives inside the registering module, not here.
         .filter(|name| !name.starts_with("device.keyring."))
         .map(|name| SystemAbilityMetadata {
-            description: description_for(&name),
+            description: description_for_owned(&name),
             input_schema: input_schema_for(&name),
-            hints: discovery_hints_for(&registry, &name),
+            hints: discovery_hints_for(registry, &name),
             name,
         })
         .collect()
+}
+
+/// Canonical descriptor path for a published ability.
+///
+/// Built-in daemon abilities remain under `abilities/system`; runtime plugin
+/// abilities own their descriptor TOMLs inside their package directory.
+pub fn descriptor_path_for(name: &str) -> String {
+    crate::runtime::plugin_host::ability_descriptor_path(name)
+        .unwrap_or_else(|| format!("abilities/system/{name}.ability.toml"))
 }
 
 pub(crate) fn discovery_hints_for(
@@ -1145,6 +1384,16 @@ pub(crate) fn discovery_hints_for(
         // into choosing InvokeStream against a daemon path that is not
         // yet wired for generic stream fallback.
         return Default::default();
+    }
+    if name == crate::runtime::agents::media_abilities::ABILITY_CAMERA_SUBSCRIBE {
+        // Camera preview has a unary compatibility path for older
+        // app shells that still call Invoke for the first frame.
+        // Discovery must continue to advertise the canonical stream
+        // shape so correct clients choose Subscribe/InvokeStream.
+        return crate::runtime::ability_descriptor::AbilityHints {
+            streaming_only: true,
+            ..Default::default()
+        };
     }
     let has_rpc = registry.has_rpc(name);
     let has_stream = registry.has_stream(name);
@@ -1166,6 +1415,10 @@ pub(crate) fn discovery_hints_for(
 /// handlers when called from the daemon registry (the `published_abilities`
 /// filter strips them, but other callers may not).
 pub fn description_for(name: &str) -> &'static str {
+    if let Some(description) = crate::runtime::plugin_host::description_for(name) {
+        return description;
+    }
+
     match name {
         "device.observe.health" => ping::description(),
         "device.observe.network_health" => network_health_ability::description(),
@@ -1199,6 +1452,8 @@ pub fn description_for(name: &str) -> &'static str {
         "device.mcp.client.list" => mcp_client_ability::list_description(),
         "device.mcp.client.call" => mcp_client_ability::call_description(),
         "device.agent.list" => agent_list_ability::list_agents_description(),
+        plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_description(),
+        plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_description(),
         "device.meta.describe" => meta_ability::describe_description(),
         "device.meta.list_abilities" => meta_ability::list_abilities_description(),
         "device.mission.run" => mission_ability::run_description(),
@@ -1314,6 +1569,15 @@ pub fn description_for(name: &str) -> &'static str {
     }
 }
 
+/// Owned description projection for registry publication.
+///
+/// Plugin packages own descriptor text that may come from TOML at runtime.
+/// Builtin system abilities still use the static `description_for` table.
+pub fn description_for_owned(name: &str) -> String {
+    crate::runtime::plugin_host::builtin_description_for_owned(name)
+        .unwrap_or_else(|| description_for(name).to_string())
+}
+
 /// JSON Schema for a published system ability's input. Mirrors
 /// `description_for` — adding an arm here is the second half of
 /// landing a new system ability so it can register against
@@ -1325,6 +1589,13 @@ pub fn description_for(name: &str) -> &'static str {
 /// as schema-less in MCP `ListTools`; a CI test pins the table
 /// against the live registry to surface that drift.
 pub fn input_schema_for(name: &str) -> serde_json::Value {
+    if let Some(schema) = crate::runtime::plugin_host::builtin_input_schema_for(name) {
+        return schema;
+    }
+    if let Some(schema) = crate::runtime::plugin_host::input_schema_for(name) {
+        return schema;
+    }
+
     match name {
         "device.observe.health" => ping::input_schema(),
         "device.observe.network_health" => network_health_ability::input_schema(),
@@ -1358,6 +1629,8 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "device.mcp.client.list" => mcp_client_ability::list_input_schema(),
         "device.mcp.client.call" => mcp_client_ability::call_input_schema(),
         "device.agent.list" => agent_list_ability::list_agents_input_schema(),
+        plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_input_schema(),
+        plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_input_schema(),
         "device.meta.describe" => meta_ability::describe_input_schema(),
         "device.meta.list_abilities" => meta_ability::list_abilities_input_schema(),
         "device.mission.run" => mission_ability::run_input_schema(),
@@ -1556,6 +1829,22 @@ mod tests {
         if name.ends_with(".chat") {
             return Some(AbilityLayer::Operational);
         }
+
+        if let Some(layer) = crate::runtime::plugin_host::ability_layer_for(name) {
+            return Some(match layer {
+                crate::runtime::plugin_host::PluginAbilityLayer::Introspection => {
+                    AbilityLayer::Introspection
+                }
+                crate::runtime::plugin_host::PluginAbilityLayer::Control => AbilityLayer::Control,
+                crate::runtime::plugin_host::PluginAbilityLayer::Observation => {
+                    AbilityLayer::Observation
+                }
+                crate::runtime::plugin_host::PluginAbilityLayer::Operational => {
+                    AbilityLayer::Operational
+                }
+            });
+        }
+
         match name {
             // ── Introspection ───────────────────────────────────
             "device.meta.describe"
@@ -1601,7 +1890,8 @@ mod tests {
             // ── Observation ─────────────────────────────────────
             "device.observe.health"
             | "device.observe.network_health"
-            | "device.admin.status" => Some(AbilityLayer::Observation),
+            | "device.admin.status"
+            | "device.plugin.status" => Some(AbilityLayer::Observation),
             // ── Operational (per-feature business verbs) ────────
             "device.session.attach"
             | "device.agent.start"
@@ -1758,6 +2048,10 @@ mod tests {
             | "device.browser.send_input"
             | "device.browser.capture_viewport"
             | "device.browser.close_session"
+            // Plugin lifecycle reload mutates the daemon's dynamic
+            // ability registration table after an install/update/remove
+            // transaction has already committed on disk.
+            | "device.plugin.reload"
             => Some(AbilityLayer::Operational),
             // `<user>.api_key.{create,list,revoke}` — user-rooted
             // credential-lifecycle verbs. `<user>` is the active
@@ -1783,7 +2077,10 @@ mod tests {
         // semantic layer. A new ability that lands without a
         // classify_ability arm trips this test, forcing the author
         // to either pick a layer or amend the layer doc.
-        let names = published_ability_names();
+        let names: Vec<String> = published_system_abilities()
+            .into_iter()
+            .map(|meta| meta.name)
+            .collect();
         let unclassified: Vec<String> = names
             .iter()
             // device.keyring.* abilities have their own ontology
@@ -1859,8 +2156,8 @@ mod tests {
         // and tells them how to fix it.
         let mut missing: Vec<String> = Vec::new();
         let mut drift: Vec<String> = Vec::new();
-        for meta in published_abilities() {
-            let toml_path = format!("abilities/system/{}.ability.toml", meta.name);
+        for meta in published_system_abilities() {
+            let toml_path = descriptor_path_for(&meta.name);
             let on_disk = match std::fs::read_to_string(&toml_path) {
                 Ok(body) => body,
                 Err(_) => {
@@ -1869,8 +2166,11 @@ mod tests {
                 }
             };
             let _ = rfc006_for(&meta.name);
-            let expected =
-                ability_toml::render_ability_toml(&meta.name, meta.description, &meta.input_schema);
+            let expected = ability_toml::render_ability_toml(
+                &meta.name,
+                &meta.description,
+                &meta.input_schema,
+            );
             if on_disk != expected {
                 drift.push(meta.name.clone());
             }
@@ -1890,7 +2190,7 @@ mod tests {
         }
         assert!(
             errors.is_empty(),
-            "abilities/system TOML descriptor drift:\n  {}",
+            "ability TOML descriptor drift:\n  {}",
             errors.join("\n  ")
         );
     }
@@ -1924,9 +2224,9 @@ mod tests {
             // <agent>.chat handlers register as Stream. Most
             // system abilities register as RPC. Bidi is rare
             // (PTY attach). We accept any of the three.
-            let has_rpc = reg.get_rpc(name).is_some();
-            let has_stream = reg.get_stream(name).is_some();
-            let has_bidi = reg.get_bidi(name).is_some();
+            let has_rpc = reg.has_rpc(name);
+            let has_stream = reg.has_stream(name);
+            let has_bidi = reg.has_bidi(name);
             if !(has_rpc || has_stream || has_bidi) {
                 unresolved.push(name.clone());
             }
@@ -1982,6 +2282,7 @@ mod tests {
                 normalized_args: serde_json::json!({}),
                 call_mode: CallMode::Rpc,
                 subject: None,
+                causal_context: None,
             };
             match dispatcher.execute_rpc(target) {
                 Ok(_) => invoked_ok.push(name.clone()),
@@ -2113,9 +2414,22 @@ mod tests {
     }
 
     #[test]
+    fn published_system_abilities_excludes_plugin_package_abilities() {
+        let plugin_leaks: Vec<String> = published_system_abilities()
+            .into_iter()
+            .map(|meta| meta.name)
+            .filter(|name| name.starts_with("device.remote_desktop."))
+            .collect();
+        assert!(
+            plugin_leaks.is_empty(),
+            "system descriptor generation must not include plugin abilities: {plugin_leaks:?}"
+        );
+    }
+
+    #[test]
     fn published_abilities_marks_server_stream_routes_as_streaming_only() {
         let metas = published_abilities();
-        for name in [
+        let expected = [
             "device.consent.subscribe",
             "device.discuss.subscribe",
             "device.loop.subscribe",
@@ -2124,7 +2438,16 @@ mod tests {
             "device.camera.subscribe",
             "device.screen.subscribe",
             "device.voice.subscribe",
-        ] {
+        ];
+        #[cfg(feature = "remote-desktop")]
+        let expected = {
+            let mut expected = expected.to_vec();
+            expected.push("device.remote_desktop.watch_events");
+            expected
+        };
+        #[cfg(not(feature = "remote-desktop"))]
+        let expected = expected.to_vec();
+        for name in expected {
             let meta = metas
                 .iter()
                 .find(|m| m.name == name)
@@ -2140,12 +2463,21 @@ mod tests {
     #[test]
     fn published_abilities_marks_bidi_routes_as_bidi_only() {
         let metas = published_abilities();
-        for name in [
+        let expected = [
             "device.fs.transfer",
             "device.terminal.attach",
             "device.speaker.publish",
             "device.voice.transcribe",
-        ] {
+        ];
+        #[cfg(feature = "remote-desktop")]
+        let expected = {
+            let mut expected = expected.to_vec();
+            expected.push("device.remote_desktop.attach");
+            expected
+        };
+        #[cfg(not(feature = "remote-desktop"))]
+        let expected = expected.to_vec();
+        for name in expected {
             let meta = metas
                 .iter()
                 .find(|m| m.name == name)
@@ -2234,21 +2566,14 @@ mod tests {
         // arms to `description_for`/`input_schema_for` would let it
         // ship with the unknown-name fallback ("(system ability)" and
         // empty `{type: object}` schema). Pin the contract that every
-        // published name has real metadata.
-        for name in published_ability_names() {
-            // `<agent>.chat` is the documented exception — its
-            // description lives in the manifest, not the table — so
-            // skip it here. (The `published_abilities` filter already
-            // strips it from the publisher's view.)
-            if name.ends_with(".chat") {
-                continue;
-            }
-            // `device.keyring.*` abilities are RFC-002-owner-scoped;
-            // their metadata lives in `keyring::abilities`, not the
-            // system descriptor table. Same exception shape as chat.
-            if name.starts_with("device.keyring.") {
-                continue;
-            }
+        // published system name has real metadata. This deliberately uses
+        // `published_system_abilities()` instead of the live daemon view so a
+        // developer's `$HOME/.easynet/plugins` cannot make the unit test
+        // depend on installed third-party packages.
+        for name in published_system_abilities()
+            .into_iter()
+            .map(|meta| meta.name)
+        {
             let desc = description_for(&name);
             assert_ne!(
                 desc, "(system ability)",
@@ -2321,6 +2646,7 @@ mod tests {
         // Run in a child-process-style isolation: redirect the
         // keyring file path to a tempdir + clear DISABLE so the
         // auto-init path runs. The default tests set DISABLE.
+        let _env_lock = crate::facade::cli::test_support::env_lock();
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("keyring.json");
         let prev_disable = std::env::var_os("EASYNET_KEYRING_DISABLE");
@@ -2399,7 +2725,10 @@ mod tests {
             "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera", "mic",
             "screen", "speaker", "voice", "skill", "consent", "01HUB",
         ];
-        let names = published_ability_names();
+        let names: Vec<String> = published_system_abilities()
+            .into_iter()
+            .map(|meta| meta.name)
+            .collect();
         let mut violations: Vec<String> = Vec::new();
         for n in &names {
             if let Some((head, _)) = n.split_once('.') {
@@ -2425,7 +2754,10 @@ mod tests {
     /// a `<self>.*` entry and getting confused.
     #[test]
     fn published_catalogue_never_contains_self_alias() {
-        let names = published_ability_names();
+        let names: Vec<String> = published_system_abilities()
+            .into_iter()
+            .map(|meta| meta.name)
+            .collect();
         let leaks: Vec<&String> = names.iter().filter(|n| n.starts_with("<self>")).collect();
         assert!(
             leaks.is_empty(),

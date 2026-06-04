@@ -365,7 +365,14 @@ fn realm_trust_path() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("EASYNET_REALM_TRUST_PATH") {
         return Some(p.into());
     }
-    Some("/etc/easynet/realm-trust.toml".into())
+    let etc = std::path::PathBuf::from("/etc/easynet/realm-trust.toml");
+    if let Ok(meta) = std::fs::metadata(&etc) {
+        if meta.is_file() && meta.len() > 0 {
+            return Some(etc);
+        }
+    }
+    let home = dirs::home_dir()?;
+    Some(home.join(".easynet").join("realm-trust.toml"))
 }
 
 fn daemon_config_path() -> Option<std::path::PathBuf> {
@@ -373,7 +380,7 @@ fn daemon_config_path() -> Option<std::path::PathBuf> {
         return Some(p.into());
     }
     let home = dirs::home_dir()?;
-    Some(home.join(".easynet").join("config.toml"))
+    Some(home.join(".easynet").join("daemon-config.toml"))
 }
 
 #[cfg(test)]

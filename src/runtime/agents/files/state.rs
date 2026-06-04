@@ -52,6 +52,6 @@ pub fn blob_path(root: &Path, sha256_hex: &str) -> std::io::Result<PathBuf> {
 }
 
 /// v4.1.5 URA for a blob owned by `user`.
-pub fn blob_uri(realm: &str, user: &str, sha256_hex: &str) -> String {
+pub fn blob_ura(realm: &str, user: &str, sha256_hex: &str) -> String {
     crate::ura::resource_dot_ura(realm, &format!("{user}.files"), sha256_hex)
 }

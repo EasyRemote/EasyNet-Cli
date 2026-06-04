@@ -126,9 +126,8 @@ impl ScheduleStore {
         Ok(())
     }
 
-    /// Borrow the directory for diagnostics (`easynet doctor`,
-    /// future `schedule list --paths`).
-    #[allow(dead_code)]
+    /// Borrow the directory. Only consumed by this module's tests.
+    #[cfg(test)]
     pub fn dir(&self) -> &std::path::Path {
         &self.dir
     }

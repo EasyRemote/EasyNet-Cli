@@ -166,6 +166,20 @@ pub fn write(path: &Path, disc: &ControlDiscovery) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Remove `control.json` on graceful daemon shutdown.
+///
+/// Missing files are harmless: a crashed daemon may already have been
+/// cleaned by an operator, and the next start overwrites stale discovery
+/// state anyway. Other I/O failures are returned so the daemon can log
+/// them without changing its exit status.
+pub fn remove(path: &Path) -> anyhow::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +240,18 @@ mod tests {
         assert_eq!(back.supported_ipc_versions, disc.supported_ipc_versions);
         assert_eq!(back.capability_flags, disc.capability_flags);
         assert_eq!(back.pages_port, Some(8787));
+    }
+
+    #[test]
+    fn remove_deletes_file_and_ignores_missing() {
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        write(&p, &sample()).unwrap();
+        assert!(p.exists());
+
+        remove(&p).unwrap();
+        assert!(!p.exists());
+        remove(&p).unwrap();
     }
 
     #[test]

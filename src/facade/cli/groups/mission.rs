@@ -183,6 +183,7 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
         MissionRunOpts {
             source_label: Some(args.file.clone()),
             trace_path: None,
+            invocation_context: None,
         },
     )?;
 

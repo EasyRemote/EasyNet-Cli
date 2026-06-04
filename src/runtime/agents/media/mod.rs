@@ -35,6 +35,9 @@
 /// later PR.
 pub mod camera_snapshot;
 
+#[cfg(target_os = "macos")]
+mod avfoundation_camera;
+
 /// `screen.snapshot` (RFC-005 v3.2 A8) — real handler. PR3
 /// vertical slice mirroring `camera_snapshot`'s shape. Real
 /// backend (`XcapBackend`) captures the primary monitor; tests
@@ -47,3 +50,5 @@ pub mod screen_snapshot;
 /// `tokio::sync::broadcast`. Tests use `SyntheticMicBackend`
 /// which emits a single zero-filled frame.
 pub mod mic_subscribe;
+pub mod resource_bootstrap;
+pub mod resource_subject;

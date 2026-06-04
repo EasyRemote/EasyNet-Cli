@@ -55,10 +55,10 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use tonic::transport::{Channel, Endpoint};
 
-use crate::pb::axon::v1::invocation_client::InvocationClient;
-use crate::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 
 /// PR-N1 commit 9/N: how the dialer reads the trust anchor on
 /// every dial. Two flavours:
@@ -110,7 +110,7 @@ impl TrustSource {
     /// possible by construction); the `Live` flavour reads the
     /// cell's atomic counter, which bumps on every `replace`.
     /// `CrossHubDialer` keys its channel cache by
-    /// `(hub_uri, generation)` so a SIGHUP-triggered swap of the
+    /// `(hub_endpoint, generation)` so a SIGHUP-triggered swap of the
     /// CA pinned for a peer invalidates cached channels for the
     /// next dial — without disturbing in-flight calls on the old
     /// channel.
@@ -336,7 +336,7 @@ pub type DirectoryEventStream = std::pin::Pin<
 #[derive(Clone)]
 pub struct CrossHubDialer {
     trust_source: TrustSource,
-    /// DEC-N5 §5 cert-rotation pool — keyed by `(hub_uri,
+    /// DEC-N5 §5 cert-rotation pool — keyed by `(hub_endpoint,
     /// cert_anchor_generation)`. A SIGHUP-driven anchor swap bumps
     /// the generation on the trust cell; the next dial keys at
     /// the new generation, misses the cache, and builds a fresh
@@ -347,7 +347,7 @@ pub struct CrossHubDialer {
     /// eviction (next §5.2 cleanup pass) reclaims it.
     channels: Arc<DashMap<(HubUri, u64), Channel>>,
     /// **PR-N1 commit 4/N**. Per-peer breaker state, keyed by
-    /// `(hub_uri, scope)`. Lock-free `DashMap` matches the channel
+    /// `(hub_endpoint, scope)`. Lock-free `DashMap` matches the channel
     /// cache shape so admission + breaker contention stay
     /// symmetric on the hot path. Scope separation keeps the
     /// long-stream supervisor's reconnect failures from draining
@@ -410,7 +410,7 @@ impl CrossHubDialer {
     /// uses this constructor in `Hub` / `Both` modes so operators
     /// editing the federation peer set (adding `[[trusted_agent]]
     /// role = "hub"` blocks with the schema-B `origin_tenant_id` /
-    /// `hub_uri` / `tls_ca_pem_path` fields) only need
+    /// `hub_endpoint` / `tls_ca_pem_path` fields) only need
     /// `kill -HUP <daemon_pid>` — no restart, no in-flight
     /// invoke loss.
     #[must_use]
@@ -596,7 +596,7 @@ impl CrossHubDialer {
         let endpoint = Endpoint::from_shared(target_hub.clone())
             .map_err(|err| FederationClientError::DialFailed {
                 hub: target_hub.clone(),
-                detail: format!("invalid hub_uri `{target_hub}`: {err}"),
+                detail: format!("invalid hub_endpoint `{target_hub}`: {err}"),
             })?
             .tls_config(tls)
             .map_err(|err| FederationClientError::DialFailed {
@@ -652,7 +652,7 @@ impl FederationClient for CrossHubDialer {
         // ── 1. Trust gate ────────────────────────────────────
         // `lookup_peer_hub` enforces the schema-B contract:
         // role == Hub AND origin_tenant_id.is_some() AND
-        // hub_uri == target_hub. A peer that fails any of those
+        // hub_endpoint == target_hub. A peer that fails any of those
         // is `PeerNotTrusted`. We additionally require
         // `tls_ca_pem_path.is_some()` since DEC-N1 forbids the
         // dialer from falling back to system CAs.
@@ -683,7 +683,7 @@ impl FederationClient for CrossHubDialer {
         self.check_and_advance_breaker(target_hub, BreakerScope::ForwardInvoke)?;
 
         // ── 3. Resolve channel (cached or fresh TLS-pinned) ──
-        // DEC-N5 §5: key the cache by `(hub_uri, generation)` so a
+        // DEC-N5 §5: key the cache by `(hub_endpoint, generation)` so a
         // SIGHUP-driven anchor swap (which changes the per-peer
         // pinned CA) invalidates cached channels for the next dial.
         // The generation snapshot is per-call — the call sees a
@@ -819,7 +819,7 @@ impl CrossHubDialer {
     /// stays focused on the dial decision; this function is
     /// the JSON-decode side of the wire.
     fn stream_chunks_to_directory_events(
-        inner: tonic::Streaming<crate::pb::axon::v1::InvokeStreamChunk>,
+        inner: tonic::Streaming<easynet_axon::pb::axon::v1::InvokeStreamChunk>,
         target_hub: HubUri,
     ) -> impl futures::Stream<Item = crate::services::federation_directory::DirectoryEvent> + Send
     {
@@ -884,8 +884,8 @@ mod tests {
     //!   gate + cache + plumbing surface.
 
     use super::*;
-    use crate::pb::axon::v1::{InvocationState, ResponseHeader};
     use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use easynet_axon::pb::axon::v1::ResponseHeader;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Mutex;
@@ -958,7 +958,7 @@ mod tests {
                 status: "completed".to_string(),
                 ..ResponseHeader::default()
             }),
-            state: InvocationState::Completed as i32,
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
             ..InvokeResponse::default()
         }
     }
@@ -972,7 +972,7 @@ mod tests {
             role: TrustedAgentRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_tenant_id: Some("peer-realm".to_string()),
-            hub_uri: Some(target_hub.to_string()),
+            hub_endpoint: Some(target_hub.to_string()),
             tls_ca_pem_path: Some(ca_path),
         }
     }
@@ -1004,10 +1004,10 @@ mod tests {
 
     #[tokio::test]
     async fn peer_not_trusted_when_role_is_not_hub() {
-        // A Backend-role entry whose `hub_uri` matches the target
+        // A Backend-role entry whose `hub_endpoint` matches the target
         // is still rejected. `lookup_peer_hub` filters on role +
         // origin_tenant_id, so a misconfigured TOML that put a
-        // backend's URL into hub_uri does not accidentally make
+        // backend's URL into hub_endpoint does not accidentally make
         // it dialable.
         let target = "https://peer-hub.example:50443".to_string();
         let mut entry = fed_peer_entry(&target, PathBuf::from("/dev/null"));
@@ -1453,8 +1453,8 @@ mod tests {
         // Pin the new entry's generation explicitly so a future
         // refactor that broke the eviction would flip this red.
         let entry = dialer.channels.iter().next().expect("one entry remains");
-        let (cached_uri, cached_gen) = entry.key();
-        assert_eq!(cached_uri, &target);
+        let (cached_ura, cached_gen) = entry.key();
+        assert_eq!(cached_ura, &target);
         assert_eq!(
             *cached_gen, 1,
             "remaining entry must be at the new generation"
@@ -1651,7 +1651,10 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
             .forward_invoke(&target, sample_request("test.echo"))
             .await
             .expect("canned response delivered");
-        assert_eq!(resp.state, InvocationState::Completed as i32);
+        assert_eq!(
+            resp.state,
+            easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+        );
         assert_eq!(
             resp.header.as_ref().expect("header present").status,
             "completed"

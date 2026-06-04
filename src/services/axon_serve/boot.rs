@@ -17,7 +17,7 @@
 //    subsystems (control.sock, runtime-dispatch, heartbeat) keep
 //    working unchanged.
 // 2. Loads `~/.easynet/credentials.json` to derive the daemon's own
-//    URI; threads it into `AdmissionFacade` as the loopback bypass
+//    URA; threads it into `AdmissionFacade` as the loopback bypass
 //    so the daemon can call its own RPCs without entering the
 //    realm trust set.
 // 3. Loads `/etc/easynet/realm-trust.toml` (or the
@@ -89,7 +89,6 @@ use tokio_stream::wrappers::ReceiverStream;
 #[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
 
-use crate::pb::axon::v1::invocation_server::InvocationServer;
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
 use crate::runtime::publish::derive_subject_keypair;
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
@@ -101,8 +100,10 @@ use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use crate::services::usage_quota_store::SharedUsageQuotaGate;
 #[cfg(windows)]
 use crate::support::named_pipe::PipeListener;
+use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 
 /// Maximum decoded gRPC message size for InvocationServer/Client on
 /// both directions. tonic's default cap is 4 MiB which aborted
@@ -186,6 +187,7 @@ pub fn start_axon_serve_sidecar(
     hot_agent_registrar_cell: Arc<
         crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell,
     >,
+    plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
 ) -> anyhow::Result<()> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
@@ -205,7 +207,7 @@ pub fn start_axon_serve_sidecar(
     };
 
     let daemon_identity = load_daemon_identity();
-    let daemon_uri = daemon_identity
+    let daemon_ura = daemon_identity
         .as_ref()
         .map(|identity| identity.caller_ura.clone());
     if let Some(identity) = daemon_identity.as_ref() {
@@ -256,12 +258,12 @@ pub fn start_axon_serve_sidecar(
     // device showed REMOVED in /api/v1/devices despite the bidi
     // being healthy.
     //
-    // Seed the local presence with the daemon's own URI on boot so
+    // Seed the local presence with the daemon's own URA on boot so
     // the local resolve answers "yes I'm here" when the operator's
     // backend asks. The dispatch sender pushes into a drain task
     // (kept alive as long as the daemon process), so try_send never
     // observes Closed/Full and the entry stays in the registry.
-    // For actual ability invokes targeting this URI, the
+    // For actual ability invokes targeting this URA, the
     // `daemon_invocation_service` <self>.invoke_remote handler
     // already short-circuits self-targeted invocations to the
     // local Axon session dispatcher BEFORE try_send fires (see
@@ -271,7 +273,7 @@ pub fn start_axon_serve_sidecar(
     // already populated by inbound device sessions, and the hub
     // itself is the directory-of-record. Device-only.
     if matches!(config.mode(), DaemonMode::Device) {
-        if let Some(uri) = daemon_uri.as_ref() {
+        if let Some(ura) = daemon_ura.as_ref() {
             let (noop_tx, mut noop_rx) = tokio::sync::mpsc::channel(
                 crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY,
             );
@@ -288,12 +290,12 @@ pub fn start_axon_serve_sidecar(
                     // land here.
                 }
             });
-            let prior = presence.insert(uri.clone(), noop_tx);
+            let prior = presence.insert(ura.clone(), noop_tx);
             if prior.is_none() {
                 crate::op_event!(
                     component = axon_serve,
                     kind = device_mode_self_presence_seeded,
-                    self_uri = uri,
+                    self_ura = ura,
                     message = "drain task holds receiver; self-targeted invokes route through Axon LocalRuntime",
                 );
             }
@@ -328,7 +330,7 @@ pub fn start_axon_serve_sidecar(
     // PR-N1 commit 9/N + PR-N2 commit 1/N: hub-mode daemons
     // construct one CrossHubDialer that backs both the daemon's
     // outbound `forward_invoke` routing AND the admission gate's
-    // `FederatedKeyResolver` so a cross-realm caller's URI can be
+    // `FederatedKeyResolver` so a cross-realm caller's URA can be
     // resolved via `federation.resolve_key` against the peer hub.
     // Device-mode daemons never originate federation calls, so
     // both surfaces stay local-only.
@@ -344,10 +346,16 @@ pub fn start_axon_serve_sidecar(
         };
 
     let mut admission =
-        AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_uri.clone());
+        AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_ura.clone());
     if let Some(client) = dialer.clone() {
         admission = admission.with_federation(client, federated_peers_cell.clone());
     }
+    // #185: one hot-swappable quota gate is shared by both listeners.
+    // The gate exists even when quota starts disabled so SIGHUP can
+    // enable, disable, or retune `[daemon.quota]` without rebuilding
+    // the admission facade.
+    let quota_gate = SharedUsageQuotaGate::from_policy(config.quota().cloned());
+    admission = admission.with_quota_gate(quota_gate.clone());
     // Grab a clone of the federated-key cache handle BEFORE
     // ownership of the AdmissionFacade moves into the service,
     // so the unified SIGHUP reload task (below) can flush
@@ -355,17 +363,18 @@ pub fn start_axon_serve_sidecar(
     // rotation must not wait for the 5-min per-entry TTL).
     let federated_key_cache = admission.federated_key_cache();
     // **Unified SIGHUP reload coordinator** (replaces the
-    // previous three independent tasks). One task, one signal
+    // previous independent tasks). One task, one signal
     // listener, processes trust-anchor reload + federated_peers
-    // reload + key-cache flush in deterministic sequence per
+    // reload + quota reload + key-cache flush in deterministic sequence per
     // signal — eliminates the race window where a federated
-    // cross-realm admission could fire between the three
+    // cross-realm admission could fire between the individual
     // reloads landing.
     spawn_unified_sighup_reload_task(
         trust_anchor_path.clone(),
         trust_anchor_cell.clone(),
         config_path.clone(),
         federated_peers_cell.clone(),
+        quota_gate.clone(),
         federated_key_cache,
     );
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
@@ -398,7 +407,7 @@ pub fn start_axon_serve_sidecar(
     //
     // Resolution order: explicit `invocation_ledger` argument from
     // the daemon main first (tests use this seam), then a default
-    // open at `<billing_dir>/invocations.redb`. Open failure leaves
+    // open at `<ledger_dir>/invocations.redb`. Open failure leaves
     // the slot `None` — Phase 4 ledger writes silently no-op, same
     // operational degradation as before.
     let resolved_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>> =
@@ -406,16 +415,16 @@ pub fn start_axon_serve_sidecar(
             Some(ledger) => Some(ledger),
             None => {
                 match easynet_axon::invocation::InvocationLedger::open(
-                    config.billing_dir().join("invocations.redb"),
+                    config.ledger_dir().join("invocations.redb"),
                 ) {
                     Ok(ledger) => Some(Arc::new(ledger)),
                     Err(err) => {
-                        let billing_dir_display = format!("{}", config.billing_dir().display());
+                        let ledger_dir_display = format!("{}", config.ledger_dir().display());
                         let err_msg = format!("{err}");
                         crate::op_event!(
                             component = axon_serve,
                             kind = invocation_ledger_disabled,
-                            billing_dir = billing_dir_display,
+                            ledger_dir = ledger_dir_display,
                             error = err_msg,
                         );
                         None
@@ -450,6 +459,18 @@ pub fn start_axon_serve_sidecar(
         )),
         resolved_ledger.clone(),
     );
+    if let Err(err) =
+        futures::executor::block_on(local_runtime.install_bootstrap_self_identity_admin())
+    {
+        let err_msg = err.to_string();
+        crate::op_event!(
+            component = axon_serve,
+            kind = axon_local_runtime_admin_install_failed,
+            level = "warn",
+            error = err_msg,
+            message = "failed to install Axon SDK runtime.bootstrap_self_identity admin ability",
+        );
+    }
 
     // **Phase 5c**. Attach the live `LocalRuntime` to the hot-agent
     // runtime registrar that `build_registry_with_services` constructed
@@ -494,7 +515,28 @@ pub fn start_axon_serve_sidecar(
         message = "Axon LocalRuntime configured; ability registration already landed directly in LocalRuntime",
     );
 
+    let ability_wire_registry = plugin_runtime_manager
+        .as_ref()
+        .map(|manager| manager.ability_wire_registry())
+        .unwrap_or_else(|| {
+            match crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile() {
+                Ok(registry) => Arc::new(registry),
+                Err(err) => {
+                    let error = err.to_string();
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = ability_wire_registry_load_failed,
+                        level = "warn",
+                        error = error.as_str(),
+                        message = "daemon will use core bidi wire profiles only",
+                    );
+                    Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core())
+                }
+            }
+        });
+
     service = service.with_local_runtime(Arc::clone(&local_runtime));
+    service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
 
     if let Ok(seed) = crate::services::axon_serve::daemon_invocation_service::read_hub_identity_seed(
         config.realm(),
@@ -575,15 +617,15 @@ pub fn start_axon_serve_sidecar(
         // "operator manual poll" CLI command but is no longer
         // wired into boot.
         //
-        // Use the daemon's own URI as the subscribe-stream
+        // Use the daemon's own URA as the subscribe-stream
         // envelope's caller. Falls back to a generic CLI-style
-        // URI when the daemon has no credentials yet (test /
+        // URA when the daemon has no credentials yet (test /
         // smoke builds) so the peer's strict-admission still
         // sees a non-empty caller field. The fallback uses the
         // v4.1.5 device shape (`r/cli/device/local`) — the
-        // legacy `r/cli/agent/local` shape would fail the
+        // legacy CLI agent-placeholder shape would fail the
         // strict parser (§A.URA-3: agent tail needs a dot).
-        let supervisor_caller_ura = daemon_uri
+        let supervisor_caller_ura = daemon_ura
             .clone()
             .unwrap_or_else(|| "easynet:///r/cli/device/local".to_string());
         spawn_federated_directory_streaming_supervisor(
@@ -604,7 +646,12 @@ pub fn start_axon_serve_sidecar(
     // is fail-closed for missing material.
     if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
         if let Some(listen_tcp) = config.listen_tcp() {
-            spawn_tcp_tls_listener(&config, listen_tcp, service)?;
+            // The TCP+TLS socket is off-box reachable, so its admission
+            // gate must NOT honour the loopback bypass — otherwise a
+            // caller that spoofs the daemon's own URA in `caller.ura`
+            // would skip the trust-anchor / signature / replay pipeline.
+            // The UDS listener above keeps the default (trusted) bypass.
+            spawn_tcp_tls_listener(&config, listen_tcp, service.with_loopback_trusted(false))?;
         }
     }
 
@@ -620,7 +667,7 @@ pub fn start_axon_serve_sidecar(
             // Resolve the operator-pinned CA for this hub from
             // realm-trust.toml. With a publicly-trusted hub cert
             // (production deploy, Let's Encrypt etc.) the trust
-            // anchor has no entry whose `hub_uri` matches and we
+            // anchor has no entry whose `hub_endpoint` matches and we
             // pass `None` — tonic falls back to the system trust
             // store. With a self-signed hub cert (staging /
             // single-machine demo) the operator has already
@@ -644,6 +691,7 @@ pub fn start_axon_serve_sidecar(
                 hub_ca_pem_path,
                 escalation_state,
                 Arc::clone(&local_runtime),
+                Arc::clone(&ability_wire_registry),
             );
         } else {
             crate::op_event!(
@@ -673,6 +721,7 @@ fn spawn_session_supervisor(
         crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     )>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
 ) {
     // Snapshot Axon's runtime catalogue once before wrapping it in a
     // `LocalAxonSessionDispatcher`. The session supervisor's
@@ -746,6 +795,8 @@ fn spawn_session_supervisor(
         local_dispatcher = local_dispatcher.with_escalation_correlation(correlation);
     }
     local_dispatcher = local_dispatcher.with_local_runtime(Arc::clone(&local_runtime));
+    local_dispatcher =
+        local_dispatcher.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
     let dispatcher = Arc::new(local_dispatcher);
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
@@ -1051,7 +1102,7 @@ struct StoredDeviceIdentity {
     node_id: Option<String>,
 }
 
-/// Resolve the daemon's caller URI plus the optional deterministic
+/// Resolve the daemon's caller URA plus the optional deterministic
 /// signing seed from `~/.easynet/credentials.json`.
 ///
 /// Compatibility rules:
@@ -1059,10 +1110,10 @@ struct StoredDeviceIdentity {
 ///   and boot; they simply omit the signing seed and therefore keep
 ///   the old unsigned frame-0 behaviour
 /// - modern credentials with `(realm|tenant_id, node_id)` always
-///   derive the canonical v4.1.4 device URI from those fields,
+///   derive the canonical v4.1.4 device URA from those fields,
 ///   even when an old `agent_ura` is still persisted alongside
 ///   them. This keeps daemon session registration aligned with
-///   CLI-side `forward_invoke` targets during the URI migration.
+///   CLI-side `forward_invoke` targets during the URA migration.
 /// - once we have the canonical `(realm, node_id)` pair, derive the
 ///   same deterministic Ed25519 seed the SDK uses for
 ///   `easynet:prv:reg:agent.<node>`
@@ -1106,7 +1157,7 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
     // backend (Go side, Phase 3D's Go reader) and daemon (Rust
     // side here) end up signing with the **same** Ed25519 seed.
     //
-    // Misses (env unset, vault file missing, this URI not in
+    // Misses (env unset, vault file missing, this URA not in
     // vault) silently fall through to the v4.1.4 deterministic
     // derive — operators who have not yet rolled their daemons
     // onto the keyring stay unaffected.
@@ -1115,7 +1166,7 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
     } else {
         match (realm.as_deref(), node_id.as_deref()) {
             (Some(realm), Some(node_id)) => {
-                let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+                let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
                 Some(derive_subject_keypair(realm, &subject_id).0)
             }
             _ => None,
@@ -1211,7 +1262,7 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
     }
 }
 
-fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
+fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
     use crate::services::keyring::{MasterKeySource, Vault, VaultError};
 
     std::env::var("EASYNET_KEYRING_PASSPHRASE")
@@ -1253,12 +1304,12 @@ fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
             return None;
         }
     };
-    match vault.export_seed(self_uri) {
+    match vault.export_seed(self_ura) {
         Ok(seed) => {
             crate::op_event!(
                 component = axon_serve,
                 kind = keyring_daemon_seed_resolved,
-                self_uri = self_uri,
+                self_ura = self_ura,
             );
             Some(seed)
         }
@@ -1268,7 +1319,7 @@ fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
             crate::op_event!(
                 component = axon_serve,
                 kind = keyring_export_seed_failed,
-                self_uri = self_uri,
+                self_ura = self_ura,
                 error = err_msg,
             );
             None
@@ -1303,25 +1354,25 @@ fn canonical_caller_ura_from_stored_identity(stored: &StoredDeviceIdentity) -> O
         .agent_ura
         .as_deref()
         .map(str::trim)
-        .filter(|uri| !uri.is_empty())
+        .filter(|ura| !ura.is_empty())
         .map(str::to_string)
 }
 
-// URI v4.1.5: strict parsing via crate::ura::parse_ura per memory
-// `feedback_no_legacy_ura.md`. The daemon's stored caller URI in
+// URA v4.1.5: strict parsing via crate::ura::parse_ura per memory
+// `feedback_no_legacy_ura.md`. The daemon's stored caller URA in
 // v4.1.5 is always `easynet:///r/<realm>/device/<device-uuid>`
 // (device-mode CLI's self-identity URA), so we only need to match
 // that one shape.
 //
-// Legacy `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` (URI v1) and
-// `agent/<bare-id>` (URI v2 transitional) shapes are rejected —
+// Legacy `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` (URA v1) and
+// `agent/<bare-id>` (URA v2 transitional) shapes are rejected —
 // pre-v4.1.5 credential files cannot bootstrap signing seeds; users
 // must `easynet device join` again to mint a v4.1.5 credential.
 // Returning `None` triggers the parent code's "skip signing seed"
 // branch (CLI starts unsigned, harmless in dev).
 
-fn realm_from_agent_ura(uri: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(uri).ok()?;
+fn realm_from_agent_ura(ura: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(ura).ok()?;
     if parsed.realm.is_empty() {
         None
     } else {
@@ -1329,9 +1380,9 @@ fn realm_from_agent_ura(uri: &str) -> Option<String> {
     }
 }
 
-fn device_id_from_caller_ura(uri: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(uri).ok()?;
-    // Only Device-kind URIs carry a device_id field; other kinds
+fn device_id_from_caller_ura(ura: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(ura).ok()?;
+    // Only Device-kind URAs carry a device_id field; other kinds
     // leave it empty. Empty == not a device URA.
     if parsed.device_id.is_empty() {
         None
@@ -1423,8 +1474,8 @@ fn reload_trust_anchor_cell_from(
 /// only under `--features demo-fixture`; the production build
 /// emits a no-op no matter what `EASYNET_DEMO_PRESENCE_SEED`
 /// holds. The seed registers a no-op `DispatchSender` under
-/// each comma-separated URI in the env var so cross-hub
-/// `forward_invoke` targeting that URI survives the presence
+/// each comma-separated URA in the env var so cross-hub
+/// `forward_invoke` targeting that URA survives the presence
 /// registry lookup gate without a real device pair flow.
 ///
 /// Channel capacity 8 mirrors the `<self>.session` accept
@@ -1439,7 +1490,7 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
     let Ok(seed_value) = std::env::var("EASYNET_DEMO_PRESENCE_SEED") else {
         return;
     };
-    for seed_uri in seed_value
+    for seed_ura in seed_value
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -1447,7 +1498,7 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
         >(8);
-        presence.insert(seed_uri.to_string(), tx);
+        presence.insert(seed_ura.to_string(), tx);
         tokio::spawn(async move {
             while rx.recv().await.is_some() {
                 // discard
@@ -1456,7 +1507,7 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
         crate::op_event!(
             component = axon_serve,
             kind = demo_presence_seed_registered,
-            seed_uri = seed_uri,
+            seed_ura = seed_ura,
             message = "test fixture; do not use in production",
         );
     }
@@ -1484,8 +1535,8 @@ fn maybe_seed_demo_presence(_presence: &Arc<PresenceRegistry>) {
 ///
 /// **Order matters within a signal**. Trust anchor first (operator's
 /// most-likely-edited file), then daemon-config (federated_peers
-/// table), then key-cache flush (so the next admission re-resolves
-/// against the new anchor + peers).
+/// table + quota policy), then key-cache flush (so the next
+/// admission re-resolves against the new anchor + peers).
 ///
 /// Each reload step is independently fault-tolerant: a TOML parse
 /// error in one step logs the error and continues to the next step
@@ -1497,6 +1548,7 @@ fn spawn_unified_sighup_reload_task(
     trust_anchor_cell: SharedTrustAnchor,
     daemon_config_path: PathBuf,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    quota_gate: SharedUsageQuotaGate,
     federated_key_cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
 ) {
     tokio::spawn(async move {
@@ -1541,27 +1593,37 @@ fn spawn_unified_sighup_reload_task(
                 }
             }
 
-            // Step 2: daemon-config federated_peers.
+            // Step 2: daemon-config federated_peers + quota.
             let daemon_config_path_display = format!("{}", daemon_config_path.display());
-            match reload_federated_peers_cell_from(&daemon_config_path, &federated_peers_cell) {
-                Ok(len) => {
+            match reload_daemon_config_cells_from(
+                &daemon_config_path,
+                &federated_peers_cell,
+                &quota_gate,
+            ) {
+                Ok(snapshot) => {
+                    let quota_state = if snapshot.quota_configured {
+                        "configured"
+                    } else {
+                        "disabled"
+                    };
                     crate::op_event!(
                         component = axon_serve,
-                        kind = sighup_federated_peers_reloaded,
+                        kind = sighup_daemon_config_reloaded,
                         step = "2/3",
                         path = daemon_config_path_display,
-                        entries = len,
+                        federated_peers = snapshot.federated_peers_len,
+                        quota = quota_state,
                     );
                 }
                 Err(err) => {
                     let err_msg = format!("{err}");
                     crate::op_event!(
                         component = axon_serve,
-                        kind = sighup_federated_peers_reload_failed,
+                        kind = sighup_daemon_config_reload_failed,
                         step = "2/3",
                         path = daemon_config_path_display,
                         error = err_msg,
-                        message = "keeping previous federated_peers map",
+                        message = "keeping previous federated_peers map and quota policy",
                     );
                 }
             }
@@ -1586,24 +1648,37 @@ fn spawn_unified_sighup_reload_task(
     _trust_anchor_cell: SharedTrustAnchor,
     _daemon_config_path: PathBuf,
     _federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    _quota_gate: SharedUsageQuotaGate,
     _federated_key_cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
 ) {
 }
 
-/// **PR-N1 commit 10/N**. Re-parse the daemon-config TOML at
-/// `path` and republish its `federated_peers` table into the
-/// cell. Returns the number of entries in the new map on
-/// success.
-fn reload_federated_peers_cell_from(
+struct ReloadedDaemonConfigCells {
+    federated_peers_len: usize,
+    quota_configured: bool,
+}
+
+/// Re-parse daemon-config TOML at `path` and republish all live cells
+/// that are intentionally SIGHUP-managed from that file.
+fn reload_daemon_config_cells_from(
     path: &Path,
     federated_peers_cell: &crate::services::federated_peers_cell::SharedFederatedPeers,
-) -> anyhow::Result<usize> {
+    quota_gate: &SharedUsageQuotaGate,
+) -> anyhow::Result<ReloadedDaemonConfigCells> {
     let next_config = DaemonConfig::load(path)
         .map_err(|err| anyhow::anyhow!("reload daemon-config from {}: {err}", path.display()))?;
     let next_peers = next_config.federated_peers().clone();
     let len = next_peers.len();
     federated_peers_cell.replace(next_peers);
-    Ok(len)
+
+    let next_quota = next_config.quota().cloned();
+    let quota_configured = next_quota.is_some();
+    quota_gate.replace_policy(next_quota);
+
+    Ok(ReloadedDaemonConfigCells {
+        federated_peers_len: len,
+        quota_configured,
+    })
 }
 
 /// **PR-N3 commit N3-3.1**. Spawn the cross-realm directory
@@ -1625,7 +1700,7 @@ fn reload_federated_peers_cell_from(
 fn spawn_federated_directory_poll_task(
     federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
-    daemon_uri: Option<String>,
+    daemon_ura: Option<String>,
     federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
 ) {
     tokio::spawn(async move {
@@ -1644,7 +1719,7 @@ fn spawn_federated_directory_poll_task(
             let outcome = crate::services::federation_directory::poll_once(
                 federation_client.as_ref(),
                 &peers,
-                daemon_uri.as_deref(),
+                daemon_ura.as_deref(),
                 &federated_directory_cell,
             )
             .await;
@@ -1709,10 +1784,10 @@ fn spawn_federated_directory_streaming_supervisor(
                 crate::services::federation_directory::reconcile_streaming_supervisors(
                     &snapshot,
                     &mut active,
-                    |peer_realm, peer_hub_uri| {
+                    |peer_realm, peer_hub_endpoint| {
                         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
                         let realm_owned = peer_realm.to_string();
-                        let uri_owned = peer_hub_uri.to_string();
+                        let uri_owned = peer_hub_endpoint.to_string();
                         let caller_owned = caller_ura.clone();
                         let client_clone = Arc::clone(&federation_client_outer);
                         let cell_clone = directory_cell_outer.clone();
@@ -1944,6 +2019,7 @@ mod tests {
             Arc::new(
                 crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
+            None,
         )
         .expect("missing config is a soft skip");
     }
@@ -2078,6 +2154,7 @@ tls_key_pem = {key:?}
                 Arc::new(
                     crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
                 ),
+                None,
             );
         }));
         // futures::FutureExt::catch_unwind would be nicer; we

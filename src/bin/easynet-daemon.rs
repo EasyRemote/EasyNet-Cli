@@ -31,9 +31,6 @@
 // - Schedule tick (PR-SCHED).
 // - System ability dispatch — proxy still returns the v1 skeleton
 //   error envelope (PR-INVOCATION-EXEC-UNITY).
-// - Graceful shutdown that removes `~/.easynet/control.json` on
-//   SIGTERM. Today the file is left behind for the next start to
-//   overwrite; the OS frees the UDS file on process exit.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -44,6 +41,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use easynet_cli::facade::cli::run_daemon;
+use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{default_config_path, DaemonConfig};
 use easynet_cli::runtime::agents;
 use easynet_cli::runtime::domain::{NodeId, ScheduleId, TenantId};
@@ -56,14 +54,14 @@ use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
 use easynet_cli::services::control::ability_proxy::AbilityProxy;
 use easynet_cli::services::control::boot_events::{BootBus, BootEvent};
-use easynet_cli::services::control::runtime_dispatch;
-use easynet_cli::services::control::server;
+use easynet_cli::services::control::{discovery, runtime_dispatch, server};
 
 /// Heartbeat is opt-in: only spawn the legacy loop if the parent
 /// process configured an endpoint. This lets `cargo run --bin
 /// easynet-daemon` boot in IPC-only mode for FFI smoke tests without
 /// requiring a Hub.
 const ENV_HB_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
+const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -142,6 +140,25 @@ async fn main() -> anyhow::Result<()> {
         .filter(|s| !s.is_empty())
         .map(NodeId::new)
         .unwrap_or_else(|| NodeId::new("self"));
+    if media_resource_bootstrap_enabled() {
+        match config::load_credentials() {
+            Ok(creds) => {
+                let owner_agent = easynet_cli::ura::device_ura(creds.realm_str(), &creds.node_id);
+                match agents::media::resource_bootstrap::seed_default_device_resources(
+                    creds.realm_str(),
+                    &owner_agent,
+                ) {
+                    Ok(count) => eprintln!("[daemon] media resources ready: {count} known"),
+                    Err(err) => eprintln!("[daemon] media resource bootstrap failed: {err:#}"),
+                }
+            }
+            Err(err) => {
+                eprintln!("[daemon] media resource bootstrap skipped: {err}");
+            }
+        }
+    } else {
+        eprintln!("[daemon] media resource bootstrap skipped: {ENV_BOOTSTRAP_MEDIA_RESOURCES}=0");
+    }
     let kernel_api: Arc<dyn KernelApi> = Arc::clone(&kernel) as Arc<dyn KernelApi>;
     let loop_driver = Arc::new(KernelLoopInvocationDriver::new(
         Arc::clone(&kernel_api),
@@ -212,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
     // landing.
     let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
         Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
-    let registry = agents::build_registry_for_daemon(
+    let built_registry = agents::build_registry_for_daemon_result(
         kernel.session_service(),
         kernel.permission_service(),
         kernel.discuss_service(),
@@ -224,6 +241,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Arc::clone(&local_runtime)),
         Arc::clone(&hot_agent_registrar_cell),
     );
+    let registry = Arc::clone(&built_registry.catalog);
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
 
@@ -256,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&local_runtime),
             invocation_ledger,
             Arc::clone(&hot_agent_registrar_cell),
+            Some(Arc::clone(&built_registry.plugin_runtime_manager)),
         ) {
             eprintln!("[axon-serve] sidecar boot failed: {e:#}");
             boot_bus.emit_failed("axon-serve-sidecar", e.to_string());
@@ -375,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_ready();
 
     wait_for_shutdown_signal().await;
+    cleanup_control_discovery();
     Ok(())
 }
 
@@ -393,6 +413,16 @@ fn resolve_pages_start_port() -> anyhow::Result<u16> {
         Err(std::env::VarError::NotUnicode(_)) => {
             anyhow::bail!("EASYNET_PAGES_PORT is not valid UTF-8")
         }
+    }
+}
+
+fn media_resource_bootstrap_enabled() -> bool {
+    match std::env::var(ENV_BOOTSTRAP_MEDIA_RESOURCES) {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
     }
 }
 
@@ -419,6 +449,16 @@ async fn wait_for_shutdown_signal() {
     }
 }
 
+fn cleanup_control_discovery() {
+    let path = discovery::default_path();
+    if let Err(err) = discovery::remove(&path) {
+        eprintln!(
+            "[daemon] failed to remove control discovery file at {}: {err:#}",
+            path.display()
+        );
+    }
+}
+
 fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLedger>> {
     let config = match DaemonConfig::load(&default_config_path()) {
         Ok(config) => config,
@@ -427,7 +467,7 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
             return None;
         }
     };
-    let path = config.billing_dir().join("invocations.redb");
+    let path = config.ledger_dir().join("invocations.redb");
     match easynet_axon::invocation::InvocationLedger::open(&path) {
         Ok(ledger) => Some(Arc::new(ledger)),
         Err(err) => {
@@ -520,7 +560,7 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                         fire.schedule_id, fire.fire_at, fire.catch_up
                     ),
                 };
-                let local_device_uri =
+                let local_device_ura =
                     easynet_cli::ura::device_ura("default", entry.target_node.as_str());
                 let schedule_subject_ura = easynet_cli::ura::resource_dot_ura(
                     "default",
@@ -528,8 +568,8 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     "",
                 );
                 let inv = match Invocation::try_new(
-                    local_device_uri.clone(),
-                    local_device_uri,
+                    local_device_ura.clone(),
+                    local_device_ura,
                     format!("{}.chat", agent),
                     schedule_subject_ura,
                     CausalContext::Null,

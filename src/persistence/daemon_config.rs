@@ -23,11 +23,13 @@
 //   file is read by `services/realm_trust_anchor` and is authored by
 //   the device-pairing flow shipping in PR-7. The daemon uses both
 //   files at boot but they have distinct lifecycles.
-// - It does **not** hot-reload. The TOML is parsed once at boot.
-//   Operator workflow for cert renewal under Let's Encrypt is
-//   `systemctl restart easynet-daemon` after `certbot renew`; see
-//   `docs/daemon-config.md` (PR-1 deliverable). File-watch reload is
-//   a future RFC, explicitly out of RFC-003 scope.
+// - It does **not** rebuild listeners or TLS state after boot. The
+//   SIGHUP coordinator in `services::axon_serve::boot` deliberately
+//   hot-reloads only cells whose runtime owners are built for
+//   replacement: `federated_peers` and `[daemon.quota]`. Mode,
+//   socket paths, TCP listeners, TLS cert/key paths, hub endpoint,
+//   realm, and ledger path remain boot-time invariants and require a
+//   daemon restart.
 //
 // Invariants enforced at load time
 // --------------------------------
@@ -53,8 +55,8 @@
 //   time only validates the path syntax.
 //
 // Invariant 2.1 (cert reload) is a documentation-only invariant and
-// imposes no code path here. PR-1 explicitly does not implement
-// cert hot-reload.
+// imposes no code path here. Cert/key changes require a daemon
+// restart; SIGHUP does not rebuild TLS listeners.
 //
 // Authorship and stability
 // ------------------------
@@ -85,7 +87,7 @@ pub const DEFAULT_DAEMON_UDS_PATH: &str = "~/.easynet/daemon.sock";
 /// override is via the daemon binary's `--config <path>` argument
 /// (handled in the binary, not here).
 pub const DEFAULT_DAEMON_CONFIG_PATH: &str = "~/.easynet/daemon-config.toml";
-pub const DEFAULT_BILLING_DIR: &str = "~/.easynet/billing";
+pub const DEFAULT_LEDGER_DIR: &str = "~/.easynet/billing";
 
 /// Expand a `~/...` path against the current process's HOME. Paths
 /// without the prefix are returned unchanged. Kept in
@@ -119,12 +121,12 @@ pub fn default_uds_path() -> PathBuf {
     expand_home_path(Path::new(DEFAULT_DAEMON_UDS_PATH))
 }
 
-pub fn default_billing_dir() -> PathBuf {
+pub fn default_ledger_dir() -> PathBuf {
     std::env::var_os("EASYNET_WORKSPACE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(|workspace| workspace.join("billing"))
-        .unwrap_or_else(|| expand_home_path(Path::new(DEFAULT_BILLING_DIR)))
+        .unwrap_or_else(|| expand_home_path(Path::new(DEFAULT_LEDGER_DIR)))
 }
 
 /// Resolve the daemon's gRPC UDS socket using the local config file when
@@ -326,8 +328,8 @@ pub struct DaemonConfig {
     tls_cert_pem: Option<PathBuf>,
     tls_key_pem: Option<PathBuf>,
     uds_path: PathBuf,
-    billing_dir: PathBuf,
-    /// **PR-N1 commit 3a/N**. Operator-curated `tenant → hub_uri`
+    ledger_dir: PathBuf,
+    /// **PR-N1 commit 3a/N**. Operator-curated `tenant → hub_endpoint`
     /// map the federation dispatcher consults when `federation.
     /// forward_invoke` targets a tenant whose realm is not local.
     /// Empty = no cross-tenant routing configured (legacy
@@ -357,6 +359,12 @@ pub struct DaemonConfig {
     /// See [`crate::services::axon_serve::hub_resolver`] for the
     /// resolver-side enforcement and the threat-model write-up.
     allow_directory_auto_route: bool,
+    /// #185: per-consumer invocation quota policy (caps applied per
+    /// ability per window — see [`QuotaConfig`]). `None` = the feature
+    /// is off and every caller is unmetered. `Some` even with no caps
+    /// still means "metering wired" — the admission gate consults the
+    /// store but a `0` cap leaves callers unthrottled.
+    quota: Option<QuotaConfig>,
 }
 
 impl DaemonConfig {
@@ -398,9 +406,10 @@ impl DaemonConfig {
             tls_cert_pem,
             tls_key_pem,
             uds_path,
-            billing_dir,
+            ledger_dir,
             federated_peers,
             allow_directory_auto_route,
+            quota,
         } = daemon;
 
         if realm.trim().is_empty() {
@@ -422,9 +431,9 @@ impl DaemonConfig {
             .transpose()?;
 
         let uds_path = uds_path.map(PathBuf::from).unwrap_or_else(default_uds_path);
-        let billing_dir = billing_dir
+        let ledger_dir = ledger_dir
             .map(PathBuf::from)
-            .unwrap_or_else(default_billing_dir);
+            .unwrap_or_else(default_ledger_dir);
 
         if matches!(mode, DaemonMode::Device) && hub_endpoint.is_none() {
             return Err(DaemonConfigError::DeviceMissingHubEndpoint);
@@ -438,9 +447,10 @@ impl DaemonConfig {
             tls_cert_pem: tls_cert_pem.map(PathBuf::from),
             tls_key_pem: tls_key_pem.map(PathBuf::from),
             uds_path,
-            billing_dir,
+            ledger_dir,
             federated_peers: federated_peers.unwrap_or_default(),
             allow_directory_auto_route: allow_directory_auto_route.unwrap_or(false),
+            quota: quota.map(QuotaConfig::from),
         })
     }
 
@@ -510,8 +520,8 @@ impl DaemonConfig {
         &self.uds_path
     }
 
-    pub fn billing_dir(&self) -> &Path {
-        &self.billing_dir
+    pub fn ledger_dir(&self) -> &Path {
+        &self.ledger_dir
     }
 
     /// **PR-N1 commit 3a/N**. Operator-curated cross-tenant
@@ -530,6 +540,14 @@ impl DaemonConfig {
     /// doc-comment for the threat model.
     pub fn allow_directory_auto_route(&self) -> bool {
         self.allow_directory_auto_route
+    }
+
+    /// The per-consumer invocation quota policy (#185), or `None` when
+    /// the operator did not configure a `[daemon.quota]` table (the
+    /// feature is off; every caller is unmetered).
+    #[must_use]
+    pub fn quota(&self) -> Option<&QuotaConfig> {
+        self.quota.as_ref()
     }
 }
 
@@ -554,9 +572,9 @@ pub(crate) struct RawDaemonSection {
     pub(crate) tls_key_pem: Option<String>,
     #[serde(default)]
     pub(crate) uds_path: Option<String>,
-    #[serde(default)]
-    pub(crate) billing_dir: Option<String>,
-    /// PR-N1 commit 3a/N: operator-curated `tenant → hub_uri`
+    #[serde(default, alias = "billing_dir")]
+    pub(crate) ledger_dir: Option<String>,
+    /// PR-N1 commit 3a/N: operator-curated `tenant → hub_endpoint`
     /// map for cross-tenant `federation.forward_invoke` routing.
     /// `#[serde(default)]` so legacy daemon-config.toml files
     /// load unchanged (empty map).
@@ -570,6 +588,119 @@ pub(crate) struct RawDaemonSection {
     /// configs load unchanged and inherit the default.
     #[serde(default)]
     pub(crate) allow_directory_auto_route: Option<bool>,
+    /// #185: per-consumer invocation quota. Absent = the whole
+    /// feature is off (every caller unmetered). `#[serde(default)]`
+    /// so existing configs load unchanged.
+    #[serde(default)]
+    pub(crate) quota: Option<RawQuotaSection>,
+}
+
+/// Raw `[daemon.quota]` sub-table. All fields optional so an empty
+/// `[daemon.quota]` table is valid (and equivalent to "metering on
+/// with no caps").
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct RawQuotaSection {
+    #[serde(default)]
+    pub(crate) default_cap_per_window: Option<i32>,
+    #[serde(default)]
+    pub(crate) window_ms: Option<i64>,
+    #[serde(default)]
+    pub(crate) per_consumer: Option<BTreeMap<String, i32>>,
+}
+
+/// Per-consumer invocation quota policy (#185). The daemon's
+/// admission gate consults this AFTER permission is granted, to meter
+/// an already-admitted caller. A consumer's cap is its
+/// `per_consumer` entry if present, else `default_cap_per_window`. A
+/// cap `<= 0` means that consumer is unmetered.
+///
+/// **Granularity (read before setting a cap).** The cap is keyed by
+/// consumer URA but applies *per ability, per window*: the enforcement
+/// counter ([`crate::services::usage_quota_store`]) windows on
+/// `(consumer_ura, ability)`, so a cap of `N` admits up to `N` calls
+/// to *each distinct ability* per window, not `N` calls total across
+/// all abilities. This is deliberate — one hot ability cannot starve a
+/// consumer's budget for the rest — but an operator sizing a cap must
+/// reason per ability, not per consumer-aggregate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuotaConfig {
+    /// Per-ability, per-window request cap for any consumer without a
+    /// `per_consumer` override. `0` (the default) = unmetered. See the
+    /// struct-level granularity note: this bounds calls to each
+    /// distinct ability independently, not the consumer's total.
+    default_cap_per_window: i32,
+    /// Tumbling-window width in millis. Defaults to 60_000 (1 min).
+    window_ms: i64,
+    /// Per-consumer-URA cap overrides. Each value is itself a
+    /// per-ability, per-window cap (see the struct-level granularity
+    /// note). `BTreeMap` for stable audit / test ordering.
+    per_consumer: BTreeMap<String, i32>,
+}
+
+impl QuotaConfig {
+    /// Default window width when the operator omits `window_ms`.
+    pub const DEFAULT_WINDOW_MS: i64 = 60_000;
+
+    /// Construct a policy directly. Used by the owner-facing
+    /// `quota` CLI verb (which builds and persists a policy) and by
+    /// tests. `window_ms <= 0` is clamped to [`Self::DEFAULT_WINDOW_MS`]
+    /// so the window arithmetic always has a positive width.
+    #[must_use]
+    pub fn new(
+        default_cap_per_window: i32,
+        window_ms: i64,
+        per_consumer: BTreeMap<String, i32>,
+    ) -> Self {
+        Self {
+            default_cap_per_window,
+            window_ms: if window_ms > 0 {
+                window_ms
+            } else {
+                Self::DEFAULT_WINDOW_MS
+            },
+            per_consumer,
+        }
+    }
+
+    /// The per-ability, per-window cap that applies to `consumer_ura`:
+    /// its override if present, otherwise the default cap. A return
+    /// `<= 0` means unmetered. The returned cap bounds each distinct
+    /// ability independently (see the struct-level granularity note).
+    #[must_use]
+    pub fn cap_for(&self, consumer_ura: &str) -> i32 {
+        self.per_consumer
+            .get(consumer_ura)
+            .copied()
+            .unwrap_or(self.default_cap_per_window)
+    }
+
+    /// Tumbling-window width in millis.
+    #[must_use]
+    pub fn window_ms(&self) -> i64 {
+        self.window_ms
+    }
+
+    /// The default per-window cap (for consumers without an override).
+    #[must_use]
+    pub fn default_cap_per_window(&self) -> i32 {
+        self.default_cap_per_window
+    }
+
+    /// Read-only view of the per-consumer overrides.
+    #[must_use]
+    pub fn per_consumer(&self) -> &BTreeMap<String, i32> {
+        &self.per_consumer
+    }
+}
+
+impl From<RawQuotaSection> for QuotaConfig {
+    fn from(raw: RawQuotaSection) -> Self {
+        Self::new(
+            raw.default_cap_per_window.unwrap_or(0),
+            raw.window_ms.unwrap_or(Self::DEFAULT_WINDOW_MS),
+            raw.per_consumer.unwrap_or_default(),
+        )
+    }
 }
 
 /// Every way `DaemonConfig::load` can fail. Each variant maps to a
@@ -638,9 +769,10 @@ mod tests {
                 tls_cert_pem: cert.map(str::to_string),
                 tls_key_pem: key.map(str::to_string),
                 uds_path: None,
-                billing_dir: None,
+                ledger_dir: None,
                 federated_peers: None,
                 allow_directory_auto_route: None,
+                quota: None,
             },
         }
     }
@@ -693,7 +825,94 @@ mod tests {
     }
 
     #[test]
-    fn billing_dir_defaults_and_can_be_configured() {
+    fn quota_absent_means_feature_off() {
+        let cfg = DaemonConfig::from_raw(raw(
+            DaemonMode::Device,
+            "easynet.run",
+            Some("https://hub.example.com:50051"),
+            None,
+            None,
+            None,
+        ))
+        .expect("default config");
+        assert!(
+            cfg.quota().is_none(),
+            "no [daemon.quota] table → metering off"
+        );
+    }
+
+    #[test]
+    fn quota_table_parses_caps_window_and_overrides() {
+        let parsed: RawDaemonConfig = toml::from_str(
+            r#"
+            [daemon]
+            mode = "device"
+            realm = "easynet.run"
+            hub_endpoint = "https://hub.example.com:50051"
+
+            [daemon.quota]
+            default_cap_per_window = 100
+            window_ms = 30000
+
+            [daemon.quota.per_consumer]
+            "easynet:///r/easynet.run/user/alice" = 5
+            "#,
+        )
+        .expect("quota TOML parses");
+        let cfg = DaemonConfig::from_raw(parsed).expect("valid config");
+        let quota = cfg.quota().expect("quota configured");
+
+        assert_eq!(quota.default_cap_per_window(), 100);
+        assert_eq!(quota.window_ms(), 30_000);
+        // Override beats the default; an unlisted consumer falls back.
+        assert_eq!(quota.cap_for("easynet:///r/easynet.run/user/alice"), 5);
+        assert_eq!(quota.cap_for("easynet:///r/easynet.run/user/bob"), 100);
+    }
+
+    #[test]
+    fn empty_quota_table_means_metering_on_with_default_window() {
+        let parsed: RawDaemonConfig = toml::from_str(
+            r#"
+            [daemon]
+            mode = "device"
+            realm = "easynet.run"
+            hub_endpoint = "https://hub.example.com:50051"
+
+            [daemon.quota]
+            "#,
+        )
+        .expect("empty quota table parses");
+        let cfg = DaemonConfig::from_raw(parsed).expect("valid config");
+        let quota = cfg.quota().expect("an empty table still wires metering");
+        assert_eq!(quota.default_cap_per_window(), 0, "no cap → unmetered caps");
+        assert_eq!(quota.window_ms(), QuotaConfig::DEFAULT_WINDOW_MS);
+    }
+
+    #[test]
+    fn quota_non_positive_window_clamps_to_default() {
+        let parsed: RawDaemonConfig = toml::from_str(
+            r#"
+            [daemon]
+            mode = "device"
+            realm = "easynet.run"
+            hub_endpoint = "https://hub.example.com:50051"
+
+            [daemon.quota]
+            default_cap_per_window = 10
+            window_ms = -1
+            "#,
+        )
+        .expect("quota TOML parses");
+        let cfg = DaemonConfig::from_raw(parsed).expect("valid config");
+        assert_eq!(
+            cfg.quota().expect("quota configured").window_ms(),
+            QuotaConfig::DEFAULT_WINDOW_MS,
+            "hand-edited non-positive windows must not collapse to a 1ms quota window"
+        );
+    }
+
+    #[test]
+    fn ledger_dir_defaults_and_can_be_configured() {
         let mut raw = raw(
             DaemonMode::Device,
             "easynet.run",
@@ -703,13 +922,31 @@ mod tests {
             None,
         );
         let defaulted = DaemonConfig::from_raw(raw.clone()).expect("default config");
-        assert!(defaulted.billing_dir().ends_with(".easynet/billing"));
+        assert!(defaulted.ledger_dir().ends_with(".easynet/billing"));
 
-        raw.daemon.billing_dir = Some("/tmp/easynet-workspace/billing".to_string());
-        let configured = DaemonConfig::from_raw(raw).expect("configured billing dir");
+        raw.daemon.ledger_dir = Some("/tmp/easynet-workspace/billing".to_string());
+        let configured = DaemonConfig::from_raw(raw).expect("configured ledger dir");
         assert_eq!(
-            configured.billing_dir(),
+            configured.ledger_dir(),
             Path::new("/tmp/easynet-workspace/billing")
+        );
+    }
+
+    #[test]
+    fn legacy_billing_dir_key_deserializes_as_ledger_dir() {
+        let parsed: RawDaemonConfig = toml::from_str(
+            r#"
+            [daemon]
+            mode = "device"
+            realm = "easynet.run"
+            hub_endpoint = "https://hub.example.com:50051"
+            billing_dir = "/tmp/easynet-workspace/billing"
+            "#,
+        )
+        .expect("legacy billing_dir key must remain accepted");
+        assert_eq!(
+            parsed.daemon.ledger_dir.as_deref(),
+            Some("/tmp/easynet-workspace/billing")
         );
     }
 

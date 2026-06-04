@@ -29,12 +29,12 @@
 // Why not a bigger helper that also takes the Endpoint
 // ----------------------------------------------------
 // The two call sites' Endpoint construction looks identical at
-// first glance — `Endpoint::from_shared(uri)` then optional
+// first glance — `Endpoint::from_shared(ura)` then optional
 // `connect_timeout` — but they map errors differently:
 //   - cross_hub_dial maps to `FederationClientError::DialFailed`
 //   - session_initiator maps to `SessionError::InvalidEndpoint`
 // Both wrap the underlying `tonic::transport::Error` with extra
-// context (the hub URI string, the CA file path). Bundling the
+// context (the hub URA string, the CA file path). Bundling the
 // Endpoint construction into the helper would force a single shared
 // error type and lose that context. Keeping the helper at the
 // `ClientTlsConfig` boundary preserves caller-side error

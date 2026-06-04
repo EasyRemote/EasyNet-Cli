@@ -18,7 +18,33 @@ use easynet_axon::error::Result as AxonResult;
 use easynet_axon::reconnect::{ReconnectConfig, ReconnectHook, ReconnectingBridge};
 
 use crate::persistence::config;
+use crate::runtime::federation_client::HeartbeatReceipt;
 use crate::support::{output, shutdown::ShutdownSignal};
+
+#[cfg(feature = "axon-pb")]
+pub use easynet_axon::pb::axon::v1::{
+    FederationHeartbeatResponse, RejectedNodeInfo, ResponseHeader,
+};
+
+#[cfg(not(feature = "axon-pb"))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResponseHeader {
+    pub status: String,
+    pub permanent: bool,
+}
+
+#[cfg(not(feature = "axon-pb"))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RejectedNodeInfo {
+    pub node_id: String,
+}
+
+#[cfg(not(feature = "axon-pb"))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FederationHeartbeatResponse {
+    pub header: Option<ResponseHeader>,
+    pub rejected_nodes: Vec<RejectedNodeInfo>,
+}
 
 // The runtime-side federation sweeper starts suspecting stale members
 // at ~20 s. The CLI used to wait 30 s before sending the next
@@ -78,7 +104,7 @@ pub trait HeartbeatTransport {
     /// Perform one heartbeat RPC and return the Hub response or an error.
     /// The loop passes the response to `check_rejection` — all fields the
     /// state machine inspects must survive this round-trip unchanged.
-    fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value>;
+    fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<FederationHeartbeatResponse>;
 }
 
 /// Reconnecting transport — every heartbeat rides the SDK's
@@ -99,21 +125,21 @@ impl<'a> ReconnectingHeartbeat<'a> {
 }
 
 impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
-    fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value> {
+    fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<FederationHeartbeatResponse> {
         // Mirrors DirectBridge::beat — see that impl for the
         // `federation.heartbeat` rationale. The reconnecting
         // wrapper retries the call once on a transport-level
         // failure (its standard contract), so an abilty-level
         // hub rejection still propagates here while a transient
         // dropped connection self-heals.
-        let device_uri = crate::ura::device_ura(tenant, node_id);
+        let device_ura = crate::ura::device_ura(tenant, node_id);
         self.bridge.with_bridge(|br| {
             let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
                 br,
-                device_uri.clone(),
+                device_ura.clone(),
             );
             crate::runtime::advertise::heartbeat(&invoker, tenant, tenant)
-                .map(|_| serde_json::json!({"ok": true}))
+                .map(heartbeat_response_from_receipt)
                 .map_err(easynet_axon::error::AxonError::Bridge)
         })
     }
@@ -178,17 +204,86 @@ fn jittered_interval(interval_ms: u64, node_id: &str) -> std::time::Duration {
     std::time::Duration::from_millis(jittered)
 }
 
+fn heartbeat_response_from_receipt(receipt: HeartbeatReceipt) -> FederationHeartbeatResponse {
+    let header = receipt.header.map_or_else(
+        || {
+            if receipt.permanent || !receipt.status.is_empty() {
+                Some(response_header(receipt.status, receipt.permanent))
+            } else {
+                None
+            }
+        },
+        |h| Some(response_header(h.status, h.permanent)),
+    );
+    let rejected_nodes = receipt
+        .rejected_nodes
+        .into_iter()
+        .map(|n| rejected_node(n.node_id))
+        .collect();
+    heartbeat_response(header, rejected_nodes)
+}
+
+#[cfg(feature = "axon-pb")]
+fn response_header(status: String, permanent: bool) -> ResponseHeader {
+    ResponseHeader {
+        request_id: String::new(),
+        trace_id: String::new(),
+        status,
+        permanent,
+    }
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn response_header(status: String, permanent: bool) -> ResponseHeader {
+    ResponseHeader { status, permanent }
+}
+
+#[cfg(feature = "axon-pb")]
+fn rejected_node(node_id: String) -> RejectedNodeInfo {
+    RejectedNodeInfo {
+        node_id,
+        code: 0,
+        message: String::new(),
+    }
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn rejected_node(node_id: String) -> RejectedNodeInfo {
+    RejectedNodeInfo { node_id }
+}
+
+#[cfg(feature = "axon-pb")]
+fn heartbeat_response(
+    header: Option<ResponseHeader>,
+    rejected_nodes: Vec<RejectedNodeInfo>,
+) -> FederationHeartbeatResponse {
+    FederationHeartbeatResponse {
+        header,
+        rejected_nodes,
+        ..Default::default()
+    }
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn heartbeat_response(
+    header: Option<ResponseHeader>,
+    rejected_nodes: Vec<RejectedNodeInfo>,
+) -> FederationHeartbeatResponse {
+    FederationHeartbeatResponse {
+        header,
+        rejected_nodes,
+    }
+}
+
 /// Check heartbeat response for permanent rejection or node removal.
-fn check_rejection(resp: &serde_json::Value, node_id: &str) -> Option<HeartbeatOutcome> {
+fn check_rejection(resp: &FederationHeartbeatResponse, node_id: &str) -> Option<HeartbeatOutcome> {
     // Hub has evicted this member entirely.
-    if resp
-        .get("permanent")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    if resp.header.as_ref().is_some_and(|h| h.permanent) {
         let status = resp
-            .get("status")
-            .and_then(serde_json::Value::as_str)
+            .header
+            .as_ref()
+            .map(|h| h.status.as_str())
+            .filter(|s| !s.is_empty())
             .unwrap_or("unknown");
         output::warn(&format!(
             "heartbeat permanently rejected by hub (status: {status}), disconnecting"
@@ -197,13 +292,9 @@ fn check_rejection(resp: &serde_json::Value, node_id: &str) -> Option<HeartbeatO
     }
     // This specific node was administratively removed.
     let self_rejected = resp
-        .get("rejected_nodes")
-        .and_then(|v| v.as_array())
-        .is_some_and(|arr| {
-            arr.iter()
-                .filter_map(|v| v.get("node_id").and_then(|n| n.as_str()))
-                .any(|id| id == node_id)
-        });
+        .rejected_nodes
+        .iter()
+        .any(|rejected| rejected.node_id == node_id);
     if self_rejected {
         output::warn(&format!(
             "this node ({node_id}) was rejected by hub, disconnecting"
@@ -216,7 +307,7 @@ fn check_rejection(resp: &serde_json::Value, node_id: &str) -> Option<HeartbeatO
 /// Transition one heartbeat tick.
 /// Returns `(next_failures, optional_terminal_outcome)`.
 fn next_heartbeat_state<E: std::fmt::Display>(
-    result: Result<serde_json::Value, E>,
+    result: Result<FederationHeartbeatResponse, E>,
     node_id: &str,
     failures: u32,
 ) -> (u32, Option<HeartbeatOutcome>) {
@@ -270,13 +361,13 @@ fn next_heartbeat_state<E: std::fmt::Display>(
 fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> ReconnectHook {
     use std::rc::Rc;
     Rc::new(move |bridge: &DendriteBridge| -> AxonResult<()> {
-        let device_uri = crate::ura::device_ura(&tenant, &node_id);
+        let device_ura = crate::ura::device_ura(&tenant, &node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
             bridge,
-            device_uri.clone(),
+            device_ura.clone(),
         );
         let args = crate::runtime::federation_client::AdvertiseAgentArgs {
-            agent_ura: device_uri.clone(),
+            agent_ura: device_ura.clone(),
             public_key_hex: String::new(),
             signing_authority:
                 crate::runtime::federation_client::AdvertisedSigningAuthority::SelfSigned,
@@ -349,9 +440,9 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // logical scope.
     let realm = tenant.clone();
     let bootstrap_outcome = reconnecting.with_bridge(|br| {
-        let device_uri = crate::ura::device_ura(&tenant, &node_id);
+        let device_ura = crate::ura::device_ura(&tenant, &node_id);
         let invoker =
-            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(br, device_uri);
+            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(br, device_ura);
         let outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
             &invoker, &tenant, &realm, &node_id,
         );
@@ -384,13 +475,13 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // reconnecting bridge so a transient drop right before
     // shutdown still reaches the hub via one auto-reconnect.
     let reason = outcome.reason();
-    let device_uri = crate::ura::device_ura(&tenant, &node_id);
+    let device_ura = crate::ura::device_ura(&tenant, &node_id);
     let revoked = reconnecting.with_bridge(|br| {
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
             br,
-            device_uri.clone(),
+            device_ura.clone(),
         );
-        crate::runtime::advertise::revoke_agent(&invoker, &tenant, &tenant, &device_uri, reason)
+        crate::runtime::advertise::revoke_agent(&invoker, &tenant, &tenant, &device_ura, reason)
             .map_err(easynet_axon::error::AxonError::Bridge)
     });
     if outcome == HeartbeatOutcome::NodeRejected {
@@ -412,7 +503,24 @@ pub fn run_daemon() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use easynet_axon::error::AxonError;
-    use serde_json::json;
+
+    fn healthy_response() -> FederationHeartbeatResponse {
+        heartbeat_response(None, Vec::new())
+    }
+
+    fn permanent_response(status: &str) -> FederationHeartbeatResponse {
+        heartbeat_response(Some(response_header(status.to_string(), true)), Vec::new())
+    }
+
+    fn rejected_response(node_ids: &[&str]) -> FederationHeartbeatResponse {
+        heartbeat_response(
+            None,
+            node_ids
+                .iter()
+                .map(|node_id| rejected_node((*node_id).to_string()))
+                .collect(),
+        )
+    }
 
     #[test]
     fn jitter_stays_within_ten_percent_window() {
@@ -461,8 +569,7 @@ mod tests {
 
     #[test]
     fn success_clears_previous_failures() {
-        let (failures, outcome) =
-            next_heartbeat_state::<&str>(Ok(json!({"ok": true})), "node-1", 3);
+        let (failures, outcome) = next_heartbeat_state::<&str>(Ok(healthy_response()), "node-1", 3);
         assert_eq!(failures, 0);
         assert_eq!(outcome, None);
     }
@@ -489,7 +596,7 @@ mod tests {
 
     #[test]
     fn hub_permanent_rejection_exits_immediately() {
-        let resp = json!({"permanent": true, "status": "evicted"});
+        let resp = permanent_response("evicted");
         let (failures, outcome) = next_heartbeat_state::<&str>(Ok(resp), "node-1", 0);
         assert_eq!(failures, 0);
         assert_eq!(outcome, Some(HeartbeatOutcome::HubRejected));
@@ -497,22 +604,30 @@ mod tests {
 
     #[test]
     fn node_rejection_list_only_affects_current_node() {
-        let resp = json!({
-            "rejected_nodes": [
-                {"node_id": "node-2"},
-                {"node_id": "node-3"}
-            ]
-        });
+        let resp = rejected_response(&["node-2", "node-3"]);
         assert_eq!(check_rejection(&resp, "node-1"), None);
 
-        let resp = json!({
-            "rejected_nodes": [
-                {"node_id": "node-1"}
-            ]
-        });
+        let resp = rejected_response(&["node-1"]);
         assert_eq!(
             check_rejection(&resp, "node-1"),
             Some(HeartbeatOutcome::NodeRejected)
+        );
+    }
+
+    #[test]
+    fn receipt_conversion_preserves_legacy_rejection_fields() {
+        let resp = heartbeat_response_from_receipt(HeartbeatReceipt {
+            permanent: true,
+            status: "evicted".to_string(),
+            rejected_nodes: vec![crate::runtime::federation_client::HeartbeatRejectedNode {
+                node_id: "node-1".to_string(),
+                message: String::new(),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(
+            check_rejection(&resp, "node-1"),
+            Some(HeartbeatOutcome::HubRejected)
         );
     }
 
@@ -548,8 +663,14 @@ mod tests {
     }
 
     enum Step {
-        Ok(serde_json::Value),
+        Ok(Box<FederationHeartbeatResponse>),
         Err(AxonError),
+    }
+
+    impl Step {
+        fn ok(response: FederationHeartbeatResponse) -> Self {
+            Self::Ok(Box::new(response))
+        }
     }
 
     impl FakeTransport {
@@ -567,7 +688,11 @@ mod tests {
     }
 
     impl HeartbeatTransport for FakeTransport {
-        fn beat(&mut self, _tenant: &str, _node_id: &str) -> AxonResult<serde_json::Value> {
+        fn beat(
+            &mut self,
+            _tenant: &str,
+            _node_id: &str,
+        ) -> AxonResult<FederationHeartbeatResponse> {
             *self.calls.borrow_mut() += 1;
             let step = {
                 let mut script = self.script.borrow_mut();
@@ -589,7 +714,7 @@ mod tests {
                 self.shutdown.trigger();
             }
             match step {
-                Step::Ok(v) => Ok(v),
+                Step::Ok(v) => Ok(*v),
                 Step::Err(e) => Err(e),
             }
         }
@@ -624,7 +749,7 @@ mod tests {
                 Step::Err(AxonError::Bridge("transient 1".into())),
                 Step::Err(AxonError::Bridge("transient 2".into())),
                 Step::Err(AxonError::Bridge("transient 3".into())),
-                Step::Ok(json!({"ok": true})),
+                Step::ok(healthy_response()),
             ],
             shutdown.clone(),
         );
@@ -647,9 +772,9 @@ mod tests {
         let shutdown = ShutdownSignal::new();
         let mut t = FakeTransport::new(
             vec![
-                Step::Ok(json!({"ok": true})),
-                Step::Ok(json!({"ok": true})),
-                Step::Ok(json!({"permanent": true, "status": "evicted"})),
+                Step::ok(healthy_response()),
+                Step::ok(healthy_response()),
+                Step::ok(permanent_response("evicted")),
             ],
             shutdown.clone(),
         );
@@ -665,7 +790,7 @@ mod tests {
         // rejected list and continue.
         let shutdown = ShutdownSignal::new();
         let mut t = FakeTransport::new(
-            vec![Step::Ok(json!({"rejected_nodes": [{"node_id": "node-1"}]}))],
+            vec![Step::ok(rejected_response(&["node-1"]))],
             shutdown.clone(),
         );
         let outcome = heartbeat_loop(&mut t, "tenant", "node-1", 20, &shutdown);
@@ -700,7 +825,7 @@ mod tests {
             for _ in 0..(MAX_HEARTBEAT_FAILURES - 1) {
                 script.push(Step::Err(AxonError::Bridge("flap".into())));
             }
-            script.push(Step::Ok(json!({"ok": true})));
+            script.push(Step::ok(healthy_response()));
         }
         let total_beats = script.len();
         let mut t = FakeTransport::new(script, shutdown.clone());
@@ -729,7 +854,7 @@ mod tests {
         let mut script: Vec<Step> = (0..(MAX_HEARTBEAT_FAILURES - 1))
             .map(|_| Step::Err(AxonError::Bridge("flap".into())))
             .collect();
-        script.push(Step::Ok(json!({"permanent": true, "status": "banned"})));
+        script.push(Step::ok(permanent_response("banned")));
         let mut t = FakeTransport::new(script, shutdown.clone());
         let outcome = heartbeat_loop(&mut t, "tenant", "node", 20, &shutdown);
         assert_eq!(outcome, HeartbeatOutcome::HubRejected);
@@ -749,10 +874,7 @@ mod tests {
     fn unknown_response_fields_do_not_trigger_rejection() {
         let shutdown = ShutdownSignal::new();
         let mut t = FakeTransport::new(
-            vec![
-                Step::Ok(json!({"hub_build": "1.2.3", "next_heartbeat_ms": 30000})),
-                Step::Ok(json!({"ok": true})),
-            ],
+            vec![Step::ok(healthy_response()), Step::ok(healthy_response())],
             shutdown.clone(),
         );
         let outcome = heartbeat_loop(&mut t, "tenant", "node", 20, &shutdown);

@@ -50,7 +50,7 @@ pub enum FederationAction {
     /// daemon's gRPC UDS and renders the returned
     /// `DirectoryEntry` list. Optional `--user-id` filter
     /// applies the PR-N4 INV-5 privacy default; optional
-    /// `--agent-uri` filter narrows to a single URI.
+    /// `--agent-ura` filter narrows to a single URA.
     #[cfg(feature = "axon-pb")]
     Discover(federation_discover::DiscoverArgs),
 

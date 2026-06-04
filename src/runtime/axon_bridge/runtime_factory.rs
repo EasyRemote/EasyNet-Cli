@@ -26,11 +26,11 @@ use easynet_axon::invocation::{
 ///   signatures against the daemon-owned trust set without runtime
 ///   depending on services internals);
 /// - the ledger sink backed by `InvocationLedger` (so every
-///   terminal invocation persists into `<billing_dir>/invocations.redb`
+///   terminal invocation persists into `<ledger_dir>/invocations.redb`
 ///   without the dispatch arm needing to manually build a record).
 ///
 /// `ledger` is optional: device-mode daemons that never opened a
-/// ledger (e.g. failed to create `billing_dir`) just skip the sink
+/// ledger (e.g. failed to create `ledger_dir`) just skip the sink
 /// — the invocation still flows, only the persistent audit trail
 /// is missing for that boot.
 #[must_use]
@@ -127,6 +127,8 @@ mod tests {
             causal: CausalContext::None,
             payload_digest: [0u8; 32],
             callee_signature: None,
+            signer_binding: None,
+            host_attestation: Vec::new(),
         };
 
         assert_eq!(
@@ -152,6 +154,8 @@ mod tests {
             causal: CausalContext::None,
             payload_digest: [0u8; 32],
             callee_signature: None,
+            signer_binding: None,
+            host_attestation: Vec::new(),
         };
         assert_eq!(
             ledger_route_ura("chat", &fallback_binding),

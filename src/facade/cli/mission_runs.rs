@@ -27,6 +27,7 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use crate::persistence::config;
+use crate::runtime::context::ParentInvocationContext;
 
 pub fn root_dir() -> PathBuf {
     config::state_dir().join("missions").join("runs")
@@ -135,6 +136,10 @@ pub struct MissionRunMeta {
     /// (self-evolution = graph) and §10 (non-CLI artefacts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ability_graph_traces: Option<Vec<serde_json::Value>>,
+
+    /// Parent invocation context captured for EAL/plugin-driven mission runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_context: Option<ParentInvocationContext>,
 }
 
 /// One row in the mission history listing.
@@ -262,12 +267,10 @@ pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
 // owned by this module. Moving it elsewhere would split the persistence
 // logic without a corresponding gain.
 //
-// One known scope-bounded exception: `mcp::handlers::run_mission` currently
-// uses its own `BorrowedBridgeDispatcher` path that does not flow through
-// `run_mission_inproc`. That path cannot dispatch to agents — only to
-// devices via the bridge — so the dispatch invariant in
-// `runtime::dispatch::send_to_agent` does not fire on it. Migrating that
-// handler is tracked as a follow-up PR.
+// The former MCP mission handler bypass has been collapsed onto this entry:
+// `runtime::agents::mission_ability` and `runtime::agents::eal_executor` both
+// delegate here. Keep this comment in sync with the grep invariant above; a
+// second production mission execution path is a release blocker, not a TODO.
 
 /// Options for `run_mission_inproc`. Kept narrow on purpose: anything that
 /// is not strictly required by both the CLI `mission run` path and the
@@ -286,6 +289,14 @@ pub struct MissionRunOpts {
     /// from there.
     #[allow(dead_code)]
     pub trace_path: Option<PathBuf>,
+    /// Parent AXIOM invocation context when a mission is executing as an
+    /// ability implementation.
+    ///
+    /// What this is NOT: a second invocation constructor. The daemon stores
+    /// and propagates this value so child dispatch can preserve the parent
+    /// caller/subject/causal tuple while Axon remains the owner of canonical
+    /// invocation and receipt construction.
+    pub invocation_context: Option<ParentInvocationContext>,
 }
 
 /// Result of a mission run. Returned by `run_mission_inproc`.
@@ -463,7 +474,7 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
     // that every cross-agent call originates from a real mission run dir.
     // The RAII guard restores the previous value (or removes the var)
     // even if the interpreter panics.
-    let _ctx = MissionContextGuard::enter(&run_id);
+    let _ctx = MissionContextGuard::enter(&run_id, opts.invocation_context.clone());
 
     let state = crate::persistence::config::load()?;
     let tenant = state.tenant_or_default();
@@ -486,10 +497,12 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
         steps_completed: 0,
         steps_failed: 0,
         ability_graph_traces: None,
+        invocation_context: opts.invocation_context.clone(),
     };
 
     match exec {
         Ok(report) => {
+            meta.duration_ms = report.total_elapsed_ms;
             meta.steps_completed = report.steps_completed;
             meta.steps_failed = report.steps_failed;
             // The interpreter returns Ok even when individual steps fail
@@ -580,7 +593,7 @@ struct MissionContextGuard {
 }
 
 impl MissionContextGuard {
-    fn enter(run_id: &str) -> Self {
+    fn enter(run_id: &str, invocation_context: Option<ParentInvocationContext>) -> Self {
         let prev_env = std::env::var("EASYNET_MISSION_ID").ok();
         std::env::set_var("EASYNET_MISSION_ID", run_id);
         // Install the typed thread-local. The run_dir field is filled
@@ -588,7 +601,8 @@ impl MissionContextGuard {
         // dir is missing the dispatch invariant check will surface that
         // separately (the Stage 2 anti-forgery check).
         let ctx =
-            crate::runtime::context::DispatchContext::for_mission(run_id, root_dir().join(run_id));
+            crate::runtime::context::DispatchContext::for_mission(run_id, root_dir().join(run_id))
+                .with_parent_invocation(invocation_context);
         let ctx_guard = crate::runtime::context::enter(ctx);
         Self {
             prev_env,
@@ -735,6 +749,7 @@ mod tests {
             steps_completed: 3,
             steps_failed: 0,
             ability_graph_traces: None,
+            invocation_context: None,
         }
     }
 
@@ -750,6 +765,27 @@ mod tests {
         assert!(
             !dir.path.join("pid").exists(),
             "pid file should be gone after finish"
+        );
+    }
+
+    #[test]
+    fn mission_context_guard_preserves_parent_invocation_context() {
+        let _g = HomeGuard::new();
+        let _guard = MissionContextGuard::enter(
+            "mission-parent-context",
+            Some(
+                ParentInvocationContext::from_json_value(serde_json::json!({
+                    "caller": "easynet:///r/acme/agent/alice",
+                    "subject": "easynet:///r/acme/resource/doc",
+                    "causal_context": {"kind": "none"},
+                }))
+                .expect("typed parent invocation context"),
+            ),
+        );
+        let ctx = crate::runtime::context::current().expect("mission context installed");
+        assert_eq!(
+            ctx.parent_invocation.as_ref().unwrap().subject.as_deref(),
+            Some("easynet:///r/acme/resource/doc")
         );
     }
 
@@ -918,6 +954,7 @@ mod tests {
             MissionRunOpts {
                 source_label: Some("regression".into()),
                 trace_path: None,
+                invocation_context: None,
             },
         );
         let err = result.expect_err("traditional form on agent name must be rejected");

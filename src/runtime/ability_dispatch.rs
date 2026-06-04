@@ -27,21 +27,17 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
-/// Module-local sync→async bridge for the ability-dispatch hot
-/// path. Every future driven through this helper only touches
-/// in-memory state — the registry's `Arc<Mutex<…>>` cells and
-/// `LocalRuntime`'s own async mutex. None of them await tokio
-/// resources (timers, sockets, IPC).
+/// Module-local sync→async bridge for the ability-dispatch registry
+/// path. These calls sit on catalogue construction and discovery,
+/// not per-frame dispatch, so correctness under all runtime hosts is
+/// more important than the cheapest possible no-runtime fallback.
 ///
-/// On that contract, the cheap `UseFuturesExecutor` fallback is
-/// correct: it drives the future on the calling thread when there
-/// is no tokio runtime, without paying the cost of spinning up a
-/// fresh current-thread tokio runtime. Any future addition that
-/// would await a tokio resource MUST reach for
-/// `crate::support::async_bridge::run_blocking` directly with
-/// `NoRuntimeFallback::BuildCurrentThreadTokio` rather than
-/// extending this helper — otherwise the in-memory-only
-/// invariant is silently broken.
+/// In particular, feature-expanded registration can enter SDK-backed
+/// paths that rely on tokio wakeups. Driving those futures with
+/// `futures::executor::block_on` from a current-thread tokio test
+/// runtime can park forever. Use the tokio fallback so single-thread
+/// callers are offloaded to a fresh helper runtime instead of
+/// re-entering or starving the active one.
 fn block_on_runtime_sync<F>(future: F) -> F::Output
 where
     F: Future + Send,
@@ -49,7 +45,7 @@ where
 {
     crate::support::async_bridge::run_blocking(
         future,
-        crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
     )
 }
 
@@ -58,9 +54,8 @@ where
 pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + Sync>;
 
 /// Slice of the AXIOM 7-tuple that an envelope-aware handler needs
-/// access to. Currently carries `subject` only — extending this is
-/// the path for future envelope fields (delegation, causal_context)
-/// to reach handlers without another sweep through call sites.
+/// access to. Sidecar plugins consume this whole value to avoid creating
+/// a second, incomplete `ability + args` invoke primitive outside Axon.
 ///
 /// Per **INV-SUBJECT-ENVELOPE**: this is the ONLY way a handler
 /// reads its `subject`. Handlers MUST NOT accept `subject` in
@@ -68,12 +63,23 @@ pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + S
 /// the way for handlers to opt into envelope access.
 #[derive(Debug, Clone, Default)]
 pub struct EnvelopeContext {
+    /// AXIOM 7-tuple `caller`.
+    pub caller: Option<String>,
+    /// AXIOM 7-tuple `callee`.
+    pub callee: Option<String>,
+    /// AXIOM 7-tuple `ability`.
+    pub ability: Option<String>,
     /// AXIOM 7-tuple `subject`. `None` for legacy abilities and
     /// for the degenerate `subject = callee` case (per
     /// INV-META-SUBJECT-EXEMPT). Resource handlers MUST treat
     /// `None` as a missing-subject failure (`resource_not_found`
     /// or InvalidArgument).
     pub subject: Option<String>,
+    /// AXIOM 7-tuple `nonce`.
+    pub invocation_nonce: Option<Vec<u8>>,
+    /// Host-side projection of AXIOM `causal_context`. This is not a
+    /// canonical encoder; canonical receipt semantics stay in Axon.
+    pub causal_context: Option<Value>,
 }
 
 /// Envelope-aware RPC handler. The runtime adapter passes a snapshot of
@@ -209,7 +215,38 @@ pub struct BidiSource {
     /// Transport READ end. The forwarder reads here and emits each
     /// value as `RecvBidi`; the handler's matching Sender is what
     /// produces them.
-    pub from_client: mpsc::Receiver<Value>,
+    pub from_client: mpsc::Receiver<BidiOutputFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BidiOutputFrame {
+    pub payload: Vec<u8>,
+    pub content_type: String,
+}
+
+impl BidiOutputFrame {
+    pub fn json(value: Value) -> Self {
+        Self {
+            payload: serde_json::to_vec(&value)
+                .expect("serde_json::Value serialization should not fail"),
+            content_type: "application/json".to_string(),
+        }
+    }
+
+    pub fn binary(payload: impl Into<Vec<u8>>, content_type: impl Into<String>) -> Self {
+        Self {
+            payload: payload.into(),
+            content_type: content_type.into(),
+        }
+    }
+
+    pub fn into_json_value(self) -> anyhow::Result<Value> {
+        if self.payload.is_empty() {
+            return Ok(Value::Object(Default::default()));
+        }
+        serde_json::from_slice(&self.payload)
+            .map_err(|err| anyhow::anyhow!("bidi output frame is not JSON: {err}"))
+    }
 }
 
 /// One in-process bidi handler. Per design §D2 the closure runs at
@@ -293,12 +330,50 @@ pub(crate) fn rpc_handler_to_ability_fn(handler: LocalRpcHandler) -> AbilityFn {
 }
 
 async fn envelope_context_from_axon(ctx: &Arc<AbilityContext>) -> EnvelopeContext {
-    let subject = ctx
-        .runtime
+    ctx.runtime
         .axiom_envelope_of(&ctx.invocation_id)
         .await
-        .map(|signed| signed.envelope.subject.ura);
-    EnvelopeContext { subject }
+        .map(|signed| EnvelopeContext {
+            caller: Some(signed.envelope.caller.ura),
+            callee: Some(signed.envelope.callee.ura),
+            ability: Some(signed.envelope.ability),
+            subject: Some(signed.envelope.subject.ura),
+            invocation_nonce: Some(signed.envelope.invocation_nonce.to_vec()),
+            causal_context: Some(causal_context_to_json(&signed.envelope.causal_context)),
+        })
+        .unwrap_or_default()
+}
+
+fn causal_context_to_json(causal: &easynet_axon::invocation::CausalContext) -> serde_json::Value {
+    match causal {
+        easynet_axon::invocation::CausalContext::None => {
+            serde_json::json!({"kind": "none"})
+        }
+        easynet_axon::invocation::CausalContext::Scalar(receipt) => serde_json::json!({
+            "kind": "scalar",
+            "receipt_hash": hex::encode(receipt.receipt_hash),
+            "receipt_ura": receipt.receipt_ura,
+        }),
+        easynet_axon::invocation::CausalContext::List(receipts) => {
+            let receipts: Vec<_> = receipts
+                .iter()
+                .map(|receipt| {
+                    serde_json::json!({
+                        "receipt_hash": hex::encode(receipt.receipt_hash),
+                        "receipt_ura": receipt.receipt_ura,
+                    })
+                })
+                .collect();
+            serde_json::json!({"kind": "list", "receipts": receipts})
+        }
+        easynet_axon::invocation::CausalContext::Merkle { root, proof_ura } => {
+            serde_json::json!({
+                "kind": "merkle",
+                "root": hex::encode(root),
+                "proof_ura": proof_ura,
+            })
+        }
+    }
 }
 
 fn rpc_env_handler_to_ability_fn(handler: LocalRpcHandlerWithEnvelope) -> AbilityFn {
@@ -427,7 +502,9 @@ async fn run_bidi_source(
     loop {
         if to_client.is_none() {
             match from_client.recv().await {
-                Some(value) => emit_json_progress(&ctx, value).await?,
+                Some(frame) => {
+                    ctx.emit_progress(frame.payload, frame.content_type).await?;
+                }
                 None => break,
             }
             continue;
@@ -453,7 +530,7 @@ async fn run_bidi_source(
             }
             outbound = from_client.recv() => {
                 match outbound {
-                    Some(value) => emit_json_progress(&ctx, value).await?,
+                    Some(frame) => ctx.emit_progress(frame.payload, frame.content_type).await?,
                     None => break,
                 }
             }
@@ -787,6 +864,7 @@ impl AxonAbilityCatalog {
             normalized_args: args.clone(),
             call_mode: CallMode::Rpc,
             subject: None,
+            causal_context: None,
         };
         match crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(
             Arc::clone(&runtime),
@@ -818,6 +896,7 @@ impl AxonAbilityCatalog {
                         normalized_args: args,
                         call_mode: CallMode::Rpc,
                         subject: None,
+                        causal_context: None,
                     };
                     return crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(
                         runtime, target,
@@ -869,28 +948,35 @@ impl AxonAbilityCatalog {
             stream_with_env: self.stream_with_env.get(name).map(Arc::clone),
             bidi_with_env: self.bidi_with_env.get(name).map(Arc::clone),
         };
-
-        let dyn_ext = self
-            .dynamic_ext
-            .read()
-            .expect("dynamic_ext RwLock poisoned");
-        if handlers.rpc.is_none() {
-            handlers.rpc = dyn_ext.rpc.get(name).map(Arc::clone);
-        }
-        if handlers.stream.is_none() {
-            handlers.stream = dyn_ext.stream.get(name).map(Arc::clone);
-        }
-        if handlers.bidi.is_none() {
-            handlers.bidi = dyn_ext.bidi.get(name).map(Arc::clone);
-        }
-        if handlers.rpc_with_env.is_none() {
-            handlers.rpc_with_env = dyn_ext.rpc_with_env.get(name).map(Arc::clone);
-        }
-        if handlers.stream_with_env.is_none() {
-            handlers.stream_with_env = dyn_ext.stream_with_env.get(name).map(Arc::clone);
-        }
-        if handlers.bidi_with_env.is_none() {
-            handlers.bidi_with_env = dyn_ext.bidi_with_env.get(name).map(Arc::clone);
+        if handlers.rpc.is_none()
+            || handlers.stream.is_none()
+            || handlers.bidi.is_none()
+            || handlers.rpc_with_env.is_none()
+            || handlers.stream_with_env.is_none()
+            || handlers.bidi_with_env.is_none()
+        {
+            let dyn_ext = self
+                .dynamic_ext
+                .read()
+                .expect("dynamic_ext RwLock poisoned");
+            if handlers.rpc.is_none() {
+                handlers.rpc = dyn_ext.rpc.get(name).map(Arc::clone);
+            }
+            if handlers.stream.is_none() {
+                handlers.stream = dyn_ext.stream.get(name).map(Arc::clone);
+            }
+            if handlers.bidi.is_none() {
+                handlers.bidi = dyn_ext.bidi.get(name).map(Arc::clone);
+            }
+            if handlers.rpc_with_env.is_none() {
+                handlers.rpc_with_env = dyn_ext.rpc_with_env.get(name).map(Arc::clone);
+            }
+            if handlers.stream_with_env.is_none() {
+                handlers.stream_with_env = dyn_ext.stream_with_env.get(name).map(Arc::clone);
+            }
+            if handlers.bidi_with_env.is_none() {
+                handlers.bidi_with_env = dyn_ext.bidi_with_env.get(name).map(Arc::clone);
+            }
         }
         handlers
     }
@@ -898,6 +984,37 @@ impl AxonAbilityCatalog {
     fn sync_runtime_ability(&self, name: &str) {
         let handlers = self.runtime_handlers_for(name);
         self.sync_runtime_ability_from_handlers(name, handlers);
+    }
+
+    /// True when `ability` is present in the boot-time static catalogue.
+    ///
+    /// What this is NOT: a general discovery helper. Dynamic plugin/MCP
+    /// entries are intentionally ignored so plugin-host reload can enforce
+    /// the invariant that post-boot extensions never shadow daemon/system
+    /// abilities.
+    pub fn has_static_ability(&self, ability: &str) -> bool {
+        self.rpc.contains_key(ability)
+            || self.stream.contains_key(ability)
+            || self.bidi.contains_key(ability)
+            || self.rpc_with_env.contains_key(ability)
+            || self.stream_with_env.contains_key(ability)
+            || self.bidi_with_env.contains_key(ability)
+            || self.owner.contains_key(ability)
+            || self.manifests.contains_key(ability)
+    }
+
+    fn reject_dynamic_shadow_of_static(&self, ability: &str) -> bool {
+        if !self.has_static_ability(ability) {
+            return false;
+        }
+        crate::op_event!(
+            component = ability_dispatch,
+            kind = hot_register_static_collision_rejected,
+            ability = ability,
+            message = "dynamic ability registration attempted to shadow a boot-time ability",
+        );
+        self.sync_runtime_ability(ability);
+        true
     }
 
     fn sync_runtime_ability_from_handlers(&self, name: &str, handlers: RuntimeHandlerSet) {
@@ -1103,6 +1220,27 @@ impl AxonAbilityCatalog {
         self.sync_runtime_ability(&name);
     }
 
+    /// Register an envelope-aware RPC handler with explicit owner and manifest.
+    ///
+    /// Plugin handlers need the AXIOM envelope (`subject`, caller context, and
+    /// causal metadata) and also need to publish the package descriptor schema
+    /// through `meta.list_abilities`. This method keeps those two contracts in
+    /// one registration path instead of forcing plugin host code to write the
+    /// handler and manifest side tables separately.
+    pub fn register_rpc_with_envelope_and_spec(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.manifests.insert(name.clone(), Arc::new(manifest));
+        self.rpc_with_env.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
+    }
+
     /// Register an envelope-aware RPC handler. Used by abilities
     /// that need access to the AXIOM 7-tuple `subject` (per
     /// **INV-SUBJECT-ENVELOPE**) — typically media abilities
@@ -1138,6 +1276,22 @@ impl AxonAbilityCatalog {
         self.sync_runtime_ability(&name);
     }
 
+    /// Register an envelope-aware stream handler with explicit owner and
+    /// registry manifest.
+    pub fn register_stream_with_envelope_and_spec(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.manifests.insert(name.clone(), Arc::new(manifest));
+        self.stream_with_env.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
+    }
+
     /// Envelope-aware stream variant. See `register_rpc_with_envelope`
     /// for the rationale. Transitional shim; defaults owner to
     /// `OwnerKind::Device`.
@@ -1159,6 +1313,22 @@ impl AxonAbilityCatalog {
     ) {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
+        self.bidi_with_env.insert(name.clone(), handler);
+        self.sync_runtime_ability(&name);
+    }
+
+    /// Register an envelope-aware bidi handler with explicit owner and
+    /// registry manifest.
+    pub fn register_bidi_with_envelope_and_spec(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.manifests.insert(name.clone(), Arc::new(manifest));
         self.bidi_with_env.insert(name.clone(), handler);
         self.sync_runtime_ability(&name);
     }
@@ -1276,11 +1446,15 @@ impl AxonAbilityCatalog {
         handler: LocalRpcHandler,
     ) {
         let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
         {
             let mut dyn_ext = self
                 .dynamic_ext
                 .write()
                 .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
             dyn_ext.owner.insert(name.clone(), owner);
             dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
             dyn_ext.rpc.insert(name.clone(), handler);
@@ -1299,11 +1473,15 @@ impl AxonAbilityCatalog {
         handler: LocalRpcHandler,
     ) {
         let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
         {
             let mut dyn_ext = self
                 .dynamic_ext
                 .write()
                 .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
             dyn_ext.owner.insert(name.clone(), owner);
             dyn_ext.rpc.insert(name.clone(), handler);
         }
@@ -1324,14 +1502,167 @@ impl AxonAbilityCatalog {
         handler: LocalStreamHandler,
     ) {
         let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
         {
             let mut dyn_ext = self
                 .dynamic_ext
                 .write()
                 .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
             dyn_ext.owner.insert(name.clone(), owner);
             dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
             dyn_ext.stream.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
+    }
+
+    /// Hot-register an envelope-aware RPC handler in the dynamic side table.
+    /// Plugin hot-load uses this path so sidecar/declarative handlers receive
+    /// the same AXIOM envelope context as boot-registered handlers.
+    pub fn hot_register_rpc_with_envelope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.rpc_with_env.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
+    }
+
+    /// Hot-register an envelope-aware RPC handler with explicit owner and
+    /// registry manifest in the dynamic side table.
+    pub fn hot_register_rpc_with_envelope_and_spec(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
+            dyn_ext.rpc_with_env.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
+    }
+
+    /// Hot-register an envelope-aware stream handler in the dynamic side table.
+    pub fn hot_register_stream_with_envelope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.stream_with_env.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
+    }
+
+    /// Hot-register an envelope-aware stream handler with explicit owner and
+    /// registry manifest in the dynamic side table.
+    pub fn hot_register_stream_with_envelope_and_spec(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
+            dyn_ext.stream_with_env.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
+    }
+
+    /// Hot-register an envelope-aware bidi handler in the dynamic side table.
+    pub fn hot_register_bidi_with_envelope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.bidi_with_env.insert(name.clone(), handler);
+        }
+        self.sync_runtime_ability(&name);
+    }
+
+    /// Hot-register an envelope-aware bidi handler with explicit owner and
+    /// registry manifest in the dynamic side table.
+    pub fn hot_register_bidi_with_envelope_and_spec(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        if self.reject_dynamic_shadow_of_static(&name) {
+            return;
+        }
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(&name);
+            dyn_ext.owner.insert(name.clone(), owner);
+            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
+            dyn_ext.bidi_with_env.insert(name.clone(), handler);
         }
         self.sync_runtime_ability(&name);
     }
@@ -1353,6 +1684,21 @@ impl AxonAbilityCatalog {
             self.sync_runtime_ability(ability);
         }
         present
+    }
+
+    /// Remove a post-boot ability from the dynamic side and from
+    /// LocalRuntime even when the name was originally boot-registered in the
+    /// static maps. Plugin package reload uses this to make remove/update
+    /// visible without mutating the boot-time metadata maps behind `Arc`.
+    pub fn hot_remove_runtime_ability(&self, ability: &str) {
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.drain(ability);
+        }
+        self.unregister_runtime_ability(ability);
     }
 
     /// True iff the dynamic side currently holds an entry for
@@ -1918,7 +2264,8 @@ fn runtime_bidi_source(
                     };
 
                 let (to_client, mut to_runtime) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
-                let (from_runtime, from_client) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                let (from_runtime, from_client) =
+                    mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
                 let runtime_input = source.to_client;
                 let mut runtime_output = source.from_client;
 
@@ -1934,7 +2281,7 @@ fn runtime_bidi_source(
                                 &frame,
                             ) {
                                 Ok(value) => {
-                                    let _ = from_runtime.send(value).await;
+                                    let _ = from_runtime.send(BidiOutputFrame::json(value)).await;
                                 }
                                 Err(err) => {
                                     let _ = ready_tx.send(Err(anyhow::anyhow!("{err}")));
@@ -1980,10 +2327,20 @@ fn runtime_bidi_source(
                             break;
                         };
                         if !frame.payload.is_empty() {
-                            if let Ok(value) =
-                                crate::runtime::local_runtime_invoker::ability_frame_to_json(&frame)
+                            let output_frame = if frame.content_type == "application/json"
+                                || frame.content_type.is_empty()
                             {
-                                if from_runtime.send(value).await.is_err() {
+                                match crate::runtime::local_runtime_invoker::ability_frame_to_json(
+                                    &frame,
+                                ) {
+                                    Ok(value) => Ok(BidiOutputFrame::json(value)),
+                                    Err(err) => Err(anyhow::anyhow!("{err}")),
+                                }
+                            } else {
+                                Ok(BidiOutputFrame::binary(frame.payload, frame.content_type))
+                            };
+                            if let Ok(output_frame) = output_frame {
+                                if from_runtime.send(output_frame).await.is_err() {
                                     break;
                                 }
                             }
@@ -2020,6 +2377,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
             subject: None,
+            causal_context: None,
         }
     }
 
@@ -2078,6 +2436,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
             subject: Some("easynet:///r/acme/resource/01CAM".into()),
+            causal_context: None,
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(
@@ -2109,18 +2468,18 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
             subject: None,
+            causal_context: None,
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(resp, json!({"path": "envelope"}));
     }
 
     #[test]
-    fn envelope_aware_handler_with_none_subject_still_dispatches() {
-        // Legacy callers that don't set subject still reach the
-        // envelope-aware handler — it just sees subject=None and
-        // can decide what to do (fail with resource_not_found or
-        // process anyway). The dispatcher does NOT reject the call
-        // for missing subject; that's a per-handler policy.
+    fn envelope_aware_handler_with_degenerate_subject_still_dispatches() {
+        // Legacy callers that don't set an explicit resource subject still
+        // reach the envelope-aware handler. Through LocalRuntime they receive
+        // the degenerate Axon subject (`subject = callee`); handlers that need
+        // a real resource URA must reject that at their own boundary.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_envelope(
             "x.optional",
@@ -2135,9 +2494,10 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
             subject: None,
+            causal_context: None,
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
-        assert_eq!(resp, json!({"subject_was_none": true}));
+        assert_eq!(resp, json!({"subject_was_none": false}));
     }
 
     #[test]
@@ -2157,6 +2517,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Stream,
             subject: Some("easynet:///r/x/resource/01MIC".into()),
+            causal_context: None,
         };
         let src = dispatcher.execute_stream(target).unwrap();
         match src {
@@ -2205,6 +2566,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
             subject: None,
+            causal_context: None,
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         let msg = format!("{err}");
@@ -2280,7 +2642,8 @@ mod tests {
     /// the loop — that path is tested at the IPC layer (commit 4).
     fn trivial_bidi_handler() -> LocalBidiHandler {
         Arc::new(|_args: Value| {
-            let (_to_handler_tx, from_client) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+            let (_to_handler_tx, from_client) =
+                mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
             let (to_client, _to_client_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
             Ok(BidiSource {
                 from_client,
@@ -2357,7 +2720,7 @@ mod tests {
                 let (client_to_handler_tx, mut client_to_handler_rx) =
                     mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
                 let (handler_to_client_tx, handler_to_client_rx) =
-                    mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+                    mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
                 // Forwarder side of the BidiSource is what we hand
                 // back to the caller — it sees the *handler input*
                 // sender (so it can push frames in) and the handler
@@ -2365,7 +2728,11 @@ mod tests {
                 // handler keeps the opposite ends.
                 tokio::spawn(async move {
                     while let Some(v) = client_to_handler_rx.recv().await {
-                        if handler_to_client_tx.send(v).await.is_err() {
+                        if handler_to_client_tx
+                            .send(BidiOutputFrame::json(v))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -2383,6 +2750,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
+            causal_context: None,
         };
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2396,7 +2764,7 @@ mod tests {
             // via from_client. End-to-end through the spawned loop.
             src.to_client.send(json!({"hello": 1})).await.unwrap();
             let echoed = src.from_client.recv().await.expect("echo arrives");
-            assert_eq!(echoed, json!({"hello": 1}));
+            assert_eq!(echoed.into_json_value().unwrap(), json!({"hello": 1}));
         });
     }
 
@@ -2412,6 +2780,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
+            causal_context: None,
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         let msg = format!("{err}");
@@ -2443,6 +2812,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
+            causal_context: None,
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").contains("precondition foo missing"));
@@ -2463,6 +2833,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
+            causal_context: None,
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("remote"));
@@ -2565,7 +2936,7 @@ mod tests {
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,
@@ -2576,7 +2947,7 @@ mod tests {
             Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,
@@ -2750,7 +3121,7 @@ mod tests {
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,
@@ -2761,7 +3132,7 @@ mod tests {
             Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
             let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
-            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<BidiOutputFrame>(1);
             Ok(BidiSource {
                 to_client: tx_to_client,
                 from_client: rx_from_client,
@@ -2918,6 +3289,41 @@ mod tests {
     }
 
     #[test]
+    fn hot_register_replaces_prior_dynamic_call_mode() {
+        let reg = Arc::new(AxonAbilityCatalog::new());
+        reg.hot_register_rpc(
+            "device.plugin.mode_shift",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::json!({"mode": "rpc"}))),
+        );
+        assert!(reg.has_rpc("device.plugin.mode_shift"));
+        assert!(!reg.has_stream("device.plugin.mode_shift"));
+
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "mode_shift",
+            "Mode-shift test ability.",
+            serde_json::json!({"type": "object"}),
+        )
+        .unwrap();
+        reg.hot_register_stream_with_spec(
+            "device.plugin.mode_shift",
+            OwnerKind::Device,
+            manifest,
+            Arc::new(|_args| Ok(StreamSource::Snapshot(Vec::new()))),
+        );
+
+        assert!(
+            !reg.has_rpc("device.plugin.mode_shift"),
+            "hot-registering a stream handler must drain the stale dynamic RPC mode"
+        );
+        assert!(reg.has_stream("device.plugin.mode_shift"));
+        assert_eq!(
+            reg.list_dynamic_abilities(),
+            vec!["device.plugin.mode_shift".to_string()]
+        );
+    }
+
+    #[test]
     fn hot_unregister_removes_dynamic_entry_without_touching_static() {
         // Diff-aware refresh writes `hot_unregister` for tools that
         // disappeared from the upstream catalogue. Static entries
@@ -3003,6 +3409,10 @@ mod tests {
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic"}))),
         );
+        assert!(
+            !reg.has_dynamic("device.fs.read"),
+            "dynamic side must reject attempts to shadow static abilities"
+        );
         let handler = reg.resolve_rpc("device.fs.read").unwrap();
         let out = handler(serde_json::json!({})).unwrap();
         assert_eq!(
@@ -3013,5 +3423,35 @@ mod tests {
         // Owner table reflects the static entry too — synth paths
         // that read `lookup_owner` see Device, not Agent.
         assert_eq!(reg.lookup_owner("device.fs.read"), Some(OwnerKind::Device));
+    }
+
+    #[test]
+    fn hot_register_static_collision_keeps_local_runtime_on_static_handler() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner(
+            "device.keyring.sign",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::json!({"from": "static-runtime"}))),
+        );
+        let reg = Arc::new(reg);
+
+        reg.hot_register_rpc(
+            "device.keyring.sign",
+            OwnerKind::Agent("malicious-plugin".to_string()),
+            Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic-runtime"}))),
+        );
+
+        assert!(
+            !reg.has_dynamic("device.keyring.sign"),
+            "hot-registering an existing daemon ability must not create a dynamic row"
+        );
+        let out = reg
+            .invoke_rpc_json("device.keyring.sign", serde_json::json!({}))
+            .expect("static runtime handler remains invokable");
+        assert_eq!(
+            out,
+            serde_json::json!({"from": "static-runtime"}),
+            "LocalRuntime must continue routing to the boot-registered handler"
+        );
     }
 }

@@ -138,6 +138,15 @@ impl AgentId {
         validate_segment(&name, "name")?;
         Ok(Self { tenant, name })
     }
+
+    /// Convert the CLI shorthand identity into Axon's canonical Agent URA.
+    ///
+    /// `AgentId` stays a front-door convenience for EAL/member-call syntax;
+    /// cross-runtime identity is always the Axon SDK URA shape
+    /// `easynet:///r/<realm>/agent/<tenant>.<name>`.
+    pub fn to_axon_agent_ura(&self, realm: &str) -> String {
+        crate::ura::agent_ura(realm, &self.tenant, &self.name)
+    }
 }
 
 impl fmt::Display for AgentId {
@@ -595,6 +604,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn axon_agent_ura_projection_uses_sdk_builder() {
+        let id = AgentId::parse("silan/claude").unwrap();
+        assert_eq!(
+            id.to_axon_agent_ura("easynet.run"),
+            "easynet:///r/easynet.run/agent/silan.claude"
+        );
+    }
+
     // ── AgentId — rejection rules from AGENT_IDENTITY.md §3.2 ────────────
 
     #[test]
@@ -694,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_uri_shaped_input_as_wrong_layer() {
+    fn rejects_ura_shaped_input_as_wrong_layer() {
         let err = AgentId::parse("easynet://r/agent.claude/abilities/chat").unwrap_err();
         assert!(matches!(err, AgentIdError::WrongLayer));
         assert!(format!("{err}").contains("URA"));

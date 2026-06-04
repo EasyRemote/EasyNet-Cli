@@ -185,6 +185,7 @@ fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
         normalized_args: args,
         call_mode: CallMode::Rpc,
         subject: None,
+        causal_context: None,
     }
 }
 
@@ -193,7 +194,7 @@ fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
 fn u1_publish_two_file_folder() {
     let f = Fixture::new("u1");
     let result = f.publish();
-    assert!(result.get("project_uri").is_some());
+    assert!(result.get("project_ura").is_some());
     assert!(result.get("url_root").is_some());
     let key = (f.user.clone(), f.project_id.clone());
     assert!(
@@ -380,7 +381,7 @@ fn u11_get_returns_detail() {
         v.get("project_id").and_then(Value::as_str),
         Some(f.project_id.as_str())
     );
-    assert!(v.get("project_uri").is_some());
+    assert!(v.get("project_ura").is_some());
     assert!(v.get("file_size_cap").is_some());
 }
 

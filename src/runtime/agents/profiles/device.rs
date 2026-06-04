@@ -89,7 +89,7 @@ pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
 /// mcp / llm sub-profiles claim certain `device.<sub>.*` shapes
 /// FIRST. Without this exclusion the device profile would
 /// shadow the more-specific sub-profiles, breaking
-/// `descriptors_for_<profile>(uri)` ownership.
+/// `descriptors_for_<profile>(ura)` ownership.
 ///
 /// Rule: a name is device-owned iff it matches a device prefix
 /// AND is NOT owned by any non-device profile (consent, policy,
@@ -148,7 +148,7 @@ pub fn descriptors_for(
             .with_input_schema(meta.input_schema.clone())
             .with_hints(meta.hints.clone())
             .with_source("kernel:built-in")
-            .with_description(meta.description);
+            .with_description(meta.description.as_str());
         out.push(descriptor);
     }
     out

@@ -110,6 +110,7 @@ fn install_process_client_for_tests(svc: Arc<McpClientService>) {
 /// schema-compat harness) match on this string; pin it as a const
 /// so a typo here is a compile failure, not a silent ledger break.
 const FULFILLED_BY_TAG: &str = "mcp";
+pub const AXON_INVOCATION_CONTEXT_RESULT_KEY: &str = "axon_invocation";
 
 /// Invoke the MCP tool declared by an ability manifest.
 ///
@@ -119,6 +120,20 @@ const FULFILLED_BY_TAG: &str = "mcp";
 /// verbatim so callers can inspect MCP-native fields such as
 /// `content` / `isError`.
 pub fn run_mcp_exec(spec: &McpExec, args: &Value) -> anyhow::Result<Value> {
+    run_mcp_exec_with_invocation_context(spec, args, None)
+}
+
+/// Invoke an MCP-backed plugin ability while preserving daemon envelope
+/// metadata in the local result.
+///
+/// The context is deliberately NOT forwarded inside MCP `arguments`; upstream
+/// MCP tools validate their own schemas and must not receive daemon protocol
+/// fields as surprise user arguments.
+pub fn run_mcp_exec_with_invocation_context(
+    spec: &McpExec,
+    args: &Value,
+    invocation_context: Option<Value>,
+) -> anyhow::Result<Value> {
     let started = Instant::now();
     let arguments = require_object_args(args)?;
     let server = spec.server.clone();
@@ -144,13 +159,17 @@ pub fn run_mcp_exec(spec: &McpExec, args: &Value) -> anyhow::Result<Value> {
             .await
     })?;
 
-    Ok(json!({
+    let mut response = json!({
         "result": result,
         "fulfilled_by": FULFILLED_BY_TAG,
         "server": spec.server,
         "tool": spec.tool,
         "elapsed_ms": started.elapsed().as_millis() as u64,
-    }))
+    });
+    if let Some(invocation_context) = invocation_context {
+        response[AXON_INVOCATION_CONTEXT_RESULT_KEY] = invocation_context;
+    }
+    Ok(response)
 }
 
 /// Validate + clone the arguments JSON for the `tools/call` payload.
@@ -240,6 +259,11 @@ mod tests {
         let input = json!({"foo": 1, "bar": [1, 2]});
         let out = require_object_args(&input).expect("object accepted");
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn mcp_invocation_context_result_key_is_reserved_for_metadata() {
+        assert_eq!(AXON_INVOCATION_CONTEXT_RESULT_KEY, "axon_invocation");
     }
 
     /// End-to-end: a manifest pinning a configured-but-unreachable

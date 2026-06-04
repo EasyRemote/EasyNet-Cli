@@ -21,14 +21,14 @@
 //
 //   1. Tries the local trust anchor first (INV-2 local-first).
 //      Same-realm callers short-circuit before any network I/O.
-//   2. On local miss, parses the caller URI's tenant and checks
+//   2. On local miss, parses the caller URA's tenant and checks
 //      the `realm-trust.toml` for a `[[trusted_agent]]` entry
 //      whose `origin_tenant_id` matches that tenant (INV-1
 //      federated trust gate). Operators explicitly opt into
 //      cross-realm verification by adding such entries.
 //   3. Calls `federation.resolve_key` on the peer hub via the
 //      PR-N1 CrossHubDialer, returning the peer's pubkey for
-//      the caller URI (INV-3 same Ed25519 4-step verify).
+//      the caller URA (INV-3 same Ed25519 4-step verify).
 //   4. Dial failure surfaces as `unknown_agent_ura` so the
 //      admission gate's reject path runs identically to a
 //      local trust miss (INV-4 fail-closed).
@@ -56,10 +56,10 @@ use easynet_axon::invocation::axiom::KeyResolver;
 use easynet_axon::invocation::{AxonError, AxonErrorKind};
 use ed25519_dalek::VerifyingKey;
 
-#[cfg(test)]
-use crate::pb::axon::v1::InvokeRequest;
 use crate::services::federation_client::FederationClient;
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
+#[cfg(test)]
+use easynet_axon::pb::axon::v1::InvokeRequest;
 
 /// Default TTL for a federated-resolve cache entry. 5 minutes
 /// trims a hot signed-call path from O(N) cross-hub round-trips
@@ -128,7 +128,7 @@ impl SharedFederatedKeyCache {
 
 /// Resolves an `agent_ura` to its Ed25519 verifying key, falling
 /// through to a federated lookup when the local trust anchor has
-/// no entry for the URI and the caller's tenant is one the
+/// no entry for the URA and the caller's tenant is one the
 /// operator has marked as federated via DEC-N1 schema-B
 /// `origin_tenant_id` on a `[[trusted_agent]]` entry.
 pub struct FederatedKeyResolver {
@@ -136,6 +136,10 @@ pub struct FederatedKeyResolver {
     federation_client: Option<Arc<dyn FederationClient>>,
     federated_peers: Arc<std::collections::BTreeMap<String, String>>,
     self_realm: Option<String>,
+    /// Public key presented by the envelope being admitted, encoded as
+    /// standard base64. User URAs are 1:N, so cross-realm
+    /// `federation.resolve_key` must forward this pin to the peer hub.
+    presented_pubkey_b64: Option<String>,
     /// 5-min TTL cache on cross-hub `federation.resolve_key`
     /// outcomes. Keyed by full `agent_ura`. Operators flush on
     /// trust-anchor SIGHUP via [`SharedFederatedKeyCache::flush`]
@@ -143,7 +147,7 @@ pub struct FederatedKeyResolver {
     /// The mutex is held for the duration of one HashMap lookup
     /// / insert / drain — never across the cross-hub dial
     /// itself, so concurrent first-time resolves on disjoint
-    /// URIs never serialize.
+    /// URAs never serialize.
     ///
     /// The cache lives at AdmissionFacade scope (passed in via
     /// `with_cache`) so the per-admission-call resolver
@@ -172,6 +176,7 @@ impl FederatedKeyResolver {
             federation_client,
             federated_peers,
             self_realm,
+            presented_pubkey_b64: None,
             cache: SharedFederatedKeyCache::new(),
             cache_ttl: DEFAULT_FEDERATED_RESOLVE_CACHE_TTL,
         }
@@ -198,6 +203,18 @@ impl FederatedKeyResolver {
         self
     }
 
+    /// Attach the public key presented by the envelope currently being
+    /// admitted. Empty input is ignored so non-user callers keep the
+    /// legacy `{agent_ura}` resolve-key request shape.
+    #[must_use]
+    pub fn with_presented_pubkey_b64(mut self, presented_pubkey_b64: impl Into<String>) -> Self {
+        let trimmed = presented_pubkey_b64.into().trim().to_string();
+        if !trimmed.is_empty() {
+            self.presented_pubkey_b64 = Some(trimmed);
+        }
+        self
+    }
+
     /// Drop every cached entry. Re-exported on the resolver for
     /// call-site convenience; identical to
     /// `self.cache.clone().flush()`.
@@ -217,14 +234,15 @@ impl FederatedKeyResolver {
     /// for one HashMap operation; never across the cross-hub
     /// dial.
     fn cache_lookup(&self, agent_ura: &str) -> Option<VerifyingKey> {
+        let cache_key = self.cache_key(agent_ura);
         let mut guard = match self.cache.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        match guard.get(agent_ura) {
+        match guard.get(&cache_key) {
             Some(entry) if entry.expires_at > Instant::now() => Some(entry.key),
             Some(_expired) => {
-                guard.remove(agent_ura);
+                guard.remove(&cache_key);
                 None
             }
             None => None,
@@ -232,15 +250,16 @@ impl FederatedKeyResolver {
     }
 
     /// Insert a freshly-resolved key into the cache with the
-    /// configured TTL. Subsequent lookups on the same URI inside
+    /// configured TTL. Subsequent lookups on the same URA inside
     /// the window short-circuit before any cross-hub dial.
     fn cache_insert(&self, agent_ura: &str, key: VerifyingKey) {
+        let cache_key = self.cache_key(agent_ura);
         let mut guard = match self.cache.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
         guard.insert(
-            agent_ura.to_string(),
+            cache_key,
             CachedKey {
                 key,
                 expires_at: Instant::now() + self.cache_ttl,
@@ -248,10 +267,27 @@ impl FederatedKeyResolver {
         );
     }
 
+    fn cache_key(&self, agent_ura: &str) -> String {
+        // `\x1f` (ASCII unit separator) joins the URA and pubkey. It
+        // cannot appear in either an `easynet://` URA or standard
+        // base64, so no `(ura, pk)` pair can collide with a different
+        // pair under naive concatenation — which is the whole point of
+        // keying by pubkey: one 1:N user URA must not share a cache
+        // slot across its registered device keys.
+        match self.presented_pubkey_b64.as_deref() {
+            Some(pk) => format!("{agent_ura}\x1f{pk}"),
+            None => agent_ura.to_string(),
+        }
+    }
+
     /// Local-first lookup. Mirrors `TrustAnchorKeyResolver` shape
     /// so existing single-realm setups behave identically.
     fn resolve_local(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-        let entry = self.trust_anchor.lookup(agent_ura).ok_or_else(|| {
+        let entry = match self.presented_pubkey_b64.as_deref() {
+            Some(pk) => self.trust_anchor.lookup_user_by_pubkey(agent_ura, pk),
+            None => self.trust_anchor.lookup(agent_ura),
+        }
+        .ok_or_else(|| {
             AxonError::new(AxonErrorKind::InvalidArgument)
                 .with_reason("unknown_agent_ura")
                 .with_message(format!("agent_ura:{agent_ura}"))
@@ -284,7 +320,7 @@ impl FederatedKeyResolver {
     ///   `[[trusted_agent]] origin_tenant_id = "<tenant>"` entry
     ///   in `realm-trust.toml`) → local-only.
     /// - `federated_peers` map has no entry mapping
-    ///   `caller_tenant → hub_uri` → cannot dial; return
+    ///   `caller_tenant → hub_endpoint` → cannot dial; return
     ///   unknown_agent_ura.
     /// - dial fails → unknown_agent_ura (INV-4 fail-closed).
     ///
@@ -292,7 +328,7 @@ impl FederatedKeyResolver {
     /// returns a valid base64 Ed25519 pubkey for the caller.
     fn resolve_federated(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
         // Cache short-circuit. A hot signed-call path with the
-        // same caller URI repeated within the TTL window skips
+        // same caller URA repeated within the TTL window skips
         // the cross-hub dial entirely. Cache-miss paths
         // (expired, never-resolved, post-flush) fall through to
         // a real dial. Cache failure modes are NEVER considered
@@ -309,17 +345,17 @@ impl FederatedKeyResolver {
         };
 
         let caller_tenant =
-            crate::services::axon_serve::daemon_invocation_service::parse_tenant_from_uri(
+            crate::services::axon_serve::daemon_invocation_service::parse_tenant_from_ura(
                 agent_ura,
             )
-            .ok_or_else(|| unknown_agent_ura(agent_ura, "malformed_uri"))?;
+            .ok_or_else(|| unknown_agent_ura(agent_ura, "malformed_ura"))?;
 
         // INV-1 federated trust gate: same-realm caller's local
         // miss is final. Returning unknown_agent_ura here is the
         // same surface as a normal trust-anchor miss for a local
-        // URI — the admission gate emits
+        // URA — the admission gate emits
         // AXON_CALLER_SIGNATURE_INVALID, which is the right
-        // operator signal ("the URI is not trusted in this
+        // operator signal ("the URA is not trusted in this
         // realm").
         if let Some(self_realm) = self.self_realm.as_deref() {
             if caller_tenant == self_realm {
@@ -347,16 +383,19 @@ impl FederatedKeyResolver {
             return Err(unknown_agent_ura(agent_ura, "tenant_not_federated"));
         }
 
-        let Some(peer_hub_uri) = peer_entry else {
-            return Err(unknown_agent_ura(agent_ura, "no_hub_uri_for_tenant"));
+        let Some(peer_hub_endpoint) = peer_entry else {
+            return Err(unknown_agent_ura(agent_ura, "no_hub_endpoint_for_tenant"));
         };
 
         // Build the cross-hub `federation.resolve_key` request.
         // The peer-side ability handler is a thin RFC-002 wrap
         // around its local trust anchor; we forward the caller
-        // URI verbatim and parse the response as a JSON
+        // URA verbatim and parse the response as a JSON
         // `{"public_key_b64": "<base64-32-bytes>"}` shape.
-        let args = serde_json::json!({ "agent_ura": agent_ura });
+        let mut args = serde_json::json!({ "agent_ura": agent_ura });
+        if let Some(pk) = self.presented_pubkey_b64.as_deref() {
+            args["presented_pubkey_b64"] = serde_json::Value::String(pk.to_string());
+        }
         let args_bytes = serde_json::to_vec(&args).map_err(|e| {
             AxonError::new(AxonErrorKind::Internal)
                 .with_reason("resolve_key_args_encode")
@@ -365,8 +404,8 @@ impl FederatedKeyResolver {
         let Some(self_realm) = self.self_realm.as_deref() else {
             return Err(unknown_agent_ura(agent_ura, "missing_self_realm"));
         };
-        let local_hub_uri = crate::ura::hub_ura(self_realm);
-        let request = crate::services::axon_serve::ProtoEnvelope::caller_only(local_hub_uri)
+        let local_hub_ura = crate::ura::hub_ura(self_realm);
+        let request = crate::services::axon_serve::ProtoEnvelope::caller_only(local_hub_ura)
             .and_then(|env| {
                 env.invoke_request(
                     crate::services::axon_serve::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
@@ -380,7 +419,7 @@ impl FederatedKeyResolver {
             })?;
 
         // Bridge sync trait → async tonic call.
-        let target_hub = peer_hub_uri.clone();
+        let target_hub = peer_hub_endpoint.clone();
         let client_clone = Arc::clone(client);
         let response = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
@@ -406,6 +445,27 @@ impl FederatedKeyResolver {
         })?;
         let verifying_key = VerifyingKey::from_bytes(&arr)
             .map_err(|e| unknown_agent_ura(agent_ura, &format!("resolve_key_pubkey_parse:{e}")))?;
+        // Fail-closed pin check. When we forwarded a
+        // `presented_pubkey_b64`, the peer hub's job is to confirm that
+        // exact key is registered under the caller URA and echo it
+        // back; the key it returns MUST byte-equal the one we pinned.
+        // A divergent key means either a misbehaving peer or a 1:N user
+        // URA the peer disambiguated differently than the envelope —
+        // both unsafe to admit, so we reject rather than trust the
+        // peer's substitution. Compared on decoded bytes (not the
+        // base64 strings) so padding / encoding variance never masks a
+        // real mismatch.
+        if let Some(pinned) = self.presented_pubkey_b64.as_deref() {
+            let pinned_bytes = BASE64_STANDARD.decode(pinned).map_err(|e| {
+                unknown_agent_ura(agent_ura, &format!("presented_pubkey_b64_decode:{e}"))
+            })?;
+            if pinned_bytes != arr {
+                return Err(unknown_agent_ura(
+                    agent_ura,
+                    "resolve_key_response_pubkey_mismatch",
+                ));
+            }
+        }
         // Cache success only. A failed dial / parse leaves the
         // cache untouched so a recoverable peer-hub outage does
         // not poison resolution for the configured TTL.
@@ -427,7 +487,7 @@ impl KeyResolver for FederatedKeyResolver {
 /// Wrap a federated-resolve failure as the same wire-shape the
 /// local trust-miss path emits, so the admission gate's reject
 /// reason is `AXON_CALLER_SIGNATURE_INVALID` regardless of
-/// whether the URI was unknown locally or unreachable cross-
+/// whether the URA was unknown locally or unreachable cross-
 /// realm. Operators reading the reject log see the failure
 /// detail in the AxonError message field.
 fn unknown_agent_ura(agent_ura: &str, detail: &str) -> AxonError {
@@ -452,14 +512,26 @@ mod tests {
         (signing, BASE64_STANDARD.encode(pk_bytes))
     }
 
-    fn local_entry(uri: &str, pk_b64: &str) -> TrustedAgent {
+    fn local_entry(ura: &str, pk_b64: &str) -> TrustedAgent {
         TrustedAgent {
-            agent_ura: uri.to_string(),
+            agent_ura: ura.to_string(),
             public_key_b64: pk_b64.to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }
+    }
+
+    fn user_entry(ura: &str, pk_b64: &str) -> TrustedAgent {
+        TrustedAgent {
+            agent_ura: ura.to_string(),
+            public_key_b64: pk_b64.to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_tenant_id: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         }
     }
@@ -479,10 +551,10 @@ mod tests {
             _target_hub: &crate::services::federation_client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
-            crate::pb::axon::v1::InvokeResponse,
+            easynet_axon::pb::axon::v1::InvokeResponse,
             crate::services::federation_client::FederationClientError,
         > {
-            Ok(crate::pb::axon::v1::InvokeResponse {
+            Ok(easynet_axon::pb::axon::v1::InvokeResponse {
                 result: self.canned_response.clone(),
                 ..Default::default()
             })
@@ -500,7 +572,7 @@ mod tests {
             target_hub: &crate::services::federation_client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
-            crate::pb::axon::v1::InvokeResponse,
+            easynet_axon::pb::axon::v1::InvokeResponse,
             crate::services::federation_client::FederationClientError,
         > {
             Err(
@@ -515,9 +587,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn local_hit_short_circuits_before_federated_dial() {
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let local_uri = "easynet:///r/realm-a/device/local-device";
+        let local_ura = "easynet:///r/realm-a/device/local-device";
         let anchor = Arc::new(
-            RealmTrustAnchor::from_entries(vec![local_entry(local_uri, &pk_b64)]).unwrap(),
+            RealmTrustAnchor::from_entries(vec![local_entry(local_ura, &pk_b64)]).unwrap(),
         );
 
         // Wire a dial-failed client; if the resolver tried to
@@ -531,16 +603,16 @@ mod tests {
             Some("realm-a".to_string()),
         );
 
-        let key = resolver.resolve(local_uri).expect("local hit");
+        let key = resolver.resolve(local_ura).expect("local hit");
         assert_eq!(key.to_bytes().len(), 32);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_realm_with_federated_peers_entry_resolves_via_dial() {
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/device/peer-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
 
-        // Local trust anchor has NO entry for cross_uri.
+        // Local trust anchor has NO entry for cross_ura.
         let anchor = Arc::new(RealmTrustAnchor::default());
 
         // Operator wired a federated_peers entry for realm-b.
@@ -563,13 +635,13 @@ mod tests {
             Some("realm-a".to_string()),
         );
 
-        let key = resolver.resolve(cross_uri).expect("federated hit");
+        let key = resolver.resolve(cross_ura).expect("federated hit");
         assert_eq!(key.to_bytes().len(), 32);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_realm_without_federation_marker_returns_unknown() {
-        let cross_uri = "easynet:///r/realm-b/device/peer-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
 
         // No federated_peers entry, no origin_tenant_id-marked
@@ -583,7 +655,7 @@ mod tests {
             Some("realm-a".to_string()),
         );
 
-        let err = resolver.resolve(cross_uri).expect_err("unmarked");
+        let err = resolver.resolve(cross_ura).expect_err("unmarked");
         assert!(
             format!("{err:?}").contains("unknown_agent_ura"),
             "expected unknown_agent_ura, got {err:?}"
@@ -592,7 +664,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_realm_dial_failure_surfaces_as_unknown() {
-        let cross_uri = "easynet:///r/realm-b/device/peer-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -607,7 +679,7 @@ mod tests {
 
         // INV-4 fail-closed: dial failure → unknown_agent_ura,
         // NOT a silent local fall-through.
-        let err = resolver.resolve(cross_uri).expect_err("dial fail");
+        let err = resolver.resolve(cross_ura).expect_err("dial fail");
         assert!(
             format!("{err:?}").contains("unknown_agent_ura"),
             "expected unknown_agent_ura, got {err:?}"
@@ -616,10 +688,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn same_realm_local_miss_does_not_dial_federated() {
-        let same_realm_uri = "easynet:///r/realm-a/device/missing-device";
+        let same_realm_ura = "easynet:///r/realm-a/device/missing-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
 
-        // Federated peer wired, but the missing URI is in the
+        // Federated peer wired, but the missing URA is in the
         // SAME realm as `self_realm` — INV-1 says local miss is
         // final, do not federate.
         let mut peers = BTreeMap::new();
@@ -636,7 +708,7 @@ mod tests {
         );
 
         let err = resolver
-            .resolve(same_realm_uri)
+            .resolve(same_realm_ura)
             .expect_err("same-realm miss");
         let err_str = format!("{err:?}");
         assert!(err_str.contains("unknown_agent_ura"));
@@ -678,13 +750,67 @@ mod tests {
             _target_hub: &crate::services::federation_client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
-            crate::pb::axon::v1::InvokeResponse,
+            easynet_axon::pb::axon::v1::InvokeResponse,
             crate::services::federation_client::FederationClientError,
         > {
             self.dial_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(crate::pb::axon::v1::InvokeResponse {
+            Ok(easynet_axon::pb::axon::v1::InvokeResponse {
                 result: self.canned_response.clone(),
+                ..Default::default()
+            })
+        }
+    }
+
+    struct EchoPresentedPubkeyClient {
+        dial_count: std::sync::atomic::AtomicUsize,
+        seen_args: Mutex<Vec<serde_json::Value>>,
+    }
+
+    impl EchoPresentedPubkeyClient {
+        fn new() -> Self {
+            Self {
+                dial_count: std::sync::atomic::AtomicUsize::new(0),
+                seen_args: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn dials(&self) -> usize {
+            self.dial_count.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn seen_args(&self) -> Vec<serde_json::Value> {
+            self.seen_args.lock().expect("seen args mutex").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FederationClient for EchoPresentedPubkeyClient {
+        async fn forward_invoke(
+            &self,
+            _target_hub: &crate::services::federation_client::HubUri,
+            request: InvokeRequest,
+        ) -> Result<
+            easynet_axon::pb::axon::v1::InvokeResponse,
+            crate::services::federation_client::FederationClientError,
+        > {
+            self.dial_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let args: serde_json::Value =
+                serde_json::from_slice(&request.arguments).expect("resolve_key args JSON");
+            self.seen_args
+                .lock()
+                .expect("seen args mutex")
+                .push(args.clone());
+            let pk_b64 = args
+                .get("presented_pubkey_b64")
+                .and_then(|v| v.as_str())
+                .expect("presented pubkey must be forwarded");
+            Ok(easynet_axon::pb::axon::v1::InvokeResponse {
+                result: serde_json::to_vec(&serde_json::json!({
+                    "public_key_b64": pk_b64,
+                }))
+                .unwrap(),
                 ..Default::default()
             })
         }
@@ -692,11 +818,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ttl_cache_hits_avoid_repeat_dial_within_window() {
-        // Two consecutive resolves on the same URI within the
+        // Two consecutive resolves on the same URA within the
         // TTL window: second hits cache, peer hub is dialed
         // exactly once.
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/device/peer-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -714,8 +840,8 @@ mod tests {
             Some("realm-a".to_string()),
         );
 
-        let k1 = resolver.resolve(cross_uri).expect("dial 1");
-        let k2 = resolver.resolve(cross_uri).expect("cache hit");
+        let k1 = resolver.resolve(cross_ura).expect("dial 1");
+        let k2 = resolver.resolve(cross_ura).expect("cache hit");
         assert_eq!(k1.to_bytes(), k2.to_bytes());
         assert_eq!(counting.dials(), 1, "second resolve must hit cache");
         assert_eq!(resolver.cache_len(), 1);
@@ -726,7 +852,7 @@ mod tests {
         // Short TTL forces expiry; the second resolve sees an
         // expired entry, evicts it, and dials again.
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/device/peer-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -745,9 +871,9 @@ mod tests {
         )
         .with_cache_ttl(Duration::from_millis(50));
 
-        let _ = resolver.resolve(cross_uri).expect("dial 1");
+        let _ = resolver.resolve(cross_ura).expect("dial 1");
         std::thread::sleep(Duration::from_millis(80));
-        let _ = resolver.resolve(cross_uri).expect("dial 2 post-expiry");
+        let _ = resolver.resolve(cross_ura).expect("dial 2 post-expiry");
         assert_eq!(counting.dials(), 2, "expired cache entry must redial");
     }
 
@@ -757,7 +883,7 @@ mod tests {
         // by populating the cache, then calling flush_cache,
         // and asserting the next resolve hits the dial again.
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/device/peer-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -775,11 +901,11 @@ mod tests {
             Some("realm-a".to_string()),
         );
 
-        let _ = resolver.resolve(cross_uri).expect("dial 1");
+        let _ = resolver.resolve(cross_ura).expect("dial 1");
         assert_eq!(resolver.cache_len(), 1);
         resolver.flush_cache();
         assert_eq!(resolver.cache_len(), 0, "flush drops all entries");
-        let _ = resolver.resolve(cross_uri).expect("dial 2 post-flush");
+        let _ = resolver.resolve(cross_ura).expect("dial 2 post-flush");
         assert_eq!(counting.dials(), 2, "post-flush resolve dials again");
     }
 
@@ -789,7 +915,7 @@ mod tests {
         // a negative entry — a recoverable peer-hub outage
         // would otherwise keep resolving as `unknown_agent_ura`
         // for the entire TTL even after the peer comes back.
-        let cross_uri = "easynet:///r/realm-b/device/peer-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -802,11 +928,133 @@ mod tests {
             Some("realm-a".to_string()),
         );
 
-        let _ = resolver.resolve(cross_uri).expect_err("dial fails");
+        let _ = resolver.resolve(cross_ura).expect_err("dial fails");
         assert_eq!(
             resolver.cache_len(),
             0,
             "negative outcomes never poison the cache"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_user_resolution_pins_presented_pubkey_without_dial() {
+        let (_a, pk_a) = ed25519_pubkey_b64();
+        let key_b = SigningKey::from_bytes(&[2u8; 32]);
+        let pk_b = BASE64_STANDARD.encode(key_b.verifying_key().to_bytes());
+        let user_ura = "easynet:///r/realm-a/user/alice";
+        let anchor = Arc::new(
+            RealmTrustAnchor::from_entries(vec![
+                user_entry(user_ura, &pk_a),
+                user_entry(user_ura, &pk_b),
+            ])
+            .unwrap(),
+        );
+
+        let client = Arc::new(EchoPresentedPubkeyClient::new());
+        let resolver = FederatedKeyResolver::new(
+            anchor,
+            Some(client.clone()),
+            Arc::new(BTreeMap::new()),
+            Some("realm-a".to_string()),
+        )
+        .with_presented_pubkey_b64(pk_b.clone());
+
+        let key = resolver.resolve(user_ura).expect("local user pin");
+        assert_eq!(BASE64_STANDARD.encode(key.to_bytes()), pk_b);
+        assert_eq!(client.dials(), 0, "same-realm local pin must not dial");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cross_realm_user_resolution_forwards_presented_pubkey_and_keys_cache_by_pubkey() {
+        let (_a, pk_a) = ed25519_pubkey_b64();
+        let key_b = SigningKey::from_bytes(&[2u8; 32]);
+        let pk_b = BASE64_STANDARD.encode(key_b.verifying_key().to_bytes());
+        let user_ura = "easynet:///r/realm-b/user/alice";
+        let anchor = Arc::new(RealmTrustAnchor::default());
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
+        let peers = Arc::new(peers);
+        let cache = SharedFederatedKeyCache::new();
+        let client = Arc::new(EchoPresentedPubkeyClient::new());
+
+        let client_dyn: Arc<dyn FederationClient> = client.clone();
+        let key_a = FederatedKeyResolver::new(
+            Arc::clone(&anchor),
+            Some(client_dyn),
+            Arc::clone(&peers),
+            Some("realm-a".to_string()),
+        )
+        .with_cache(cache.clone())
+        .with_presented_pubkey_b64(pk_a.clone())
+        .resolve(user_ura)
+        .expect("federated user key a");
+
+        let client_dyn: Arc<dyn FederationClient> = client.clone();
+        let key_b =
+            FederatedKeyResolver::new(anchor, Some(client_dyn), peers, Some("realm-a".to_string()))
+                .with_cache(cache)
+                .with_presented_pubkey_b64(pk_b.clone())
+                .resolve(user_ura)
+                .expect("federated user key b");
+
+        assert_eq!(BASE64_STANDARD.encode(key_a.to_bytes()), pk_a);
+        assert_eq!(BASE64_STANDARD.encode(key_b.to_bytes()), pk_b);
+        assert_ne!(key_a.to_bytes(), key_b.to_bytes());
+        assert_eq!(
+            client.dials(),
+            2,
+            "same user URA with two presented keys must not share one cache entry"
+        );
+        let seen = client.seen_args();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0]["agent_ura"], user_ura);
+        assert_eq!(seen[0]["presented_pubkey_b64"], pk_a);
+        assert_eq!(seen[1]["agent_ura"], user_ura);
+        assert_eq!(seen[1]["presented_pubkey_b64"], pk_b);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cross_realm_rejects_peer_key_that_diverges_from_presented_pin() {
+        // A peer hub that returns a key other than the one we pinned is
+        // either misbehaving or disambiguating a 1:N user URA to a
+        // different device than the envelope signed with. Either way the
+        // resolve must fail closed and never cache the substituted key.
+        let (_a, pk_a) = ed25519_pubkey_b64();
+        let key_b = SigningKey::from_bytes(&[2u8; 32]);
+        let pk_b = BASE64_STANDARD.encode(key_b.verifying_key().to_bytes());
+        let user_ura = "easynet:///r/realm-b/user/alice";
+        let anchor = Arc::new(RealmTrustAnchor::default());
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
+
+        // Peer echoes key_a regardless of what we present.
+        let client: Arc<dyn FederationClient> = Arc::new(CannedFederationClient {
+            canned_response: serde_json::to_vec(&serde_json::json!({
+                "public_key_b64": pk_a,
+            }))
+            .unwrap(),
+        });
+        let resolver = FederatedKeyResolver::new(
+            anchor,
+            Some(client),
+            Arc::new(peers),
+            Some("realm-a".to_string()),
+        )
+        // We present key_b; the peer's key_a must be rejected.
+        .with_presented_pubkey_b64(pk_b);
+
+        let err = resolver
+            .resolve(user_ura)
+            .expect_err("divergent peer key must fail closed");
+        assert!(
+            err.message.contains("resolve_key_response_pubkey_mismatch"),
+            "expected pin-mismatch reject; got: {}",
+            err.message
+        );
+        assert_eq!(
+            resolver.cache_len(),
+            0,
+            "a rejected substitution must never poison the cache"
         );
     }
 }

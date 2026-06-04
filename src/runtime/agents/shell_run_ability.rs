@@ -250,7 +250,7 @@ fn parse_rule_array(arr: &[Value], field: &str) -> Result<Vec<Rule>> {
             other => {
                 return Err(anyhow!(
                     "shell.run: {field}[{i}].match {other:?} unknown; expected exact|prefix"
-                ))
+                ));
             }
         };
         let allowed_flags = match obj.get("flags") {
@@ -268,7 +268,7 @@ fn parse_rule_array(arr: &[Value], field: &str) -> Result<Vec<Rule>> {
             Some(_) => {
                 return Err(anyhow!(
                     "shell.run: {field}[{i}].flags must be an array of strings"
-                ))
+                ));
             }
         };
         out.push(Rule {

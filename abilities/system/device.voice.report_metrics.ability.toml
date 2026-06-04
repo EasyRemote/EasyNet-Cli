@@ -12,6 +12,25 @@ type = "string"
 
 [input_schema.properties.metrics]
 type = "object"
+additionalProperties = false
+
+[input_schema.properties.metrics.properties.audio_level_dbov]
+type = "number"
+
+[input_schema.properties.metrics.properties.concealed_samples]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.metrics.properties.jitter_ms]
+type = "number"
+
+[input_schema.properties.metrics.properties.packet_loss_ratio]
+type = "number"
+minimum = 0.0
+maximum = 1.0
+
+[input_schema.properties.metrics.properties.rtt_ms]
+type = "number"
 
 [input_schema.properties.participant_id]
 type = "string"

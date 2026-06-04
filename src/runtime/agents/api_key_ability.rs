@@ -146,7 +146,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
         last_used_at: None,
     };
 
-    let key_uri = {
+    let key_ura = {
         let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let mut store = load_store();
         store.keys.push(entry.clone());
@@ -162,7 +162,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
 
     Ok(json!({
         "token":          token,                          // ONLY returned here
-        "key_uri":        key_uri,
+        "key_ura":        key_ura,
         "id_prefix":      entry.id_prefix,
         "user_ura":       entry.user_ura,
         "label":          entry.label,

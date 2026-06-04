@@ -35,7 +35,7 @@
 // argument/response types and deterministic-field population. The
 // handlers do not yet:
 //
-// - Verify caller URI against envelope signer (admission gate
+// - Verify caller URA against envelope signer (admission gate
 //   integration arrives in commit 7/9 alongside the realm-trust
 //   loader)
 // - Push frames down a `<self>.session` reverse channel for
@@ -65,6 +65,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -72,9 +73,14 @@ use crate::services::advertised_agent_store::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
 use crate::services::presence_registry::PresenceRegistry;
+pub use easynet_axon::{
+    DiscoverRequest, DiscoverResponse, ForwardInvokeRequest, ForwardInvokeResponse,
+    ListUserDevicesRequest, ListUserDevicesResponse, ResolveAgentSummary, ResolveFilterRequest,
+    ResolveKeyRequest, ResolveKeyResponse, ResolveRequest, ResolveResponse,
+};
 
-/// `federation.join` — caller's claimed URI is authoritative; no
-/// hub-side `agent/a-X` minting (spec §5.1 URI scheme migration).
+/// `federation.join` — caller's claimed URA is authoritative; no
+/// hub-side `agent/a-X` minting (spec §5.1 URA scheme migration).
 pub const ABILITY_FEDERATION_JOIN: &str = "federation.join";
 
 /// `federation.advertise_agent` — records hosted-agent directory rows.
@@ -88,7 +94,7 @@ pub const ABILITY_FEDERATION_ADVERTISE_AGENT: &str = "federation.advertise_agent
 /// without us re-implementing the unary heartbeat path.
 pub const ABILITY_FEDERATION_HEARTBEAT: &str = "federation.heartbeat";
 
-/// `federation.resolve` — projects both live PresenceRegistry URIs
+/// `federation.resolve` — projects both live PresenceRegistry URAs
 /// and hosted-agent rows whose host device is presently online.
 pub const ABILITY_FEDERATION_RESOLVE: &str = "federation.resolve";
 
@@ -106,7 +112,7 @@ pub const ABILITY_FEDERATION_REVOKE: &str = "federation.revoke";
 /// reply by call_id (same scheme MVP uses).
 pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = "federation.forward_invoke";
 
-/// `federation.resolve_key` — peer-hub lookup of an agent URI's
+/// `federation.resolve_key` — peer-hub lookup of an agent URA's
 /// Ed25519 public key, served from the local realm trust anchor.
 /// PR-N2 commit 1/N's `FederatedKeyResolver` is the canonical
 /// caller: when realm A's daemon receives a forwarded envelope
@@ -114,7 +120,7 @@ pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = "federation.forward_invoke";
 /// resolve_key` to fetch the verifying key, runs the same RFC 001
 /// §5.2 4-step verify, and admits or rejects identically to a
 /// local-realm caller. Wire shape: request `{agent_ura}` → response
-/// `{public_key_b64}`; `Status::not_found` when the URI is not in
+/// `{public_key_b64}`; `Status::not_found` when the URA is not in
 /// this hub's trust set.
 pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 
@@ -125,7 +131,7 @@ pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 /// `DirectoryEntry` (or every entry when no `agent_ura` filter
 /// is supplied). Lex tie-break is deterministic (first peer in
 /// alphabetical order wins). Returns the empty list when no peer
-/// has the URI; never errors. The §2.4 `origin_realm` rewrite
+/// has the URA; never errors. The §2.4 `origin_realm` rewrite
 /// chokepoint runs on the write side (`DirectoryView::apply_frame`)
 /// so reads here are pure lookup.
 pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
@@ -146,7 +152,7 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscrib
 /// `listDevices` response. Caller must authenticate as a
 /// trusted hub-role peer (admission filter rejects backends
 /// dialled directly from outside the federation). Hub-side
-/// projects the local `PresenceRegistry` entries whose URI
+/// projects the local `PresenceRegistry` entries whose URA
 /// matches the supplied tenant prefix into `DirectoryEntry`s
 /// with `origin_realm = None` (this hub speaks for its own
 /// realm; the calling backend stamps the merge boundary's
@@ -180,14 +186,12 @@ pub const ABILITY_FEDERATION_PROXY_RESOLVE: &str = "federation.proxy_resolve";
 /// missing every backend-owned ability.
 pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
 
-/// `runtime.bootstrap_self_identity` — runtime-self handshake the
-/// backend issues at boot to register its hub-as-agent verifying
-/// key with the hub's KeyResolver. PR-1 staging accepts the call
-/// as a typed ack: the daemon's admission gate already trusts the
-/// caller via the trust anchor file, so the runtime does not need
-/// to re-derive keys. Without this handler the backend panics on
-/// `axon.BootstrapSelfIdentity` at boot and `federation.resolve`
-/// fans out against an empty key cache.
+/// `runtime.bootstrap_self_identity` — runtime-self handshake.
+///
+/// Kept only as the ability-name constant. This module must not
+/// provide a shadow handler for the contract; if the embedded Axon
+/// runtime lacks the runtime-admin implementation, callers must see
+/// that explicit missing-handler failure instead of a false ack.
 pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
 
 /// All federation.* ability names in deterministic order.
@@ -222,7 +226,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
 /// fields.
 #[derive(Debug, Clone, Deserialize)]
 pub struct JoinRequest {
-    /// Caller-claimed canonical URI (must match envelope signer per
+    /// Caller-claimed canonical URA (must match envelope signer per
     /// admission gate, verified in the dispatcher before this
     /// wrapper runs).
     pub membership_ura: String,
@@ -234,7 +238,7 @@ pub struct JoinRequest {
 /// Response payload for `federation.join`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JoinResponse {
-    /// The caller's claimed URI, echoed back unchanged. Deterministic.
+    /// The caller's claimed URA, echoed back unchanged. Deterministic.
     pub membership_ura: String,
     /// The realm the caller has joined. Deterministic.
     pub realm: String,
@@ -275,7 +279,7 @@ pub fn derive_join_receipt_hash(caller_ura: &str, realm: &str) -> String {
 /// Request payload for `federation.advertise_agent`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdvertiseAgentRequest {
-    /// URI of the agent being advertised.
+    /// URA of the agent being advertised.
     pub agent_ura: String,
     /// New wire shape used by the publisher. Legacy callers may still
     /// send a top-level `host_ura`, so we accept both.
@@ -363,7 +367,7 @@ pub fn handle_advertise_agent(
 /// `federation.resolve(prefix)` fan-outs.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdvertiseAbilitiesRequest {
-    /// Caller-claimed agent URI publishing the abilities. Captured
+    /// Caller-claimed agent URA publishing the abilities. Captured
     /// for log context only; admission verifies caller equality
     /// against the envelope before this wrapper runs.
     pub agent_ura: String,
@@ -401,45 +405,12 @@ pub fn handle_advertise_abilities(
     AdvertiseAbilitiesResponse { ack: true, count }
 }
 
-// ─── runtime.bootstrap_self_identity ───────────────────────────────
-
-/// Request payload for `runtime.bootstrap_self_identity`. The backend
-/// emits this once at boot so the daemon's KeyResolver can pin the
-/// hub's verifying key without waiting for a pairing flow. The shape
-/// is intentionally permissive: any of `agent_ura`, `node_id`,
-/// `tenant_id`, `public_key_b64` may be absent. Daemon-side trust
-/// is anchored in `realm-trust.toml`, so the wrapper's job is to
-/// acknowledge the call and let the boot path proceed.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct BootstrapSelfIdentityRequest {
-    #[serde(default)]
-    pub agent_ura: String,
-    #[serde(default)]
-    pub node_id: String,
-    #[serde(default)]
-    pub tenant_id: String,
-    #[serde(default)]
-    pub public_key_b64: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BootstrapSelfIdentityResponse {
-    pub ack: bool,
-}
-
-#[must_use]
-pub fn handle_bootstrap_self_identity(
-    _request: &BootstrapSelfIdentityRequest,
-) -> BootstrapSelfIdentityResponse {
-    BootstrapSelfIdentityResponse { ack: true }
-}
-
 // ─── federation.heartbeat ──────────────────────────────────────────
 
 /// Request payload for `federation.heartbeat`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HeartbeatRequest {
-    /// URI of the agent reporting in. Used only for log context now;
+    /// URA of the agent reporting in. Used only for log context now;
     /// liveness comes from the registry's stream membership.
     pub agent_ura: String,
 }
@@ -475,85 +446,10 @@ pub fn handle_heartbeat(
 
 // ─── federation.resolve ────────────────────────────────────────────
 
-/// Request payload for `federation.resolve`.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct ResolveRequest {
-    /// Optional URI prefix to filter the registry on. When absent,
-    /// returns every online agent.
-    #[serde(default)]
-    pub ura_prefix: Option<String>,
-    /// When true, the response carries each agent's
-    /// `abilities[]` from the daemon's `AbilityCatalogStore`
-    /// (populated by `federation.advertise_abilities`). When
-    /// false / absent, the abilities slot is left empty so
-    /// callers paying the wire-bandwidth cost can opt out.
-    #[serde(default)]
-    pub include_abilities: bool,
-    /// Compatibility with the older nested `filter{...}` request
-    /// shape still emitted by some bridge helpers.
-    #[serde(default)]
-    pub filter: Option<ResolveFilterRequest>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct ResolveFilterRequest {
-    #[serde(default)]
-    pub agent_ura_prefix: Option<String>,
-    #[serde(default)]
-    pub include_abilities: bool,
-}
-
-impl ResolveRequest {
-    #[must_use]
-    fn effective_ura_prefix(&self) -> Option<&str> {
-        self.ura_prefix.as_deref().or_else(|| {
-            self.filter
-                .as_ref()
-                .and_then(|filter| filter.agent_ura_prefix.as_deref())
-        })
-    }
-
-    #[must_use]
-    fn wants_abilities(&self) -> bool {
-        self.include_abilities
-            || self
-                .filter
-                .as_ref()
-                .map(|filter| filter.include_abilities)
-                .unwrap_or(false)
-    }
-}
-
-/// One agent in a resolve response. Matches the backend Go helper's
-/// `ResolvedAgent` wire shape (`uri`, `status`) so
-/// `axon.ResolveAgents` can unmarshal real daemon receipts without a
-/// JSON field-name shim.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ResolveAgentSummary {
-    /// The agent's canonical URA; deterministic.
-    pub ura: String,
-    /// Always `"active"` because in-registry equals online; spec §4.
-    pub status: String,
-    /// Host device node id for hosted agents. Omitted for self-signed
-    /// entries and older daemons that do not track host linkage.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub host_node_id: Option<String>,
-    /// Catalog of ability descriptors the agent advertised via
-    /// `federation.advertise_abilities`. Populated only when the
-    /// caller sets `include_abilities = true` AND the daemon's
-    /// `AbilityCatalogStore` has a row for this URI; absent
-    /// otherwise. Each entry is the descriptor JSON the device
-    /// emitted (free-form: `{name, tool_name, description, ...}`)
-    /// so the backend can extend the projection without re-reading
-    /// the wire.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub abilities: Vec<serde_json::Value>,
-}
-
 /// Legacy v1 directory-stream projection. Kept separate from
 /// `ResolveAgentSummary` because `subscribe_directory` still speaks
 /// the historical `membership_ura` field while
-/// `federation.resolve` now matches the backend helper's `uri`
+/// `federation.resolve` now matches the backend helper's `ura`
 /// field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSummary {
@@ -561,19 +457,11 @@ pub struct AgentSummary {
     pub status: String,
 }
 
-/// Response payload for `federation.resolve`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ResolveResponse {
-    /// Sorted ascending by `uri` so byte-identical
-    /// responses come from byte-identical state.
-    pub agents: Vec<ResolveAgentSummary>,
-}
-
 /// Handle a `federation.resolve` invocation.
 ///
 /// `catalog` is the optional `AbilityCatalogStore` the daemon
 /// constructs at boot. When `request.include_abilities` is true
-/// AND the store has a row for an in-presence URI, the response
+/// AND the store has a row for an in-presence URA, the response
 /// carries that agent's published `abilities[]` verbatim. Hub-mode
 /// daemons in production always wire a catalog; the smoke-test
 /// build-without-catalog path passes `None` and the abilities slot
@@ -589,19 +477,19 @@ pub fn handle_resolve(
     let want_abilities = request.wants_abilities();
     let mut agents = std::collections::BTreeMap::<String, ResolveAgentSummary>::new();
 
-    for uri in registry.snapshot() {
-        if prefix.is_some_and(|p| !uri.starts_with(p)) {
+    for ura in registry.snapshot() {
+        if prefix.is_some_and(|p| !ura.starts_with(p)) {
             continue;
         }
         let abilities = if want_abilities {
-            catalog.and_then(|c| c.get(&uri)).unwrap_or_default()
+            catalog.and_then(|c| c.get(&ura)).unwrap_or_default()
         } else {
             Vec::new()
         };
         agents.insert(
-            uri.clone(),
+            ura.clone(),
             ResolveAgentSummary {
-                ura: uri,
+                ura,
                 status: "active".to_string(),
                 host_node_id: None,
                 abilities,
@@ -654,39 +542,15 @@ pub fn handle_resolve(
 
 // ─── federation.resolve_key ────────────────────────────────────────
 
-/// Request payload for `federation.resolve_key`. PR-N2 commit 2/N
-/// peer-side handler: the local trust anchor is consulted for the
-/// supplied `agent_ura` and its base64-encoded Ed25519 public key
-/// is returned (or `Status::not_found` when absent).
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct ResolveKeyRequest {
-    /// The canonical agent URI whose verifying key the caller
-    /// needs. The peer hub returns its locally-known key
-    /// regardless of who is asking; cross-realm trust gating is
-    /// enforced caller-side by the FederatedKeyResolver before
-    /// dialling, never here.
-    pub agent_ura: String,
-    /// DEC-EU §multi-realm. For user-role URIs (multi-device → N
-    /// pubkeys), the caller pins the exact pubkey it observed on
-    /// the envelope; the peer answers with that pubkey iff it is
-    /// registered under the URI. Hub / backend / device URIs are
-    /// 1:1 and ignore this field. Absent / empty falls back to
-    /// the legacy single-value lookup.
-    #[serde(default)]
-    pub presented_pubkey_b64: Option<String>,
-}
-
-/// Response payload for `federation.resolve_key`. The 32-byte
-/// Ed25519 verifying key is returned base64-encoded in the same
-/// format `realm-trust.toml` and the local
-/// `TrustAnchorKeyResolver` use, so callers can feed it directly
-/// to `ed25519_dalek::VerifyingKey::from_bytes`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ResolveKeyResponse {
-    /// Base64 (standard alphabet) of 32 raw Ed25519 verifying-key
-    /// bytes. The wire encoding is fixed; PR-4 schema fixtures
-    /// pin this shape.
-    pub public_key_b64: String,
+fn resolve_key_response(public_key_b64: &str) -> ResolveKeyResponse {
+    let public_key_hex = BASE64_STANDARD
+        .decode(public_key_b64.as_bytes())
+        .map(hex::encode)
+        .unwrap_or_default();
+    ResolveKeyResponse {
+        public_key_b64: public_key_b64.to_string(),
+        public_key_hex,
+    }
 }
 
 /// Handle a `federation.resolve_key` invocation.
@@ -696,26 +560,33 @@ pub struct ResolveKeyResponse {
 /// already stores the canonical base64 form, so no re-encode is
 /// needed here). On miss, returns `None`; the caller is responsible
 /// for wrapping that as `Status::not_found` so the FederatedKey-
-/// Resolver can distinguish "URI is not in this hub's trust set"
+/// Resolver can distinguish "URA is not in this hub's trust set"
 /// from a network-level failure.
 #[must_use]
 pub fn handle_resolve_key(
     request: &ResolveKeyRequest,
     trust_anchor: &crate::services::realm_trust_anchor::RealmTrustAnchor,
 ) -> Option<ResolveKeyResponse> {
-    // DEC-EU multi-device user URIs: caller supplies the pubkey it
+    // DEC-EU multi-device user URAs: caller supplies the pubkey it
     // observed on the envelope; we confirm it's in the user bucket.
     // Single-value roles (hub/backend/device) ignore this field and
     // fall through to the legacy lookup below.
-    if let Some(pk) = request
+    let presented_pubkey_b64 = request
         .presented_pubkey_b64
         .as_deref()
         .filter(|s| !s.is_empty())
-    {
+        .map(str::to_string)
+        .or_else(|| {
+            request
+                .presented_pubkey_hex
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .and_then(|hex| hex::decode(hex).ok())
+                .map(|raw| BASE64_STANDARD.encode(raw))
+        });
+    if let Some(pk) = presented_pubkey_b64.as_deref() {
         if let Some(entry) = trust_anchor.lookup_user_by_pubkey(&request.agent_ura, pk) {
-            return Some(ResolveKeyResponse {
-                public_key_b64: entry.public_key_b64.clone(),
-            });
+            return Some(resolve_key_response(&entry.public_key_b64));
         }
         if matches!(
             crate::ura::parse_ura(&request.agent_ura).map(|parsed| parsed.kind),
@@ -726,49 +597,10 @@ pub fn handle_resolve_key(
     }
     trust_anchor
         .lookup(&request.agent_ura)
-        .map(|entry| ResolveKeyResponse {
-            public_key_b64: entry.public_key_b64.clone(),
-        })
+        .map(|entry| resolve_key_response(&entry.public_key_b64))
 }
 
 // ─── federation.discover (PR-N3 N3-4) ──────────────────────────────
-
-/// Request payload for `federation.discover`. PR-N3 N3-4 cross-
-/// realm directory lookup. When `agent_ura` is `Some`, the
-/// handler returns at most one entry (the lex-smallest peer's
-/// view of that URI). When `None`, the handler returns the
-/// flattened federated directory in deterministic order
-/// (peers in lex order on `peer_realm`, entries within each
-/// peer in lex order on `agent_ura`).
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct DiscoverRequest {
-    /// Optional URI to filter on. Absent ⇒ return every entry
-    /// in the federated directory.
-    #[serde(default)]
-    pub agent_ura: Option<String>,
-    /// **N3-N4 bridge**. Optional caller's local user id. When
-    /// present and the daemon has a `FederatedBindingsStore`
-    /// wired, the dispatch arm filters cross-realm entries
-    /// through the corresponding `FederatedUserResolver`: only
-    /// entries whose URI is on the caller's local realm or has
-    /// a recorded binding to this `local_user_id` survive
-    /// (INV-5 privacy default). Absent ⇒ unfiltered (operator /
-    /// audit query path).
-    #[serde(default)]
-    pub local_user_id: Option<String>,
-}
-
-/// Response payload for `federation.discover`. Each entry in
-/// `entries` carries its `origin_realm` already stamped via the
-/// §2.4 rewrite chokepoint, so callers can sort, group, or
-/// filter by realm without trusting the wire bytes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DiscoverResponse {
-    /// Matching `DirectoryEntry`s. Empty when the `agent_ura`
-    /// filter misses every peer; also empty when no peers are
-    /// federated (single-realm daemons gracefully degrade).
-    pub entries: Vec<crate::services::federation_directory::DirectoryEntry>,
-}
 
 /// Handle a `federation.discover` invocation. Pure read against
 /// the supplied `SharedFederatedDirectoryView` snapshot — no I/O,
@@ -779,7 +611,7 @@ pub fn handle_discover(
     view: &crate::services::federation_directory::SharedFederatedDirectoryView,
 ) -> DiscoverResponse {
     let entries = match request.agent_ura.as_deref() {
-        Some(uri) => crate::services::federation_directory::lookup_in_federated_view(view, uri)
+        Some(ura) => crate::services::federation_directory::lookup_in_federated_view(view, ura)
             .map(|e| vec![e])
             .unwrap_or_default(),
         None => crate::services::federation_directory::flatten_federated_view(view),
@@ -789,12 +621,12 @@ pub fn handle_discover(
 
 /// **PR-N4 N3-N4 bridge**. Variant of `handle_discover` that
 /// filters cross-realm entries through a `FederatedUserResolver`.
-/// Only entries whose URI either:
+/// Only entries whose URA either:
 ///   - matches the local realm (`FederatedUserOutcome::Local`), or
 ///   - has a recorded binding for the calling user
 ///     (`BoundLocalUser`)
 /// pass through. Unbound (`NotBound`) and malformed
-/// (`Malformed`) URIs are filtered out.
+/// (`Malformed`) URAs are filtered out.
 ///
 /// This realises PR-N4 spec §commit 4/N's INV-5 privacy default:
 /// a calling user only sees cross-realm devices that have been
@@ -808,7 +640,7 @@ pub fn handle_discover_with_user_filter(
 ) -> DiscoverResponse {
     use crate::runtime::keyring::resolver::FederatedUserOutcome;
     let raw = match request.agent_ura.as_deref() {
-        Some(uri) => crate::services::federation_directory::lookup_in_federated_view(view, uri)
+        Some(ura) => crate::services::federation_directory::lookup_in_federated_view(view, ura)
             .map(|e| vec![e])
             .unwrap_or_default(),
         None => crate::services::federation_directory::flatten_federated_view(view),
@@ -826,26 +658,6 @@ pub fn handle_discover_with_user_filter(
 }
 
 // ─── federation.list_user_devices (PR-N3 N3-5) ────────────────────
-
-/// Request payload for `federation.list_user_devices`. The
-/// `tenant_id` is the URI realm component (`<tenant>` in
-/// `easynet:///r/<tenant>/device/<id>`) — the same shape backend
-/// Go uses to key device_pairing rows.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ListUserDevicesRequest {
-    pub tenant_id: String,
-}
-
-/// Response payload for `federation.list_user_devices`. Each
-/// entry has `origin_realm = None` — this hub speaks for its
-/// own realm; the calling backend on the peer hub stamps the
-/// merge-boundary realm at its end (per spec §3.4 the backend
-/// rewrites `origin_realm = Some(peer_realm)` when projecting
-/// federated rows into its own listDevices response).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ListUserDevicesResponse {
-    pub devices: Vec<crate::services::federation_directory::DirectoryEntry>,
-}
 
 /// Request payload for `federation.proxy_list_user_devices`.
 /// `tenant_id` is the user-owned device realm to enumerate on
@@ -879,7 +691,7 @@ pub struct ProxyResolveRequest {
 }
 
 /// Handle a `federation.list_user_devices` invocation. Reads
-/// the supplied `PresenceRegistry` snapshot, filters URIs
+/// the supplied `PresenceRegistry` snapshot, filters URAs
 /// whose realm component matches `request.tenant_id`, and
 /// projects each into a `DirectoryEntry`. PR-N3 spec §3.5: the
 /// admission filter (caller must be a trusted hub-role peer)
@@ -888,16 +700,16 @@ pub struct ProxyResolveRequest {
 ///
 /// `display_name` / `hub_endpoint` / `last_seen_unix_ms` are
 /// `None` in this baseline projection — the daemon's
-/// PresenceRegistry only knows URIs and active/inactive state.
+/// PresenceRegistry only knows URAs and active/inactive state.
 /// Enriching from the backend's device_pairing table (with
 /// real display_name, last_seen) is N3-6 backend-Go territory.
 ///
-/// URI compatibility:
+/// URA compatibility:
 /// - Canonical v4.1.4 device sessions live under
 ///   `easynet:///r/<tenant>/device/<node>`.
-/// - Only canonical device-session URIs (`.../device/<node>`) are
+/// - Only canonical device-session URAs (`.../device/<node>`) are
 ///   surfaced here.
-/// - Real agent-profile URIs (`.../agent/<user>.<agent>`) are not
+/// - Real agent-profile URAs (`.../agent/<user>.<agent>`) are not
 ///   device sessions and are ignored here.
 #[must_use]
 pub fn handle_list_user_devices(
@@ -908,16 +720,16 @@ pub fn handle_list_user_devices(
     let snapshot = registry.snapshot();
     let devices = snapshot
         .into_iter()
-        .filter(|uri| uri.starts_with(&tenant_device_prefix))
-        .map(|uri| {
-            // Canonical v4.1.4 device URIs are the only input
+        .filter(|ura| ura.starts_with(&tenant_device_prefix))
+        .map(|ura| {
+            // Canonical v4.1.4 device URAs are the only input
             // that should survive the prefix filter above.
-            let node_id = match crate::ura::parse_ura(&uri) {
+            let node_id = match crate::ura::parse_ura(&ura) {
                 Ok(parsed) if parsed.kind == crate::ura::URAKind::Device => parsed.device_id,
                 _ => String::new(),
             };
             crate::services::federation_directory::DirectoryEntry {
-                agent_ura: uri,
+                agent_ura: ura,
                 node_id,
                 display_name: None,
                 status: "active".to_string(),
@@ -995,117 +807,6 @@ pub fn handle_revoke(
 
 // ─── federation.forward_invoke ─────────────────────────────────────
 
-/// Request payload for `federation.forward_invoke` — the dispatcher
-/// uses this to decide whether to push the inner envelope down a
-/// target's `<self>.session` reverse channel.
-///
-/// Wire shape per DEC-N4 §2.1:
-/// - `target_ura` — destination agent URI.
-/// - `inner_envelope_b64` — base64 of the caller-built inner
-///   payload (`{ability, args, call_id}`); opaque to this wrapper.
-/// - `causal_context_bytes` — opaque audit-chain bytes the caller's
-///   `<self>.invoke_remote` initiator carries (PR-N5 §1: prior
-///   ForwardReceipt hash list, possibly empty). The dispatcher
-///   threads these verbatim into the target's session frame so the
-///   target's InvocationReceipt can stamp `causal_context.list`
-///   with the same values.
-/// - `forward_deadline_ms` — caller-side deadline budget remaining
-///   in milliseconds at the time the request was built. The peer
-///   hub uses this to derive its own forward-call deadline (DEC-N5
-///   §3); zero means "no caller-side deadline supplied" (peer
-///   applies its own default).
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ForwardInvokeRequest {
-    pub target_ura: String,
-    pub inner_envelope_b64: String,
-    /// Opaque audit-chain bytes; round-trips verbatim per DEC-N4
-    /// §2.1 acceptance criterion. Empty when the caller's initiator
-    /// has no prior receipts to chain (typical for the first call
-    /// in a session).
-    ///
-    /// Wire shape accepts BOTH a JSON array of byte values
-    /// (Rust-serde default for `Vec<u8>`) AND a base64-encoded
-    /// string (Go's default `[]byte` JSON shape). PR-4 conformance
-    /// captures across rust/go/python/java/node/swift/react each
-    /// pick whichever shape is idiomatic for their language; the
-    /// daemon's `deserialize_bytes_dual` collapses both to the same
-    /// `Vec<u8>` value.
-    #[serde(default, deserialize_with = "deserialize_bytes_dual")]
-    pub causal_context_bytes: Vec<u8>,
-    /// Caller-side remaining deadline in milliseconds. `0` is the
-    /// sentinel for "no deadline supplied"; the peer applies its
-    /// configured default in that case (DEC-N5 §3).
-    #[serde(default)]
-    pub forward_deadline_ms: u64,
-}
-
-/// Permissive bytes deserialiser accepting both the JSON-array
-/// shape `[1, 2, 3]` (Rust serde default) and the base64-string
-/// shape `"AQID"` (Go `[]byte` default JSON encoding). PR-4
-/// SDK-conformance vectors regenerate cleanly across both
-/// language families without forcing a single wire encoding.
-fn deserialize_bytes_dual<'de, D>(d: D) -> Result<Vec<u8>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    use serde::de::{Error as DeError, Visitor};
-
-    struct DualVisitor;
-    impl<'de> Visitor<'de> for DualVisitor {
-        type Value = Vec<u8>;
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("a JSON array of byte values or a base64-encoded string")
-        }
-        fn visit_str<E: DeError>(self, v: &str) -> Result<Vec<u8>, E> {
-            if v.is_empty() {
-                return Ok(Vec::new());
-            }
-            STANDARD.decode(v).map_err(DeError::custom)
-        }
-        fn visit_string<E: DeError>(self, v: String) -> Result<Vec<u8>, E> {
-            self.visit_str(&v)
-        }
-        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<u8>, A::Error>
-        where
-            A: serde::de::SeqAccess<'de>,
-        {
-            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-            while let Some(b) = seq.next_element::<u8>()? {
-                out.push(b);
-            }
-            Ok(out)
-        }
-    }
-    d.deserialize_any(DualVisitor)
-}
-
-/// Response payload for `federation.forward_invoke` (DEC-N4 §2.1
-/// final shape).
-///
-/// `result_bytes` carries the target's ability-response bytes
-/// end-to-end, opaque to the forwarding hub. `correlation_call_id`
-/// is the call_id originally minted by the caller's
-/// `<self>.invoke_remote` initiator (or, for the CLI bridge,
-/// generated client-side at request build time); the receiving
-/// daemon uses it to correlate the SessionDispatch::Result with
-/// the awaiting bidi.
-///
-/// `target_offline` is NOT carried as an `Ok(ForwardInvokeResponse
-/// { result_bytes: empty })`; per DEC-N4 §2.1 it surfaces as
-/// `Status::failed_precondition` with reason text `target_offline`.
-/// The previous staging field `target_online: bool` is removed
-/// entirely; PR-4 baseline schema fixtures regenerate alongside
-/// this shape change.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ForwardInvokeResponse {
-    /// Target ability response bytes, opaque to the forwarder.
-    pub result_bytes: Vec<u8>,
-    /// Call-id minted by the caller; threaded back so the caller
-    /// can correlate this response with its awaiting bidi.
-    pub correlation_call_id: String,
-}
-
 /// Reason text emitted on `Status::failed_precondition` when the
 /// target presence-registry lookup misses on the local-tenant
 /// fast-path. Wire-stable per DEC-N4 §2.1.
@@ -1160,8 +861,8 @@ pub fn build_subscribe_directory_initial(registry: &PresenceRegistry) -> Subscri
     let agents = registry
         .snapshot()
         .into_iter()
-        .map(|uri| AgentSummary {
-            membership_ura: uri,
+        .map(|ura| AgentSummary {
+            membership_ura: ura,
             status: "active".to_string(),
         })
         .collect();
@@ -1170,21 +871,17 @@ pub fn build_subscribe_directory_initial(registry: &PresenceRegistry) -> Subscri
 
 /// **PR-N3 N3-streaming-1**. Build the initial `Snapshot` frame
 /// for the v2 subscribe stream from the local presence registry.
-/// Each in-registry URI projects to a `DirectoryEntry` via the
-/// pure-data adapter; sorted iteration mirrors v1's
+/// Each in-registry URA projects to a `DirectoryAgentSummary` via
+/// the pure-data adapter; sorted iteration mirrors v1's
 /// deterministic-bytes-from-deterministic-state contract.
 #[must_use]
 pub fn build_subscribe_directory_v2_snapshot(
     registry: &PresenceRegistry,
 ) -> crate::services::federation_directory::DirectoryEvent {
-    let entries = registry
-        .snapshot()
-        .into_iter()
-        .map(|uri| {
-            crate::services::federation_directory::presence_uri_to_directory_entry(&uri, true)
-        })
-        .collect();
-    crate::services::federation_directory::DirectoryEvent::Snapshot { entries }
+    crate::services::federation_directory::presence_uras_to_directory_snapshot(
+        registry.snapshot(),
+        crate::services::federation_directory::now_unix_ms(),
+    )
 }
 
 #[cfg(test)]
@@ -1265,7 +962,7 @@ mod tests {
     fn join_receipt_hash_pin() {
         // Pin the value directly so a future change to the
         // derivation algorithm requires updating both this test and
-        // the spec §5.1 statement of `sha256(uri || realm)`.
+        // the spec §5.1 statement of `sha256(ura || realm)`.
         //
         // Equivalent in shell:
         //     printf 'agent-xrealm-y' | shasum -a 256
@@ -1278,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_join_echoes_uri_and_realm() {
+    fn handle_join_echoes_ura_and_realm() {
         let req = JoinRequest {
             membership_ura: "easynet:///r/realm/device/n1".to_string(),
             realm: "realm".to_string(),
@@ -1355,9 +1052,9 @@ mod tests {
             None,
             None,
         );
-        let uris: Vec<&str> = resp.agents.iter().map(|a| a.ura.as_str()).collect();
+        let uras: Vec<&str> = resp.agents.iter().map(|a| a.ura.as_str()).collect();
         assert_eq!(
-            uris,
+            uras,
             vec![
                 "easynet:///r/realm/device/a",
                 "easynet:///r/realm/device/b",
@@ -1443,7 +1140,7 @@ mod tests {
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         };
         let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
@@ -1451,6 +1148,7 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
                 presented_pubkey_b64: None,
+                presented_pubkey_hex: None,
             },
             &anchor,
         )
@@ -1459,16 +1157,21 @@ mod tests {
             resp.public_key_b64,
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         );
+        assert_eq!(
+            resp.public_key_hex,
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
     }
 
     #[test]
-    fn handle_resolve_key_returns_none_when_uri_not_in_anchor() {
+    fn handle_resolve_key_returns_none_when_ura_not_in_anchor() {
         use crate::services::realm_trust_anchor::RealmTrustAnchor;
         let anchor = RealmTrustAnchor::default();
         let resp = handle_resolve_key(
             &ResolveKeyRequest {
                 agent_ura: "easynet:///r/realm-a/device/missing".to_string(),
                 presented_pubkey_b64: None,
+                presented_pubkey_hex: None,
             },
             &anchor,
         );
@@ -1493,7 +1196,7 @@ mod tests {
             role: TrustedAgentRole::User,
             added_at_unix_ms: 1_714_000_000_000,
             origin_tenant_id: None,
-            hub_uri: None,
+            hub_endpoint: None,
             tls_ca_pem_path: None,
         });
         let anchor = RealmTrustAnchor::from_entries(entries.collect()).expect("anchor");
@@ -1503,6 +1206,7 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: alice.to_string(),
                 presented_pubkey_b64: Some(pk_a.to_string()),
+                presented_pubkey_hex: None,
             },
             &anchor,
         )
@@ -1514,6 +1218,7 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: alice.to_string(),
                 presented_pubkey_b64: Some(pk_b.to_string()),
+                presented_pubkey_hex: None,
             },
             &anchor,
         )
@@ -1527,6 +1232,7 @@ mod tests {
                 presented_pubkey_b64: Some(
                     "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=".to_string(),
                 ),
+                presented_pubkey_hex: None,
             },
             &anchor,
         );
@@ -1538,33 +1244,29 @@ mod tests {
     fn populated_view_two_realms(
     ) -> crate::services::federation_directory::SharedFederatedDirectoryView {
         use crate::services::federation_directory::{
-            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+            DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
         };
         let cell = SharedFederatedDirectoryView::default();
         let mut realm_a = DirectoryView::new("realm-a".to_string());
-        realm_a.apply_frame(&DirectoryEvent::Snapshot {
-            entries: vec![DirectoryEntry {
-                agent_ura: "easynet:///r/realm-a/user/user-c".to_string(),
-                node_id: "user-c".to_string(),
-                display_name: None,
-                status: "active".to_string(),
-                origin_realm: None,
-                hub_endpoint: None,
-                last_seen_unix_ms: None,
-            }],
-        });
+        realm_a.replace_entries(vec![DirectoryEntry {
+            agent_ura: "easynet:///r/realm-a/user/user-c".to_string(),
+            node_id: "user-c".to_string(),
+            display_name: None,
+            status: "active".to_string(),
+            origin_realm: None,
+            hub_endpoint: None,
+            last_seen_unix_ms: None,
+        }]);
         let mut realm_c = DirectoryView::new("realm-c".to_string());
-        realm_c.apply_frame(&DirectoryEvent::Snapshot {
-            entries: vec![DirectoryEntry {
-                agent_ura: "easynet:///r/realm-c/user/unbound".to_string(),
-                node_id: "unbound".to_string(),
-                display_name: None,
-                status: "active".to_string(),
-                origin_realm: None,
-                hub_endpoint: None,
-                last_seen_unix_ms: None,
-            }],
-        });
+        realm_c.replace_entries(vec![DirectoryEntry {
+            agent_ura: "easynet:///r/realm-c/user/unbound".to_string(),
+            node_id: "unbound".to_string(),
+            display_name: None,
+            status: "active".to_string(),
+            origin_realm: None,
+            hub_endpoint: None,
+            last_seen_unix_ms: None,
+        }]);
         let mut peers = std::collections::BTreeMap::new();
         peers.insert("realm-a".to_string(), std::sync::Arc::new(realm_a));
         peers.insert("realm-c".to_string(), std::sync::Arc::new(realm_c));
@@ -1670,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_with_user_filter_uri_query_drops_when_unbound() {
+    fn discover_with_user_filter_ura_query_drops_when_unbound() {
         use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
         use crate::runtime::keyring::resolver::FederatedUserResolver;
         use std::sync::Arc;
@@ -1678,7 +1380,7 @@ mod tests {
         let bindings = Arc::new(FederatedBindingsStore::in_memory());
         let resolver = FederatedUserResolver::new("realm-b", bindings);
         let view = populated_view_two_realms();
-        // Direct URI query for realm-c's entry — exists in the
+        // Direct URA query for realm-c's entry — exists in the
         // view but is unbound for the calling user. Filter out.
         let resp = handle_discover_with_user_filter(
             &DiscoverRequest {
@@ -1726,7 +1428,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_list_user_devices_extracts_node_id_from_uri() {
+    fn handle_list_user_devices_extracts_node_id_from_ura() {
         let registry = PresenceRegistry::new();
         registry.insert(
             "easynet:///r/tenant-a/device/node-xyz".to_string(),
@@ -1763,7 +1465,7 @@ mod tests {
         );
         assert!(
             resp.devices.is_empty(),
-            "legacy and hosted agent URIs must be ignored"
+            "legacy and hosted agent URAs must be ignored"
         );
     }
 
@@ -1787,12 +1489,12 @@ mod tests {
     #[test]
     fn handle_revoke_reports_was_active_correctly() {
         let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/device/n1".to_string();
-        registry.insert(uri.clone(), make_dispatch_sender());
+        let ura = "easynet:///r/realm/device/n1".to_string();
+        registry.insert(ura.clone(), make_dispatch_sender());
 
         let resp = handle_revoke(
             &RevokeRequest {
-                target_ura: uri.clone(),
+                target_ura: ura.clone(),
                 agent_ura: String::new(),
             },
             &registry,
@@ -1800,7 +1502,7 @@ mod tests {
         );
         assert!(resp.ack);
         assert!(resp.was_active);
-        assert!(registry.lookup(&uri).is_none(), "must be removed");
+        assert!(registry.lookup(&ura).is_none(), "must be removed");
     }
 
     #[test]
@@ -1930,13 +1632,13 @@ mod tests {
         );
 
         let initial = build_subscribe_directory_initial(&registry);
-        let uris: Vec<&str> = initial
+        let uras: Vec<&str> = initial
             .agents
             .iter()
             .map(|a| a.membership_ura.as_str())
             .collect();
         assert_eq!(
-            uris,
+            uras,
             vec!["easynet:///r/realm/device/a", "easynet:///r/realm/device/c"]
         );
     }

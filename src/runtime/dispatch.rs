@@ -381,6 +381,7 @@ pub fn send_to_agent_with_depth_and_progress(
             depth: d,
             mission_run_dir: None,
             origin_agent: None,
+            parent_invocation: None,
         })
         .or_else(context::current);
 
@@ -593,6 +594,9 @@ pub fn send_to_agent_with_depth_and_progress(
         // context, or the root agent name inside a mission.
         "origin_agent": active.as_ref().and_then(|c| c.origin_agent.clone()),
         "mission_id": active.as_ref().map(|c| c.mission_id.clone()),
+        "parent_invocation": active
+            .as_ref()
+            .and_then(|c| c.parent_invocation.as_ref().map(|ctx| ctx.to_json_value())),
         "context_present": context.is_some(),
     });
     if let Err(e) = session.writer().emit("admitted", Some(admitted_payload)) {

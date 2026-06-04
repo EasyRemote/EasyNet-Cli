@@ -38,6 +38,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use easynet_axon::{VoiceCallState, VoiceEndReason, VoiceEventType, VoiceNetworkMetrics};
 
 pub const ABILITY_CREATE_CALL: &str = "device.voice.create_call";
 pub const ABILITY_SHOW_CALL: &str = "device.voice.show_call";
@@ -51,10 +52,10 @@ pub const ABILITY_LIST_CALLS: &str = "device.voice.list_calls";
 #[derive(Debug, Clone)]
 struct CallState {
     call_id: String,
-    state: &'static str, // "ringing" | "active" | "ended"
+    state: VoiceCallState,
     created_at_ms: u64,
     ended_at_ms: Option<u64>,
-    end_reason: Option<u32>,
+    end_reason: Option<VoiceEndReason>,
     participants: HashMap<String, ParticipantState>,
     events: Vec<Value>,
 }
@@ -64,7 +65,7 @@ struct ParticipantState {
     participant_id: String,
     sdp_offer: Option<String>,
     ice_candidates: Vec<Value>,
-    last_metrics: Option<Value>,
+    last_metrics: Option<VoiceNetworkMetrics>,
     joined_at_ms: u64,
     left_at_ms: Option<u64>,
 }
@@ -176,7 +177,7 @@ fn create_call_handler(args: Value) -> anyhow::Result<Value> {
     }
     let state = CallState {
         call_id: call_id.clone(),
-        state: "ringing",
+        state: VoiceCallState::Ringing,
         created_at_ms: now_ms(),
         ended_at_ms: None,
         end_reason: None,
@@ -196,7 +197,11 @@ fn create_call_handler(args: Value) -> anyhow::Result<Value> {
     );
     Ok(json!({
         "call_id": call_id,
-        "state": "ringing",
+        // `state` keeps the legacy label for wire compatibility with
+        // existing consumers; `state_proto` carries the Axon contract
+        // name. Mirrors the additive convention in `ping.rs`.
+        "state": VoiceCallState::Ringing.legacy_label(),
+        "state_proto": VoiceCallState::Ringing.as_proto_name(),
         "created_at_ms": now_ms(),
     }))
 }
@@ -221,7 +226,7 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
     let call = s
         .get_mut(&call_id)
         .ok_or_else(|| anyhow::anyhow!("voice.join_call: call {call_id:?} not found"))?;
-    if call.state == "ended" {
+    if call.state.is_terminal() {
         anyhow::bail!("voice.join_call: call {call_id:?} has already ended");
     }
     call.participants.insert(
@@ -238,15 +243,18 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
     // A call becomes active once at least two participants are present:
     // the creator/caller plus the first remote joiner.
     if call.participants.len() >= 2 {
-        call.state = "active";
+        call.state = VoiceCallState::Active;
     }
     call.events.push(json!({
+        "event_type": VoiceEventType::ParticipantJoin.as_proto_name(),
         "type": "joined",
         "participant_id": participant_id,
+        "state": call.state.legacy_label(),
+        "state_proto": call.state.as_proto_name(),
         "at_ms": now_ms(),
     }));
     let participant_count = call.participants.len();
-    let state = call.state;
+    let state = call.state.as_proto_name();
     crate::op_event!(
         component = voice_call,
         kind = participant_joined,
@@ -258,7 +266,8 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
     Ok(json!({
         "call_id": call_id,
         "participant_id": participant_id,
-        "state": call.state,
+        "state": call.state.legacy_label(),
+        "state_proto": call.state.as_proto_name(),
     }))
 }
 
@@ -279,9 +288,12 @@ fn leave_call_handler(args: Value) -> anyhow::Result<Value> {
     })?;
     p.left_at_ms = Some(now_ms());
     call.events.push(json!({
+        "event_type": VoiceEventType::ParticipantLeave.as_proto_name(),
         "type": "left",
         "participant_id": participant_id,
         "reason": reason,
+        "state": call.state.legacy_label(),
+        "state_proto": call.state.as_proto_name(),
         "at_ms": now_ms(),
     }));
     Ok(json!({"call_id": call_id, "participant_id": participant_id}))
@@ -289,30 +301,47 @@ fn leave_call_handler(args: Value) -> anyhow::Result<Value> {
 
 fn end_call_handler(args: Value) -> anyhow::Result<Value> {
     let call_id = require_str(&args, "call_id", "voice.end_call")?.to_string();
-    let end_reason = args.get("end_reason").and_then(Value::as_u64).unwrap_or(1) as u32;
+    let end_reason = args
+        .get("end_reason")
+        .and_then(Value::as_i64)
+        .map(VoiceEndReason::from_wire)
+        .transpose()?
+        .unwrap_or(VoiceEndReason::CallerHangup);
     let mut s = store().lock().unwrap();
     let call = s
         .get_mut(&call_id)
         .ok_or_else(|| anyhow::anyhow!("voice.end_call: call {call_id:?} not found"))?;
-    if call.state == "ended" {
+    if call.state.is_terminal() {
         return Ok(json!({
             "call_id": call_id,
-            "state": "ended",
+            "state": call.state.legacy_label(),
+            "state_proto": call.state.as_proto_name(),
             "already_ended": true,
         }));
     }
-    call.state = "ended";
+    call.state = VoiceCallState::Ended;
     call.ended_at_ms = Some(now_ms());
     call.end_reason = Some(end_reason);
     call.events.push(json!({
+        "event_type": VoiceEventType::CallEnded.as_proto_name(),
         "type": "ended",
-        "reason_code": end_reason,
+        // `reason_code` is the legacy numeric event field; the proto
+        // name rides the additive `end_reason_proto`.
+        "reason_code": end_reason.to_wire_i32(),
+        "end_reason_proto": end_reason.as_proto_name(),
+        "state": call.state.legacy_label(),
+        "state_proto": call.state.as_proto_name(),
         "at_ms": now_ms(),
     }));
     Ok(json!({
         "call_id": call_id,
-        "state": "ended",
-        "end_reason": end_reason,
+        "state": call.state.legacy_label(),
+        "state_proto": call.state.as_proto_name(),
+        // `end_reason` keeps its legacy numeric code for wire
+        // compatibility (it was a `u32` pre-#contract); the proto name
+        // rides the additive `end_reason_proto` field.
+        "end_reason": end_reason.to_wire_i32(),
+        "end_reason_proto": end_reason.as_proto_name(),
     }))
 }
 
@@ -335,7 +364,11 @@ fn watch_call_handler(args: Value) -> anyhow::Result<Value> {
 fn report_metrics_handler(args: Value) -> anyhow::Result<Value> {
     let call_id = require_str(&args, "call_id", "voice.report_metrics")?.to_string();
     let participant_id = require_str(&args, "participant_id", "voice.report_metrics")?.to_string();
-    let metrics = args.get("metrics").cloned().unwrap_or_else(|| json!({}));
+    let metrics = args
+        .get("metrics")
+        .map(VoiceNetworkMetrics::from_json)
+        .transpose()?
+        .unwrap_or_default();
     let mut s = store().lock().unwrap();
     let call = s
         .get_mut(&call_id)
@@ -347,9 +380,12 @@ fn report_metrics_handler(args: Value) -> anyhow::Result<Value> {
     })?;
     p.last_metrics = Some(metrics.clone());
     call.events.push(json!({
+        "event_type": VoiceEventType::MetricsReported.as_proto_name(),
         "type": "metrics",
         "participant_id": participant_id,
-        "metrics": metrics,
+        "metrics": metrics.to_json(),
+        "state": call.state.legacy_label(),
+        "state_proto": call.state.as_proto_name(),
         "at_ms": now_ms(),
     }));
     Ok(json!({"call_id": call_id, "participant_id": participant_id, "ack": true}))
@@ -375,7 +411,7 @@ fn serialize_call(call: &CallState) -> Value {
                 "participant_id": p.participant_id,
                 "sdp_offer": p.sdp_offer,
                 "ice_candidates": p.ice_candidates,
-                "last_metrics": p.last_metrics,
+                "last_metrics": p.last_metrics.as_ref().map(VoiceNetworkMetrics::to_json),
                 "joined_at_ms": p.joined_at_ms,
                 "left_at_ms": p.left_at_ms,
             })
@@ -383,10 +419,17 @@ fn serialize_call(call: &CallState) -> Value {
         .collect();
     json!({
         "call_id": call.call_id,
-        "state": call.state,
+        // `state` / `end_reason` keep their legacy values (string label
+        // and numeric code respectively) for wire compatibility; the
+        // Axon proto names ride additive `*_proto` fields, and the
+        // numeric state code rides `state_code`.
+        "state": call.state.legacy_label(),
+        "state_proto": call.state.as_proto_name(),
+        "state_code": call.state.to_wire_i32(),
         "created_at_ms": call.created_at_ms,
         "ended_at_ms": call.ended_at_ms,
-        "end_reason": call.end_reason,
+        "end_reason": call.end_reason.map(VoiceEndReason::to_wire_i32),
+        "end_reason_proto": call.end_reason.map(VoiceEndReason::as_proto_name),
         "participants": participants,
     })
 }
@@ -424,9 +467,10 @@ pub fn show_call_input_schema() -> Value {
 
 pub fn join_call_description() -> &'static str {
     "Add a participant to an existing call. The first participant \
-     transitions the call from `ringing` to `active`. Optional \
-     `sdp_offer` carries the participant's SDP; ICE candidates \
-     stream in via subsequent `voice.report_metrics`-style updates."
+     transitions the call from `ringing` to `active` (response `state` \
+     carries the legacy label; `state_proto` carries the Axon contract \
+     name). Optional `sdp_offer` carries the participant's SDP; ICE \
+     candidates stream in via subsequent `voice.report_metrics`-style updates."
 }
 
 pub fn join_call_input_schema() -> Value {
@@ -502,7 +546,17 @@ pub fn report_metrics_input_schema() -> Value {
         "properties": {
             "call_id":        { "type": "string" },
             "participant_id": { "type": "string" },
-            "metrics":        { "type": "object" }
+            "metrics": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "rtt_ms":            { "type": "number" },
+                    "jitter_ms":         { "type": "number" },
+                    "packet_loss_ratio": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                    "concealed_samples": { "type": "integer", "minimum": 0 },
+                    "audio_level_dbov":  { "type": "number" }
+                }
+            }
         }
     })
 }
@@ -538,7 +592,13 @@ mod tests {
         }))
         .expect("create");
         let s1 = show_call_handler(json!({"call_id": cid})).unwrap();
+        // `state` carries the legacy label (back-compat); `state_proto`
+        // carries the Axon contract name.
         assert_eq!(s1.get("state").and_then(Value::as_str), Some("ringing"));
+        assert_eq!(
+            s1.get("state_proto").and_then(Value::as_str),
+            Some("VOICE_CALL_STATE_RINGING")
+        );
 
         join_call_handler(json!({
             "call_id": cid,
@@ -548,6 +608,10 @@ mod tests {
         .expect("join");
         let s2 = show_call_handler(json!({"call_id": cid})).unwrap();
         assert_eq!(s2.get("state").and_then(Value::as_str), Some("active"));
+        assert_eq!(
+            s2.get("state_proto").and_then(Value::as_str),
+            Some("VOICE_CALL_STATE_ACTIVE")
+        );
 
         report_metrics_handler(json!({
             "call_id": cid,
@@ -568,6 +632,10 @@ mod tests {
         end_call_handler(json!({"call_id": cid})).expect("end");
         let s3 = show_call_handler(json!({"call_id": cid})).unwrap();
         assert_eq!(s3.get("state").and_then(Value::as_str), Some("ended"));
+        assert_eq!(
+            s3.get("state_proto").and_then(Value::as_str),
+            Some("VOICE_CALL_STATE_ENDED")
+        );
     }
 
     #[test]

@@ -81,7 +81,9 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource, BIDI_CHANNEL_BOUND};
+use crate::runtime::ability_dispatch::{
+    AxonAbilityCatalog, BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND,
+};
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str = "device.terminal.attach";
@@ -156,7 +158,7 @@ fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSour
     let (xport_to_handler_tx, xport_to_handler_rx) =
         tokio::sync::mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
     let (xport_from_handler_tx, xport_from_handler_rx) =
-        tokio::sync::mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+        tokio::sync::mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
 
     // Each of the three tasks (reader / writer / exit-watcher) owns
     // one sender clone; the §I2 TerminalBidi fires only when the
@@ -181,7 +183,7 @@ fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSour
 /// pool, send each chunk as a `stdout` base64 frame.
 fn spawn_pty_reader(
     session: Arc<crate::runtime::execution::pty::PtySession>,
-    to_client: tokio::sync::mpsc::Sender<Value>,
+    to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
         // Take the reader handle once; we own it for the task's life.
@@ -193,7 +195,9 @@ fn spawn_pty_reader(
                     // PTY can't lend a reader; surface as exit-with-
                     // unknown so the wire sees a deterministic close.
                     let _ = to_client
-                        .send(json!({"type": "exit", "status": Value::Null}))
+                        .send(BidiOutputFrame::json(
+                            json!({"type": "exit", "status": Value::Null}),
+                        ))
                         .await;
                     return;
                 }
@@ -220,7 +224,9 @@ fn spawn_pty_reader(
                 };
                 let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                 if to_client
-                    .blocking_send(json!({"type": "stdout", "data": encoded}))
+                    .blocking_send(BidiOutputFrame::json(
+                        json!({"type": "stdout", "data": encoded}),
+                    ))
                     .is_err()
                 {
                     break; // forwarder gone
@@ -238,7 +244,7 @@ fn spawn_pty_reader(
 fn spawn_pty_writer(
     session: Arc<crate::runtime::execution::pty::PtySession>,
     mut from_client: tokio::sync::mpsc::Receiver<Value>,
-    to_client: tokio::sync::mpsc::Sender<Value>,
+    to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
         // Take the writer once; portable-pty's take_writer can only
@@ -264,10 +270,10 @@ fn spawn_pty_writer(
                         // so an MCP client doesn't accidentally print
                         // an empty `stdout` to the user's terminal.
                         let _ = to_client
-                            .send(json!({
+                            .send(BidiOutputFrame::json(json!({
                                 "type": "warn",
                                 "message": "stdin frame missing `data` field",
-                            }))
+                            })))
                             .await;
                         continue;
                     };
@@ -275,10 +281,10 @@ fn spawn_pty_writer(
                         Ok(b) => b,
                         Err(e) => {
                             let _ = to_client
-                                .send(json!({
+                                .send(BidiOutputFrame::json(json!({
                                     "type": "warn",
                                     "message": format!("stdin base64 decode failed: {e}"),
-                                }))
+                                })))
                                 .await;
                             continue;
                         }
@@ -336,7 +342,7 @@ fn spawn_pty_writer(
 /// status when waitable; null when the child was reaped externally.
 fn spawn_exit_watcher(
     session: Arc<crate::runtime::execution::pty::PtySession>,
-    to_client: tokio::sync::mpsc::Sender<Value>,
+    to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
     pty: Arc<PtyService>,
     id: PtySessionId,
 ) {
@@ -372,7 +378,9 @@ fn spawn_exit_watcher(
                     None => Value::Null,
                 };
                 let _ = to_client
-                    .send(json!({"type": "exit", "status": status_value}))
+                    .send(BidiOutputFrame::json(
+                        json!({"type": "exit", "status": status_value}),
+                    ))
                     .await;
                 // Best-effort cleanup: remove the session row so a
                 // future close sees ack=false (idempotent). Failure
@@ -442,7 +450,7 @@ mod tests {
     /// matches what a real wire consumer would do — once `exit`
     /// fires, the session is gone.
     async fn drain_handler_emit(
-        rx: &mut tokio::sync::mpsc::Receiver<Value>,
+        rx: &mut tokio::sync::mpsc::Receiver<BidiOutputFrame>,
         n: usize,
         deadline: std::time::Duration,
     ) -> Vec<Value> {
@@ -455,6 +463,7 @@ mod tests {
             };
             match tokio::time::timeout(rem, rx.recv()).await {
                 Ok(Some(f)) => {
+                    let f = f.into_json_value().expect("pty emits JSON frames");
                     let is_exit = f.get("type").and_then(Value::as_str) == Some("exit");
                     out.push(f);
                     if is_exit {

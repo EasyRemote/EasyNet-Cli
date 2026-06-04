@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "device.plugin.reload"
+description = "Reload installed plugin packages into the running daemon runtime after a plugin install, update, or remove transaction."
+
+[input_schema]
+type = "object"
+additionalProperties = false

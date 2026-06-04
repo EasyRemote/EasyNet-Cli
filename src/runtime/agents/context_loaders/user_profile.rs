@@ -129,7 +129,7 @@ impl ContextLoader for UserProfileLoader {
                 return Err(anyhow::anyhow!(
                     "user_profile: read {} failed: {e}",
                     path.display()
-                ))
+                ));
             }
         };
         let profile: UserProfile = ::toml::from_str(&body).map_err(|e| {

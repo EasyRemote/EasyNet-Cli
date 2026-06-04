@@ -19,12 +19,19 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-/// Global serialization for tests that mutate the `HOME` env var. Required
+/// Global serialization for tests that mutate process env vars. Required
 /// because Rust runs tests in parallel by default and `std::env::set_var`
 /// is process-global.
-fn home_lock() -> &'static Mutex<()> {
+fn env_lock_cell() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Acquire the process-env mutation lock without changing any variables.
+/// Tests that temporarily set non-HOME env vars must use the same lock as
+/// `HomeGuard`, otherwise a parallel HomeGuard can still restore over them.
+pub fn env_lock() -> MutexGuard<'static, ()> {
+    env_lock_cell().lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// RAII guard that:
@@ -61,7 +68,7 @@ impl HomeGuard {
         // mutation. If a previous test panicked while holding the lock, we
         // recover the poison and continue — the env vars are still
         // restored by the previous Drop impl.
-        let lock = home_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let lock = env_lock();
 
         // Build a unique temp dir under the OS temp root. We use a
         // process-global atomic counter rather than a timestamp

@@ -64,10 +64,10 @@ use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::Status;
 
-use crate::pb::axon::v1::invocation_client::InvocationClient;
+use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 #[cfg(test)]
-use crate::pb::axon::v1::BinaryChunk;
-use crate::pb::axon::v1::{
+use easynet_axon::pb::axon::v1::BinaryChunk;
+use easynet_axon::pb::axon::v1::{
     invoke_bidi_up::Payload as UpPayload, ContentEnvelope, EnvelopeOpen, InvocationTarget,
     InvokeBidiUp, StreamDescriptor,
 };
@@ -143,6 +143,12 @@ pub enum InvokeRemoteUp {
         /// Canonical URI of the device whose `<self>.session` stream
         /// the daemon must look up via `PresenceRegistry::lookup`.
         subject_device: String,
+        /// Inner ability subject. Resource-backed abilities use this
+        /// as their envelope subject after the target daemon dispatches
+        /// through its LocalRuntime. Older callers omit it and the
+        /// target falls back to `subject_device`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_ura: Option<String>,
         /// Ability name the remote device should run.
         ability: String,
         /// Opaque payload bytes the remote ability consumes. The
@@ -212,6 +218,10 @@ pub enum SessionDispatch {
     /// `<self>.invoke_remote` caller."
     Dispatch {
         call_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        callee_ura: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_ura: Option<String>,
         ability: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
@@ -225,6 +235,10 @@ pub enum SessionDispatch {
     /// `Result` frames.
     BidiOpen {
         call_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        callee_ura: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_ura: Option<String>,
         ability: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
@@ -354,6 +368,7 @@ pub async fn invoke_remote(
 ) -> Result<Pin<Box<dyn Stream<Item = Result<InvokeRemoteFrame, Status>> + Send>>, Status> {
     let request = InvokeRemoteUp::Request {
         subject_device,
+        subject_ura: None,
         ability,
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -437,7 +452,10 @@ fn map_down_stream<S>(
     up_tx: mpsc::Sender<InvokeBidiUp>,
 ) -> impl Stream<Item = Result<InvokeRemoteFrame, Status>> + Send + 'static
 where
-    S: Stream<Item = Result<crate::pb::axon::v1::InvokeBidiDown, Status>> + Send + Unpin + 'static,
+    S: Stream<Item = Result<easynet_axon::pb::axon::v1::InvokeBidiDown, Status>>
+        + Send
+        + Unpin
+        + 'static,
 {
     let (out_tx, out_rx) = mpsc::channel::<Result<InvokeRemoteFrame, Status>>(8);
     tokio::spawn(async move {
@@ -497,7 +515,7 @@ enum FrameOutcome {
     Terminal(Result<InvokeRemoteFrame, Status>),
 }
 
-fn map_one_frame(frame: &crate::pb::axon::v1::InvokeBidiDown) -> FrameOutcome {
+fn map_one_frame(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> FrameOutcome {
     let bytes = match extract_chunk_bytes(frame) {
         Some(b) => b,
         None => return FrameOutcome::Skip,
@@ -532,8 +550,8 @@ fn map_one_frame(frame: &crate::pb::axon::v1::InvokeBidiDown) -> FrameOutcome {
 /// Extract `BinaryChunk.data` bytes from a down frame, returning
 /// `None` for non-chunk frames (Receipt / Control) the consumer
 /// doesn't see.
-fn extract_chunk_bytes(frame: &crate::pb::axon::v1::InvokeBidiDown) -> Option<&[u8]> {
-    use crate::pb::axon::v1::invoke_bidi_down::Payload;
+fn extract_chunk_bytes(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> Option<&[u8]> {
+    use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
     match frame.payload.as_ref()? {
         Payload::BinaryChunk(chunk) => Some(chunk.data.as_slice()),
         Payload::Receipt(_) | Payload::Control(_) => None,
@@ -543,13 +561,14 @@ fn extract_chunk_bytes(frame: &crate::pb::axon::v1::InvokeBidiDown) -> Option<&[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, InvokeBidiDown};
+    use easynet_axon::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, InvokeBidiDown};
     use futures::stream;
 
     #[test]
     fn frame_zero_carries_ability_name_and_one_stream_descriptor() {
         let request_json = serde_json::to_vec(&InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
+            subject_ura: None,
             ability: "echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -585,6 +604,7 @@ mod tests {
     fn invoke_remote_up_request_serde_round_trip() {
         let original = InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-X".into(),
+            subject_ura: Some("easynet:///r/realm/resource/camera-1".into()),
             ability: "fs.read".into(),
             args: vec![1, 2, 3, 255],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -639,7 +659,7 @@ mod tests {
     }
 
     fn down_receipt(sequence: u64) -> InvokeBidiDown {
-        use crate::pb::axon::v1::InvocationReceipt;
+        use easynet_axon::pb::axon::v1::InvocationReceipt;
         InvokeBidiDown {
             sequence,
             mac: Vec::new(),
@@ -759,7 +779,7 @@ mod tests {
 
     #[tokio::test]
     async fn map_down_stream_skips_receipt_and_control_frames() {
-        use crate::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, BidiControl};
+        use easynet_axon::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, BidiControl};
         let frames = vec![
             Ok(down_receipt(0)),
             Ok(InvokeBidiDown {

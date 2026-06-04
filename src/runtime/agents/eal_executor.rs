@@ -52,6 +52,7 @@
 
 use crate::core::ability_spec::EalExec;
 use crate::facade::cli::mission_runs::{run_mission_inproc, MissionRunOpts};
+use crate::runtime::context::ParentInvocationContext;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
@@ -64,6 +65,7 @@ use std::time::{Duration, Instant};
 /// facing surface. Manifests with a known short workflow should
 /// pin `timeout_seconds` explicitly.
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;
+pub const AXON_INVOCATION_CONTEXT_KEY: &str = "__axon_invocation";
 
 /// Run an EAL ability. Returns a JSON envelope
 /// `{"result": <bound_vars or single binding>, "fulfilled_by": "eal",
@@ -75,12 +77,35 @@ pub fn run_eal_exec(
     args: &Value,
     timeout: Option<Duration>,
 ) -> anyhow::Result<Value> {
+    run_eal_exec_with_invocation_context(spec, args, None, timeout)
+}
+
+/// Run an EAL ability with daemon invocation context available to templates.
+///
+/// Plugin-owned EAL abilities receive the parent AXIOM envelope under the
+/// reserved `__axon_invocation` argument key. This keeps caller, subject, nonce,
+/// and causal context visible to composed EAL missions without asking plugin
+/// authors to smuggle protocol state through business arguments.
+pub fn run_eal_exec_with_invocation_context(
+    spec: &EalExec,
+    args: &Value,
+    invocation_context: Option<Value>,
+    timeout: Option<Duration>,
+) -> anyhow::Result<Value> {
+    let render_args = args_with_invocation_context(args, invocation_context.clone())?;
+    let parent_invocation = invocation_context
+        .map(ParentInvocationContext::from_json_value)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("eal executor: invalid invocation context: {err}"))?;
     // Render `{{ name }}` placeholders in the embedded source. We
     // render BEFORE handing to the EAL parser so a template error
     // (missing arg, unclosed brace, …) surfaces with the executor
     // label — not as a confusing parse error several layers down.
-    let rendered =
-        crate::runtime::agents::template::render_template(&spec.source, args, "eal executor")?;
+    let rendered = crate::runtime::agents::template::render_template(
+        &spec.source,
+        &render_args,
+        "eal executor",
+    )?;
 
     let started = Instant::now();
     let _ = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
@@ -99,6 +124,7 @@ pub fn run_eal_exec(
     let opts = MissionRunOpts {
         source_label: Some("ability:eal".to_string()),
         trace_path: None,
+        invocation_context: parent_invocation,
     };
     let run = run_mission_inproc(&rendered, opts)
         .map_err(|e| anyhow::anyhow!("eal executor: mission run failed: {e}"))?;
@@ -143,6 +169,31 @@ pub fn run_eal_exec(
     }))
 }
 
+fn args_with_invocation_context(
+    args: &Value,
+    invocation_context: Option<Value>,
+) -> anyhow::Result<Value> {
+    let Some(invocation_context) = invocation_context else {
+        return Ok(args.clone());
+    };
+    let mut object = match args {
+        Value::Object(map) => map.clone(),
+        other => {
+            return Ok(json!({
+                "args": other,
+                AXON_INVOCATION_CONTEXT_KEY: invocation_context,
+            }));
+        }
+    };
+    if object.contains_key(AXON_INVOCATION_CONTEXT_KEY) {
+        anyhow::bail!(
+            "eal executor: `{AXON_INVOCATION_CONTEXT_KEY}` is reserved for daemon invocation context"
+        );
+    }
+    object.insert(AXON_INVOCATION_CONTEXT_KEY.to_string(), invocation_context);
+    Ok(Value::Object(object))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +223,34 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("eal executor"), "label missing: {msg}");
         assert!(msg.contains("name"), "missing key not named: {msg}");
+    }
+
+    #[test]
+    fn invocation_context_is_available_to_plugin_eal_templates() {
+        let args = args_with_invocation_context(
+            &json!({}),
+            Some(json!({"subject": "easynet:///r/acme/resource/test"})),
+        )
+        .expect("context args");
+        assert_eq!(
+            args[AXON_INVOCATION_CONTEXT_KEY]["subject"],
+            "easynet:///r/acme/resource/test"
+        );
+    }
+
+    #[test]
+    fn user_args_cannot_shadow_invocation_context() {
+        let spec = EalExec {
+            source: "mission \"x\" {}".to_string(),
+            result_binding: None,
+        };
+        let err = run_eal_exec_with_invocation_context(
+            &spec,
+            &json!({"__axon_invocation": {}}),
+            Some(json!({"subject": "s"})),
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("reserved"));
     }
 }
