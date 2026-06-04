@@ -94,7 +94,10 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
             ));
         }
         config::RuntimeKind::AxonBridge => {
-            rows.push(("Mode", "bridge/hub".to_string()));
+            // Legacy raw axon-runtime state. Both device and hub product
+            // paths now record DaemonOnly; this arm is reached only by
+            // pre-unification runtime.json or non-product axon-runtime use.
+            rows.push(("Mode", "bridge (legacy)".to_string()));
             rows.push(("Bridge endpoint", state.endpoint.clone()));
             if let Some(pid) = state.pid {
                 rows.push(("PID", pid.to_string()));
