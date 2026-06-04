@@ -148,7 +148,7 @@ pub fn descriptors_for(
             .with_input_schema(meta.input_schema.clone())
             .with_hints(meta.hints.clone())
             .with_source("kernel:built-in")
-            .with_description(meta.description);
+            .with_description(meta.description.as_str());
         out.push(descriptor);
     }
     out

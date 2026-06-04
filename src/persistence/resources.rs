@@ -168,7 +168,9 @@ pub struct ResourcesFile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceEntry {
     /// Canonical resource URA, shape
-    /// `easynet:///r/<realm>/resource/<id>` per RFC-005 v3.2.
+    /// `easynet:///r/<realm>/resource/device.<device-id>/streams/<type>.<id>`
+    /// for device-local media resources. Older single-segment rows
+    /// are migrated on the next upsert once `owner_agent` is known.
     pub resource_ura: String,
     /// Owner Agent's URA. Empty at first-boot (no host URA known
     /// yet); patched on next save once `local-agents.json` knows
@@ -260,17 +262,76 @@ pub fn save(file: &ResourcesFile) -> anyhow::Result<()> {
     atomic_write_with_permissions(&path(), json.as_bytes(), WritePermissions::OwnerReadWrite)
 }
 
-/// Build the canonical resource URA for a given realm + id.
+/// Build the legacy resource URA for a given realm + id.
 ///
 /// Realm comes from credentials; id is the per-resource ULID/UUID
-/// minted on first sight. Centralised so every consumer (upsert,
-/// tests, future federation.advertise hook) agrees on the shape.
+/// minted on first sight. Kept for non-device resources and old
+/// tests that pin the generic Axon builder shape.
 pub fn build_resource_ura(realm: &str, resource_id: &str) -> String {
-    // URA v2: resource_id is opaque tail; this convenience helper
-    // takes a pre-composed `<kind>.<id>` value and just slots it in
-    // — keeps backward-compat with existing callers that don't
-    // know about the kind+id split.
     crate::ura::resource_dot_ura(realm, resource_id, "")
+}
+
+fn build_device_stream_resource_ura(
+    realm: &str,
+    device_id: &str,
+    kind: ResourceType,
+    resource_id: &str,
+) -> String {
+    crate::ura::resource_dot_ura(
+        realm,
+        &format!("device.{device_id}"),
+        &format!("streams/{}.{}", kind.as_str(), resource_id),
+    )
+}
+
+fn owner_device_id(realm: &str, owner_agent: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(owner_agent).ok()?;
+    if parsed.kind != crate::ura::URAKind::Device || parsed.realm != realm {
+        return None;
+    }
+    if parsed.device_id.is_empty() {
+        return None;
+    }
+    Some(parsed.device_id)
+}
+
+fn canonical_resource_ura_for_new(spec: &ResourceUpsert<'_>, resource_id: &str) -> String {
+    owner_device_id(spec.realm, spec.owner_agent)
+        .map(|device_id| {
+            build_device_stream_resource_ura(spec.realm, &device_id, spec.kind, resource_id)
+        })
+        .unwrap_or_else(|| build_resource_ura(spec.realm, resource_id))
+}
+
+fn canonical_resource_ura_for_existing(
+    realm: &str,
+    owner_agent: &str,
+    kind: ResourceType,
+    current_ura: &str,
+) -> Option<String> {
+    let device_id = owner_device_id(realm, owner_agent)?;
+    let parsed = crate::ura::parse_ura(current_ura).ok()?;
+    if parsed.kind != crate::ura::URAKind::Resource {
+        return None;
+    }
+
+    let expected_owner = format!("device.{device_id}");
+    if parsed.user_id == expected_owner && parsed.path.starts_with("streams/") {
+        return None;
+    }
+
+    let resource_id = if parsed.path.is_empty() {
+        parsed.user_id
+    } else {
+        let prefix = format!("streams/{}.", kind.as_str());
+        parsed.path.strip_prefix(&prefix)?.to_string()
+    };
+    Some(build_device_stream_resource_ura(
+        realm,
+        &device_id,
+        kind,
+        &resource_id,
+    ))
 }
 
 /// Look up an entry by `hardware_id`. Returns the existing URA when
@@ -295,10 +356,11 @@ pub fn lookup_by_ura<'a>(file: &'a ResourcesFile, resource_ura: &str) -> Option<
 ///
 /// Returns the resulting `resource_ura`:
 /// - if `hardware_id` already exists in the file, returns its
-///   existing URA (URA does NOT change — INV-RESOURCE-ULID-STABLE).
-///   Mutates `display_name` / `metadata` / `owner_agent` so a
-///   renamed device or post-join host URA propagates without
-///   orphaning the URA.
+///   existing stable resource id. If the row still uses the old
+///   single-segment resource URA and the owner is now a device URA,
+///   migrates it to the hub-authorized device-stream subject shape.
+///   Mutates `display_name` / `metadata` / `owner_agent` so a renamed
+///   device or post-join host URA propagates.
 /// - else mints a fresh UUIDv4-based id, builds a new URA via
 ///   `build_resource_ura(realm, ...)`, appends the entry, and
 ///   returns the new URA.
@@ -316,14 +378,23 @@ pub fn upsert_resource(file: &mut ResourcesFile, spec: ResourceUpsert<'_>) -> St
         .iter_mut()
         .find(|e| e.hardware_id == spec.hardware_id)
     {
-        // Stable URA + immutable kind/binding — never mutated.
         entry.owner_agent = spec.owner_agent.to_string();
+        if entry.binding == ResourceBinding::LocalDevice {
+            if let Some(resource_ura) = canonical_resource_ura_for_existing(
+                spec.realm,
+                spec.owner_agent,
+                entry.kind,
+                &entry.resource_ura,
+            ) {
+                entry.resource_ura = resource_ura;
+            }
+        }
         entry.display_name = spec.display_name.to_string();
         entry.metadata = spec.metadata;
         return entry.resource_ura.clone();
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
-    let resource_ura = build_resource_ura(spec.realm, &id);
+    let resource_ura = canonical_resource_ura_for_new(&spec, &id);
     file.resources.push(ResourceEntry {
         resource_ura: resource_ura.clone(),
         owner_agent: spec.owner_agent.to_string(),
@@ -412,11 +483,56 @@ mod tests {
             },
         );
         assert!(ura.starts_with(&crate::ura::realm_resource_prefix("acme")));
+        let parsed = crate::ura::parse_ura(&ura).expect("resource URA must parse");
+        assert_eq!(parsed.kind, crate::ura::URAKind::Resource);
+        assert_eq!(parsed.realm, "acme");
+        assert_eq!(
+            parsed.user_id, "device.01DEV",
+            "device-local media resources must be bound to the callee device for hub subject authorization; got {ura}"
+        );
+        assert!(
+            parsed.path.starts_with("streams/mic."),
+            "device-local mic resources must use stream subject path; got {ura}"
+        );
         assert_eq!(f.resources.len(), 1);
         assert_eq!(f.resources[0].kind, ResourceType::Mic);
         assert_eq!(f.resources[0].hardware_id, "BuiltInMic-AAPL-0001");
         assert_eq!(f.resources[0].display_name, "Built-in Microphone");
         assert_eq!(f.resources[0].owner_agent, "easynet:///r/acme/device/01DEV");
+    }
+
+    #[test]
+    fn upsert_migrates_legacy_device_resource_ura_to_stream_subject_shape() {
+        let mut f = ResourcesFile {
+            resources: vec![ResourceEntry {
+                resource_ura: "easynet:///r/acme/resource/LEGACY01".to_string(),
+                owner_agent: "".to_string(),
+                kind: ResourceType::Camera,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: "Camera-USB-12345".to_string(),
+                display_name: "Old Camera".to_string(),
+                metadata: json!({}),
+                first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        };
+
+        let ura = upsert_resource(
+            &mut f,
+            ResourceUpsert {
+                owner_agent: "easynet:///r/acme/device/01DEV",
+                metadata: json!({"max_fps":30}),
+                ..spec(ResourceType::Camera, "Camera-USB-12345", "Renamed Camera")
+            },
+        );
+
+        assert_eq!(
+            ura,
+            "easynet:///r/acme/resource/device.01DEV/streams/camera.LEGACY01"
+        );
+        assert_eq!(f.resources.len(), 1);
+        assert_eq!(f.resources[0].resource_ura, ura);
+        assert_eq!(f.resources[0].display_name, "Renamed Camera");
+        assert_eq!(f.resources[0].metadata["max_fps"], 30);
     }
 
     #[test]
