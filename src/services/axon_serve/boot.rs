@@ -187,6 +187,7 @@ pub fn start_axon_serve_sidecar(
     hot_agent_registrar_cell: Arc<
         crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell,
     >,
+    plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
 ) -> anyhow::Result<()> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
@@ -514,7 +515,28 @@ pub fn start_axon_serve_sidecar(
         message = "Axon LocalRuntime configured; ability registration already landed directly in LocalRuntime",
     );
 
+    let ability_wire_registry = plugin_runtime_manager
+        .as_ref()
+        .map(|manager| manager.ability_wire_registry())
+        .unwrap_or_else(|| {
+            match crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile() {
+                Ok(registry) => Arc::new(registry),
+                Err(err) => {
+                    let error = err.to_string();
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = ability_wire_registry_load_failed,
+                        level = "warn",
+                        error = error.as_str(),
+                        message = "daemon will use core bidi wire profiles only",
+                    );
+                    Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core())
+                }
+            }
+        });
+
     service = service.with_local_runtime(Arc::clone(&local_runtime));
+    service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
 
     if let Ok(seed) = crate::services::axon_serve::daemon_invocation_service::read_hub_identity_seed(
         config.realm(),
@@ -669,6 +691,7 @@ pub fn start_axon_serve_sidecar(
                 hub_ca_pem_path,
                 escalation_state,
                 Arc::clone(&local_runtime),
+                Arc::clone(&ability_wire_registry),
             );
         } else {
             crate::op_event!(
@@ -698,6 +721,7 @@ fn spawn_session_supervisor(
         crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     )>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
 ) {
     // Snapshot Axon's runtime catalogue once before wrapping it in a
     // `LocalAxonSessionDispatcher`. The session supervisor's
@@ -771,6 +795,8 @@ fn spawn_session_supervisor(
         local_dispatcher = local_dispatcher.with_escalation_correlation(correlation);
     }
     local_dispatcher = local_dispatcher.with_local_runtime(Arc::clone(&local_runtime));
+    local_dispatcher =
+        local_dispatcher.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
     let dispatcher = Arc::new(local_dispatcher);
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
@@ -1993,6 +2019,7 @@ mod tests {
             Arc::new(
                 crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
+            None,
         )
         .expect("missing config is a soft skip");
     }
@@ -2127,6 +2154,7 @@ tls_key_pem = {key:?}
                 Arc::new(
                     crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
                 ),
+                None,
             );
         }));
         // futures::FutureExt::catch_unwind would be nicer; we

@@ -801,6 +801,7 @@ mod tests {
                 session_id: "e2e-1".into(),
                 ability: "bidi.echo".into(),
                 args: serde_json::json!({}),
+                subject: None,
             },
         )
         .await;

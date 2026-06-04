@@ -36,8 +36,21 @@ fn local_subject(ura: String) -> SubjectIdentity {
     SubjectIdentity::new(ura, UraProfile::EasynetStrictV2)
 }
 
+fn local_invocation_subject(target: &InvocationTarget) -> SubjectIdentity {
+    local_subject(
+        target
+            .subject
+            .clone()
+            .unwrap_or_else(|| LOCAL_CALLEE_URA.to_string()),
+    )
+}
+
 fn local_subject_signing_key() -> SigningKey {
     SigningKey::from_bytes(&LOCAL_SUBJECT_SIGNING_SEED)
+}
+
+fn local_invocation_causal_context(target: &InvocationTarget) -> CausalContext {
+    target.causal_context.clone().unwrap_or(CausalContext::None)
 }
 
 pub fn encode_json_payload(value: &Value) -> Result<Vec<u8>, String> {
@@ -112,30 +125,23 @@ pub async fn open_local_stream(
 ) -> Result<StreamingInvocationHandle, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    if let Some(subject) = target.subject {
-        let signing_key = local_subject_signing_key();
-        let (handle, _) = runtime
-            .invoke_signed_stream_async(
-                local_identity(LOCAL_CALLER_URA),
-                local_identity(LOCAL_CALLEE_URA),
-                &target.ability,
-                payload,
-                Some(local_subject(subject)),
-                CausalContext::None,
-                None,
-                &signing_key,
-                None,
-                None,
-            )
-            .await
-            .map_err(|err| format!("{err}"))?;
-        Ok(handle)
-    } else {
-        runtime
-            .invoke_stream_async(&target.ability, payload, None, None)
-            .await
-            .map_err(|err| format!("{err}"))
-    }
+    let signing_key = local_subject_signing_key();
+    let (handle, _) = runtime
+        .invoke_signed_stream_async(
+            local_identity(LOCAL_CALLER_URA),
+            local_identity(LOCAL_CALLEE_URA),
+            &target.ability,
+            payload,
+            Some(local_invocation_subject(&target)),
+            local_invocation_causal_context(&target),
+            None,
+            &signing_key,
+            None,
+            None,
+        )
+        .await
+        .map_err(|err| format!("{err}"))?;
+    Ok(handle)
 }
 
 pub async fn open_local_bidi(
@@ -144,30 +150,22 @@ pub async fn open_local_bidi(
 ) -> Result<RuntimeBidiSource, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    let handle = if let Some(subject) = target.subject {
-        let signing_key = local_subject_signing_key();
-        let (handle, _) = runtime
-            .invoke_signed_bidi_async(
-                local_identity(LOCAL_CALLER_URA),
-                local_identity(LOCAL_CALLEE_URA),
-                &target.ability,
-                payload,
-                Some(local_subject(subject)),
-                CausalContext::None,
-                None,
-                &signing_key,
-                None,
-                None,
-            )
-            .await
-            .map_err(|err| format!("{err}"))?;
-        handle
-    } else {
-        runtime
-            .invoke_bidi_async(&target.ability, payload, None, None)
-            .await
-            .map_err(|err| format!("{err}"))?
-    };
+    let signing_key = local_subject_signing_key();
+    let (handle, _) = runtime
+        .invoke_signed_bidi_async(
+            local_identity(LOCAL_CALLER_URA),
+            local_identity(LOCAL_CALLEE_URA),
+            &target.ability,
+            payload,
+            Some(local_invocation_subject(&target)),
+            local_invocation_causal_context(&target),
+            None,
+            &signing_key,
+            None,
+            None,
+        )
+        .await
+        .map_err(|err| format!("{err}"))?;
     let (to_client, from_client) = handle.split();
     Ok(RuntimeBidiSource {
         to_client,
@@ -191,30 +189,22 @@ pub async fn invoke_local_rpc(
 ) -> Result<Value, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    let handle = if let Some(subject) = target.subject {
-        let signing_key = local_subject_signing_key();
-        let (handle, _) = runtime
-            .invoke_signed_async(
-                local_identity(LOCAL_CALLER_URA),
-                local_identity(LOCAL_CALLEE_URA),
-                &target.ability,
-                payload,
-                Some(local_subject(subject)),
-                CausalContext::None,
-                None,
-                &signing_key,
-                None,
-                None,
-            )
-            .await
-            .map_err(|err| format!("{err}"))?;
-        handle
-    } else {
-        runtime
-            .invoke_async(&target.ability, payload, None, None)
-            .await
-            .map_err(|err| format!("{err}"))?
-    };
+    let signing_key = local_subject_signing_key();
+    let (handle, _) = runtime
+        .invoke_signed_async(
+            local_identity(LOCAL_CALLER_URA),
+            local_identity(LOCAL_CALLEE_URA),
+            &target.ability,
+            payload,
+            Some(local_invocation_subject(&target)),
+            local_invocation_causal_context(&target),
+            None,
+            &signing_key,
+            None,
+            None,
+        )
+        .await
+        .map_err(|err| format!("{err}"))?;
     rpc_value_from_handle(handle).await
 }
 

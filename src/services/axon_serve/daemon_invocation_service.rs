@@ -350,6 +350,10 @@ pub struct DaemonInvocationService {
     /// unary, stream, bidi, and self-targeted federation dispatch all
     /// enter through this handle.
     local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    /// Daemon-owned local bidi wire profile registry. Plugin wire metadata is
+    /// projected into this value at boot; the service does not inspect package
+    /// state while handling an invocation.
+    ability_wire: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -438,6 +442,7 @@ impl DaemonInvocationService {
             escalation: None,
             invocation_ledger: None,
             local_runtime: None,
+            ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
         }
     }
 
@@ -602,6 +607,17 @@ impl DaemonInvocationService {
         runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ) -> Self {
         self.local_runtime = Some(runtime);
+        self
+    }
+
+    /// Attach the daemon-owned wire profile registry used for local bidi
+    /// dispatch. Boot computes this after plugin load planning.
+    #[must_use]
+    pub fn with_ability_wire_registry(
+        mut self,
+        registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+    ) -> Self {
+        self.ability_wire = registry;
         self
     }
 
@@ -1178,7 +1194,7 @@ impl Invocation for DaemonInvocationService {
                     })?;
                 self.dispatch_self_session_accept(caller_ura, up).await
             }
-            other if crate::runtime::ability_wire::is_bidi_wire_ability(other) => {
+            other if self.ability_wire.is_bidi_wire_ability(other) => {
                 if let Some(target_ura) = remote_bidi_target_ura(envelope_open) {
                     if !self.matches_self_target_ura(&target_ura).await {
                         return self
@@ -3001,8 +3017,13 @@ impl DaemonInvocationService {
         let call_id = handle.call_id();
         let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
 
-        let open_frame =
-            build_remote_bidi_open_dispatch_frame(call_id, ability, &envelope_open.initial_args)?;
+        let open_frame = build_remote_bidi_open_dispatch_frame(
+            call_id,
+            target_ura,
+            remote_bidi_subject_ura(envelope_open).as_deref(),
+            ability,
+            &envelope_open.initial_args,
+        )?;
         match sender.try_send(Ok(open_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -3299,7 +3320,7 @@ impl DaemonInvocationService {
         let wire =
             crate::runtime::axon_bridge::dispatch_shim::admitted_from_envelope_open(envelope_open)
                 .map_err(|err| status_from_axon_invoke_error("InvokeBidi", ability, err))?;
-        let wire_kind = local_bidi_wire_kind(ability).ok_or_else(|| {
+        let wire_kind = self.ability_wire.bidi_wire_kind_for(ability).ok_or_else(|| {
             Status::failed_precondition(format!(
                 "InvokeBidi: ability `{ability}` is registered as local bidi but has no declared wire protocol"
             ))
@@ -4174,10 +4195,6 @@ fn build_bidi_terminal_receipt_with_payload(
 const LOCAL_BIDI_DEFAULT_STREAM_ID: u32 = 1;
 
 type LocalBidiWireKind = crate::runtime::ability_wire::AbilityBidiWireKind;
-
-fn local_bidi_wire_kind(ability: &str) -> Option<LocalBidiWireKind> {
-    crate::runtime::ability_wire::bidi_wire_kind_for(ability)
-}
 
 fn local_bidi_stdout_stream_id(envelope_open: &EnvelopeOpen) -> u32 {
     envelope_open
@@ -5763,11 +5780,17 @@ fn agent_scoped_registry_ability(target_ura: &str, ability: &str) -> String {
 
 fn build_remote_bidi_open_dispatch_frame(
     call_id: u64,
+    callee_ura: &str,
+    subject_ura: Option<&str>,
     ability: &str,
     args: &[u8],
 ) -> Result<DispatchFrame, Status> {
     let payload = SessionDispatch::BidiOpen {
         call_id,
+        callee_ura: Some(callee_ura.to_string()),
+        subject_ura: subject_ura
+            .filter(|subject| !subject.trim().is_empty())
+            .map(ToOwned::to_owned),
         ability: ability.to_string(),
         args: args.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -5850,6 +5873,16 @@ fn remote_bidi_target_ura(envelope_open: &EnvelopeOpen) -> Option<String> {
         .map(|callee| callee.ura.trim())
         .filter(|ura| !ura.is_empty())?;
     Some(crate::ura::canonicalize_presence_key(callee))
+}
+
+fn remote_bidi_subject_ura(envelope_open: &EnvelopeOpen) -> Option<String> {
+    envelope_open
+        .envelope
+        .as_ref()
+        .and_then(|env| env.subject.as_ref())
+        .map(|subject| subject.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Build the terminal `InvokeBidiDown` frame the
@@ -8216,8 +8249,10 @@ mod tests {
     #[test]
     #[cfg(feature = "remote-desktop")]
     fn remote_desktop_bidi_uses_json_frame_wire_kind() {
+        let registry = crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile()
+            .expect("remote desktop plugin wire profile loads");
         assert_eq!(
-            local_bidi_wire_kind("device.remote_desktop.attach"),
+            registry.bidi_wire_kind_for("device.remote_desktop.attach"),
             Some(LocalBidiWireKind::JsonFrames)
         );
     }
@@ -8457,6 +8492,45 @@ mod tests {
                 assert_eq!(args_content_envelope.content_type, "application/json");
             }
             _ => panic!("expected Dispatch variant"),
+        }
+    }
+
+    #[test]
+    fn build_remote_bidi_open_dispatch_frame_carries_resource_binding() {
+        let frame = build_remote_bidi_open_dispatch_frame(
+            43,
+            "easynet:///r/realm/device/dev",
+            Some("easynet:///r/realm/resource/display-1"),
+            "device.remote_desktop.attach",
+            br#"{"session_id":"rd-1"}"#,
+        )
+        .expect("built");
+        let payload = match frame.frame.payload.expect("frame has payload") {
+            DownPayload::BinaryChunk(chunk) => chunk,
+            _ => panic!("expected BinaryChunk"),
+        };
+        assert_eq!(payload.stream_id, INVOKE_REMOTE_STREAM_ID);
+        let parsed: SessionDispatch =
+            serde_json::from_slice(&payload.data).expect("decode SessionDispatch");
+        match parsed {
+            SessionDispatch::BidiOpen {
+                call_id,
+                callee_ura,
+                subject_ura,
+                ability,
+                args,
+                ..
+            } => {
+                assert_eq!(call_id, 43);
+                assert_eq!(callee_ura.as_deref(), Some("easynet:///r/realm/device/dev"));
+                assert_eq!(
+                    subject_ura.as_deref(),
+                    Some("easynet:///r/realm/resource/display-1")
+                );
+                assert_eq!(ability, "device.remote_desktop.attach");
+                assert_eq!(args, br#"{"session_id":"rd-1"}"#);
+            }
+            _ => panic!("expected BidiOpen variant"),
         }
     }
 

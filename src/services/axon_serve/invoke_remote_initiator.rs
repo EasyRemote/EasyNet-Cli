@@ -235,6 +235,10 @@ pub enum SessionDispatch {
     /// `Result` frames.
     BidiOpen {
         call_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        callee_ura: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_ura: Option<String>,
         ability: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,

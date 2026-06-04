@@ -86,6 +86,10 @@ pub struct LocalAxonSessionDispatcher {
     /// observability (state machine, AbilityChangeEvent, ledger
     /// persistence) is uniform with the unary-invoke path.
     local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    /// Daemon-owned wire profile registry for local bidi abilities. Plugin
+    /// declarations are projected into this table at boot so the dispatcher
+    /// does not query package state through process-global helpers.
+    ability_wire: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
 }
 
 type LocalBidiWireKind = crate::runtime::ability_wire::AbilityBidiWireKind;
@@ -96,10 +100,26 @@ struct ActiveRemoteBidi {
     sender: BidiInputSender,
 }
 
+struct RemoteBidiOpenRequest {
+    call_id: u64,
+    callee_ura: Option<String>,
+    subject_ura: Option<String>,
+    ability: String,
+    args: Vec<u8>,
+    args_content_envelope: SessionContentEnvelope,
+}
+
 impl LocalAxonSessionDispatcher {
-    fn is_json_frame_bidi(ability: &str) -> bool {
+    fn is_json_frame_bidi(&self, ability: &str) -> bool {
+        Self::is_json_frame_bidi_with(&self.ability_wire, ability)
+    }
+
+    fn is_json_frame_bidi_with(
+        registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+        ability: &str,
+    ) -> bool {
         matches!(
-            crate::runtime::ability_wire::bidi_wire_kind_for(ability),
+            registry.bidi_wire_kind_for(ability),
             Some(LocalBidiWireKind::JsonFrames)
         )
     }
@@ -112,7 +132,19 @@ impl LocalAxonSessionDispatcher {
             remote_bidi_sessions: Arc::new(Mutex::new(HashMap::new())),
             remote_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             local_runtime: None,
+            ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
         }
+    }
+
+    /// Builder seam: attach the daemon-owned wire registry computed from the
+    /// same plugin runtime state used for ability registration.
+    #[must_use]
+    pub fn with_ability_wire_registry(
+        mut self,
+        registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+    ) -> Self {
+        self.ability_wire = registry;
+        self
     }
 
     /// Builder seam: attach a device-mode escalation correlation
@@ -320,7 +352,7 @@ impl LocalAxonSessionDispatcher {
                 };
                 let terminal = matches!(dispatch, SessionDispatch::Result { terminal: true, .. });
                 if Self::send_dispatch_up(&outbound, &dispatch).await.is_err() || terminal {
-                    return;
+                    break;
                 }
             }
             if !sent_terminal && !cancelled {
@@ -502,7 +534,18 @@ impl LocalAxonSessionDispatcher {
         }
     }
 
+    #[cfg(all(test, feature = "remote-desktop"))]
     fn map_remote_bidi_output(
+        &self,
+        call_id: u64,
+        ability: &str,
+        value: &Value,
+    ) -> Result<Option<SessionDispatch>, SessionDispatchError> {
+        Self::map_remote_bidi_output_with(&self.ability_wire, call_id, ability, value)
+    }
+
+    fn map_remote_bidi_output_with(
+        registry: &crate::runtime::ability_wire::AbilityWireRegistry,
         call_id: u64,
         ability: &str,
         value: &Value,
@@ -510,7 +553,7 @@ impl LocalAxonSessionDispatcher {
         if ability == crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH {
             return Self::map_remote_pty_output(call_id, value);
         }
-        if Self::is_json_frame_bidi(ability) {
+        if Self::is_json_frame_bidi_with(registry, ability) {
             let terminal = matches!(
                 value.get("type").and_then(Value::as_str),
                 Some("closed") | Some("error")
@@ -531,13 +574,19 @@ impl LocalAxonSessionDispatcher {
 
     async fn open_remote_bidi(
         &self,
-        call_id: u64,
-        ability: &str,
-        args: Vec<u8>,
-        args_content_envelope: SessionContentEnvelope,
+        request: RemoteBidiOpenRequest,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        if !crate::runtime::ability_wire::is_bidi_wire_ability(ability) {
+        let RemoteBidiOpenRequest {
+            call_id,
+            callee_ura,
+            subject_ura,
+            ability,
+            args,
+            args_content_envelope,
+        } = request;
+        let ability = ability.as_str();
+        if !self.ability_wire.is_bidi_wire_ability(ability) {
             return Self::send_dispatch_up(
                 outbound,
                 &Self::file_transfer_terminal_error(
@@ -567,7 +616,16 @@ impl LocalAxonSessionDispatcher {
             .await;
         };
 
-        let handle = match runtime.invoke_bidi_async(ability, args, None, None).await {
+        let handle = match (callee_ura.as_deref(), subject_ura.as_deref()) {
+            (Some(callee), Some(subject)) if !subject.trim().is_empty() => {
+                crate::runtime::axon_bridge::dispatch_shim::open_bidi_local_with_subject(
+                    runtime, callee, subject, ability, args,
+                )
+                .await
+            }
+            _ => runtime.invoke_bidi_async(ability, args, None, None).await,
+        };
+        let handle = match handle {
             Ok(handle) => handle,
             Err(err) => {
                 return Self::send_dispatch_up(
@@ -599,6 +657,7 @@ impl LocalAxonSessionDispatcher {
         let sessions = Arc::clone(&self.remote_bidi_sessions);
         let outbound = outbound.clone();
         let ability_owned = ability.to_string();
+        let ability_wire = Arc::clone(&self.ability_wire);
         tokio::spawn(async move {
             while let Some(frame_result) = handler_out_rx.next_frame().await {
                 let frame = match frame_result {
@@ -615,8 +674,10 @@ impl LocalAxonSessionDispatcher {
                 };
                 let mapped = if frame.payload.is_empty() {
                     None
-                } else if LocalAxonSessionDispatcher::is_json_frame_bidi(&ability_owned)
-                    && !frame.content_type.is_empty()
+                } else if LocalAxonSessionDispatcher::is_json_frame_bidi_with(
+                    &ability_wire,
+                    &ability_owned,
+                ) && !frame.content_type.is_empty()
                     && frame.content_type != "application/json"
                 {
                     Some(SessionDispatch::Result {
@@ -629,7 +690,8 @@ impl LocalAxonSessionDispatcher {
                 } else {
                     match serde_json::from_slice::<Value>(&frame.payload) {
                         Ok(value) => {
-                            match LocalAxonSessionDispatcher::map_remote_bidi_output(
+                            match LocalAxonSessionDispatcher::map_remote_bidi_output_with(
+                                &ability_wire,
                                 call_id,
                                 &ability_owned,
                                 &value,
@@ -722,14 +784,14 @@ impl LocalAxonSessionDispatcher {
         };
 
         let frame = if eof {
-            if Self::is_json_frame_bidi(&active.ability) {
+            if self.is_json_frame_bidi(&active.ability) {
                 json!({"type": "close", "reason": "bidi_eof"})
             } else {
                 json!({"type": "eof"})
             }
         } else if active.ability
             == crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
-            || Self::is_json_frame_bidi(&active.ability)
+            || self.is_json_frame_bidi(&active.ability)
         {
             serde_json::from_slice::<Value>(&payload).map_err(|err| {
                 SessionDispatchError::Other(format!("decode remote bidi JSON input: {err}"))
@@ -853,6 +915,8 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 }
                 SessionDispatch::BidiOpen {
                     call_id,
+                    callee_ura,
+                    subject_ura,
                     ability,
                     args,
                     args_content_envelope,
@@ -867,7 +931,17 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                         args_bytes = args_bytes,
                     );
                     return self
-                        .open_remote_bidi(call_id, &ability, args, args_content_envelope, outbound)
+                        .open_remote_bidi(
+                            RemoteBidiOpenRequest {
+                                call_id,
+                                callee_ura,
+                                subject_ura,
+                                ability,
+                                args,
+                                args_content_envelope,
+                            },
+                            outbound,
+                        )
                         .await;
                 }
                 SessionDispatch::BidiInput {
@@ -1842,6 +1916,8 @@ mod tests {
         disp.handle_down(
             session_frame(SessionDispatch::BidiOpen {
                 call_id: 77,
+                callee_ura: None,
+                subject_ura: None,
                 ability: crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
                     .to_string(),
                 args: serde_json::to_vec(&json!({
@@ -1912,17 +1988,19 @@ mod tests {
     #[test]
     #[cfg(feature = "remote-desktop")]
     fn remote_desktop_bidi_output_preserves_json_frame_payload() {
-        let mapped = LocalAxonSessionDispatcher::map_remote_bidi_output(
-            91,
-            "device.remote_desktop.attach",
-            &json!({
-                "type": "frame",
-                "seq": 3,
-                "image_bytes_b64": "abc",
-            }),
-        )
-        .expect("map succeeds")
-        .expect("frame forwards");
+        let dispatcher = remote_desktop_wire_dispatcher();
+        let mapped = dispatcher
+            .map_remote_bidi_output(
+                91,
+                "device.remote_desktop.attach",
+                &json!({
+                    "type": "frame",
+                    "seq": 3,
+                    "image_bytes_b64": "abc",
+                }),
+            )
+            .expect("map succeeds")
+            .expect("frame forwards");
 
         match mapped {
             SessionDispatch::Result {
@@ -1947,21 +2025,31 @@ mod tests {
     #[test]
     #[cfg(feature = "remote-desktop")]
     fn remote_desktop_bidi_closed_frame_is_terminal() {
-        let mapped = LocalAxonSessionDispatcher::map_remote_bidi_output(
-            92,
-            "device.remote_desktop.attach",
-            &json!({
-                "type": "closed",
-                "reason": "client_closed",
-            }),
-        )
-        .expect("map succeeds")
-        .expect("closed forwards");
+        let dispatcher = remote_desktop_wire_dispatcher();
+        let mapped = dispatcher
+            .map_remote_bidi_output(
+                92,
+                "device.remote_desktop.attach",
+                &json!({
+                    "type": "closed",
+                    "reason": "client_closed",
+                }),
+            )
+            .expect("map succeeds")
+            .expect("closed forwards");
 
         match mapped {
             SessionDispatch::Result { terminal, .. } => assert!(terminal),
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_wire_dispatcher() -> LocalAxonSessionDispatcher {
+        LocalAxonSessionDispatcher::new().with_ability_wire_registry(Arc::new(
+            crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile()
+                .expect("remote desktop plugin wire profile loads"),
+        ))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1980,6 +2068,8 @@ mod tests {
         disp.handle_down(
             session_frame(SessionDispatch::BidiOpen {
                 call_id: 88,
+                callee_ura: None,
+                subject_ura: None,
                 ability: crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
                     .to_string(),
                 args: serde_json::to_vec(&json!({

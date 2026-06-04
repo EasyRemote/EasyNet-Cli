@@ -362,6 +362,39 @@ pub async fn open_bidi_admitted(
     Ok(handle)
 }
 
+pub async fn open_bidi_local_with_subject(
+    runtime: &Arc<LocalRuntime>,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    args: Vec<u8>,
+) -> Result<BidiInvocationHandle, AxonError> {
+    let caller = AgentIdentity::new(
+        "easynet:///r/_system/agent/_system.local",
+        UraProfile::EasynetStrictV2,
+    );
+    let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
+    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
+    let envelope = InvocationEnvelope::from_wire_parts(
+        caller,
+        callee,
+        subject,
+        fresh_nonce(),
+        CausalContext::None,
+        ability,
+        &args,
+    );
+    open_bidi_admitted(
+        runtime,
+        AdmittedWireDispatch {
+            envelope,
+            signature: None,
+            payload: args,
+        },
+    )
+    .await
+}
+
 /// Daemon-internal self-target dispatch — caller is trusted, no
 /// signature verification.
 ///

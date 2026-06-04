@@ -59,14 +59,15 @@ pub struct InvocationPlan {
     pub call_mode: CallMode,
 
     /// AXIOM 7-tuple `subject` — the resource URA the invocation
-    /// acts on. `None` for legacy abilities and for the degenerate
-    /// `subject = callee` case (per INV-META-SUBJECT-EXEMPT). Per
-    /// **INV-SUBJECT-ENVELOPE**: when set, this MUST come from the
-    /// invocation envelope (signed cross-process bytes), NEVER from
-    /// args. The IPC translator that builds this plan reads the
-    /// signed envelope's subject field; future in-process callers
-    /// supply it explicitly via the `with_subject` builder on the
-    /// resolved target.
+    /// acts on. `None` means the local runtime adapter must provide
+    /// the degenerate `subject = callee` envelope subject; handlers
+    /// that require a real resource URA must still reject that
+    /// degenerate subject themselves. Per **INV-SUBJECT-ENVELOPE**:
+    /// when set, this MUST come from the invocation envelope (signed
+    /// cross-process bytes), NEVER from args. The IPC translator that
+    /// builds this plan reads the signed envelope's subject field;
+    /// future in-process callers supply it explicitly via the
+    /// `with_subject` builder on the resolved target.
     pub subject: Option<String>,
 }
 
@@ -85,20 +86,33 @@ pub struct InvocationTarget {
     /// need a subject MUST consume it from this field; they MUST
     /// NOT accept a `subject` key in `normalized_args`. The
     /// `reject_subject_in_args` guard in media_abilities enforces
-    /// the negative half. Default `None` — every legacy site
-    /// (struct literal in tests, resolvers built before this PR)
-    /// gets `None` until it explicitly sets a subject.
+    /// the negative half. Default `None` still produces a signed
+    /// local envelope with `subject = callee`; explicit subjects are
+    /// required only for resource-scoped abilities.
     pub subject: Option<String>,
+    /// Optional AXIOM causal context for local/runtime calls that need to bind
+    /// the invocation to a prior receipt. This is how local callers represent
+    /// product consent receipts without smuggling protocol state through args.
+    pub causal_context: Option<easynet_axon::invocation::CausalContext>,
 }
 
 impl InvocationTarget {
     /// Builder: attach a subject to the resolved target. Used by
     /// callers that have envelope context (the IPC translator, or a
     /// future planner). In-process tests construct the literal
-    /// directly with `subject: None`; they exercise the no-subject
-    /// path which most handlers don't need.
+    /// directly with `subject: None`; the LocalRuntime adapter maps
+    /// that to the degenerate `subject = callee` envelope shape.
     pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
         self.subject = Some(subject.into());
+        self
+    }
+
+    /// Builder: attach a causal context to the resolved target.
+    pub fn with_causal_context(
+        mut self,
+        causal_context: easynet_axon::invocation::CausalContext,
+    ) -> Self {
+        self.causal_context = Some(causal_context);
         self
     }
 }
@@ -172,6 +186,7 @@ impl TargetResolver for LocalNodeResolver {
             normalized_args: plan.args,
             call_mode: plan.call_mode,
             subject: plan.subject,
+            causal_context: None,
         })
     }
 }
@@ -299,6 +314,7 @@ mod tests {
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
             subject: None,
+            causal_context: None,
         };
         let with = t.with_subject("easynet:///r/acme/resource/01CAM");
         assert_eq!(

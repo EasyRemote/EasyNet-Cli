@@ -46,6 +46,7 @@ pub mod eal;
 pub mod facade;
 pub mod ffi;
 pub mod persistence;
+pub mod plugins;
 pub mod registry;
 pub mod runtime;
 pub mod services;

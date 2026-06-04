@@ -74,11 +74,18 @@ pub enum IncomingFrame {
     /// the handler ends, or the connection drops. Server emits zero
     /// or more `RecvBidi` frames followed by exactly one `Terminal`
     /// envelope.
+    ///
+    /// `subject` carries the same AXIOM envelope subject as Invoke and
+    /// Subscribe. Bidi abilities such as `device.remote_desktop.attach` bind
+    /// session admission to a resource/session subject; dropping this field at
+    /// OpenBidi would create a second, incomplete invocation primitive.
     OpenBidi {
         session_id: String,
         ability: String,
         #[serde(default)]
         args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<String>,
     },
     /// Push one client→handler frame onto an opened bidi session.
     /// Frames are delivered to the handler in client emission order
@@ -301,19 +308,29 @@ mod tests {
             session_id: "s-1".into(),
             ability: "device.terminal.attach".into(),
             args: serde_json::json!({"node":"01DEV"}),
+            subject: Some("easynet:///r/localhost/resource/terminal/session-1".into()),
         };
         let s = serde_json::to_string(&f).unwrap();
         assert!(s.contains("\"type\":\"open_bidi\""), "discriminator: {s}");
         assert!(s.contains("\"session_id\":\"s-1\""));
+        assert!(
+            s.contains("\"subject\":\"easynet:///r/localhost/resource/terminal/session-1\""),
+            "OpenBidi must carry AXIOM subject when present: {s}"
+        );
         let back: IncomingFrame = serde_json::from_str(&s).unwrap();
         match back {
             IncomingFrame::OpenBidi {
                 session_id,
                 ability,
+                subject,
                 ..
             } => {
                 assert_eq!(session_id, "s-1");
                 assert_eq!(ability, "device.terminal.attach");
+                assert_eq!(
+                    subject.as_deref(),
+                    Some("easynet:///r/localhost/resource/terminal/session-1")
+                );
             }
             _ => panic!("expected OpenBidi after round-trip"),
         }
