@@ -91,6 +91,7 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use easynet_axon::invocation::axiom::AuthorityBinding;
     use easynet_axon::invocation::{AgentIdentity, CausalContext, SubjectIdentity, UraProfile};
 
     #[test]
@@ -120,7 +121,7 @@ mod tests {
             UraProfile::EasynetStrictV2,
         );
         let binding = AxiomBinding {
-            caller,
+            caller: caller.clone(),
             callee,
             subject,
             invocation_nonce: [0u8; 16],
@@ -129,6 +130,9 @@ mod tests {
             callee_signature: None,
             signer_binding: None,
             host_attestation: Vec::new(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: caller.ura.clone(),
+            },
         };
 
         assert_eq!(
@@ -140,11 +144,12 @@ mod tests {
             "easynet:///r/localhost/resource/dev/invocation/inv_123/history"
         );
 
+        let fallback_caller = AgentIdentity::new(
+            "easynet:///r/localhost/user/dev",
+            UraProfile::EasynetStrictV2,
+        );
         let fallback_binding = AxiomBinding {
-            caller: AgentIdentity::new(
-                "easynet:///r/localhost/user/dev",
-                UraProfile::EasynetStrictV2,
-            ),
+            caller: fallback_caller.clone(),
             callee: AgentIdentity::new("easynet:///r/localhost/hub", UraProfile::EasynetStrictV2),
             subject: SubjectIdentity::new(
                 "easynet:///r/localhost/user/dev",
@@ -156,6 +161,9 @@ mod tests {
             callee_signature: None,
             signer_binding: None,
             host_attestation: Vec::new(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: fallback_caller.ura.clone(),
+            },
         };
         assert_eq!(
             ledger_route_ura("chat", &fallback_binding),

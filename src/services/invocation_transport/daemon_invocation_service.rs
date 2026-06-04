@@ -6325,6 +6325,48 @@ mod tests {
             .with_hub_signing_seed([0x11; 32])
     }
 
+    fn signed_delegation_metadata_for_test(
+        signer: &ed25519_dalek::SigningKey,
+        issuer_ura: &str,
+        subject_ura: &str,
+        caller_ura: &str,
+        audience: &str,
+        scopes: &[&str],
+    ) -> String {
+        use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+        use ed25519_dalek::Signer as _;
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct DelegationPayload {
+            issuer_ura: String,
+            subject_ura: String,
+            caller_ura: String,
+            audience: String,
+            scopes: Vec<String>,
+            issued_at_ms: i64,
+            expires_at_ms: i64,
+        }
+
+        let payload = DelegationPayload {
+            issuer_ura: issuer_ura.to_string(),
+            subject_ura: subject_ura.to_string(),
+            caller_ura: caller_ura.to_string(),
+            audience: audience.to_string(),
+            scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 4_102_444_800_000,
+        };
+        let payload_bytes = serde_json::to_vec(&payload).expect("delegation payload");
+        let signature = signer.sign(&payload_bytes);
+        let raw = serde_json::json!({
+            "payload": serde_json::from_slice::<serde_json::Value>(&payload_bytes)
+                .expect("payload JSON value"),
+            "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+        });
+        BASE64_STANDARD.encode(serde_json::to_vec(&raw).expect("delegation proof"))
+    }
+
     fn make_quota_service_for_device_caller(caller_ura: &str, cap: i32) -> DaemonInvocationService {
         let anchor = RealmTrustAnchor::from_entries(vec![TrustedAgent {
             agent_ura: caller_ura.to_string(),
@@ -7225,13 +7267,26 @@ mod tests {
         )
         .expect("sign test envelope");
 
+        let mut request = InvokeRequest {
+            envelope: Some(envelope),
+            function_name: ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES.to_string(),
+            arguments: args.to_vec(),
+            ..InvokeRequest::default()
+        };
+        request.metadata.insert(
+            "x-easynet-delegation".to_string(),
+            signed_delegation_metadata_for_test(
+                &caller_signing_key,
+                &caller_ura,
+                "easynet:///r/local-realm/user/alice",
+                &caller_ura,
+                &crate::ura::hub_ura("local-realm"),
+                &[ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES],
+            ),
+        );
+
         let err = svc
-            .invoke(Request::new(InvokeRequest {
-                envelope: Some(envelope),
-                function_name: ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES.to_string(),
-                arguments: args.to_vec(),
-                ..InvokeRequest::default()
-            }))
+            .invoke(Request::new(request))
             .await
             .expect_err("hub-role caller must be rejected by proxy filter");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
