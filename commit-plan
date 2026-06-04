@@ -42,10 +42,16 @@ The discriminator is policy ownership, not process persistence.
 
 ## Migration Order
 
+> **Status reconciliation (2026-06-05):** verified against the current tree — see
+> [`docs/cross-repo-migration-ledger.md`](docs/cross-repo-migration-ledger.md). Steps 1, 2,
+> 5 are **done**; the Axon P0 row is a **non-defect** (intentional test-pinned mirroring);
+> backend is done except one blocked delegation-proof item. The remaining critical path is
+> **Step 3 → Step 4 → {Step 6, Step 7}** inside EasyNet-Cli.
+
 | Step | Work | Why It Comes Here | Exit Criteria |
 |---|---|---|---|
-| 1 | Unify Hub and device product paths under `easynet-daemon`. | This establishes one policy owner before any public daemon API is stabilized. | Hub mode no longer starts raw `axon-runtime` as the product path. Runtime state no longer needs `AxonBridge` for product Hub. |
-| 2 | Promote daemon Invocation transport to first-class daemon API. | Backend and bindings need a stable daemon Invocation endpoint before JSON control can be demoted. | daemon Invocation transport is named and documented as the main call surface; unary, stream, and bidi are all proven. |
+| 1 | Unify Hub and device product paths under `easynet-daemon`. **Done — branch `codex/f07-hub-device-unify-2026-06-05`.** | This establishes one policy owner before any public daemon API is stabilized. | Hub mode no longer starts raw `axon-runtime` as the product path. Runtime state no longer needs `AxonBridge` for product Hub. |
+| 2 | Promote daemon Invocation transport to first-class daemon API. **Done — `services::invocation_transport` + `start_daemon_invocation_transport`; unary/stream/bidi proven.** | Backend and bindings need a stable daemon Invocation endpoint before JSON control can be demoted. | daemon Invocation transport is named and documented as the main call surface; unary, stream, and bidi are all proven. |
 | 3 | Add daemon SDK lifecycle and client APIs. | After Hub/device unification, public API can safely represent the actual daemon abstraction. | `DaemonConfig`, `DaemonHandle`, `DaemonClient`, endpoint discovery, status, stop, and invoke APIs exist in `libeasynet_cli`. |
 | 4 | Replace ability+args FFI with complete Invocation FFI. | Receipt-chain integrity requires all seven fields at public binding boundaries. | C ABI has unary, stream, and bidi complete Invocation entry points; old ability+args APIs are deprecated or compatibility-only. |
 | 5 | Complete JSON control caller inventory. **Done — see [`docs/json-control-caller-inventory.md`](docs/json-control-caller-inventory.md).** | Demotion risk depends on actual callers, not intent. | Every Invoke, Subscribe, and OpenBidi caller is classified as backend, language binding, CLI command, boot/status path, daemon internal, or test. **Result: 4 MUST_MIGRATE (3 FFI + 1 CLI plugin), backend confirmed absent; demotion-readiness gate G1–G12 in the inventory.** |
