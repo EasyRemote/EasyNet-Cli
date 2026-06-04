@@ -2,30 +2,35 @@
 // =======================================
 //
 // File: src/bin/gen-ability-tomls.rs
-// Description: Regenerates every published ability descriptor from the live
-//              dispatcher metadata. Built-in daemon descriptors live under
-//              `abilities/system`; plugin-owned descriptors live inside their
-//              package directories.
+// Description: Regenerates daemon ability descriptors. Built-in daemon
+//              descriptors come from the live system registry; plugin-owned
+//              descriptors come from the plugin package index, independent of
+//              this boot's runtime load plan.
 //
 // Usage
 // -----
 //   cargo run --bin gen-ability-tomls
+//   cargo run --features remote-desktop --bin gen-ability-tomls
 //
 // Behaviour:
-//   1. Walk `published_abilities()` (every system ability the
-//      dispatcher publishes — `<agent>.chat` is excluded by the
-//      same filter the rest of the discovery surface applies).
-//   2. For each, render the canonical TOML via
+//   1. Walk `published_system_abilities()` for system abilities only
+//      (`<agent>.chat` is excluded by the same filter the rest of
+//      the discovery surface applies).
+//   2. Walk the builtin `PluginPackageIndex` for repo-owned plugin abilities,
+//      without consulting env flags, platform gates, the runtime load plan, or
+//      user-local installed plugins. Builtin plugin bindings remain compile-
+//      feature gated: maintaining `plugins/remote-desktop/abilities/*.toml`
+//      requires the explicit `--features remote-desktop` invocation above.
+//   3. For each, render the canonical TOML via
 //      `runtime::agents::ability_toml::render_ability_toml`.
-//   3. Write to the canonical `descriptor_path_for(name)`, overwriting any
-//      prior content. Files NOT in the live registry are deleted from their
-//      owning descriptor directory so a removed system or plugin ability cleans
-//      up after itself.
+//   4. Write to the canonical descriptor path, overwriting any prior content.
+//      Files no longer present in their owning system/package index are
+//      deleted from that owner directory.
 //
 // Why a separate binary (and not part of cargo build)
 // ---------------------------------------------------
 // build.rs runs *before* the crate's own modules compile, so it
-// cannot call `runtime::agents::published_abilities()` (which
+// cannot call `runtime::agents::published_system_abilities()` (which
 // depends on every ability module being compiled). Putting the
 // generator in `src/bin/` lets it link the full crate and run
 // after any code change with a single command.
@@ -37,7 +42,8 @@
 //
 // What this binary deliberately does NOT do
 // -----------------------------------------
-// * Delete handwritten TOMLs that aren't in `published_abilities()`.
+// * Delete handwritten TOMLs that aren't owned by the system registry or a
+//   plugin package manifest.
 //   `chat.ability.toml` is lazily seeded at runtime to the
 //   per-install path (see runtime/abilities.rs); a future
 //   non-system descriptor (e.g. for a third-party ability shipped
@@ -52,8 +58,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use easynet_cli::runtime::agents::{ability_toml, descriptor_path_for, published_abilities};
-use easynet_cli::runtime::plugins;
+use easynet_cli::runtime::agents::{ability_toml, descriptor_path_for, published_system_abilities};
+use easynet_cli::runtime::plugin_host::{
+    PluginDescriptorProjector, PluginPackageIndex, PluginWireRegistry,
+};
 
 const TARGET_DIR: &str = "abilities/system";
 
@@ -66,18 +74,30 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    let metas = published_abilities();
-    let live_system_names: BTreeSet<String> = metas
+    let package_index = PluginPackageIndex::builtin()?;
+    let plugin_wire = PluginWireRegistry::new(&package_index);
+
+    let all_system_metas = published_system_abilities();
+    let collisions: Vec<_> = all_system_metas
         .iter()
-        .filter(|m| !plugins::is_plugin_ability(&m.name))
+        .filter(|m| plugin_wire.ability_descriptor_path(&m.name).is_some())
         .map(|m| m.name.clone())
         .collect();
+    if !collisions.is_empty() {
+        anyhow::bail!(
+            "plugin ability names collide with daemon system abilities: {:?}",
+            collisions
+        );
+    }
+
+    let metas: Vec<_> = all_system_metas.into_iter().collect();
+    let live_system_names: BTreeSet<String> = metas.iter().map(|m| m.name.clone()).collect();
 
     let mut written: Vec<String> = Vec::new();
     let mut unchanged: Vec<String> = Vec::new();
     for meta in &metas {
         let body =
-            ability_toml::render_ability_toml(&meta.name, meta.description, &meta.input_schema);
+            ability_toml::render_ability_toml(&meta.name, &meta.description, &meta.input_schema);
         let path = PathBuf::from(descriptor_path_for(&meta.name));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -94,14 +114,40 @@ fn main() -> anyhow::Result<()> {
     let mut deleted: Vec<String> = Vec::new();
     delete_stale_descriptors(&target_dir, &live_system_names, &mut deleted)?;
 
-    for plugin in plugins::builtin_plugins() {
+    let plugin_metas = PluginDescriptorProjector::project(&package_index)?;
+    for plugin in package_index.packages() {
         let live_plugin_names: BTreeSet<String> = plugin
+            .manifest()
             .abilities()
             .iter()
             .map(|ability| ability.name().to_string())
             .collect();
+        for meta in plugin_metas
+            .iter()
+            .filter(|meta| live_plugin_names.contains(&meta.name))
+        {
+            let body = ability_toml::render_ability_toml(
+                &meta.name,
+                &meta.description,
+                &meta.input_schema,
+            );
+            let path = plugin_wire
+                .ability_descriptor_path(&meta.name)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(descriptor_path_for(&meta.name)));
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let prior = std::fs::read_to_string(&path).ok();
+            if prior.as_deref() == Some(body.as_str()) {
+                unchanged.push(meta.name.clone());
+            } else {
+                std::fs::write(&path, body)?;
+                written.push(meta.name.clone());
+            }
+        }
         delete_stale_descriptors(
-            Path::new(plugin.descriptor_dir()),
+            Path::new(plugin.manifest().descriptor_dir()),
             &live_plugin_names,
             &mut deleted,
         )?;

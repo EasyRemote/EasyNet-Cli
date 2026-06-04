@@ -32,5 +32,6 @@ pub mod federation;
 pub mod invocation;
 pub mod mcp;
 pub mod mission;
+pub mod plugin;
 pub mod runtime;
 pub mod selfcmd;
