@@ -10,7 +10,10 @@
 #
 #   * `easynet`                  is on PATH
 #   * `easynet-daemon`           is on PATH
+#   * `easynet-keyring`          is on PATH
 #   * `libaxon_dendrite_bridge`  is at $HOME/.easynet/dendrite-bridge/native/
+#   * `easynet_cli.h`            is installed under the sandbox include dir
+#   * `ffi-abi-v2.md`            is installed under the sandbox doc dir
 #   * `EASYNET_DENDRITE_BRIDGE_LIB` env var points at that library
 #   * `axon-runtime`             is NOT installed anywhere
 #
@@ -120,9 +123,11 @@ echo "==> tarball:        $tarball"
 
 # Mirror install.sh layout under the sandbox prefix.
 install_dir="$prefix/usr/local/bin"
+include_dir="$prefix/usr/local/include/easynet"
+doc_dir="$prefix/usr/local/share/doc/easynet"
 easynet_home="$prefix/home/.easynet"
 native_dir="$easynet_home/dendrite-bridge/native"
-mkdir -p "$install_dir" "$native_dir"
+mkdir -p "$install_dir" "$include_dir" "$doc_dir" "$native_dir"
 
 # Step 1: extract.
 extract_dir="$prefix/extract"
@@ -132,7 +137,14 @@ tar -xzf "$tarball" -C "$extract_dir"
 # Step 2: required binaries. Mirror install.sh's "treat the daemon
 # as a required artefact: if the tarball is missing it, the release
 # is malformed and the installer should fail loudly."
-for required in easynet easynet-daemon "libaxon_dendrite_bridge.${lib_ext}"; do
+for required in \
+    easynet \
+    easynet-daemon \
+    easynet-keyring \
+    "libaxon_dendrite_bridge.${lib_ext}" \
+    include/easynet_cli.h \
+    docs/spec/ffi-abi-v2.md
+do
     if [ ! -f "$extract_dir/$required" ]; then
         echo "[FAIL] tarball missing required artefact: $required" >&2
         exit 1
@@ -151,8 +163,11 @@ fi
 # Step 4: install (mirror install.sh::download_and_install).
 mv "$extract_dir/easynet"        "$install_dir/easynet"
 mv "$extract_dir/easynet-daemon" "$install_dir/easynet-daemon"
-chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon"
+mv "$extract_dir/easynet-keyring" "$install_dir/easynet-keyring"
+chmod +x "$install_dir/easynet" "$install_dir/easynet-daemon" "$install_dir/easynet-keyring"
 mv "$extract_dir/libaxon_dendrite_bridge.${lib_ext}" "$native_dir/"
+mv "$extract_dir/include/easynet_cli.h" "$include_dir/easynet_cli.h"
+mv "$extract_dir/docs/spec/ffi-abi-v2.md" "$doc_dir/ffi-abi-v2.md"
 
 # Step 5: env stamping (mirror install.sh::setup_env). We don't
 # write into a real shell profile — the harness's caller picks up
@@ -174,7 +189,10 @@ fail=0
 for assert in \
     "$install_dir/easynet:executable" \
     "$install_dir/easynet-daemon:executable" \
-    "$native_dir/libaxon_dendrite_bridge.${lib_ext}:exists"
+    "$install_dir/easynet-keyring:executable" \
+    "$native_dir/libaxon_dendrite_bridge.${lib_ext}:exists" \
+    "$include_dir/easynet_cli.h:exists" \
+    "$doc_dir/ffi-abi-v2.md:exists"
 do
     path="${assert%:*}"
     kind="${assert##*:}"
@@ -204,6 +222,16 @@ fi
 
 if [ "$fail" != 0 ]; then
     exit 1
+fi
+
+if ! grep -q '#define EASYNET_ABI_VERSION 2u' "$include_dir/easynet_cli.h"; then
+    echo "[FAIL] installed easynet_cli.h does not declare ABI version 2" >&2
+    fail=1
+fi
+
+if ! grep -q 'include/easynet_cli.h' "$doc_dir/ffi-abi-v2.md"; then
+    echo "[FAIL] installed ffi-abi-v2.md does not reference the C header contract" >&2
+    fail=1
 fi
 
 # Smoke: spawn `easynet --version` against the sandbox env to prove
@@ -250,9 +278,12 @@ echo
 echo "[OK] release-shape install verified"
 echo "  install_dir: $install_dir"
 echo "  native_dir:  $native_dir"
+echo "  include_dir: $include_dir"
+echo "  doc_dir:     $doc_dir"
 echo "  env file:    $env_file"
-echo "  binaries:    easynet, easynet-daemon"
+echo "  binaries:    easynet, easynet-daemon, easynet-keyring"
 echo "  library:     libaxon_dendrite_bridge.${lib_ext}"
+echo "  c abi:       easynet_cli.h (ABI v2)"
 echo "  forbidden:   axon-runtime (absent ✓)"
 echo
 # Last-line contract for Phase C consumers: env=<path> + prefix=<path>

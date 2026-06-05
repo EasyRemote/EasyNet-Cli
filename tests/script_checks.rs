@@ -60,3 +60,27 @@ fn no_raw_ura_construction_script_contract_holds() {
     // construct or scheme-prefix parse easynet URAs.
     run_bash_script("tests/scripts/test_no_raw_ura_construction.sh");
 }
+
+#[test]
+fn daemon_invocation_migration_script_contract_holds() {
+    // Pins the post-demotion boundary: JSON control stays boot/status,
+    // DaemonInvocation construction stays tuple-complete, and runtime
+    // invocation stays an Axon-canonical adapter.
+    run_bash_script("tests/scripts/test_check_daemon_invocation_migration.sh");
+}
+
+#[test]
+fn ffi_abi_v2_header_script_contract_holds() {
+    // Pins the binding-facing ABI contract: version, error code table,
+    // complete Invocation symbols, daemon lifecycle symbols, and
+    // retirement of the old auto-spawn init surface.
+    run_bash_script("tests/scripts/test_check_ffi_abi_v2_header.sh");
+}
+
+#[test]
+fn release_package_contract_script_holds() {
+    // Pins the release shape consumed by install.sh: runtime binaries,
+    // dendrite bridge, and ABI v2 binding artefacts must be packaged
+    // and installed together.
+    run_bash_script("tests/scripts/test_check_release_package_contract.sh");
+}

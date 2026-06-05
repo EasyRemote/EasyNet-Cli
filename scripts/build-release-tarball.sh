@@ -4,11 +4,15 @@
 #
 # What this script ships
 # ----------------------
-# Exactly three files, flat at the tarball root:
+# Runtime artefacts are flat at the tarball root; binding/doc
+# artefacts keep their normal repository paths:
 #
 #   easynet                              — CLI binary
 #   easynet-daemon                       — long-running daemon
+#   easynet-keyring                      — device-signing vault helper
 #   libaxon_dendrite_bridge.{dylib|so}   — dendrite SDK shared library
+#   include/easynet_cli.h                — libeasynet_cli C ABI v2 header
+#   docs/spec/ffi-abi-v2.md              — binding-facing ABI spec
 #
 # Critically: NO `axon-runtime`. The production installer cleans up
 # any axon-runtime binary it finds (`install.sh` lines around 264-268
@@ -98,14 +102,14 @@ mkdir -p "$out_dir"
 stage_dir="$(mktemp -d /tmp/easynet-release-stage-XXXXXX)"
 trap 'rm -rf "$stage_dir"' EXIT
 
-cargo_args_cli=(--bin easynet --bin easynet-daemon --features axon-pb)
+cargo_args_cli=(--bin easynet --bin easynet-daemon --bin easynet-keyring --features axon-pb)
 cargo_args_bridge=(--lib)
 if [ "$build_profile" = "release" ]; then
     cargo_args_cli=("${cargo_args_cli[@]}" --release)
     cargo_args_bridge=("${cargo_args_bridge[@]}" --release)
 fi
 
-echo "==> [1/3] building easynet + easynet-daemon ($rust_target, $build_profile)"
+echo "==> [1/3] building easynet + easynet-daemon + easynet-keyring ($rust_target, $build_profile)"
 (
     cd "$cli_root"
     # We deliberately do NOT pass --target on host-native builds; the
@@ -125,9 +129,12 @@ echo "==> [2/3] building libaxon_dendrite_bridge.${lib_ext} ($build_profile)"
 # Source paths for the three release artefacts.
 cli_bin="$cli_root/target/$build_profile/easynet"
 daemon_bin="$cli_root/target/$build_profile/easynet-daemon"
+keyring_bin="$cli_root/target/$build_profile/easynet-keyring"
 bridge_lib="$bridge_crate/target/$build_profile/libaxon_dendrite_bridge.${lib_ext}"
+abi_header="$cli_root/include/easynet_cli.h"
+abi_spec="$cli_root/docs/spec/ffi-abi-v2.md"
 
-for path in "$cli_bin" "$daemon_bin" "$bridge_lib"; do
+for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$bridge_lib" "$abi_header" "$abi_spec"; do
     if [ ! -f "$path" ]; then
         echo "build-release-tarball.sh: expected artefact missing: $path" >&2
         exit 1
@@ -148,12 +155,16 @@ fi
 echo "==> [3/3] staging tarball at $out_file"
 cp "$cli_bin"    "$stage_dir/easynet"
 cp "$daemon_bin" "$stage_dir/easynet-daemon"
+cp "$keyring_bin" "$stage_dir/easynet-keyring"
 cp "$bridge_lib" "$stage_dir/libaxon_dendrite_bridge.${lib_ext}"
+mkdir -p "$stage_dir/include" "$stage_dir/docs/spec"
+cp "$abi_header" "$stage_dir/include/easynet_cli.h"
+cp "$abi_spec" "$stage_dir/docs/spec/ffi-abi-v2.md"
 
 # Strip symbols on release builds to match what production tarballs
 # look like; debug profile keeps symbols for stack traces.
 if [ "$build_profile" = "release" ] && command -v strip >/dev/null 2>&1; then
-    strip "$stage_dir/easynet" "$stage_dir/easynet-daemon" 2>/dev/null || true
+    strip "$stage_dir/easynet" "$stage_dir/easynet-daemon" "$stage_dir/easynet-keyring" 2>/dev/null || true
 fi
 
 # tar -C into the staging dir so the tarball entries are flat
@@ -161,11 +172,14 @@ fi
 tar -czf "$out_file" -C "$stage_dir" \
     easynet \
     easynet-daemon \
-    "libaxon_dendrite_bridge.${lib_ext}"
+    easynet-keyring \
+    "libaxon_dendrite_bridge.${lib_ext}" \
+    include/easynet_cli.h \
+    docs/spec/ffi-abi-v2.md
 
 echo
 echo "[OK] release tarball ready"
 echo "  path:    $out_file"
-echo "  shape:   easynet, easynet-daemon, libaxon_dendrite_bridge.${lib_ext}"
+echo "  shape:   easynet, easynet-daemon, easynet-keyring, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, docs/spec/ffi-abi-v2.md"
 echo "  axon-runtime: NOT shipped (production-shape contract)"
 echo "  size:    $(wc -c < "$out_file" | awk '{printf "%.1f MiB", $1/1024/1024}')"
