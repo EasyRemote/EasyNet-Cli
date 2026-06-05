@@ -544,18 +544,11 @@ fn bidi_handler_to_ability_fn(handler: LocalBidiHandler) -> AbilityFn {
         let handler = Arc::clone(&handler);
         async move {
             let value = payload_to_json_value(&ctx.payload)?;
-            let source = tokio::task::spawn_blocking(move || handler(value))
-                .await
-                .map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: bidi handler join error: {err}"
-                    ))
-                })?
-                .map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: bidi handler returned error: {err}"
-                    ))
-                })?;
+            let source = handler(value).map_err(|err| {
+                AxonError::internal(format!(
+                    "local_runtime_adapter: bidi handler returned error: {err}"
+                ))
+            })?;
             run_bidi_source(ctx, source).await
         }
     })
@@ -567,18 +560,11 @@ fn bidi_env_handler_to_ability_fn(handler: LocalBidiHandlerWithEnvelope) -> Abil
         async move {
             let value = payload_to_json_value(&ctx.payload)?;
             let env = envelope_context_from_axon(&ctx).await;
-            let source = tokio::task::spawn_blocking(move || handler(env, value))
-                .await
-                .map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: env bidi handler join error: {err}"
-                    ))
-                })?
-                .map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: env bidi handler returned error: {err}"
-                    ))
-                })?;
+            let source = handler(env, value).map_err(|err| {
+                AxonError::internal(format!(
+                    "local_runtime_adapter: env bidi handler returned error: {err}"
+                ))
+            })?;
             run_bidi_source(ctx, source).await
         }
     })
@@ -1370,6 +1356,16 @@ impl AxonAbilityCatalog {
             .read()
             .expect("dynamic_ext RwLock poisoned");
         dyn_ext.owner.get(ability).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_owner_for_test(&mut self, ability: &str) {
+        self.owner.remove(ability);
+        let mut dyn_ext = self
+            .dynamic_ext
+            .write()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.owner.remove(ability);
     }
 
     /// Remove every trace of `ability` from the registry: handlers

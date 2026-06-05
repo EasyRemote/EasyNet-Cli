@@ -218,7 +218,9 @@ fn invoke_plugin_control_ability_via_daemon(
                 }
                 Err(err) => return Err(err.into()),
             };
-            let subject = plugin_control_subject_ura();
+            let Some(subject) = plugin_control_subject_ura()? else {
+                return Ok(None);
+            };
             let invocation =
                 crate::daemon::DaemonInvocation::builder(&subject, &subject, ability, &subject)?
                     .args_json(&serde_json::json!({}))?
@@ -242,11 +244,26 @@ fn invoke_plugin_control_ability_via_daemon(
 }
 
 #[cfg(feature = "axon-pb")]
-fn plugin_control_subject_ura() -> String {
-    crate::persistence::config::load_credentials()
-        .ok()
-        .map(|creds| crate::ura::device_ura(&creds.tenant_id, &creds.node_id))
-        .unwrap_or_else(|| crate::ura::device_ura("cli", "local"))
+fn plugin_control_subject_ura() -> anyhow::Result<Option<String>> {
+    match crate::persistence::config::load_credentials() {
+        Ok(creds) => Ok(Some(crate::ura::device_ura(
+            creds.tenant_id.trim(),
+            creds.node_id.trim(),
+        ))),
+        Err(err) => {
+            if is_missing_or_incomplete_credentials(&err) {
+                Ok(None)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_missing_or_incomplete_credentials(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("no credentials found") || msg.contains("credentials file is incomplete")
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -254,13 +271,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_control_subject_falls_back_to_loopback_when_unpaired() {
+    fn plugin_control_subject_is_unavailable_when_unpaired() {
         let _guard = crate::facade::cli::test_support::HomeGuard::new();
 
-        assert_eq!(
-            plugin_control_subject_ura(),
-            "easynet:///r/cli/device/local"
-        );
+        assert_eq!(plugin_control_subject_ura().unwrap(), None);
     }
 
     #[test]
@@ -276,8 +290,8 @@ mod tests {
         .expect("write test credentials");
 
         assert_eq!(
-            plugin_control_subject_ura(),
-            "easynet:///r/acme/device/dev-a"
+            plugin_control_subject_ura().unwrap().as_deref(),
+            Some("easynet:///r/acme/device/dev-a")
         );
     }
 }

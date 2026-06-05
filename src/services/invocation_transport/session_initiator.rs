@@ -472,14 +472,12 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             source: err,
         })?;
 
-    // Bump client-side gRPC message limits to match the server side
-    // (`MAX_INVOCATION_GRPC_MESSAGE_BYTES` = 1 GiB). The tonic-default
-    // 4 MiB decoder cap aborted `<self>.session` mid-stream the moment
-    // a single down-frame envelope exceeded ~4 MiB — the symptom was
-    // `OutOfRange: decoded message length too large` on file-transfer
-    // 1 MB+ uploads, where backend's 64 KiB chunks accumulate into
-    // larger framed payloads on the down direction. Server side
-    // already configures both directions; the client side must too.
+    // Bump client-side gRPC message limits to match the server side.
+    // The tonic-default 4 MiB decoder cap aborted `<self>.session`
+    // mid-stream the moment a single down-frame envelope exceeded it.
+    // The shared 64 MiB transport-envelope cap keeps legitimate
+    // chunked traffic flowing without permitting near-unbounded
+    // single-message allocations.
     let mut client = InvocationClient::new(channel)
         .max_decoding_message_size(
             crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,

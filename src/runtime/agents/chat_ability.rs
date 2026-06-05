@@ -2124,7 +2124,7 @@ mod tests {
     #[test]
     fn kernel_invoke_routes_chat_through_registered_handler() {
         use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::invocation::{CausalContext, Invocation};
+        use crate::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
         use crate::runtime::kernel::Kernel;
         use crate::runtime::kernel_api::KernelApi;
         use easynet_axon::invocation::{make_ability, LocalRuntime};
@@ -2160,13 +2160,13 @@ mod tests {
         kernel.set_local_runtime(Arc::clone(&rt));
 
         let device_ura = crate::ura::device_ura("localhost", "a");
-        let inv = Invocation {
+        let inv = RuntimeInvocation {
             caller: device_ura.clone(),
             callee: device_ura.clone(),
             ability: "alice.chat".into(),
             subject: device_ura,
             nonce_hex: "aa".repeat(16),
-            causal_context: CausalContext::Null,
+            causal_context: RuntimeCausalContext::Null,
             args: json!({"prompt": "hi"}),
             caller_signature: None,
         };

@@ -19,10 +19,9 @@
 //   2. The hosted Agent URA recorded in `local-agents.json`.
 //   3. The host device-profile URA from the same file.
 //
-// Inlining this lookup into ability_proxy.rs would couple the
-// proxy to every profile module. Wrapping it here keeps the
-// proxy's responsibilities small (decode wire frames, run the
-// dispatcher, render the response).
+// Inlining this lookup into a transport adapter would couple that
+// adapter to every profile module. Wrapping it here keeps dispatch
+// responsibilities small.
 //
 // What this module DOES
 // ---------------------

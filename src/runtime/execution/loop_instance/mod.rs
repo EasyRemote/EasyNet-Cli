@@ -23,7 +23,9 @@ use uuid::Uuid;
 use crate::runtime::domain::{
     AgentId, LoopId, LoopInstance, LoopState, NodeId, SessionId, TenantId,
 };
-use crate::runtime::invocation::{invocation_id_of, CausalContext, Invocation, TerminalState};
+use crate::runtime::invocation::{
+    runtime_invocation_id, RuntimeCausalContext, RuntimeInvocation, TerminalState,
+};
 use crate::runtime::kernel_api::KernelApi;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,15 +80,15 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
             &format!("loop.{}", loop_id.as_str()),
             &format!("{}/{}", kind.as_str(), iter),
         );
-        let invocation = Invocation::try_new(
+        let invocation = RuntimeInvocation::try_new(
             local_device_ura.clone(),
             local_device_ura,
             format!("{}.chat", worker_agent.as_str()),
             loop_subject_ura,
-            CausalContext::Null,
+            RuntimeCausalContext::Null,
             json!({ "prompt": prompt }),
         )?;
-        let invocation_id = invocation_id_of(&invocation);
+        let invocation_id = runtime_invocation_id(&invocation)?;
         let receipt = self.kernel.invoke(invocation)?;
         match receipt.terminal {
             TerminalState::Succeeded => {}

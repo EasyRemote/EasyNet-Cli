@@ -62,7 +62,7 @@
 // `services/receipt_store.rs` (the in-memory `SharedReceiptStore`
 // ring buffer) was deleted in Phase 5a. The current contract:
 //
-//   * Successful admission of an Invoke/Subscribe/OpenBidi
+//   * Successful admission of a daemon Invocation
 //     emits NO standalone audit artefact. The call proceeds.
 //     When (and only when) the invocation reaches a terminal
 //     state, the `LedgerSink` writes one `InvocationLedger` row

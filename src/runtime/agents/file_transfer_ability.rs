@@ -42,8 +42,8 @@
 // the Receipt's `sha256` and `state` fields. Runtime layer maps
 // {"type":"complete"} → BidiKindReceipt{state:"completed"} and
 // {"type":"error"} → BidiKindReceipt{state:"failed"}; that
-// mapping happens in `services/control/ability_proxy.rs` (or
-// equivalent for the federation-routed path) — NOT here.
+// mapping happens in the invocation/runtime-dispatch transport layer
+// (or equivalent for the federation-routed path) — NOT here.
 //
 // Safety
 // ------

@@ -76,6 +76,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use ed25519_dalek::SigningKey;
+use serde::Deserialize;
+
 #[cfg(windows)]
 use tonic::transport::server::Connected;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
@@ -98,7 +102,9 @@ use crate::services::invocation_transport::session_initiator::run_session_superv
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
-use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
+use crate::services::realm_trust_anchor::{
+    RealmTrustAnchor, TrustedAgent, TrustedAgentRole, DEFAULT_REALM_TRUST_PATH,
+};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::usage_quota_store::SharedUsageQuotaGate;
 #[cfg(windows)]
@@ -109,14 +115,14 @@ use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 /// both directions. tonic's default cap is 4 MiB which aborted
 /// `<self>.session` the moment any frame envelope grew past it (real
 /// trigger: file-transfer uploads ≥ 1 MB whose accumulated down
-/// frames cross 4 MiB). 1 GiB is generous enough that legitimate
-/// large abilities (file_transfer, screen.snapshot, mission output)
-/// fit, while still bounded so a malformed counterparty can't OOM
-/// the daemon. Exposed `pub` because the **client** side
+/// frames cross 4 MiB). 64 MiB is deliberately a transport-envelope
+/// cap, not an ability payload cap: large files and snapshots must be
+/// chunked above gRPC instead of granting every peer a near-unbounded
+/// single-message allocation. Exposed `pub` because the **client** side
 /// (`session_initiator`, `invoke_remote_initiator`) must apply the
 /// same cap as the server side; without that the asymmetry triggers
 /// `OutOfRange: decoded message length too large` mid-stream.
-pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 1 << 30;
+pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(windows)]
 #[derive(Debug)]
@@ -221,7 +227,11 @@ pub fn start_daemon_invocation_transport(
     // intentionally narrow (one path, no other behaviour change) so
     // production paths cannot diverge accidentally.
     let trust_anchor_path = trust_anchor_path_from_env_or_default();
-    let trust_anchor = load_trust_anchor_from(&trust_anchor_path);
+    let trust_anchor = upsert_backend_identity_from_disk(
+        config.realm(),
+        &trust_anchor_path,
+        load_trust_anchor_from(&trust_anchor_path),
+    );
     // PR-7 commit 5/N: wrap the boot-time anchor in a reload-friendly
     // cell. The same cell is handed to the admission facade *and* to
     // `<self>.register_device_pubkey`'s handler context — a successful
@@ -1465,6 +1475,134 @@ fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
     }
 }
 
+#[derive(Deserialize)]
+struct BackendIdentityRecord {
+    private_key_seed_hex: String,
+    #[serde(default, alias = "agent_uri")]
+    agent_ura: String,
+}
+
+fn upsert_backend_identity_from_disk(
+    realm: &str,
+    trust_anchor_path: &Path,
+    mut anchor: RealmTrustAnchor,
+) -> RealmTrustAnchor {
+    let Some(record) = read_backend_identity_record(realm) else {
+        return anchor;
+    };
+    let expected_ura = crate::ura::hub_ura(realm);
+    if !record.agent_ura.trim().is_empty() && record.agent_ura != expected_ura {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = backend_identity_trust_upsert_skipped,
+            expected_ura = expected_ura,
+            actual_ura = record.agent_ura,
+            message = "backend identity file does not match daemon realm",
+        );
+        return anchor;
+    }
+    let seed = match decode_backend_identity_seed(&record.private_key_seed_hex) {
+        Ok(seed) => seed,
+        Err(err) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = backend_identity_trust_upsert_failed,
+                error = err,
+                message = "backend identity seed is not usable",
+            );
+            return anchor;
+        }
+    };
+    let signing_key = SigningKey::from_bytes(&seed);
+    let entry = TrustedAgent {
+        agent_ura: expected_ura.clone(),
+        public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
+        role: TrustedAgentRole::Backend,
+        added_at_unix_ms: now_unix_ms(),
+        origin_tenant_id: None,
+        hub_endpoint: None,
+        tls_ca_pem_path: None,
+    };
+    if let Err(err) = anchor.upsert_singleton_agent(entry) {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = backend_identity_trust_upsert_failed,
+            error = format!("{err}"),
+            message = "failed to merge backend identity into trust anchor",
+        );
+        return anchor;
+    }
+    if let Err(err) = anchor.save(trust_anchor_path) {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = backend_identity_trust_save_failed,
+            path = format!("{}", trust_anchor_path.display()),
+            error = format!("{err}"),
+            message = "using backend identity in memory; disk trust anchor was not updated",
+        );
+    } else {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = backend_identity_trust_upserted,
+            path = format!("{}", trust_anchor_path.display()),
+            agent_ura = expected_ura,
+            message = "backend identity public key is present in trust anchor",
+        );
+    }
+    anchor
+}
+
+fn read_backend_identity_record(realm: &str) -> Option<BackendIdentityRecord> {
+    let home = std::env::var_os("HOME")?;
+    let path = Path::new(&home)
+        .join(".easynet-hub")
+        .join(realm)
+        .join("identity.json");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = backend_identity_trust_upsert_failed,
+                path = format!("{}", path.display()),
+                error = format!("{err}"),
+                message = "failed to read backend identity file",
+            );
+            return None;
+        }
+    };
+    match serde_json::from_str(&raw) {
+        Ok(record) => Some(record),
+        Err(err) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = backend_identity_trust_upsert_failed,
+                path = format!("{}", path.display()),
+                error = format!("{err}"),
+                message = "failed to parse backend identity file",
+            );
+            None
+        }
+    }
+}
+
+fn decode_backend_identity_seed(raw: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(raw.trim()).map_err(|err| format!("seed hex decode failed: {err}"))?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("seed must decode to 32 bytes, got {}", bytes.len()))
+}
+
+fn now_unix_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn reload_trust_anchor_cell_from(
     path: &Path,
     trust_anchor_cell: &SharedTrustAnchor,
@@ -1994,6 +2132,61 @@ mod tests {
         assert!(
             identity.signing_seed.is_some(),
             "deterministic derive must still work when the keyring is not opted into"
+        );
+    }
+
+    #[test]
+    fn backend_identity_upsert_replaces_stale_trust_anchor_key() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", temp.path());
+
+        let realm = "realm-upsert";
+        let identity_dir = temp.path().join(".easynet-hub").join(realm);
+        std::fs::create_dir_all(&identity_dir).expect("identity dir");
+        let new_seed = [0x42u8; 32];
+        std::fs::write(
+            identity_dir.join("identity.json"),
+            serde_json::json!({
+                "private_key_seed_hex": hex::encode(new_seed),
+                "agent_uri": crate::ura::hub_ura(realm),
+                "created_at_unix_ms": 1_714_492_800_000i64,
+            })
+            .to_string(),
+        )
+        .expect("identity file");
+
+        let old_key = SigningKey::from_bytes(&[0x41u8; 32]);
+        let old_pub = BASE64_STANDARD.encode(old_key.verifying_key().to_bytes());
+        let trust_path = temp.path().join("realm-trust.toml");
+        let stale = RealmTrustAnchor::from_entries(vec![TrustedAgent {
+            agent_ura: crate::ura::hub_ura(realm),
+            public_key_b64: old_pub,
+            role: TrustedAgentRole::Backend,
+            added_at_unix_ms: 1,
+            origin_tenant_id: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }])
+        .expect("stale anchor");
+
+        let updated = upsert_backend_identity_from_disk(realm, &trust_path, stale);
+        let want_pub =
+            BASE64_STANDARD.encode(SigningKey::from_bytes(&new_seed).verifying_key().to_bytes());
+        assert_eq!(
+            updated
+                .lookup(&crate::ura::hub_ura(realm))
+                .expect("backend entry")
+                .public_key_b64,
+            want_pub
+        );
+        let from_disk = RealmTrustAnchor::try_load_strict(&trust_path).expect("disk anchor");
+        assert_eq!(
+            from_disk
+                .lookup(&crate::ura::hub_ura(realm))
+                .expect("backend entry on disk")
+                .public_key_b64,
+            want_pub
         );
     }
 

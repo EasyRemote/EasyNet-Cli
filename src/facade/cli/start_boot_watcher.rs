@@ -156,7 +156,6 @@ async fn subscribe_boot_events(
         subscription_id: BOOT_SUBSCRIPTION_ID.into(),
         ability: WATCH_BOOT_ABILITY.into(),
         args: serde_json::json!({}),
-        subject: None,
     };
     framed
         .send(Bytes::from(serde_json::to_vec(&req)?))
@@ -206,7 +205,6 @@ async fn subscribe_boot_events(
             OutgoingFrame::Error { code, message, .. } => {
                 anyhow::bail!("boot progress subscription failed (code={code}): {message}");
             }
-            other => anyhow::bail!("unexpected boot progress frame: {other:?}"),
         }
     }
 }

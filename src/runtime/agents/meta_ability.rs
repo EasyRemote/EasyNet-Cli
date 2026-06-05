@@ -323,17 +323,7 @@ fn list_abilities_handler(
                 Some(crate::runtime::ability_dispatch::OwnerKind::User(user_id)) => {
                     realm.as_deref().map(|r| crate::ura::user_ura(r, &user_id))
                 }
-                None => {
-                    // No owner metadata recorded — the registration
-                    // path predates M0 (or the ability landed via
-                    // the dynamic fallback resolver, which today
-                    // does not stamp owner). Default to the device
-                    // URA, matching the legacy synth behaviour.
-                    // M0 commit 6 will tighten this to a panic /
-                    // hard error once every register site has been
-                    // converted.
-                    device_owner_ura.clone()
-                }
+                None => None,
             };
             let Some(owner) = owner_string.as_deref() else {
                 continue;
@@ -824,6 +814,39 @@ mod tests {
             mcp_search["schema_summary"]["input"]["properties"]["query"]["type"],
             json!("string"),
             "dynamic overlay manifests must be visible to meta.list_abilities"
+        );
+    }
+
+    #[test]
+    fn live_registry_synth_drops_entries_without_owner_metadata() {
+        use crate::runtime::ability_dispatch::OwnerKind;
+        use std::sync::OnceLock;
+
+        let mut live_reg = AxonAbilityCatalog::new();
+        live_reg.register_rpc_with_owner(
+            "device.unowned.test",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(json!({}))),
+        );
+        live_reg.clear_owner_for_test("device.unowned.test");
+
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+        handle.set(Arc::new(live_reg)).expect("set live registry");
+
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, Vec::new, handle, None);
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let names: Vec<_> = resp["abilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+
+        assert!(
+            !names.contains(&"device.unowned.test"),
+            "meta.list_abilities must not synthesize an owner for entries missing registry metadata"
         );
     }
 

@@ -1,20 +1,24 @@
-// EasyNet CLI — Invocation (system-level unit of execution)
-// ==========================================================
+// EasyNet CLI — Runtime Invocation Adapter Record
+// ===============================================
 //
 // File: src/runtime/invocation.rs
-// Description: The seven-parameter Invocation structure that AXIOM §2
-//              pins as the sole protocol primitive, plus the Receipt
-//              terminal record and the causal-context shapes.
+// Description: Daemon-local adapter record for scheduled/loop/kernel
+//              execution, plus the Receipt terminal record used by
+//              legacy runtime services.
 //
 // Why this module is the root of runtime types
 // --------------------------------------------
-// The plan v10.2–v10.5 collapses every execution path onto a single
-// syntactic and semantic object: Invocation. Every entry into the
-// runtime — Client FFI, schedule tick, loop controller, permission
-// admission, Axon inbound task — is first lifted to an Invocation
-// whose `invocation_id` is then the system-wide unique key the rest of
-// the runtime indexes by (IPC request_id, KernelApi call id, Axon
-// `send_a2a_task` id — all one id).
+// The public Invocation primitive belongs to Axon. This module does
+// not define canonical Invocation semantics and does not sign or
+// verify protocol bytes. It exists only because a few daemon-owned
+// services still need an in-process record to carry caller/callee/
+// ability/subject/nonce/args into `Kernel::invoke`.
+//
+// The runtime id for this adapter is derived by converting the record
+// into Axon's `InvocationEnvelope` and calling
+// `easynet_axon::invocation::canonical_invocation_bytes`. That keeps
+// byte layout ownership in Axon while preserving the daemon's current
+// session/receipt indexing model during the Step 7 migration.
 //
 // v1 vs v2 signature status
 // -------------------------
@@ -27,8 +31,8 @@
 //
 // v1 classification (v10.5 R1)
 // ----------------------------
-// The type system here describes *structural* invariants (shape of an
-// Invocation, shape of a Receipt, shape of a CausalContext). The
+// The type system here describes *structural* invariants (shape of a
+// runtime invocation record, shape of a Receipt, shape of a causal context). The
 // *semantic* invariants S1–S4 (receipts as runtime inputs) are
 // explicitly not in scope for v1 — v1 is a record system, not a
 // computation system. docs/design/formal-model-v1.md pins this.
@@ -38,7 +42,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 /// Unified Resource Address.
 ///
@@ -46,7 +50,7 @@ use sha2::{Digest, Sha256};
 /// should construct them through `crate::ura` builders and validate
 /// externally supplied values with `crate::ura::parse_ura`. Plain
 /// node ids, agent ids, or ad-hoc route fragments are not valid
-/// Invocation URAs.
+/// Runtime invocation URAs.
 pub type Ura = String;
 
 /// Ability member-call name.
@@ -57,51 +61,56 @@ pub type Ura = String;
 /// envelope/registry layers, not by this dispatch key.
 pub type AbilityName = String;
 
-/// The four shapes `causal_context` may take per AXIOM §2.x.
+/// The four legacy daemon-local causal-context shapes.
 ///
-/// - `Null`   — a freshly-initiated Invocation with no prior receipt
+/// - `Null`   — a freshly-initiated runtime invocation with no prior receipt
 ///              in its causal past (e.g. a user-initiated Client FFI
 ///              call that did not cite any prior receipt).
-/// - `Scalar` — a single prior invocation's receipt hash. This is the
-///              common shape for "B ran because A completed".
-/// - `List`   — multiple prior receipts forming a set causal parent.
-/// - `Merkle` — a Merkle root over a large set of prior receipts,
-///              used when list cardinality would blow the envelope.
+/// - `Scalar` — a single prior invocation id. This is not sufficient
+///              for Axon canonical causal encoding.
+/// - `List`   — multiple prior invocation ids forming a set causal
+///              parent. This is also not sufficient for Axon canonical
+///              causal encoding.
+/// - `Merkle` — a legacy Merkle root placeholder without an Axon proof
+///              URA.
 ///
 /// v1 emits `Null` and `Scalar` only (schedule tick / loop controller
 /// / permission admission all have at most one prior receipt to cite).
 /// `List` and `Merkle` variants exist on the wire so v2 causal
 /// scheduling can populate them without a schema migration.
+///
+/// This is retained for daemon-internal records only. Axon's canonical
+/// causal context requires receipt hashes and receipt URAs; the legacy
+/// `Scalar`/`List` variants here carry only prior invocation ids and
+/// therefore cannot be encoded into Axon canonical bytes without
+/// losing verification semantics. `runtime_invocation_id` rejects
+/// those variants until callers migrate to Axon `ReceiptRef`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum CausalContext {
+pub enum RuntimeCausalContext {
     Null,
     Scalar { prior_invocation_id: String },
     List { prior_invocation_ids: Vec<String> },
     Merkle { merkle_root: String },
 }
 
-impl CausalContext {
+impl RuntimeCausalContext {
     pub fn is_null(&self) -> bool {
-        matches!(self, CausalContext::Null)
+        matches!(self, RuntimeCausalContext::Null)
     }
 }
 
-/// AXIOM §2 seven-parameter Invocation.
+/// Daemon-local runtime invocation record.
 ///
-/// The fields mirror the AXIOM tuple verbatim so audit tooling that
-/// cross-references a runtime trace with the paper can locate each
-/// parameter without translation. `args` is typed as `Value` in v1
-/// because the ability input schema is still JSON-shaped; v2 will
-/// carry proto-encoded bytes here once schemas/ is wired end-to-end.
+/// What this is: an adapter record used by daemon schedule/loop/kernel
+/// paths while they are being moved to Axon-native Invocation.
 ///
-/// `invocation_id` is not stored on the struct: it is derived from
-/// canonical bytes (see `invocation_id_of`). Keeping it out of the
-/// struct prevents a caller from forging an id that disagrees with
-/// the content — the id is a function of the Invocation, not an
-/// attribute.
+/// What this is not: the protocol Invocation primitive, a signing
+/// source, or a canonical byte-layout definition. Call
+/// `runtime_invocation_id` to derive the daemon session key through
+/// Axon's canonical encoder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Invocation {
+pub struct RuntimeInvocation {
     pub caller: Ura,
     pub callee: Ura,
     pub ability: AbilityName,
@@ -109,7 +118,7 @@ pub struct Invocation {
     /// 16-byte caller-generated nonce, hex-encoded. v1 generates via
     /// `fresh_nonce_hex()` at Control-layer admission time.
     pub nonce_hex: String,
-    pub causal_context: CausalContext,
+    pub causal_context: RuntimeCausalContext,
     pub args: Value,
     /// Caller-produced signature over canonical bytes. v1 = None;
     /// v2 mandatory (AXIOM §6.3 C1).
@@ -117,15 +126,15 @@ pub struct Invocation {
     pub caller_signature: Option<Vec<u8>>,
 }
 
-impl Invocation {
+impl RuntimeInvocation {
     pub fn try_new(
         caller: Ura,
         callee: Ura,
         ability: AbilityName,
         subject: Ura,
-        causal_context: CausalContext,
+        causal_context: RuntimeCausalContext,
         args: Value,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, RuntimeInvocationError> {
         let invocation = Self {
             caller,
             callee,
@@ -140,7 +149,7 @@ impl Invocation {
         Ok(invocation)
     }
 
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> Result<(), RuntimeInvocationError> {
         validate_ura_field("caller", &self.caller)?;
         validate_ura_field("callee", &self.callee)?;
         validate_ura_field("subject", &self.subject)?;
@@ -149,58 +158,138 @@ impl Invocation {
         Ok(())
     }
 
-    /// Canonical byte representation used for hashing. Order-stable by
-    /// serde_json's `to_vec` on the named struct, which is
-    /// insertion-order for struct fields and sorted-by-key for
-    /// `Value` sub-trees. For v1 this is enough; v2 protobuf mapping
-    /// will pin canonical bytes at the wire level.
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        // serialize without the optional caller_signature field so a
-        // later v2 signing pass does not rehash a different payload.
-        let mut cloned = self.clone();
-        cloned.caller_signature = None;
-        serde_json::to_vec(&cloned).unwrap_or_default()
+    /// Convert the daemon-local record into Axon's canonical envelope
+    /// and return Axon-owned canonical bytes.
+    ///
+    /// The adapter intentionally accepts only `RuntimeCausalContext::Null`.
+    /// Legacy scalar/list/merkle variants do not carry enough receipt
+    /// material to build Axon `ReceiptRef`s, so accepting them would
+    /// create a false proof of canonical equivalence.
+    pub fn axon_canonical_bytes(&self) -> Result<Vec<u8>, RuntimeInvocationError> {
+        self.validate()?;
+        let nonce = decode_nonce_hex(&self.nonce_hex)?;
+        let args_bytes =
+            serde_json::to_vec(&self.args).map_err(RuntimeInvocationError::ArgsJson)?;
+        let causal_context = match &self.causal_context {
+            RuntimeCausalContext::Null => easynet_axon::invocation::CausalContext::None,
+            RuntimeCausalContext::Scalar { .. } => {
+                return Err(RuntimeInvocationError::LegacyCausalContext(
+                    "scalar prior_invocation_id lacks receipt hash and receipt URA",
+                ));
+            }
+            RuntimeCausalContext::List { .. } => {
+                return Err(RuntimeInvocationError::LegacyCausalContext(
+                    "list prior_invocation_ids lack receipt hashes and receipt URAs",
+                ));
+            }
+            RuntimeCausalContext::Merkle { .. } => {
+                return Err(RuntimeInvocationError::LegacyCausalContext(
+                    "merkle_root lacks Axon proof URA",
+                ));
+            }
+        };
+        let envelope = easynet_axon::invocation::InvocationEnvelope::from_wire_parts(
+            easynet_axon::invocation::AgentIdentity::new(
+                self.caller.clone(),
+                easynet_axon::invocation::UraProfile::EasynetStrictV2,
+            ),
+            easynet_axon::invocation::AgentIdentity::new(
+                self.callee.clone(),
+                easynet_axon::invocation::UraProfile::EasynetStrictV2,
+            ),
+            easynet_axon::invocation::SubjectIdentity::new(
+                self.subject.clone(),
+                easynet_axon::invocation::UraProfile::EasynetStrictV2,
+            ),
+            nonce,
+            causal_context,
+            self.ability.clone(),
+            &args_bytes,
+        );
+        Ok(easynet_axon::invocation::canonical_invocation_bytes(
+            &envelope,
+        ))
     }
 }
 
-fn validate_ura_field(field: &str, value: &str) -> anyhow::Result<()> {
-    let value = value.trim();
+/// Errors produced while validating or adapting a daemon-local runtime
+/// invocation record.
+#[derive(Debug, Error)]
+pub enum RuntimeInvocationError {
+    #[error("{field} URA must not be empty")]
+    EmptyUra { field: &'static str },
+    #[error("{field} URA must not contain leading or trailing whitespace")]
+    UraHasSurroundingWhitespace { field: &'static str },
+    #[error("{field} URA is invalid: {message}")]
+    InvalidUra {
+        field: &'static str,
+        message: String,
+    },
+    #[error("ability must not be empty")]
+    EmptyAbility,
+    #[error("ability must not contain whitespace")]
+    AbilityContainsWhitespace,
+    #[error("nonce_hex is not hex: {0}")]
+    NonceHex(#[from] hex::FromHexError),
+    #[error("nonce_hex must encode exactly 16 bytes")]
+    NonceLength,
+    #[error("args JSON serialization failed: {0}")]
+    ArgsJson(serde_json::Error),
+    #[error("legacy causal context cannot be converted to Axon canonical bytes: {0}")]
+    LegacyCausalContext(&'static str),
+}
+
+fn validate_ura_field(field: &'static str, value: &str) -> Result<(), RuntimeInvocationError> {
     if value.is_empty() {
-        anyhow::bail!("{field} URA must not be empty");
+        return Err(RuntimeInvocationError::EmptyUra { field });
     }
-    crate::ura::parse_ura(value).map_err(|e| anyhow::anyhow!("{field} URA is invalid: {e}"))?;
+    if value.trim() != value {
+        return Err(RuntimeInvocationError::UraHasSurroundingWhitespace { field });
+    }
+    crate::ura::parse_ura(value).map_err(|e| RuntimeInvocationError::InvalidUra {
+        field,
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
-fn validate_ability_name(value: &str) -> anyhow::Result<()> {
+fn validate_ability_name(value: &str) -> Result<(), RuntimeInvocationError> {
     let value = value.trim();
     if value.is_empty() {
-        anyhow::bail!("ability must not be empty");
+        return Err(RuntimeInvocationError::EmptyAbility);
     }
     if value.chars().any(char::is_whitespace) {
-        anyhow::bail!("ability must not contain whitespace");
+        return Err(RuntimeInvocationError::AbilityContainsWhitespace);
     }
     Ok(())
 }
 
-fn validate_nonce_hex(value: &str) -> anyhow::Result<()> {
-    let raw = hex::decode(value).map_err(|e| anyhow::anyhow!("nonce_hex is not hex: {e}"))?;
+fn validate_nonce_hex(value: &str) -> Result<(), RuntimeInvocationError> {
+    let raw = decode_nonce_hex(value)?;
     if raw.len() != 16 {
-        anyhow::bail!("nonce_hex must encode exactly 16 bytes");
+        return Err(RuntimeInvocationError::NonceLength);
     }
     Ok(())
 }
 
-/// Compute `invocation_id = sha256(canonical_bytes(inv))`, hex-encoded.
+fn decode_nonce_hex(value: &str) -> Result<[u8; 16], RuntimeInvocationError> {
+    let raw = hex::decode(value)?;
+    if raw.len() != 16 {
+        return Err(RuntimeInvocationError::NonceLength);
+    }
+    let mut nonce = [0u8; 16];
+    nonce.copy_from_slice(&raw);
+    Ok(nonce)
+}
+
+/// Compute `invocation_id = sha256(axon_canonical_bytes(inv))`, hex-encoded.
 ///
-/// This is the system-wide unique id for one Invocation. The IPC layer
-/// reuses it as `request_id`; Kernel::invoke keys its in-flight table
-/// on it; Axon `send_a2a_task` carries it as `task_id` when the
-/// dispatch is remote. Three names in the codebase, one id.
-pub fn invocation_id_of(inv: &Invocation) -> String {
-    let mut h = Sha256::new();
-    h.update(inv.canonical_bytes());
-    hex::encode(h.finalize())
+/// This is a daemon-local session/receipt key for the adapter record.
+/// The canonical byte layout is Axon-owned; this function only hashes
+/// the bytes returned by Axon SDK.
+pub fn runtime_invocation_id(inv: &RuntimeInvocation) -> Result<String, RuntimeInvocationError> {
+    let canonical = inv.axon_canonical_bytes()?;
+    Ok(hex::encode(easynet_axon::invocation::sha256(&canonical)))
 }
 
 /// Generate a fresh 16-byte nonce, hex-encoded.
@@ -209,11 +298,10 @@ pub fn invocation_id_of(inv: &Invocation) -> String {
 /// admission dedup. Wire proto envelopes use `ProtoEnvelope`, which
 /// emits a binary 16-byte nonce directly.
 pub fn fresh_nonce_hex() -> String {
-    let uuid_bytes = uuid::Uuid::new_v4().into_bytes();
-    hex::encode(uuid_bytes)
+    hex::encode(easynet_axon::invocation::fresh_nonce())
 }
 
-/// Terminal state of an Invocation — the runtime decision that
+/// Terminal state of a runtime invocation — the runtime decision that
 /// closes the timeline (AXIOM §6.1 I2 terminal monotonic).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -234,7 +322,7 @@ pub enum PriorChain {
     Root { prior_root: String },
 }
 
-/// One event in an Invocation's lifetime, replicated here for
+/// One event in a runtime invocation's lifetime, replicated here for
 /// compatibility with `runtime::timeline::TimelineEvent`. The
 /// timeline layer remains authoritative; this struct only mirrors
 /// the fields a Receipt needs to embed post-terminal.
@@ -247,7 +335,7 @@ pub struct ReceiptEvent {
     pub payload: Option<Value>,
 }
 
-/// AXIOM §6.1 I3 Receipt — the durable record that an Invocation
+/// AXIOM §6.1 I3 Receipt — the durable record that a runtime invocation
 /// terminated. In v1 the callee_signature field is always `None`
 /// (I3 integrity holds via the in-process events hash; non-
 /// repudiation C2 lands with v2 signed invocation).
@@ -266,14 +354,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn sample_invocation() -> Invocation {
-        Invocation {
+    fn sample_invocation() -> RuntimeInvocation {
+        RuntimeInvocation {
             caller: "easynet:///r/localhost/device/dev-a".into(),
             callee: "easynet:///r/localhost/device/dev-b".into(),
             ability: "observe.health".into(),
             subject: "easynet:///r/localhost/device/dev-b".into(),
             nonce_hex: "00112233445566778899aabbccddeeff".into(),
-            causal_context: CausalContext::Null,
+            causal_context: RuntimeCausalContext::Null,
             args: json!({}),
             caller_signature: None,
         }
@@ -281,12 +369,12 @@ mod tests {
 
     #[test]
     fn invocation_id_is_stable_across_repeat_hash() {
-        // Given the same inputs, `invocation_id_of` must return the
+        // Given the same inputs, `runtime_invocation_id` must return the
         // same hex digest — this is what makes it a valid system-
         // wide key.
         let inv = sample_invocation();
-        let a = invocation_id_of(&inv);
-        let b = invocation_id_of(&inv);
+        let a = runtime_invocation_id(&inv).unwrap();
+        let b = runtime_invocation_id(&inv).unwrap();
         assert_eq!(a, b);
         assert_eq!(a.len(), 64, "sha256 hex digest is 64 chars");
     }
@@ -301,20 +389,29 @@ mod tests {
         let mut b = sample_invocation();
         a.nonce_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
         b.nonce_hex = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
-        assert_ne!(invocation_id_of(&a), invocation_id_of(&b));
+        assert_ne!(
+            runtime_invocation_id(&a).unwrap(),
+            runtime_invocation_id(&b).unwrap()
+        );
     }
 
     #[test]
     fn caller_signature_does_not_affect_invocation_id() {
         // The id hashes canonical bytes *excluding* the caller
         // signature so that attaching the v2 signature to a formerly
-        // unsigned Invocation does not change its identity.
+        // unsigned runtime invocation does not change its identity.
         let mut a = sample_invocation();
         let mut b = sample_invocation();
         b.caller_signature = Some(vec![1, 2, 3]);
-        assert_eq!(invocation_id_of(&a), invocation_id_of(&b));
+        assert_eq!(
+            runtime_invocation_id(&a).unwrap(),
+            runtime_invocation_id(&b).unwrap()
+        );
         a.caller_signature = Some(vec![9, 9, 9]);
-        assert_eq!(invocation_id_of(&a), invocation_id_of(&b));
+        assert_eq!(
+            runtime_invocation_id(&a).unwrap(),
+            runtime_invocation_id(&b).unwrap()
+        );
     }
 
     #[test]
@@ -334,13 +431,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_ura_with_surrounding_whitespace() {
+        let mut inv = sample_invocation();
+        inv.caller = " easynet:///r/localhost/device/dev-a".into();
+        let err = inv.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            RuntimeInvocationError::UraHasSurroundingWhitespace { field: "caller" }
+        ));
+    }
+
+    #[test]
     fn try_new_builds_valid_invocation_with_fresh_nonce() {
-        let inv = Invocation::try_new(
+        let inv = RuntimeInvocation::try_new(
             "easynet:///r/localhost/device/dev-a".into(),
             "easynet:///r/localhost/device/dev-b".into(),
             "device.skill.list".into(),
             "easynet:///r/localhost/device/dev-b".into(),
-            CausalContext::Null,
+            RuntimeCausalContext::Null,
             json!({}),
         )
         .unwrap();
@@ -350,11 +458,24 @@ mod tests {
 
     #[test]
     fn causal_context_serializes_with_tagged_kind() {
-        let ctx = CausalContext::Scalar {
+        let ctx = RuntimeCausalContext::Scalar {
             prior_invocation_id: "abc".into(),
         };
         let s = serde_json::to_string(&ctx).unwrap();
         assert!(s.contains("\"kind\":\"scalar\""));
         assert!(s.contains("\"prior_invocation_id\":\"abc\""));
+    }
+
+    #[test]
+    fn legacy_scalar_causal_context_is_not_canonicalized() {
+        let mut inv = sample_invocation();
+        inv.causal_context = RuntimeCausalContext::Scalar {
+            prior_invocation_id: "abc".into(),
+        };
+        let err = runtime_invocation_id(&inv).unwrap_err();
+        assert!(
+            matches!(err, RuntimeInvocationError::LegacyCausalContext(_)),
+            "legacy causal context must fail before Axon canonicalization; got {err:?}"
+        );
     }
 }

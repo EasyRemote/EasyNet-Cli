@@ -109,7 +109,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -159,6 +159,9 @@ use crate::services::invocation_transport::revoke_user_pubkey::{
 use crate::services::invocation_transport::session_initiator::{
     SessionSigningSeed, ABILITY_SELF_SESSION,
 };
+
+const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
+const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
 use crate::services::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
 };
@@ -1157,7 +1160,7 @@ impl Invocation for DaemonInvocationService {
         let frame0 = match up.next().await {
             Some(Ok(f)) => f,
             Some(Err(err)) => {
-                return Err(Status::internal(format!("InvokeBidi frame 0 recv: {err}")))
+                return Err(Status::internal(format!("InvokeBidi frame 0 recv: {err}")));
             }
             None => return Err(Status::invalid_argument("InvokeBidi: empty up stream")),
         };
@@ -1475,7 +1478,7 @@ impl DaemonInvocationService {
                 return (
                     Err(status_from_axon_invoke_error("Invoke", ability, err)),
                     false,
-                )
+                );
             }
         };
         let outcome =
@@ -1605,7 +1608,7 @@ impl DaemonInvocationService {
     /// this hub's trust set" from a network or admission
     /// failure (which arrive as `unavailable` /
     /// `permission_denied`). The resolver then maps both into
-    /// `unknown_agent_ura` for INV-4 fail-closed admission, but
+    /// `CALLER_KEY_NOT_FOUND` for INV-4 fail-closed admission, but
     /// the wire-level distinction is useful for operator audit
     /// and matches the rest of the federation.* surface where
     /// `not_found` means "no entry" and `failed_precondition`
@@ -2305,7 +2308,8 @@ impl DaemonInvocationService {
                                                     let err_msg = format!("{err}");
                                                     crate::op_event!(
                                                         component = daemon_invocation,
-                                                        kind = forward_invoke_peer_response_malformed,
+                                                        kind =
+                                                            forward_invoke_peer_response_malformed,
                                                         scope = "same_tenant_fanout",
                                                         error = err_msg,
                                                         message = "forwarding raw bytes for forward-compat",
@@ -2421,7 +2425,8 @@ impl DaemonInvocationService {
                                                     let err_msg = format!("{err}");
                                                     crate::op_event!(
                                                         component = daemon_invocation,
-                                                        kind = forward_invoke_peer_response_malformed,
+                                                        kind =
+                                                            forward_invoke_peer_response_malformed,
                                                         scope = "same_tenant_fanout",
                                                         error = err_msg,
                                                         message = "forwarding raw bytes for forward-compat",
@@ -2741,6 +2746,7 @@ impl DaemonInvocationService {
             &dispatch_ability,
             &inner_payload.args_bytes,
             SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )?;
 
         match sender.try_send(Ok(dispatch_frame)) {
@@ -3027,6 +3033,7 @@ impl DaemonInvocationService {
             remote_bidi_subject_ura(envelope_open).as_deref(),
             ability,
             &envelope_open.initial_args,
+            envelope_open.metadata.clone(),
         )?;
         match sender.try_send(Ok(open_frame)) {
             Ok(()) => {}
@@ -3723,6 +3730,7 @@ impl DaemonInvocationService {
                         let chunk = InvokeStreamChunk {
                             content_type,
                             payload: frame.payload,
+                            terminal,
                             ..InvokeStreamChunk::default()
                         };
                         if tx.send(Ok(chunk)).await.is_err() || terminal {
@@ -3797,6 +3805,7 @@ impl DaemonInvocationService {
             ability,
             args,
             args_content_envelope,
+            metadata,
         } = request;
 
         // Postel-boundary: peer hubs may pass a `/agent/<bare-uuid>`
@@ -3805,6 +3814,33 @@ impl DaemonInvocationService {
         // lookup. New clients always emit canonical; this is
         // transitional compatibility.
         let subject_device = crate::ura::canonicalize_presence_key(&subject_device);
+        let inner_subject = subject_ura
+            .as_deref()
+            .filter(|subject| !subject.trim().is_empty())
+            .unwrap_or(subject_device.as_str());
+        let outer_caller = envelope_open
+            .envelope
+            .as_ref()
+            .and_then(|envelope| envelope.caller.clone())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "<self>.invoke_remote: admitted frame-0 envelope is missing caller",
+                )
+            })?;
+        let inner_envelope = Envelope {
+            caller: Some(outer_caller),
+            callee: Some(AgentIdentity {
+                ura: subject_device.clone(),
+                ..AgentIdentity::default()
+            }),
+            subject: Some(SubjectIdentity {
+                ura: inner_subject.to_string(),
+                ..SubjectIdentity::default()
+            }),
+            ..Envelope::default()
+        };
+        self.admission
+            .verify_delegation_for_envelope(&inner_envelope, &ability, &metadata)?;
 
         // ── Phase 4: Axon-routed **self-target** dispatch ──────────
         //
@@ -3912,6 +3948,7 @@ impl DaemonInvocationService {
             &dispatch_ability,
             &args,
             args_content_envelope,
+            metadata,
         )?;
         match target_sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
@@ -4190,6 +4227,7 @@ fn build_bidi_terminal_receipt_with_payload(
             reason: reason.into(),
             payload: payload_bytes,
             payload_content_type,
+            cleanup_complete: true,
             ..InvocationReceipt::default()
         })),
         ..InvokeBidiDown::default()
@@ -4353,8 +4391,7 @@ fn map_local_bidi_handler_frame(
             Some("stdout") => {
                 let Some(data_b64) = value.get("data").and_then(|field| field.as_str()) else {
                     return LocalBidiHandlerFrame::ProtocolFailure(
-                        "InvokeBidi local-dispatcher: PTY stdout frame missing `data`"
-                            .to_string(),
+                        "InvokeBidi local-dispatcher: PTY stdout frame missing `data`".to_string(),
                     );
                 };
                 let raw = match B64.decode(data_b64) {
@@ -4362,7 +4399,7 @@ fn map_local_bidi_handler_frame(
                     Err(err) => {
                         return LocalBidiHandlerFrame::ProtocolFailure(format!(
                             "InvokeBidi local-runtime: PTY stdout frame base64 decode failed: {err}"
-                        ))
+                        ));
                     }
                 };
                 LocalBidiHandlerFrame::Forward(InvokeBidiDown {
@@ -4414,7 +4451,7 @@ fn map_local_bidi_handler_frame(
                     Err(err) => {
                         return LocalBidiHandlerFrame::ProtocolFailure(format!(
                             "InvokeBidi local-runtime: file_transfer chunk frame base64 decode failed: {err}"
-                        ))
+                        ));
                     }
                 };
                 LocalBidiHandlerFrame::Forward(InvokeBidiDown {
@@ -4427,13 +4464,13 @@ fn map_local_bidi_handler_frame(
                 })
             }
             Some("complete") => match serde_json::to_vec(value) {
-                Ok(payload) => LocalBidiHandlerFrame::Terminal(
-                    build_bidi_terminal_receipt_with_payload(
+                Ok(payload) => {
+                    LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload(
                         easynet_axon::invocation::InvocationState::Completed,
                         String::new(),
                         Some((payload, "application/json")),
-                    ),
-                ),
+                    ))
+                }
                 Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
                     "InvokeBidi local-runtime: encode file_transfer completion receipt payload failed: {err}"
                 )),
@@ -4453,13 +4490,13 @@ fn map_local_bidi_handler_frame(
                     _ => "file_transfer handler returned error".to_string(),
                 };
                 match serde_json::to_vec(value) {
-                    Ok(payload) => LocalBidiHandlerFrame::Terminal(
-                        build_bidi_terminal_receipt_with_payload(
+                    Ok(payload) => {
+                        LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload(
                             easynet_axon::invocation::InvocationState::Failed,
                             reason,
                             Some((payload, "application/json")),
-                        ),
-                    ),
+                        ))
+                    }
                     Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
                         "InvokeBidi local-runtime: encode file_transfer error receipt payload failed: {err}"
                     )),
@@ -5594,7 +5631,7 @@ fn sign_peer_request_envelope(
     // than the trust-anchor entry (sourced from `identity.json`).
     // Peer hubs verifying via `federation.resolve_key` saw a
     // signature/key mismatch and rejected with
-    // `AXON_CALLER_SIGNATURE_INVALID:caller_signature_invalid`.
+    // `CALLER_SIGNATURE_INVALID:caller_signature_invalid`.
     //
     // Read the on-disk seed in production so the signing key
     // matches the pubkey the trust anchor advertises. Tests stage
@@ -5749,6 +5786,7 @@ fn build_invoke_remote_dispatch_frame(
     ability: &str,
     args: &[u8],
     args_content_envelope: SessionContentEnvelope,
+    metadata: HashMap<String, String>,
 ) -> Result<DispatchFrame, Status> {
     let payload = SessionDispatch::Dispatch {
         call_id,
@@ -5759,6 +5797,7 @@ fn build_invoke_remote_dispatch_frame(
         ability: ability.to_string(),
         args: args.to_vec(),
         args_content_envelope,
+        metadata,
     };
     let bytes = serde_json::to_vec(&payload).map_err(|err| {
         Status::internal(format!(
@@ -5788,6 +5827,7 @@ fn build_remote_bidi_open_dispatch_frame(
     subject_ura: Option<&str>,
     ability: &str,
     args: &[u8],
+    metadata: HashMap<String, String>,
 ) -> Result<DispatchFrame, Status> {
     let payload = SessionDispatch::BidiOpen {
         call_id,
@@ -5798,6 +5838,7 @@ fn build_remote_bidi_open_dispatch_frame(
         ability: ability.to_string(),
         args: args.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
+        metadata,
     };
     let bytes = serde_json::to_vec(&payload).map_err(|err| {
         Status::internal(format!(
@@ -5989,6 +6030,7 @@ fn build_unary_ledger_record(
     let invocation_ura =
         invocation_resource_ura(&realm, &request_id, &subject_ura, &callee_ura, &caller_ura)?;
     let elapsed_ms = completed_unix_ms.saturating_sub(started_unix_ms) as u64;
+    let authority_binding = ledger_authority_binding_for_request(request);
 
     let mut builder = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
         .invocation_ura(invocation_ura)
@@ -6004,6 +6046,7 @@ fn build_unary_ledger_record(
         .completed_unix_ms(completed_unix_ms)
         .elapsed_ms(elapsed_ms)
         .causal_links(causal_links_from_envelope(envelope))
+        .authority_binding(authority_binding)
         .args(easynet_axon::invocation::LedgerEventPayload::digest(
             "application/octet-stream",
             &request.arguments,
@@ -6063,6 +6106,39 @@ fn build_unary_ledger_record(
     }
 
     Ok(builder.build()?)
+}
+
+fn ledger_authority_binding_for_request(request: &InvokeRequest) -> &'static str {
+    if bootstrap_authority_ability_for_ledger(&request.function_name) {
+        "bootstrap"
+    } else if request
+        .metadata
+        .get(DELEGATION_METADATA_KEY)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        "delegated"
+    } else if request
+        .metadata
+        .get(SESSION_AUTHORITY_METADATA_KEY)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        "session"
+    } else {
+        "self"
+    }
+}
+
+fn bootstrap_authority_ability_for_ledger(function: &str) -> bool {
+    matches!(
+        function,
+        ABILITY_SELF_REGISTER_DEVICE_PUBKEY
+            | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
+            | ABILITY_FEDERATION_ADVERTISE_AGENT
+            | ABILITY_SELF_LIST_USER_PUBKEYS
+            | ABILITY_SELF_REVOKE_USER_PUBKEY
+    )
 }
 
 fn causal_links_from_envelope(
@@ -6676,6 +6752,7 @@ mod tests {
             "easynet:///r/test-realm/ability/hub.federation.resolve"
         );
         assert_eq!(record.state, "completed");
+        assert_eq!(record.authority_binding, "self");
         assert!(matches!(
             record.args,
             easynet_axon::invocation::LedgerEventPayload::Digest { .. }
@@ -6747,6 +6824,38 @@ mod tests {
         assert_eq!(
             record.error.as_ref().map(|err| err.code.as_str()),
             Some("invalidargument")
+        );
+    }
+
+    #[test]
+    fn ledger_authority_binding_classifies_bootstrap_delegated_session_and_self() {
+        let bootstrap = invoke_request(ABILITY_SELF_REGISTER_DEVICE_PUBKEY, "{}").into_inner();
+        assert_eq!(
+            ledger_authority_binding_for_request(&bootstrap),
+            "bootstrap"
+        );
+
+        let mut delegated = invoke_request("demo.delegated", "{}").into_inner();
+        delegated.metadata.insert(
+            DELEGATION_METADATA_KEY.to_string(),
+            "serialized-proof".to_string(),
+        );
+        assert_eq!(
+            ledger_authority_binding_for_request(&delegated),
+            "delegated"
+        );
+
+        let mut session = invoke_request("demo.session", "{}").into_inner();
+        session.metadata.insert(
+            SESSION_AUTHORITY_METADATA_KEY.to_string(),
+            "serialized-session-authority".to_string(),
+        );
+        assert_eq!(ledger_authority_binding_for_request(&session), "session");
+
+        let self_authority = invoke_request("demo.self", "{}").into_inner();
+        assert_eq!(
+            ledger_authority_binding_for_request(&self_authority),
+            "self"
         );
     }
 
@@ -7892,6 +8001,10 @@ mod tests {
         let mut stream = resp.into_inner();
         let first = stream.next().await.expect("one frame").expect("frame Ok");
         assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+        assert!(
+            first.terminal,
+            "local snapshot stream must preserve terminal=true on the daemon InvokeStream chunk"
+        );
         let frame: serde_json::Value = serde_json::from_slice(&first.payload).expect("JSON frame");
         assert_eq!(
             frame
@@ -7908,6 +8021,97 @@ mod tests {
             .await
             .expect("snapshot stream closes promptly");
         assert!(close.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admitted_bidi_file_transfer_download_emits_business_frames() {
+        use base64::Engine as _;
+        use easynet_axon::invocation::LocalRuntime;
+
+        let rt = LocalRuntime::new();
+        let mut catalog =
+            crate::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt));
+        crate::runtime::agents::file_transfer_ability::register(&mut catalog);
+
+        let path = std::env::temp_dir().join(format!(
+            "easynet-admitted-bidi-download-{}-{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        let bytes = b"admitted-bidi-download-proof";
+        std::fs::write(&path, bytes).unwrap();
+
+        let args = serde_json::to_vec(&serde_json::json!({
+            "mode": "download",
+            "path": path.to_string_lossy(),
+        }))
+        .unwrap();
+        let open = make_envelope_open(
+            crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
+            args,
+        );
+        let wire = crate::runtime::axon_bridge::dispatch_shim::admitted_from_envelope_open(&open)
+            .expect("wire dispatch");
+        let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_admitted(&rt, wire)
+            .await
+            .expect("open admitted bidi");
+        let (input, mut output) = handle.split();
+
+        input
+            .send(
+                BidiInputFrame::new(
+                    serde_json::to_vec(&serde_json::json!({"type":"eof"})).unwrap(),
+                )
+                .with_content_type("application/json"),
+            )
+            .await
+            .expect("send ready/eof");
+        let _ = input.close_input().await;
+
+        let mut downloaded = Vec::new();
+        let mut got_complete = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or_default();
+            let Some(frame) = tokio::time::timeout(remaining, output.next_frame())
+                .await
+                .expect("bidi output poll should not time out")
+            else {
+                break;
+            };
+            let frame = frame.expect("bidi frame ok");
+            if frame.payload.is_empty() {
+                continue;
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(&frame.payload).expect("file transfer JSON frame");
+            match value["type"].as_str() {
+                Some("chunk") => {
+                    let chunk = value["data"].as_str().expect("chunk data");
+                    downloaded.extend(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(chunk)
+                            .expect("chunk base64"),
+                    );
+                }
+                Some("complete") => {
+                    got_complete = true;
+                    break;
+                }
+                other => panic!("unexpected file_transfer frame {other:?}: {value}"),
+            }
+        }
+        assert!(
+            got_complete,
+            "admitted file_transfer download must emit complete"
+        );
+        assert_eq!(downloaded, bytes);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
@@ -8227,6 +8431,10 @@ mod tests {
                     easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
                 );
                 assert_eq!(receipt.payload_content_type, "application/json");
+                assert!(
+                    receipt.cleanup_complete,
+                    "terminal file_transfer completion receipt must close the bidi lifecycle"
+                );
                 let payload: serde_json::Value =
                     serde_json::from_slice(&receipt.payload).expect("json payload");
                 assert_eq!(payload["sha256"], "deadbeef");
@@ -8515,6 +8723,11 @@ mod tests {
 
     #[test]
     fn build_invoke_remote_dispatch_frame_carries_session_dispatch_json() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "x-easynet-delegation".to_string(),
+            "serialized-proof".to_string(),
+        );
         let frame = build_invoke_remote_dispatch_frame(
             42,
             "easynet:///r/realm/device/dev",
@@ -8522,6 +8735,7 @@ mod tests {
             "echo",
             b"hello",
             SessionContentEnvelope::plaintext_json(),
+            metadata,
         )
         .expect("built");
         let payload = match frame.frame.payload.expect("frame has payload") {
@@ -8539,6 +8753,7 @@ mod tests {
                 ability,
                 args,
                 args_content_envelope,
+                metadata,
             } => {
                 assert_eq!(call_id, 42);
                 assert_eq!(callee_ura.as_deref(), Some("easynet:///r/realm/device/dev"));
@@ -8549,6 +8764,10 @@ mod tests {
                 assert_eq!(ability, "echo");
                 assert_eq!(args, b"hello");
                 assert_eq!(args_content_envelope.content_type, "application/json");
+                assert_eq!(
+                    metadata.get("x-easynet-delegation").map(String::as_str),
+                    Some("serialized-proof")
+                );
             }
             _ => panic!("expected Dispatch variant"),
         }
@@ -8562,6 +8781,7 @@ mod tests {
             Some("easynet:///r/realm/resource/display-1"),
             "device.remote_desktop.attach",
             br#"{"session_id":"rd-1"}"#,
+            HashMap::new(),
         )
         .expect("built");
         let payload = match frame.frame.payload.expect("frame has payload") {
@@ -8697,6 +8917,7 @@ mod tests {
             ability: "echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
+            metadata: HashMap::new(),
         })
         .unwrap();
         // Decoding as the wrong type must fail.
@@ -9613,7 +9834,7 @@ mod tests {
         // The cross-hub deep harness failure we care about is not
         // "signature field missing" anymore; it is "peer hub rejects
         // the rebuilt federation.forward_invoke wrapper with
-        // caller_signature_invalid". Rebuild that exact wrapper via
+        // CALLER_SIGNATURE_INVALID". Rebuild that exact wrapper via
         // the caller-hub dispatch path, then feed it into a fresh
         // AdmissionFacade that trusts the caller hub's public key.
         //

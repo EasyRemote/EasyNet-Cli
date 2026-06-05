@@ -64,7 +64,7 @@
 // the upgraded gate, an unsigned envelope from a non-loopback URA
 // fails `validate_signature_structure` (signature_algorithm_empty)
 // and the wire-visible reason changes from `permission_denied` to
-// `invalid_argument` with reason `AXON_CALLER_SIGNATURE_INVALID`.
+// `invalid_argument` with reason `CALLER_SIGNATURE_MISSING`.
 // The flip is by design — commit 6/N teaches the EasyNet backend's
 // `verifyCredentialLogic` to invoke the new `<self>.register_device_pubkey`
 // ability (PR-7 commit 5/N) so the trust set carries a real public
@@ -88,10 +88,10 @@
 // callers split into two paths by `TrustedAgent.role`. The
 // `Backend` and `Hub` paths run the full §5.2 pipeline end-to-end:
 // a missing/malformed `caller_signature` rejects with
-// `AXON_CALLER_SIGNATURE_INVALID`; a signature that fails to
+// `CALLER_SIGNATURE_INVALID`; a signature that fails to
 // verify against the trust anchor's public-key entry rejects with
 // the same reason; a nonce already observed inside the dedup
-// window rejects with `AXON_NONCE_REPLAY`. The `Device` path keeps
+// window rejects with `CALLER_NONCE_REPLAYED`. The `Device` path keeps
 // URA-only admission for unsigned device callers, but any device
 // envelope that already carries signature material runs the same
 // strict pipeline immediately.
@@ -107,16 +107,18 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tonic::Status;
 
 use easynet_axon::invocation::admission::{
     now_ms as axon_now_ms, run_admission, REASON_CALLER_SIGNATURE_INVALID,
-    REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
+    REASON_CALLER_SIGNATURE_MISSING, REASON_CALLER_URA_MISSING, REASON_ENVELOPE_INCOMPLETE,
+    REASON_NONCE_REPLAY,
 };
 use easynet_axon::invocation::axiom::{
     AgentIdentity as AxiomAgentIdentity, CallerSignature as AxiomCallerSignature, CausalContext,
@@ -131,6 +133,12 @@ use crate::services::federation_client::FederationClient;
 use crate::services::invocation_transport::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
+use crate::services::invocation_transport::federation_wrappers::{
+    ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+};
+use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
+use crate::services::invocation_transport::register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
+use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
@@ -139,6 +147,20 @@ use easynet_axon::pb::axon::v1::{
     causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvokeRequest,
     InvokeServerStreamRequest, RateLimitInfo,
 };
+
+const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
+const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
+const REASON_AUTHORITY_REQUIRED: &str = "AUTHORITY_REQUIRED";
+const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
+const REASON_AUTHORITY_SIGNATURE_INVALID: &str = "AUTHORITY_SIGNATURE_INVALID";
+const REASON_AUTHORITY_CALLER_MISMATCH: &str = "AUTHORITY_CALLER_MISMATCH";
+const REASON_AUTHORITY_SUBJECT_MISMATCH: &str = "AUTHORITY_SUBJECT_MISMATCH";
+const REASON_AUTHORITY_AUDIENCE_VIOLATION: &str = "AUTHORITY_AUDIENCE_VIOLATION";
+const REASON_AUTHORITY_SCOPE_VIOLATION: &str = "AUTHORITY_SCOPE_VIOLATION";
+const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
+const REASON_AUTHORITY_ISSUER_UNKNOWN: &str = "AUTHORITY_ISSUER_UNKNOWN";
+const REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND: &str = "AUTHORITY_ISSUER_KEY_NOT_FOUND";
+const REASON_CALLER_UNKNOWN: &str = "CALLER_UNKNOWN";
 
 /// Per-RPC admission gate consulted by `DaemonInvocationService`
 /// before routing into a federation wrapper or fallthrough handler.
@@ -288,6 +310,29 @@ impl AdmissionFacade {
         self.trust_anchor.snapshot()
     }
 
+    /// Verify delegation metadata against an already-constructed
+    /// envelope without re-running caller signature / nonce admission.
+    ///
+    /// Used by `<self>.invoke_remote` for the inner ability request:
+    /// the outer invoke_remote frame has already passed strict
+    /// admission, and the inner JSON carries the user/resource
+    /// subject plus non-AXIOM metadata. This method verifies only the
+    /// authority proof binding `(caller, subject, callee, ability)`.
+    pub fn verify_delegation_for_envelope(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        metadata: &HashMap<String, String>,
+    ) -> Result<(), Status> {
+        verify_delegation_metadata(
+            envelope,
+            ability,
+            Some(metadata),
+            self.trust_anchor_snapshot().as_ref(),
+            axon_now_ms(),
+        )
+    }
+
     /// The daemon's own canonical URA. Used by per-ability
     /// admission filters that need to recognise the loopback
     /// caller (eg. `federation.list_user_devices` in N3-5
@@ -377,15 +422,15 @@ impl AdmissionFacade {
         }
         match decision.deny_reason {
             Some(QuotaDenyReason::KeyTooLarge) => Err(Status::invalid_argument(format!(
-                "AXON_QUOTA_KEY_TOO_LARGE caller={caller_ura} ability={ability}"
+                "REQUEST_METADATA_INVALID: quota key too large caller={caller_ura} ability={ability}"
             ))),
             Some(QuotaDenyReason::StoreSaturated) => Err(Status::resource_exhausted(format!(
-                "AXON_QUOTA_STORE_SATURATED caller={caller_ura} ability={ability} retry_after_ms={}",
+                "RESOURCE_EXHAUSTED: quota store saturated caller={caller_ura} ability={ability} retry_after_ms={}",
                 decision.retry_after_ms
             ))),
             Some(QuotaDenyReason::BudgetExhausted) | None => {
                 Err(Status::resource_exhausted(format!(
-                    "AXON_QUOTA_EXHAUSTED caller={caller_ura} ability={ability} retry_after_ms={}",
+                    "QUOTA_EXCEEDED: caller={caller_ura} ability={ability} retry_after_ms={}",
                     decision.retry_after_ms
                 )))
             }
@@ -460,7 +505,12 @@ impl AdmissionFacade {
             .envelope
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("Invoke request missing envelope"))?;
-        self.run_full_admission(envelope, &request.function_name, &request.arguments)
+        self.run_full_admission(
+            envelope,
+            &request.function_name,
+            &request.arguments,
+            Some(&request.metadata),
+        )
     }
 
     /// Verify a server-stream `InvokeServerStreamRequest`. Same rule
@@ -471,7 +521,12 @@ impl AdmissionFacade {
             .envelope
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("InvokeStream request missing envelope"))?;
-        self.run_full_admission(envelope, &request.function_name, &request.arguments)
+        self.run_full_admission(
+            envelope,
+            &request.function_name,
+            &request.arguments,
+            Some(&request.metadata),
+        )
     }
 
     /// Verify the frame-0 `EnvelopeOpen` of an InvokeBidi stream.
@@ -493,7 +548,7 @@ impl AdmissionFacade {
                     "InvokeBidi frame 0 missing target.ability_name; cannot dispatch",
                 )
             })?;
-        self.run_full_admission(envelope, ability, &open.initial_args)
+        self.run_full_admission(envelope, ability, &open.initial_args, Some(&open.metadata))
     }
 
     // ── Internal pipeline ────────────────────────────────────────
@@ -521,6 +576,7 @@ impl AdmissionFacade {
         envelope: &Envelope,
         ability: &str,
         args: &[u8],
+        metadata: Option<&HashMap<String, String>>,
     ) -> Result<(), Status> {
         let caller_ura = caller_ura_required(envelope)?;
 
@@ -561,7 +617,7 @@ impl AdmissionFacade {
             Some(entry) => entry,
             None => {
                 if self.is_federated_caller(caller_ura) {
-                    return self.run_strict_admission(envelope, ability, args, snapshot);
+                    return self.run_strict_admission(envelope, ability, args, metadata, snapshot);
                 }
                 return Err(permission_denied_unknown_caller(caller_ura));
             }
@@ -582,7 +638,7 @@ impl AdmissionFacade {
             // dead in a follow-up.
             TrustedAgentRole::Device => {
                 if envelope_carries_signature_material(envelope) {
-                    self.run_strict_admission(envelope, ability, args, snapshot)
+                    self.run_strict_admission(envelope, ability, args, metadata, snapshot)
                 } else {
                     // Phase 5a: SharedReceiptStore is gone. Successful
                     // admission outcomes are now observable through
@@ -608,7 +664,7 @@ impl AdmissionFacade {
             // there is no URA-only fallback arm for User the way
             // there is for unsigned Device callers.
             TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::User => {
-                self.run_strict_admission(envelope, ability, args, snapshot)
+                self.run_strict_admission(envelope, ability, args, metadata, snapshot)
             }
         }
     }
@@ -627,6 +683,7 @@ impl AdmissionFacade {
         envelope: &Envelope,
         ability: &str,
         args: &[u8],
+        metadata: Option<&HashMap<String, String>>,
         trust_anchor: Arc<RealmTrustAnchor>,
     ) -> Result<(), Status> {
         if ability.is_empty() {
@@ -648,7 +705,7 @@ impl AdmissionFacade {
         // `federation.resolve_key` handler. Non-user callers keep the
         // existing one-key local-first behavior.
         let mut federated_resolver = FederatedKeyResolver::new(
-            trust_anchor,
+            Arc::clone(&trust_anchor),
             self.federation_client.clone(),
             self.federated_peers.snapshot(),
             self.self_realm.clone(),
@@ -679,7 +736,14 @@ impl AdmissionFacade {
             // terminal time, and rejected invocations via
             // `op_event!` audit lines + the wire-level error
             // their gRPC client sees.
-            Ok(()) => Ok(()),
+            Ok(()) if bootstrap_authority_ability(ability) => Ok(()),
+            Ok(()) => verify_delegation_metadata(
+                envelope,
+                ability,
+                metadata,
+                trust_anchor.as_ref(),
+                axon_now_ms(),
+            ),
             Err(err) => Err(axon_error_to_status(err)),
         }
     }
@@ -744,6 +808,453 @@ fn parse_realm_from_ura(ura: &str) -> Option<String> {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+/// Bootstrap authority abilities mutate identity or presence roots.
+/// They still require the caller to pass strict admission above; this
+/// gate only keeps trust-anchor bootstrap out of normal user-delegation
+/// semantics so stale backend issuer keys cannot deadlock key repair.
+fn bootstrap_authority_ability(ability: &str) -> bool {
+    matches!(
+        ability,
+        ABILITY_SELF_REGISTER_DEVICE_PUBKEY
+            | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
+            | ABILITY_FEDERATION_ADVERTISE_AGENT
+            | ABILITY_SELF_LIST_USER_PUBKEYS
+            | ABILITY_SELF_REVOKE_USER_PUBKEY
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct DelegationProofRaw {
+    #[serde(default)]
+    payload: serde_json::Value,
+    #[serde(default)]
+    signature: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct DelegationPayload {
+    issuer_ura: String,
+    subject_ura: String,
+    caller_ura: String,
+    audience: String,
+    scopes: Vec<String>,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionAuthorityRaw {
+    #[serde(default)]
+    payload: serde_json::Value,
+    #[serde(default)]
+    signature: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SessionAuthorityPayload {
+    backend_ura: String,
+    user_ura: String,
+    session_id: String,
+    scopes: Vec<String>,
+    audiences: Vec<String>,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+}
+
+fn verify_delegation_metadata(
+    envelope: &Envelope,
+    ability: &str,
+    metadata: Option<&HashMap<String, String>>,
+    trust_anchor: &RealmTrustAnchor,
+    now_ms: i64,
+) -> Result<(), Status> {
+    let raw_delegation = metadata.and_then(|m| {
+        m.get(DELEGATION_METADATA_KEY)
+            .map(String::as_str)
+            .filter(|s| !s.trim().is_empty())
+    });
+    let raw_session = metadata.and_then(|m| {
+        m.get(SESSION_AUTHORITY_METADATA_KEY)
+            .map(String::as_str)
+            .filter(|s| !s.trim().is_empty())
+    });
+
+    match (raw_delegation, raw_session) {
+        (Some(_), Some(_)) => {
+            return Err(Status::invalid_argument(format!(
+                "{REASON_AUTHORITY_FORMAT_INVALID}: invocation carries both `{DELEGATION_METADATA_KEY}` \
+                 and `{SESSION_AUTHORITY_METADATA_KEY}`"
+            )));
+        }
+        (Some(raw_proof), None) => {
+            let payload = parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
+            verify_delegation_bindings(&payload, envelope, ability)
+        }
+        (None, Some(raw_session)) => {
+            let payload = parse_and_verify_session_authority(raw_session, trust_anchor, now_ms)?;
+            verify_session_authority_bindings(&payload, envelope, ability)
+        }
+        (None, None) => {
+            if envelope_requires_authority(envelope) {
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_REQUIRED}: envelope subject differs from caller and is a user; \
+                     missing `{DELEGATION_METADATA_KEY}` or `{SESSION_AUTHORITY_METADATA_KEY}` metadata"
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn parse_and_verify_session_authority(
+    raw_authority: &str,
+    trust_anchor: &RealmTrustAnchor,
+    now_ms: i64,
+) -> Result<SessionAuthorityPayload, Status> {
+    let wire = BASE64_STANDARD.decode(raw_authority).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority base64 decode failed: {err}"
+        ))
+    })?;
+
+    let raw: SessionAuthorityRaw = serde_json::from_slice(&wire).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: raw session authority JSON parse failed: {err}"
+        ))
+    })?;
+
+    let payload: SessionAuthorityPayload = serde_json::from_value(raw.payload).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority payload parse failed: {err}"
+        ))
+    })?;
+    validate_session_authority_payload_shape(&payload, now_ms)?;
+
+    let payload_bytes = serde_json::to_vec(&payload).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority payload canonical marshal failed: {err}"
+        ))
+    })?;
+    let signature = BASE64_STANDARD.decode(&raw.signature).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority signature base64 decode failed: {err}"
+        ))
+    })?;
+
+    let backend = trust_anchor.lookup(&payload.backend_ura).ok_or_else(|| {
+        Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_UNKNOWN}: session authority backend `{}` is not in the realm \
+             trust anchor",
+            payload.backend_ura
+        ))
+    })?;
+    verify_delegation_signature(&backend.public_key_b64, &payload_bytes, &signature)?;
+
+    Ok(payload)
+}
+
+fn validate_session_authority_payload_shape(
+    payload: &SessionAuthorityPayload,
+    now_ms: i64,
+) -> Result<(), Status> {
+    if payload.backend_ura.is_empty()
+        || payload.user_ura.is_empty()
+        || payload.session_id.is_empty()
+        || payload.scopes.is_empty()
+        || payload.audiences.is_empty()
+    {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority must carry backend, user, \
+             session_id, at least one audience, and at least one scope"
+        )));
+    }
+    if payload.expires_at_ms <= payload.issued_at_ms {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority expires_at_ms must be greater than \
+             issued_at_ms"
+        )));
+    }
+    if now_ms >= payload.expires_at_ms {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_EXPIRED}: session authority expired at {}ms (now {}ms)",
+            payload.expires_at_ms, now_ms
+        )));
+    }
+    Ok(())
+}
+
+fn verify_session_authority_bindings(
+    payload: &SessionAuthorityPayload,
+    envelope: &Envelope,
+    ability: &str,
+) -> Result<(), Status> {
+    let caller = envelope
+        .caller
+        .as_ref()
+        .map(|c| c.ura.as_str())
+        .unwrap_or("");
+    if payload.backend_ura != caller {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_CALLER_MISMATCH}: session backend `{}` does not match envelope \
+             caller `{caller}`",
+            payload.backend_ura
+        )));
+    }
+
+    let subject = envelope
+        .subject
+        .as_ref()
+        .map(|s| s.ura.as_str())
+        .unwrap_or("");
+    if payload.user_ura != subject {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session user `{}` does not match envelope \
+             subject `{subject}`",
+            payload.user_ura
+        )));
+    }
+
+    let callee = envelope
+        .callee
+        .as_ref()
+        .map(|c| c.ura.as_str())
+        .unwrap_or("");
+    if !payload
+        .audiences
+        .iter()
+        .any(|audience| audience_admits(audience, callee))
+    {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: session audiences {:?} do not admit \
+             envelope callee `{callee}`",
+            payload.audiences
+        )));
+    }
+
+    if !payload
+        .scopes
+        .iter()
+        .any(|pattern| scope_matches(pattern, ability))
+    {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_SCOPE_VIOLATION}: session scopes {:?} do not admit ability \
+             `{ability}`",
+            payload.scopes
+        )));
+    }
+
+    Ok(())
+}
+
+fn parse_and_verify_delegation_proof(
+    raw_proof: &str,
+    trust_anchor: &RealmTrustAnchor,
+    now_ms: i64,
+) -> Result<DelegationPayload, Status> {
+    let wire = BASE64_STANDARD.decode(raw_proof).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: metadata base64 decode failed: {err}"
+        ))
+    })?;
+
+    let raw: DelegationProofRaw = serde_json::from_slice(&wire).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: raw proof JSON parse failed: {err}"
+        ))
+    })?;
+
+    let payload: DelegationPayload = serde_json::from_value(raw.payload).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: authority payload parse failed: {err}"
+        ))
+    })?;
+    validate_delegation_payload_shape(&payload, now_ms)?;
+
+    let payload_bytes = serde_json::to_vec(&payload).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: authority payload canonical marshal failed: {err}"
+        ))
+    })?;
+    let signature = BASE64_STANDARD.decode(&raw.signature).map_err(|err| {
+        Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: authority signature base64 decode failed: {err}"
+        ))
+    })?;
+
+    let issuer = trust_anchor.lookup(&payload.issuer_ura).ok_or_else(|| {
+        Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_UNKNOWN}: authority issuer `{}` is not in the realm \
+             trust anchor",
+            payload.issuer_ura
+        ))
+    })?;
+    verify_delegation_signature(&issuer.public_key_b64, &payload_bytes, &signature)?;
+
+    Ok(payload)
+}
+
+fn envelope_requires_authority(envelope: &Envelope) -> bool {
+    let Some(caller) = envelope.caller.as_ref().map(|c| c.ura.as_str()) else {
+        return false;
+    };
+    let Some(subject) = envelope.subject.as_ref().map(|s| s.ura.as_str()) else {
+        return false;
+    };
+    if caller == subject {
+        return false;
+    }
+    matches!(
+        crate::ura::parse_ura(subject).map(|p| p.kind),
+        Ok(crate::ura::URAKind::User)
+    )
+}
+
+fn validate_delegation_payload_shape(
+    payload: &DelegationPayload,
+    now_ms: i64,
+) -> Result<(), Status> {
+    if payload.issuer_ura.is_empty()
+        || payload.subject_ura.is_empty()
+        || payload.caller_ura.is_empty()
+        || payload.audience.is_empty()
+        || payload.scopes.is_empty()
+    {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: authority payload must carry issuer, subject, caller, \
+             audience, and at least one scope"
+        )));
+    }
+    if payload.expires_at_ms <= payload.issued_at_ms {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: authority expires_at_ms must be greater than \
+             issued_at_ms"
+        )));
+    }
+    if now_ms >= payload.expires_at_ms {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_EXPIRED}: authority proof expired at {}ms (now {}ms)",
+            payload.expires_at_ms, now_ms
+        )));
+    }
+    Ok(())
+}
+
+fn verify_delegation_signature(
+    issuer_public_key_b64: &str,
+    payload_bytes: &[u8],
+    signature_bytes: &[u8],
+) -> Result<(), Status> {
+    let public_key = BASE64_STANDARD
+        .decode(issuer_public_key_b64)
+        .map_err(|err| {
+            Status::permission_denied(format!(
+                "{REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND}: issuer public key is not valid base64: {err}"
+            ))
+        })?;
+    let key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+        public_key.as_slice().try_into().map_err(|_| {
+            Status::permission_denied(format!(
+                "{REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND}: issuer public key wrong size, want {} got {}",
+                ed25519_dalek::PUBLIC_KEY_LENGTH,
+                public_key.len()
+            ))
+        })?;
+    let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+        signature_bytes.try_into().map_err(|_| {
+            Status::permission_denied(format!(
+                "{REASON_AUTHORITY_SIGNATURE_INVALID}: signature wrong size, want {} got {}",
+                ed25519_dalek::SIGNATURE_LENGTH,
+                signature_bytes.len()
+            ))
+        })?;
+    let verifying_key = VerifyingKey::from_bytes(&key_bytes).map_err(|err| {
+        Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND}: issuer public key rejected: {err}"
+        ))
+    })?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    verifying_key
+        .verify(payload_bytes, &signature)
+        .map_err(|err| {
+            Status::permission_denied(format!(
+                "{REASON_AUTHORITY_SIGNATURE_INVALID}: authority signature does not verify: {err}"
+            ))
+        })
+}
+
+fn verify_delegation_bindings(
+    payload: &DelegationPayload,
+    envelope: &Envelope,
+    ability: &str,
+) -> Result<(), Status> {
+    let caller = envelope
+        .caller
+        .as_ref()
+        .map(|c| c.ura.as_str())
+        .unwrap_or("");
+    if payload.caller_ura != caller {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_CALLER_MISMATCH}: authority caller `{}` does not match envelope \
+             caller `{caller}`",
+            payload.caller_ura
+        )));
+    }
+
+    let subject = envelope
+        .subject
+        .as_ref()
+        .map(|s| s.ura.as_str())
+        .unwrap_or("");
+    if payload.subject_ura != subject {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_SUBJECT_MISMATCH}: authority subject `{}` does not match envelope \
+             subject `{subject}`",
+            payload.subject_ura
+        )));
+    }
+
+    let callee = envelope
+        .callee
+        .as_ref()
+        .map(|c| c.ura.as_str())
+        .unwrap_or("");
+    if !audience_admits(&payload.audience, callee) {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: authority audience `{}` does not admit \
+             envelope callee `{callee}`",
+            payload.audience
+        )));
+    }
+
+    if !payload
+        .scopes
+        .iter()
+        .any(|pattern| scope_matches(pattern, ability))
+    {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_SCOPE_VIOLATION}: authority scopes {:?} do not admit ability \
+             `{ability}`",
+            payload.scopes
+        )));
+    }
+
+    Ok(())
+}
+
+fn audience_admits(audience: &str, callee: &str) -> bool {
+    audience == "*" || audience == callee || audience.ends_with('/') && callee.starts_with(audience)
+}
+
+fn scope_matches(pattern: &str, ability: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return !prefix.is_empty() && ability.starts_with(prefix);
+    }
+    pattern == ability
+}
+
 // Phase 5a deleted `hex_lower` — its sole caller was the
 // `record_admission_receipt` helper, which built the
 // `invocation_id` string for SharedReceiptStore entries. The
@@ -760,15 +1271,16 @@ fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
         .map(|c| c.ura.as_str())
         .filter(|u| !u.is_empty())
         .ok_or_else(|| {
-            Status::invalid_argument(
-                "envelope.caller.ura is required (Invariant 1: caller URA required)",
-            )
+            Status::invalid_argument(format!(
+                "{REASON_CALLER_URA_MISSING}: envelope.caller.ura is required \
+                 (Invariant 1: caller URA required)"
+            ))
         })
 }
 
 fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
     Status::permission_denied(format!(
-        "caller URA `{caller_ura}` is not in the realm trust anchor; \
+        "{REASON_CALLER_UNKNOWN}: caller URA `{caller_ura}` is not in the realm trust anchor; \
          pairing-flow registration via `<self>.register_device_pubkey` \
          (PR-7 commit 5/N) populates the trust set",
     ))
@@ -776,7 +1288,7 @@ fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
 
 /// Map an axon-SDK invocation `AxonError` (the kind admission
 /// emits) to a `tonic::Status`. The mapping preserves the canonical
-/// reason (e.g. `AXON_CALLER_SIGNATURE_INVALID`) inside the status
+/// reason (e.g. `CALLER_SIGNATURE_INVALID`) inside the status
 /// message so audit pipelines and client-side metrics that grep on
 /// those strings continue to work.
 fn axon_error_to_status(err: InvocationError) -> Status {
@@ -787,6 +1299,8 @@ fn axon_error_to_status(err: InvocationError) -> Status {
     };
     match err.reason.as_str() {
         REASON_ENVELOPE_INCOMPLETE => Status::invalid_argument(detail),
+        REASON_CALLER_URA_MISSING => Status::invalid_argument(detail),
+        REASON_CALLER_SIGNATURE_MISSING => Status::invalid_argument(detail),
         REASON_CALLER_SIGNATURE_INVALID => Status::invalid_argument(detail),
         REASON_NONCE_REPLAY => Status::invalid_argument(detail),
         _ => match err.kind {
@@ -974,7 +1488,7 @@ fn envelope_caller_is_user(envelope: &Envelope) -> bool {
 /// Empty when the envelope is hub / device / backend-signed (those
 /// callers don't need pubkey disambiguation), or when the caller
 /// neglected to set the hint (a programming error; downstream
-/// `FederatedKeyResolver` surfaces `unknown_agent_ura` and admission
+/// `FederatedKeyResolver` surfaces `CALLER_KEY_NOT_FOUND` and admission
 /// rejects).
 fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
     envelope
@@ -1085,6 +1599,26 @@ mod tests {
         signing_key: &SigningKey,
         nonce: [u8; 16],
     ) -> (InvokeRequest, [u8; 32]) {
+        signed_request_with_subject_and_nonce(
+            caller_ura,
+            callee_ura,
+            callee_ura,
+            ability,
+            args,
+            signing_key,
+            nonce,
+        )
+    }
+
+    fn signed_request_with_subject_and_nonce(
+        caller_ura: &str,
+        callee_ura: &str,
+        subject_ura: &str,
+        ability: &str,
+        args: &[u8],
+        signing_key: &SigningKey,
+        nonce: [u8; 16],
+    ) -> (InvokeRequest, [u8; 32]) {
         // Build the canonical bytes the same way axon's encoder does
         // so we sign over what admission will verify against.
         use easynet_axon::invocation::axiom::canonical_invocation_bytes;
@@ -1096,7 +1630,7 @@ mod tests {
         let axiom_env = InvocationEnvelope {
             caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
             callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-            subject: SubjectIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+            subject: SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2),
             ability: ability.to_string(),
             args_digest,
             invocation_nonce: nonce,
@@ -1115,7 +1649,7 @@ mod tests {
                 profile: "easynet-strict-v2".to_string(),
             }),
             subject: Some(PbSubjectIdentity {
-                ura: callee_ura.to_string(),
+                ura: subject_ura.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             invocation_nonce: nonce.to_vec(),
@@ -1280,8 +1814,8 @@ mod tests {
         let err = facade.check_quota(&req).expect_err("third over cap");
         assert_eq!(err.code(), tonic::Code::ResourceExhausted);
         assert!(
-            err.message().contains("AXON_QUOTA_EXHAUSTED"),
-            "wire reason must be AXON_QUOTA_EXHAUSTED, got: {}",
+            err.message().contains("QUOTA_EXCEEDED"),
+            "wire reason must be QUOTA_EXCEEDED, got: {}",
             err.message()
         );
     }
@@ -1332,7 +1866,7 @@ mod tests {
 
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(
-            err.message().contains("AXON_QUOTA_KEY_TOO_LARGE"),
+            err.message().contains("REQUEST_METADATA_INVALID"),
             "wire reason must name quota key bound, got: {}",
             err.message()
         );
@@ -1341,7 +1875,7 @@ mod tests {
     // ── Full §5.2 pipeline ─────────────────────────────────────────
 
     #[test]
-    fn unsigned_external_caller_rejected_with_signature_invalid_reason() {
+    fn unsigned_external_caller_rejected_with_signature_missing_reason() {
         // PR-7 LB-05 callout: this is the new wire-visible behaviour
         // that breaks the unsigned-envelope PR-6 e2e until commit
         // 7/N restores it with a signed payload.
@@ -1360,8 +1894,8 @@ mod tests {
         let err = facade.verify_invoke(&req).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(
-            err.message().contains(REASON_CALLER_SIGNATURE_INVALID),
-            "wire reason must be AXON_CALLER_SIGNATURE_INVALID, got: {}",
+            err.message().contains(REASON_CALLER_SIGNATURE_MISSING),
+            "wire reason must be CALLER_SIGNATURE_MISSING, got: {}",
             err.message()
         );
     }
@@ -1440,7 +1974,7 @@ mod tests {
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(
             err.message().contains(REASON_NONCE_REPLAY),
-            "wire reason must be AXON_NONCE_REPLAY, got: {}",
+            "wire reason must be CALLER_NONCE_REPLAYED, got: {}",
             err.message()
         );
     }
@@ -1449,7 +1983,7 @@ mod tests {
     fn signed_caller_with_wrong_key_rejected() {
         // Trust anchor lists a different public key than the
         // signer's. verify_signature fails; admission propagates
-        // AXON_CALLER_SIGNATURE_INVALID.
+        // CALLER_SIGNATURE_INVALID.
         let signing_key = SigningKey::from_bytes(&[0x55u8; 32]);
         let other_key = SigningKey::from_bytes(&[0x66u8; 32]);
         let other_pub_b64 = BASE64_STANDARD.encode(other_key.verifying_key().to_bytes());

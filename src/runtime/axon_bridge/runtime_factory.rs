@@ -130,6 +130,7 @@ mod tests {
             callee_signature: None,
             signer_binding: None,
             host_attestation: Vec::new(),
+            ability_binding: "liangbing.chat".to_string(),
             authority_binding: AuthorityBinding::Self_ {
                 principal_ura: caller.ura.clone(),
             },
@@ -161,6 +162,7 @@ mod tests {
             callee_signature: None,
             signer_binding: None,
             host_attestation: Vec::new(),
+            ability_binding: "chat".to_string(),
             authority_binding: AuthorityBinding::Self_ {
                 principal_ura: fallback_caller.ura.clone(),
             },

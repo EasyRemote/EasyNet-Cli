@@ -28,7 +28,8 @@
 //
 // v10.3 C* unity: every execution entry point ultimately funnels
 // through `invoke`. Schedule tick, loop iteration, permission
-// admission, Client FFI — all construct an Invocation and call
+// admission, Client FFI — all construct a RuntimeInvocation adapter
+// record and call
 // `invoke`. No bypass paths.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -38,7 +39,7 @@ use crate::runtime::domain::{
     DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest, RoomId,
     ScheduleEntry, ScheduleId, Session, SessionId,
 };
-use crate::runtime::invocation::{Invocation, Receipt};
+use crate::runtime::invocation::{Receipt, RuntimeInvocation};
 use serde_json::Value;
 
 /// v1 KernelApi surface. Each method is the runtime analogue of a
@@ -56,16 +57,16 @@ use serde_json::Value;
 /// feature-specific typed channel. The trait surface grows PR by
 /// PR — the method *placeholders* listed here are the v1 floor.
 pub trait KernelApi: Send + Sync {
-    // ── Invocation (C* unity entry point) ────────────────────────────
+    // ── RuntimeInvocation adapter (C* unity entry point) ─────────────
 
     /// The single execution entry point. Schedule tick, loop
     /// controller, permission admission, Client FFI all construct
-    /// an Invocation and call this method. Returns the terminal
-    /// Receipt.
+    /// a RuntimeInvocation adapter record and call this method. Returns
+    /// the terminal Receipt.
     ///
     /// v1 signature returns `Result<Receipt>` synchronously; v2
     /// async version returns `impl Future<Output = Receipt>`.
-    fn invoke(&self, invocation: Invocation) -> anyhow::Result<Receipt>;
+    fn invoke(&self, invocation: RuntimeInvocation) -> anyhow::Result<Receipt>;
 
     // ── Session (PR-ATTACH) ──────────────────────────────────────────
 
