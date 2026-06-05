@@ -4732,8 +4732,9 @@ impl DaemonInvocationService {
     /// `Invoke` RPC consults, then maps the result into the typed
     /// `RequestOutcome` shape.
     ///
-    /// Spec scope (PR-N6 v1): forwards
-    /// `federation.forward_invoke` only. Other ability names return
+    /// Spec scope (PR-N6 v1): forwards `federation.forward_invoke`
+    /// plus the hosted-agent self-advertise repair path
+    /// (`federation.advertise_agent`). Other ability names return
     /// `PermissionDenied` so the device-side caller surfaces a
     /// structured error instead of a silent timeout — PR-N6 v2 may
     /// widen this set once a per-ability admission policy is
@@ -4777,11 +4778,23 @@ impl DaemonInvocationService {
                     Err(status) => map_status_to_session_request_error(status),
                 }
             }
+            ABILITY_FEDERATION_ADVERTISE_AGENT => {
+                match self.dispatch_federation_advertise_agent(args) {
+                    Ok(response) => {
+                        let body = response.into_inner();
+                        RequestOutcome::Ok {
+                            result_bytes: body.result,
+                        }
+                    }
+                    Err(status) => map_status_to_session_request_error(status),
+                }
+            }
             other => RequestOutcome::Err {
                 error: SessionRequestError::PermissionDenied {
                     reason: format!(
                         "session_request: ability `{other}` is not yet routed; \
-                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}` is wired in PR-N6 v1"
+                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}` and \
+                         `{ABILITY_FEDERATION_ADVERTISE_AGENT}` are wired in PR-N6 v1"
                     ),
                 },
             },
@@ -10204,12 +10217,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_session_request_advertise_agent_updates_store() {
+        // Hot `device.agent.start` runs on the already-open device
+        // session, so its hub repair path arrives as a
+        // SessionDispatch::Request. The handler must route
+        // `federation.advertise_agent` through the same store-writing
+        // wrapper as unary Invoke; otherwise agent add succeeds
+        // locally while chat / skill / history still fail with
+        // "agent is not advertised on this hub".
+        let svc = make_service().with_session_realm("test-realm");
+        let agent_ura = "easynet:///r/test-realm/agent/dev.anthropic";
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": agent_ura,
+            "signing_authority": {
+                "kind": "hosted_by",
+                "host_ura": TEST_DAEMON_URI,
+            },
+            "host_node_id": "test-daemon",
+        }))
+        .expect("advertise args encode");
+
+        let outcome = svc
+            .dispatch_session_request(ABILITY_FEDERATION_ADVERTISE_AGENT, &args)
+            .await;
+
+        match outcome {
+            RequestOutcome::Ok { result_bytes } => {
+                let body: federation_wrappers::AdvertiseAgentResponse =
+                    serde_json::from_slice(&result_bytes)
+                        .expect("body decodes as AdvertiseAgentResponse");
+                assert!(body.ack);
+            }
+            other => panic!("expected advertise_agent Ok outcome, got {other:?}"),
+        }
+
+        let record = svc
+            .advertised_agents
+            .get(agent_ura)
+            .expect("advertise_agent request must populate AdvertisedAgentStore");
+        assert_eq!(record.host_ura(), Some(TEST_DAEMON_URI));
+        assert_eq!(record.host_node_id.as_deref(), Some("test-daemon"));
+    }
+
+    #[tokio::test]
     async fn dispatch_session_request_unknown_ability_returns_permission_denied() {
-        // PR-N6 v1 only routes `federation.forward_invoke`. Other
-        // ability names must surface a typed `PermissionDenied`
-        // so the device caller knows the hub refused (not a
-        // silent timeout). PR-N6 v2 may widen this set once a
-        // per-ability admission policy is specified.
+        // PR-N6 v1 only routes the small explicit set used by
+        // invoke forwarding and hosted-agent self-advertise repair.
+        // Other ability names must surface a typed `PermissionDenied`
+        // so the device caller knows the hub refused (not a silent
+        // timeout). PR-N6 v2 may widen this set once a per-ability
+        // admission policy is specified.
         let svc = make_service().with_session_realm("test-realm");
         let outcome = svc.dispatch_session_request("fs.read", b"{}").await;
         match outcome {
@@ -10222,7 +10279,11 @@ mod tests {
                 );
                 assert!(
                     reason.contains(ABILITY_FEDERATION_FORWARD_INVOKE),
-                    "reason must cite the only ability PR-N6 v1 routes; got: {reason}",
+                    "reason must cite forward_invoke as an allowed ability; got: {reason}",
+                );
+                assert!(
+                    reason.contains(ABILITY_FEDERATION_ADVERTISE_AGENT),
+                    "reason must cite advertise_agent as an allowed ability; got: {reason}",
                 );
             }
             other => panic!("expected PermissionDenied for unknown ability, got {other:?}"),

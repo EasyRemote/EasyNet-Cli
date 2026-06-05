@@ -55,9 +55,13 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::core::agent_spec::{AgentSpec, RuntimeKind};
-use crate::persistence::config;
-use crate::registry::agents::{self, AgentEntry, AgentType, CURRENT_REGISTRY_SCHEMA};
+use crate::persistence::{config, local_agents};
+use crate::registry::agents::{
+    self, AgentEntry, AgentRegistry, AgentType, CURRENT_REGISTRY_SCHEMA,
+};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::agents::profiles::bootstrap::{self, BootstrapPlan, LlmSubAgent, UuidMinter};
+use crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest;
 use crate::runtime::directory::{AgentDirectory, Location};
 
 use crate::runtime::ability_dispatch::OwnerKind;
@@ -267,6 +271,8 @@ fn start_agent_handler(
     }
     registry.agents.insert(name.clone(), entry.clone());
     agents::save_agents(&registry)?;
+    let local_agents_file = sync_hosted_agents_for_registry(&registry)?;
+    let hosted_agent_ura = local_agents::lookup_hosted_ura(&local_agents_file, "llm", &name);
 
     let mut workspace_projected = false;
     let mut workspace_projection_error: Option<String> = None;
@@ -309,7 +315,8 @@ fn start_agent_handler(
     // is a real bug, not a legitimate skip. The helper also handles
     // current-thread tokio runtimes by offloading to a fresh runtime
     // thread, so all registrar sync sites share one bridge policy.
-    let runtime_sync_outcome = if let Some(registrar) = hot_registrar.get() {
+    let hot_registrar = hot_registrar.get().cloned();
+    let runtime_sync_outcome = if let Some(registrar) = hot_registrar.as_ref() {
         let registrar = Arc::clone(registrar);
         let name_for_registrar = name.clone();
         let entry_for_registrar = entry.clone();
@@ -342,13 +349,41 @@ fn start_agent_handler(
     let (runtime_registered, runtime_failed) = runtime_sync_outcome
         .map(|o| (o.registered, o.failed))
         .unwrap_or((0, 0));
-    let agent_ura = agent_ura_for_name(&name);
+    let agent_ura = hosted_agent_ura.unwrap_or_else(|| agent_ura_for_name(&name));
+    let hub_advertise_outcome = hot_registrar
+        .as_ref()
+        .and_then(|registrar| registrar.hot_agent_advertiser())
+        .map(|advertiser| {
+            advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
+                agent_ura: agent_ura.clone(),
+            })
+        });
+    if let Some(outcome) = hub_advertise_outcome.as_ref() {
+        if let Some(err) = outcome.error.as_ref() {
+            crate::op_event!(
+                component = agent_lifecycle,
+                kind = hot_agent_hub_advertise_soft_failed,
+                agent_name = name.as_str(),
+                agent_ura = agent_ura.as_str(),
+                error = err.as_str(),
+                message = "agent registered locally but hub advertise failed; \
+                           frontend remote invokes may need a session reconnect",
+            );
+        }
+    }
 
     Ok(json!({
         "agent_ura": agent_ura,
         "replaced_prior": replaced_prior,
         "runtime_registered": runtime_registered,
         "runtime_failed": runtime_failed,
+        "hub_advertised": hub_advertise_outcome
+            .as_ref()
+            .map(|outcome| outcome.advertised)
+            .unwrap_or(false),
+        "hub_advertise_error": hub_advertise_outcome
+            .as_ref()
+            .and_then(|outcome| outcome.error.clone()),
         "created_directory": created_directory,
         "updated_spec": updated_spec,
         "workspace_projected": workspace_projected,
@@ -392,6 +427,7 @@ fn stop_agent_handler(
     let ack = removed_entry.is_some();
     if ack {
         agents::save_agents(&registry)?;
+        remove_hosted_llm_agent(&name)?;
     }
 
     // Phase 5c runtime-sync reverse: tear down every `<name>.*`
@@ -558,6 +594,68 @@ where
     T: Send,
 {
     crate::support::async_bridge::try_run_blocking_in_tokio(future)
+}
+
+fn sync_hosted_agents_for_registry(
+    registry: &AgentRegistry,
+) -> anyhow::Result<local_agents::LocalAgentsFile> {
+    let plan = hosted_agent_bootstrap_plan(registry);
+    let mut file = local_agents::load().unwrap_or_default();
+    bootstrap::bootstrap_local_agents(&plan, &mut file, &UuidMinter);
+    local_agents::save(&file)?;
+    Ok(file)
+}
+
+fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> BootstrapPlan {
+    let (realm, user_id, host_device_ura) = config::load_credentials()
+        .ok()
+        .map(|creds| {
+            let realm = creds.tenant_id.trim().to_string();
+            let node_id = creds.node_id.trim().to_string();
+            let user_id = creds
+                .username
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("")
+                .to_string();
+            let host_device_ura = if realm.is_empty() || node_id.is_empty() {
+                String::new()
+            } else {
+                crate::ura::device_ura(&realm, &node_id)
+            };
+            (realm, user_id, host_device_ura)
+        })
+        .unwrap_or_else(|| (String::new(), String::new(), String::new()));
+
+    BootstrapPlan {
+        realm,
+        user_id,
+        host_device_ura,
+        consent: true,
+        policy: false,
+        mcp: false,
+        llm_sub_agents: registry
+            .agents
+            .iter()
+            .map(|(name, entry)| LlmSubAgent {
+                name: name.clone(),
+                agent_type_display: entry.agent_type.to_string(),
+                model: entry.model.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn remove_hosted_llm_agent(name: &str) -> anyhow::Result<()> {
+    let mut file = local_agents::load().unwrap_or_default();
+    let before = file.hosted_agents.len();
+    file.hosted_agents
+        .retain(|entry| !(entry.profile == "llm" && entry.name == name));
+    if file.hosted_agents.len() != before {
+        local_agents::save(&file)?;
+    }
+    Ok(())
 }
 
 fn agent_ura_for_name(name: &str) -> String {
@@ -769,6 +867,58 @@ mod tests {
         SharedHotRegistrarCell::new()
     }
 
+    fn seed_joined_credentials() {
+        crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            tenant_id: "localhost".to_string(),
+            username: Some("dev".to_string()),
+            ..Default::default()
+        })
+        .expect("seed joined credentials");
+    }
+
+    #[derive(Default)]
+    struct RecordingHotAdvertiser {
+        requests: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiser
+        for RecordingHotAdvertiser
+    {
+        fn advertise_hosted_agent(
+            &self,
+            request: crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest,
+        ) -> crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            self.requests.lock().unwrap().push(request.agent_ura);
+            crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+                advertised: true,
+                error: None,
+            }
+        }
+    }
+
+    fn hot_registrar_with_advertiser(
+        advertiser: Arc<RecordingHotAdvertiser>,
+    ) -> SharedHotRegistrarCell {
+        let cell = SharedHotRegistrarCell::new();
+        let registrar =
+            crate::runtime::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
+                Arc::new(Vec::new()),
+                Arc::new(std::sync::OnceLock::new()),
+            );
+        let advertiser: Arc<
+            dyn crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+        > = advertiser;
+        registrar.set_hot_agent_advertiser(advertiser);
+        assert!(
+            cell.set(registrar).is_ok(),
+            "test cell must accept its first registrar"
+        );
+        cell
+    }
+
     #[test]
     fn registration_makes_lifecycle_abilities_dispatchable() {
         let mut reg = AxonAbilityCatalog::new();
@@ -801,7 +951,72 @@ mod tests {
             // Round-trip: the registry now has the row.
             let registry = agents::load_agents().unwrap();
             assert!(registry.agents.contains_key("claude"));
+            assert_eq!(
+                local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "claude"),
+                Some(crate::ura::agent_ura("<unjoined>", "<unjoined>", "claude")),
+                "device.agent.start must keep local-agents.json in sync even pre-join"
+            );
         });
+    }
+
+    #[test]
+    fn start_agent_materialize_syncs_hosted_ura_and_default_chat_manifest() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+
+            let resp = start_agent_handler(
+                json!({
+                    "name": "anthropic",
+                    "agent_type": "claude-code",
+                    "model": "sonnet",
+                    "materialize_directory": true,
+                }),
+                &empty_hot_registrar(),
+            )
+            .unwrap();
+
+            let expected_ura = crate::ura::agent_ura("localhost", "dev", "anthropic");
+            assert_eq!(resp["agent_ura"], json!(expected_ura));
+            assert_eq!(
+                local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
+                Some(expected_ura),
+                "newly added agents must be visible to hosted-agent descriptor synthesis"
+            );
+
+            let registry = agents::load_agents().unwrap();
+            let root = registry.agents["anthropic"].root_path.clone().unwrap();
+            assert!(
+                root.join("abilities").join("chat.ability.toml").exists(),
+                "agent add must seed the default chat ability manifest"
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn start_agent_hot_advertises_joined_hosted_ura_when_bridge_is_wired() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        seed_joined_credentials();
+        let advertiser = Arc::new(RecordingHotAdvertiser::default());
+        let hot_registrar = hot_registrar_with_advertiser(Arc::clone(&advertiser));
+
+        let resp = start_agent_handler(
+            json!({
+                "name": "anthropic",
+                "agent_type": "claude-code",
+                "materialize_directory": true,
+            }),
+            &hot_registrar,
+        )
+        .unwrap();
+
+        let expected_ura = crate::ura::agent_ura("localhost", "dev", "anthropic");
+        assert_eq!(resp["hub_advertised"], true);
+        assert_eq!(resp["hub_advertise_error"], Value::Null);
+        assert_eq!(
+            advertiser.requests.lock().unwrap().as_slice(),
+            [expected_ura.as_str()],
+            "hot-added agent must be advertised to the hub immediately"
+        );
     }
 
     #[test]
@@ -981,6 +1196,45 @@ mod tests {
                 stop_agent_handler(json!({"name": "claude"}), &empty_hot_registrar()).unwrap();
             assert_eq!(resp["ack"], true);
             assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert_eq!(
+                local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "claude"),
+                None,
+                "stopping an agent must remove its hosted llm mapping"
+            );
+        });
+    }
+
+    #[test]
+    fn stop_agent_by_ura_removes_joined_hosted_mapping() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            start_agent_handler(
+                json!({
+                    "name": "anthropic",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &empty_hot_registrar(),
+            )
+            .unwrap();
+
+            let agent_ura = crate::ura::agent_ura("localhost", "dev", "anthropic");
+            assert_eq!(
+                local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
+                Some(agent_ura.clone())
+            );
+
+            let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &empty_hot_registrar())
+                .unwrap();
+            assert_eq!(resp["ack"], true);
+            assert!(!agents::load_agents()
+                .unwrap()
+                .agents
+                .contains_key("anthropic"));
+            assert_eq!(
+                local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
+                None
+            );
         });
     }
 

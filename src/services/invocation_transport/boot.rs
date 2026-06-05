@@ -78,6 +78,13 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
+
+use crate::runtime::axon_bridge::hot_agent_registrar::{
+    HotAgentAdvertiseOutcome, HotAgentAdvertiseRequest, HotAgentAdvertiser,
+};
+use crate::services::invocation_transport::invoke_remote_initiator::{
+    RequestOutcome, SessionRequestError,
+};
 use serde::Deserialize;
 
 #[cfg(windows)]
@@ -600,6 +607,14 @@ pub fn start_daemon_invocation_transport(
                 outbox.clone(),
             ),
         );
+        if let (Some(registrar), Some(identity)) =
+            (hot_agent_registrar_cell.get(), daemon_identity.as_ref())
+        {
+            registrar.set_hot_agent_advertiser(Arc::new(SessionHotAgentAdvertiser::new(
+                Arc::clone(&handle),
+                identity.caller_ura.clone(),
+            )));
+        }
         service = service.with_session_escalation(Arc::clone(&handle));
         Some((correlation, outbox))
     } else {
@@ -717,6 +732,110 @@ pub fn start_daemon_invocation_transport(
     }
 
     Ok(())
+}
+
+/// Device-mode hot-advertise adapter for `device.agent.start`.
+///
+/// It reuses the already-open `<self>.session` bidi instead of
+/// opening a second hub client from the lifecycle handler. The
+/// lifecycle layer only sees the [`HotAgentAdvertiser`] trait; this
+/// adapter owns the session-specific wire shape and caller identity.
+struct SessionHotAgentAdvertiser {
+    escalation:
+        Arc<crate::services::invocation_transport::session_escalation::SessionEscalationHandle>,
+    caller_ura: String,
+    host_node_id: Option<String>,
+}
+
+impl SessionHotAgentAdvertiser {
+    fn new(
+        escalation: Arc<
+            crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
+        >,
+        caller_ura: String,
+    ) -> Self {
+        let host_node_id = crate::ura::parse_ura(&caller_ura)
+            .ok()
+            .filter(|parsed| parsed.kind == crate::ura::URAKind::Device)
+            .map(|parsed| parsed.device_id);
+        Self {
+            escalation,
+            caller_ura,
+            host_node_id,
+        }
+    }
+}
+
+impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
+    fn advertise_hosted_agent(
+        &self,
+        request: HotAgentAdvertiseRequest,
+    ) -> HotAgentAdvertiseOutcome {
+        let mut body = serde_json::json!({
+            "agent_ura": request.agent_ura,
+            "signing_authority": {
+                "kind": "hosted_by",
+                "host_ura": self.caller_ura,
+            },
+        });
+        if let Some(node_id) = self.host_node_id.as_ref() {
+            if let Some(map) = body.as_object_mut() {
+                map.insert(
+                    "host_node_id".to_string(),
+                    serde_json::Value::String(node_id.clone()),
+                );
+            }
+        }
+        let args = match serde_json::to_vec(&body) {
+            Ok(args) => args,
+            Err(err) => {
+                return HotAgentAdvertiseOutcome {
+                    advertised: false,
+                    error: Some(format!("encode federation.advertise_agent args: {err}")),
+                };
+            }
+        };
+        let escalation = Arc::clone(&self.escalation);
+        let Some(outcome) = crate::support::async_bridge::try_run_blocking_in_tokio(async move {
+            escalation
+                .escalate_with_timeout(
+                    "federation.advertise_agent".to_string(),
+                    args,
+                    Duration::from_secs(5),
+                )
+                .await
+        }) else {
+            return HotAgentAdvertiseOutcome {
+                advertised: false,
+                error: Some(
+                    "no tokio runtime available for hot federation.advertise_agent".to_string(),
+                ),
+            };
+        };
+        match outcome {
+            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome {
+                advertised: true,
+                error: None,
+            },
+            RequestOutcome::Err { error } => HotAgentAdvertiseOutcome {
+                advertised: false,
+                error: Some(render_session_request_error(&error)),
+            },
+        }
+    }
+}
+
+fn render_session_request_error(error: &SessionRequestError) -> String {
+    match error {
+        SessionRequestError::TargetOffline => "target_offline".to_string(),
+        SessionRequestError::PermissionDenied { reason } => {
+            format!("permission_denied: {reason}")
+        }
+        SessionRequestError::UpstreamFailure { reason } => {
+            format!("upstream_failure: {reason}")
+        }
+        SessionRequestError::UpstreamTimeout => "upstream_timeout".to_string(),
+    }
 }
 
 /// Spawn the long-lived device-side `<self>.session` supervisor. The
