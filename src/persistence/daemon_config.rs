@@ -357,6 +357,18 @@ pub enum DaemonMode {
     Both,
 }
 
+impl DaemonMode {
+    /// Stable lowercase representation used in discovery files and
+    /// operator-facing diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DaemonMode::Device => "device",
+            DaemonMode::Hub => "hub",
+            DaemonMode::Both => "both",
+        }
+    }
+}
+
 /// Parsed and invariant-validated representation of
 /// `~/.easynet/daemon-config.toml`. Construct via `DaemonConfig::load`;
 /// the `Deserialize`-derived shape used internally is private to

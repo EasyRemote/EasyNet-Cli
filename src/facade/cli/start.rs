@@ -2,8 +2,9 @@
 // ===========
 //
 // File: src/cli/start.rs
-// Description: `easynet start` — spawns a local Axon runtime, joins Hub, registers node,
-//              and maintains heartbeat. Supports both foreground and background modes.
+// Description: `easynet start` — starts the EasyNet product daemon,
+//              joins Hub, registers node, and maintains heartbeat.
+//              Supports both foreground and background modes.
 //
 // Lifecycle:
 // - Ensures no runtime is already running (checks ~/.easynet/runtime.json).
@@ -190,7 +191,8 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         .context("ensure daemon-config.toml for device mode")?;
     let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
 
-    let mut daemon_handle = crate::daemon::DaemonConfig::device(&creds.node_id)
+    let mut daemon_handle = crate::daemon::DaemonStartConfig::device(&creds.node_id)
+        .map(|cfg| cfg.with_realm(creds.realm_str()))
         .and_then(|cfg| cfg.start())
         .context("start easynet-daemon")?;
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
@@ -601,7 +603,8 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     let cfg = resolve_hub_config(args)?;
     let realm = cfg.realm().to_string();
 
-    let mut daemon_handle = crate::daemon::DaemonConfig::hub()
+    let mut daemon_handle = crate::daemon::DaemonStartConfig::hub()
+        .with_realm(&realm)
         .start()
         .context("start hub easynet-daemon")?;
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
