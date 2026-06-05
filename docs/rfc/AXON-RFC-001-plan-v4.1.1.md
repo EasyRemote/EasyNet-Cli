@@ -921,7 +921,7 @@ outbound (`mcp.client.*`) abilities.
   Frontend issues:
     caller         = backend-profile Agent
     subject        = operator URA
-    delegation     = JWT-derived DelegationProof
+    authority      = backend SessionAuthority
     callee         = consent-profile Agent
     ability        = consent.decide
     args           = { request_id, decision: "Allowed", justification }
@@ -1114,7 +1114,7 @@ Visibility column reflects [P8] correction for conversation.*.)
 For each current EasyNet function, the v4.1.1 invocation chain that
 implements it:
 
-| Function | Caller | Subject | Delegation | Callee | Ability | Section |
+| Function | Caller | Subject | Authority | Callee | Ability | Section |
 |---|---|---|---|---|---|---|
 | `easynet runtime start` (joined-device) | device-profile | device-profile | none | hub-profile | `federation.heartbeat` (initial=true) | §2.A Step 5 |
 | `easynet runtime start` (joined-device) | device-profile | each hosted Agent | none (self-attest) | hub-profile | `federation.advertise_agent` + `federation.advertise_abilities` | §2.A Step 6 |
@@ -1136,13 +1136,13 @@ implements it:
 | `easynet schedule add` | device-profile | operator | local-socket DelegationProof | device-profile (self) | `schedule.add` | (analogous) |
 | `easynet loop create` | device-profile | operator | local-socket DelegationProof | device-profile (self) | `loop.create` | (analogous) |
 | `easynet permission ...` | device-profile | operator | local-socket DelegationProof | consent-profile | `consent.list_pending` / `consent.decide` | §14 |
-| Frontend Skills page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (filter `skill.`) | §9 |
-| Frontend Abilities page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (no filter) | §10 |
-| Frontend Devices page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (filter `fleet.*`) | (analogous to §10) |
-| Frontend Agents page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (no filter) | (analogous to §10) |
-| Frontend chat | backend-profile | operator | JWT-derived DelegationProof | target llm-profile Agent | `conversation.send` (or stream) | §11 |
-| Frontend session attach | backend-profile | operator | JWT-derived DelegationProof | target device-profile | InvokeStream `fleet.session_read` + `fleet.session_input` | (analogous to §16) |
-| Frontend permission popup | backend-profile | operator | JWT-derived DelegationProof | consent-profile | InvokeStream `consent.subscribe` + `consent.decide` | §14 |
+| Frontend Skills page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (filter `skill.`) | §9 |
+| Frontend Abilities page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (no filter) | §10 |
+| Frontend Devices page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (filter `fleet.*`) | (analogous to §10) |
+| Frontend Agents page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (no filter) | (analogous to §10) |
+| Frontend chat | backend-profile | operator | backend SessionAuthority | target llm-profile Agent | `conversation.send` (or stream) | §11 |
+| Frontend session attach | backend-profile | operator | backend SessionAuthority | target device-profile | InvokeStream `fleet.session_read` + `fleet.session_input` | (analogous to §16) |
+| Frontend permission popup | backend-profile | operator | backend SessionAuthority | consent-profile | InvokeStream `consent.subscribe` + `consent.decide` | §14 |
 | External Claude Code via MCP (tools/list) | mcp-profile | local operator | local-socket DelegationProof | hub-profile | `federation.resolve` (filter PUBLIC + SCOPED-matching) | §12 |
 | External Claude Code via MCP (tools/call) | mcp-profile | local operator | local-socket DelegationProof | target Agent | per tool name | §12 |
 | Daemon outbound to external MCP | <calling Agent> | relevant subject | (none if calling Agent is local) | mcp-profile (self) | `mcp.client.call` | §13 |

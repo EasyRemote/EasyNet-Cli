@@ -1,7 +1,7 @@
 // EasyNet CLI — `<self>.register_device_pubkey` ability handler
 // ==============================================================
 //
-// File: src/services/axon_serve/register_device_pubkey.rs
+// File: src/services/invocation_transport/register_device_pubkey.rs
 // Description: PR-7 commit 5/N. Daemon-side handler for the
 //              `<self>.register_device_pubkey` ability that the
 //              EasyNet backend invokes from
@@ -194,17 +194,25 @@ pub fn handle(
         tls_ca_pem_path: None,
     };
 
-    // Build the next anchor by snapshotting current entries +
-    // appending the new one. `append_agent` enforces Invariant 1
-    // (URA uniqueness) and rejects duplicates with a structured
-    // `DuplicateUra`.
+    // Build the next anchor by snapshotting current entries and
+    // applying the role-specific write policy. Device pairing keeps
+    // strict duplicate rejection; user registration keeps DEC-EU
+    // multi-pubkey semantics; backend / hub registration is an
+    // upsert so boot-time identity repair replaces a stale key
+    // instead of leaving delegation verification pinned to an old
+    // trust row.
     let snapshot = cell.snapshot();
     let mut next_entries: Vec<TrustedAgent> = snapshot.entries_sorted();
     let mut next_anchor =
         RealmTrustAnchor::from_entries(next_entries.split_off(0)).map_err(realm_error_to_status)?;
-    next_anchor
-        .append_agent(entry.clone())
-        .map_err(realm_error_to_status)?;
+    match role {
+        TrustedAgentRole::Backend | TrustedAgentRole::Hub => next_anchor
+            .upsert_singleton_agent(entry.clone())
+            .map_err(realm_error_to_status)?,
+        TrustedAgentRole::Device | TrustedAgentRole::User => next_anchor
+            .append_agent(entry.clone())
+            .map_err(realm_error_to_status)?,
+    }
 
     next_anchor
         .save(trust_anchor_path)
@@ -345,6 +353,11 @@ mod tests {
         BASE64_STANDARD.encode(signing.verifying_key().to_bytes())
     }
 
+    fn test_pub_b64_with_seed(seed: u8) -> String {
+        let signing = SigningKey::from_bytes(&[seed; 32]);
+        BASE64_STANDARD.encode(signing.verifying_key().to_bytes())
+    }
+
     #[test]
     fn happy_path_appends_and_persists() {
         let (_dir, path) = fresh_path();
@@ -430,6 +443,62 @@ mod tests {
         handle(&args, "r1", &path, &cell).expect("first ok");
         let err = handle(&args, "r1", &path, &cell).expect_err("second must reject as duplicate");
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
+    }
+
+    #[test]
+    fn backend_same_ura_new_key_replaces_stale_trust_entry() {
+        let (_dir, path) = fresh_path();
+        let old_key = test_pub_b64_with_seed(7);
+        let new_key = test_pub_b64_with_seed(8);
+        let cell = SharedTrustAnchor::new(Arc::new(
+            RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                agent_ura: "easynet:///r/r1/hub".to_string(),
+                public_key_b64: old_key,
+                role: TrustedAgentRole::Hub,
+                added_at_unix_ms: 1,
+                origin_tenant_id: Some("r1".to_string()),
+                hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
+                tls_ca_pem_path: Some(std::path::PathBuf::from("/tmp/r1.ca.pem")),
+            }])
+            .expect("stale hub anchor"),
+        ));
+        handle(
+            &args_bytes("easynet:///r/r1/hub", &new_key, "backend"),
+            "r1",
+            &path,
+            &cell,
+        )
+        .expect("backend key rotation ok");
+
+        let snap = cell.snapshot();
+        let entry = snap.lookup("easynet:///r/r1/hub").expect("backend present");
+        assert_eq!(entry.public_key_b64, new_key);
+        assert_eq!(entry.role, TrustedAgentRole::Hub);
+        assert_eq!(
+            entry.hub_endpoint.as_deref(),
+            Some("https://127.0.0.1:50443")
+        );
+        assert_eq!(
+            entry.tls_ca_pem_path.as_deref(),
+            Some(Path::new("/tmp/r1.ca.pem"))
+        );
+        assert_eq!(snap.len(), 1);
+
+        let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
+        let disk_entry = from_disk
+            .lookup("easynet:///r/r1/hub")
+            .expect("backend present on disk");
+        assert_eq!(disk_entry.public_key_b64, new_key);
+        assert_eq!(disk_entry.role, TrustedAgentRole::Hub);
+        assert_eq!(
+            disk_entry.hub_endpoint.as_deref(),
+            Some("https://127.0.0.1:50443")
+        );
+        assert_eq!(
+            disk_entry.tls_ca_pem_path.as_deref(),
+            Some(Path::new("/tmp/r1.ca.pem"))
+        );
+        assert_eq!(from_disk.len(), 1);
     }
 
     #[test]

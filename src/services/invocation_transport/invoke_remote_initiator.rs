@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — <self>.invoke_remote initiator (device side)
+// EasyNet CLI — invocation_transport — <self>.invoke_remote initiator (device side)
 // =========================================================================
 //
-// File: src/services/axon_serve/invoke_remote_initiator.rs
+// File: src/services/invocation_transport/invoke_remote_initiator.rs
 // Description: Device-side caller for `<self>.invoke_remote`. Opens a
 //              per-call `InvokeBidi` stream against the daemon, sends
 //              frame 0 = `EnvelopeOpen` carrying the cross-device
@@ -54,7 +54,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 
 use futures::Stream;
 use serde::{Deserialize, Serialize};
@@ -156,6 +156,11 @@ pub enum InvokeRemoteUp {
         args: Vec<u8>,
         /// Content contract for `args`.
         args_content_envelope: SessionContentEnvelope,
+        /// Inner invocation metadata. Carries authority material such
+        /// as `x-easynet-delegation` when the inner subject is a user
+        /// represented by a hub/backend caller.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        metadata: HashMap<String, String>,
     },
 }
 
@@ -225,6 +230,8 @@ pub enum SessionDispatch {
         ability: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        metadata: HashMap<String, String>,
     },
     /// Hub → target device. Open one long-lived local bidi handler
     /// on the target and bind it to `call_id`. Used by the
@@ -242,6 +249,8 @@ pub enum SessionDispatch {
         ability: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        metadata: HashMap<String, String>,
     },
     /// Hub → target device. One incremental input frame for a
     /// previously-opened remote bidi session. `payload` carries raw
@@ -372,6 +381,7 @@ pub async fn invoke_remote(
         ability,
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
+        metadata: HashMap::new(),
     };
     let initial_args = serde_json::to_vec(&request)
         .map_err(|err| Status::internal(format!("encode invoke_remote request: {err}")))?;
@@ -383,16 +393,16 @@ pub async fn invoke_remote(
         .await
         .map_err(|_| Status::internal("up channel closed before frame 0 send"))?;
 
-    // Match server-side cap (1 GiB) on both directions. tonic's
-    // default 4 MiB caused `OutOfRange: decoded message length too
-    // large` mid-stream on cross-hub file transfers; see boot.rs for
-    // the rationale on why 1 GiB.
+    // Match the server-side transport-envelope cap on both
+    // directions. tonic's default 4 MiB caused `OutOfRange: decoded
+    // message length too large` mid-stream on cross-hub transfers;
+    // boot.rs owns the exact bounded value.
     let mut client = InvocationClient::new(channel)
         .max_decoding_message_size(
-            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
         )
         .max_encoding_message_size(
-            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
         );
     let response = client
         .invoke_bidi(tonic::Request::new(ReceiverStream::new(up_rx)))
@@ -572,6 +582,7 @@ mod tests {
             ability: "echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
+            metadata: HashMap::new(),
         })
         .unwrap();
         let frame = build_envelope_open_frame(&request_json);
@@ -608,6 +619,11 @@ mod tests {
             ability: "fs.read".into(),
             args: vec![1, 2, 3, 255],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
+            metadata: {
+                let mut metadata = HashMap::new();
+                metadata.insert("x-easynet-delegation".to_string(), "proof".to_string());
+                metadata
+            },
         };
         let bytes = serde_json::to_vec(&original).unwrap();
         let recovered: InvokeRemoteUp = serde_json::from_slice(&bytes).unwrap();

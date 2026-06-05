@@ -3,7 +3,7 @@
 //! Centralises the "build Axon's runtime + install KeyResolver +
 //! install LedgerSink" recipe so that:
 //!
-//!   * production boot (`services::axon_serve::boot::start_axon_serve_sidecar`)
+//!   * production boot (`services::invocation_transport::start_daemon_invocation_transport`)
 //!     gets the runtime wired the same way every time, and
 //!   * integration tests can call the same factory with a tempdir
 //!     ledger + a stub trust anchor without duplicating the
@@ -45,7 +45,7 @@ pub fn build_local_runtime(
 
 /// Install daemon-specific admission and ledger adapters onto an
 /// already-created runtime. Daemon boot uses this when ability
-/// registration has to happen before `axon_serve` finishes loading
+/// registration has to happen before `invocation_transport` finishes loading
 /// the transport config and trust anchor.
 pub fn configure_local_runtime(
     runtime: &Arc<LocalRuntime>,
@@ -91,6 +91,7 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use easynet_axon::invocation::axiom::AuthorityBinding;
     use easynet_axon::invocation::{AgentIdentity, CausalContext, SubjectIdentity, UraProfile};
 
     #[test]
@@ -120,7 +121,7 @@ mod tests {
             UraProfile::EasynetStrictV2,
         );
         let binding = AxiomBinding {
-            caller,
+            caller: caller.clone(),
             callee,
             subject,
             invocation_nonce: [0u8; 16],
@@ -129,6 +130,10 @@ mod tests {
             callee_signature: None,
             signer_binding: None,
             host_attestation: Vec::new(),
+            ability_binding: "liangbing.chat".to_string(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: caller.ura.clone(),
+            },
         };
 
         assert_eq!(
@@ -140,11 +145,12 @@ mod tests {
             "easynet:///r/localhost/resource/dev/invocation/inv_123/history"
         );
 
+        let fallback_caller = AgentIdentity::new(
+            "easynet:///r/localhost/user/dev",
+            UraProfile::EasynetStrictV2,
+        );
         let fallback_binding = AxiomBinding {
-            caller: AgentIdentity::new(
-                "easynet:///r/localhost/user/dev",
-                UraProfile::EasynetStrictV2,
-            ),
+            caller: fallback_caller.clone(),
             callee: AgentIdentity::new("easynet:///r/localhost/hub", UraProfile::EasynetStrictV2),
             subject: SubjectIdentity::new(
                 "easynet:///r/localhost/user/dev",
@@ -156,6 +162,10 @@ mod tests {
             callee_signature: None,
             signer_binding: None,
             host_attestation: Vec::new(),
+            ability_binding: "chat".to_string(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: fallback_caller.ura.clone(),
+            },
         };
         assert_eq!(
             ledger_route_ura("chat", &fallback_binding),

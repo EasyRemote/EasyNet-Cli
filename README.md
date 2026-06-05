@@ -59,7 +59,7 @@ EasyNet gives every capability a **URA** (Universal Resource Address): one netwo
 cargo install --path .
 ```
 
-> **Note:** Requires a local or remote Axon runtime. The `easynet start` command auto-spawns one and joins the Hub.
+> **Note:** `easynet start` launches `easynet-daemon`, which embeds the Axon Invocation runtime and joins the Hub. Product/device paths should target the daemon, not a standalone Axon reference runtime.
 
 ## Quick Start
 
@@ -67,7 +67,7 @@ cargo install --path .
 
 ```bash
 easynet start --hub axon://hub.easynet.run:50084 --tenant myteam --foreground
-# ✓ Axon runtime started on http://127.0.0.1:50123
+# ✓ easynet-daemon started
 # ✓ Joined hub.easynet.run as alice-macbook
 ```
 

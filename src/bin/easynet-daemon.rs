@@ -9,9 +9,9 @@
 //
 // Current shape
 // -------------
-// - Always: spin up a tokio multi-thread runtime and run the
-//   Control-plane accept loop on it (UDS bind, control.json write,
-//   per-connection task spawn). This is the surface FFI clients dial.
+// - Always: spin up a tokio multi-thread runtime and run the daemon
+//   IPC surfaces on it: boot/status control, daemon Invocation, and
+//   runtime-dispatch for Axon local-tool delegation.
 // - Optional: if `_EASYNET_HB_ENDPOINT` is set in the environment,
 //   start the heartbeat loop on a dedicated OS thread. The heartbeat
 //   loop is sync today (uses ureq + ctrlc); embedding it on the tokio
@@ -29,8 +29,9 @@
 // What is NOT here yet
 // --------------------
 // - Schedule tick (PR-SCHED).
-// - System ability dispatch — proxy still returns the v1 skeleton
-//   error envelope (PR-INVOCATION-EXEC-UNITY).
+// - Nothing on control.sock dispatches product abilities. Product
+//   calls enter through daemon Invocation; Axon-owned delegated calls
+//   enter through runtime-dispatch.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -42,18 +43,21 @@ use std::time::Duration;
 use chrono::Utc;
 use easynet_cli::facade::cli::run_daemon;
 use easynet_cli::persistence::config;
-use easynet_cli::persistence::daemon_config::{default_config_path, DaemonConfig};
+use easynet_cli::persistence::daemon_config::{
+    default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig,
+};
 use easynet_cli::runtime::agents;
 use easynet_cli::runtime::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::runtime::execution::schedule::ScheduleService;
 use easynet_cli::runtime::gateway::NoopGateway;
-use easynet_cli::runtime::invocation::{CausalContext, Invocation};
+use easynet_cli::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
-use easynet_cli::services::control::ability_proxy::AbilityProxy;
 use easynet_cli::services::control::boot_events::{BootBus, BootEvent};
+use easynet_cli::services::control::discovery::DaemonIdentity;
+use easynet_cli::services::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 use easynet_cli::services::control::{discovery, runtime_dispatch, server};
 
 /// Heartbeat is opt-in: only spawn the legacy loop if the parent
@@ -91,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // v1: a Kernel wrapping a NoopGateway is sufficient for the
-    // proxy to construct Receipts. The daemon installs the
+    // loop scheduler and permission/session services. The daemon installs the
     // SubscriberBroker permission variant so a Client UI
     // connected to consent.subscribe sees real pending
     // requests when an agent dispatch is gated. (When no Client
@@ -179,12 +183,10 @@ async fn main() -> anyhow::Result<()> {
     // the registry off fresh sub-services (the pre-PR shape) would
     // give the IPC plane a parallel state not reachable from the
     // Kernel — silently breaking session.list / discuss.subscribe.
-    // Snapshot the sub-service handles we'll need for the tick
-    // runner BEFORE moving the kernel into the proxy. The schedule
-    // handle reads which schedules are due; the kernel handle is
-    // the C* unity entry — the tick runner constructs an Invocation
-    // and routes through Kernel::invoke (which admits a Session,
-    // dispatches the agent, terminates).
+    // Snapshot the sub-service handles used by the tick runner. The
+    // schedule handle reads due work; the kernel handle is the C*
+    // unity entry — the tick runner constructs a RuntimeInvocation and
+    // routes through Kernel::invoke.
     let schedule_for_tick = kernel.schedule_service();
     let kernel_for_tick: Arc<Kernel> = Arc::clone(&kernel);
 
@@ -216,8 +218,8 @@ async fn main() -> anyhow::Result<()> {
     //   * the registry's `device.agent.start` / `.stop` handler
     //     closures (capture an Arc clone via
     //     `agent_lifecycle_ability::register`), and
-    //   * the boot sidecar's post-`LocalRuntime` wiring
-    //     (`start_axon_serve_sidecar`) which populates the cell
+    //   * the Invocation transport's post-`LocalRuntime` wiring
+    //     (`start_daemon_invocation_transport`) which populates the cell
     //     ONCE with the actual `HotAgentRegistrar` after
     //     `LocalRuntime` + `dispatch_handle` are wired.
     //
@@ -254,37 +256,34 @@ async fn main() -> anyhow::Result<()> {
     // by the supervisor from credentials.json) or "self" as a
     // harness default; controls loopback-vs-remote routing.
     let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
-    let proxy = AbilityProxy::new_with_runtime(
-        Arc::clone(&kernel_api),
-        Arc::clone(&local_runtime),
-        resolver,
-    );
+    let adapter = RuntimeDispatchAdapter::new_with_runtime(Arc::clone(&local_runtime), resolver);
 
-    // RFC-003 PR-1 sidecar: gRPC InvocationServer (transport plane).
+    // Daemon RuntimeInvocation transport: gRPC InvocationServer.
     // Start this BEFORE any other daemon listener binds so
     // `daemon-config.toml` is validated at the top of the boot order
     // rather than after control/runtime-dispatch sockets already
     // exist. That keeps the PR-1 "load config before any listener
-    // bind" invariant honest even while axon_serve is still a soft
-    // dependency.
+    // bind" invariant honest whenever the feature-gated transport is compiled in.
     #[cfg(feature = "axon-pb")]
     {
-        boot_bus.emit_started("axon-serve-sidecar");
-        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(
-            Arc::clone(&local_runtime),
-            invocation_ledger,
-            Arc::clone(&hot_agent_registrar_cell),
-            Some(Arc::clone(&built_registry.plugin_runtime_manager)),
-        ) {
-            eprintln!("[axon-serve] sidecar boot failed: {e:#}");
-            boot_bus.emit_failed("axon-serve-sidecar", e.to_string());
+        boot_bus.emit_started("daemon-invocation-transport");
+        if let Err(e) =
+            easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
+                Arc::clone(&local_runtime),
+                invocation_ledger,
+                Arc::clone(&hot_agent_registrar_cell),
+                Some(Arc::clone(&built_registry.plugin_runtime_manager)),
+            )
+        {
+            eprintln!("[daemon-invocation] transport boot failed: {e:#}");
+            boot_bus.emit_failed("daemon-invocation-transport", e.to_string());
             return Err(e);
         }
-        boot_bus.emit_ok("axon-serve-sidecar");
+        boot_bus.emit_ok("daemon-invocation-transport");
     }
     #[cfg(not(feature = "axon-pb"))]
     {
-        boot_bus.emit_skipped("axon-serve-sidecar");
+        boot_bus.emit_skipped("daemon-invocation-transport");
     }
 
     // Optional sidecar: heartbeat. Run on a dedicated OS thread
@@ -311,7 +310,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Schedule tick runner. Fires due schedules every TICK_PERIOD
-    // by constructing a real Invocation per fire and routing it
+    // by constructing a RuntimeInvocation adapter record per fire and routing it
     // through Kernel::invoke. The Kernel admits the Session,
     // dispatches the agent, and terminates — Clients subscribed
     // to device.session.attach see the same lifecycle they would
@@ -320,18 +319,26 @@ async fn main() -> anyhow::Result<()> {
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
     boot_bus.emit_ok("schedule-tick");
 
-    // Step-3 sidecar: runtime-dispatch UDS responder. Listens on a
+    // Step-3 runtime-dispatch UDS responder. Listens on a
     // separate socket from `control.sock` because the runtime side
     // talks newline-delimited single-line JSON, while the CLI/MCP IPC
     // server speaks length-delimited frames. axon-runtime opens this
     // socket only when it has resolved a `runtime_local_tools` entry
     // whose `dispatch_endpoint` points at it — i.e., one of the
     // abilities the daemon registered via `runtime.register_local_tool`
-    // at boot. A failure here logs but does not tear down the daemon.
+    // at boot. Binding failure is a boot failure because a daemon that
+    // cannot accept runtime-local delegation is not fully Ready.
     boot_bus.emit_started("runtime-dispatch");
-    let dispatch_proxy = proxy.clone();
+    let runtime_dispatch_server = match runtime_dispatch::RuntimeDispatchServer::bind().await {
+        Ok(server) => server,
+        Err(err) => {
+            boot_bus.emit_failed("runtime-dispatch", err.to_string());
+            return Err(err);
+        }
+    };
+    let dispatch_adapter = adapter.clone();
     tokio::spawn(async move {
-        if let Err(e) = runtime_dispatch::run(dispatch_proxy).await {
+        if let Err(e) = runtime_dispatch_server.serve(dispatch_adapter).await {
             eprintln!("[runtime-dispatch] responder exited: {e:#}");
         }
     });
@@ -377,20 +384,23 @@ async fn main() -> anyhow::Result<()> {
             return Err(err);
         }
     };
-    if let Err(err) = control_server.write_discovery(Some(pages_port)) {
+    let runtime_discovery = match ready_runtime_discovery() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            boot_bus.emit_failed("control-discovery", err.to_string());
+            return Err(err);
+        }
+    };
+    if let Err(err) = control_server.write_ready_discovery(Some(pages_port), runtime_discovery) {
         boot_bus.emit_failed("control-discovery", err.to_string());
         return Err(err);
     }
 
-    // The control server has been accepting connections since stage
-    // "control-server". This stage flips it from BOOTING mode (where
-    // every request except `system.watch_boot` answers with
-    // code=BOOTING) to fully dispatching mode by injecting the ready
-    // proxy. Naming this "accept-invokes" rather than another
-    // "control-ready" avoids the impression of two ready signals.
-    boot_bus.emit_started("accept-invokes");
-    control_server.state().set_ready(proxy).await;
-    boot_bus.emit_ok("accept-invokes");
+    // The control server remains a boot/status socket. Product
+    // ability calls use daemon.sock Invocation; `runtime-dispatch`
+    // remains the daemon-internal bridge for Axon local tool calls.
+    boot_bus.emit_started("control-ready");
+    boot_bus.emit_ok("control-ready");
     boot_bus.emit_ready();
 
     wait_for_shutdown_signal().await;
@@ -414,6 +424,22 @@ fn resolve_pages_start_port() -> anyhow::Result<u16> {
             anyhow::bail!("EASYNET_PAGES_PORT is not valid UTF-8")
         }
     }
+}
+
+fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> {
+    let config = DaemonConfig::load(&default_config_path())?;
+    let node_id = std::env::var("EASYNET_NODE_ID")
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty());
+    Ok(server::ControlRuntimeDiscovery {
+        invocation_endpoint: resolved_local_uds_path_with_env_override(),
+        daemon_identity: DaemonIdentity {
+            mode: config.mode().as_str().to_string(),
+            realm: config.realm().to_string(),
+            node_id,
+        },
+    })
 }
 
 fn media_resource_bootstrap_enabled() -> bool {
@@ -482,7 +508,7 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
 
 /// Spawn the schedule tick runner. Every `TICK_PERIOD` it asks the
 /// ScheduleService for due fires and routes each through
-/// `Kernel::invoke` as a real Invocation:
+/// `Kernel::invoke` as a RuntimeInvocation adapter record:
 ///
 ///   ability       = "<target_agent>.chat"
 ///   caller        = local node URA
@@ -567,12 +593,12 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     &format!("schedule.{}", fire.schedule_id.as_str()),
                     "",
                 );
-                let inv = match Invocation::try_new(
+                let inv = match RuntimeInvocation::try_new(
                     local_device_ura.clone(),
                     local_device_ura,
                     format!("{}.chat", agent),
                     schedule_subject_ura,
-                    CausalContext::Null,
+                    RuntimeCausalContext::Null,
                     serde_json::json!({"prompt": prompt}),
                 ) {
                     Ok(inv) => inv,

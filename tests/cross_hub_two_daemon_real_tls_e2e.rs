@@ -16,7 +16,7 @@
 // commit 6/N plugs `CrossHubDialer` into the daemon's boot path. The
 // in-process e2e in commit 5/N (`cross_hub_forward_invoke_e2e_in_process`)
 // exercises the routing chain through a `ForwardingPeerClient`
-// fixture — it does NOT prove the binary's `start_axon_serve_sidecar`
+// fixture — it does NOT prove the binary's `start_daemon_invocation_transport`
 // actually constructs and threads the dialer end-to-end.
 //
 // This integration test is the operator-side smoke-test analog of
@@ -66,7 +66,7 @@ use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::services::axon_serve::federation_wrappers::{
+use easynet_cli::services::invocation_transport::federation_wrappers::{
     ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
 };
 

@@ -54,7 +54,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
 
-use crate::services::axon_serve::ProtoEnvelope;
+use crate::services::invocation_transport::ProtoEnvelope;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 
 /// Validate a `--node` argument as a canonical EasyNet device or hub URA.

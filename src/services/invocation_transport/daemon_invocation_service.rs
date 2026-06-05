@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — DaemonInvocationService
+// EasyNet CLI — invocation_transport — DaemonInvocationService
 // ===================================================
 //
-// File: src/services/axon_serve/daemon_invocation_service.rs
+// File: src/services/invocation_transport/daemon_invocation_service.rs
 // Description: Concrete implementation of axon's
 //              `pb::axon::v1::invocation_server::Invocation` trait
 //              for the new daemon transport plane.
@@ -109,7 +109,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -130,8 +130,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::services::axon_serve::admission_facade::AdmissionFacade;
-use crate::services::axon_serve::federation_wrappers::{
+use crate::services::federated_peers_cell::SharedFederatedPeers;
+use crate::services::federation_client::FederationClient;
+use crate::services::invocation_transport::admission_facade::AdmissionFacade;
+use crate::services::invocation_transport::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
     ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
     ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES,
@@ -140,23 +142,26 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
-use crate::services::axon_serve::invoke_remote_initiator::{
+use crate::services::invocation_transport::invoke_remote_initiator::{
     call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionContentEnvelope,
     SessionDispatch, SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
-use crate::services::axon_serve::list_user_pubkeys::{
+use crate::services::invocation_transport::list_user_pubkeys::{
     handle as handle_list_user_pubkeys, ABILITY_SELF_LIST_USER_PUBKEYS,
 };
-use crate::services::axon_serve::register_device_pubkey::{
+use crate::services::invocation_transport::register_device_pubkey::{
     handle as handle_register_device_pubkey, parse_realm_from_ura,
     ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
 };
-use crate::services::axon_serve::revoke_user_pubkey::{
+use crate::services::invocation_transport::revoke_user_pubkey::{
     handle as handle_revoke_user_pubkey, ABILITY_SELF_REVOKE_USER_PUBKEY,
 };
-use crate::services::axon_serve::session_initiator::{SessionSigningSeed, ABILITY_SELF_SESSION};
-use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_client::FederationClient;
+use crate::services::invocation_transport::session_initiator::{
+    SessionSigningSeed, ABILITY_SELF_SESSION,
+};
+
+const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
+const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
 use crate::services::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
 };
@@ -257,7 +262,7 @@ pub struct DaemonInvocationService {
     /// `Status::failed_precondition` (the daemon was booted without
     /// the trust-write surface — typically a smoke-test setup).
     /// Production daemons always attach one at boot from
-    /// `start_axon_serve_sidecar`.
+    /// `start_daemon_invocation_transport`.
     register_pubkey: Option<RegisterPubkeyContext>,
     /// Daemon realm carried explicitly for `<self>.session`
     /// admission-time cross-realm rejection. `None` means the
@@ -304,7 +309,7 @@ pub struct DaemonInvocationService {
     /// (the default), the federation dispatcher refuses to dial a
     /// peer hub whose endpoint came from an observed
     /// `federated_directory` entry — see
-    /// [`crate::services::axon_serve::hub_resolver`] for the
+    /// [`crate::services::invocation_transport::hub_resolver`] for the
     /// threat model. Wiring lands inline rather than as a `Builder`
     /// because the flag's value never changes within a daemon
     /// lifetime (no SIGHUP-driven runtime toggle): the security
@@ -335,9 +340,11 @@ pub struct DaemonInvocationService {
     /// `None` ⇒ this daemon owns its own PresenceRegistry
     /// (hub or both mode), so the existing dispatch arm runs
     /// unchanged. Boot wires `Some` only under
-    /// `mode = "device"` per `boot.rs::start_axon_serve_sidecar`.
+    /// `mode = "device"` per `boot.rs::start_daemon_invocation_transport`.
     escalation: Option<
-        std::sync::Arc<crate::services::axon_serve::session_escalation::SessionEscalationHandle>,
+        std::sync::Arc<
+            crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
+        >,
     >,
     /// Workspace-scoped invocation ledger. Boot wires this to
     /// `<ledger_dir>/invocations.redb`; tests may inject a temp
@@ -479,7 +486,7 @@ impl DaemonInvocationService {
                             // stable snake_case wire label; no Debug
                             // double-quoting at the op-event boundary.
                             crate::op_event!(
-                                component = axon_serve,
+                                component = daemon_invocation,
                                 kind = presence_offline_cancel,
                                 target_ura = ura,
                                 reason = reason,
@@ -562,7 +569,7 @@ impl DaemonInvocationService {
     pub fn with_session_escalation(
         mut self,
         handle: std::sync::Arc<
-            crate::services::axon_serve::session_escalation::SessionEscalationHandle,
+            crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
         >,
     ) -> Self {
         self.escalation = Some(handle);
@@ -657,7 +664,7 @@ impl DaemonInvocationService {
     /// reloads (operator editing `[daemon.federated_peers]`)
     /// republish into the dispatcher's view within ~50ms — same
     /// cadence as the trust-anchor reload landed by commit 9/N.
-    /// Production `start_axon_serve_sidecar` uses this builder; the
+    /// Production `start_daemon_invocation_transport` uses this builder; the
     /// SIGHUP task in `boot.rs` calls `cell.replace(...)` on
     /// successful TOML reload.
     #[must_use]
@@ -808,7 +815,7 @@ impl DaemonInvocationService {
                 "true"
             };
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = self_target_miss_for_agent_ura,
                 target_ura = target_ura,
                 realm = agent_target.realm.as_str(),
@@ -1153,7 +1160,7 @@ impl Invocation for DaemonInvocationService {
         let frame0 = match up.next().await {
             Some(Ok(f)) => f,
             Some(Err(err)) => {
-                return Err(Status::internal(format!("InvokeBidi frame 0 recv: {err}")))
+                return Err(Status::internal(format!("InvokeBidi frame 0 recv: {err}")));
             }
             None => return Err(Status::invalid_argument("InvokeBidi: empty up stream")),
         };
@@ -1344,7 +1351,7 @@ impl DaemonInvocationService {
                 Err(err) => {
                     let err_msg = format!("{err}");
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = ledger_record_skipped,
                         shape = "unary",
                         error = err_msg,
@@ -1355,7 +1362,7 @@ impl DaemonInvocationService {
         if let Err(err) = ledger.put(&record) {
             let err_msg = format!("{err}");
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = ledger_write_failed,
                 shape = "unary",
                 invocation_ura = record.invocation_ura,
@@ -1451,7 +1458,7 @@ impl DaemonInvocationService {
             );
         }
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = dispatch_local_rpc_fallback_axon_first,
             ability = ability,
         );
@@ -1471,7 +1478,7 @@ impl DaemonInvocationService {
                 return (
                     Err(status_from_axon_invoke_error("Invoke", ability, err)),
                     false,
-                )
+                );
             }
         };
         let outcome =
@@ -1601,7 +1608,7 @@ impl DaemonInvocationService {
     /// this hub's trust set" from a network or admission
     /// failure (which arrive as `unavailable` /
     /// `permission_denied`). The resolver then maps both into
-    /// `unknown_agent_ura` for INV-4 fail-closed admission, but
+    /// `CALLER_KEY_NOT_FOUND` for INV-4 fail-closed admission, but
     /// the wire-level distinction is useful for operator audit
     /// and matches the rest of the federation.* surface where
     /// `not_found` means "no entry" and `failed_precondition`
@@ -1816,7 +1823,7 @@ impl DaemonInvocationService {
         for peer_hub_url in peer_hub_urls {
             let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = proxy_list_user_devices_skip_untrusted_peer,
                     peer_hub_url = peer_hub_url,
                 );
@@ -1824,7 +1831,7 @@ impl DaemonInvocationService {
             };
             let Some(peer_realm) = peer_entry.origin_tenant_id.clone() else {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = proxy_list_user_devices_skip_peer_missing_origin_tenant,
                     peer_hub_url = peer_hub_url,
                 );
@@ -1879,7 +1886,7 @@ impl DaemonInvocationService {
                 Err(err) => {
                     let err_msg = err.to_string();
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = proxy_list_user_devices_fanout_error,
                         error = err_msg,
                     );
@@ -1942,7 +1949,7 @@ impl DaemonInvocationService {
         for peer_hub_url in peer_hub_urls {
             let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = proxy_resolve_skip_untrusted_peer,
                     peer_hub_url = peer_hub_url,
                 );
@@ -2006,7 +2013,7 @@ impl DaemonInvocationService {
                 Err(err) => {
                     let err_msg = err.to_string();
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = proxy_resolve_fanout_error,
                         error = err_msg,
                     );
@@ -2129,7 +2136,7 @@ impl DaemonInvocationService {
         let target_tenant_field = target_tenant.as_deref().unwrap_or("<none>");
         let local_tenant_field = local_tenant.unwrap_or("<none>");
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_dispatch,
             target_ura = request.target_ura,
             target_tenant = target_tenant_field,
@@ -2300,8 +2307,9 @@ impl DaemonInvocationService {
                                                 Err(err) => {
                                                     let err_msg = format!("{err}");
                                                     crate::op_event!(
-                                                        component = axon_serve,
-                                                        kind = forward_invoke_peer_response_malformed,
+                                                        component = daemon_invocation,
+                                                        kind =
+                                                            forward_invoke_peer_response_malformed,
                                                         scope = "same_tenant_fanout",
                                                         error = err_msg,
                                                         message = "forwarding raw bytes for forward-compat",
@@ -2322,7 +2330,7 @@ impl DaemonInvocationService {
                                     Err(err) => {
                                         let err_msg = format!("{err}");
                                         crate::op_event!(
-                                            component = axon_serve,
+                                            component = daemon_invocation,
                                             kind = forward_invoke_same_tenant_cross_hub_miss,
                                             peer_realm = peer_realm,
                                             peer_hub_endpoint = peer_hub_endpoint,
@@ -2416,8 +2424,9 @@ impl DaemonInvocationService {
                                                 Err(err) => {
                                                     let err_msg = format!("{err}");
                                                     crate::op_event!(
-                                                        component = axon_serve,
-                                                        kind = forward_invoke_peer_response_malformed,
+                                                        component = daemon_invocation,
+                                                        kind =
+                                                            forward_invoke_peer_response_malformed,
                                                         scope = "same_tenant_fanout",
                                                         error = err_msg,
                                                         message = "forwarding raw bytes for forward-compat",
@@ -2438,7 +2447,7 @@ impl DaemonInvocationService {
                                     Err(err) => {
                                         let err_msg = format!("{err}");
                                         crate::op_event!(
-                                            component = axon_serve,
+                                            component = daemon_invocation,
                                             kind = forward_invoke_same_tenant_cross_hub_miss,
                                             peer_realm = peer_realm,
                                             peer_hub_endpoint = peer_hub_endpoint,
@@ -2484,17 +2493,17 @@ impl DaemonInvocationService {
         // to the next call, matching the admission gate's per-call
         // snapshot pattern. See `hub_resolver.rs` for the precedence
         // contract and the per-source rationale.
-        let resolution = crate::services::axon_serve::hub_resolver::HubResolver::new(
+        let resolution = crate::services::invocation_transport::hub_resolver::HubResolver::new(
             &self.federated_peers,
             &self.federated_directory,
             self.allow_directory_auto_route,
         )
         .resolve(&target_tenant, &request.target_ura);
         let target_hub_endpoint: String = match resolution {
-            crate::services::axon_serve::hub_resolver::HubResolution::Static { hub_endpoint } => {
+            crate::services::invocation_transport::hub_resolver::HubResolution::Static { hub_endpoint } => {
                 hub_endpoint
             }
-            crate::services::axon_serve::hub_resolver::HubResolution::DirectoryFallback {
+            crate::services::invocation_transport::hub_resolver::HubResolution::DirectoryFallback {
                 hub_endpoint,
                 target_ura,
             } => {
@@ -2504,7 +2513,7 @@ impl DaemonInvocationService {
                 // instead of declaring tenants explicitly in
                 // daemon-config.toml.
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = auto_route,
                     source = "federated_directory",
                     target_tenant = target_tenant,
@@ -2513,7 +2522,7 @@ impl DaemonInvocationService {
                 );
                 hub_endpoint
             }
-            crate::services::axon_serve::hub_resolver::HubResolution::Offline => {
+            crate::services::invocation_transport::hub_resolver::HubResolution::Offline => {
                 record_offline_receipt();
                 return Err(Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -2591,7 +2600,7 @@ impl DaemonInvocationService {
                         Err(err) => {
                             let err_msg = format!("{err}");
                             crate::op_event!(
-                                component = axon_serve,
+                                component = daemon_invocation,
                                 kind = forward_invoke_peer_response_malformed,
                                 scope = "cross_tenant",
                                 error = err_msg,
@@ -2609,7 +2618,7 @@ impl DaemonInvocationService {
                     };
                 let result_bytes_len = peer_body.result_bytes.len();
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = forward_invoke_cross_tenant_ok,
                     target_ura = request.target_ura,
                     target_hub_endpoint = target_hub_endpoint,
@@ -2635,7 +2644,7 @@ impl DaemonInvocationService {
                 // by hand.
                 let err_msg = format!("{err}");
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = forward_invoke_peer_dial_failed,
                     target_ura = request.target_ura,
                     target_hub_endpoint = target_hub_endpoint,
@@ -2737,6 +2746,7 @@ impl DaemonInvocationService {
             &dispatch_ability,
             &inner_payload.args_bytes,
             SessionContentEnvelope::plaintext_json(),
+            HashMap::new(),
         )?;
 
         match sender.try_send(Ok(dispatch_frame)) {
@@ -2764,7 +2774,7 @@ impl DaemonInvocationService {
         }
 
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_local_presence_dispatch_awaiting_reply,
             target_ura = request.target_ura,
             ability = inner_payload.ability,
@@ -2794,7 +2804,7 @@ impl DaemonInvocationService {
         let result_bytes_len = result_bytes.len();
         let error_field = error.as_deref().unwrap_or("<none>");
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_local_presence_dispatch_result,
             target_ura = request.target_ura,
             ability = inner_payload.ability,
@@ -2857,7 +2867,7 @@ impl DaemonInvocationService {
         }
 
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_self_target_dispatch,
             target_ura = request.target_ura,
             ability = inner_payload.ability,
@@ -2887,7 +2897,7 @@ impl DaemonInvocationService {
         }
         if result_bytes.is_empty() {
             crate::op_event!(
-                component = axon_serve,
+                component = daemon_invocation,
                 kind = forward_invoke_self_target_empty_result,
                 target_ura = request.target_ura,
                 ability = inner_payload.ability,
@@ -2935,7 +2945,7 @@ impl DaemonInvocationService {
         args: &[u8],
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = invoke_remote_self_target_dispatch,
             subject = subject_device,
             ability = ability,
@@ -3023,6 +3033,7 @@ impl DaemonInvocationService {
             remote_bidi_subject_ura(envelope_open).as_deref(),
             ability,
             &envelope_open.initial_args,
+            envelope_open.metadata.clone(),
         )?;
         match sender.try_send(Ok(open_frame)) {
             Ok(()) => {}
@@ -3049,7 +3060,7 @@ impl DaemonInvocationService {
         }
 
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = invoke_bidi_remote_bridge,
             ability = ability,
             target_ura = target_ura,
@@ -3271,7 +3282,7 @@ impl DaemonInvocationService {
                         &[],
                         true,
                     ))),
-                    "axon_serve",
+                    "daemon_invocation",
                     &format!("remote_bidi_eof call_id={call_id}"),
                 );
             }
@@ -3306,7 +3317,7 @@ impl DaemonInvocationService {
         mut up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = invoke_bidi_local_runtime_dispatch,
             ability = ability,
         );
@@ -3390,7 +3401,7 @@ impl DaemonInvocationService {
                 if frame.sequence != expected_up_sequence {
                     let frame_sequence = frame.sequence;
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = invoke_bidi_frame_sequence_violated,
                         reason = REASON_BIDI_FRAME_SEQUENCE,
                         expected = expected_up_sequence,
@@ -3719,6 +3730,7 @@ impl DaemonInvocationService {
                         let chunk = InvokeStreamChunk {
                             content_type,
                             payload: frame.payload,
+                            terminal,
                             ..InvokeStreamChunk::default()
                         };
                         if tx.send(Ok(chunk)).await.is_err() || terminal {
@@ -3793,6 +3805,7 @@ impl DaemonInvocationService {
             ability,
             args,
             args_content_envelope,
+            metadata,
         } = request;
 
         // Postel-boundary: peer hubs may pass a `/agent/<bare-uuid>`
@@ -3801,6 +3814,33 @@ impl DaemonInvocationService {
         // lookup. New clients always emit canonical; this is
         // transitional compatibility.
         let subject_device = crate::ura::canonicalize_presence_key(&subject_device);
+        let inner_subject = subject_ura
+            .as_deref()
+            .filter(|subject| !subject.trim().is_empty())
+            .unwrap_or(subject_device.as_str());
+        let outer_caller = envelope_open
+            .envelope
+            .as_ref()
+            .and_then(|envelope| envelope.caller.clone())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "<self>.invoke_remote: admitted frame-0 envelope is missing caller",
+                )
+            })?;
+        let inner_envelope = Envelope {
+            caller: Some(outer_caller),
+            callee: Some(AgentIdentity {
+                ura: subject_device.clone(),
+                ..AgentIdentity::default()
+            }),
+            subject: Some(SubjectIdentity {
+                ura: inner_subject.to_string(),
+                ..SubjectIdentity::default()
+            }),
+            ..Envelope::default()
+        };
+        self.admission
+            .verify_delegation_for_envelope(&inner_envelope, &ability, &metadata)?;
 
         // ── Phase 4: Axon-routed **self-target** dispatch ──────────
         //
@@ -3908,6 +3948,7 @@ impl DaemonInvocationService {
             &dispatch_ability,
             &args,
             args_content_envelope,
+            metadata,
         )?;
         match target_sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
@@ -3977,7 +4018,7 @@ impl DaemonInvocationService {
                             &[],
                             true,
                         ))),
-                        "axon_serve",
+                        "daemon_invocation",
                         &format!("invoke_remote_stream_cancel call_id={call_id}"),
                     );
                 }
@@ -4079,7 +4120,7 @@ impl DaemonInvocationService {
         let registration = self.presence.insert_tracked(caller_ura.clone(), down_tx);
         let displaced_prior = registration.displaced.is_some();
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = self_session_admitted,
             caller = caller_ura,
             displaced_prior = displaced_prior,
@@ -4186,6 +4227,7 @@ fn build_bidi_terminal_receipt_with_payload(
             reason: reason.into(),
             payload: payload_bytes,
             payload_content_type,
+            cleanup_complete: true,
             ..InvocationReceipt::default()
         })),
         ..InvokeBidiDown::default()
@@ -4349,8 +4391,7 @@ fn map_local_bidi_handler_frame(
             Some("stdout") => {
                 let Some(data_b64) = value.get("data").and_then(|field| field.as_str()) else {
                     return LocalBidiHandlerFrame::ProtocolFailure(
-                        "InvokeBidi local-dispatcher: PTY stdout frame missing `data`"
-                            .to_string(),
+                        "InvokeBidi local-dispatcher: PTY stdout frame missing `data`".to_string(),
                     );
                 };
                 let raw = match B64.decode(data_b64) {
@@ -4358,7 +4399,7 @@ fn map_local_bidi_handler_frame(
                     Err(err) => {
                         return LocalBidiHandlerFrame::ProtocolFailure(format!(
                             "InvokeBidi local-runtime: PTY stdout frame base64 decode failed: {err}"
-                        ))
+                        ));
                     }
                 };
                 LocalBidiHandlerFrame::Forward(InvokeBidiDown {
@@ -4386,7 +4427,7 @@ fn map_local_bidi_handler_frame(
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = invoke_bidi_local_runtime_warning,
                         handler = "pty",
                         message = message,
@@ -4410,7 +4451,7 @@ fn map_local_bidi_handler_frame(
                     Err(err) => {
                         return LocalBidiHandlerFrame::ProtocolFailure(format!(
                             "InvokeBidi local-runtime: file_transfer chunk frame base64 decode failed: {err}"
-                        ))
+                        ));
                     }
                 };
                 LocalBidiHandlerFrame::Forward(InvokeBidiDown {
@@ -4423,13 +4464,13 @@ fn map_local_bidi_handler_frame(
                 })
             }
             Some("complete") => match serde_json::to_vec(value) {
-                Ok(payload) => LocalBidiHandlerFrame::Terminal(
-                    build_bidi_terminal_receipt_with_payload(
+                Ok(payload) => {
+                    LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload(
                         easynet_axon::invocation::InvocationState::Completed,
                         String::new(),
                         Some((payload, "application/json")),
-                    ),
-                ),
+                    ))
+                }
                 Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
                     "InvokeBidi local-runtime: encode file_transfer completion receipt payload failed: {err}"
                 )),
@@ -4449,13 +4490,13 @@ fn map_local_bidi_handler_frame(
                     _ => "file_transfer handler returned error".to_string(),
                 };
                 match serde_json::to_vec(value) {
-                    Ok(payload) => LocalBidiHandlerFrame::Terminal(
-                        build_bidi_terminal_receipt_with_payload(
+                    Ok(payload) => {
+                        LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload(
                             easynet_axon::invocation::InvocationState::Failed,
                             reason,
                             Some((payload, "application/json")),
-                        ),
-                    ),
+                        ))
+                    }
                     Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
                         "InvokeBidi local-runtime: encode file_transfer error receipt payload failed: {err}"
                     )),
@@ -4464,7 +4505,7 @@ fn map_local_bidi_handler_frame(
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
                     crate::op_event!(
-                        component = axon_serve,
+                        component = daemon_invocation,
                         kind = invoke_bidi_local_runtime_warning,
                         handler = "file_transfer",
                         message = message,
@@ -4647,7 +4688,7 @@ impl DaemonInvocationService {
     async fn escalate_forward_invoke(
         &self,
         handle: &std::sync::Arc<
-            crate::services::axon_serve::session_escalation::SessionEscalationHandle,
+            crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
         >,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
@@ -4691,8 +4732,9 @@ impl DaemonInvocationService {
     /// `Invoke` RPC consults, then maps the result into the typed
     /// `RequestOutcome` shape.
     ///
-    /// Spec scope (PR-N6 v1): forwards
-    /// `federation.forward_invoke` only. Other ability names return
+    /// Spec scope (PR-N6 v1): forwards `federation.forward_invoke`
+    /// plus the hosted-agent self-advertise repair path
+    /// (`federation.advertise_agent`). Other ability names return
     /// `PermissionDenied` so the device-side caller surfaces a
     /// structured error instead of a silent timeout — PR-N6 v2 may
     /// widen this set once a per-ability admission policy is
@@ -4736,11 +4778,23 @@ impl DaemonInvocationService {
                     Err(status) => map_status_to_session_request_error(status),
                 }
             }
+            ABILITY_FEDERATION_ADVERTISE_AGENT => {
+                match self.dispatch_federation_advertise_agent(args) {
+                    Ok(response) => {
+                        let body = response.into_inner();
+                        RequestOutcome::Ok {
+                            result_bytes: body.result,
+                        }
+                    }
+                    Err(status) => map_status_to_session_request_error(status),
+                }
+            }
             other => RequestOutcome::Err {
                 error: SessionRequestError::PermissionDenied {
                     reason: format!(
                         "session_request: ability `{other}` is not yet routed; \
-                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}` is wired in PR-N6 v1"
+                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}` and \
+                         `{ABILITY_FEDERATION_ADVERTISE_AGENT}` are wired in PR-N6 v1"
                     ),
                 },
             },
@@ -5163,7 +5217,7 @@ async fn drain_session_up_stream(
                 // string, so we converged on the op_event shape.
                 let id_hex = call_id_hex(&call_id);
                 crate::op_event!(
-                    component = axon_serve,
+                    component = daemon_invocation,
                     kind = session_accept_request_frame,
                     call_id = id_hex,
                     ability = ability,
@@ -5498,7 +5552,7 @@ pub(crate) fn build_peer_envelope(
         Status::invalid_argument(format!("peer envelope subject URA is invalid: {err}"))
     })?;
 
-    let profile = crate::services::axon_serve::DEFAULT_URA_PROFILE.to_string();
+    let profile = crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string();
     forwarded.caller = Some(AgentIdentity {
         ura: caller_ura,
         profile: profile.clone(),
@@ -5590,7 +5644,7 @@ fn sign_peer_request_envelope(
     // than the trust-anchor entry (sourced from `identity.json`).
     // Peer hubs verifying via `federation.resolve_key` saw a
     // signature/key mismatch and rejected with
-    // `AXON_CALLER_SIGNATURE_INVALID:caller_signature_invalid`.
+    // `CALLER_SIGNATURE_INVALID:caller_signature_invalid`.
     //
     // Read the on-disk seed in production so the signing key
     // matches the pubkey the trust anchor advertises. Tests stage
@@ -5724,7 +5778,7 @@ pub(crate) fn read_hub_identity_seed(realm: &str) -> Result<[u8; 32], String> {
 // now observable via:
 //   * the dispatched invocation's `InvocationLedger` row, written
 //     when the target reaches a terminal state, and
-//   * `op_event!(component = axon_serve, kind = forward_invoke_*)`
+//   * `op_event!(component = daemon_invocation, kind = forward_invoke_*)`
 //     log lines for transport-level miss / fail diagnostics.
 //
 // The trade-off (documented in src/services/mod.rs): admission-time
@@ -5745,6 +5799,7 @@ fn build_invoke_remote_dispatch_frame(
     ability: &str,
     args: &[u8],
     args_content_envelope: SessionContentEnvelope,
+    metadata: HashMap<String, String>,
 ) -> Result<DispatchFrame, Status> {
     let payload = SessionDispatch::Dispatch {
         call_id,
@@ -5755,6 +5810,7 @@ fn build_invoke_remote_dispatch_frame(
         ability: ability.to_string(),
         args: args.to_vec(),
         args_content_envelope,
+        metadata,
     };
     let bytes = serde_json::to_vec(&payload).map_err(|err| {
         Status::internal(format!(
@@ -5784,6 +5840,7 @@ fn build_remote_bidi_open_dispatch_frame(
     subject_ura: Option<&str>,
     ability: &str,
     args: &[u8],
+    metadata: HashMap<String, String>,
 ) -> Result<DispatchFrame, Status> {
     let payload = SessionDispatch::BidiOpen {
         call_id,
@@ -5794,6 +5851,7 @@ fn build_remote_bidi_open_dispatch_frame(
         ability: ability.to_string(),
         args: args.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
+        metadata,
     };
     let bytes = serde_json::to_vec(&payload).map_err(|err| {
         Status::internal(format!(
@@ -5985,6 +6043,7 @@ fn build_unary_ledger_record(
     let invocation_ura =
         invocation_resource_ura(&realm, &request_id, &subject_ura, &callee_ura, &caller_ura)?;
     let elapsed_ms = completed_unix_ms.saturating_sub(started_unix_ms) as u64;
+    let authority_binding = ledger_authority_binding_for_request(request);
 
     let mut builder = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
         .invocation_ura(invocation_ura)
@@ -6000,6 +6059,7 @@ fn build_unary_ledger_record(
         .completed_unix_ms(completed_unix_ms)
         .elapsed_ms(elapsed_ms)
         .causal_links(causal_links_from_envelope(envelope))
+        .authority_binding(authority_binding)
         .args(easynet_axon::invocation::LedgerEventPayload::digest(
             "application/octet-stream",
             &request.arguments,
@@ -6059,6 +6119,39 @@ fn build_unary_ledger_record(
     }
 
     Ok(builder.build()?)
+}
+
+fn ledger_authority_binding_for_request(request: &InvokeRequest) -> &'static str {
+    if bootstrap_authority_ability_for_ledger(&request.function_name) {
+        "bootstrap"
+    } else if request
+        .metadata
+        .get(DELEGATION_METADATA_KEY)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        "delegated"
+    } else if request
+        .metadata
+        .get(SESSION_AUTHORITY_METADATA_KEY)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        "session"
+    } else {
+        "self"
+    }
+}
+
+fn bootstrap_authority_ability_for_ledger(function: &str) -> bool {
+    matches!(
+        function,
+        ABILITY_SELF_REGISTER_DEVICE_PUBKEY
+            | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
+            | ABILITY_FEDERATION_ADVERTISE_AGENT
+            | ABILITY_SELF_LIST_USER_PUBKEYS
+            | ABILITY_SELF_REVOKE_USER_PUBKEY
+    )
 }
 
 fn causal_links_from_envelope(
@@ -6319,6 +6412,48 @@ mod tests {
         );
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
             .with_hub_signing_seed([0x11; 32])
+    }
+
+    fn signed_delegation_metadata_for_test(
+        signer: &ed25519_dalek::SigningKey,
+        issuer_ura: &str,
+        subject_ura: &str,
+        caller_ura: &str,
+        audience: &str,
+        scopes: &[&str],
+    ) -> String {
+        use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+        use ed25519_dalek::Signer as _;
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct DelegationPayload {
+            issuer_ura: String,
+            subject_ura: String,
+            caller_ura: String,
+            audience: String,
+            scopes: Vec<String>,
+            issued_at_ms: i64,
+            expires_at_ms: i64,
+        }
+
+        let payload = DelegationPayload {
+            issuer_ura: issuer_ura.to_string(),
+            subject_ura: subject_ura.to_string(),
+            caller_ura: caller_ura.to_string(),
+            audience: audience.to_string(),
+            scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 4_102_444_800_000,
+        };
+        let payload_bytes = serde_json::to_vec(&payload).expect("delegation payload");
+        let signature = signer.sign(&payload_bytes);
+        let raw = serde_json::json!({
+            "payload": serde_json::from_slice::<serde_json::Value>(&payload_bytes)
+                .expect("payload JSON value"),
+            "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+        });
+        BASE64_STANDARD.encode(serde_json::to_vec(&raw).expect("delegation proof"))
     }
 
     fn make_quota_service_for_device_caller(caller_ura: &str, cap: i32) -> DaemonInvocationService {
@@ -6630,6 +6765,7 @@ mod tests {
             "easynet:///r/test-realm/ability/hub.federation.resolve"
         );
         assert_eq!(record.state, "completed");
+        assert_eq!(record.authority_binding, "self");
         assert!(matches!(
             record.args,
             easynet_axon::invocation::LedgerEventPayload::Digest { .. }
@@ -6701,6 +6837,38 @@ mod tests {
         assert_eq!(
             record.error.as_ref().map(|err| err.code.as_str()),
             Some("invalidargument")
+        );
+    }
+
+    #[test]
+    fn ledger_authority_binding_classifies_bootstrap_delegated_session_and_self() {
+        let bootstrap = invoke_request(ABILITY_SELF_REGISTER_DEVICE_PUBKEY, "{}").into_inner();
+        assert_eq!(
+            ledger_authority_binding_for_request(&bootstrap),
+            "bootstrap"
+        );
+
+        let mut delegated = invoke_request("demo.delegated", "{}").into_inner();
+        delegated.metadata.insert(
+            DELEGATION_METADATA_KEY.to_string(),
+            "serialized-proof".to_string(),
+        );
+        assert_eq!(
+            ledger_authority_binding_for_request(&delegated),
+            "delegated"
+        );
+
+        let mut session = invoke_request("demo.session", "{}").into_inner();
+        session.metadata.insert(
+            SESSION_AUTHORITY_METADATA_KEY.to_string(),
+            "serialized-session-authority".to_string(),
+        );
+        assert_eq!(ledger_authority_binding_for_request(&session), "session");
+
+        let self_authority = invoke_request("demo.self", "{}").into_inner();
+        assert_eq!(
+            ledger_authority_binding_for_request(&self_authority),
+            "self"
         );
     }
 
@@ -7221,13 +7389,26 @@ mod tests {
         )
         .expect("sign test envelope");
 
+        let mut request = InvokeRequest {
+            envelope: Some(envelope),
+            function_name: ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES.to_string(),
+            arguments: args.to_vec(),
+            ..InvokeRequest::default()
+        };
+        request.metadata.insert(
+            "x-easynet-delegation".to_string(),
+            signed_delegation_metadata_for_test(
+                &caller_signing_key,
+                &caller_ura,
+                "easynet:///r/local-realm/user/alice",
+                &caller_ura,
+                &crate::ura::hub_ura("local-realm"),
+                &[ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES],
+            ),
+        );
+
         let err = svc
-            .invoke(Request::new(InvokeRequest {
-                envelope: Some(envelope),
-                function_name: ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES.to_string(),
-                arguments: args.to_vec(),
-                ..InvokeRequest::default()
-            }))
+            .invoke(Request::new(request))
             .await
             .expect_err("hub-role caller must be rejected by proxy filter");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -7833,6 +8014,10 @@ mod tests {
         let mut stream = resp.into_inner();
         let first = stream.next().await.expect("one frame").expect("frame Ok");
         assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+        assert!(
+            first.terminal,
+            "local snapshot stream must preserve terminal=true on the daemon InvokeStream chunk"
+        );
         let frame: serde_json::Value = serde_json::from_slice(&first.payload).expect("JSON frame");
         assert_eq!(
             frame
@@ -7849,6 +8034,97 @@ mod tests {
             .await
             .expect("snapshot stream closes promptly");
         assert!(close.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admitted_bidi_file_transfer_download_emits_business_frames() {
+        use base64::Engine as _;
+        use easynet_axon::invocation::LocalRuntime;
+
+        let rt = LocalRuntime::new();
+        let mut catalog =
+            crate::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt));
+        crate::runtime::agents::file_transfer_ability::register(&mut catalog);
+
+        let path = std::env::temp_dir().join(format!(
+            "easynet-admitted-bidi-download-{}-{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        let bytes = b"admitted-bidi-download-proof";
+        std::fs::write(&path, bytes).unwrap();
+
+        let args = serde_json::to_vec(&serde_json::json!({
+            "mode": "download",
+            "path": path.to_string_lossy(),
+        }))
+        .unwrap();
+        let open = make_envelope_open(
+            crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
+            args,
+        );
+        let wire = crate::runtime::axon_bridge::dispatch_shim::admitted_from_envelope_open(&open)
+            .expect("wire dispatch");
+        let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_admitted(&rt, wire)
+            .await
+            .expect("open admitted bidi");
+        let (input, mut output) = handle.split();
+
+        input
+            .send(
+                BidiInputFrame::new(
+                    serde_json::to_vec(&serde_json::json!({"type":"eof"})).unwrap(),
+                )
+                .with_content_type("application/json"),
+            )
+            .await
+            .expect("send ready/eof");
+        let _ = input.close_input().await;
+
+        let mut downloaded = Vec::new();
+        let mut got_complete = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or_default();
+            let Some(frame) = tokio::time::timeout(remaining, output.next_frame())
+                .await
+                .expect("bidi output poll should not time out")
+            else {
+                break;
+            };
+            let frame = frame.expect("bidi frame ok");
+            if frame.payload.is_empty() {
+                continue;
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(&frame.payload).expect("file transfer JSON frame");
+            match value["type"].as_str() {
+                Some("chunk") => {
+                    let chunk = value["data"].as_str().expect("chunk data");
+                    downloaded.extend(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(chunk)
+                            .expect("chunk base64"),
+                    );
+                }
+                Some("complete") => {
+                    got_complete = true;
+                    break;
+                }
+                other => panic!("unexpected file_transfer frame {other:?}: {value}"),
+            }
+        }
+        assert!(
+            got_complete,
+            "admitted file_transfer download must emit complete"
+        );
+        assert_eq!(downloaded, bytes);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
@@ -7960,7 +8236,7 @@ mod tests {
 
     // ── PR-3 commit 1/3 — <self>.invoke_remote helpers + early returns ────
 
-    use crate::services::axon_serve::invoke_remote_initiator::{
+    use crate::services::invocation_transport::invoke_remote_initiator::{
         InvokeRemoteUp, ABILITY_INVOKE_REMOTE,
     };
     use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
@@ -8168,6 +8444,10 @@ mod tests {
                     easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
                 );
                 assert_eq!(receipt.payload_content_type, "application/json");
+                assert!(
+                    receipt.cleanup_complete,
+                    "terminal file_transfer completion receipt must close the bidi lifecycle"
+                );
                 let payload: serde_json::Value =
                     serde_json::from_slice(&receipt.payload).expect("json payload");
                 assert_eq!(payload["sha256"], "deadbeef");
@@ -8456,6 +8736,11 @@ mod tests {
 
     #[test]
     fn build_invoke_remote_dispatch_frame_carries_session_dispatch_json() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "x-easynet-delegation".to_string(),
+            "serialized-proof".to_string(),
+        );
         let frame = build_invoke_remote_dispatch_frame(
             42,
             "easynet:///r/realm/device/dev",
@@ -8463,6 +8748,7 @@ mod tests {
             "echo",
             b"hello",
             SessionContentEnvelope::plaintext_json(),
+            metadata,
         )
         .expect("built");
         let payload = match frame.frame.payload.expect("frame has payload") {
@@ -8480,6 +8766,7 @@ mod tests {
                 ability,
                 args,
                 args_content_envelope,
+                metadata,
             } => {
                 assert_eq!(call_id, 42);
                 assert_eq!(callee_ura.as_deref(), Some("easynet:///r/realm/device/dev"));
@@ -8490,6 +8777,10 @@ mod tests {
                 assert_eq!(ability, "echo");
                 assert_eq!(args, b"hello");
                 assert_eq!(args_content_envelope.content_type, "application/json");
+                assert_eq!(
+                    metadata.get("x-easynet-delegation").map(String::as_str),
+                    Some("serialized-proof")
+                );
             }
             _ => panic!("expected Dispatch variant"),
         }
@@ -8503,6 +8794,7 @@ mod tests {
             Some("easynet:///r/realm/resource/display-1"),
             "device.remote_desktop.attach",
             br#"{"session_id":"rd-1"}"#,
+            HashMap::new(),
         )
         .expect("built");
         let payload = match frame.frame.payload.expect("frame has payload") {
@@ -8638,6 +8930,7 @@ mod tests {
             ability: "echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
+            metadata: HashMap::new(),
         })
         .unwrap();
         // Decoding as the wrong type must fail.
@@ -8741,15 +9034,15 @@ mod tests {
         assert_eq!(subject.ura, "easynet:///r/local/device/dev-a");
         assert_eq!(
             caller.profile,
-            crate::services::axon_serve::DEFAULT_URA_PROFILE
+            crate::services::invocation_transport::DEFAULT_URA_PROFILE
         );
         assert_eq!(
             callee.profile,
-            crate::services::axon_serve::DEFAULT_URA_PROFILE
+            crate::services::invocation_transport::DEFAULT_URA_PROFILE
         );
         assert_eq!(
             subject.profile,
-            crate::services::axon_serve::DEFAULT_URA_PROFILE
+            crate::services::invocation_transport::DEFAULT_URA_PROFILE
         );
         assert_eq!(env.invocation_nonce.len(), 16);
     }
@@ -9554,7 +9847,7 @@ mod tests {
         // The cross-hub deep harness failure we care about is not
         // "signature field missing" anymore; it is "peer hub rejects
         // the rebuilt federation.forward_invoke wrapper with
-        // caller_signature_invalid". Rebuild that exact wrapper via
+        // CALLER_SIGNATURE_INVALID". Rebuild that exact wrapper via
         // the caller-hub dispatch path, then feed it into a fresh
         // AdmissionFacade that trusts the caller hub's public key.
         //
@@ -9924,12 +10217,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_session_request_advertise_agent_updates_store() {
+        // Hot `device.agent.start` runs on the already-open device
+        // session, so its hub repair path arrives as a
+        // SessionDispatch::Request. The handler must route
+        // `federation.advertise_agent` through the same store-writing
+        // wrapper as unary Invoke; otherwise agent add succeeds
+        // locally while chat / skill / history still fail with
+        // "agent is not advertised on this hub".
+        let svc = make_service().with_session_realm("test-realm");
+        let agent_ura = "easynet:///r/test-realm/agent/dev.anthropic";
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": agent_ura,
+            "signing_authority": {
+                "kind": "hosted_by",
+                "host_ura": TEST_DAEMON_URI,
+            },
+            "host_node_id": "test-daemon",
+        }))
+        .expect("advertise args encode");
+
+        let outcome = svc
+            .dispatch_session_request(ABILITY_FEDERATION_ADVERTISE_AGENT, &args)
+            .await;
+
+        match outcome {
+            RequestOutcome::Ok { result_bytes } => {
+                let body: federation_wrappers::AdvertiseAgentResponse =
+                    serde_json::from_slice(&result_bytes)
+                        .expect("body decodes as AdvertiseAgentResponse");
+                assert!(body.ack);
+            }
+            other => panic!("expected advertise_agent Ok outcome, got {other:?}"),
+        }
+
+        let record = svc
+            .advertised_agents
+            .get(agent_ura)
+            .expect("advertise_agent request must populate AdvertisedAgentStore");
+        assert_eq!(record.host_ura(), Some(TEST_DAEMON_URI));
+        assert_eq!(record.host_node_id.as_deref(), Some("test-daemon"));
+    }
+
+    #[tokio::test]
     async fn dispatch_session_request_unknown_ability_returns_permission_denied() {
-        // PR-N6 v1 only routes `federation.forward_invoke`. Other
-        // ability names must surface a typed `PermissionDenied`
-        // so the device caller knows the hub refused (not a
-        // silent timeout). PR-N6 v2 may widen this set once a
-        // per-ability admission policy is specified.
+        // PR-N6 v1 only routes the small explicit set used by
+        // invoke forwarding and hosted-agent self-advertise repair.
+        // Other ability names must surface a typed `PermissionDenied`
+        // so the device caller knows the hub refused (not a silent
+        // timeout). PR-N6 v2 may widen this set once a per-ability
+        // admission policy is specified.
         let svc = make_service().with_session_realm("test-realm");
         let outcome = svc.dispatch_session_request("fs.read", b"{}").await;
         match outcome {
@@ -9942,7 +10279,11 @@ mod tests {
                 );
                 assert!(
                     reason.contains(ABILITY_FEDERATION_FORWARD_INVOKE),
-                    "reason must cite the only ability PR-N6 v1 routes; got: {reason}",
+                    "reason must cite forward_invoke as an allowed ability; got: {reason}",
+                );
+                assert!(
+                    reason.contains(ABILITY_FEDERATION_ADVERTISE_AGENT),
+                    "reason must cite advertise_agent as an allowed ability; got: {reason}",
                 );
             }
             other => panic!("expected PermissionDenied for unknown ability, got {other:?}"),
@@ -10129,11 +10470,11 @@ mod tests {
         // result. The dispatcher's response must carry exactly
         // those bytes — proving the device-mode path didn't
         // short-circuit to a local-presence answer.
-        use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch;
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
         use tokio::sync::mpsc;
 
@@ -10200,10 +10541,10 @@ mod tests {
         // surfaces on the unary wire as the same `failed_precondition
         // (target_offline)` reason the existing hub-mode arm uses,
         // so a CLI doesn't need to branch on mode.
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use tokio::sync::mpsc;
 
         let correlation = EscalationCorrelation::new();
@@ -10215,7 +10556,7 @@ mod tests {
 
         // Fake hub: complete every Request with TargetOffline.
         tokio::spawn(async move {
-            use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
+            use crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch;
             use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
             while let Some(frame) = up_rx.recv().await {
                 let chunk = match frame.payload {
@@ -10260,10 +10601,10 @@ mod tests {
         // built-in timeout fires (we use the short-timeout
         // builder) and the unary path surfaces
         // `Status::deadline_exceeded`.
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use tokio::sync::mpsc;
 
         let correlation = EscalationCorrelation::new();
@@ -10479,11 +10820,11 @@ mod tests {
         // request → forward_invoke local-fast-path → push to
         // PresenceRegistry → response bytes round-trip back via
         // RequestResult → device caller receives the bytes.
-        use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
-        use crate::services::axon_serve::session_escalation::{
+        use crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch;
+        use crate::services::invocation_transport::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
-        use crate::services::axon_serve::session_initiator::SessionUpSender;
+        use crate::services::invocation_transport::session_initiator::SessionUpSender;
         use crate::services::presence_registry::DispatchSender;
         use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
         use tokio::sync::mpsc;

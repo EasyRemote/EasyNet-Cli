@@ -1,7 +1,7 @@
 // EasyNet CLI — Axon invocation wire builders
 // ===========================================
 //
-// File: src/services/axon_serve/invocation_wire.rs
+// File: src/services/invocation_transport/invocation_wire.rs
 // Description: Typed construction boundary for proto InvokeRequest
 //              and Envelope values emitted by the CLI/daemon.
 //

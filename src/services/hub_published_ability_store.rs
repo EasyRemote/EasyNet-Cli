@@ -137,7 +137,7 @@ impl HubPublishedAbilityStore {
 }
 
 /// Process-wide singleton. The session-prelude functions in
-/// `services/axon_serve/session_initiator.rs` need to reach the
+/// `services/invocation_transport/session_initiator.rs` need to reach the
 /// store without threading a new `Arc` through five layers of
 /// supervisor / dial / handshake plumbing; the meta-ability synth
 /// path (read-only) does too. We expose a `OnceLock` so both

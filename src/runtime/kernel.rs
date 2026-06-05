@@ -39,7 +39,7 @@ use crate::runtime::execution::{
 };
 use crate::runtime::gateway_api::GatewayApi;
 use crate::runtime::invocation::{
-    invocation_id_of, Invocation, PriorChain, Receipt, TerminalState,
+    runtime_invocation_id, PriorChain, Receipt, RuntimeInvocation, TerminalState,
 };
 use crate::runtime::kernel_api::KernelApi;
 
@@ -395,7 +395,7 @@ fn agent_portion(ability: &str) -> &str {
 }
 
 impl KernelApi for Kernel {
-    fn invoke(&self, invocation: Invocation) -> anyhow::Result<Receipt> {
+    fn invoke(&self, invocation: RuntimeInvocation) -> anyhow::Result<Receipt> {
         // Plan v10.3 C* unity entry. Three phases:
         //   1. Admission — compute invocation_id, register a Session
         //      keyed by that id so live attachers see the run from
@@ -412,7 +412,7 @@ impl KernelApi for Kernel {
         //   4. Terminal — emit `invoke_terminal`, mark the session
         //      ended, return the Receipt.
         invocation.validate()?;
-        let id = invocation_id_of(&invocation);
+        let id = runtime_invocation_id(&invocation)?;
         let session_id = SessionId::new(id.clone());
         // The session's `agent` field is for observability only —
         // for system.* abilities it carries the verb portion, for
@@ -570,7 +570,7 @@ impl KernelApi for Kernel {
 mod tests {
     use super::*;
     use crate::runtime::gateway_api::PeerInfo;
-    use crate::runtime::invocation::{CausalContext, Invocation};
+    use crate::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
     use serde_json::json;
 
     struct NoopGateway;
@@ -595,21 +595,21 @@ mod tests {
     #[test]
     fn kernel_invoke_returns_receipt_with_matching_id_for_same_invocation() {
         // The v1 stub must at minimum return a Receipt whose
-        // invocation_id matches `invocation_id_of(&inv)`.
+        // invocation_id matches `runtime_invocation_id(&inv)`.
         let k = Kernel::new(Arc::new(NoopGateway));
         let caller = crate::ura::device_ura("localhost", "a");
         let callee = crate::ura::device_ura("localhost", "b");
-        let inv = Invocation {
+        let inv = RuntimeInvocation {
             caller,
             callee: callee.clone(),
             ability: "observe.health".into(),
             subject: callee,
             nonce_hex: "aa".repeat(16),
-            causal_context: CausalContext::Null,
+            causal_context: RuntimeCausalContext::Null,
             args: json!({}),
             caller_signature: None,
         };
-        let expected_id = invocation_id_of(&inv);
+        let expected_id = runtime_invocation_id(&inv).unwrap();
         let r = k.invoke(inv).unwrap();
         assert_eq!(r.invocation_id, expected_id);
         assert!(matches!(r.terminal, TerminalState::Succeeded));
@@ -683,13 +683,13 @@ mod tests {
         let k_clone = Arc::clone(&k);
         let invoke_task = tokio::task::spawn_blocking(move || {
             let device_ura = crate::ura::device_ura("localhost", "a");
-            let inv = Invocation {
+            let inv = RuntimeInvocation {
                 caller: device_ura.clone(),
                 callee: device_ura.clone(),
                 ability: "ghost-agent.chat".into(),
                 subject: device_ura,
                 nonce_hex: "11".repeat(16),
-                causal_context: CausalContext::Null,
+                causal_context: RuntimeCausalContext::Null,
                 args: json!({"prompt": "do the thing"}),
                 caller_signature: None,
             };
@@ -730,13 +730,13 @@ mod tests {
         k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let device_ura = crate::ura::device_ura("localhost", "a");
-        let inv = Invocation {
+        let inv = RuntimeInvocation {
             caller: device_ura.clone(),
             callee: device_ura.clone(),
             ability: "ghost-agent.chat".into(),
             subject: device_ura,
             nonce_hex: "00".repeat(16),
-            causal_context: CausalContext::Null,
+            causal_context: RuntimeCausalContext::Null,
             args: json!({"prompt": "hi"}),
             caller_signature: None,
         };
@@ -763,13 +763,13 @@ mod tests {
         let k = Kernel::new(Arc::new(NoopGateway));
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let device_ura = crate::ura::device_ura("localhost", "a");
-        let inv = Invocation {
+        let inv = RuntimeInvocation {
             caller: device_ura.clone(),
             callee: device_ura.clone(),
             ability: "alice.chat".into(),
             subject: device_ura,
             nonce_hex: "ff".repeat(16),
-            causal_context: CausalContext::Null,
+            causal_context: RuntimeCausalContext::Null,
             args: json!({"prompt": "hi"}),
             caller_signature: None,
         };
@@ -780,13 +780,13 @@ mod tests {
     #[test]
     fn invoke_rejects_malformed_invocation_ura_before_admission() {
         let k = Kernel::new(Arc::new(NoopGateway));
-        let inv = Invocation {
+        let inv = RuntimeInvocation {
             caller: "easynet://nodes/a".into(),
             callee: crate::ura::device_ura("localhost", "a"),
             ability: "alice.chat".into(),
             subject: crate::ura::device_ura("localhost", "a"),
             nonce_hex: "ff".repeat(16),
-            causal_context: CausalContext::Null,
+            causal_context: RuntimeCausalContext::Null,
             args: json!({"prompt": "hi"}),
             caller_signature: None,
         };

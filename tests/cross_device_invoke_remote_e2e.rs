@@ -47,22 +47,23 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
-    AgentIdentity, BinaryChunk, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
-    InvokeBidiUp, InvokeServerStreamRequest, StreamDescriptor,
+    bidi_control, AgentIdentity, BidiControl, BinaryChunk, Envelope, EnvelopeOpen,
+    InvocationTarget, InvokeBidiDown, InvokeBidiUp, InvokeServerStreamRequest, StreamDescriptor,
 };
-use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
-use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::axon_serve::invoke_remote_initiator::{
+use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
+use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
     InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
-use easynet_cli::services::axon_serve::local_session_dispatcher::LocalAxonSessionDispatcher;
-use easynet_cli::services::axon_serve::session_initiator::{
+use easynet_cli::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
+use easynet_cli::services::invocation_transport::session_initiator::{
     SessionFrameDispatcher, SessionUpSender, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
 };
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
@@ -201,6 +202,60 @@ added_at_unix_ms = 0
     // dials. tonic's `Server::serve_with_incoming` does not expose
     // a "ready" signal; a millisecond yield is enough on the same
     // tokio runtime.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    TestHub {
+        socket_path,
+        presence,
+        _tempdir: tempdir,
+        shutdown: Some(shutdown_tx),
+        server: Some(server),
+    }
+}
+
+async fn start_in_process_local_device() -> TestHub {
+    use std::io::Write;
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let socket_path = tempdir.path().join("local-device.sock");
+
+    let trust_path = tempdir.path().join("realm-trust.toml");
+    let trust_toml = format!(
+        r#"
+[[trusted_agent]]
+agent_ura = "{DEVICE_A_URI}"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "device"
+added_at_unix_ms = 0
+        "#,
+    );
+    let mut f = std::fs::File::create(&trust_path).expect("write trust toml");
+    f.write_all(trust_toml.as_bytes()).expect("write");
+    drop(f);
+
+    let trust_anchor = RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
+    let presence = Arc::new(PresenceRegistry::new());
+    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_A_URI.to_string()));
+    let runtime = LocalRuntime::new();
+    let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(
+        Arc::clone(&runtime),
+    );
+    easynet_cli::runtime::agents::file_transfer_ability::register(&mut catalog);
+    let service =
+        DaemonInvocationService::new(Arc::clone(&presence), admission).with_local_runtime(runtime);
+
+    let listener = UnixListener::bind(&socket_path).expect("bind UDS");
+    let incoming = UnixListenerStream::new(listener);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let _ = Server::builder()
+            .add_service(InvocationServer::new(service))
+            .serve_with_incoming_shutdown(incoming, async {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+    });
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     TestHub {
@@ -691,6 +746,131 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
     .expect("test completes within 60 s");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let hub = start_in_process_local_device().await;
+        let channel = connect_to_hub(hub.socket_path()).await;
+        let mut client = InvocationClient::new(channel);
+
+        let path = std::env::temp_dir().join(format!(
+            "easynet-tonic-ft-download-{}-{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        let bytes = b"tonic-local-file-transfer-download";
+        std::fs::write(&path, bytes).unwrap();
+
+        let args = serde_json::to_vec(&json!({
+            "mode": "download",
+            "path": path.to_string_lossy(),
+        }))
+        .unwrap();
+        let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(8);
+        up_tx
+            .send(InvokeBidiUp {
+                sequence: 0,
+                payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
+                    envelope: Some(Envelope {
+                        caller: Some(AgentIdentity {
+                            ura: DEVICE_A_URI.to_string(),
+                            ..AgentIdentity::default()
+                        }),
+                        callee: Some(AgentIdentity {
+                            ura: DEVICE_A_URI.to_string(),
+                            ..AgentIdentity::default()
+                        }),
+                        subject: Some(easynet_axon::pb::axon::v1::SubjectIdentity {
+                            ura: DEVICE_A_URI.to_string(),
+                            ..Default::default()
+                        }),
+                        invocation_nonce: (1_u8..=16).collect(),
+                        ..Envelope::default()
+                    }),
+                    target: Some(InvocationTarget {
+                        ability_name:
+                            easynet_cli::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                                .to_string(),
+                        ..InvocationTarget::default()
+                    }),
+                    initial_args: args,
+                    args_content_type: "application/json".to_string(),
+                    streams: vec![StreamDescriptor {
+                        stream_id: 1,
+                        content_type: "application/octet-stream".to_string(),
+                        ordering: "STRICT".to_string(),
+                        ..StreamDescriptor::default()
+                    }],
+                    ..EnvelopeOpen::default()
+                })),
+                ..InvokeBidiUp::default()
+            })
+            .await
+            .expect("send frame 0");
+
+        let mut down = client
+            .invoke_bidi(Request::new(ReceiverStream::new(up_rx)))
+            .await
+            .expect("invoke_bidi opens")
+            .into_inner();
+
+        up_tx
+            .send(InvokeBidiUp {
+                sequence: 1,
+                payload: Some(UpPayload::Control(BidiControl {
+                    control: Some(bidi_control::Control::Eof(true)),
+                })),
+                ..InvokeBidiUp::default()
+            })
+            .await
+            .expect("send ready/eof");
+
+        let mut downloaded = Vec::new();
+        let mut got_complete = false;
+        let deadline = tokio::time::Instant::now() + STEP_TIMEOUT;
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or_default();
+            let Some(frame) = tokio::time::timeout(remaining, down.next())
+                .await
+                .expect("down frame within bound")
+            else {
+                break;
+            };
+            let frame = frame.expect("down frame ok");
+            match frame.payload {
+                Some(DownPayload::BinaryChunk(chunk)) => downloaded.extend(chunk.data),
+                Some(DownPayload::Receipt(receipt))
+                    if receipt.state
+                        == easynet_axon::invocation::InvocationState::Completed.to_wire_i32() =>
+                {
+                    assert!(
+                        receipt.cleanup_complete,
+                        "completed bidi receipt must mark cleanup_complete"
+                    );
+                    got_complete = true;
+                    break;
+                }
+                Some(DownPayload::Receipt(_)) => {}
+                other => panic!("unexpected down payload {other:?}"),
+            }
+        }
+
+        assert!(
+            got_complete,
+            "local file_transfer download must reach completed receipt"
+        );
+        assert_eq!(downloaded, bytes);
+        let _ = std::fs::remove_file(&path);
+    })
+    .await
+    .expect("test completes within 60 s");
+}
+
 async fn run_round_trip() {
     let hub = start_in_process_hub().await;
     let socket_path = hub.socket_path();
@@ -770,6 +950,7 @@ async fn run_round_trip() {
         ability: "test.echo".to_string(),
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
+        metadata: Default::default(),
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
@@ -828,7 +1009,7 @@ async fn run_round_trip() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::services::axon_serve::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::services::invocation_transport::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 
@@ -891,6 +1072,7 @@ async fn run_round_trip_via_local_dispatcher() {
         ability: "test.echo".to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
+        metadata: Default::default(),
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
@@ -945,7 +1127,7 @@ async fn run_round_trip_via_local_dispatcher() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::services::axon_serve::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::services::invocation_transport::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 

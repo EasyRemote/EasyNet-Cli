@@ -29,7 +29,7 @@ identity).
 - [ ] Replay store empty at boot (`SharedNonceReplayStore` is
       in-memory and empty by construction; no operator action
       unless a previous daemon left a process artifact).
-- [ ] `cargo test --lib --features axon-pb services::axon_serve`
+- [ ] `cargo test --lib --features axon-pb services::invocation_transport`
       green on the build that's about to ship.
 - [ ] `go test -tags=e2e ./internal/daemon_grpc/...` green
       against the same build.
@@ -55,8 +55,8 @@ journalctl -fu easynet-daemon.service            # confirm UDS bind +
 Confirm the daemon's stderr shows both:
 
 ```
-[axon-serve] gRPC InvocationServer listening on UDS /var/lib/easynet/daemon.sock
-[axon-serve] gRPC InvocationServer listening on TCP+TLS <addr> (cert=..., key=...)
+[daemon-invocation] gRPC InvocationServer listening on UDS /var/lib/easynet/daemon.sock
+[daemon-invocation] gRPC InvocationServer listening on TCP+TLS <addr> (cert=..., key=...)
 ```
 
 If either bind fails: investigate, do NOT proceed. Boot is

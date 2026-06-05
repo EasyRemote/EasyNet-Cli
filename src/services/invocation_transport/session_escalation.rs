@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — device-mode `forward_invoke` escalation
+// EasyNet CLI — invocation_transport — device-mode `forward_invoke` escalation
 // =====================================================================
 //
-// File: src/services/axon_serve/session_escalation.rs
+// File: src/services/invocation_transport/session_escalation.rs
 // Description: Lets a device-mode daemon's `dispatch_federation_
 //              forward_invoke` send a `SessionDispatch::Request`
 //              frame up the long-lived `<self>.session` bidi to its
@@ -50,10 +50,12 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::services::axon_serve::invoke_remote_initiator::{
+use crate::services::invocation_transport::invoke_remote_initiator::{
     call_id_hex, RequestOutcome, SessionRequestError,
 };
-use crate::services::axon_serve::session_initiator::{SessionUpSender, SESSION_STREAM_ID};
+use crate::services::invocation_transport::session_initiator::{
+    SessionUpSender, SESSION_STREAM_ID,
+};
 
 /// Default deadline for awaiting a `RequestResult` after the
 /// device queues a Request. PR-N6 spec §"Deadline propagation"
@@ -124,7 +126,7 @@ impl SessionEscalationHandle {
         // 2026-05-25 audit confirmed no external grep dependency
         // on the previous byte-exact form.
         crate::op_event!(
-            component = axon_serve,
+            component = daemon_invocation,
             kind = forward_invoke_escalated_up_session_bidi,
             call_id = id_hex,
         );
@@ -435,7 +437,7 @@ fn build_session_request_up_chunk(
     ability: &str,
     args: &[u8],
 ) -> easynet_axon::pb::axon::v1::BinaryChunk {
-    use crate::services::axon_serve::invoke_remote_initiator::{
+    use crate::services::invocation_transport::invoke_remote_initiator::{
         SessionContentEnvelope, SessionDispatch,
     };
     use easynet_axon::pb::axon::v1::BinaryChunk;
@@ -480,9 +482,9 @@ mod tests {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
                 };
-                let dispatch: crate::services::axon_serve::invoke_remote_initiator::SessionDispatch =
+                let dispatch: crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch =
                     serde_json::from_slice(&chunk.data).expect("decode");
-                if let crate::services::axon_serve::invoke_remote_initiator::SessionDispatch::Request {
+                if let crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch::Request {
                     call_id, ..
                 } = dispatch
                 {
@@ -656,9 +658,9 @@ mod tests {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
                 };
-                let dispatch: crate::services::axon_serve::invoke_remote_initiator::SessionDispatch =
+                let dispatch: crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch =
                     serde_json::from_slice(&chunk.data).expect("decode");
-                if let crate::services::axon_serve::invoke_remote_initiator::SessionDispatch::Request {
+                if let crate::services::invocation_transport::invoke_remote_initiator::SessionDispatch::Request {
                     call_id, ..
                 } = dispatch
                 {

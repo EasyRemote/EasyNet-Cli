@@ -64,7 +64,18 @@ The layering is enforced at CI time:
   import `kernel_api`, `invocation`, `domain`,
   `invocation_target` from `crate::runtime`. Anything else is
   rejected.
-- `scripts/check-kernel-boundary.sh` (rule 2) — Execution may
+- `scripts/check-kernel-boundary.sh` (rule 2) — Daemon Invocation
+  transport may import the explicitly listed runtime adapters it
+  needs to translate Axon `Invocation` frames into daemon-local
+  execution. `ability_wire` is allowed only as a metadata boundary:
+  the transport reads the local bidi codec profile from
+  `AbilityWireRegistry`, but plugin package ownership and execution
+  policy remain in `runtime/plugin_host` and the Axon
+  `LocalRuntime`. `plugin_host` itself is allowed only for the
+  boot-injected `PluginRuntimeManager` handle used to execute
+  already-loaded plugin-backed abilities; install/load policy stays
+  in `runtime/plugin_host`.
+- `scripts/check-kernel-boundary.sh` (rule 3) — Execution may
   only touch the network via `crate::runtime::gateway_api`, not
   the concrete `runtime::gateway`.
 - `scripts/check-subservice-isolation.sh` — Execution

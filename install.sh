@@ -33,6 +33,8 @@ set -eu
 
 BASE_URL="https://easynet.run/download"
 INSTALL_DIR="/usr/local/bin"
+INCLUDE_DIR="/usr/local/include/easynet"
+DOC_DIR="/usr/local/share/doc/easynet"
 
 # Resolve the home directory we should plant ~/.easynet under. When the
 # script runs under `sudo`, $HOME is /root — which is wrong: the user
@@ -65,6 +67,8 @@ main() {
     echo "    easynet-daemon               → $INSTALL_DIR/"
     echo "    easynet-keyring              → $INSTALL_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
+    echo "    easynet_cli.h                → $INCLUDE_DIR/"
+    echo "    ffi-abi-v2.md                → $DOC_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
         echo "  To activate in this terminal, run:"
@@ -189,6 +193,13 @@ download_and_install() {
     mv "${TMPDIR}/easynet-daemon" "${INSTALL_DIR}/easynet-daemon"
     mv "${TMPDIR}/easynet-keyring" "${INSTALL_DIR}/easynet-keyring"
     chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring"
+
+    # Install the C ABI v2 contract alongside the runtime artefacts.
+    # Language bindings compile against this header; the markdown spec
+    # carries the return-code and ownership rules that a C header cannot.
+    mkdir -p "$INCLUDE_DIR" "$DOC_DIR"
+    mv "${TMPDIR}/include/easynet_cli.h" "${INCLUDE_DIR}/easynet_cli.h"
+    mv "${TMPDIR}/docs/spec/ffi-abi-v2.md" "${DOC_DIR}/ffi-abi-v2.md"
 
     # Install dendrite bridge library under the REAL user's home so
     # the daemon can dlopen it without LD_LIBRARY_PATH gymnastics.

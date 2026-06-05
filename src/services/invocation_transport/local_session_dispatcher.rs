@@ -1,7 +1,7 @@
 // EasyNet CLI — `<self>.session` device-side LocalAxonSessionDispatcher
 // =================================================================
 //
-// File: src/services/axon_serve/local_session_dispatcher.rs
+// File: src/services/invocation_transport/local_session_dispatcher.rs
 //
 // Device-side `<self>.session` dispatcher. It decodes
 // `SessionDispatch::Dispatch{call_id, ability, args}`, routes the
@@ -31,10 +31,10 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::services::axon_serve::invoke_remote_initiator::{
+use crate::services::invocation_transport::invoke_remote_initiator::{
     call_id_hex, SessionContentEnvelope, SessionDispatch,
 };
-use crate::services::axon_serve::session_initiator::{
+use crate::services::invocation_transport::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
@@ -57,8 +57,9 @@ pub struct LocalAxonSessionDispatcher {
     /// never receive `RequestResult` frames). When set, inbound
     /// `SessionDispatch::RequestResult` frames are routed here
     /// by `call_id`, completing the awaiting dispatcher future.
-    escalation_correlation:
-        Option<Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>>,
+    escalation_correlation: Option<
+        Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
+    >,
     /// Active same-hub remote bidi sessions keyed by dispatcher
     /// call_id. The hub opens the local bidi on the device, then
     /// subsequent `SessionDispatch::BidiInput` frames route through
@@ -107,6 +108,7 @@ struct RemoteBidiOpenRequest {
     ability: String,
     args: Vec<u8>,
     args_content_envelope: SessionContentEnvelope,
+    metadata: HashMap<String, String>,
 }
 
 impl LocalAxonSessionDispatcher {
@@ -154,7 +156,9 @@ impl LocalAxonSessionDispatcher {
     #[must_use]
     pub fn with_escalation_correlation(
         mut self,
-        correlation: Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
+        correlation: Arc<
+            crate::services::invocation_transport::session_escalation::EscalationCorrelation,
+        >,
     ) -> Self {
         self.escalation_correlation = Some(correlation);
         self
@@ -584,6 +588,7 @@ impl LocalAxonSessionDispatcher {
             ability,
             args,
             args_content_envelope,
+            metadata: _metadata,
         } = request;
         let ability = ability.as_str();
         if !self.ability_wire.is_bidi_wire_ability(ability) {
@@ -895,6 +900,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                     ability,
                     args,
                     args_content_envelope,
+                    metadata: _metadata,
                 } => {
                     let args_bytes = args.len();
                     crate::op_event!(
@@ -920,6 +926,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                     ability,
                     args,
                     args_content_envelope,
+                    metadata,
                 } => {
                     let args_bytes = args.len();
                     let ability_log = ability.clone();
@@ -939,6 +946,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                                 ability,
                                 args,
                                 args_content_envelope,
+                                metadata,
                             },
                             outbound,
                         )
@@ -959,11 +967,11 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                         let fired = correlation.complete(call_id, outcome);
                         if !fired {
                             crate::op_event!(
-                            component = local_session_dispatcher,
-                            kind = request_result_orphan,
-                            call_id = id_hex,
-                            message = "no pending entry matched; dropping (caller may have timed out, or hub double-replied)",
-                        );
+                                component = local_session_dispatcher,
+                                kind = request_result_orphan,
+                                call_id = id_hex,
+                                message = "no pending entry matched; dropping (caller may have timed out, or hub double-replied)",
+                            );
                         } else {
                             crate::op_event!(
                                 component = local_session_dispatcher,
@@ -973,10 +981,10 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                         }
                     } else {
                         crate::op_event!(
-                        component = local_session_dispatcher,
-                        kind = request_result_dropped_hub_mode,
-                        message = "inbound RequestResult on a hub-mode daemon (no escalation_correlation wired); ignoring",
-                    );
+                            component = local_session_dispatcher,
+                            kind = request_result_dropped_hub_mode,
+                            message = "inbound RequestResult on a hub-mode daemon (no escalation_correlation wired); ignoring",
+                        );
                     }
                     return Ok(());
                 }
@@ -1140,6 +1148,7 @@ mod tests {
             ability: ability.to_string(),
             args,
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
+            metadata: HashMap::new(),
         };
         let payload = serde_json::to_vec(&dispatch).expect("encode dispatch");
         InvokeBidiDown {
@@ -1246,6 +1255,7 @@ mod tests {
                 ability: "device.camera.snapshot".to_string(),
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                metadata: HashMap::new(),
             }),
             &session_tx,
         )
@@ -1307,6 +1317,7 @@ mod tests {
                 ability: "device.screen.subscribe".to_string(),
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                metadata: HashMap::new(),
             }),
             &session_tx,
         )
@@ -1692,6 +1703,7 @@ mod tests {
                     encryption: 1,
                     key_id: "session-key-1".to_string(),
                 },
+                metadata: HashMap::new(),
             }),
             &session_tx,
         )
@@ -1926,6 +1938,7 @@ mod tests {
                 }))
                 .expect("encode args"),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                metadata: HashMap::new(),
             }),
             &session_tx,
         )
@@ -2078,6 +2091,7 @@ mod tests {
                 }))
                 .expect("encode args"),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                metadata: HashMap::new(),
             }),
             &session_tx,
         )

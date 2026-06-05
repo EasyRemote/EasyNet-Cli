@@ -70,12 +70,34 @@ pub const ERR_VERSION_INCOMPATIBLE: i32 = 8;
 /// daemon-side reason verbatim.
 pub const ERR_ABILITY_FAILED: i32 = 9;
 
-/// A feature is not yet wired in this build of the library. Seen
-/// during the feature PR series while `NOT_FOUND` frames come back
-/// from the daemon; surfaced to the caller as an explicit code so
-/// Client bindings can display "not yet supported" instead of a
-/// generic failure.
+/// A symbol is intentionally unavailable in this build or has been
+/// retired from the current ABI surface. Client bindings should treat
+/// this as a non-retriable capability mismatch, not daemon downtime.
 pub const ERR_NOT_IMPLEMENTED: i32 = 10;
+
+/// The caller supplied a syntactically valid ABI value whose domain
+/// contents are invalid: malformed JSON, missing required fields,
+/// invalid URA shape, invalid base64, or daemon-side
+/// `InvalidArgument`.
+pub const ERR_INVALID_ARG: i32 = 11;
+
+/// The daemon rejected the call because the caller is not authorised
+/// for the requested Invocation.
+pub const ERR_PERMISSION_DENIED: i32 = 12;
+
+/// The requested ability, subject, stream, or resource was not found.
+pub const ERR_NOT_FOUND: i32 = 13;
+
+/// The operation was cancelled or the local stream/session was
+/// already closed.
+pub const ERR_CANCELLED: i32 = 14;
+
+/// The daemon returned a malformed or semantically impossible
+/// protocol response.
+pub const ERR_PROTOCOL: i32 = 15;
+
+/// The operation exceeded its deadline.
+pub const ERR_TIMEOUT: i32 = 16;
 
 thread_local! {
     /// Per-thread last-error message. Rust storage owns the
@@ -201,6 +223,12 @@ mod tests {
             ERR_VERSION_INCOMPATIBLE,
             ERR_ABILITY_FAILED,
             ERR_NOT_IMPLEMENTED,
+            ERR_INVALID_ARG,
+            ERR_PERMISSION_DENIED,
+            ERR_NOT_FOUND,
+            ERR_CANCELLED,
+            ERR_PROTOCOL,
+            ERR_TIMEOUT,
         ];
         for i in 0..codes.len() {
             for j in (i + 1)..codes.len() {

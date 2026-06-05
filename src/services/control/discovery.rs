@@ -13,11 +13,12 @@
 //
 // File permissions
 // ----------------
-// `control.json` is written with mode `0600` on Unix (Windows sets
-// an ACL limiting read to the current user SID). Combined with the
-// socket itself being mode `0600`, this gives us the entire auth
-// model: another user on the same machine physically cannot read
-// the discovery file nor open the socket.
+// `control.json` is written atomically with mode `0600` on Unix.
+// Windows relies on the current user's profile directory ACL; the
+// named pipe still owns the actual transport authentication boundary.
+// The file contains local routing metadata (`invocation_endpoint`,
+// daemon pid, realm, node id), so Unix permissions are fixed rather
+// than left to process umask.
 //
 // Version negotiation
 // -------------------
@@ -28,19 +29,12 @@
 // version without a flag-day (ship `{ min: 2, max: 3 }` to drop v1;
 // old libs fail at init with a clear message).
 //
-// v1 status
-// ---------
-// The types and the `read`/`write` helpers are in place with JSON
-// serde wiring. The `write` helper does not yet chmod the file to
-// 0600 — that is a follow-up commit in PR-DAEMON alongside the real
-// transport. Shipping the wire schema now keeps the Client FFI
-// implementation additive: its `read` call compiles today even
-// though `write` is not called yet.
-//
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +42,8 @@ use crate::persistence::config::state_dir;
 
 /// Filename inside `~/.easynet/`.
 pub const CONTROL_JSON_FILENAME: &str = "control.json";
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// v1 IPC protocol version — the one the daemon actually speaks
 /// today. The range emitted into `control.json` is `{ min: 1, max:
@@ -68,6 +64,25 @@ pub struct ControlDiscovery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipe_name: Option<String>,
 
+    /// Absolute local Invocation endpoint the daemon actually bound.
+    ///
+    /// This is the product-call endpoint used by `libeasynet_cli`
+    /// Invocation ABI handles. It is intentionally advertised here
+    /// instead of being derived from `control.json`'s directory:
+    /// daemon-config.toml supports custom `uds_path` and test
+    /// harnesses can override it through environment, so directory
+    /// guessing breaks the ABI contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_endpoint: Option<PathBuf>,
+
+    /// Product identity of the daemon that wrote this discovery file.
+    ///
+    /// Lifecycle attach uses this to refuse reusing a daemon started
+    /// for a different mode, realm, or node. A missing identity is
+    /// treated as non-attachable by the SDK start path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_identity: Option<DaemonIdentity>,
+
     /// PID of the running daemon. Clients use this to detect stale
     /// `control.json` files from a crashed daemon.
     pub pid: u32,
@@ -81,9 +96,7 @@ pub struct ControlDiscovery {
     pub supported_ipc_versions: IpcVersionRange,
 
     /// Capability flags the daemon declares. Clients use these to
-    /// feature-gate without a second RPC round-trip (e.g. the lib
-    /// can refuse to attempt ability subscription if this daemon
-    /// has not yet advertised `ability_subscribe`).
+    /// feature-gate without a second RPC round-trip.
     #[serde(default)]
     pub capability_flags: Vec<String>,
 
@@ -94,6 +107,24 @@ pub struct ControlDiscovery {
     /// or omit Pages URLs until Ready.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages_port: Option<u16>,
+}
+
+/// Identity tuple advertised by the daemon in `control.json`.
+///
+/// This is not an Axon Invocation identity and it is not a security
+/// credential. It is a local lifecycle guard: callers that request a
+/// device daemon for `(realm, node_id)` must not silently attach to a
+/// hub daemon or a different device process just because the sockets
+/// are reachable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DaemonIdentity {
+    /// Deployment mode string: `device`, `hub`, or `both`.
+    pub mode: String,
+    /// EasyNet realm served by the daemon.
+    pub realm: String,
+    /// Runtime node id supplied through `EASYNET_NODE_ID`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,16 +153,10 @@ impl IpcVersionRange {
 
 /// Capability flags the v1 daemon advertises.
 pub mod flags {
-    /// The daemon accepts `Invoke` frames.
-    pub const ABILITY_INVOKE: &str = "ability_invoke";
-    /// The daemon accepts `Subscribe` + `Cancel` frames.
-    pub const ABILITY_SUBSCRIBE: &str = "ability_subscribe";
-    /// The daemon short-circuits local-target ability calls without
-    /// a round-trip through Axon.
-    pub const LOOPBACK: &str = "loopback";
-    /// The daemon understands the three v1 misfire policies (skip,
-    /// fire_once, catch_up_windowed) — see PR-SCHED.
-    pub const MISFIRE_POLICY_V1: &str = "misfire_policy_v1";
+    /// The daemon exposes boot progress over control.sock.
+    pub const BOOT_STATUS: &str = "boot_status";
+    /// The daemon exposes local non-product diagnostics over control.sock.
+    pub const CONTROL_DIAGNOSTICS: &str = "control_diagnostics";
 }
 
 /// Default discovery path. Callers should prefer this over rolling
@@ -154,15 +179,58 @@ pub fn read(path: &Path) -> anyhow::Result<Option<ControlDiscovery>> {
     Ok(Some(parsed))
 }
 
-/// Write `control.json`. v1 does not yet chmod to 0600; the
-/// follow-up PR-DAEMON commit lands the permission tightening
-/// alongside the UDS bind.
+/// Write `control.json` atomically.
+///
+/// On Unix the temporary file is created with `0600` before bytes
+/// are written, then renamed into place. That keeps the discovery
+/// permission contract independent of umask and avoids readers
+/// observing partial JSON during daemon Ready updates.
 pub fn write(path: &Path, disc: &ControlDiscovery) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(disc)?;
-    std::fs::write(path, bytes)?;
+    write_atomic(path, &bytes)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(CONTROL_JSON_FILENAME);
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(CONTROL_JSON_FILENAME);
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -190,9 +258,12 @@ mod tests {
     /// `persistence::config` tests) so a test failure doesn't point
     /// at a missing dev-dep.
     fn unique_tmp() -> PathBuf {
+        static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let p = std::env::temp_dir().join(format!(
-            "easynet-control-discovery-{}-{}",
+            "easynet-control-discovery-{}-{}-{}",
             std::process::id(),
+            counter,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
@@ -206,10 +277,16 @@ mod tests {
         ControlDiscovery {
             socket_path: Some(PathBuf::from("/tmp/x.sock")),
             pipe_name: None,
+            invocation_endpoint: Some(PathBuf::from("/tmp/custom-daemon.sock")),
+            daemon_identity: Some(DaemonIdentity {
+                mode: "device".into(),
+                realm: "tenant-a".into(),
+                node_id: Some("node-a".into()),
+            }),
             pid: 12345,
             daemon_version: "1.17.1".into(),
             supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
-            capability_flags: vec![flags::ABILITY_INVOKE.into()],
+            capability_flags: vec![flags::BOOT_STATUS.into()],
             pages_port: Some(8787),
         }
     }
@@ -240,6 +317,23 @@ mod tests {
         assert_eq!(back.supported_ipc_versions, disc.supported_ipc_versions);
         assert_eq!(back.capability_flags, disc.capability_flags);
         assert_eq!(back.pages_port, Some(8787));
+        assert_eq!(
+            back.invocation_endpoint,
+            Some(PathBuf::from("/tmp/custom-daemon.sock"))
+        );
+        assert_eq!(back.daemon_identity, disc.daemon_identity);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_sets_control_json_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        write(&p, &sample()).unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

@@ -17,58 +17,68 @@
 // initialise when the lib's reported ABI version does not match the
 // one they were compiled against.
 //
-// `cbindgen` generates `include/easynet_cli.h` from this file tree.
-// The generated header is checked into the repo; CI asserts that a
-// fresh `cbindgen` run produces the same file (detects "I changed
-// a signature but forgot to regenerate").
+// `include/easynet_cli.h` is the checked-in binding-facing contract
+// for this module. CI asserts that the header, ABI version, exported
+// symbol list, and error-code table stay aligned with this file tree.
 //
 // Module layout
 // -------------
 //   mod.rs     — top-level functions (ABI version, init, shutdown).
 //   handle.rs  — opaque handle types + registry + lib runtime.
+//   daemon.rs  — daemon lifecycle C ABI handle registry.
 //   client.rs  — the lib's internal IPC client (UDS + framed JSON).
 //   errors.rs  — i32 error codes + thread-local last-error message.
 //   strings.rs — UTF-8 C string ↔ Rust &str conversion helpers.
-//   ability.rs — generic `easynet_ability_invoke` /
-//                `easynet_ability_subscribe` helpers every feature
-//                PR's FFI binding maps onto.
+//   invocation.rs — complete Axon Invocation ABI.
+//   ability.rs — retired ability+args symbols that hard-fail instead
+//                of constructing JSON control product frames.
 //
-// v1 status (PR-DAEMON Commit 4)
+// v2 status (daemon Invocation ABI)
 // -------------------------------
 // - ABI version + handle registry + last-error TLS: shipped (Commit 1).
-// - `easynet_init` / `easynet_shutdown` + `easynet_ability_invoke`
-//   wired through the real IPC client to the daemon UDS: this commit.
-// - `easynet_ability_subscribe` still returns ERR_NOT_IMPLEMENTED
-//   because streaming requires a long-lived reader task + frame
-//   channel back to the FFI callback; that lands in a follow-up.
+// - `easynet_init` / `easynet_shutdown`: daemon handle setup.
+// - `easynet_daemon_start/stop/status/invocation_endpoint`:
+//   product daemon lifecycle and endpoint discovery.
+// - `easynet_invocation_invoke`: complete unary Axon Invocation over
+//   daemon.sock when the `axon-pb` feature is enabled.
+// - `easynet_invocation_stream_open/cancel`: complete server-stream
+//   Axon Invocation over daemon.sock.
+// - `easynet_invocation_bidi_open/send/close/cancel`: complete
+//   InvokeBidi session ABI over daemon.sock.
+// - `easynet_ability_*`: retired legacy symbols; no JSON control
+//   product path remains in the FFI surface.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod ability;
 pub mod client;
+pub mod daemon;
 pub mod errors;
 pub mod handle;
+pub mod invocation;
 pub mod strings;
 
 use std::os::raw::c_char;
 
 use crate::ffi::client as ipc_client;
 use crate::ffi::errors::{
-    clear_last_error, set_last_error, EASYNET_OK, ERR_ALREADY_INIT, ERR_DAEMON_DOWN, ERR_GENERIC,
-    ERR_INVALID_HANDLE, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
+    clear_last_error, set_last_error, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
+    ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
 };
-use crate::ffi::handle::{alloc, lib_runtime, release, ClientSession, EasynetHandle};
+use crate::ffi::handle::{alloc, get, lib_runtime, release, ClientSession, EasynetHandle};
 use crate::ffi::strings::read_cstr;
 use crate::services::control::discovery;
 
 /// Current ABI version. Every breaking change to an exported
 /// `#[no_mangle] extern "C"` function bumps this integer; the CI
-/// header diff + the cbindgen regeneration guard catch renames
-/// that forget to bump.
+/// ABI header guard catches renames or return-code changes that
+/// forget to update the binding-facing contract.
 ///
-/// v1 = 1. First value; no deprecation path to a prior value.
-pub const EASYNET_ABI_VERSION: u32 = 1;
+/// v1 = 1. Historical ability+args dispatch draft.
+/// v2 = 2. Complete Invocation + daemon lifecycle ABI; legacy
+/// ability+args symbols are hard-fail retirement points.
+pub const EASYNET_ABI_VERSION: u32 = 2;
 
 /// Report the ABI version of this library build. Client bindings
 /// call this first thing at dlopen time and refuse to proceed when
@@ -181,37 +191,17 @@ pub unsafe extern "C" fn easynet_init(
 /// dereference any pointers.
 #[no_mangle]
 pub extern "C" fn easynet_shutdown(handle: EasynetHandle) -> i32 {
-    if release(handle) {
-        clear_last_error();
-        EASYNET_OK
-    } else {
+    if get(handle).is_none() {
         set_last_error(format!(
             "easynet_shutdown: handle {handle} is not registered (already shut down?)"
         ));
-        ERR_INVALID_HANDLE
+        return ERR_INVALID_HANDLE;
     }
-}
 
-/// Reject a second initialisation that targets the same control
-/// path. The intended Client usage is "one handle per Client
-/// process"; a second `easynet_init` is almost always a bug, but
-/// returning a distinct code (`ERR_ALREADY_INIT`) lets the binding
-/// surface "you already have a handle" instead of crashing.
-///
-/// v1 implementation: check whether any session in the registry
-/// already references the requested control path. The path
-/// comparison is by string, so `~/.easynet/control.json` and
-/// `/Users/.../.easynet/control.json` are not deduplicated; a
-/// follow-up commit can canonicalise the path. Today's behaviour
-/// is documented in the ABI spec.
-///
-/// Note: this is not currently called from `easynet_init` because
-/// the v1 contract is "init returns a fresh handle". Reserved for a
-/// follow-up commit that adds the dedupe behaviour explicitly.
-#[doc(hidden)]
-#[allow(dead_code)]
-pub(crate) fn _reserved_already_init_marker() -> i32 {
-    ERR_ALREADY_INIT
+    invocation::cancel_invocations_for_handle(handle);
+    let _ = release(handle);
+    clear_last_error();
+    EASYNET_OK
 }
 
 #[cfg(test)]

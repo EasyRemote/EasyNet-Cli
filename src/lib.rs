@@ -42,6 +42,7 @@
 )]
 
 pub mod core;
+pub mod daemon;
 pub mod eal;
 pub mod facade;
 pub mod ffi;

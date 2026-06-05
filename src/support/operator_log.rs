@@ -74,7 +74,7 @@ pub fn fmt_field_value(value: &dyn std::fmt::Display) -> String {
 /// ```
 ///
 /// Renders as (underscores in `component` become hyphens for the
-/// `[bracket]` tag only, matching the existing `[axon-serve]` /
+/// `[bracket]` tag only, matching the existing `[daemon-invocation]` /
 /// `[mcp-http-client]` convention; `kind` and field names are
 /// emitted verbatim so `grep kind=tls_insecure` is stable):
 ///
@@ -167,6 +167,6 @@ mod tests {
 
     #[test]
     fn macro_with_zero_extra_fields_expands() {
-        op_event!(component = axon_serve, kind = boot_complete);
+        op_event!(component = daemon_invocation, kind = boot_complete);
     }
 }

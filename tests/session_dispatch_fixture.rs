@@ -22,7 +22,7 @@
 
 use std::path::PathBuf;
 
-use easynet_cli::services::axon_serve::invoke_remote_initiator::SessionDispatch;
+use easynet_cli::services::invocation_transport::invoke_remote_initiator::SessionDispatch;
 use serde_json::Value;
 
 fn fixture_path() -> PathBuf {

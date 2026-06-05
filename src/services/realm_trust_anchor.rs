@@ -36,7 +36,7 @@
 // -----------------------
 // - The admission gate itself — that lives in `easynet-axon`'s
 //   `invocation::admission` module and is consulted from
-//   `services::axon_serve::daemon_invocation_service` (commit 7b/9)
+//   `services::invocation_transport::daemon_invocation_service` (commit 7b/9)
 // - The `realm-trust.toml` *writer* — pairing flow lives in PR-7
 // - SIGHUP reload — PR-7 wires the reload signal handler; PR-1
 //   reads once at boot
@@ -495,6 +495,48 @@ impl RealmTrustAnchor {
     pub fn append_agent(&mut self, entry: TrustedAgent) -> Result<(), RealmTrustError> {
         let entry = canonicalize_entry(entry)?;
         self.insert_canonicalized(entry)
+    }
+
+    /// Insert or replace one singleton-role trust entry.
+    ///
+    /// This is intentionally narrower than `append_agent`: it is
+    /// only for roles whose URA owns exactly one active key at a
+    /// time (`Backend` and `Hub`). It lets daemon bootstrap repair a
+    /// stale trust file after the hub/backend identity key rotates
+    /// without weakening Device pairing semantics or User
+    /// multi-pubkey semantics.
+    #[cfg(feature = "axon-pb")]
+    pub(crate) fn upsert_singleton_agent(
+        &mut self,
+        entry: TrustedAgent,
+    ) -> Result<(), RealmTrustError> {
+        let mut entry = canonicalize_entry(entry)?;
+        match entry.role {
+            TrustedAgentRole::Backend | TrustedAgentRole::Hub => {
+                if let Some(existing) = self.by_ura.get(&entry.agent_ura) {
+                    if matches!(
+                        existing.role,
+                        TrustedAgentRole::Backend | TrustedAgentRole::Hub
+                    ) {
+                        if existing.role == TrustedAgentRole::Hub {
+                            entry.role = TrustedAgentRole::Hub;
+                        }
+                        if entry.origin_tenant_id.is_none() {
+                            entry.origin_tenant_id = existing.origin_tenant_id.clone();
+                        }
+                        if entry.hub_endpoint.is_none() {
+                            entry.hub_endpoint = existing.hub_endpoint.clone();
+                        }
+                        if entry.tls_ca_pem_path.is_none() {
+                            entry.tls_ca_pem_path = existing.tls_ca_pem_path.clone();
+                        }
+                    }
+                }
+                self.by_ura.insert(entry.agent_ura.clone(), entry);
+                Ok(())
+            }
+            TrustedAgentRole::Device | TrustedAgentRole::User => self.insert_canonicalized(entry),
+        }
     }
 
     /// DEC-EU §revocation. Remove the (user_ura, pubkey) entry from

@@ -100,7 +100,7 @@ to re-verify after any vault format change.
 ```
 Producer:   EasyNet-Cli/src/bin/easynet-keyring.rs (Rust)
 Consumers:  EasyNet/backend/internal/keyring/reader.go (Go)
-            EasyNet-Cli/src/services/axon_serve/boot.rs::
+            EasyNet-Cli/src/services/invocation_transport/boot.rs::
               try_load_daemon_seed_from_keyring (Rust)
 ```
 

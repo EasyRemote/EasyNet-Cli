@@ -23,7 +23,8 @@
 //! The `AxonAbilityCatalog` is constructed *before* the Axon
 //! `LocalRuntime` (registry comes from
 //! `runtime::agents::build_registry_with_services` in the daemon's
-//! Stage 2; runtime comes later in `axon_serve::start_..._sidecar`).
+//! Stage 2; runtime comes later in
+//! `invocation_transport::start_daemon_invocation_transport`).
 //! But `device.agent.start`'s handler closure has to be installed at
 //! registry-build time. We bridge that by parking the
 //! [`LocalRuntime`] handle in an internal [`OnceLock`]: the
@@ -66,6 +67,15 @@ pub struct HotAgentRegistrar {
     /// the discover + invoke handlers re-enter local dispatch
     /// through it to resolve peer-agent ability descriptors.
     dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    /// Optional hub-advertise bridge for hot-added hosted agents.
+    ///
+    /// Runtime registration is local; hub visibility is separate.
+    /// Device-mode boot wires this after the long-lived
+    /// `<self>.session` escalation channel exists. Tests and
+    /// non-device modes leave it empty, in which case
+    /// `device.agent.start` still succeeds locally and the next
+    /// reconnect/boot advertise sweep repairs hub visibility.
+    hot_advertiser: OnceLock<Arc<dyn HotAgentAdvertiser>>,
 }
 
 /// Outcome reported back to the caller of `register_agent` /
@@ -83,6 +93,31 @@ pub struct HotAgentRuntimeSyncOutcome {
     pub runtime_not_ready: bool,
 }
 
+/// Input for a hot hosted-agent advertise pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotAgentAdvertiseRequest {
+    pub agent_ura: String,
+}
+
+/// Outcome for best-effort hub advertisement after hot agent add.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HotAgentAdvertiseOutcome {
+    pub advertised: bool,
+    pub error: Option<String>,
+}
+
+/// Narrow abstraction over the transport used to notify the hub
+/// about a hot-added hosted agent.
+///
+/// The registrar owns the trait object so runtime lifecycle code
+/// does not depend on `services::invocation_transport` concrete
+/// session types. Device-mode boot supplies an implementation backed
+/// by the current `<self>.session` bidi; tests can supply a recorder.
+pub trait HotAgentAdvertiser: Send + Sync {
+    fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
+        -> HotAgentAdvertiseOutcome;
+}
+
 impl HotAgentRegistrar {
     /// Build a *pending* registrar — runtime not yet attached.
     /// Construct at registry-build time so the lifecycle ability
@@ -97,6 +132,7 @@ impl HotAgentRegistrar {
             runtime: OnceLock::new(),
             loaders,
             dispatch_handle,
+            hot_advertiser: OnceLock::new(),
         })
     }
 
@@ -106,6 +142,19 @@ impl HotAgentRegistrar {
     /// `build_local_runtime`.
     pub fn set_runtime(&self, runtime: Arc<LocalRuntime>) {
         let _ = self.runtime.set(runtime);
+    }
+
+    /// Attach the hot advertise bridge. Idempotent first-writer-wins
+    /// to mirror [`Self::set_runtime`]; boot should call this at most
+    /// once after the device-mode session escalation handle exists.
+    pub fn set_hot_agent_advertiser(&self, advertiser: Arc<dyn HotAgentAdvertiser>) {
+        let _ = self.hot_advertiser.set(advertiser);
+    }
+
+    /// Clone the current hot advertise bridge if boot wired one.
+    #[must_use]
+    pub fn hot_agent_advertiser(&self) -> Option<Arc<dyn HotAgentAdvertiser>> {
+        self.hot_advertiser.get().cloned()
     }
 
     /// Register the canonical `<agent>.chat / discover / invoke`
@@ -368,7 +417,7 @@ mod tests {
     async fn register_agent_before_set_runtime_no_ops_with_runtime_not_ready_flag() {
         // Pre-`set_runtime` (i.e. during the brief boot window
         // between `build_registry_with_services` and
-        // `start_axon_serve_sidecar`'s `set_runtime` call), the
+        // `start_daemon_invocation_transport`'s `set_runtime` call), the
         // registrar must NOT panic — it logs an op_event and
         // returns `runtime_not_ready: true`. The agent still lands
         // on disk via the lifecycle handler's prior `save_agents`,

@@ -15,12 +15,16 @@
 // --------------------------------------------------------------------
 //
 //   request line  (terminated by \n):
-//     {"mode":"rpc",    "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>"}
+//     {"mode":"rpc",    "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>","subject_ura":"<optional>"}
 //   OR:
-//     {"mode":"stream", "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>"}
+//     {"mode":"stream", "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>","subject_ura":"<optional>"}
 //
 // `mode` defaults to "rpc" so a stale axon-runtime that does not
 // know about streaming gets the original single-line response shape.
+// `subject_ura` is optional envelope context. This UDS is still only
+// a daemon-internal local-tool bridge: it does not mint canonical
+// Invocation receipts and does not replace the public daemon.sock
+// Invocation transport.
 //
 //   RPC response (single line, terminated by \n):
 //     {"ok":true,  "result_b64":"<base64>", "content_type":"application/json"}
@@ -81,7 +85,7 @@ use crate::support::named_pipe::{scoped_pipe_name, PipeListener};
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::services::control::ability_proxy::AbilityProxy;
+use crate::services::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 
 /// One incoming request on the runtime-dispatch UDS. Mirrors the
 /// shape `axon-runtime/.../execution.rs::try_dispatch_runtime_local_tool`
@@ -112,6 +116,12 @@ struct DispatchRequest {
     /// JSON args), invokes, and re-encodes the result.
     #[serde(default)]
     arguments_b64: String,
+    /// Optional AXIOM envelope subject supplied by the Axon runtime.
+    /// Empty/missing means "degenerate local-tool subject" and is
+    /// represented as `None` in `InvocationPlan`; resource-scoped
+    /// handlers must still reject missing subjects themselves.
+    #[serde(default)]
+    subject_ura: String,
 }
 
 fn default_mode() -> String {
@@ -176,17 +186,37 @@ pub fn dispatch_endpoint_uri() -> String {
 /// process holding the socket) surfaces on the second attempt and
 /// aborts boot — operators see the conflict cleanly rather than
 /// running two daemons that disagree about who serves invokes.
-pub async fn run(proxy: AbilityProxy) -> anyhow::Result<()> {
-    let path = dispatch_socket_path();
-    let listener = bind_socket(&path).await?;
-    let path_display = format!("{}", path.display());
-    crate::op_event!(
-        component = runtime_dispatch,
-        kind = listening,
-        path = path_display,
-        message = "Step 3 wire to axon-runtime",
-    );
-    accept_loop(listener, proxy).await
+pub async fn run(adapter: RuntimeDispatchAdapter) -> anyhow::Result<()> {
+    RuntimeDispatchServer::bind().await?.serve(adapter).await
+}
+
+/// Bound runtime-dispatch listener.
+///
+/// Binding is deliberately separated from serving so daemon boot can
+/// synchronously prove that the socket is owned before it advertises
+/// Ready. A collision is a boot failure, not a background task log.
+#[derive(Debug)]
+pub struct RuntimeDispatchServer {
+    listener: DispatchListener,
+}
+
+impl RuntimeDispatchServer {
+    pub async fn bind() -> anyhow::Result<Self> {
+        let path = dispatch_socket_path();
+        let listener = bind_socket(&path).await?;
+        let path_display = format!("{}", path.display());
+        crate::op_event!(
+            component = runtime_dispatch,
+            kind = listening,
+            path = path_display,
+            message = "Step 3 wire to axon-runtime",
+        );
+        Ok(Self { listener })
+    }
+
+    pub async fn serve(self, adapter: RuntimeDispatchAdapter) -> anyhow::Result<()> {
+        accept_loop(self.listener, adapter).await
+    }
 }
 
 #[derive(Debug)]
@@ -241,14 +271,17 @@ async fn bind_socket(path: &Path) -> anyhow::Result<DispatchListener> {
 /// Accept connections forever, spawn one task per connection.
 /// One request per connection; the task ends after writing the
 /// response.
-async fn accept_loop(listener: DispatchListener, proxy: AbilityProxy) -> anyhow::Result<()> {
+async fn accept_loop(
+    listener: DispatchListener,
+    adapter: RuntimeDispatchAdapter,
+) -> anyhow::Result<()> {
     match listener {
         #[cfg(unix)]
         DispatchListener::Unix(listener) => loop {
             let (stream, _peer) = listener.accept().await?;
-            let proxy = proxy.clone();
+            let adapter = adapter.clone();
             tokio::spawn(async move {
-                if let Err(e) = serve_one(stream, proxy).await {
+                if let Err(e) = serve_one(stream, adapter).await {
                     // Per-connection failures never crash the loop.
                     let err_msg = format!("{e:#}");
                     crate::op_event!(
@@ -262,9 +295,9 @@ async fn accept_loop(listener: DispatchListener, proxy: AbilityProxy) -> anyhow:
         #[cfg(windows)]
         DispatchListener::NamedPipe(mut listener) => loop {
             let stream = listener.accept().await?;
-            let proxy = proxy.clone();
+            let adapter = adapter.clone();
             tokio::spawn(async move {
-                if let Err(e) = serve_one(stream, proxy).await {
+                if let Err(e) = serve_one(stream, adapter).await {
                     let err_msg = format!("{e:#}");
                     crate::op_event!(
                         component = runtime_dispatch,
@@ -281,7 +314,7 @@ async fn accept_loop(listener: DispatchListener, proxy: AbilityProxy) -> anyhow:
 /// dispatches, writes one line, closes. Stream mode reads one line,
 /// dispatches, writes a multi-line stream of frame lines, then closes.
 /// `mode` is parsed from the request (default "rpc").
-async fn serve_one<S>(stream: S, proxy: AbilityProxy) -> anyhow::Result<()>
+async fn serve_one<S>(stream: S, adapter: RuntimeDispatchAdapter) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -297,12 +330,12 @@ where
     // mode-specific path so error reporting shape stays consistent.
     match parse_request(&line) {
         ParsedRequest::Rpc(req) => {
-            let response_line = build_response_line(&req, &proxy);
+            let response_line = build_response_line(&req, &adapter);
             write_half.write_all(response_line.as_bytes()).await?;
             write_half.flush().await?;
         }
         ParsedRequest::Stream(req) => {
-            stream_frames_for_request(&req, &proxy, &mut write_half).await?;
+            stream_frames_for_request(&req, &adapter, &mut write_half).await?;
         }
         ParsedRequest::Bad(reason) => {
             let line = error_line("BAD_REQUEST", reason);
@@ -339,12 +372,12 @@ fn parse_request(request_line: &str) -> ParsedRequest {
 }
 
 /// Pure decision function — what response should we send for a
-/// pre-parsed request + proxy state. Pulled out as a free
+/// pre-parsed request + adapter state. Pulled out as a free
 /// function so it's exercised by unit tests without needing a real
 /// socket. ALWAYS returns a single line ending in `\n` — the
 /// runtime side reads exactly one line and tolerates no other
 /// shape.
-fn build_response_line(req: &DispatchRequest, proxy: &AbilityProxy) -> String {
+fn build_response_line(req: &DispatchRequest, adapter: &RuntimeDispatchAdapter) -> String {
     if req.tool_name.trim().is_empty() {
         return error_line("BAD_REQUEST", "tool_name must be non-empty".into());
     }
@@ -355,7 +388,7 @@ fn build_response_line(req: &DispatchRequest, proxy: &AbilityProxy) -> String {
         Err(msg) => return error_line("BAD_REQUEST", msg),
     };
 
-    match proxy.execute_runtime_dispatch(&req.tool_name, args_value) {
+    match adapter.execute_runtime_dispatch(&req.tool_name, args_value, subject_from_request(req)) {
         Ok(value) => {
             let bytes = match serde_json::to_vec(&value) {
                 Ok(b) => b,
@@ -416,7 +449,7 @@ fn error_line(code: &str, message: String) -> String {
 /// JSON. The chat-frame `type` is preserved for the gRPC consumer.
 async fn stream_frames_for_request<W>(
     req: &DispatchRequest,
-    proxy: &AbilityProxy,
+    adapter: &RuntimeDispatchAdapter,
     write_half: &mut W,
 ) -> anyhow::Result<()>
 where
@@ -438,7 +471,11 @@ where
         }
     };
 
-    let source = match proxy.execute_runtime_dispatch_stream(&req.tool_name, args_value) {
+    let source = match adapter.execute_runtime_dispatch_stream(
+        &req.tool_name,
+        args_value,
+        subject_from_request(req),
+    ) {
         Ok(s) => s,
         Err(msg) => {
             // Centralised "ability not found" classification — see
@@ -456,6 +493,15 @@ where
     };
 
     write_stream_source(source, write_half).await
+}
+
+fn subject_from_request(req: &DispatchRequest) -> Option<String> {
+    let subject = req.subject_ura.trim();
+    if subject.is_empty() {
+        None
+    } else {
+        Some(subject.to_owned())
+    }
 }
 
 /// Decode the base64 arguments. Pulled out so both RPC and stream
@@ -579,18 +625,13 @@ fn stream_error_line(code: &str, message: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::control::ability_proxy::AbilityProxy;
+    use crate::services::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 
-    /// Bare proxy used by every test. The dispatcher under it is
+    /// Bare adapter used by every test. The dispatcher under it is
     /// the live system-ability registry — `observe.health` is the
     /// canonical "always-registered, no fixture needed" probe.
-    fn fresh_proxy() -> AbilityProxy {
-        use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::kernel::Kernel;
-        use crate::runtime::kernel_api::KernelApi;
-        use std::sync::Arc;
-        let kernel: Arc<dyn KernelApi> = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
-        AbilityProxy::new(kernel)
+    fn fresh_adapter() -> RuntimeDispatchAdapter {
+        RuntimeDispatchAdapter::new_for_test()
     }
 
     /// Test helper: drive a raw request line through the same
@@ -599,10 +640,13 @@ mod tests {
     /// pin behaviour for malformed input without reaching for the
     /// inner `build_response_line` (which now expects a pre-parsed
     /// `DispatchRequest`).
-    fn build_response_line_from_str(request_line: &str, proxy: &AbilityProxy) -> String {
+    fn build_response_line_from_str(
+        request_line: &str,
+        adapter: &RuntimeDispatchAdapter,
+    ) -> String {
         match parse_request(request_line) {
             ParsedRequest::Rpc(req) | ParsedRequest::Stream(req) => {
-                build_response_line(&req, proxy)
+                build_response_line(&req, adapter)
             }
             ParsedRequest::Bad(reason) => error_line("BAD_REQUEST", reason),
         }
@@ -643,8 +687,8 @@ mod tests {
 
     #[test]
     fn malformed_request_line_returns_bad_request() {
-        let proxy = fresh_proxy();
-        let resp = build_response_line_from_str("not a json", &proxy);
+        let adapter = fresh_adapter();
+        let resp = build_response_line_from_str("not a json", &adapter);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], false);
         assert_eq!(v["code"], "BAD_REQUEST");
@@ -653,8 +697,8 @@ mod tests {
 
     #[test]
     fn empty_tool_name_returns_bad_request() {
-        let proxy = fresh_proxy();
-        let resp = build_response_line_from_str(r#"{"tool_name":"","arguments_b64":""}"#, &proxy);
+        let adapter = fresh_adapter();
+        let resp = build_response_line_from_str(r#"{"tool_name":"","arguments_b64":""}"#, &adapter);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["code"], "BAD_REQUEST");
         assert!(v["message"].as_str().unwrap().contains("tool_name"));
@@ -665,10 +709,10 @@ mod tests {
         // `!` is outside the base64 alphabet (URL or standard). A
         // bare-`@` string actually decodes (some base64 libs accept
         // it as no-op padding) so we use a guaranteed-invalid char.
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
             r#"{"tool_name":"device.observe.health","arguments_b64":"!!!"}"#,
-            &proxy,
+            &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["code"], "BAD_REQUEST");
@@ -689,10 +733,10 @@ mod tests {
     fn empty_arguments_default_to_empty_object() {
         // observe.health accepts {} — empty arguments_b64 must be
         // treated as {} not as a bad-request.
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
             r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
-            &proxy,
+            &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
@@ -702,10 +746,10 @@ mod tests {
 
     #[test]
     fn unknown_ability_returns_not_found() {
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
             r#"{"tool_name":"nope.does_not_exist","arguments_b64":""}"#,
-            &proxy,
+            &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], false);
@@ -717,10 +761,10 @@ mod tests {
         // Real RPC through the dispatcher — observe.health has a
         // built-in handler that returns a structured object. We
         // verify the result_b64 decodes to JSON and isn't empty.
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
             r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
-            &proxy,
+            &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
@@ -735,12 +779,12 @@ mod tests {
     fn json_args_decoded_then_passed_to_dispatcher() {
         // observe.health echoes its args through `ts`. We send a
         // marker arg and verify the dispatch path didn't drop it.
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let args = serde_json::json!({"client_marker":"e2e-step3"}).to_string();
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
         let req =
             format!(r#"{{"tool_name":"device.observe.health","arguments_b64":"{args_b64}"}}"#);
-        let resp = build_response_line_from_str(&req, &proxy);
+        let resp = build_response_line_from_str(&req, &adapter);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
         // We don't pin the inner shape — observe.health may or may
@@ -766,10 +810,10 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
 
         let listener = UnixListener::bind(&socket_path).unwrap();
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            serve_one(stream, proxy).await.unwrap();
+            serve_one(stream, adapter).await.unwrap();
         });
 
         // Client side: open, send request, read response, close.
@@ -810,10 +854,10 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
 
         let listener = UnixListener::bind(&socket_path).unwrap();
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            serve_one(stream, proxy).await.unwrap();
+            serve_one(stream, adapter).await.unwrap();
         });
 
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
@@ -865,10 +909,10 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path).unwrap();
-        let proxy = fresh_proxy();
+        let adapter = fresh_adapter();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            serve_one(stream, proxy).await.unwrap();
+            serve_one(stream, adapter).await.unwrap();
         });
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
         let req = json!({
@@ -933,6 +977,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn subject_ura_is_optional_and_trimmed() {
+        let req: DispatchRequest =
+            serde_json::from_str(r#"{"tool_name":"device.observe.health","arguments_b64":""}"#)
+                .unwrap();
+        assert_eq!(subject_from_request(&req), None);
+
+        let req: DispatchRequest = serde_json::from_str(
+            r#"{"tool_name":"device.observe.health","arguments_b64":"","subject_ura":"  easynet:///r/test/resource/device  "}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            subject_from_request(&req).as_deref(),
+            Some("easynet:///r/test/resource/device")
+        );
+
+        let req: DispatchRequest = serde_json::from_str(
+            r#"{"tool_name":"device.observe.health","arguments_b64":"","subject_ura":"   "}"#,
+        )
+        .unwrap();
+        assert_eq!(subject_from_request(&req), None);
+    }
+
     /// `bind_socket` cleans up a stale (no live listener) socket
     /// file. Pins the recovery path so a daemon that crashed
     /// without removing the file can re-bind on next boot.
@@ -971,6 +1038,31 @@ mod tests {
         let _holder = UnixListener::bind(&socket_path).unwrap();
         let err = bind_socket(&socket_path).await.unwrap_err();
         assert!(format!("{err:#}").contains("another process already accepts"));
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runtime_dispatch_server_bind_surfaces_live_collision() {
+        let socket_path = std::path::PathBuf::from(format!(
+            "/tmp/erld-server-live-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let _holder = UnixListener::bind(&socket_path).unwrap();
+        let previous = std::env::var("EASYNET_RUNTIME_DISPATCH_SOCK").ok();
+        std::env::set_var("EASYNET_RUNTIME_DISPATCH_SOCK", &socket_path);
+
+        let err = RuntimeDispatchServer::bind().await.unwrap_err();
+        assert!(format!("{err:#}").contains("another process already accepts"));
+
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_RUNTIME_DISPATCH_SOCK", value),
+            None => std::env::remove_var("EASYNET_RUNTIME_DISPATCH_SOCK"),
+        }
         let _ = std::fs::remove_file(&socket_path);
     }
 }

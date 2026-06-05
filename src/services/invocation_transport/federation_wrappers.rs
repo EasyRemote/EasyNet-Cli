@@ -1,7 +1,7 @@
-// EasyNet CLI — axon_serve — federation.* thin wrappers
+// EasyNet CLI — invocation_transport — federation.* thin wrappers
 // =======================================================
 //
-// File: src/services/axon_serve/federation_wrappers.rs
+// File: src/services/invocation_transport/federation_wrappers.rs
 // Description: Six thin wrappers for the `federation.*` ability
 //              family that the new daemon binary serves over the
 //              `Invocation::Invoke` (and one over `InvokeStream`)

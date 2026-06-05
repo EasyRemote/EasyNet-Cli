@@ -2274,6 +2274,67 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
+    use base64::Engine;
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let mut reg = AxonAbilityCatalog::new();
+    super::file_transfer_ability::register(&mut reg);
+    let d = dispatcher_for(Arc::new(reg));
+
+    let path = std::env::temp_dir().join(format!(
+        "easynet-real-ft-download-{}-{}.bin",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
+    let bytes = b"real-invoke-device-file-transfer-download";
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut t = target(
+        "device.fs.transfer",
+        json!({"mode": "download", "path": path.to_string_lossy()}),
+    );
+    t.call_mode = CallMode::Bidi;
+    let bidi = d.execute_bidi(t).expect("file_transfer bidi");
+
+    let mut from = bidi.from_client;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut downloaded = Vec::new();
+    let mut got_complete = false;
+    while std::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), from.recv()).await {
+            Ok(Some(f)) => {
+                let f = f.into_json_value().expect("device.fs.transfer emits JSON");
+                match f["type"].as_str() {
+                    Some("chunk") => {
+                        let chunk = f["data"].as_str().expect("chunk carries base64 data");
+                        downloaded.extend(
+                            base64::engine::general_purpose::STANDARD
+                                .decode(chunk)
+                                .expect("chunk base64 decodes"),
+                        );
+                    }
+                    Some("complete") => {
+                        got_complete = true;
+                        break;
+                    }
+                    other => panic!("unexpected file_transfer download frame {other:?}: {f}"),
+                }
+            }
+            _ => break,
+        }
+    }
+    assert!(
+        got_complete,
+        "expected `complete` frame from device.fs.transfer download"
+    );
+    assert_eq!(downloaded, bytes);
+    let _ = std::fs::remove_file(&path);
+}
+
 // ════════════════════════════════════════════════════════════════
 // Category F: RFC-005 v3.2 media abilities (A1–A9)
 // ────────────────────────────────────────────────────────────────

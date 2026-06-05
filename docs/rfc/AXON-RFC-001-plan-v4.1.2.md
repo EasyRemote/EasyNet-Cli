@@ -371,8 +371,8 @@ Verification rules at the admission gate:
 
    A device-profile is NOT implicitly trusted to issue DelegationProofs
    targeting Agents on other devices. Cross-device operator-authority
-   calls go through backend-profile (JWT-derived DelegationProof) or
-   require an explicitly cross-device-scoped delegation rotation
+   calls go through backend-profile with `SessionAuthority` or require
+   an explicitly cross-device-scoped user-signed delegation rotation
    (future work).
 
    This exception encodes the operational fact that a 0600 control
@@ -474,8 +474,9 @@ Operators (humans) are subjects, not Agents. They have URAs of shape
 recording the binding from external auth identity to URA. They do NOT
 host abilities and they are NEVER `caller` in an envelope — they are
 ALWAYS `subject`, with caller being a hosting Agent
-(backend-profile, device-profile) and a DelegationProof attesting
-authority.
+(backend-profile, device-profile) and an explicit authority binding
+attesting authority. Backend-mediated calls use `SessionAuthority`;
+true `DelegationProof` is reserved for user-signed delegation.
 
 **Where the URA lives.**
 
@@ -1150,7 +1151,7 @@ outbound (`mcp.client.*`) abilities.
   Frontend issues:
     caller         = backend-profile Agent
     subject        = operator URA
-    delegation     = JWT-derived DelegationProof
+    authority      = backend SessionAuthority
     callee         = consent-profile Agent
     ability        = consent.decide
     args           = { request_id, decision: "Allowed", justification }
@@ -1373,7 +1374,7 @@ Visibility column reflects [P8] correction for conversation.*.)
 For each current EasyNet function, the v4.1.2 invocation chain that
 implements it:
 
-| Function | Caller | Subject | Delegation | Callee | Ability | Section |
+| Function | Caller | Subject | Authority | Callee | Ability | Section |
 |---|---|---|---|---|---|---|
 | `easynet runtime start` (joined-device) | device-profile | device-profile | none | hub-profile | `federation.heartbeat` (initial=true) | §2.A Step 5 |
 | `easynet runtime start` (joined-device) | device-profile | each hosted Agent | none (self-attest) | hub-profile | `federation.advertise_agent` + `federation.advertise_abilities` | §2.A Step 6 |
@@ -1397,13 +1398,13 @@ implements it:
 | `easynet loop create` | device-profile | operator | local-socket DelegationProof | device-profile (self) | `loop.create` | (analogous) |
 | `easynet permission ...` | device-profile | operator | local-socket DelegationProof | consent-profile | `consent.list_pending` / `consent.decide` | §14 |
 | Frontend login → operator URA resolution [R1] | backend-profile | backend-profile | none (identity bootstrap) | hub-profile | `identity.resolve_operator` (cache miss → `identity.register_operator`) | §1.7 |
-| Frontend Skills page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (filter `skill.`) | §9 |
-| Frontend Abilities page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (no filter) | §10 |
-| Frontend Devices page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (filter `fleet.*`) | (analogous to §10) |
-| Frontend Agents page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (no filter) | (analogous to §10) |
-| Frontend chat | backend-profile | operator | JWT-derived DelegationProof | target llm-profile Agent | `conversation.send` (or stream) | §11 |
-| Frontend session attach | backend-profile | operator | JWT-derived DelegationProof | target device-profile | InvokeStream `fleet.session_read` + `fleet.session_input` | (analogous to §16) |
-| Frontend permission popup | backend-profile | operator | JWT-derived DelegationProof | consent-profile | InvokeStream `consent.subscribe` + `consent.decide` | §14 |
+| Frontend Skills page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (filter `skill.`) | §9 |
+| Frontend Abilities page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (no filter) | §10 |
+| Frontend Devices page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (filter `fleet.*`) | (analogous to §10) |
+| Frontend Agents page | backend-profile | operator | backend SessionAuthority | hub-profile | `federation.resolve` (no filter) | (analogous to §10) |
+| Frontend chat | backend-profile | operator | backend SessionAuthority | target llm-profile Agent | `conversation.send` (or stream) | §11 |
+| Frontend session attach | backend-profile | operator | backend SessionAuthority | target device-profile | InvokeStream `fleet.session_read` + `fleet.session_input` | (analogous to §16) |
+| Frontend permission popup | backend-profile | operator | backend SessionAuthority | consent-profile | InvokeStream `consent.subscribe` + `consent.decide` | §14 |
 | External Claude Code via MCP (tools/list) | mcp-profile | local operator | local-socket DelegationProof | hub-profile | `federation.resolve` (filter PUBLIC + SCOPED-matching) | §12 |
 | External Claude Code via MCP (tools/call) | mcp-profile | local operator | local-socket DelegationProof | target Agent | per tool name | §12 |
 | Daemon outbound to external MCP | <calling Agent> | relevant subject | (none if calling Agent is local) | mcp-profile (self) | `mcp.client.call` | §13 |

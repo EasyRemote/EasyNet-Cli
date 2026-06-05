@@ -142,6 +142,9 @@ fn check_runtime() -> Check {
                     ),
                 },
             },
+            // Legacy raw axon-runtime state. Unified device and hub paths
+            // now record DaemonOnly and flow through the branch above;
+            // this arm covers only pre-unification or non-product state.
             config::RuntimeKind::AxonBridge => {
                 let alive = state.pid.is_some_and(net::is_pid_alive)
                     || net::discover_pid_from_endpoint(&state.endpoint).is_some();
@@ -149,7 +152,7 @@ fn check_runtime() -> Check {
                     Check {
                         name: "local runtime".to_string(),
                         status: CheckStatus::Ok,
-                        detail: format!("bridge runtime up at {}", state.endpoint),
+                        detail: format!("bridge runtime (legacy) up at {}", state.endpoint),
                         hint: None,
                     }
                 } else {

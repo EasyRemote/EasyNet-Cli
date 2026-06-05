@@ -35,18 +35,17 @@
 #      API surfaces the same ability catalogue with friendly
 #      `display_name` values (no raw uuid hashes).
 #
-# Today's expected outcome
-# ------------------------
-# **Fails at step 2** with current code (start.rs::start_runtime_for_device
-# tries to fork axon-runtime, which is not in the release tarball).
-# That failure IS the bug we're tracking; this harness is the
-# regression gate that goes red on the bug and green after the P0
-# daemon-first refactor lands.
+# Expected outcome
+# ----------------
+# This harness should pass on daemon-first code. A failure in
+# `easynet start`, a changed axon-runtime process set, or missing
+# daemon/control sockets is a release-blocking regression.
 #
 # Hub topology
 # ------------
-# Local dev-backend on :8080 by default (override via
-# EASYNET_TEST_BACKEND_PORT / --backend-port; started via
+# Local dev-backend on :8080 / :50443 by default (override via
+# EASYNET_TEST_BACKEND_PORT / --backend-port and
+# EASYNET_TEST_HUB_TLS_PORT / --hub-tls-port; started via
 # scripts/dev-backend.sh --reset-db --no-seed-device from
 # the EasyNet repo). The dev-backend seeds a default
 # user dev@easynet.local / dev-password and serves both the REST API
@@ -68,6 +67,7 @@ easynet_repo="$workspace_root/EasyNet"
 # unset, the harness boots its own dev-backend for the test window.
 backend_url="${EASYNET_TEST_HUB_URL:-}"
 backend_port="${EASYNET_TEST_BACKEND_PORT:-8080}"
+backend_tls_port="${EASYNET_TEST_HUB_TLS_PORT:-50443}"
 backend_pid=""
 backend_listener_pid=""
 baseline_axon_pids=""
@@ -82,8 +82,9 @@ keep_state=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --prefix)        prefix="$2"; shift 2 ;;
-        --backend-url)   backend_url="$2"; shift 2 ;;
-        --backend-port)  backend_port="$2"; shift 2 ;;
+        --backend-url)      backend_url="$2"; shift 2 ;;
+        --backend-port)     backend_port="$2"; shift 2 ;;
+        --hub-tls-port)     backend_tls_port="$2"; shift 2 ;;
         --keep-prefix)   keep_prefix=1; shift ;;
         --keep-state)    keep_state=1; shift ;;
         --help|-h)
@@ -184,7 +185,8 @@ if [ -z "$backend_url" ]; then
     backend_log="$prefix/dev-backend.log"
     (
         cd "$easynet_repo"
-        EASYNET_PORT="$backend_port" \
+        HUB_HTTP_PORT="$backend_port" \
+        HUB_TLS_PORT="$backend_tls_port" \
         EASYNET_CLI_DIR="$cli_root" \
         EASYNET_AXON_RUNTIME_BIN="$workspace_root/EasyNet-Axon/core/runtime-rs/target/release/axon-runtime" \
           nohup bash scripts/dev-backend.sh --reset-db --no-seed-device > "$backend_log" 2>&1 &
@@ -263,10 +265,9 @@ if [ ! -f "$HOME/.easynet/credentials.json" ]; then
 fi
 
 # ── 5. Start daemon — THIS IS THE LOAD-BEARING ASSERTION ─────────
-# Current code spawns axon-runtime here. The release tarball does
-# NOT ship axon-runtime. So `easynet start` should fail fast on a
-# release-shape install — that failure is exactly the bug we're
-# tracking, and this script's whole purpose is to surface it.
+# `easynet start` must bring up easynet-daemon without spawning a
+# product-path standalone axon-runtime. The release tarball does not
+# ship axon-runtime, by design.
 echo "==> [5/7] easynet start (load-bearing assertion)"
 start_log="$prefix/easynet-start.log"
 if start_out="$(easynet start 2>&1)"; then

@@ -77,7 +77,7 @@ use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStre
 ///   flow) is visible to the next federation dispatch within
 ///   the cell's per-RPC snapshot cost (~50ms per
 ///   `perf-notes/PR-N1-commit-6-perf-cross-pass-by-xiaowen.md`).
-///   Production `start_axon_serve_sidecar` wires this flavour.
+///   Production `start_daemon_invocation_transport` wires this flavour.
 ///
 /// PR-N1 user-flow review (round 4) catch: the boot-time
 /// snapshot pinned the daemon's federation-peer view at boot,
@@ -331,7 +331,7 @@ pub type DirectoryEventStream = std::pin::Pin<
 ///   regression vs. `PresenceRegistry`'s existing pattern.
 ///
 /// Constructed once per daemon process at boot (alongside the
-/// inbound `start_axon_serve_sidecar` listener) and cloned
+/// inbound `start_daemon_invocation_transport` listener) and cloned
 /// cheaply into per-RPC dispatch tasks.
 #[derive(Clone)]
 pub struct CrossHubDialer {
@@ -406,7 +406,7 @@ impl CrossHubDialer {
     /// visible to the next federation dispatch without
     /// reconstructing the dialer or restarting the daemon.
     ///
-    /// `services/axon_serve/boot.rs::start_axon_serve_sidecar`
+    /// `services::invocation_transport::start_daemon_invocation_transport`
     /// uses this constructor in `Hub` / `Both` modes so operators
     /// editing the federation peer set (adding `[[trusted_agent]]
     /// role = "hub"` blocks with the schema-B `origin_tenant_id` /
@@ -582,7 +582,7 @@ impl CrossHubDialer {
             return Ok(cached.clone());
         }
 
-        // Shared with `axon_serve::session_initiator::dial_and_run_
+        // Shared with `invocation_transport::session_initiator::dial_and_run_
         // session` via `federation_client::peer_dial::pinned_tls_
         // config` so both outbound dial sites have one audited
         // PEM-read + Certificate::from_pem + ClientTlsConfig path.
@@ -604,7 +604,7 @@ impl CrossHubDialer {
                 detail: format!("apply tls_config: {err}"),
             })?
             // Production-WAN h2 hardening on the peer-hub bidi.
-            // Mirrors `axon_serve::session_initiator::dial_and_run_
+            // Mirrors `invocation_transport::session_initiator::dial_and_run_
             // session` on the device→hub leg: cross-hub federation
             // streams traverse the same NAT/LB intermediaries and
             // share the same idle-drop failure mode. 5s ping cadence,

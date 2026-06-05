@@ -13,8 +13,6 @@ use crate::runtime::plugin_host::{
     PluginAbilitySurfaceRecord, PluginInstaller, PluginLoadPlanner, PluginPackageIndex,
     PluginSurfaceProjector,
 };
-use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
-use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
 use crate::support::output::{self, OutputFormat};
 
 /// Plugin package lifecycle and daemon boot-state inspection.
@@ -195,44 +193,105 @@ fn invoke_plugin_status() -> anyhow::Result<Option<Vec<PluginAbilitySurfaceRecor
 fn invoke_plugin_control_ability(
     ability: &'static str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    run_blocking(
+    #[cfg(feature = "axon-pb")]
+    {
+        invoke_plugin_control_ability_via_daemon(ability)
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = ability;
+        Ok(None)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_plugin_control_ability_via_daemon(
+    ability: &'static str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    crate::support::async_bridge::run_blocking(
         async {
-            let control_path = crate::services::control::discovery::default_path();
-            let mut client = match crate::ffi::client::connect(&control_path).await {
+            let client = match crate::daemon::DaemonClient::local() {
                 Ok(client) => client,
-                Err(err) => {
-                    let msg = format!("{err:#}");
-                    if msg.contains("control.json not found")
-                        || msg.contains("connect to")
-                        || msg.contains("No such file")
-                        || msg.contains("Connection refused")
-                    {
-                        return Ok(None);
-                    }
-                    return Err(err);
+                Err(crate::daemon::DaemonError::InvocationEndpointDown { .. }) => {
+                    return Ok(None);
                 }
+                Err(err) => return Err(err.into()),
             };
-            let request_id = format!("plugin-reload-{}", uuid::Uuid::new_v4());
-            let req = IncomingFrame::Invoke {
-                request_id: request_id.clone(),
-                ability: ability.to_string(),
-                args: serde_json::json!({}),
-                subject: None,
+            let Some(subject) = plugin_control_subject_ura()? else {
+                return Ok(None);
             };
-            match client.round_trip(req).await? {
-                OutgoingFrame::Result {
-                    request_id: got,
-                    value,
-                    ..
-                } if got == request_id => Ok(Some(value)),
-                OutgoingFrame::Error { code, message, .. } => {
-                    anyhow::bail!("daemon plugin reload failed ({code}): {message}")
-                }
-                other => anyhow::bail!(
-                    "daemon plugin reload returned unexpected control frame: {other:?}"
-                ),
+            let invocation =
+                crate::daemon::DaemonInvocation::builder(&subject, &subject, ability, &subject)?
+                    .args_json(&serde_json::json!({}))?
+                    .build();
+            let response = client.invoke(invocation).await?;
+            if let Some(err) = response.error {
+                anyhow::bail!(
+                    "daemon plugin control ability {ability} failed ({}): {}",
+                    err.code,
+                    err.message
+                );
             }
+            if response.result.is_empty() {
+                return Ok(Some(serde_json::Value::Null));
+            }
+            let value = serde_json::from_slice(&response.result)?;
+            Ok(Some(value))
         },
-        NoRuntimeFallback::BuildCurrentThreadTokio,
+        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
     )
+}
+
+#[cfg(feature = "axon-pb")]
+fn plugin_control_subject_ura() -> anyhow::Result<Option<String>> {
+    match crate::persistence::config::load_credentials() {
+        Ok(creds) => Ok(Some(crate::ura::device_ura(
+            creds.tenant_id.trim(),
+            creds.node_id.trim(),
+        ))),
+        Err(err) => {
+            if is_missing_or_incomplete_credentials(&err) {
+                Ok(None)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_missing_or_incomplete_credentials(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("no credentials found") || msg.contains("credentials file is incomplete")
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_control_subject_is_unavailable_when_unpaired() {
+        let _guard = crate::facade::cli::test_support::HomeGuard::new();
+
+        assert_eq!(plugin_control_subject_ura().unwrap(), None);
+    }
+
+    #[test]
+    fn plugin_control_subject_uses_paired_device_ura() {
+        let _guard = crate::facade::cli::test_support::HomeGuard::new();
+        crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            tenant_id: "acme".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            ..Default::default()
+        })
+        .expect("write test credentials");
+
+        assert_eq!(
+            plugin_control_subject_ura().unwrap().as_deref(),
+            Some("easynet:///r/acme/device/dev-a")
+        );
+    }
 }
