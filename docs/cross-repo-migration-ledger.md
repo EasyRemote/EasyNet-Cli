@@ -44,12 +44,15 @@ by reading both encoders.
 
 | Plan item | Priority | Status | Evidence | Remainder |
 |---|---|---|---|---|
-| daemon Invocation builder completeness | P1 | **PARTIAL** | All 7 AXIOM fields set in 3 builders (`backend/internal/daemon_grpc/mapping.go:229-295`, `invoke_remote.go:563`). | `x-easynet-delegation = "stub"` (`mapping.go:129`) — **blocked** on the daemon admission gate accepting a real delegation-proof format. |
+| daemon Invocation builder completeness | P1 | **DONE end-to-end for backend producer + CLI consumer** | All 7 AXIOM fields set in 3 builders (`backend/internal/daemon_grpc/mapping.go`, `invoke_remote.go`). Backend serializes true user-signed `DelegationProof` values into `x-easynet-delegation` and backend-signed `SessionAuthority` values into `x-easynet-session-authority`, rejects ambiguous authority, and pins decode/verify in daemon gRPC and invoke_remote frame tests. EasyNet-Cli daemon admission now parses and verifies both metadata forms in `src/services/invocation_transport/admission_facade.rs`; `tests/admission_delegation_metadata.rs` proves unary, server-stream, and bidi frame-0 consumer paths. `<self>.invoke_remote` additionally verifies inner `(caller, subject, target, ability)` authority before writing `SessionDispatch`, and preserves metadata in the session dispatch frame. | Keep `InvokeRemote` receipt/control down-frames intentionally non-user-visible unless a future audit requirement needs HTTP-layer admission receipt exposure. |
 | No JSON control dependency | P1 | **DONE** | `internal/cliipc` absent; backend dials `daemon.sock` via gRPC only (`servicecontext.go:154-227`); JSON path retired (comments only). | None. |
 | Product state boundary | P1 | **DONE** | Backend calls daemon for all execution, stores DB projections; owns no admission/receipt semantics (`invokeAbilityLogic.go:94`, `remote_routing.go:179`). | None. |
 
-**Backend verdict: one blocked remainder** (delegation proof) gated by daemon work, not
-actionable from the backend repo alone.
+**Backend verdict: producer-side authority proof is complete, and the matching
+EasyNet-Cli daemon consumer is now complete.** Hub/backend-mediated user-subject calls
+must carry `x-easynet-session-authority`; true user-delegated calls carry
+`x-easynet-delegation`. Daemon admission verifies proof integrity, issuer trust,
+caller/subject/audience/scope binding, and expiry before dispatch.
 
 ---
 
@@ -59,34 +62,49 @@ actionable from the backend repo alone.
 |---|---|---|---|---|---|
 | 1 | Unify Hub + device under easynet-daemon | P0 | **DONE (this branch)** | `run_as_hub` runs through `easynet-daemon mode=hub`, records `DaemonOnly` (`src/facade/cli/start.rs`); `ensure_hub_config` (`daemon_config.rs`); AxonBridge kept for legacy only. 3 commits on `codex/f07-hub-device-unify-2026-06-05`. | None. |
 | 2 | Promote daemon Invocation transport to first-class | P1 | **DONE** | `services::invocation_transport` module tree (`src/services/invocation_transport/`); `start_daemon_invocation_transport` (`invocation_transport/boot.rs:184`); unary/stream/bidi implemented (`daemon_invocation_service.rs:982/1104/1148`) + 115 tests. The residual "sidecar" word elsewhere refers to *plugin-host* sidecars — a different concept; must not be renamed. | None. |
-| 3 | daemon SDK lifecycle + client APIs in `libeasynet_cli` | P1 | **DONE (this branch)** | `easynet_cli::daemon::{DaemonConfig, DaemonHandle, DaemonClient, DaemonInvocation, start_daemon, stop_daemon}` (`src/daemon.rs`); `DaemonHandle::{control_endpoint, invocation_endpoint, status, stop}`; `DaemonClient::invoke(DaemonInvocation)` submits a complete unary Axon Invocation over `daemon.sock`; `facade::cli::start` now reuses the SDK lifecycle path. | Stream/bidi and C ABI bindings are intentionally left to Step 4. |
-| 4 | Replace ability+args FFI with complete Invocation FFI | P2 | **NOT_STARTED** | FFI still `easynet_ability_invoke` (ability+args) at `src/ffi/ability.rs:102/155`; no `easynet_invocation_invoke` / stream / bidi. These are the Step-5 inventory's 3 remaining MUST_MIGRATE callers. | Add complete-Invocation FFI threading `subject`/causal context. **Now unblocked by Step 3.** |
-| 5 | JSON control caller inventory | P0 | **DONE** | `docs/json-control-caller-inventory.md` (commit `1af95db`, updated in this branch). 3 remaining MUST_MIGRATE FFI callers, CLI plugin migrated, backend confirmed absent, G1–G12 gate. | None. |
-| 6 | Demote JSON control | P3 | **BLOCKED** | The 3 remaining MUST_MIGRATE FFI callers still construct `IncomingFrame::Invoke/Subscribe` (`ffi/ability.rs:155/461`) plus cancel at `ffi/ability.rs:541`; CLI plugin is already on daemon Invocation. | Cannot start until Step 4 gives the remaining FFI callers a daemon-Invocation replacement. Gate = inventory G9 (empty re-sweep). |
-| 7 | Remove/shrink CLI-owned Invocation semantics | P1 | **NOT_STARTED** | `src/runtime/invocation.rs:104` defines a CLI-owned `Invocation` with its **own** `canonical_bytes()` (:157) + `invocation_id_of` (:200) — a second canonical source. **Live**, used by `runtime/kernel.rs:41` and `easynet-daemon.rs:51` (not dead code). | Reduce to an adapter over Axon canonical bytes, or prove equivalence + delegate. Real refactor; touches the daemon kernel. Sequence after Step 4 so callers already use Axon Invocation. |
+| 3 | daemon SDK lifecycle + client APIs in `libeasynet_cli` | P1 | **DONE (this branch)** | `easynet_cli::daemon::{DaemonStartConfig, DaemonHandle, DaemonClient, DaemonInvocation, start_daemon, stop_daemon}` (`src/daemon.rs`); `DaemonHandle::{control_endpoint, invocation_endpoint, status, stop}`; `DaemonClient::invoke(DaemonInvocation)` submits complete unary Axon Invocation over `daemon.sock`; `DaemonClient::invoke_stream(DaemonInvocation)` opens daemon `InvokeStream`; `DaemonClient::invoke_bidi(DaemonInvocation, streams)` opens daemon `InvokeBidi`; C ABI lifecycle symbols `easynet_daemon_start/stop/status/invocation_endpoint` live in `src/ffi/daemon.rs`; `facade::cli::start` now reuses the SDK lifecycle path. | None. |
+| 4 | Replace ability+args FFI with complete Invocation FFI | P2 | **DONE (this branch)** | `easynet_invocation_invoke(handle, invocation_json, out_receipt_json)`, `easynet_invocation_stream_open/cancel`, and `easynet_invocation_bidi_open/send/close/cancel` exist in `src/ffi/invocation.rs` and validate the full seven-tuple before routing through `DaemonClient`. `scripts/ffi-smoke.sh` proves daemon lifecycle, non-default invocation endpoint discovery, unary receipt/result, stream callback delivery, and bidi `device.fs.transfer` business data plus terminal cleanup receipt through a real daemon. Legacy `easynet_ability_invoke`, `easynet_ability_subscribe`, and `easynet_subscription_cancel` are hard-fail retired stubs and construct no JSON control frames. | None. |
+| 5 | JSON control caller inventory | P0 | **DONE** | `docs/json-control-caller-inventory.md` (commit `1af95db`, updated in this branch). 0 remaining MUST_MIGRATE product callers; CLI plugin migrated; FFI legacy JSON product callers retired; backend confirmed absent; G1–G12 gate. | None. |
+| 6 | Demote JSON control | P3 | **DONE (active CLI code)** | No production FFI/CLI product caller constructs JSON `Invoke/Subscribe/Cancel`. `src/services/control/frames.rs` now defines only boot/status `Subscribe` and `Cancel`; `src/services/control/server.rs` handles `system.watch_boot` only; daemon-internal Axon local-tool delegation is isolated in `runtime_dispatch.rs` + `runtime_dispatch_adapter.rs`. | Keep boot/status tests green and reject any future attempt to put product ability calls back on `control.sock`. |
+| 7 | Remove/shrink CLI-owned Invocation semantics | P1 | **DONE (active CLI code)** | `src/runtime/invocation.rs` now names the daemon-local type `RuntimeInvocation`; it has no `canonical_bytes()` method and no `invocation_id_of()` helper. `runtime_invocation_id()` converts the record to Axon `InvocationEnvelope`, calls Axon `canonical_invocation_bytes`, then hashes Axon-owned bytes. Legacy non-null `RuntimeCausalContext` variants fail closed because they lack Axon receipt hashes/URAs. | Remaining follow-up is semantic migration of any future non-null causal callers to Axon `ReceiptRef`; current schedule/loop/kernel callers use `Null`. |
 
 ---
 
 ## Critical path (what "finish everything" actually means)
 
-The cross-repo work is mostly **already done**. The genuine remaining sequence is a single
-chain inside EasyNet-Cli, plus one blocked backend item:
+The cross-repo work is mostly **already done**. The former EasyNet-Cli critical path
+for Steps 6 and 7 is complete in active code; the EasyNet-Cli proof/cleanup gates are
+now covered by `scripts/check-daemon-invocation-migration.sh`:
 
 ```
-Step 4 (complete-Invocation FFI)  ──▶  Step 6 (demote JSON control)
-                                    └─▶  Step 7 (shrink CLI Invocation)
-
-backend delegation proof  ──(blocked on daemon admission gate format)──
+InvokeRemote receipt/control audit policy  ──(only if HTTP-layer receipts become required)──
 ```
 
-- **Steps 1, 2, 5** — DONE. **Axon** — nothing to change. **Backend** — done except one
-  blocked item.
-- **Step 3** is now complete in this branch. Step 4 is the next actionable unit; it gates
-  Steps 6 and 7.
-- Step 7's CLI `Invocation` is a live kernel type, so it is a real refactor, not a deletion.
+- **Steps 1, 2, 5** — DONE. **Axon** — protocol docs define `subject` as the
+  authority/audit principal, not execution location. **Backend producer** — done;
+  it emits serialized `SessionAuthority` metadata for backend sessions and
+  reserves `DelegationProof` for user-signed delegation, including the
+  `<self>.invoke_remote` inner metadata path.
+- **Daemon authority consumer** — DONE in EasyNet-Cli; `x-easynet-session-authority`
+  and `x-easynet-delegation` are parsed and verified across unary,
+  server-stream, bidi frame-0 admission paths, and invoke_remote inner dispatch
+  before reverse-session forwarding.
+- **Step 3 and Step 4** are now complete in this branch. Unary, server-stream,
+  and bidi external FFI surfaces are covered by daemon-level smoke tests; bidi
+  additionally proves real `device.fs.transfer` business data plus terminal
+  cleanup receipt over `InvokeBidi`.
+- Step 7's CLI runtime invocation is now an adapter record over Axon canonical bytes, not a canonical source.
+- G8 is complete in EasyNet-Cli: migrated product callers either parse complete Invocation JSON
+  or use the complete `DaemonInvocation::builder(caller, callee, ability, subject)` path, and
+  direct construction is mechanically rejected outside `src/daemon.rs`.
+- G12 is complete for EasyNet-Cli `main` `6f463c6826dd3ff28d44db91263504d3fbc26023`: `main`
+  still contains `ability_proxy.rs`, product JSON control frame variants, and CLI-owned
+  `Invocation`/`CausalContext`/`canonical_bytes`/`invocation_id_of`; the current tree removes
+  those active paths and passes the migration guard.
 
 ## Baseline caveat
 
-This ledger is current-working-tree evidence on the branches named above. Re-confirm against
-each repo's `main` before treating any NOT_STARTED row as greenfield — a sibling branch may
-already hold partial work (as the backend audit branch did).
+This ledger is current-working-tree evidence on the branches named above. EasyNet-Cli has
+now been re-confirmed against `main` for the daemon Invocation migration gate. Re-confirm
+EasyNet backend and EasyNet-Axon against their release baselines before packaging a cross-repo
+release — a sibling branch may already hold partial work (as the backend audit branch did).

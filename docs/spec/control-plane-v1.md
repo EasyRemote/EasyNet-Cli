@@ -1,7 +1,8 @@
 # Control Plane v1 — Local IPC Wire Protocol
 
 > Plan v10.5 R1 §"本机 IPC 接口" pin. The on-host control-plane
-> protocol every Client FFI binding speaks to `easynet-daemon`.
+> protocol used for local daemon boot/status and diagnostics.
+> Product ability calls use daemon `Invocation` over `daemon.sock`.
 
 ## 1. Transport
 
@@ -22,7 +23,7 @@
   "pid": 12345,
   "daemon_version": "1.17.1",
   "supported_ipc_versions": { "min": 1, "max": 1 },
-  "capability_flags": ["ability_invoke", "ability_subscribe", "loopback", "misfire_policy_v1"]
+  "capability_flags": ["boot_status", "control_diagnostics"]
 }
 ```
 
@@ -51,62 +52,51 @@ compose the same shape from a `python3` client.
 ### Client → daemon (`IncomingFrame`)
 
 ```jsonc
-// RPC ability call
-{ "type": "Invoke",
-  "request_id": "<caller-chosen string>",
-  "ability": "system.session.list",
-  "args": { "include_terminated": true } }
-
-// Streaming ability subscription
-{ "type": "Subscribe",
+// Boot/status stream subscription
+{ "type": "subscribe",
   "subscription_id": "<caller-chosen string>",
-  "ability": "system.session.attach",
-  "args": { "session_id": "...", "since_seq": 0 } }
+  "ability": "system.watch_boot",
+  "args": {} }
 
-// Cancel an active subscription
-{ "type": "Cancel",
+// Cancel an active boot/status subscription
+{ "type": "cancel",
   "subscription_id": "<the id from a prior Subscribe>" }
 ```
 
 ### Daemon → client (`OutgoingFrame`)
 
 ```jsonc
-// Successful RPC response
-{ "type": "Result",
-  "request_id": "<echo of Invoke.request_id>",
-  "value": { ... } }
-
 // One frame in a stream
-{ "type": "Frame",
+{ "type": "frame",
   "subscription_id": "<echo of Subscribe.subscription_id>",
-  "frame": { ... } }
+  "frame": { "type": "ready" } }
 
 // Stream terminated (success or otherwise)
-{ "type": "Terminal",
+{ "type": "terminal",
   "subscription_id": "...",
   "reason": "completed" | "cancelled" | "error" }
 
-// Error envelope (for Invoke OR Subscribe)
-{ "type": "Error",
-  "request_id": "..." | null,
+// Error envelope for malformed, unknown, or unsupported control frames
+{ "type": "error",
   "subscription_id": "..." | null,
-  "code": "ability_failed" | "protocol" | "not_found" | ...,
+  "code": "protocol" | "not_found" | "version" | "shutting_down",
   "message": "human-readable diagnostic" }
 ```
 
-`request_id` and `subscription_id` are returned verbatim from the
-matching request frame. Pinned by the Rust unit test
-`handle_preserves_subscription_id_for_subscribe_and_cancel`.
+`subscription_id` is returned verbatim from the matching boot/status
+request frame. Retired product frame discriminators such as `invoke`,
+`open_bidi`, `send_bidi`, and `close_bidi` are no longer part of the
+schema; serde decode rejects them as `protocol` errors before handler
+dispatch.
 
 ## 5. Error codes (`code` field)
 
 | code             | meaning                                                |
 |------------------|--------------------------------------------------------|
 | `protocol`       | malformed frame; connection stays open                 |
-| `not_found`      | unknown ability or unknown id                          |
-| `ability_failed` | ability handler returned an error                     |
+| `not_found`      | unknown control subscription or id                     |
 | `version`        | post-handshake version mismatch                        |
-| `internal`       | daemon-side bug; consult logs                          |
+| `shutting_down`  | daemon is terminating                                  |
 
 A `protocol` error does not close the connection — the daemon
 keeps reading subsequent frames. Any other error may close the

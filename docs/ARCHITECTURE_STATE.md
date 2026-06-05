@@ -81,11 +81,12 @@ ability registry, no provider matching. `claude.chat` and
 `codex.chat` are different methods that share a name; they are not
 two implementations of the same ability.
 
-The ontological grounding is §4 (OOP view): an agent is an object,
-its public abilities are methods, and its private skills are fields.
-The encapsulation invariant is non-negotiable — no CLI command, no
-SDK call, and no EAL construct may reach across an agent boundary
-into a private skill.
+The ontological grounding is the OOP view: an agent is an object,
+its public abilities are methods, and its private skills are
+implementation resources. A skill is not a private ability and is not
+network-addressable. The encapsulation invariant is non-negotiable —
+no CLI command, no SDK call, and no EAL construct may reach across an
+agent boundary into a private skill.
 
 ## EAL surface invariant
 

@@ -127,12 +127,14 @@
 This document records the consensus reached between the EasyNet authors and a
 rapporteur during a multi-round design alignment session, regarding the
 ontology that underpins EasyNet---an agent-native distributed system---and
-the layering of its command-line interface. The central claim aligned upon is
-that an \emph{ability} is not a function and not a static contract, but rather
-the triple ``\emph{skill plus self-evolution plus network-wide invocation},''
-implemented internally as a graph composed of memory and workflow components.
-We further pin down the object-oriented view of agents (public abilities,
-private skills), the two-language two-runtime split (AAL/BCC for production;
+the layering of its command-line interface. The current protocol-facing claim
+is that an \emph{ability} is a network-visible executable contract with a
+stable public surface, policy, Invocation, observability, and receipt
+semantics. A \emph{skill} is implementation/resource-plane support: an
+ability implementation may use skills, memory, workflow graphs, tools, or
+other abilities, but a skill is not itself network-addressable. We further
+pin down the object-oriented view of agents (public abilities, private
+skills), the two-language two-runtime split (AAL/BCC for production;
 EAL/EasyNet for consumption), the demotion of \emph{device} from a
 network-first-class object to a hosting substrate, and the desugaring of
 \texttt{agent send} into a single-line External EAL mission invoking the
@@ -182,35 +184,39 @@ auditable.
 
 \axiom{}
 \begin{quote}
-\textbf{$\text{ability} = \text{skill} + \text{self-evolution} + \text{network-wide invocation}$}
+\textbf{Ability is the network-visible executable contract. Skill is private
+implementation support.}
 
 \medskip
 \noindent
-Compared with the static-template execution of a Skill, an Ability can
-continuously evolve through user long-context and network compounding, and
-through EasyNet can remotely invoke abilities across the whole network for
-its own use, achieving maximum capability execution.
+An ability exposes a stable public surface, policy boundary, Invocation
+entrypoint, observability stream, and receipt semantics. Its implementation
+may evolve through long-context memory, workflow graphs, model/tool use, skill
+resources, and child Invocations, but those implementation resources are not
+part of the public addressable contract.
 \end{quote}
 
-The three components of an ability are non-optional. Each contributes a
-property that the other two cannot supply on their own:
+The older shorthand
+``\emph{skill plus self-evolution plus network-wide invocation}'' was useful
+as a draft intuition, but it is not the normative definition. It must not be
+read as ``Skill is a component of Ability'' or ``private Ability equals
+Skill.'' The protocol boundary is:
 
 \begin{itemize}[leftmargin=2em,itemsep=0.3em]
-    \item \textbf{$+\,\text{skill}$} --- the seed. The ability begins as
-    wrapped skill knowledge.
-    \item \textbf{$+\,\text{self-evolution}$} --- the ability's
-    \emph{implementation} grows over time, while its public surface remains
-    stable.
-    \item \textbf{$+\,\text{network-wide invocation}$} --- the ability is
-    addressable from anywhere on EasyNet via gRPC.
+    \item \textbf{Ability} --- public, addressable, policy-governed, invoked
+    through Axon Invocation, and producing receipts.
+    \item \textbf{Skill} --- private implementation/resource-plane knowledge
+    that may support an ability but cannot be invoked across the network.
+    \item \textbf{Implementation graph} --- memory, workflow, tools, skills,
+    model calls, and child Invocations behind the stable ability surface.
 \end{itemize}
 
-\derived{} Removing any one component degenerates the object back to something
-strictly simpler:
+\derived{} Removing one of the public-contract properties degenerates the
+object into something strictly simpler:
 \begin{itemize}[leftmargin=2em,itemsep=0.2em]
-    \item without graph $\Rightarrow$ degenerates to a skill,
-    \item without self-evolution $\Rightarrow$ degenerates to a frozen function,
-    \item without network invocation $\Rightarrow$ degenerates to a local tool.
+    \item without Invocation/receipt semantics $\Rightarrow$ local tool,
+    \item without stable schema/policy $\Rightarrow$ ad-hoc handler,
+    \item without observability/audit $\Rightarrow$ unauditable side effect.
 \end{itemize}
 
 \subsection{Thesis B: EasyNet, the network of vocational abilities}

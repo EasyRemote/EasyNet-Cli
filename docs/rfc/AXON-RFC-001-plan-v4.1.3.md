@@ -80,10 +80,10 @@ and `conversation.stream`.
 §19 is amended: the `easynet ability invoke claude.skill.alive-video`
 row is unchanged, but a parallel row is added for the canonical form:
 
-| Function | Caller | Subject | Delegation | Callee | Ability | Section |
+| Function | Caller | Subject | Authority | Callee | Ability | Section |
 |---|---|---|---|---|---|---|
-| Frontend chat (canonical form, when registered) | backend-profile | operator | JWT-derived DelegationProof | target llm-profile Agent | `conversation.send` (or stream) | §11 |
-| Frontend chat (live convenience form, today) | backend-profile | operator | JWT-derived DelegationProof | device-profile (proxy) | `<agent>.chat` per per-agent manifest | §11 |
+| Frontend chat (canonical form, when registered) | backend-profile | operator | backend SessionAuthority | target llm-profile Agent | `conversation.send` (or stream) | §11 |
+| Frontend chat (live convenience form, today) | backend-profile | operator | backend SessionAuthority | device-profile (proxy) | `<agent>.chat` per per-agent manifest | §11 |
 
 ---
 

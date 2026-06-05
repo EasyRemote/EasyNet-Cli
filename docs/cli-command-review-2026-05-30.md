@@ -17,6 +17,13 @@ This document lists **every command the CLI should have**, each tagged with:
 The review is structured so we can **walk it one section at a time**. Each command has a one-line
 *what it's for* and, where relevant, the Axon primitive it maps to (with file:line).
 
+**Current ontology correction (2026-06-05):** this review predates the clean
+Ability/Skill boundary. Read any older "Skill = private Ability" phrasing as a
+historical audit note, not a current model. Ability is the network-visible
+executable contract invoked through Axon Invocation. Skill is private
+implementation/resource-plane support and is not network-addressable unless an
+agent exposes a separate Ability whose implementation uses that skill.
+
 ---
 
 ## North Star (the bar we measure against)
@@ -501,7 +508,7 @@ The intuition "this should be an object graph" is sound and *partially present*,
 |---|---|---|---|
 | **Method** | Ability (a verb on an Agent) | `[IMPLEMENTED]` | `invoke(caller, callee, ability, args)` is literally method dispatch; `<agent>.<verb>` is `receiver.method`. |
 | **`toString()` / base method** | A default callable every object has | `[DOC-ONLY]` | The `chat` ability is described as *"Analogous to `Object.toString()` in Java — every agent exposes this"* (`gallery/case01-aris/abilities/chat/ability.json:5`). But there is **no base-Agent type** that *guarantees* `chat`; it's a convention, not an inherited member. |
-| **Encapsulation** (private members) | Skill = PRIVATE ability | `[DOC-ONLY]` | Ontology says Skill = `visibility=PRIVATE`. But visibility isn't in proto/runtime (§3.8-B), so the private/public boundary is **not structurally enforced** — it's an honor system. |
+| **Encapsulation** (private members) | Ability is public contract; Skill is private implementation support | `[DOC-ONLY]` | Current ontology does not model Skill as a `PRIVATE` Ability. Runtime still lacks structural visibility/authorization fields (§3.8-B), so the private/public boundary is not yet enforced by wire state. |
 | **Composition** (object made of objects) | Recursive Agent; `Eal` ability composing sub-invocations | `[IMPLEMENTED]` (composition) / `[DOC-ONLY]` (recursive Agent) | `Eal(EalExec)` lets an ability be implemented by composing others — real composition. But "Agent composed of Agents" is the *open question* (`ONTOLOGY:474`), undecided. |
 | **Inheritance** (family shares members) | Family/namespace shares abilities or policy | `[ABSENT]` | No type hierarchy, no member inheritance, no "all `aris.*` inherit X." The family segment doesn't even parse (§3.7). |
 | **Polymorphism** (same call, different impl) | Same ability name across agents (`reviewer-gpt.review` vs `aris.review`) | `[IMPLEMENTED]` (de facto) | Two agents can both expose `review`; caller picks the receiver. This is duck-typing by ability name — works, but unmodeled (no interface/contract type asserting they're substitutable). |
@@ -578,8 +585,9 @@ protocol/ability-publication dependency, not pure CLI exposure.
   permission grants — exactly "an ability may access the camera," "an agent may install on this node."
 - **Temporary override** — `CreateOverride/RevokeOverride`, use case literally *"temporarily allow
   ability X on node Y for debugging"* (policy.proto:166–191). The break-glass / time-boxed grant.
-- **Ability visibility** — PUBLIC / PRIVATE(=Skill) / SCOPED(authorized_agents) from the ontology. The
-  *who-can-even-see-this* layer.
+- **Ability visibility** — PUBLIC / SCOPED(authorized_agents), with PRIVATE reserved only for
+  implementation-internal resources rather than network-addressable abilities. The
+  *who-can-even-see-this* layer still needs a wire/runtime contract.
 - **Install-time guards** — `require_consent`, `allow_transferred_code` (capability.proto:239–240).
 
 ### Missing commands

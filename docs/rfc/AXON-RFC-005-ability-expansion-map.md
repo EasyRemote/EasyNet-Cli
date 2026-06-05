@@ -172,8 +172,9 @@ the choice.
 
 `VoiceSignaller` rewrite (post-cluster): each method
 constructs an `InvokeRequest` against the matching `media.*`
-ability, with a JWT-derived DelegationProof per §1.5. The
-wire format and signing path are unchanged.
+ability, with backend `SessionAuthority` for backend-mediated
+sessions or a true user-signed `DelegationProof` when the user key
+signs directly. The wire format and signing path are unchanged.
 
 **Verdict**: needs **new namespace `media.*`** (7 abilities)
 plus an owner-profile decision. No protocol change. No FFI
