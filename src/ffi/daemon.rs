@@ -1,0 +1,600 @@
+// EasyNet CLI — Daemon lifecycle C ABI
+// =====================================
+//
+// File: src/ffi/daemon.rs
+// Description: C ABI entry points for starting, stopping, inspecting,
+//              and discovering the local `easynet-daemon`.
+//
+// Boundary
+// --------
+// This module exposes EasyNet-Cli daemon lifecycle control to
+// language bindings. It owns only product daemon process lifecycle
+// and endpoint discovery. It does not submit ability calls, define
+// Axon Invocation semantics, or replace `ffi::invocation`.
+//
+// What this module is NOT
+// -----------------------
+// - It is not the `easynet_init` client-session registry. A daemon
+//   lifecycle handle names a process/status object, while
+//   `EasynetHandle` names an IPC client session.
+// - It is not an Axon runtime lifecycle API. Starting
+//   `axon-runtime` belongs to Axon SDK reference-runtime surfaces,
+//   not to `libeasynet_cli`.
+// - It is not a JSON-control ability bridge. Product calls must use
+//   the complete Invocation ABI in `ffi::invocation`.
+
+use std::os::raw::c_char;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+use crate::daemon::{DaemonHandle, DaemonStartConfig};
+use crate::ffi::errors::{
+    clear_last_error, set_last_error, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_ARG,
+    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
+};
+use crate::ffi::handle::{alloc, ClientSession, EasynetHandle};
+use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
+
+/// Opaque handle for a daemon process lifecycle session.
+///
+/// A value of 0 means "no daemon lifecycle handle allocated".
+/// The handle is process-local and must not be persisted. It is
+/// intentionally separate from `EasynetHandle`, which names an IPC
+/// client session returned by `easynet_init`.
+pub type EasynetDaemonHandle = u64;
+
+/// Start or attach to `easynet-daemon`.
+///
+/// `config_json` must be a UTF-8 JSON object with this shape:
+///
+/// ```text
+/// {
+///   "mode": "device" | "hub",
+///   "node_id": "dev-a",              // required for device
+///   "daemon_bin": "/path/to/bin",    // optional
+///   "log_path": "/path/to/log",      // optional
+///   "detach": true,                  // optional
+///   "env": {"KEY": "VALUE"}          // optional string map
+/// }
+/// ```
+///
+/// On success, `*out_daemon_handle` receives a daemon lifecycle
+/// handle that can be passed to `easynet_daemon_status`,
+/// `easynet_daemon_invocation_endpoint`, and `easynet_daemon_stop`.
+///
+/// # Safety
+/// - `config_json` must point to a valid UTF-8 C string.
+/// - `out_daemon_handle` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_daemon_start(
+    config_json: *const c_char,
+    out_daemon_handle: *mut EasynetDaemonHandle,
+) -> i32 {
+    if out_daemon_handle.is_null() {
+        set_last_error("easynet_daemon_start: out_daemon_handle pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_daemon_handle = 0 };
+
+    let raw = match read_cstr(config_json) {
+        Ok(value) => value,
+        Err(StringError::Null) => {
+            set_last_error("easynet_daemon_start: config_json pointer is null");
+            return ERR_NULL_POINTER;
+        }
+        Err(StringError::NotUtf8) => {
+            set_last_error("easynet_daemon_start: config_json is not valid UTF-8");
+            return ERR_INVALID_UTF8;
+        }
+    };
+
+    let config = match DaemonStartConfigJson::parse(raw).and_then(DaemonStartConfigJson::build) {
+        Ok(config) => config,
+        Err(err) => {
+            set_last_error(format!("easynet_daemon_start: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+
+    let handle = match crate::daemon::start_daemon(&config) {
+        Ok(handle) => handle,
+        Err(err) => {
+            set_last_error(format!("easynet_daemon_start: {err}"));
+            return ERR_DAEMON_DOWN;
+        }
+    };
+
+    let id = insert_daemon_handle(handle);
+    unsafe { *out_daemon_handle = id };
+    clear_last_error();
+    EASYNET_OK
+}
+
+/// Stop a daemon lifecycle handle.
+///
+/// The handle is removed only after the stop operation succeeds.
+/// Unknown handles return `ERR_INVALID_HANDLE`.
+#[no_mangle]
+pub extern "C" fn easynet_daemon_stop(handle: EasynetDaemonHandle) -> i32 {
+    let Some(daemon) = get_daemon_handle(handle) else {
+        set_last_error(format!(
+            "easynet_daemon_stop: daemon handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    };
+    let stop_result = daemon
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .stop();
+    if let Err(err) = stop_result {
+        set_last_error(format!("easynet_daemon_stop: {err}"));
+        return ERR_DAEMON_DOWN;
+    }
+    let _ = remove_daemon_handle(handle);
+    clear_last_error();
+    EASYNET_OK
+}
+
+/// Return daemon liveness and endpoint status as JSON.
+///
+/// The returned string is caller-owned and must be freed with
+/// `easynet_string_free`.
+///
+/// # Safety
+/// `out_status_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_daemon_status(
+    handle: EasynetDaemonHandle,
+    out_status_json: *mut *mut c_char,
+) -> i32 {
+    if out_status_json.is_null() {
+        set_last_error("easynet_daemon_status: out_status_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_status_json = std::ptr::null_mut() };
+
+    let Some(daemon) = get_daemon_handle(handle) else {
+        set_last_error(format!(
+            "easynet_daemon_status: daemon handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    };
+    let status = daemon
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .status();
+    let json = daemon_status_json(&status).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_daemon_status: out-of-memory allocating status string");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_status_json = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+/// Return the daemon Axon Invocation endpoint path.
+///
+/// The returned string is caller-owned and must be freed with
+/// `easynet_string_free`.
+///
+/// # Safety
+/// `out_endpoint` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_daemon_invocation_endpoint(
+    handle: EasynetDaemonHandle,
+    out_endpoint: *mut *mut c_char,
+) -> i32 {
+    if out_endpoint.is_null() {
+        set_last_error("easynet_daemon_invocation_endpoint: out_endpoint pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_endpoint = std::ptr::null_mut() };
+
+    let Some(daemon) = get_daemon_handle(handle) else {
+        set_last_error(format!(
+            "easynet_daemon_invocation_endpoint: daemon handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    };
+    let endpoint = daemon
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .invocation_endpoint()
+        .display()
+        .to_string();
+    let ptr = alloc_output_cstring(endpoint);
+    if ptr.is_null() {
+        set_last_error("easynet_daemon_invocation_endpoint: out-of-memory allocating endpoint");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_endpoint = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+/// Open an Invocation-capable client handle from a daemon lifecycle
+/// handle.
+///
+/// This is the binding-friendly bridge between the process lifecycle
+/// ABI and the Invocation ABI: callers may start or attach to a daemon,
+/// then call this function and pass the returned `EasynetHandle` to
+/// `easynet_invocation_*`. The returned handle is released with
+/// `easynet_shutdown`.
+///
+/// # Safety
+/// `out_handle` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_daemon_open_client(
+    daemon_handle: EasynetDaemonHandle,
+    out_handle: *mut EasynetHandle,
+) -> i32 {
+    if out_handle.is_null() {
+        set_last_error("easynet_daemon_open_client: out_handle pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_handle = 0 };
+
+    let Some(daemon) = get_daemon_handle(daemon_handle) else {
+        set_last_error(format!(
+            "easynet_daemon_open_client: daemon handle {daemon_handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    };
+
+    let daemon = daemon
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let status = daemon.status();
+    if !status.control_accepting() || !status.invocation_accepting() {
+        set_last_error(format!(
+            "easynet_daemon_open_client: daemon is not ready; control_accepting={}, invocation_accepting={}",
+            status.control_accepting(),
+            status.invocation_accepting()
+        ));
+        return ERR_DAEMON_DOWN;
+    }
+
+    let control_path = daemon.control_endpoint().display().to_string();
+    let invocation_endpoint = daemon.invocation_endpoint().display().to_string();
+    let (handle, _) = alloc(ClientSession::with_control_path_only(
+        control_path,
+        Some(invocation_endpoint),
+    ));
+    unsafe { *out_handle = handle };
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[derive(Debug)]
+struct ActiveDaemonHandle {
+    inner: Mutex<DaemonHandle>,
+}
+
+#[derive(Debug)]
+struct DaemonHandleRegistry {
+    next: AtomicU64,
+    entries: Mutex<std::collections::HashMap<EasynetDaemonHandle, Arc<ActiveDaemonHandle>>>,
+}
+
+fn daemon_handle_registry() -> &'static DaemonHandleRegistry {
+    static REGISTRY: OnceLock<DaemonHandleRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| DaemonHandleRegistry {
+        next: AtomicU64::new(1),
+        entries: Mutex::new(std::collections::HashMap::new()),
+    })
+}
+
+fn lock_daemon_entries(
+    registry: &DaemonHandleRegistry,
+) -> MutexGuard<'_, std::collections::HashMap<EasynetDaemonHandle, Arc<ActiveDaemonHandle>>> {
+    registry
+        .entries
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn insert_daemon_handle(handle: DaemonHandle) -> EasynetDaemonHandle {
+    let registry = daemon_handle_registry();
+    let id = registry.next.fetch_add(1, Ordering::Relaxed);
+    lock_daemon_entries(registry).insert(
+        id,
+        Arc::new(ActiveDaemonHandle {
+            inner: Mutex::new(handle),
+        }),
+    );
+    id
+}
+
+fn get_daemon_handle(handle: EasynetDaemonHandle) -> Option<Arc<ActiveDaemonHandle>> {
+    if handle == 0 {
+        return None;
+    }
+    lock_daemon_entries(daemon_handle_registry())
+        .get(&handle)
+        .cloned()
+}
+
+fn remove_daemon_handle(handle: EasynetDaemonHandle) -> Option<Arc<ActiveDaemonHandle>> {
+    if handle == 0 {
+        return None;
+    }
+    lock_daemon_entries(daemon_handle_registry()).remove(&handle)
+}
+
+#[derive(Debug)]
+struct DaemonStartConfigJson {
+    mode: DaemonStartMode,
+    node_id: Option<String>,
+    realm: Option<String>,
+    daemon_bin: Option<String>,
+    log_path: Option<String>,
+    detach: Option<bool>,
+    env: std::collections::BTreeMap<String, String>,
+}
+
+impl DaemonStartConfigJson {
+    fn parse(raw: &str) -> Result<Self, DaemonStartConfigError> {
+        let value: serde_json::Value = serde_json::from_str(raw)?;
+        let obj = value
+            .as_object()
+            .ok_or(DaemonStartConfigError::ExpectedObject)?;
+        Ok(Self {
+            mode: DaemonStartMode::parse(required_string(obj, "mode")?)?,
+            node_id: optional_string(obj, "node_id")?,
+            realm: optional_string(obj, "realm")?,
+            daemon_bin: optional_string(obj, "daemon_bin")?,
+            log_path: optional_string(obj, "log_path")?,
+            detach: optional_bool(obj, "detach")?,
+            env: parse_env(obj)?,
+        })
+    }
+
+    fn build(self) -> Result<DaemonStartConfig, DaemonStartConfigError> {
+        let mut config = match self.mode {
+            DaemonStartMode::Device => {
+                let node_id = self
+                    .node_id
+                    .ok_or(DaemonStartConfigError::MissingField("node_id"))?;
+                DaemonStartConfig::device(node_id)?
+            }
+            DaemonStartMode::Hub => DaemonStartConfig::hub(),
+        };
+        if let Some(realm) = self.realm {
+            config = config.with_realm(realm);
+        }
+        if let Some(path) = self.daemon_bin {
+            config = config.with_daemon_bin(path)?;
+        }
+        if let Some(path) = self.log_path {
+            config = config.with_log_path(path);
+        }
+        if let Some(detach) = self.detach {
+            config = config.detached(detach);
+        }
+        for (key, value) in self.env {
+            config = config.with_env(key, value);
+        }
+        Ok(config)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum DaemonStartMode {
+    Device,
+    Hub,
+}
+
+impl DaemonStartMode {
+    fn parse(raw: String) -> Result<Self, DaemonStartConfigError> {
+        match raw.as_str() {
+            "device" => Ok(Self::Device),
+            "hub" => Ok(Self::Hub),
+            other => Err(DaemonStartConfigError::UnsupportedMode(other.to_string())),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum DaemonStartConfigError {
+    #[error("config_json must be a JSON object")]
+    ExpectedObject,
+    #[error("missing field `{0}`")]
+    MissingField(&'static str),
+    #[error("field `{0}` must be a non-empty string")]
+    InvalidString(&'static str),
+    #[error("unsupported daemon mode `{0}`")]
+    UnsupportedMode(String),
+    #[error("field `{0}` must be a boolean")]
+    InvalidBool(&'static str),
+    #[error("field `env` must be a JSON object")]
+    InvalidEnv,
+    #[error("env key must not be empty")]
+    EmptyEnvKey,
+    #[error("env value for `{0}` must be a string")]
+    InvalidEnvValue(String),
+    #[error("invalid daemon config: {0}")]
+    Daemon(#[from] crate::daemon::DaemonError),
+    #[error("decode config_json failed: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+fn required_string(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+) -> Result<String, DaemonStartConfigError> {
+    let value = obj
+        .get(field)
+        .ok_or(DaemonStartConfigError::MissingField(field))?
+        .as_str()
+        .ok_or(DaemonStartConfigError::InvalidString(field))?
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return Err(DaemonStartConfigError::InvalidString(field));
+    }
+    Ok(value)
+}
+
+fn optional_string(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+) -> Result<Option<String>, DaemonStartConfigError> {
+    match obj.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(_) => Ok(Some(required_string(obj, field)?)),
+    }
+}
+
+fn optional_bool(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+) -> Result<Option<bool>, DaemonStartConfigError> {
+    match obj.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_bool()
+            .ok_or(DaemonStartConfigError::InvalidBool(field))
+            .map(Some),
+    }
+}
+
+fn parse_env(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<std::collections::BTreeMap<String, String>, DaemonStartConfigError> {
+    let Some(value) = obj.get("env") else {
+        return Ok(std::collections::BTreeMap::new());
+    };
+    if value.is_null() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let env = value
+        .as_object()
+        .ok_or(DaemonStartConfigError::InvalidEnv)?;
+    let mut out = std::collections::BTreeMap::new();
+    for (key, value) in env {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(DaemonStartConfigError::EmptyEnvKey);
+        }
+        let value = value
+            .as_str()
+            .ok_or_else(|| DaemonStartConfigError::InvalidEnvValue(key.to_string()))?;
+        out.insert(key.to_string(), value.to_string());
+    }
+    Ok(out)
+}
+
+fn daemon_status_json(status: &crate::daemon::DaemonStatus) -> serde_json::Value {
+    serde_json::json!({
+        "pid": status.pid(),
+        "pid_alive": status.pid_alive(),
+        "control_accepting": status.control_accepting(),
+        "invocation_accepting": status.invocation_accepting(),
+        "control_endpoint": status.endpoints().control().display().to_string(),
+        "invocation_endpoint": status.endpoints().invocation().display().to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    #[test]
+    fn parse_start_config_requires_explicit_mode() {
+        let err = DaemonStartConfigJson::parse("{}").unwrap_err();
+        assert!(
+            err.to_string().contains("mode"),
+            "missing mode must be explicit: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_start_config_builds_device_config() {
+        let config = DaemonStartConfigJson::parse(
+            r#"{
+                "mode": "device",
+                "node_id": "dev-a",
+                "daemon_bin": "/tmp/easynet-daemon",
+                "log_path": "/tmp/easynet.log",
+                "detach": false,
+                "env": {"EASYNET_TEST": "1"}
+            }"#,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        assert_eq!(config.node_id(), "dev-a");
+    }
+
+    #[test]
+    fn parse_start_config_rejects_device_without_node_id() {
+        let err = DaemonStartConfigJson::parse(r#"{"mode":"device"}"#)
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("node_id"),
+            "missing node_id must be reported: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_start_rejects_null_out_handle_before_io() {
+        let raw = CString::new(r#"{"mode":"hub"}"#).unwrap();
+        let code = unsafe { easynet_daemon_start(raw.as_ptr(), std::ptr::null_mut()) };
+        assert_eq!(code, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn daemon_start_rejects_malformed_json_after_zeroing_handle() {
+        let raw = CString::new("{not-json").unwrap();
+        let mut handle: EasynetDaemonHandle = 42;
+        let code = unsafe { easynet_daemon_start(raw.as_ptr(), &mut handle) };
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert_eq!(handle, 0);
+    }
+
+    #[test]
+    fn daemon_status_rejects_invalid_handle_after_zeroing_output() {
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+        let code = unsafe { easynet_daemon_status(9_999_999, &mut out) };
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn daemon_invocation_endpoint_rejects_invalid_handle_after_zeroing_output() {
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+        let code = unsafe { easynet_daemon_invocation_endpoint(9_999_999, &mut out) };
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn daemon_open_client_rejects_null_out_handle_before_registry_lookup() {
+        let code = unsafe { easynet_daemon_open_client(9_999_999, std::ptr::null_mut()) };
+        assert_eq!(code, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn daemon_open_client_rejects_invalid_handle_after_zeroing_output() {
+        let mut out: EasynetHandle = 42;
+        let code = unsafe { easynet_daemon_open_client(9_999_999, &mut out) };
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert_eq!(out, 0);
+    }
+
+    #[test]
+    fn daemon_stop_rejects_invalid_handle() {
+        let code = easynet_daemon_stop(9_999_999);
+        assert_eq!(code, ERR_INVALID_HANDLE);
+    }
+}

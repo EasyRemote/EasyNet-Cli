@@ -5,18 +5,18 @@
 // Description: The integer handles the Client FFI uses to name
 //              library-side state across the C ABI. A handle is a
 //              `u64` value that indexes a process-local registry of
-//              per-Client sessions (one open IPC connection to the
-//              daemon, plus future per-session metadata).
+//              per-Client sessions (control discovery state, plus
+//              future per-session metadata).
 //
 // Why a registry, not raw `Box<T>` -> pointer casts
 // --------------------------------------------------
 // Raw pointers crossing the ABI create two classes of hard-to-
 // diagnose bug: (a) a Client holding a pointer to a freed session
-// has a use-after-free that manifests at some distant ability
-// call, and (b) concurrent shutdown races between "lib shutdown"
-// and "Client calls easynet_ability_invoke" have to be papered
-// over in user code. A u64 handle + a process-wide registry puts
-// both of those problems on the library side.
+// has a use-after-free that manifests at some distant FFI call, and
+// (b) concurrent shutdown races between "lib shutdown" and "Client
+// calls into the ABI" have to be papered over in user code. A u64
+// handle + a process-wide registry puts both of those problems on
+// the library side.
 //
 // Lib-internal tokio runtime
 // --------------------------
@@ -68,33 +68,52 @@ pub struct ClientSession {
     /// in diagnostic messages so an operator can see "which daemon
     /// did this handle connect to".
     pub control_path: String,
+    /// Optional direct daemon Invocation endpoint. Sessions created
+    /// from `easynet_daemon_open_client` already know the daemon
+    /// lifecycle handle's endpoint, so Invocation ABI calls should
+    /// not re-derive `daemon.sock` from a control descriptor path.
+    pub invocation_endpoint: Option<String>,
     /// The framed UDS connection. `None` for test sessions that
     /// only exercise the registry, `Some(...)` for sessions opened
     /// via `easynet_init`. Behind a `Mutex` because the round-trip
     /// is one-frame-in / one-frame-out and concurrent calls on the
     /// same handle would interleave reads.
     pub client: Option<Mutex<IpcClient>>,
-    /// Per-handle subscription registry. Each `easynet_ability_subscribe`
-    /// call:
-    ///   * dials a fresh UDS connection (so the existing
-    ///     round-trip socket stays a clean 1-frame-in / 1-frame-out
-    ///     pipe);
-    ///   * spawns a reader task on the lib runtime;
-    ///   * stores a CancellationToken here keyed by the local
-    ///     subscription_id so easynet_subscription_cancel can fire
-    ///     the token + the reader exits.
-    pub subscriptions: Mutex<std::collections::HashMap<u64, tokio_util::sync::CancellationToken>>,
 }
 
 impl ClientSession {
     /// Construct a session that owns a live IPC client.
     pub fn with_client(control_path: String, client: IpcClient) -> Self {
         let ipc_version = client.ipc_version;
+        let invocation_endpoint = client
+            .daemon_discovery
+            .invocation_endpoint
+            .as_ref()
+            .map(|path| path.display().to_string());
         Self {
             ipc_version,
             control_path,
+            invocation_endpoint,
             client: Some(Mutex::new(client)),
-            subscriptions: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Construct a session that names a daemon control path but does
+    /// not hold a JSON-control IPC connection.
+    ///
+    /// This is used by daemon lifecycle C ABI helpers that only need
+    /// an `EasynetHandle` for daemon Invocation calls. The complete
+    /// Invocation ABI prefers the explicit `invocation_endpoint` and
+    /// does not use the JSON-control client.
+    pub(crate) fn with_control_path_only(
+        control_path: String,
+        invocation_endpoint: Option<String>,
+    ) -> Self {
+        Self {
+            ipc_version: 0,
+            control_path,
+            invocation_endpoint,
+            client: None,
         }
     }
 
@@ -106,8 +125,8 @@ impl ClientSession {
         Self {
             ipc_version: 0,
             control_path,
+            invocation_endpoint: None,
             client: None,
-            subscriptions: Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -171,7 +190,7 @@ pub(crate) fn alloc(session: ClientSession) -> (EasynetHandle, Arc<ClientSession
     let arc = Arc::new(session);
     reg.entries
         .lock()
-        .expect("handle registry lock not poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(id, arc.clone());
     (id, arc)
 }
@@ -186,7 +205,7 @@ pub(crate) fn get(handle: EasynetHandle) -> Option<Arc<ClientSession>> {
     registry()
         .entries
         .lock()
-        .expect("handle registry lock not poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&handle)
         .cloned()
 }
@@ -201,7 +220,7 @@ pub(crate) fn release(handle: EasynetHandle) -> bool {
     registry()
         .entries
         .lock()
-        .expect("handle registry lock not poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(&handle)
         .is_some()
 }

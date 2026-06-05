@@ -24,8 +24,8 @@
 //
 // Why one dedicated free function, not two
 // ----------------------------------------
-// Every output string — whether it came from an `ability_invoke`
-// result, a `last_error` copy, or a future diagnostic blob — is
+// Every output string — whether it came from an invocation result, a
+// `last_error` copy, or a future diagnostic blob — is
 // produced the same way. Having one `easynet_string_free` means
 // Client bindings can register one cleanup function and use it for
 // every output pointer.
@@ -105,6 +105,7 @@ mod tests {
         assert_eq!(s, "hello");
     }
 
+    #[cfg(feature = "axon-pb")]
     #[test]
     fn alloc_output_cstring_allocates_standalone_buffer() {
         // The returned pointer must be freeable via

@@ -16,25 +16,19 @@
 // server has an accept loop; client has a single connect + the
 // per-call read/write split.
 //
-// v1 status — real I/O lands in PR-DAEMON Commit 4
-// -------------------------------------------------
+// Current status — control-plane IPC only
+// ---------------------------------------
 // `connect()` reads `~/.easynet/control.json`, validates the
 // `supported_ipc_versions` overlap with the lib's range, and opens
-// a `tokio::net::UnixStream` on the discovered socket. v1 does NOT
-// run a wire-level handshake frame yet — the daemon's accept loop
-// has no handshake stage either, so adding one client-side would be
-// a one-sided contract. PR-INVOCATION-EXEC-UNITY (or a focused
-// follow-up) lands the explicit handshake. For v1, "version
-// negotiation" = the discovery overlap check.
+// a `tokio::net::UnixStream` on the discovered socket. The control
+// socket intentionally has no product Invocation traffic; daemon
+// Invocation calls use `daemon.sock` through `crate::daemon`.
 //
 // `round_trip()` writes one length-prefixed JSON frame and reads
-// exactly one back. The daemon's `serve_connection` returns one
-// `OutgoingFrame` per `IncomingFrame` for both `Invoke` and the
-// (skeleton) `Subscribe` / `Cancel` paths, so this 1:1 model is
-// correct for the RPC `easynet_ability_invoke` flow. Streaming
-// (`easynet_ability_subscribe`) lands in a follow-up commit because
-// it needs a long-lived reader task and a frame channel back to the
-// FFI callback.
+// exactly one back. Product ability calls no longer use this client;
+// they go through the daemon Invocation transport. This JSON client
+// remains for control-plane traffic such as boot/status probes and
+// for tests that pin the control socket codec.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -93,8 +87,8 @@ impl std::fmt::Debug for IpcClient {
     }
 }
 
-/// v1 supported version range on the lib side. Must overlap with
-/// the daemon's advertised range for `connect()` to succeed.
+/// Supported control IPC version range on the lib side. Must overlap
+/// with the daemon's advertised range for `connect()` to succeed.
 pub fn supported_versions() -> IpcVersionRange {
     IpcVersionRange::single(IPC_VERSION_V1)
 }
@@ -106,8 +100,7 @@ pub fn supported_versions() -> IpcVersionRange {
 /// Errors:
 /// - control.json missing or unreadable (`ERR_DAEMON_DOWN`-mapped
 ///   message in caller).
-/// - control.json reports no UDS path (e.g. v1 saw a Named-Pipe-
-///   only daemon — not yet possible in tree, but defended against).
+/// - control.json reports no UDS path for a Unix build.
 /// - version ranges do not overlap (`ERR_VERSION_INCOMPATIBLE`).
 /// - connect refused (`ERR_DAEMON_DOWN`).
 pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
@@ -140,7 +133,7 @@ pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
     let socket_path = disc.socket_path.clone().ok_or_else(|| {
         anyhow::anyhow!(
             "FFI client: control.json reports no UDS socket_path; \
-             v1 only supports Unix Domain Socket transport"
+             this Unix build requires Unix Domain Socket control transport"
         )
     })?;
 
@@ -199,10 +192,8 @@ pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
 
 impl IpcClient {
     /// Send one `IncomingFrame` and read exactly one
-    /// `OutgoingFrame`. Used by `easynet_ability_invoke` for the
-    /// RPC path. The daemon writes exactly one response per
-    /// request (Invoke→Result/Error, Cancel→Error or terminal),
-    /// so this 1:1 contract holds for v1.
+    /// `OutgoingFrame`. Retained for boot/status control probes;
+    /// product ability calls use daemon Invocation over daemon.sock.
     ///
     /// Errors:
     /// - serde_json::to_vec fails (impossible for a valid
@@ -239,15 +230,11 @@ impl IpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::gateway::NoopGateway;
-    use crate::runtime::kernel::Kernel;
-    use crate::runtime::kernel_api::KernelApi;
-    use crate::services::control::ability_proxy::AbilityProxy;
+    use crate::services::control::boot_events::BootBus;
     use crate::services::control::discovery::{flags, ControlDiscovery, IpcVersionRange};
     use crate::services::control::server;
     use crate::services::control::transport::{self, ControlListener};
     use std::path::PathBuf;
-    use std::sync::Arc;
 
     /// Short-prefix temp dir; see same comment in services/control/{server,transport}.rs.
     /// macOS `SUN_LEN` ~= 104 bytes for sockaddr_un.sun_path; the default
@@ -263,10 +250,6 @@ mod tests {
         p
     }
 
-    fn make_kernel() -> Arc<dyn KernelApi> {
-        Arc::new(Kernel::new(Arc::new(NoopGateway::new())))
-    }
-
     #[test]
     fn supported_versions_is_the_v1_single_point_range() {
         // The lib's declared v1 support is exactly {IPC_VERSION_V1}.
@@ -279,30 +262,35 @@ mod tests {
 
     /// End-to-end: stand up a real UDS server (the same
     /// `serve_connection` path the daemon uses), write a fake
-    /// `control.json`, dial via `connect()`, send one `Invoke`,
-    /// observe the daemon's v1 skeleton `Error` response.
+    /// `control.json`, dial via `connect()`, send one boot/status
+    /// `Subscribe`, and observe the daemon's boot event frame.
     ///
     /// This test pins the entire FFI-side dial+round-trip path
     /// against the real server harness. A regression in either
     /// half (encode, codec settings, version overlap, decode)
-    /// turns up here.
+    /// turns up here. It intentionally uses `system.watch_boot`
+    /// instead of product `Invoke`; product ability calls belong to
+    /// the complete Invocation ABI.
     #[cfg(unix)]
     #[tokio::test]
-    async fn connect_and_round_trip_against_real_server() {
+    async fn connect_and_round_trip_boot_status_against_real_server() {
         let dir = unique_tmp();
         let sock_path = dir.join("c.sock");
         let json_path = dir.join("control.json");
 
         // Stand up a server on a known socket.
         let (listener, addr) = transport::bind_at(&sock_path).expect("bind");
-        let proxy = AbilityProxy::new(make_kernel());
+        let boot = BootBus::new();
+        boot.emit_ready();
         let server_task = tokio::spawn(async move {
             #[cfg(unix)]
             if let ControlListener::Uds(uds) = listener {
                 let (stream, _) = uds.accept().await.unwrap();
                 // serve_connection is private to server.rs; route
                 // through the public re-export.
-                server::serve_one_for_test(stream, proxy).await.unwrap();
+                server::serve_booting_one_for_test(stream, boot)
+                    .await
+                    .unwrap();
             }
         });
 
@@ -311,10 +299,12 @@ mod tests {
         let disc = ControlDiscovery {
             socket_path: addr.as_uds_path().map(|p| p.to_path_buf()),
             pipe_name: None,
+            invocation_endpoint: Some(dir.join("daemon.sock")),
+            daemon_identity: None,
             pid: std::process::id(),
             daemon_version: "test".into(),
             supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
-            capability_flags: vec![flags::ABILITY_INVOKE.into()],
+            capability_flags: vec![flags::BOOT_STATUS.into()],
             pages_port: None,
         };
         discovery::write(&json_path, &disc).expect("write control.json");
@@ -323,26 +313,24 @@ mod tests {
         let mut client = connect(&json_path).await.expect("ffi connect");
         assert_eq!(client.ipc_version, IPC_VERSION_V1);
 
-        let resp = client
-            .round_trip(IncomingFrame::Invoke {
-                request_id: "ffi-1".into(),
-                ability: "device.observe.health".into(),
+        let frame = client
+            .round_trip(IncomingFrame::Subscribe {
+                subscription_id: "boot-sub".into(),
+                ability: server::WATCH_BOOT_ABILITY.into(),
                 args: serde_json::json!({}),
-                subject: None,
             })
             .await
             .expect("round_trip");
 
-        // PR-INVOCATION-EXEC-UNITY: Invoke now reaches the real
-        // dispatcher; observe.health returns a Result envelope. The
-        // request_id round-trip is the load-bearing assertion (Client
-        // bindings correlate by it); the value shape is owned by the
-        // ping handler.
-        match resp {
-            OutgoingFrame::Result { request_id, .. } => {
-                assert_eq!(request_id, "ffi-1");
+        match frame {
+            OutgoingFrame::Frame {
+                subscription_id,
+                frame,
+            } => {
+                assert_eq!(subscription_id, "boot-sub");
+                assert_eq!(frame["type"], "ready");
             }
-            other => panic!("expected Result frame for observe.health, got {other:?}"),
+            other => panic!("expected Ready boot Frame, got {other:?}"),
         }
 
         // Drop the client to close its side; server task exits via EOF.
@@ -379,6 +367,8 @@ mod tests {
         let disc = ControlDiscovery {
             socket_path: Some(sock_path.clone()),
             pipe_name: None,
+            invocation_endpoint: Some(dir.join("daemon.sock")),
+            daemon_identity: None,
             pid: 0,
             daemon_version: "test".into(),
             // Daemon claims it speaks v99-v100; the lib supports v1.
