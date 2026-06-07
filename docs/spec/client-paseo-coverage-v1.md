@@ -60,7 +60,7 @@ paths, each its own plan:
 
 The EasyNet-Client repo's bindings consume:
 
-- The C ABI defined in `docs/spec/ffi-abi-v2.md`.
+- The C ABI defined in `docs/spec/ffi-abi-v3.md`.
 - The wire framing defined in `docs/spec/control-plane-v1.md`.
 - The ability set defined in `docs/spec/system-abilities-v1.md`.
 

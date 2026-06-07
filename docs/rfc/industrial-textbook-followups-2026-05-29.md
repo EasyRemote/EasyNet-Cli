@@ -123,7 +123,7 @@ let svc = DaemonInvocationServiceBuilder::new(presence, admission)
 
 ## PR-C — Split `agent_lifecycle_ability::start_agent_handler` into two abilities + typed args
 
-**Motivation.** `device.agent.start` is a 230-line closure that simultaneously: validates 9 stringly-typed args, creates an `agent.toml` on disk, projects a workspace via `workspace::ensure_from_directory`, runs live `LocalRuntime` registration through a `OnceLock`-injected `HotAgentRegistrar`, and persists a registry row. Five concerns, one ability, no isolation. The current PR shrank the CLI side by 1 488 lines but only because the equivalent fat function was reborn in the runtime layer.
+**Motivation.** `agent.start` is a 230-line closure that simultaneously: validates 9 stringly-typed args, creates an `agent.toml` on disk, projects a workspace via `workspace::ensure_from_directory`, runs live `LocalRuntime` registration through a `OnceLock`-injected `HotAgentRegistrar`, and persists a registry row. Five concerns, one ability, no isolation. The current PR shrank the CLI side by 1 488 lines but only because the equivalent fat function was reborn in the runtime layer.
 
 **Proposed shape.** Split into two cohesive abilities the CLI orchestrates:
 
@@ -165,14 +165,14 @@ Handler becomes `let args: RegisterAgentArgs = serde_json::from_value(args)?;` �
 1. `device.agent.register` exists with `additionalProperties = false` schema; handler is `<= 60 lines`.
 2. `device.agent.materialize_directory` exists with the same schema strictness.
 3. CLI `easynet agent add` issues two invokes; failure of the second (materialize) does NOT leave a half-registered row — the orchestration uses a saga shape (register → materialize → on materialize-fail, unregister).
-4. `device.agent.start` is removed; CLI surfaces and any third-party that called it use the new name (deprecation aliasing optional during transition; current PR's start ability is internal so direct rename is safer).
+4. `agent.start` is removed; CLI surfaces and any third-party that called it use the new name (deprecation aliasing optional during transition; current PR's start ability is internal so direct rename is safer).
 5. No `Value::get(...).and_then(...)` chain remains in either handler. All arg parsing through `serde_json::from_value::<TypedArgs>(args)?`.
 
 ---
 
 ## PR-D — Typed ability I/O sweep (`[output_schema]` + typed wrappers)
 
-**Motivation.** Three of the modified `.ability.toml` files (`device.agent.start`, `device.agent.stop`, `device.a2a.client.send_task`) declare input shape but NO `[output_schema]`. Handlers return `json!({...})` with 8-11 stringly-typed keys; CLI surfaces consume with `daemon_response.get("…").and_then(.as_bool).unwrap_or(false)`. A daemon-side rename of any field is silently swallowed at every consumer until a test catches it three commits later.
+**Motivation.** Three of the modified `.ability.toml` files (`agent.start`, `agent.stop`, `a2a.client.send_task`) declare input shape but NO `[output_schema]`. Handlers return `json!({...})` with 8-11 stringly-typed keys; CLI surfaces consume with `daemon_response.get("…").and_then(.as_bool).unwrap_or(false)`. A daemon-side rename of any field is silently swallowed at every consumer until a test catches it three commits later.
 
 **Proposed shape.** Three coordinated sub-tasks:
 
@@ -210,7 +210,7 @@ The `{result, fulfilled_by}` envelope (e.g. `invoke.rs::unwrap_envelope`) become
 **Ship criteria.**
 1. Every TOML touched in the current PR has both `[input_schema]` and `[output_schema]`.
 2. CLI invocation surfaces use typed `invoke::<Response>(…)` calls; no `.get(...).and_then(.as_bool).unwrap_or(...)` remains in the touched subcommands.
-3. `device.a2a.client.send_task` schema declares `args: object` (currently free-form) with the SDK-side note that the inner shape is the remote skill's responsibility.
+3. `a2a.client.send_task` schema declares `args: object` (currently free-form) with the SDK-side note that the inner shape is the remote skill's responsibility.
 4. Schema mismatch (`additionalProperties = false` + a handler returning an extra key) is a CI failure, not a silent drift.
 
 ---
@@ -283,7 +283,7 @@ src/runtime/skill_store/
 
 - **`dispatch` is overloaded** across three layers — `runtime/ability_dispatch.rs` (handler registration / conversion), `services/control/runtime_dispatch.rs` (control-plane routing), `services/invocation_transport/daemon_invocation_service.rs` (gRPC fn_name arms). `git grep dispatch` returns three unrelated meanings.
 - **`local_*` prefix** is split across four different scopes — `runtime/local_runtime_invoker.rs` (CLI JSON adapter), `services/invocation_transport/local_session_dispatcher.rs` (device session dispatcher, 1 512 LoC), `support/local_invoke.rs` (daemon-side fallback invoke), `support/local_daemon_grpc.rs` (socket-path resolver). Four meanings, one prefix.
-- **`refresh` verb**, while now adequately documented in `device.agent.refresh`'s description (this PR), still has two reading paths an operator may confuse.
+- **`refresh` verb**, while now adequately documented in `agent.refresh`'s description (this PR), still has two reading paths an operator may confuse.
 - **MCP namespace shape** open per PR-E (`mcp_<server>_<tool>` vs `<agent>.mcp_<server>_<tool>` vs `device.mcp.<server>.<tool>`); PR-E owns the policy choice, PR-G owns the codebase sweep when PR-E decides.
 
 **Proposed shape.** A coordinated rename, one PR:
@@ -329,7 +329,7 @@ Sweep `runtime/agents/mcp_*.rs` and `facade/cli/agent.rs:2061-2092` to emit the 
 2. New per-ability function family: `output_schema_for(name) -> Option<Value>` matching the shape of `input_schema_for(name)`.
 3. `render_ability_toml` — extended signature `(name, description, input_schema, output_schema: Option<&Value>)`. Renderer must learn `oneOf` (today's design doc explicitly excludes it); a future-compat `oneOf` clause is what response envelopes need.
 4. Drift test — extend to require an output_schema for every ability whose handler returns a structured object (i.e. anything that isn't pure ack: bool).
-5. The seven ability TOMLs the 2026-05-29 follow-up identified (`device.a2a.client.send_task`, `device.agent.{start,stop,refresh}`, `device.invocation.history.{list,path}`, `device.terminal.list`) get their `[output_schema]` blocks via this path, not by hand.
+5. The seven ability TOMLs the 2026-05-29 follow-up identified (`a2a.client.send_task`, `device.agent.{start,stop,refresh}`, `device.invocation.history.{list,path}`, `terminal.list`) get their `[output_schema]` blocks via this path, not by hand.
 
 Until PR-D ships, the descriptions for those 7 abilities have been improved in-place through `description_for(name)` (lands in the current PR via codegen regenerate); the output_schema block is the PR-D deliverable.
 
@@ -378,9 +378,9 @@ These are the items the second-pass review identified that were small enough to 
 - **`stamp_bidi_down_sequence` helper extracted** in `daemon_invocation_service.rs`; the two byte-identical `stamp_sequence` methods on `LocalBidiDownStream` and `SessionDownStream` now both delegate. Future PR-A's per-arm split can move them anywhere without splitting the saturating_add semantic.
 - **`late_bound_rpc_handler` op_event** in `runtime/ability_dispatch.rs::invoke_rpc_json`. The self-heal path (handler in catalogue but missing from LocalRuntime) is no longer silent — operators see when boot's sync_runtime_ability is incomplete.
 - **`invoke_daemon_ability_required` helper** in `facade/cli/agent.rs`. The four `invoke_daemon_agent_*_required` wrappers now delegate to one shared helper that owns the error-format policy. The wrappers stay as 1-line named entry points for `git grep`.
-- **CLI `agent refresh --agent <name>`** new flag. Previously `easynet agent refresh` always rebuilt every row; now operators can target one row. Wired through the `device.agent.refresh` `name` field that was already in the input schema.
+- **CLI `agent refresh --agent <name>`** new flag. Previously `easynet agent refresh` always rebuilt every row; now operators can target one row. Wired through the `agent.refresh` `name` field that was already in the input schema.
 - **`runtime/axon_bridge/` moved from `services/`** — its imports went almost entirely to `runtime/*`; the `services/` placement was a false hierarchy. `crate::services::trust_anchor_cell` borrows stay as the one legitimate upward reference and are now bounded by a new boundary rule.
 - **`check-kernel-boundary.sh` extended with rules 4 + 5** — bounds `runtime/agents/` and `runtime/axon_bridge/` upward imports into `services/*` with explicit one-token allowlists (`hub_published_ability_store` for agents; `trust_anchor_cell|realm_trust_anchor` for axon_bridge). Any new upward reference must edit both the allowlist AND the rationale comment in this script.
-- **Description improvements at the source** for four abilities (`device.a2a.client.send_task` args opacity, `device.agent.refresh` semantics, `device.invocation.history.path` singular, `device.terminal.list` namespace alias). Landed through `description_for(name)` so the next `gen-ability-tomls` run keeps them; the output_schema half waits for PR-D's renderer extension.
+- **Description improvements at the source** for four abilities (`a2a.client.send_task` args opacity, `agent.refresh` semantics, `invocation.history.path` singular, `terminal.list` namespace alias). Landed through `description_for(name)` so the next `gen-ability-tomls` run keeps them; the output_schema half waits for PR-D's renderer extension.
 
 The follow-up PRs cite this document by file path in their commit message so the lineage is grep-able six months out.

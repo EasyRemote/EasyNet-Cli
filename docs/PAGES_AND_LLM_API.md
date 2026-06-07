@@ -116,10 +116,10 @@ POST `/api/checkout` `{"items": [...], "qty": 2}` → returns the request body m
 ```toml
 # api/add_task.toml
 kind = "ability"
-ability = "web-builder.todo_add_task"
+ability_ura = "easynet:///r/easynet.run/ability/alice.web-builder.todo_add_task"
 ```
 
-POST `/api/add_task` `{"title": "buy milk"}` → invokes the *real* ability `web-builder.todo_add_task` (which the agent deployed via `easynet ability deploy`) with the request body as args, returns whatever the ability returned. **This is the agent-driven full-stack loop**: an LLM-authored project carries its frontend, its backend ability TOML manifests, *and* the ability deploy step in one project. The api manifest then wires the HTTP route to the deployed ability.
+POST `/api/add_task` `{"title": "buy milk"}` → invokes the *real* Ability URA `easynet:///r/easynet.run/ability/alice.web-builder.todo_add_task` (which the agent deployed via `easynet ability deploy`) with the request body as args, returns whatever the ability returned. **This is the agent-driven full-stack loop**: an LLM-authored project carries its frontend, its backend ability TOML manifests, *and* the ability deploy step in one project. The api manifest then wires the HTTP route to the deployed ability.
 
 The adapter forwards through the live registry (in-process), not through the daemon's IPC socket — invoking through your own control.sock from inside the daemon would self-deadlock.
 
@@ -174,22 +174,23 @@ EASYNET_PAGES_USER=alice easynet api-key create --label "cursor on my mac"
 
 # 2a. CLI usage
 easynet llm-api "tell me a joke about EasyNet"
-# -> default model = first chat-base ability (e.g. codex)
+# -> default model = first chat-base Ability URA from /v1/models
 # -> default key = the one we just minted (cached)
 
 # 2b. From any OpenAI client (no code change!)
 TOKEN=$(grep default_token ~/.easynet/api_keys.local.toml | cut -d'"' -f2)
+MODEL="easynet:///r/easynet.run/ability/alice.codex.chat"
 curl -sN -X POST http://127.0.0.1:8787/v1/chat/completions \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"model":"codex","messages":[{"role":"user","content":"hi"}],"stream":true}'
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}"
 
 # 2c. From openai-python
 python3 -c "
 from openai import OpenAI
 client = OpenAI(base_url='http://127.0.0.1:8787/v1', api_key='$TOKEN')
 for chunk in client.chat.completions.create(
-    model='codex',
+    model='easynet:///r/easynet.run/ability/alice.codex.chat',
     messages=[{'role':'user','content':'count from 1 to 5'}],
     stream=True,
 ):
@@ -207,13 +208,13 @@ POST  /v1/chat/completions          unary or streaming chat completion
 OPTIONS /v1/*                       CORS preflight (open)
 ```
 
-`/v1/models` projects the local ability registry's chat-base entries (any ability of the shape `<owner>.chat` where `<owner>` is a single dot-free segment; explicitly excludes `*.api.chat`, `*.page.chat`, `*.actions.chat` — those belong to the Pages reference system).
+`/v1/models` projects the local ability registry's chat-base entries (any ability of the shape `<owner>.chat` where `<owner>` is a single dot-free segment; explicitly excludes `*.api.chat`, `*.page.chat`, `*.actions.chat` — those belong to the Pages reference system). Each returned OpenAI `Model.id` is the canonical agent-owned chat Ability URA, such as `easynet:///r/easynet.run/ability/alice.codex.chat`.
 
 `/v1/chat/completions` accepts standard OpenAI body:
 
 ```json
 {
-  "model": "codex",
+  "model": "easynet:///r/easynet.run/ability/alice.codex.chat",
   "messages": [
     {"role": "system", "content": "..."},
     {"role": "user",   "content": "..."}
@@ -252,7 +253,7 @@ easynet api-key list                                  [--json]
 easynet api-key revoke   <id_prefix>
 
 easynet llm-api          "<prompt>"
-                          [--model <name>]
+                          [--model <ability-ura>]
                           [--key   <token>]
                           [--system <text>]
                           [--json]
@@ -260,12 +261,12 @@ easynet llm-api          "<prompt>"
 
 `api-key create` returns the bearer token ONCE; raw token never enters `api_keys.toml`. The `--no-cache` flag suppresses writing `~/.easynet/api_keys.local.toml`; otherwise the freshly-minted token lands there mode 0600 and `easynet llm-api` finds it as the default.
 
-`llm-api` defaults: `--model` resolves via `01HUB.openai.list_models` to the first chat-base ability; `--key` reads `--key` arg, then `EASYNET_API_KEY` env, then the local cache file.
+`llm-api` defaults: `--model` resolves via `01HUB.openai.list_models` to the first chat-base Ability URA; `--key` reads `--key` arg, then `EASYNET_API_KEY` env, then the local cache file.
 
 ### 3.6 Mapping: where does my call go
 
 ```
-HTTP POST /v1/chat/completions     model:"codex"
+HTTP POST /v1/chat/completions     model:"easynet:///r/easynet.run/ability/alice.codex.chat"
    | Authorization: Bearer easynet-sk-<id>
    v
 01HUB.openai.chat_completions      ← adapter (INV-1 pure)
@@ -274,7 +275,7 @@ HTTP POST /v1/chat/completions     model:"codex"
    | INV-3 filter: messages[] -> {prompt, system}
    | INV-4 receipt: canonical mint
    v
-codex.chat                          ← chat-base ability
+codex.chat                          ← local registry key derived from the Ability URA
    |
    | dispatched into Codex agent's claude-style runner
    v
@@ -284,7 +285,7 @@ real LLM call (the actual model the agent driver uses)
 reply text -> OpenAI chunk projection -> SSE -> client
 ```
 
-The same flow works for `web-builder.chat`, `<self>.chat`, or any other chat-base ability the daemon registers. From the client's perspective the model name is opaque; the daemon does the routing.
+The same flow works for `easynet:///r/easynet.run/ability/alice.web-builder.chat` or any other agent-owned chat Ability URA returned by `/v1/models`. From the client's perspective the model id is opaque; the daemon does the routing.
 
 ---
 
@@ -342,7 +343,7 @@ EASYNET_PAGES_PORT=8787 EASYNET_PAGES_USER=alice EASYNET_PAGES_REALM=easynet.run
 
 # 4. Pages — agent-driven full-stack
 easynet agent add web-builder --type claude-code
-EASYNET_PAGES_USER=alice easynet ability invoke web-builder.chat --args '{
+EASYNET_PAGES_USER=alice easynet ability invoke easynet:///r/easynet.run/ability/alice.web-builder.chat --args '{
   "prompt":"Build a todo list app: kind=ability backend, real persistent JSON storage, three abilities (list_tasks/add_task/delete_task) deployed via easynet ability deploy, frontend that calls them. Project_id=todo. EASYNET_PAGES_USER=alice. Tell me the URL when done."
 }'
 # -> agent writes ~/.easynet/web-apps/todo/{index.html,style.css,app.js,
@@ -356,19 +357,20 @@ EASYNET_PAGES_USER=alice easynet api-key create --label "demo"
 # -> easynet-sk-<id>, cached locally
 
 easynet llm-api "Reply with: ok"
-# -> [llm-api] model=codex
+# -> [llm-api] model=easynet:///r/easynet.run/ability/alice.codex.chat
 # -> ok
 
+MODEL="easynet:///r/easynet.run/ability/alice.codex.chat"
 curl -sN -X POST http://127.0.0.1:8787/v1/chat/completions \
     -H "Authorization: Bearer $(grep default_token ~/.easynet/api_keys.local.toml | cut -d'\"' -f2)" \
     -H "Content-Type: application/json" \
-    -d '{"model":"codex","messages":[{"role":"user","content":"hi"}],"stream":true}'
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}"
 # -> data: {chunk1}\n\ndata: {chunk2}\n\n...data: [DONE]\n\n
 
 python3 -c "
 from openai import OpenAI
 c = OpenAI(base_url='http://127.0.0.1:8787/v1', api_key='easynet-sk-...')
-for chunk in c.chat.completions.create(model='codex', messages=[{'role':'user','content':'count 1-5'}], stream=True):
+for chunk in c.chat.completions.create(model='easynet:///r/easynet.run/ability/alice.codex.chat', messages=[{'role':'user','content':'count 1-5'}], stream=True):
     if chunk.choices[0].delta.content: print(chunk.choices[0].delta.content, end='', flush=True)
 "
 # -> 1\n2\n3\n4\n5

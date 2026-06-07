@@ -1,4 +1,4 @@
-# FFI ABI v2 — `libeasynet_cli` C ABI
+# FFI ABI v3 — `libeasynet_cli` C ABI
 
 Version-stable C ABI exposed by `libeasynet_cli.{so,dylib,dll,a}`.
 Client bindings in Go, Python, Node, Swift, Rust, Java, and other
@@ -7,13 +7,17 @@ languages consume this surface.
 ## 1. Versioning
 
 `easynet_abi_version() -> u32` is the runtime source of truth.
-Every breaking change to a function signature, struct shape, or
-return-code semantic increments this version. The checked-in
-`include/easynet_cli.h` header is the binding-facing contract; CI
-asserts the header, ABI version, exported symbol set, and error-code
-table stay aligned so a hand-edit cannot drift the contract silently.
+Every breaking change to a function signature, struct shape, exported
+symbol set, or return-code semantic increments this version. The
+checked-in `include/easynet_cli.h` header is the binding-facing
+contract; CI asserts the header, ABI version, exported symbol set, and
+error-code table stay aligned so a hand-edit cannot drift the contract
+silently.
 
-## 2. Function families (v2 surface)
+ABI v3 is the complete Invocation-only ABI. The historical
+`easynet_ability_*` ability+args symbols are not exported.
+
+## 2. Function Families
 
 ### 2.1 Lifecycle
 
@@ -64,8 +68,8 @@ or rediscover a control descriptor path.
 ```
 
 When attaching to an already-live daemon, both the control endpoint and
-the Invocation endpoint must accept connections. A control-only daemon is
-reported as down for lifecycle attach purposes because product calls
+the Invocation endpoint must accept connections. A control-only daemon
+is reported as down for lifecycle attach purposes because product calls
 cannot succeed through that process.
 
 `easynet_daemon_start` returns success only after both `control.sock`
@@ -74,7 +78,7 @@ already-live daemon with both endpoints accepting. A returned daemon
 handle is therefore immediately usable with
 `easynet_daemon_open_client`.
 
-### 2.2 Complete Invocation dispatch
+### 2.2 Complete Invocation Dispatch
 
 ```c
 int32_t easynet_invocation_invoke(
@@ -100,7 +104,7 @@ int32_t easynet_invocation_stream_cancel(EasynetHandle handle, uint64_t stream_i
 {
   "caller_ura": "easynet:///r/example/agent/alice",
   "callee_ura": "easynet:///r/example/agent/device",
-  "ability": "device.observe.health",
+  "ability": "observe.health",
   "subject_ura": "easynet:///r/example/resource/device",
   "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
   "causal_context": {"form": "none"},
@@ -113,7 +117,7 @@ For non-JSON payloads, callers pass `arguments_base64` plus
 `caller_signature` fields are forwarded to the daemon Invocation
 transport.
 
-### 2.3 InvokeBidi dispatch
+### 2.3 InvokeBidi Dispatch
 
 ```c
 int32_t easynet_invocation_bidi_open(
@@ -147,19 +151,7 @@ Stream and bidi ids are scoped to the `EasynetHandle` that opened them.
 A different handle cannot send, close, or cancel another handle's active
 stream/session.
 
-### 2.4 Retired ability+args symbols
-
-```c
-int32_t easynet_ability_invoke(...);
-int32_t easynet_ability_subscribe(...);
-int32_t easynet_subscription_cancel(...);
-```
-
-These symbols exist only as explicit retirement points. They return
-`ERR_NOT_IMPLEMENTED` after basic pointer/handle validation and never
-construct JSON control product frames.
-
-## 3. Error code table
+## 3. Error Code Table
 
 | code | name                       | meaning                                          |
 |------|----------------------------|--------------------------------------------------|
@@ -173,7 +165,7 @@ construct JSON control product frames.
 | 7    | `ERR_DAEMON_DOWN`          | daemon endpoint cannot be reached                |
 | 8    | `ERR_VERSION_INCOMPATIBLE` | IPC version overlap empty                        |
 | 9    | `ERR_ABILITY_FAILED`       | ability/admission execution failure              |
-| 10   | `ERR_NOT_IMPLEMENTED`      | retired or feature-gated symbol                  |
+| 10   | `ERR_NOT_IMPLEMENTED`      | feature-gated symbol in a build without support  |
 | 11   | `ERR_INVALID_ARG`          | malformed JSON, missing fields, invalid URA/base64 |
 | 12   | `ERR_PERMISSION_DENIED`    | daemon/admission rejected authority              |
 | 13   | `ERR_NOT_FOUND`            | requested resource or ability not found          |
@@ -192,34 +184,35 @@ Daemon gRPC status is preserved at the FFI boundary:
 - `Unknown` / `Internal` / `DataLoss` map to `ERR_PROTOCOL`.
 - Other non-transport daemon statuses map to `ERR_ABILITY_FAILED`.
 
-## 4. Threading + reentrancy
+## 4. Threading And Reentrancy
 
 - The library owns an internal tokio runtime. C ABI calls from any
   thread block the calling thread until the daemon operation returns.
 - Stream and bidi callbacks are invoked on a library-owned callback
   dispatcher thread created per opened stream/session. They are not
   invoked on the tokio I/O runtime thread. Callbacks should still
-  avoid blocking indefinitely — copy the frame and signal the
-  consumer through a queue.
+  avoid blocking indefinitely; copy the frame and signal the consumer
+  through a queue.
 - All handles are process-local integers. A stream/bidi id is valid
   only with the `EasynetHandle` that opened it.
 
-## 5. Conformance checklist
+## 5. Conformance Checklist
 
 A new Client binding must:
-- [ ] Call `easynet_abi_version()` at startup; abort if it does
-      not match the expected value.
+
+- [ ] Call `easynet_abi_version()` at startup; abort if it does not
+      match the expected value.
 - [ ] Free every `char*` returned by an `easynet_*` function via
       `easynet_string_free`.
 - [ ] Cancel or close every active stream/bidi session before calling
       `easynet_shutdown`.
-- [ ] Treat any non-zero return code from a wrapper as a hard
-      error; consult `easynet_last_error` for diagnostics.
+- [ ] Treat any non-zero return code from a wrapper as a hard error;
+      consult `easynet_last_error` for diagnostics.
 
-## 6. Out of scope for v2
+## 6. Out Of Scope
 
-- async C ABI (every call is sync today; v3 may add an async
-  surface for runtimes that prefer it).
-- One-method-per-ability ABI.
-- Reviving JSON-control product Invoke/Subscribe/OpenBidi.
-- Axon runtime lifecycle; this ABI starts only `easynet-daemon`.
+- async C ABI. Every call is synchronous today.
+- one-method-per-ability ABI.
+- ability+args ABI.
+- JSON-control product Invoke/Subscribe/OpenBidi.
+- Axon runtime lifecycle. This ABI starts only `easynet-daemon`.

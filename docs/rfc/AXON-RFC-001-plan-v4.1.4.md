@@ -74,7 +74,7 @@ Per realm, exactly one hub. v4.1.4 collapses the `01HUB` /
 A multi-hub-per-realm topology (RFC-005 future work) would extend
 hub URI with a tail; until then `easynet:///r/<realm>/hub` is
 unambiguous and the parser strict-rejects any tail to catch v1
-callers still emitting `/hub/01HUB`.
+callers still emitting hub identities with tail.
 
 ### 2.4 resource is user-anchored, slash-tailed
 
@@ -205,7 +205,7 @@ removing them is a pure-rename Phase.
   commit hash, etc.), not by URA versioning. Defer until a
   concrete use case appears.
 - **Hub-owned ability resource URIs**: the existing
-  `easynet:///r/prv/hub/<realm>/abilities/...` pattern in
+  `easynet:///r/<realm>/ability/hub.<namespace>.<local>` pattern in
   `runtime/advertise.rs` is a CALLEE resource URI (decorative
   from the daemon's perspective; routing happens via the
   `function_name` field). Whether to retire it in favor of a
