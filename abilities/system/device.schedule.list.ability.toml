@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "device.schedule.list"
-description = "List every schedule known to this daemon. Deterministic order by id."
-
-[input_schema]
-type = "object"
-additionalProperties = false

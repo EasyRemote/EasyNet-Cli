@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "agent.refresh"
+description = "Re-register the LocalRuntime handlers for one or all LLM sub-agents declared in agents.json. With `name` set, only that agent's `<agent>.*` handlers and ability TOMLs are rebuilt; with `name` omitted, every row in agents.json is rebuilt. This is the daemon-hosted surface behind `easynet agent refresh` and re-reads `<agent-root>/abilities/*.ability.toml` from disk."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.name]
+type = "string"
+minLength = 1

@@ -1,0 +1,42 @@
+schema_version = "1"
+name = "ability.deploy"
+description = "Publish an ability bundle ResourceRef to a node. Local target validates the manifest and acknowledges the registration intent. Remote targets defer to the federation Invoke replacement."
+
+[input_schema]
+type = "object"
+required = ["resource_ref"]
+additionalProperties = false
+
+[input_schema.properties.node_id]
+type = "string"
+
+[input_schema.properties.resource_ref]
+type = "object"
+required = ["resource_ura", "owner_ura", "namespace", "capability", "expires_unix_ms", "revision"]
+additionalProperties = false
+
+[input_schema.properties.resource_ref.properties.capability]
+type = "string"
+enum = ["list", "stat", "read", "write"]
+
+[input_schema.properties.resource_ref.properties.display_path]
+type = "string"
+
+[input_schema.properties.resource_ref.properties.expires_unix_ms]
+type = "integer"
+
+[input_schema.properties.resource_ref.properties.namespace]
+type = "string"
+enum = ["fs"]
+
+[input_schema.properties.resource_ref.properties.owner_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.resource_ref.properties.resource_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.resource_ref.properties.revision]
+type = "string"
+minLength = 1

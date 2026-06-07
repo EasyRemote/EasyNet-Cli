@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "ability.publish"
+description = "Publish a new ability into a registered agent's abilities/ directory. The ability becomes visible to the next discover scan. Refuses to overwrite an existing ability; call ability.unpublish first to replace."
+
+[input_schema]
+type = "object"
+required = ["owner_ura", "manifest_toml"]
+
+[input_schema.properties.manifest_toml]
+type = "string"
+description = "Full ability.toml body. The file stem on disk is taken from the manifest's `name` field."
+
+[input_schema.properties.owner_ura]
+type = "string"
+description = "Canonical Agent URA whose abilities/ dir receives the manifest. Its agent id must be registered locally."

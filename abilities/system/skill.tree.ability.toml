@@ -1,0 +1,18 @@
+schema_version = "1"
+name = "skill.tree"
+description = "List the file tree for one installed skill package. The lookup is constrained to the selected agent's visible skill directories and returns relative paths plus file sizes."
+
+[input_schema]
+type = "object"
+required = ["owner_agent_id", "skill_name", "resource_ura"]
+additionalProperties = false
+
+[input_schema.properties.owner_agent_id]
+type = "string"
+
+[input_schema.properties.resource_ura]
+type = "string"
+description = "Canonical skill package resource URA returned by skill.list."
+
+[input_schema.properties.skill_name]
+type = "string"

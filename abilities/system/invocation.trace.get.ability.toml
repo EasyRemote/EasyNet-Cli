@@ -1,0 +1,68 @@
+schema_version = "1"
+name = "invocation.trace.get"
+description = "Fetch all invocation ledger records that share a trace_id and project them through Axon's causal DAG graph API."
+
+[input_schema]
+type = "object"
+required = ["key"]
+additionalProperties = false
+
+[input_schema.properties.filter]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.filter.properties.ability_ura]
+type = "string"
+description = "Canonical Ability URA."
+
+[input_schema.properties.filter.properties.ability_uras]
+type = "array"
+items = { minLength = 1, type = "string" }
+description = "Canonical Ability URAs. Records match when ability_ura equals any value."
+minItems = 1
+uniqueItems = true
+
+[input_schema.properties.filter.properties.agent_ura]
+type = "string"
+description = "Ability owner/callee Agent URA. Equivalent to callee_ura for history scope."
+
+[input_schema.properties.filter.properties.callee_ura]
+type = "string"
+description = "Callee/owner Agent URA."
+
+[input_schema.properties.filter.properties.caller_ura]
+type = "string"
+description = "Caller Agent URA."
+
+[input_schema.properties.filter.properties.state]
+type = "string"
+
+[input_schema.properties.filter.properties.subject_ura]
+type = "string"
+description = "Single subject URA."
+
+[input_schema.properties.filter.properties.subject_uras]
+type = "array"
+items = { minLength = 1, type = "string" }
+description = "OR-scope over subject URAs."
+minItems = 1
+uniqueItems = true
+
+[input_schema.properties.filter.properties.trace_id]
+type = "string"
+
+[input_schema.properties.key]
+type = "object"
+additionalProperties = false
+maxProperties = 1
+minProperties = 1
+
+[input_schema.properties.key.properties.request_id]
+type = "string"
+
+[input_schema.properties.key.properties.trace_id]
+type = "string"
+
+[input_schema.properties.key.properties.ura]
+type = "string"
+description = "Invocation URA."

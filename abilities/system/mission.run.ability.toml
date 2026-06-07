@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "mission.run"
+description = "Compile and execute an EAL program in-process. Records the run under `~/.easynet/missions/runs/<run_id>` and returns the run id, run dir path, every `let`-bound output, and the run metadata. Use this to drive multi-step or cross-agent orchestration; `easynet.track` polls a long run, `easynet.cancel` aborts one. For a single ability call, prefer `easynet.invoke` — it skips the run-dir bookkeeping."
+
+[input_schema]
+type = "object"
+required = ["source"]
+additionalProperties = false
+
+[input_schema.properties.label]
+type = "string"
+description = "Optional human-readable label baked into the run-dir name. Two unlabeled invocations still land in distinct dirs (the run id supplies the unique component), but a label makes `easynet mission list` readable."
+
+[input_schema.properties.source]
+type = "string"
+description = "EAL source text. Member-call form is the supported way to dispatch to an agent: `let r = claude.weather(location: \"Beijing\")`."

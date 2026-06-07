@@ -1,0 +1,26 @@
+schema_version = "1"
+name = "skill.write_file"
+description = "Write one UTF-8 file inside an installed skill package. The path is relative to the skill directory, traversal is rejected, and install metadata is rehashed."
+
+[input_schema]
+type = "object"
+required = ["owner_agent_id", "skill_name", "resource_ura", "path", "content"]
+additionalProperties = false
+
+[input_schema.properties.content]
+type = "string"
+description = "UTF-8 file content. Maximum 1 MiB."
+
+[input_schema.properties.owner_agent_id]
+type = "string"
+
+[input_schema.properties.path]
+type = "string"
+description = "Relative file path inside the skill directory, for example SKILL.md."
+
+[input_schema.properties.resource_ura]
+type = "string"
+description = "Canonical skill package resource URA returned by skill.list."
+
+[input_schema.properties.skill_name]
+type = "string"

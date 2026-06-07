@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "loop.status"
+description = "Fetch a loop instance's current state, current iteration, and metadata."
+
+[input_schema]
+type = "object"
+required = ["loop_id"]
+additionalProperties = false
+
+[input_schema.properties.loop_id]
+type = "string"

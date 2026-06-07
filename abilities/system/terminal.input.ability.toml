@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "terminal.input"
+description = "Push base64-encoded stdin bytes into a PTY session. Pairs with terminal.read to form the unary RPC data plane used by the EasyNet backend's PTYDriver."
+
+[input_schema]
+type = "object"
+required = ["session_id", "data"]
+additionalProperties = false
+
+[input_schema.properties.data]
+type = "string"
+description = "base64-encoded stdin bytes"
+
+[input_schema.properties.session_id]
+type = "string"
+minLength = 1

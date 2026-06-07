@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "terminal.close"
+description = "Tear down an interactive PTY session. Idempotent — passing an unknown session_id returns ack=false rather than an error so callers can poll without special-casing already- gone sessions."
+
+[input_schema]
+type = "object"
+required = ["session_id"]
+additionalProperties = false
+
+[input_schema.properties.session_id]
+type = "string"
+minLength = 1
