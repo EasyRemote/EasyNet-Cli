@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# check-ffi-abi-v2-header.sh
+# check-ffi-abi-v3-header.sh
 # ===========================
 #
-# CI gate for the libeasynet_cli ABI v2 contract.
+# CI gate for the libeasynet_cli ABI v3 contract.
 #
 # The Rust FFI implementation owns behavior. include/easynet_cli.h is
-# the language-binding contract. This script catches the expensive class
-# of drift where Rust changes exported symbols, ABI version, or error
-# codes but the binding-facing header/spec are left stale.
+# the language-binding contract. This script catches drift where Rust
+# changes exported symbols, ABI version, or error codes but the
+# binding-facing header/spec are left stale.
 
 set -euo pipefail
 
-ROOT="${CHECK_FFI_ABI_V2_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+ROOT="${CHECK_FFI_ABI_V3_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
 HEADER="include/easynet_cli.h"
+SPEC="docs/spec/ffi-abi-v3.md"
 
-echo "== check-ffi-abi-v2-header.sh =="
+echo "== check-ffi-abi-v3-header.sh =="
 
 violations=0
 
@@ -37,11 +38,26 @@ require_file() {
     return 0
 }
 
+require_absent_file() {
+    local file="$1"
+    if [[ -e "$file" ]]; then
+        record_violation "retired file still present" "$file"
+    fi
+}
+
 require_literal() {
     local file="$1"
     local literal="$2"
     if ! grep -Fq "$literal" "$file"; then
         record_violation "required literal missing from $file" "$literal"
+    fi
+}
+
+require_absent_literal() {
+    local file="$1"
+    local literal="$2"
+    if [[ -f "$file" ]] && grep -Fq "$literal" "$file"; then
+        record_violation "retired literal present in $file" "$literal"
     fi
 }
 
@@ -70,6 +86,9 @@ expected_symbols=(
     easynet_invocation_bidi_send
     easynet_invocation_bidi_close
     easynet_invocation_bidi_cancel
+)
+
+retired_symbols=(
     easynet_ability_invoke
     easynet_ability_subscribe
     easynet_subscription_cancel
@@ -120,6 +139,11 @@ check_exported_symbols_if_built() {
             record_violation "cdylib does not export required ABI symbol" "$symbol"
         fi
     done
+    for symbol in "${retired_symbols[@]}"; do
+        if grep -Fxq "$symbol" <<<"$symbols"; then
+            record_violation "cdylib still exports retired ability+args ABI symbol" "$symbol"
+        fi
+    done
 }
 
 if require_file "$HEADER"; then
@@ -134,7 +158,7 @@ if require_file "$HEADER"; then
         record_violation "C compiler unavailable" "cc is required to validate include/easynet_cli.h"
     fi
 
-    require_literal "$HEADER" "#define EASYNET_ABI_VERSION 2u"
+    require_literal "$HEADER" "#define EASYNET_ABI_VERSION 3u"
 
     for error_pair in \
         "EASYNET_OK 0" \
@@ -166,18 +190,32 @@ if require_file "$HEADER"; then
         "typedef uint64_t EasynetDaemonHandle;" \
         "typedef uint64_t EasynetInvocationStreamId;" \
         "typedef uint64_t EasynetInvocationBidiId;" \
-        "typedef uint64_t EasynetSubscriptionId;" \
         "typedef void (*EasynetInvocationStreamCallback)(" \
-        "typedef void (*EasynetInvocationBidiCallback)(" \
-        "typedef void (*EasynetFrameCallback)("
+        "typedef void (*EasynetInvocationBidiCallback)("
     do
         require_literal "$HEADER" "$typedef"
+    done
+
+    for retired in \
+        "typedef uint64_t EasynetSubscriptionId;" \
+        "typedef void (*EasynetFrameCallback)(" \
+        "easynet_ability_invoke" \
+        "easynet_ability_subscribe" \
+        "easynet_subscription_cancel"
+    do
+        require_absent_literal "$HEADER" "$retired"
     done
 
     for header_symbol in "${expected_symbols[@]}"; do
         symbol="fn $header_symbol"
         require_literal "$HEADER" "$header_symbol"
         require_source_literal "$symbol"
+    done
+
+    for retired in "${retired_symbols[@]}"; do
+        if grep -R -Fq "fn $retired" src/ffi 2>/dev/null; then
+            record_violation "Rust FFI still exports retired ability+args ABI symbol" "$retired"
+        fi
     done
 
     check_exported_symbols_if_built
@@ -190,14 +228,18 @@ if require_file "$HEADER"; then
     fi
 fi
 
+require_absent_file "src/ffi/ability.rs"
+
 if require_file "src/ffi/mod.rs"; then
-    require_literal "src/ffi/mod.rs" "pub const EASYNET_ABI_VERSION: u32 = 2;"
+    require_literal "src/ffi/mod.rs" "pub const EASYNET_ABI_VERSION: u32 = 3;"
+    require_absent_literal "src/ffi/mod.rs" "pub mod ability;"
 fi
 
-if require_file "docs/spec/ffi-abi-v2.md"; then
-    require_literal "docs/spec/ffi-abi-v2.md" "include/easynet_cli.h"
-    require_literal "docs/spec/ffi-abi-v2.md" "ERR_INVALID_ARG"
-    require_literal "docs/spec/ffi-abi-v2.md" "easynet_invocation_bidi_open"
+if require_file "$SPEC"; then
+    require_literal "$SPEC" "include/easynet_cli.h"
+    require_literal "$SPEC" "ERR_INVALID_ARG"
+    require_literal "$SPEC" "easynet_invocation_bidi_open"
+    require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 
 for source in src/ffi/errors.rs src/ffi/mod.rs; do
@@ -211,7 +253,7 @@ for source in src/ffi/errors.rs src/ffi/mod.rs; do
 done
 
 if [[ "$violations" -eq 0 ]]; then
-    echo "ok (FFI ABI v2 header contract is clean)"
+    echo "ok (FFI ABI v3 header contract is clean)"
     exit 0
 fi
 

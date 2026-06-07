@@ -3,7 +3,7 @@
 # ==================================================================
 #
 # Boots `easynet-daemon`, then loads `libeasynet_cli` via Python
-# ctypes and exercises the ABI v2 surface: init/shutdown, daemon
+# ctypes and exercises the ABI v3 surface: init/shutdown, daemon
 # lifecycle preflight, and complete Invocation unary/stream/bidi
 # argument validation.
 #
@@ -200,7 +200,8 @@ def seed_hermetic_identity():
                 "node_id": node_id,
                 "credential_token": "ffi-smoke-token",
                 "hub_endpoint": "https://127.0.0.1:50443",
-                "tenant_id": realm,
+                "realm": realm,
+                "username": "ffi-smoke-user",
             },
             f,
             indent=2,
@@ -314,7 +315,7 @@ try:
     invocation = {
         "caller_ura": self_device_ura,
         "callee_ura": self_device_ura,
-        "ability": "device.observe.health",
+        "ability": "observe.health",
         "subject_ura": self_device_ura,
         "nonce_base64": base64.b64encode(bytes(range(1, 17))).decode("ascii"),
         "causal_context": {"form": "none"},
@@ -332,7 +333,7 @@ try:
         assert_ok(rc, label)
         response = json.loads(cstr_value(out_ptr))
         assert response["ok"] is True, response
-        assert response["ability"] == "device.observe.health", response
+        assert response["ability"] == "observe.health", response
         assert response["result_content_type"] == "application/json", response
         assert response["result_json"]["status"] == "healthy", response
         assert response["result_json"]["echo"]["smoke"] == "ffi-happy-path", response
@@ -366,7 +367,7 @@ try:
     browser_open = invoke_json(
         client_from_daemon.value,
         "easynet_invocation_invoke browser.open_session",
-        "device.browser.open_session",
+        "browser.open_session",
         {"url": "https://example.com"},
         33,
     )
@@ -377,7 +378,7 @@ try:
         stream_frames.append(json.loads(frame_json.decode("utf-8")))
 
     stream_invocation = dict(invocation)
-    stream_invocation["ability"] = "device.browser.capture_viewport"
+    stream_invocation["ability"] = "browser.capture_viewport"
     stream_invocation["nonce_base64"] = base64.b64encode(bytes(range(49, 65))).decode("ascii")
     stream_invocation["args"] = {"session_ura": session_ura}
     stream_id = ctypes.c_uint64(0)
@@ -421,7 +422,7 @@ try:
     with open(download_path, "wb") as f:
         f.write(download_bytes)
     bidi_invocation = dict(invocation)
-    bidi_invocation["ability"] = "device.fs.transfer"
+    bidi_invocation["ability"] = "fs.transfer"
     bidi_invocation["nonce_base64"] = base64.b64encode(bytes(range(65, 81))).decode("ascii")
     bidi_invocation["args"] = {"mode": "download", "path": download_path}
     bidi_invocation["bidi_streams"] = [

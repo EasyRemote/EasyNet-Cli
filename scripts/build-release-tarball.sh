@@ -11,13 +11,13 @@
 #   easynet-daemon                       — long-running daemon
 #   easynet-keyring                      — device-signing vault helper
 #   libaxon_dendrite_bridge.{dylib|so}   — dendrite SDK shared library
-#   include/easynet_cli.h                — libeasynet_cli C ABI v2 header
-#   docs/spec/ffi-abi-v2.md              — binding-facing ABI spec
+#   include/easynet_cli.h                — libeasynet_cli C ABI v3 header
+#   docs/spec/ffi-abi-v3.md              — binding-facing ABI spec
 #
 # Critically: NO `axon-runtime`. The production installer cleans up
 # any axon-runtime binary it finds (`install.sh` lines around 264-268
 # treat it as a stale artefact). The release tarball must mirror
-# that — every test that exercises `easynet start` against a real
+# that — every test that exercises `easynet runtime start` against a real
 # release shape needs to confirm the device-mode flow does not depend
 # on a separate axon-runtime process.
 #
@@ -28,7 +28,7 @@
 # silently masks bugs in the device-mode boot path: any code that
 # tries to spawn axon-runtime succeeds inside docker e2e because the
 # binary is right there. Production tarballs do not carry it. That
-# divergence is exactly what hides the "easynet start spawns
+# divergence is exactly what hides the "easynet runtime start spawns
 # axon-runtime which doesn't exist on a freshly-installed host" bug.
 #
 # Output
@@ -132,7 +132,7 @@ daemon_bin="$cli_root/target/$build_profile/easynet-daemon"
 keyring_bin="$cli_root/target/$build_profile/easynet-keyring"
 bridge_lib="$bridge_crate/target/$build_profile/libaxon_dendrite_bridge.${lib_ext}"
 abi_header="$cli_root/include/easynet_cli.h"
-abi_spec="$cli_root/docs/spec/ffi-abi-v2.md"
+abi_spec="$cli_root/docs/spec/ffi-abi-v3.md"
 
 for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$bridge_lib" "$abi_header" "$abi_spec"; do
     if [ ! -f "$path" ]; then
@@ -159,7 +159,7 @@ cp "$keyring_bin" "$stage_dir/easynet-keyring"
 cp "$bridge_lib" "$stage_dir/libaxon_dendrite_bridge.${lib_ext}"
 mkdir -p "$stage_dir/include" "$stage_dir/docs/spec"
 cp "$abi_header" "$stage_dir/include/easynet_cli.h"
-cp "$abi_spec" "$stage_dir/docs/spec/ffi-abi-v2.md"
+cp "$abi_spec" "$stage_dir/docs/spec/ffi-abi-v3.md"
 
 # Strip symbols on release builds to match what production tarballs
 # look like; debug profile keeps symbols for stack traces.
@@ -175,11 +175,11 @@ tar -czf "$out_file" -C "$stage_dir" \
     easynet-keyring \
     "libaxon_dendrite_bridge.${lib_ext}" \
     include/easynet_cli.h \
-    docs/spec/ffi-abi-v2.md
+    docs/spec/ffi-abi-v3.md
 
 echo
 echo "[OK] release tarball ready"
 echo "  path:    $out_file"
-echo "  shape:   easynet, easynet-daemon, easynet-keyring, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, docs/spec/ffi-abi-v2.md"
+echo "  shape:   easynet, easynet-daemon, easynet-keyring, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, docs/spec/ffi-abi-v3.md"
 echo "  axon-runtime: NOT shipped (production-shape contract)"
 echo "  size:    $(wc -c < "$out_file" | awk '{printf "%.1f MiB", $1/1024/1024}')"

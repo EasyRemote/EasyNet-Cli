@@ -159,7 +159,7 @@ echo "Rule 3 — MCP only inside mcp-profile module (P4)"
 #                                                 example.
 #   * facade/cli/mcp_server.rs                — `easynet mcp_server`
 #                                                 user-facing edge entry
-#   * facade/cli/start.rs                     — `easynet start --mcp`
+#   * facade/cli/start.rs                     — `easynet runtime start --mcp`
 #                                                 user-facing edge entry
 #   * facade/mcp/mod.rs                        — quarantine anchor (doc only)
 count_pattern "MCP keyword in CLI src (case-insensitive)" \

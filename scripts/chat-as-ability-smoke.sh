@@ -2,9 +2,9 @@
 # chat-as-ability-smoke.sh — verifies the chat-as-system-ability cutover
 # ======================================================================
 #
-# Boots `easynet-daemon`, then invokes a `<agent>.chat` ability through
-# `easynet ability invoke`, which routes over the daemon-hosted Axon
-# Invocation gRPC socket (`~/.easynet/daemon.sock`). This script
+# Boots `easynet-daemon`, then invokes a canonical `<agent>.chat`
+# Ability URA through `easynet ability invoke`, which routes over the
+# daemon-hosted Axon Invocation gRPC socket (`~/.easynet/daemon.sock`). This script
 # deliberately does not dial `control.sock` or construct legacy
 # control-plane frames.
 #
@@ -78,13 +78,13 @@ else
 fi
 
 if [ -n "$AGENT_NAME" ]; then
-  ABILITY="$AGENT_NAME.chat"
+  ABILITY_URA="easynet:///r/cli/ability/user-1.$AGENT_NAME.chat"
   MODE="agent_registered"
-  echo "[chat-smoke] mode=$MODE — found agent '$AGENT_NAME', will smoke '$ABILITY'"
+  echo "[chat-smoke] mode=$MODE — found agent '$AGENT_NAME', will smoke '$ABILITY_URA'"
 else
-  ABILITY="ghost-agent.chat"
+  ABILITY_URA="easynet:///r/cli/ability/user-1.ghost-agent.chat"
   MODE="no_agents"
-  echo "[chat-smoke] mode=$MODE — no agents in registry, will smoke '$ABILITY' to assert the unified-registry not-found shape"
+  echo "[chat-smoke] mode=$MODE — no agents in registry, will smoke '$ABILITY_URA' to assert the unified-registry not-found shape"
 fi
 
 # Kill any stale daemon from a previous run; the UDS file would
@@ -108,9 +108,9 @@ if [ ! -S "$DAEMON_SOCK" ]; then
   exit 1
 fi
 
-echo "[chat-smoke] invoking $ABILITY through easynet ability invoke..."
+echo "[chat-smoke] invoking $ABILITY_URA through easynet ability invoke..."
 set +e
-RESP="$("$CLI_BIN" ability invoke "$ABILITY" --args '{"prompt":"smoke-ping"}' --raw 2>&1)"
+RESP="$("$CLI_BIN" ability invoke "$ABILITY_URA" --args '{"prompt":"smoke-ping"}' --raw 2>&1)"
 STATUS=$?
 set -e
 
@@ -120,12 +120,12 @@ echo "[chat-smoke] response: $RESP"
 # Mode-specific assertion. Pass the response via env var rather than
 # stdin so the python heredoc's own stdin is not contended for by
 # whatever wrapper bash thinks the heredoc reader should see.
-RESP="$RESP" STATUS="$STATUS" MODE="$MODE" ABILITY="$ABILITY" python3 - <<'PY'
+RESP="$RESP" STATUS="$STATUS" MODE="$MODE" ABILITY_URA="$ABILITY_URA" python3 - <<'PY'
 import os, sys
 r = os.environ["RESP"]
 status = int(os.environ["STATUS"])
 mode = os.environ["MODE"]
-ability = os.environ["ABILITY"]
+ability_ura = os.environ["ABILITY_URA"]
 
 if mode == "no_agents":
     assert status != 0, f"expected no_agents invoke to fail, got status=0 and response={r}"
@@ -134,7 +134,7 @@ if mode == "no_agents":
         "no local handler" in msg
         or "unknown_ability" in msg
         or "permission denied" in msg
-        or ability.lower() in msg
+        or ability_ura.lower() in msg
     ), f"expected Axon LocalRuntime not-found shape; got {r}"
     print("[chat-smoke] PASS — Axon LocalRuntime returned the expected not-found shape")
 elif mode == "agent_registered":
