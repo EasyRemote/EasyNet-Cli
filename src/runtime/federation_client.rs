@@ -44,14 +44,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// RFC-002 §5.2 federation.forward_invoke argument shape. Matches
-/// the hub-profile's `ForwardInvokeArgs` exactly.
+/// RFC-005 federation.forward_invoke argument shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForwardInvokeArgs {
     pub target_ura: String,
-    pub ability_name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub function_name: String,
+    pub ability_ura: String,
     /// Standard base64 of the serialized argument payload (typically
     /// JSON bytes for ability calls). Hub forwards verbatim.
     pub arguments_b64: String,
@@ -312,13 +309,14 @@ pub struct ResolvedAgent {
     pub status: String,
     #[serde(default)]
     pub host_node_id: Option<String>,
-    /// Per-ability descriptors as advertised through
-    /// `federation.advertise_abilities`. Empty when the resolve
-    /// call did not pass `include_abilities = true`. Each entry
-    /// is a JSON object preserving whatever shape the publisher
-    /// emitted (name, description, input_schema, …).
-    #[serde(default)]
-    pub abilities: Vec<Value>,
+    /// RFC-005 owner projection summaries returned by
+    /// `federation.resolve(include_abilities=true)`. Empty when the
+    /// resolve call did not request abilities. Each entry has the
+    /// `AbilityProjectionSummary` JSON shape (`ability_ura`,
+    /// `namespace`, `local_name`, descriptor/schema hashes, policy
+    /// reference, tags); it is not a raw implementation descriptor.
+    #[serde(default, rename = "abilities")]
+    pub ability_summaries: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -480,7 +478,7 @@ mod tests {
     fn resolved_agents_list_parses_status_strings() {
         let body = json!({
             "agents": [
-                {"ura": "easynet:///r/acme/hub", "status": "active"},
+                {"ura": crate::ura::hub_ura("acme"), "status": "active"},
                 {"ura": "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8", "status": "revoked"}
             ]
         });
@@ -488,5 +486,35 @@ mod tests {
         assert_eq!(parsed.agents.len(), 2);
         assert_eq!(parsed.agents[0].status, "active");
         assert_eq!(parsed.agents[1].status, "revoked");
+    }
+
+    #[test]
+    fn resolved_agent_maps_wire_abilities_to_projection_summaries() {
+        let body = json!({
+            "agents": [{
+                "ura": "easynet:///r/acme/agent/alice.bot",
+                "status": "active",
+                "abilities": [{
+                    "ability_ura": "easynet:///r/acme/ability/alice.bot.chat",
+                    "owner_ura": "easynet:///r/acme/agent/alice.bot",
+                    "namespace": "",
+                    "local_name": "chat",
+                    "descriptor_revision": "sha256:descriptor",
+                    "schema_ref": null,
+                    "schema_hash": null,
+                    "policy_ref": "visibility:SCOPED",
+                    "route_summary_ref": null,
+                    "tags": ["class:query"]
+                }]
+            }]
+        });
+        let parsed: ResolveReceipt = parse_receipt_value(&body).unwrap();
+        assert_eq!(parsed.agents.len(), 1);
+        assert_eq!(parsed.agents[0].ability_summaries.len(), 1);
+        assert_eq!(parsed.agents[0].ability_summaries[0]["local_name"], "chat");
+        assert_eq!(
+            parsed.agents[0].ability_summaries[0]["ability_ura"],
+            "easynet:///r/acme/ability/alice.bot.chat"
+        );
     }
 }

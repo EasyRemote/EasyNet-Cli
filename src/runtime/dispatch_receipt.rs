@@ -14,8 +14,7 @@
 // ----------------------
 // The mapping has three inputs that must agree:
 //
-//   1. The profile that owns the ability namespace
-//      (`runtime::agents::profiles::*::owns(name)`).
+//   1. The owner classification for the ability.
 //   2. The hosted Agent URA recorded in `local-agents.json`.
 //   3. The host device-profile URA from the same file.
 //
@@ -44,9 +43,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use easynet_axon::invocation::audit::HostedAgentReceiptHeader;
+
 use crate::persistence::local_agents::{lookup_hosted_ura, LocalAgentsFile};
-use crate::runtime::agents::profiles::{consent, device, llm, mcp as mcp_profile, policy};
-use crate::runtime::hosted_receipt::HostedAgentReceiptHeader;
+use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::agents::profiles::{
+    DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID, DEFAULT_POLICY_AGENT_ID,
+};
 
 pub trait HostAttestationProvider {
     fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>>;
@@ -103,41 +106,15 @@ pub fn header_for_ability_with_attestation(
         return None;
     }
 
-    if device::owns(ability_name) {
-        // Self-signed: the device-profile dispatched its own ability.
-        return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();
-    }
-
-    // Special-case `<agent>.chat`: the wire ability name embeds the
-    // sub-agent before the verb. Profile prefix matching can't see
-    // it because llm::owns checks for `conversation./session./meta./skill.`
-    // prefixes only. We recognise the shape here so chat dispatch
-    // attaches a header to the right LLM-profile URA.
-    if let Some((agent, "chat")) = ability_name.split_once('.') {
-        let callee_ura = lookup_hosted_ura(file, "llm", agent)?;
-        let host_attestation = attestation_provider.host_attestation(&callee_ura, host_ura)?;
-        return HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, host_attestation).ok();
-    }
-
-    // Hosted abilities: the dispatching Agent is the host (device-
-    // profile), but the apparent callee is the hosted profile Agent.
-    let (profile_key, name) = if consent::owns(ability_name) {
-        ("consent", "default")
-    } else if policy::owns(ability_name) {
-        ("policy", "default")
-    } else if mcp_profile::owns(ability_name) {
-        ("mcp", "default")
-    } else if llm::owns(ability_name) {
-        // LLM sub-agent name comes from the dispatch context (e.g.
-        // skill.<v> → name=<agent>). When unknown we cannot map
-        // the receipt to a specific Agent URA — return None and
-        // let the wire stay quiet rather than guess wrong.
-        match llm_sub_agent_name {
-            Some(n) => ("llm", n),
-            None => return None,
+    let (profile_key, name) = match crate::runtime::agents::system_ability_owner(ability_name) {
+        Some(OwnerKind::Device) => {
+            // Self-signed: the device-profile dispatched its own ability.
+            return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();
         }
-    } else {
-        return None;
+        Some(OwnerKind::Agent(agent_id)) => hosted_system_profile_for_agent_id(&agent_id)?,
+        Some(OwnerKind::Hub) | Some(OwnerKind::User(_)) | None => {
+            llm_dynamic_profile_for_ability(ability_name, llm_sub_agent_name)?
+        }
     };
 
     let callee_ura = lookup_hosted_ura(file, profile_key, name)?;
@@ -145,11 +122,41 @@ pub fn header_for_ability_with_attestation(
     HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, host_attestation).ok()
 }
 
+fn hosted_system_profile_for_agent_id(agent_id: &str) -> Option<(&'static str, &'static str)> {
+    match agent_id {
+        DEFAULT_CONSENT_AGENT_ID => Some(("consent", "default")),
+        DEFAULT_POLICY_AGENT_ID => Some(("policy", "default")),
+        DEFAULT_MCP_AGENT_ID => Some(("mcp", "default")),
+        _ => None,
+    }
+}
+
+fn llm_dynamic_profile_for_ability<'a>(
+    ability_name: &'a str,
+    llm_sub_agent_name: Option<&'a str>,
+) -> Option<(&'static str, &'a str)> {
+    if let Some((agent, "chat")) = ability_name.split_once('.') {
+        return Some(("llm", agent));
+    }
+
+    if is_llm_contextual_ability(ability_name) {
+        return llm_sub_agent_name.map(|name| ("llm", name));
+    }
+
+    None
+}
+
+fn is_llm_contextual_ability(ability_name: &str) -> bool {
+    ability_name.starts_with("conversation.")
+        || ability_name.starts_with("session.")
+        || ability_name.starts_with("skill.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::persistence::local_agents::{upsert_hosted_agent, LocalAgentsFile};
-    use crate::runtime::hosted_receipt::SigningModel;
+    use easynet_axon::invocation::audit::SigningModel;
 
     fn file_with(host: &str) -> LocalAgentsFile {
         LocalAgentsFile {
@@ -170,7 +177,7 @@ mod tests {
     #[test]
     fn device_ability_emits_selfsigned_header() {
         let file = file_with("easynet:///r/acme/device/01DEV");
-        let h = header_for_ability("device.observe.health", &file, None)
+        let h = header_for_ability("observe.health", &file, None)
             .expect("device ability must produce a header");
         assert_eq!(h.callee_agent_ura, "easynet:///r/acme/device/01DEV");
         assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
@@ -187,7 +194,7 @@ mod tests {
             "easynet:///r/acme/agent/u1.01CON",
         );
         let h = header_for_ability_with_attestation(
-            "device.consent.subscribe",
+            "consent.subscribe",
             &file,
             None,
             &test_attestation,
@@ -215,7 +222,7 @@ mod tests {
         // header pointing at a URA the hub doesn't know about.
         let file = file_with("easynet:///r/acme/device/01DEV");
         assert!(
-            header_for_ability("device.consent.request", &file, None).is_none(),
+            header_for_ability("consent.request", &file, None).is_none(),
             "missing hosted URA must surface as None, not a fabricated header"
         );
     }
@@ -275,7 +282,7 @@ mod tests {
             "easynet:///r/acme/agent/u1.01MCP",
         );
         let h = header_for_ability_with_attestation(
-            "device.mcp.bridge.list_tools",
+            "mcp.bridge.list_tools",
             &file,
             None,
             &test_attestation,
@@ -290,8 +297,8 @@ mod tests {
         // Pre-join state: the dispatcher should not emit headers
         // because the host URA itself is unknown.
         let file = file_with("");
-        assert!(header_for_ability("device.observe.health", &file, None).is_none());
-        assert!(header_for_ability("device.consent.subscribe", &file, None).is_none());
+        assert!(header_for_ability("observe.health", &file, None).is_none());
+        assert!(header_for_ability("consent.subscribe", &file, None).is_none());
     }
 
     #[test]
@@ -339,7 +346,7 @@ mod tests {
             "easynet:///r/acme/agent/u1.01CON",
         );
         assert!(
-            header_for_ability("device.consent.subscribe", &file, None).is_none(),
+            header_for_ability("consent.subscribe", &file, None).is_none(),
             "hosted receipt headers require a real host attestation"
         );
     }
@@ -347,7 +354,7 @@ mod tests {
     #[test]
     fn header_passes_validate() {
         let file = file_with("easynet:///r/acme/device/01DEV");
-        let h = header_for_ability("device.observe.health", &file, None).unwrap();
+        let h = header_for_ability("observe.health", &file, None).unwrap();
         assert!(
             h.validate().is_ok(),
             "every emitted header must round-trip validate"

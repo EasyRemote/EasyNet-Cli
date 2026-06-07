@@ -4,7 +4,7 @@
 // File: src/facade/cli/presentation/stage.rs
 // Description: Reusable "running stages" UI. Every CLI command that
 //              walks through a sequence of named steps (`easynet
-//              start`, `easynet join`, ...) renders the same way
+//              runtime start`, `easynet device join`, ...) renders the same way
 //              through this module:
 //
 //                ◐ <active stage, cyan shimmer>

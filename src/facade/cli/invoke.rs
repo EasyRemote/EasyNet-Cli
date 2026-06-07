@@ -2,38 +2,27 @@
 // ===========
 //
 // File: src/facade/cli/invoke.rs
-// Description: `easynet ability invoke <ability> [--args JSON] [--timeout SECS]`.
+// Description: `easynet ability invoke <ability-ura> [--args JSON] [--timeout SECS]`.
 //
 // Routing model after the AXON-RFC-001 P1.5 federation cull:
 //
-//   easynet ability invoke <ability>            # Local Axon dispatch.
-//                                               # Goes to the local daemon's
-//                                               # Invocation gRPC socket
-//                                               # at ~/.easynet/daemon.sock
-//                                               # and lands in the shared
-//                                               # Axon LocalRuntime.
+//   easynet ability invoke <ability-ura>        # Local Axon dispatch.
+//                                               # Derives the daemon
+//                                               # registry key from the
+//                                               # canonical Ability URA.
 //
-//   easynet ability invoke <ability> --node N   # ⚠ Pinning to a remote
-//                                               # node is not supported in
-//                                               # this build. The federation
-//                                               # bridge that backed the
-//                                               # `--node` flag was removed
-//                                               # by AXON-RFC-001 P1.5; the
-//                                               # replacement (Invoke
-//                                               # against an Agent ability
-//                                               # exposed on the realm)
-//                                               # ships in a follow-up. For
-//                                               # now, --node returns a
-//                                               # precise error so a script
-//                                               # using the old form fails
-//                                               # loud rather than silently
-//                                               # auto-routing locally.
+//   easynet ability invoke <ability-ura> --node N
+//                                               # Remote dispatch. The
+//                                               # ability argument is already
+//                                               # a canonical Ability URA; the
+//                                               # CLI does not infer owner or
+//                                               # mint URAs from bare names.
 //
 // Why this rewrite
 // ----------------
 // Pre-rewrite this file called
 // `bridge.call_mcp_tool_with_timeout(...)`, which AXON-RFC-001 P1.5
-// removed in the federation cull. Every `easynet ability invoke <name>`
+// removed in the federation cull. Every `easynet ability invoke <selector>`
 // call therefore failed with
 //
 //     bridge: call_mcp_tool_with_timeout removed by AXON-RFC-001 P1.5;
@@ -58,11 +47,10 @@ use crate::support::{output, timeouts};
 
 #[derive(Debug, Args)]
 pub struct InvokeArgs {
-    /// Ability (tool) name to invoke. Use the canonical
-    /// `<owner>.<verb>` form for agent-owned abilities (e.g.
-    /// `claude.weather`) and the bare verb for system abilities
-    /// (e.g. `easynet.discover`, `observe.health`).
-    pub ability: String,
+    /// Canonical Ability URA returned by `easynet ability list`,
+    /// e.g. `easynet:///r/<realm>/ability/device.<node>.observe.health`
+    /// or `easynet:///r/<realm>/ability/<user>.<agent>.chat`.
+    pub ability_ura: String,
     /// ⚠ Pinning to a remote node id is not wired in this build.
     /// The federation Invoke surface that would back it ships in a
     /// follow-up to AXON-RFC-001 P1.5. Passing '--node' today
@@ -103,6 +91,9 @@ pub struct InvokeArgs {
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
+    let ability_selector = crate::ura::AbilitySelector::parse(&invoke_args.ability_ura)
+        .with_context(|| "parse <ability-ura>")?;
+
     // PR-N1 commit 8/N: `--node` is now wired against the local
     // daemon's `federation.forward_invoke` ability via the
     // `support::federation_invoke` helper. The path requires the
@@ -156,13 +147,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // it runs against is paired (the daemon's realm-trust
             // anchor knows about its own device URA but not about
             // the generic CLI placeholder). Pass-through to
-            // `invoke_via_federation_forward`'s `caller_ura`
-            // surface; None there preserves the legacy default
-            // for unattended fixture scripts that have no
-            // credentials.json. (The pre-v4.1.5 fallback used
-            // the `/agent/local` shape which fails strict
-            // §A.URA-3 parsing — agent tail must be
-            // `<user-uuid>.<agent-id>`.)
+            // `invoke_via_federation_forward_ability_ura`'s
+            // `caller_ura` surface. None there uses the CLI device
+            // placeholder for fixture scripts that have no
+            // credentials.json.
             // URA v4.1.4 Phase 2F: caller URA for an `easynet
             // ability invoke --node ...` originating from a daemon
             // is the daemon's *device* URA, not an agent URA. The
@@ -171,14 +159,20 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // `device` role with the same node-id tail.
             let caller_ura = crate::persistence::config::load_credentials()
                 .ok()
-                .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-                .map(|c| crate::ura::device_ura(c.tenant_id.trim(), c.node_id.trim()));
-            let value = crate::support::federation_invoke::invoke_via_federation_forward(
-                &invoke_args.ability,
-                arguments,
-                target,
-                caller_ura.as_deref(),
-            )?;
+                .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
+                .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
+            let ability_ura =
+                crate::support::federation_invoke::TargetOwnedAbilityUra::from_ability_ura(
+                    target,
+                    ability_selector.ability_ura(),
+                )?;
+            let value =
+                crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+                    ability_ura.as_str(),
+                    arguments,
+                    target,
+                    caller_ura.as_deref(),
+                )?;
             (value, format!("federation.forward_invoke target={target}"))
         }
         // The `not(axon-pb)` arm of `--node` already bailed above;
@@ -198,8 +192,11 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            let value =
-                invoke_local_ability_with_subject(&invoke_args.ability, arguments, subject)?;
+            let value = invoke_local_ability_with_subject(
+                ability_selector.local_registry_ability(),
+                arguments,
+                subject,
+            )?;
             (value, "local daemon".to_string())
         }
     };
@@ -218,7 +215,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Value::String(s) => println!("{s}"),
         _ => println!("{}", serde_json::to_string_pretty(&to_print)?),
     }
-    output::success(&format!("{} → ok ({fulfilled_label})", invoke_args.ability));
+    output::success(&format!(
+        "{} → ok ({fulfilled_label})",
+        ability_selector.ability_ura()
+    ));
     Ok(())
 }
 
@@ -262,7 +262,7 @@ mod tests {
         // rejected with a typed error before any IPC, so a typo
         // never accidentally hits the wire.
         let res = run(InvokeArgs {
-            ability: "observe.health".into(),
+            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
             node: Some("some-node-id".into()),
             args: None,
             timeout: 60,
@@ -286,7 +286,7 @@ mod tests {
         // `--node ""` is almost always an unset shell variable that
         // expanded to empty, not a deliberate intent. Reject loudly.
         let res = run(InvokeArgs {
-            ability: "observe.health".into(),
+            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
             node: Some("   ".into()),
             args: None,
             timeout: 60,
@@ -302,7 +302,7 @@ mod tests {
         // Operator-visible: a typo in --args should say "parse
         // --args JSON", not crash mid-IPC.
         let res = run(InvokeArgs {
-            ability: "observe.health".into(),
+            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
             node: None,
             args: Some("{not valid".into()),
             timeout: 60,

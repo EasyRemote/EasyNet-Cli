@@ -8,7 +8,7 @@
 // Protocol Responsibility:
 // - Reads/writes ~/.easynet/device_settings.json, which is separate from credentials
 //   and runtime state by design: settings are user-controlled knobs, not server-issued.
-// - Changes take effect on next `easynet start` (requires reconnect).
+// - Changes take effect on next `easynet runtime start` (requires reconnect).
 //
 // Implementation Approach:
 // - Subcommand dispatch: `show` (default) and `exec on|off`.
@@ -87,7 +87,7 @@ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
                 "session_bridge_exec_enabled set to {}",
                 settings.session_bridge_exec_enabled
             ));
-            output::info("Note: reconnect required to apply. Run 'easynet stop && easynet start' or restart 'easynet connect'.");
+            output::info("Note: reconnect required to apply. Run 'easynet runtime stop && easynet runtime start' or restart 'easynet runtime connect'.");
         }
     }
     Ok(())

@@ -7,7 +7,7 @@
 //              `federation.discover` (the same surface
 //              `easynet device list` uses); ability count goes
 //              through `easynet.discover`. No more
-//              `device.node.list` — that handler is on the phase 4
+//              `node.list` — that handler is on the phase 4
 //              cull list.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -124,7 +124,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    match invoke_local_ability("device.observe.health", json!({"source": "runtime.status"})) {
+    match invoke_local_ability("observe.health", json!({"source": "runtime.status"})) {
         Ok(_) => {}
         Err(e) => {
             // The Axon daemon helper already converts the common
@@ -167,7 +167,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     // returns the full local catalogue). Cheaper than the legacy
     // O(N) per-node fan-out and matches what `easynet ability list`
     // reports.
-    match invoke_local_ability("device.meta.list_abilities", serde_json::json!({})) {
+    match invoke_local_ability("meta.list_abilities", serde_json::json!({})) {
         Ok(v) => {
             let count = v
                 .get("abilities")

@@ -13,8 +13,8 @@
 // have its own workspace or a stable `<agent>.publish` route — the
 // session that fires `ability.publish` is short-lived and may not be
 // the same agent that owns the resulting manifest. The owner is
-// passed in `args.owner_agent_id`; the daemon resolves the on-disk
-// root from the agent registry.
+// passed in `args.owner_ura`; the daemon resolves the on-disk
+// root from the URA's agent id and the local agent registry.
 //
 // Trust model (Phase 2 baseline)
 // ------------------------------
@@ -58,10 +58,13 @@
 //
 // `ability.unpublish` semantics
 // -----------------------------
-// Hard delete. The on-disk manifest file is removed. The daemon
-// log captures `[ability.unpublish] owner=<id> name=<verb>
-// content_hash=<sha256>` so an operator who needs to recover the
-// manifest can grep the log and reconstruct. We considered a
+// Hard delete. The request selects the target by canonical
+// `ability_ura`; the handler derives the owner-local manifest stem
+// and local agent id from that single identity, then removes the
+// on-disk file. The daemon log captures
+// `[ability.unpublish] owner=<id> name=<verb> content_hash=<sha256>`
+// so an operator who needs to recover the manifest can grep the log
+// and reconstruct. We considered a
 // soft-delete (visibility → selfish + tombstone) and rejected it:
 // EAL has no static dependency graph, so we cannot offer a
 // "pre-delete impact report" anyway, and two-state deletes
@@ -86,11 +89,11 @@ use crate::runtime::directory::ABILITY_MANIFEST_SUFFIX;
 /// Wire name of the publish meta-ability. Pinned because the
 /// curator session in `mission.think` calls it by string; a rename
 /// breaks every published mission.
-pub const ABILITY_PUBLISH: &str = "device.ability.publish";
+pub const ABILITY_PUBLISH: &str = "ability.publish";
 
 /// Wire name of the unpublish meta-ability. Same pinning rationale
 /// as `ABILITY_PUBLISH`.
-pub const ABILITY_UNPUBLISH: &str = "device.ability.unpublish";
+pub const ABILITY_UNPUBLISH: &str = "ability.unpublish";
 
 /// Register both verbs on the registry. Stateless: the handlers
 /// reach disk directly and read the agent registry on every call,
@@ -98,12 +101,12 @@ pub const ABILITY_UNPUBLISH: &str = "device.ability.unpublish";
 /// hot-path concern). No captured state to keep coherent.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
-        "device.ability.publish",
+        "ability.publish",
         OwnerKind::Device,
         Arc::new(publish_handler),
     );
     reg.register_rpc_with_owner(
-        "device.ability.unpublish",
+        "ability.unpublish",
         OwnerKind::Device,
         Arc::new(unpublish_handler),
     );
@@ -114,7 +117,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// Args:
 /// ```json
 /// {
-///   "owner_agent_id": "<agent name>",
+///   "owner_ura": "easynet:///r/<realm>/agent/<user>.<agent>",
 ///   "manifest_toml":  "<full ability.toml text>"
 /// }
 /// ```
@@ -123,15 +126,17 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// ```json
 /// {
 ///   "ok": true,
-///   "owner_agent_id": "<agent name>",
-///   "ability_name":   "<verb>",
+///   "owner_ura": "easynet:///r/<realm>/agent/<user>.<agent>",
+///   "public_name":    "<verb>",
+///   "ability_ura":    "easynet:///r/<realm>/ability/<user>.<agent>.<verb>",
 ///   "path":           "<absolute path to written manifest>",
 ///   "content_hash":   "sha256:<hex>"
 /// }
 /// ```
 ///
 /// Errors with a clear message when:
-///   * `owner_agent_id` is missing, empty, or not a registered agent
+///   * `owner_ura` is missing, empty, malformed, or its agent
+///     id is not registered locally
 ///   * `manifest_toml` is missing, empty, or fails `from_toml_str`
 ///     validation (bad schema, empty argv, unknown sandbox profile,
 ///     etc.)
@@ -140,13 +145,15 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///   * a manifest with the same name already exists (refuse
 ///     overwrite — see module doc)
 fn publish_handler(args: Value) -> anyhow::Result<Value> {
-    let (owner_id, manifest_toml) = parse_publish_args(&args)?;
+    let (owner_ura, owner_id, manifest_toml) = parse_publish_args(&args)?;
     let owner_root = resolve_owner_root(&owner_id)?;
     validate_authorisation(&owner_id)?;
 
     let manifest = AbilityManifest::from_toml_str(&manifest_toml)?;
     let verb = manifest.name().to_string();
     reject_reserved_verb(&verb)?;
+    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, &verb)
+        .ok_or_else(|| anyhow::anyhow!("ability.publish: cannot derive ability_ura"))?;
 
     let abilities_dir = owner_root.join("abilities");
     std::fs::create_dir_all(&abilities_dir).map_err(|e| {
@@ -188,8 +195,9 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
 
     Ok(json!({
         "ok": true,
-        "owner_agent_id": owner_id,
-        "ability_name": verb,
+        "owner_ura": owner_ura,
+        "public_name": verb,
+        "ability_ura": ability_ura,
         "path": target.display().to_string(),
         "content_hash": hash,
     }))
@@ -200,8 +208,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
 /// Args:
 /// ```json
 /// {
-///   "owner_agent_id": "<agent name>",
-///   "ability_name":   "<verb>"
+///   "ability_ura":    "easynet:///r/<realm>/ability/<user>.<agent>.<verb>"
 /// }
 /// ```
 ///
@@ -209,22 +216,23 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
 /// ```json
 /// {
 ///   "ok": true,
-///   "owner_agent_id": "<agent name>",
-///   "ability_name":   "<verb>",
+///   "owner_ura": "easynet:///r/<realm>/agent/<user>.<agent>",
+///   "public_name":    "<verb>",
+///   "ability_ura":    "easynet:///r/<realm>/ability/<user>.<agent>.<verb>",
 ///   "removed_path":   "<absolute path of the file that was deleted>",
 ///   "content_hash":   "sha256:<hex of the body that was deleted>"
 /// }
 /// ```
 ///
 /// Errors with a clear message when:
-///   * `owner_agent_id` or `ability_name` is missing/empty or the
-///     owner is not a registered agent
+///   * `ability_ura` is missing/empty, malformed, not agent-owned,
+///     or its agent id is not registered locally
 ///   * the named ability does not exist on disk for that owner
 ///   * the verb is reserved (`chat`) — refuse to delete the
 ///     baseline that every agent ships with; an operator who truly
 ///     wants to remove it must do so manually
 fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
-    let (owner_id, verb) = parse_unpublish_args(&args)?;
+    let (owner_ura, owner_id, ability_ura, verb) = parse_unpublish_args(&args)?;
     let owner_root = resolve_owner_root(&owner_id)?;
     validate_authorisation(&owner_id)?;
     reject_reserved_verb(&verb)?;
@@ -270,8 +278,9 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
 
     Ok(json!({
         "ok": true,
-        "owner_agent_id": owner_id,
-        "ability_name": verb,
+        "owner_ura": owner_ura,
+        "public_name": verb,
+        "ability_ura": ability_ura,
         "removed_path": target.display().to_string(),
         "content_hash": hash,
     }))
@@ -279,22 +288,22 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
-fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String)> {
+fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String, String)> {
     let obj = args
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("ability.publish: args must be a JSON object"))?;
-    let owner = obj
-        .get("owner_agent_id")
+    let owner_ura = obj
+        .get("owner_ura")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "ability.publish: missing/empty `owner_agent_id` (string, the agent \
+                "ability.publish: missing/empty `owner_ura` (canonical agent URA, \
                  whose abilities/ dir will receive the manifest)"
             )
-        })?
-        .to_string();
+        })?;
+    let owner_id = agent_id_from_owner_ura("ability.publish", owner_ura)?;
     let manifest = obj
         .get("manifest_toml")
         .and_then(Value::as_str)
@@ -308,40 +317,35 @@ fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String)> {
             )
         })?
         .to_string();
-    Ok((owner, manifest))
+    Ok((owner_ura.to_string(), owner_id, manifest))
 }
 
-fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
+fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String, String, String)> {
     let obj = args
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("ability.unpublish: args must be a JSON object"))?;
-    let owner = obj
-        .get("owner_agent_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("ability.unpublish: missing/empty `owner_agent_id`"))?
-        .to_string();
-    let name = obj
-        .get("ability_name")
+    let ability_ura = obj
+        .get("ability_ura")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "ability.unpublish: missing/empty `ability_name` (the verb to delete; \
-                 e.g. \"summarise\" maps to abilities/summarise.ability.toml)"
+                "ability.unpublish: missing/empty `ability_ura` (canonical Ability URA \
+                 for the agent-owned ability to delete)"
             )
         })?
         .to_string();
-    Ok((owner, name))
+    let (owner_ura, owner_id, public_name) =
+        agent_owner_and_public_name_from_ability_ura(&ability_ura)?;
+    Ok((owner_ura, owner_id, ability_ura, public_name))
 }
 
 fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
     let registry = agents::load_agents()?;
     let entry = registry.agents.get(owner_id).ok_or_else(|| {
         anyhow::anyhow!(
-            "owner_agent_id {owner_id:?} is not registered (registered agents: {:?}); \
+            "owner agent id {owner_id:?} is not registered (registered agents: {:?}); \
              create the agent first via `easynet agent new`",
             registry.agents.keys().collect::<Vec<_>>()
         )
@@ -358,6 +362,42 @@ fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
         );
     }
     Ok(root)
+}
+
+fn agent_owner_and_public_name_from_ability_ura(
+    ability_ura: &str,
+) -> anyhow::Result<(String, String, String)> {
+    let parsed = crate::ura::parse_ura(ability_ura)
+        .map_err(|e| anyhow::anyhow!("ability.unpublish: invalid `ability_ura`: {e}"))?;
+    if parsed.kind != crate::ura::URAKind::Ability {
+        anyhow::bail!("ability.unpublish: `ability_ura` must be an Ability URA");
+    }
+    let ability = parsed
+        .ability()
+        .ok_or_else(|| anyhow::anyhow!("ability.unpublish: `ability_ura` has no ability tail"))?;
+    let (user_id, agent_id) = match ability.owner {
+        crate::ura::AbilityOwner::Agent { user_id, agent_id } => (user_id, agent_id),
+        other => {
+            anyhow::bail!("ability.unpublish: ability_ura must be agent-owned, got {other:?}");
+        }
+    };
+    let public_name = crate::ura::ability_name_from_parts(&parsed).ok_or_else(|| {
+        anyhow::anyhow!("ability.unpublish: ability_ura `{ability_ura}` has no public ability name")
+    })?;
+    let owner_ura = crate::ura::agent_ura(&parsed.realm, &user_id, &agent_id);
+    Ok((owner_ura, agent_id, public_name))
+}
+
+fn agent_id_from_owner_ura(context: &str, owner_ura: &str) -> anyhow::Result<String> {
+    let parsed = crate::ura::parse_ura(owner_ura)
+        .map_err(|e| anyhow::anyhow!("{context}: invalid `owner_ura`: {e}"))?;
+    if parsed.kind != crate::ura::URAKind::Agent {
+        anyhow::bail!("{context}: `owner_ura` must be an Agent URA");
+    }
+    let Some((_, agent_id)) = parsed.agent_ids() else {
+        anyhow::bail!("{context}: `owner_ura` is missing agent_id");
+    };
+    Ok(agent_id.to_string())
 }
 
 /// Phase 2 baseline: trust the local control.sock's user-level
@@ -401,11 +441,11 @@ fn content_hash(body: &str) -> String {
 pub fn publish_input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["owner_agent_id", "manifest_toml"],
+        "required": ["owner_ura", "manifest_toml"],
         "properties": {
-            "owner_agent_id": {
+            "owner_ura": {
                 "type": "string",
-                "description": "The agent whose abilities/ dir receives the manifest. Must be a registered agent."
+                "description": "Canonical Agent URA whose abilities/ dir receives the manifest. Its agent id must be registered locally."
             },
             "manifest_toml": {
                 "type": "string",
@@ -418,15 +458,11 @@ pub fn publish_input_schema() -> Value {
 pub fn unpublish_input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["owner_agent_id", "ability_name"],
+        "required": ["ability_ura"],
         "properties": {
-            "owner_agent_id": {
+            "ability_ura": {
                 "type": "string",
-                "description": "The agent whose ability is being removed."
-            },
-            "ability_name": {
-                "type": "string",
-                "description": "The verb / file stem of the ability to delete. Must NOT be a reserved verb (e.g. `chat`)."
+                "description": "Canonical agent-owned Ability URA to delete. Its agent id must be registered locally and its public name must NOT be reserved (e.g. `chat`)."
             }
         }
     })
@@ -492,18 +528,28 @@ type = "object"
         )
     }
 
+    fn owner_ura(agent_id: &str) -> String {
+        crate::ura::agent_ura("test-realm", "alice", agent_id)
+    }
+
+    fn ability_ura(agent_id: &str, public_name: &str) -> String {
+        crate::ura::ability_ura("test-realm", "alice", agent_id, public_name)
+    }
+
     #[test]
     fn publish_writes_manifest_under_owner_abilities_dir() {
         let g = HomeGuard::new();
         let name = materialise_agent("publish-writes", &g);
         let toml = well_formed_manifest_toml("summarise");
+        let owner_ura = owner_ura(&name);
         let res = publish_handler(json!({
-            "owner_agent_id": name,
+            "owner_ura": owner_ura,
             "manifest_toml": toml,
         }))
         .expect("publish ok");
         assert_eq!(res["ok"], true);
-        assert_eq!(res["ability_name"], "summarise");
+        assert_eq!(res["public_name"], "summarise");
+        assert_eq!(res["ability_ura"], ability_ura(&name, "summarise"));
         let path = res["path"].as_str().unwrap();
         assert!(
             std::path::Path::new(path).exists(),
@@ -529,12 +575,12 @@ type = "object"
         let name = materialise_agent("publish-overwrite", &g);
         let toml = well_formed_manifest_toml("foo");
         publish_handler(json!({
-            "owner_agent_id": name,
+            "owner_ura": owner_ura(&name),
             "manifest_toml": toml.clone(),
         }))
         .unwrap();
         let err = publish_handler(json!({
-            "owner_agent_id": name,
+            "owner_ura": owner_ura(&name),
             "manifest_toml": toml,
         }))
         .unwrap_err();
@@ -550,7 +596,7 @@ type = "object"
         let name = materialise_agent("publish-reserved", &g);
         let toml = well_formed_manifest_toml("chat");
         let err = publish_handler(json!({
-            "owner_agent_id": name,
+            "owner_ura": owner_ura(&name),
             "manifest_toml": toml,
         }))
         .unwrap_err();
@@ -563,7 +609,7 @@ type = "object"
         let _real = materialise_agent("publish-unknown", &g);
         let toml = well_formed_manifest_toml("foo");
         let err = publish_handler(json!({
-            "owner_agent_id": "no-such-agent-xyz",
+            "owner_ura": owner_ura("no-such-agent-xyz"),
             "manifest_toml": toml,
         }))
         .unwrap_err();
@@ -575,7 +621,7 @@ type = "object"
         let g = HomeGuard::new();
         let name = materialise_agent("publish-malformed", &g);
         let err = publish_handler(json!({
-            "owner_agent_id": name,
+            "owner_ura": owner_ura(&name),
             "manifest_toml": "this is not toml{{{",
         }))
         .unwrap_err();
@@ -591,18 +637,19 @@ type = "object"
         let name = materialise_agent("unpublish-removes", &g);
         let toml = well_formed_manifest_toml("bar");
         let pub_res = publish_handler(json!({
-            "owner_agent_id": name,
+            "owner_ura": owner_ura(&name),
             "manifest_toml": toml,
         }))
         .unwrap();
         let path = pub_res["path"].as_str().unwrap().to_string();
 
         let unpub_res = unpublish_handler(json!({
-            "owner_agent_id": name,
-            "ability_name": "bar",
+            "ability_ura": ability_ura(&name, "bar"),
         }))
         .expect("unpublish ok");
         assert_eq!(unpub_res["ok"], true);
+        assert_eq!(unpub_res["public_name"], "bar");
+        assert_eq!(unpub_res["ability_ura"], ability_ura(&name, "bar"));
         let returned_hash = unpub_res["content_hash"].as_str().unwrap();
         assert!(returned_hash.starts_with("sha256:"));
         assert_eq!(returned_hash, pub_res["content_hash"].as_str().unwrap());
@@ -617,8 +664,7 @@ type = "object"
         let g = HomeGuard::new();
         let name = materialise_agent("unpublish-missing", &g);
         let err = unpublish_handler(json!({
-            "owner_agent_id": name,
-            "ability_name": "never-published",
+            "ability_ura": ability_ura(&name, "never-published"),
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("no ability named"));
@@ -629,8 +675,7 @@ type = "object"
         let g = HomeGuard::new();
         let name = materialise_agent("unpublish-reserved", &g);
         let err = unpublish_handler(json!({
-            "owner_agent_id": name,
-            "ability_name": "chat",
+            "ability_ura": ability_ura(&name, "chat"),
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("reserved"));

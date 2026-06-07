@@ -21,7 +21,7 @@ use crate::runtime::ability_dispatch::{
     BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
 };
 
-/// Handle `device.remote_desktop.attach`.
+/// Handle `remote_desktop.attach`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     plugin: Arc<RemoteDesktopPlugin>,
     env: EnvelopeContext,

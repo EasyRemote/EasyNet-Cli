@@ -151,20 +151,19 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
     }
 
     // ── Opt-out: empty / unjoined credentials ──────────────────
-    if creds.tenant_id.is_empty() || creds.node_id.is_empty() {
+    if creds.realm.is_empty() || creds.node_id.is_empty() {
         return FederationInitOutcome::Disabled {
-            reason: "credentials.json missing tenant_id / node_id (run `easynet device join`)"
-                .into(),
+            reason: "credentials.json missing realm / node_id (run `easynet join <token>`)".into(),
         };
     }
 
-    // ── Opt-out: `*.localhost` tenants are local-only by design ─
-    let resolution = tenant_resolver::resolve(&creds.tenant_id, &resolver_config);
+    // ── Opt-out: `*.localhost` realms are local-only by design ─
+    let resolution = tenant_resolver::resolve(&creds.realm, &resolver_config);
     if matches!(resolution.mode, tenant_resolver::AdmissionMode::LocalFast) {
         return FederationInitOutcome::Disabled {
             reason: format!(
                 "tenant {:?} resolves to Local-fast mode (no federation hub configured)",
-                creds.tenant_id
+                creds.realm
             ),
         };
     }
@@ -198,19 +197,19 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
     let installed = BridgeForwardInvoker::install_for_daemon(
         bridge,
         Arc::clone(keyring),
-        creds.tenant_id.clone(),
-        creds.tenant_id.clone(), // realm == tenant in v1 (see start.rs:511)
+        creds.realm.clone(),
+        creds.realm.clone(),
     );
     if !installed {
         return FederationInitOutcome::AlreadyInstalled {
-            tenant: creds.tenant_id.clone(),
-            realm: creds.tenant_id.clone(),
+            tenant: creds.realm.clone(),
+            realm: creds.realm.clone(),
             device_ura,
         };
     }
     FederationInitOutcome::Installed {
-        tenant: creds.tenant_id.clone(),
-        realm: creds.tenant_id.clone(),
+        tenant: creds.realm.clone(),
+        realm: creds.realm.clone(),
         device_ura,
     }
 }
@@ -224,7 +223,7 @@ fn ensure_device_subject(
         None => {
             // Synthesise + bind on first install. Subsequent calls
             // re-use the bound subject so re-installs are idempotent.
-            let synth = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
+            let synth = crate::ura::device_ura(&creds.realm, &creds.node_id);
             keyring
                 .set_device_subject(synth.clone())
                 .map_err(|e| format!("keyring.set_device_subject({synth}): {e}"))?;
@@ -245,10 +244,10 @@ mod tests {
             node_id: node.into(),
             credential_token: "tok".into(),
             hub_endpoint: "axon://hub.example:7700".into(),
-            tenant_id: tenant.into(),
+            realm: tenant.into(),
             deploy_signature: String::new(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         }
@@ -346,7 +345,7 @@ mod tests {
     fn synthesised_device_subject_uses_canonical_device_ura() {
         let c = creds("acme.com", "node-1");
         let k = keyring();
-        let expected = crate::ura::device_ura(&c.tenant_id, &c.node_id);
+        let expected = crate::ura::device_ura(&c.realm, &c.node_id);
         let got = ensure_device_subject(&k, &c).expect("subject synthesised");
         assert_eq!(got, expected);
         assert_eq!(k.device_subject().as_deref(), Some(expected.as_str()));

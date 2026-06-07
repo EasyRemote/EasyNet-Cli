@@ -768,14 +768,14 @@ pub fn register_with_backend(
 ) {
     let snapshot_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_owner(
-        "device.screen.snapshot",
+        "screen.snapshot",
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| {
             snapshot_handler(&snapshot_backend, env, args)
         }),
     );
     reg.register_stream_with_envelope_and_owner(
-        "device.screen.subscribe",
+        "screen.subscribe",
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| subscribe_handler(&backend, env, args)),
     );

@@ -128,7 +128,7 @@ mod tests {
             "must say `daemon not running`; got: {msg}"
         );
         assert!(
-            msg.contains("easynet runtime start") || msg.contains("easynet start"),
+            msg.contains("easynet runtime start"),
             "must point at `easynet [runtime] start`; got: {msg}"
         );
     }

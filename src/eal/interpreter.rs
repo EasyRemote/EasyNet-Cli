@@ -419,10 +419,15 @@ fn dispatch_remote_via_forward_invoke(
 
         let caller_ura = crate::persistence::config::load_credentials()
             .ok()
-            .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::ura::device_ura(c.tenant_id.trim(), c.node_id.trim()));
-        crate::support::federation_invoke::invoke_via_federation_forward(
+            .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
+            .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
+        let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+            &target_ura,
             ability_name,
+        )
+        .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
+        crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+            ability_ura.as_str(),
             arguments.clone(),
             &target_ura,
             caller_ura.as_deref(),
@@ -2150,8 +2155,20 @@ mod tests {
     }
 
     fn dummy_agent_entry() -> AgentEntry {
+        use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+        use crate::runtime::directory::{AgentDirectory, Location};
+
+        let root = crate::persistence::config::agents_root().join("alice");
+        let _ = std::fs::remove_dir_all(&root);
+        AgentDirectory::create(
+            &Location::Local { root: root.clone() },
+            AgentSpec::new("alice".to_string(), RuntimeKind::ClaudeCode),
+        )
+        .expect("create manifest-backed dummy agent directory");
+
         let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
         entry.command = "easynet-test-nonexistent-agent-binary".to_string();
+        entry.root_path = Some(root);
         entry.timeout_secs = 1;
         entry
     }

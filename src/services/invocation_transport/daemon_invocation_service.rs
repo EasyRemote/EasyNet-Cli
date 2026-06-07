@@ -150,7 +150,7 @@ use crate::services::invocation_transport::list_user_pubkeys::{
     handle as handle_list_user_pubkeys, ABILITY_SELF_LIST_USER_PUBKEYS,
 };
 use crate::services::invocation_transport::register_device_pubkey::{
-    handle as handle_register_device_pubkey, parse_realm_from_ura,
+    handle as handle_register_device_pubkey, parse_realm_from_ura as parse_realm_from_register_ura,
     ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
 };
 use crate::services::invocation_transport::revoke_user_pubkey::{
@@ -254,7 +254,7 @@ pub struct DaemonInvocationService {
     pending: Option<Arc<PendingDispatchMap>>,
     /// Streaming correlation table for remote bidi bridges that
     /// need chunked replies instead of a single terminal payload.
-    /// Same-hub `device.fs.transfer` is the first consumer.
+    /// Same-hub `fs.transfer` is the first consumer.
     pending_stream: Option<Arc<PendingStreamDispatchMap>>,
     /// `<self>.register_device_pubkey` handler context (PR-7
     /// commit 5/N). `None` until `with_register_pubkey(...)` wires
@@ -279,14 +279,14 @@ pub struct DaemonInvocationService {
     hub_signing_seed: Option<SessionSigningSeed>,
     /// **PR-N1 commit 3a/N**. Cross-hub federation client. `None`
     /// until `with_federation_client(...)` wires one; absence
-    /// means `federation.forward_invoke` for cross-tenant targets
+    /// means `federation.forward_invoke` for cross-realm targets
     /// returns `target_offline` without dialing (no
     /// dial). Commit 3b/N rewrites the `forward_invoke` dispatcher
     /// to consume this field; commit 3a/N only plumbs it through.
     federation_client: Option<Arc<dyn FederationClient>>,
-    /// **PR-N1 commit 3a/N → 10/N**. Operator-curated `tenant →
+    /// **PR-N1 commit 3a/N → 10/N**. Operator-curated `realm →
     /// hub_endpoint` cell per `DaemonConfig::federated_peers`. Empty
-    /// map ⇒ no cross-tenant routing configured; the dispatcher
+    /// map ⇒ no cross-realm routing configured; the dispatcher
     /// returns `target_offline`. Commit 10/N upgraded this from a
     /// boot-time `BTreeMap<String, String>` snapshot to the
     /// `SharedFederatedPeers` cell so SIGHUP-driven daemon-config
@@ -630,7 +630,7 @@ impl DaemonInvocationService {
 
     /// **PR-N1 commit 3a/N**. Attach the cross-hub federation
     /// client. Daemons booted without one return `target_offline`
-    /// for cross-tenant
+    /// for cross-realm
     /// `federation.forward_invoke` calls. PR-N1 commit 3b/N
     /// rewrites the dispatcher to consume the client; commit
     /// 3a/N only stores it as a field so that rewrite has a stable
@@ -642,7 +642,7 @@ impl DaemonInvocationService {
     }
 
     /// **PR-N1 commit 3a/N**. Attach the operator-curated
-    /// `tenant → hub_endpoint` map by-value. Wraps the supplied map in
+    /// `realm → hub_endpoint` map by-value. Wraps the supplied map in
     /// a fresh `SharedFederatedPeers` cell so test fixtures that
     /// don't care about hot-reload still get the cell shape under
     /// the hood. Production daemons use
@@ -650,8 +650,8 @@ impl DaemonInvocationService {
     /// with the SIGHUP reload task.
     ///
     /// Empty map (the default from `DaemonInvocationService::new`)
-    /// means no cross-tenant routing is configured; the
-    /// dispatcher's cross-tenant arm then refuses to dial
+    /// means no cross-realm routing is configured; the
+    /// dispatcher's cross-realm arm then refuses to dial
     /// regardless of `federation_client` presence.
     #[must_use]
     pub fn with_federated_peers(mut self, peers: BTreeMap<String, String>) -> Self {
@@ -742,7 +742,7 @@ impl DaemonInvocationService {
     /// Three valid shapes per RFC-001 + RFC-006-C v0.1:
     ///   (1) `easynet:///r/<realm>/device/<deviceID>` — the daemon's
     ///       device identity from credentials.json. Standard.
-    ///   (2) `easynet:///r/<realm>/hub` — the realm-singleton hub URA;
+    ///   (2) `easynet:///r/<realm>/hub` — the canonical Hub URA;
     ///       hub-mode daemons answer to this in addition to (1).
     ///   (3) `easynet:///r/<realm>/agent/<userID>.<agentID>` — the
     ///       agent URA of an agent the daemon currently hosts. v4.1.5
@@ -760,7 +760,7 @@ impl DaemonInvocationService {
     ///   * the tuple matches this daemon's credentials and the agent is
     ///     currently dispatchable through LocalRuntime or `agents.json`.
     ///
-    /// The second branch preserves post-boot `device.agent.start`
+    /// The second branch preserves post-boot `agent.start`
     /// behaviour before publish has written `local-agents.json`, but it
     /// is still scoped to the exact realm and user from credentials.
     async fn matches_self_target_ura(&self, target_ura: &str) -> bool {
@@ -1251,13 +1251,15 @@ fn parse_agent_target_identity(target_ura: &str) -> Option<AgentTargetIdentity> 
     if !matches!(parsed.kind, crate::ura::URAKind::Agent) {
         return None;
     }
-    if parsed.realm.is_empty() || parsed.user_id.is_empty() || parsed.agent_id.is_empty() {
+    let realm = parsed.realm.clone();
+    let (user_id, agent_id) = parsed.agent_ids()?;
+    if realm.is_empty() || user_id.is_empty() || agent_id.is_empty() {
         return None;
     }
     Some(AgentTargetIdentity {
-        realm: parsed.realm,
-        user_id: parsed.user_id,
-        agent_id: parsed.agent_id,
+        realm,
+        user_id: user_id.to_string(),
+        agent_id: agent_id.to_string(),
     })
 }
 
@@ -1275,8 +1277,8 @@ fn credentials_match_agent_target(target: &AgentTargetIdentity) -> bool {
     crate::persistence::config::load_credentials()
         .ok()
         .and_then(|creds| {
-            let username = creds.username?;
-            Some((creds.tenant_id, username))
+            let username = creds.username_slug().ok()?.to_string();
+            Some((creds.realm, username))
         })
         .map(|(realm, username)| realm.trim() == target.realm && username.trim() == target.user_id)
         .unwrap_or(false)
@@ -1287,8 +1289,7 @@ fn agent_ura_matches_target(ura: &str, target: &AgentTargetIdentity) -> bool {
         .map(|parsed| {
             parsed.kind == crate::ura::URAKind::Agent
                 && parsed.realm == target.realm
-                && parsed.user_id == target.user_id
-                && parsed.agent_id == target.agent_id
+                && parsed.agent_ids() == Some((target.user_id.as_str(), target.agent_id.as_str()))
         })
         .unwrap_or(false)
 }
@@ -1675,7 +1676,7 @@ impl DaemonInvocationService {
     }
 
     /// **PR-N3 commit N3-5**. Hub-side projection of local
-    /// presence-registry entries for a given tenant. Spec §3.5
+    /// presence-registry entries for a given realm. Spec §3.5
     /// admission filter: only callers whose URA is in the local
     /// trust anchor with `role = Hub` may invoke this. Other
     /// roles (Backend, Device) are rejected with
@@ -1781,10 +1782,10 @@ impl DaemonInvocationService {
         )?;
 
         let request: federation_wrappers::ProxyListUserDevicesRequest = parse_json_args(arguments)?;
-        let tenant_id = request.tenant_id.trim();
-        if tenant_id.is_empty() {
+        let realm = request.realm.trim();
+        if realm.is_empty() {
             return Err(Status::invalid_argument(
-                "federation.proxy_list_user_devices: tenant_id is required",
+                "federation.proxy_list_user_devices: realm is required",
             ));
         }
 
@@ -1809,7 +1810,7 @@ impl DaemonInvocationService {
         }
 
         let inner_arguments = serde_json::to_vec(&federation_wrappers::ListUserDevicesRequest {
-            tenant_id: tenant_id.to_string(),
+            realm: realm.to_string(),
         })
         .map_err(|err| {
             Status::internal(format!(
@@ -1829,7 +1830,7 @@ impl DaemonInvocationService {
                 );
                 continue;
             };
-            let Some(peer_realm) = peer_entry.origin_tenant_id.clone() else {
+            let Some(peer_realm) = peer_entry.origin_realm.clone() else {
                 crate::op_event!(
                     component = daemon_invocation,
                     kind = proxy_list_user_devices_skip_peer_missing_origin_tenant,
@@ -2039,20 +2040,20 @@ impl DaemonInvocationService {
         wrap_json_response(&response)
     }
 
-    /// **PR-N1 commit 3b/N rewrite.** Tenant-aware
+    /// **PR-N1 commit 3b/N rewrite.** Realm-aware
     /// `federation.forward_invoke` dispatch:
     ///
-    /// 1. Parse `target_ura` to extract its tenant component.
-    /// 2. **Local-tenant fast path**: when the tenant matches
+    /// 1. Parse `target_ura` to extract its realm component.
+    /// 2. **Local-realm fast path**: when the realm matches
     ///    `self.session_realm` (or no realm context is wired —
     ///    test daemons), push the inner-envelope frame down the
     ///    target's `<self>.session` reverse channel via
     ///    `try_push_forward_invoke_frame` exactly as PR-1 staging
     ///    did. Local routing is the historic behavior, kept
     ///    unchanged.
-    /// 3. **Cross-tenant route**: when the tenant differs AND
+    /// 3. **Cross-realm route**: when the realm differs AND
     ///    both `federation_client` and a matching
-    ///    `federated_peers[tenant]` entry are wired, forward the
+    ///    `federated_peers[realm]` entry are wired, forward the
     ///    request to the peer hub by re-issuing the same
     ///    `federation.forward_invoke` ability against the peer
     ///    daemon. The peer-side dispatcher then performs its own
@@ -2060,7 +2061,7 @@ impl DaemonInvocationService {
     ///    `target_online` outcome verbatim — the caller cannot
     ///    distinguish a local-on-peer hit from a local-on-self
     ///    hit by the wire shape.
-    /// 4. **Cross-tenant fall-through**: missing federation
+    /// 4. **Cross-realm fall-through**: missing federation
     ///    client OR missing peer entry OR malformed target URA
     ///    all surface as `target_online: false`. Callers
     ///    treat that as "target offline" and apply
@@ -2095,21 +2096,17 @@ impl DaemonInvocationService {
             return self.escalate_forward_invoke(handle, arguments).await;
         }
 
-        let mut request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
+        let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
 
-        // Postel-boundary: peer hubs may ship a `/agent/<bare-uuid>`
-        // target URA (the device-as-agent alias). Coerce to the canonical
-        // `/device/<uuid>` form once here so every downstream
-        // use — local-presence lookup, peer-dial envelope, audit
-        // log line — sees the same canonical key. Real
-        // `/agent/<user>.<agent>` URAs and all v4.1.4-canonical
-        // shapes pass through unchanged.
-        request.target_ura = crate::ura::canonicalize_presence_key(&request.target_ura);
+        // RFC-005 owner proof: route the exact target owner the
+        // caller supplied. Legacy `/agent/<bare-id>` device aliases
+        // are intentionally not repaired here; callers must address
+        // devices with canonical `/device/<id>` owner URAs.
 
-        let target_tenant = parse_tenant_from_ura(&request.target_ura);
-        let local_tenant = self.session_realm.as_deref();
+        let target_realm = parse_realm_from_ura(&request.target_ura);
+        let local_realm = self.session_realm.as_deref();
 
-        let is_local_tenant = match (target_tenant.as_deref(), local_tenant) {
+        let is_local_realm = match (target_realm.as_deref(), local_realm) {
             (Some(target), Some(local)) => target == local,
             // Daemon has no realm context wired (smoke-test
             // build) — preserve PR-1 staging behavior and treat
@@ -2126,37 +2123,38 @@ impl DaemonInvocationService {
         // demo runs — proves which dispatch arm fired without
         // requiring an envelope-level packet capture. Cheap (one
         // eprintln per call) and the only daemon-A-side signal
-        // that distinguishes "took cross-tenant arm" from "took
+        // that distinguishes "took cross-realm arm" from "took
         // local-presence arm" when the inner ability happens to
         // be a hub-served one (e.g. federation.heartbeat).
         // Render `Option<&str>` as a stable string so SRE pipelines
-        // grep `target_tenant=<value>` (or `=<none>` for the absent
+        // grep `target_realm=<value>` (or `=<none>` for the absent
         // case) without seeing Rust's `Some("…")` / `None` Debug
         // literal sneaking into the field value.
-        let target_tenant_field = target_tenant.as_deref().unwrap_or("<none>");
-        let local_tenant_field = local_tenant.unwrap_or("<none>");
+        let target_realm_field = target_realm.as_deref().unwrap_or("<none>");
+        let local_realm_field = local_realm.unwrap_or("<none>");
         crate::op_event!(
             component = daemon_invocation,
             kind = forward_invoke_dispatch,
             target_ura = request.target_ura,
-            target_tenant = target_tenant_field,
-            local_tenant = local_tenant_field,
-            is_local_tenant = is_local_tenant,
+            target_realm = target_realm_field,
+            local_realm = local_realm_field,
+            is_local_realm = is_local_realm,
             has_local_presence = has_local_presence,
         );
 
         // Decode the inner payload up front. The
         // `correlation_call_id` field is required by DEC-N4 §2.1
-        // so both arms (local-tenant fast-path AND cross-tenant
+        // so both arms (local-realm fast-path AND cross-realm
         // dial) can thread it back to the caller. Decode failure
         // surfaces as `Status::invalid_argument`; the CLI bridge
         // is the producer and must always supply a non-empty
         // `call_id` field.
         let inner_payload = decode_inner_payload(&request.inner_envelope_b64)?;
         let correlation_call_id = inner_payload.call_id.clone();
+        let public_ability = inner_payload.public_ability_for_target(&request.target_ura)?;
 
-        // **C1a / DEC-N4 §2.1 local-tenant fast-path**.
-        // When the target tenant is local (or no realm context
+        // **C1a / DEC-N4 §2.1 local-realm fast-path**.
+        // When the target realm is local (or no realm context
         // is wired in this build), look up the target on the
         // local presence registry. Hit → push the inner envelope
         // bytes down the target's `<self>.session` reverse
@@ -2195,6 +2193,7 @@ impl DaemonInvocationService {
                 .dispatch_self_targeted_forward_invoke(
                     &inner_payload,
                     &request,
+                    &public_ability,
                     &correlation_call_id,
                 )
                 .await;
@@ -2205,29 +2204,30 @@ impl DaemonInvocationService {
         // own realm. A platform hub may therefore host devices whose
         // URAs live under many user realms simultaneously. When the
         // target URA is already present on THIS hub, that concrete
-        // liveness fact wins over any tenant mismatch and we dispatch
+        // liveness fact wins over any realm mismatch and we dispatch
         // locally rather than forcing a spurious cross-hub dial.
         if has_local_presence {
             match self
                 .dispatch_local_presence_forward_invoke(
                     &request,
                     &inner_payload,
+                    &public_ability,
                     &correlation_call_id,
                 )
                 .await
             {
                 Ok(response) => return Ok(response),
                 Err(status) => {
-                    if !is_local_tenant {
+                    if !is_local_realm {
                         return Err(status);
                     }
-                    // **Same-tenant cross-hub fall-through**.
-                    // Local presence missed but the target's tenant
+                    // **Same-realm cross-hub fall-through**.
+                    // Local presence missed but the target's realm
                     // matches ours — the device may be paired on a
                     // peer hub against the same user account. Per
                     // CTO directive on cross-hub same-account: fan
-                    // out across `federated_peers` (no per-tenant
-                    // routing key when the tenant IS local; we ask
+                    // out across `federated_peers` (no per-realm
+                    // routing key when the realm IS local; we ask
                     // every peer hub the operator has federated
                     // with). First-success wins in lex order on
                     // `peer_realm`. Real `target_offline` only
@@ -2255,7 +2255,7 @@ impl DaemonInvocationService {
                             // `dispatch_federation_forward_invoke`
                             // arm, which already implements the
                             // local-presence push (LB-50 C3) + same-
-                            // tenant fan-out + cross-tenant dial
+                            // realm fan-out + cross-realm dial
                             // semantics the demo C9 chain requires.
                             let nested = federation_wrappers::ForwardInvokeRequest {
                                 target_ura: request.target_ura.clone(),
@@ -2266,7 +2266,7 @@ impl DaemonInvocationService {
                             let nested_arguments = serde_json::to_vec(&nested).map_err(|err| {
                                 Status::internal(format!(
                                     "federation.forward_invoke: encode nested \
-                                         ForwardInvokeRequest for same-tenant fan-out: {err}"
+                                         ForwardInvokeRequest for same-realm fan-out: {err}"
                                 ))
                             })?;
                             let mut peer_request = InvokeRequest {
@@ -2310,7 +2310,7 @@ impl DaemonInvocationService {
                                                         component = daemon_invocation,
                                                         kind =
                                                             forward_invoke_peer_response_malformed,
-                                                        scope = "same_tenant_fanout",
+                                                        scope = "same_realm_fanout",
                                                         error = err_msg,
                                                         message = "forwarding raw bytes for forward-compat",
                                                     );
@@ -2331,7 +2331,7 @@ impl DaemonInvocationService {
                                         let err_msg = format!("{err}");
                                         crate::op_event!(
                                             component = daemon_invocation,
-                                            kind = forward_invoke_same_tenant_cross_hub_miss,
+                                            kind = forward_invoke_same_realm_cross_hub_miss,
                                             peer_realm = peer_realm,
                                             peer_hub_endpoint = peer_hub_endpoint,
                                             error = err_msg,
@@ -2350,27 +2350,28 @@ impl DaemonInvocationService {
             }
         }
 
-        if is_local_tenant {
-            // Same-tenant but not locally present: fan out across
-            // peer hubs that serve this tenant, then surface a real
+        if is_local_realm {
+            // Same-realm but not locally present: fan out across
+            // peer hubs that serve this realm, then surface a real
             // target_offline if every peer also misses.
             match self
                 .dispatch_local_presence_forward_invoke(
                     &request,
                     &inner_payload,
+                    &public_ability,
                     &correlation_call_id,
                 )
                 .await
             {
                 Ok(response) => return Ok(response),
                 Err(_status) => {
-                    // **Same-tenant cross-hub fall-through**.
-                    // Local presence missed but the target's tenant
+                    // **Same-realm cross-hub fall-through**.
+                    // Local presence missed but the target's realm
                     // matches ours — the device may be paired on a
                     // peer hub against the same user account. Per
                     // CTO directive on cross-hub same-account: fan
-                    // out across `federated_peers` (no per-tenant
-                    // routing key when the tenant IS local; we ask
+                    // out across `federated_peers` (no per-realm
+                    // routing key when the realm IS local; we ask
                     // every peer hub the operator has federated
                     // with). First-success wins in lex order on
                     // `peer_realm`. Real `target_offline` only
@@ -2393,7 +2394,7 @@ impl DaemonInvocationService {
                             let nested_arguments = serde_json::to_vec(&nested).map_err(|err| {
                                 Status::internal(format!(
                                     "federation.forward_invoke: encode nested \
-                                         ForwardInvokeRequest for same-tenant fan-out: {err}"
+                                         ForwardInvokeRequest for same-realm fan-out: {err}"
                                 ))
                             })?;
                             let mut peer_request = InvokeRequest {
@@ -2427,7 +2428,7 @@ impl DaemonInvocationService {
                                                         component = daemon_invocation,
                                                         kind =
                                                             forward_invoke_peer_response_malformed,
-                                                        scope = "same_tenant_fanout",
+                                                        scope = "same_realm_fanout",
                                                         error = err_msg,
                                                         message = "forwarding raw bytes for forward-compat",
                                                     );
@@ -2448,7 +2449,7 @@ impl DaemonInvocationService {
                                         let err_msg = format!("{err}");
                                         crate::op_event!(
                                             component = daemon_invocation,
-                                            kind = forward_invoke_same_tenant_cross_hub_miss,
+                                            kind = forward_invoke_same_realm_cross_hub_miss,
                                             peer_realm = peer_realm,
                                             peer_hub_endpoint = peer_hub_endpoint,
                                             error = err_msg,
@@ -2464,7 +2465,7 @@ impl DaemonInvocationService {
                 }
             }
         }
-        // Cross-tenant path. Missing federation client OR
+        // Cross-realm path. Missing federation client OR
         // missing peer entry both surface as
         // `failed_precondition(target_offline)` per DEC-N4 §2.1
         // — the older "Ok with target_online:false" shape is
@@ -2478,9 +2479,9 @@ impl DaemonInvocationService {
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
             ));
         };
-        let Some(target_tenant) = target_tenant else {
-            // Defensive: `is_local_tenant` already collapses
-            // None tenant to the local fast-path arm above.
+        let Some(target_realm) = target_realm else {
+            // Defensive: `is_local_realm` already collapses
+            // None realm to the local fast-path arm above.
             record_offline_receipt();
             return Err(Status::failed_precondition(
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -2498,7 +2499,7 @@ impl DaemonInvocationService {
             &self.federated_directory,
             self.allow_directory_auto_route,
         )
-        .resolve(&target_tenant, &request.target_ura);
+        .resolve(&target_realm, &request.target_ura);
         let target_hub_endpoint: String = match resolution {
             crate::services::invocation_transport::hub_resolver::HubResolution::Static { hub_endpoint } => {
                 hub_endpoint
@@ -2510,13 +2511,13 @@ impl DaemonInvocationService {
                 // Compile-time-shape operator log. SRE can grep
                 // `kind=auto_route source=federated_directory` to
                 // track how often operators rely on auto-route
-                // instead of declaring tenants explicitly in
+                // instead of declaring realms explicitly in
                 // daemon-config.toml.
                 crate::op_event!(
                     component = daemon_invocation,
                     kind = auto_route,
                     source = "federated_directory",
-                    target_tenant = target_tenant,
+                    target_realm = target_realm,
                     target_ura = target_ura,
                     hub_endpoint = hub_endpoint,
                 );
@@ -2530,12 +2531,12 @@ impl DaemonInvocationService {
             }
         };
 
-        // Cross-tenant dial. **LB-57 §一 Option A wire shape**.
+        // Cross-realm dial. **LB-57 §一 Option A wire shape**.
         // Re-wrap as another `federation.forward_invoke` so the
         // peer hub's top-level `Invoke::invoke` match routes
         // through `dispatch_federation_forward_invoke` (which
-        // owns the local-presence push + same-tenant fan-out +
-        // cross-tenant dial semantics) instead of falling to
+        // owns the local-presence push + same-realm fan-out +
+        // cross-realm dial semantics) instead of falling to
         // the AxonAbilityCatalog self-target arm or the
         // unimplemented surface. The original caller envelope
         // is attached so the peer's admission gate sees the
@@ -2556,7 +2557,7 @@ impl DaemonInvocationService {
         let nested_arguments = serde_json::to_vec(&nested).map_err(|err| {
             Status::internal(format!(
                 "federation.forward_invoke: encode nested ForwardInvokeRequest \
-                 for cross-tenant dial: {err}"
+                 for cross-realm dial: {err}"
             ))
         })?;
         let mut peer_request = InvokeRequest {
@@ -2602,7 +2603,7 @@ impl DaemonInvocationService {
                             crate::op_event!(
                                 component = daemon_invocation,
                                 kind = forward_invoke_peer_response_malformed,
-                                scope = "cross_tenant",
+                                scope = "cross_realm",
                                 error = err_msg,
                                 message = "forwarding raw bytes for forward-compat",
                             );
@@ -2619,7 +2620,7 @@ impl DaemonInvocationService {
                 let result_bytes_len = peer_body.result_bytes.len();
                 crate::op_event!(
                     component = daemon_invocation,
-                    kind = forward_invoke_cross_tenant_ok,
+                    kind = forward_invoke_cross_realm_ok,
                     target_ura = request.target_ura,
                     target_hub_endpoint = target_hub_endpoint,
                     result_bytes_len = result_bytes_len,
@@ -2692,7 +2693,7 @@ impl DaemonInvocationService {
     /// Errors:
     /// - target offline (no PresenceRegistry entry, or push
     ///   fails) → `Status::failed_precondition(target_offline)`,
-    ///   so the caller's same-tenant fall-through arm can fan
+    ///   so the caller's same-realm fall-through arm can fan
     ///   out to federated peers.
     /// - target's session crashed mid-call (sender dropped
     ///   without complete) → `Status::unavailable` so the CLI
@@ -2705,6 +2706,7 @@ impl DaemonInvocationService {
         &self,
         request: &federation_wrappers::ForwardInvokeRequest,
         inner_payload: &InnerPayload,
+        public_ability: &str,
         correlation_call_id: &str,
     ) -> Result<Response<InvokeResponse>, Status> {
         let pending = self.pending.as_ref().ok_or_else(|| {
@@ -2723,6 +2725,8 @@ impl DaemonInvocationService {
                 )
             })?;
 
+        let dispatch_ability = local_dispatch_ability_key(&request.target_ura, public_ability);
+
         // Register pending entry BEFORE pushing the frame so a
         // fast device reply lands a real `complete()` rather
         // than a no-op (race-free correlation, same contract as
@@ -2737,8 +2741,6 @@ impl DaemonInvocationService {
         let handle = pending.register_pending_for(&request.target_ura);
         let call_id = handle.call_id();
 
-        let dispatch_ability =
-            agent_scoped_registry_ability(&request.target_ura, &inner_payload.ability);
         let dispatch_frame = build_invoke_remote_dispatch_frame(
             call_id,
             &request.target_ura,
@@ -2777,7 +2779,7 @@ impl DaemonInvocationService {
             component = daemon_invocation,
             kind = forward_invoke_local_presence_dispatch_awaiting_reply,
             target_ura = request.target_ura,
-            ability = inner_payload.ability,
+            ability = public_ability,
             call_id = call_id,
         );
 
@@ -2807,7 +2809,7 @@ impl DaemonInvocationService {
             component = daemon_invocation,
             kind = forward_invoke_local_presence_dispatch_result,
             target_ura = request.target_ura,
-            ability = inner_payload.ability,
+            ability = public_ability,
             call_id = call_id,
             result_bytes_len = result_bytes_len,
             error = error_field,
@@ -2815,7 +2817,7 @@ impl DaemonInvocationService {
         if let Some(err) = error {
             return Err(Status::failed_precondition(format!(
                 "federation.forward_invoke: target `{}` ability `{}` failed: {err}",
-                request.target_ura, inner_payload.ability,
+                request.target_ura, public_ability,
             )));
         }
 
@@ -2848,6 +2850,7 @@ impl DaemonInvocationService {
         &self,
         inner_payload: &InnerPayload,
         request: &federation_wrappers::ForwardInvokeRequest,
+        public_ability: &str,
         correlation_call_id: &str,
     ) -> Result<Response<InvokeResponse>, Status> {
         let Some(runtime) = self.local_runtime.as_ref() else {
@@ -2857,8 +2860,7 @@ impl DaemonInvocationService {
             ));
         };
 
-        let dispatch_ability =
-            agent_scoped_registry_ability(&request.target_ura, &inner_payload.ability);
+        let dispatch_ability = local_dispatch_ability_key(&request.target_ura, public_ability);
         if !runtime.has_ability(&dispatch_ability).await {
             return Err(Status::not_found(format!(
                 "federation.forward_invoke: self-targeted ability `{dispatch_ability}` is not \
@@ -2870,7 +2872,7 @@ impl DaemonInvocationService {
             component = daemon_invocation,
             kind = forward_invoke_self_target_dispatch,
             target_ura = request.target_ura,
-            ability = inner_payload.ability,
+            ability = public_ability,
             dispatch_ability = dispatch_ability.as_str(),
             call_id = correlation_call_id,
         );
@@ -2900,7 +2902,7 @@ impl DaemonInvocationService {
                 component = daemon_invocation,
                 kind = forward_invoke_self_target_empty_result,
                 target_ura = request.target_ura,
-                ability = inner_payload.ability,
+                ability = public_ability,
                 call_id = correlation_call_id,
             );
         }
@@ -2958,7 +2960,7 @@ impl DaemonInvocationService {
             ));
         };
 
-        let dispatch_ability = agent_scoped_registry_ability(subject_device, ability);
+        let dispatch_ability = local_dispatch_ability_key(subject_device, ability);
         let outcome = match subject_ura {
             Some(subject) if !subject.trim().is_empty() => {
                 crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
@@ -3760,7 +3762,7 @@ impl DaemonInvocationService {
     /// cross-device dispatch flow:
     ///
     /// 1. Parse the frame-0 `EnvelopeOpen.initial_args` as
-    ///    `InvokeRemoteUp::Request { subject_device, ability, args }`
+    ///    `InvokeRemoteUp::Request { subject_device, ability_ura, args }`
     /// 2. Confirm a `PendingDispatchMap` is wired (else
     ///    `Status::failed_precondition` — daemon is in a half-built
     ///    configuration; calling without `with_pending` is a boot
@@ -3770,7 +3772,9 @@ impl DaemonInvocationService {
     /// 4. Register a pending-reply slot (`PendingHandle` carries a
     ///    `call_id`)
     /// 5. Push a `DispatchDown` frame down the target session
-    ///    carrying `(call_id, ability, args)` JSON. Backpressure +
+    ///    carrying `(call_id, ability, args)` JSON. The `ability`
+    ///    field in that internal frame is the derived owner-scoped
+    ///    registry key, not the caller-supplied selector. Backpressure +
     ///    closed-receiver paths collapse into presence transitions
     ///    per spec §3 Invariant 4 (same shape as
     ///    `try_push_forward_invoke_frame` from commit 8/9).
@@ -3802,18 +3806,17 @@ impl DaemonInvocationService {
         let InvokeRemoteUp::Request {
             subject_device,
             subject_ura,
-            ability,
+            ability_ura,
             args,
             args_content_envelope,
             metadata,
         } = request;
 
-        // Postel-boundary: peer hubs may pass a `/agent/<bare-uuid>`
-        // device alias; coerce to the
-        // canonical `/device/<uuid>` shape before the registry
-        // lookup. New clients always emit canonical; this is
-        // transitional compatibility.
-        let subject_device = crate::ura::canonicalize_presence_key(&subject_device);
+        // RFC-005 owner proof: validate the Ability URA against the
+        // exact subject owner the caller supplied. Legacy
+        // `/agent/<bare-id>` device aliases are intentionally not
+        // repaired here; callers must send canonical owner URAs.
+        let public_ability = invoke_remote_public_ability_for_owner(&subject_device, &ability_ura)?;
         let inner_subject = subject_ura
             .as_deref()
             .filter(|subject| !subject.trim().is_empty())
@@ -3839,8 +3842,11 @@ impl DaemonInvocationService {
             }),
             ..Envelope::default()
         };
-        self.admission
-            .verify_delegation_for_envelope(&inner_envelope, &ability, &metadata)?;
+        self.admission.verify_delegation_for_envelope(
+            &inner_envelope,
+            &public_ability,
+            &metadata,
+        )?;
 
         // ── Phase 4: Axon-routed **self-target** dispatch ──────────
         //
@@ -3858,9 +3864,9 @@ impl DaemonInvocationService {
         // name happens to be in our local runtime — even when the
         // caller's `subject_device` names a peer device that should
         // get a forwarded `Dispatch` frame. The original symptom of
-        // missing this guard: the Web UI's `device.agent.list`
+        // missing this guard: the Web UI's `agent.list`
         // request against a peer device returned THIS daemon's
-        // agents (because `device.agent.list` is registered in
+        // agents (because `agent.list` is registered in
         // every daemon's runtime), so the agent page lit up with
         // wrong data instead of the peer's view.
         //
@@ -3885,7 +3891,7 @@ impl DaemonInvocationService {
                 .dispatch_self_targeted_invoke_remote(
                     &subject_device,
                     subject_ura.as_deref(),
-                    &ability,
+                    &public_ability,
                     &args,
                 )
                 .await;
@@ -3940,7 +3946,7 @@ impl DaemonInvocationService {
             .or_else(|| unary_handle.as_ref().map(|handle| handle.call_id()))
             .expect("invoke_remote registered a pending handle");
 
-        let dispatch_ability = agent_scoped_registry_ability(&subject_device, &ability);
+        let dispatch_ability = local_dispatch_ability_key(&subject_device, &public_ability);
         let dispatch_frame = build_invoke_remote_dispatch_frame(
             call_id,
             &subject_device,
@@ -4727,10 +4733,11 @@ impl DaemonInvocationService {
     }
 
     /// PR-N6 C3 hub-side handler for inbound `SessionDispatch::Request`
-    /// frames arriving on a device's `<self>.session` bidi. Routes
-    /// the named ability through the same dispatch arms the unary
-    /// `Invoke` RPC consults, then maps the result into the typed
-    /// `RequestOutcome` shape.
+    /// frames arriving on a device's `<self>.session` bidi. Validates
+    /// the hub-owned Ability URA, routes the derived public wrapper
+    /// ability through the same dispatch arms the unary `Invoke` RPC
+    /// consults, then maps the result into the typed `RequestOutcome`
+    /// shape.
     ///
     /// Spec scope (PR-N6 v1): forwards `federation.forward_invoke`
     /// plus the hosted-agent self-advertise repair path
@@ -4746,10 +4753,19 @@ impl DaemonInvocationService {
     /// — no per-Request signature verify happens here.
     pub(crate) async fn dispatch_session_request(
         &self,
-        ability: &str,
+        ability_ura: &str,
         args: &[u8],
     ) -> RequestOutcome {
-        match ability {
+        let ability = match self.session_request_public_ability_for_hub(ability_ura) {
+            Ok(ability) => ability,
+            Err(reason) => {
+                return RequestOutcome::Err {
+                    error: SessionRequestError::PermissionDenied { reason },
+                };
+            }
+        };
+
+        match ability.as_str() {
             ABILITY_FEDERATION_FORWARD_INVOKE => {
                 // PR-N6 C5: emit the spec-locked target-resolution
                 // log marker BEFORE handing to the existing
@@ -4760,7 +4776,7 @@ impl DaemonInvocationService {
                 //
                 // The demo orchestration script grep-asserts both
                 // verbatim. The arm choice mirrors the same
-                // `target_tenant == local_tenant` comparison the
+                // `target_realm == local_realm` comparison the
                 // inner dispatch performs.
                 emit_session_request_resolution_marker(
                     args,
@@ -4800,6 +4816,24 @@ impl DaemonInvocationService {
             },
         }
     }
+
+    fn session_request_public_ability_for_hub(&self, ability_ura: &str) -> Result<String, String> {
+        let realm = self
+            .session_realm
+            .as_deref()
+            .filter(|realm| !realm.trim().is_empty())
+            .ok_or_else(|| {
+                "session_request: hub session_realm is not wired; cannot validate request \
+                 ability_ura"
+                    .to_string()
+            })?;
+        let hub_ura = crate::ura::hub_ura(realm);
+        crate::ura::public_ability_name_from_ability_ura(&hub_ura, ability_ura).ok_or_else(|| {
+            format!(
+                "session_request: ability_ura `{ability_ura}` does not belong to hub `{hub_ura}`"
+            )
+        })
+    }
 }
 
 /// PR-N6 C5: emit the spec-locked session-request resolution log
@@ -4814,26 +4848,26 @@ impl DaemonInvocationService {
 /// strings verbatim against the hub daemon's stderr log.
 ///
 /// Resolution mirrors `dispatch_federation_forward_invoke`'s
-/// internal `is_local_tenant` computation: a malformed inner
+/// internal `is_local_realm` computation: a malformed inner
 /// payload or a missing `session_realm` collapses to the local
 /// arm (matching the inner dispatcher's smoke-test fall-through).
 fn emit_session_request_resolution_marker(
     args: &[u8],
-    local_tenant: Option<&str>,
+    local_realm: Option<&str>,
     presence: &crate::services::presence_registry::PresenceRegistry,
 ) {
     let request: Option<federation_wrappers::ForwardInvokeRequest> =
         serde_json::from_slice(args).ok();
-    let target_tenant = request
+    let target_realm = request
         .as_ref()
-        .and_then(|r| parse_tenant_from_ura(&r.target_ura));
+        .and_then(|r| parse_realm_from_ura(&r.target_ura));
     let has_local_presence = request
         .as_ref()
         .map(|r| presence.lookup(&r.target_ura).is_some())
         .unwrap_or(false);
 
     let is_local = has_local_presence
-        || match (target_tenant, local_tenant) {
+        || match (target_realm, local_realm) {
             (Some(target), Some(local)) => target == local,
             (_, None) | (None, Some(_)) => true,
         };
@@ -5190,7 +5224,7 @@ async fn drain_session_up_stream(
             }
             SessionDispatch::Request {
                 call_id,
-                ability,
+                ability_ura,
                 args,
                 args_content_envelope,
             } => {
@@ -5220,7 +5254,7 @@ async fn drain_session_up_stream(
                     component = daemon_invocation,
                     kind = session_accept_request_frame,
                     call_id = id_hex,
-                    ability = ability,
+                    ability_ura = ability_ura,
                 );
 
                 // Dispatch off the drain task so a slow inner
@@ -5236,7 +5270,7 @@ async fn drain_session_up_stream(
                         RequestOutcome::Err {
                             error: SessionRequestError::PermissionDenied {
                                 reason: format!(
-                                    "<self>.session: Request ability `{ability}` received encrypted args \
+                                    "<self>.session: Request ability_ura `{ability_ura}` received encrypted args \
                                      but no hub-side request decryptor is wired"
                                 ),
                             },
@@ -5247,7 +5281,7 @@ async fn drain_session_up_stream(
                         RequestOutcome::Err {
                             error: SessionRequestError::PermissionDenied {
                                 reason: format!(
-                                    "<self>.session: Request ability `{ability}` received unsupported \
+                                    "<self>.session: Request ability_ura `{ability_ura}` received unsupported \
                                      args content_type {:?}",
                                     args_content_envelope.content_type
                                 ),
@@ -5259,7 +5293,7 @@ async fn drain_session_up_stream(
                         RequestOutcome::Err {
                             error: SessionRequestError::PermissionDenied {
                                 reason: format!(
-                                    "<self>.session: Request ability `{ability}` received unsupported \
+                                    "<self>.session: Request ability_ura `{ability_ura}` received unsupported \
                                      args encoding {:?}",
                                     args_content_envelope.encoding
                                 ),
@@ -5267,7 +5301,7 @@ async fn drain_session_up_stream(
                         }
                     } else {
                         service_for_request
-                            .dispatch_session_request(&ability, &args)
+                            .dispatch_session_request(&ability_ura, &args)
                             .await
                     };
                     let frame = build_session_request_result_frame(call_id, outcome);
@@ -5334,7 +5368,7 @@ async fn drain_session_up_stream(
 /// `forward_invoke` admission already uses (PR-N2 commits
 /// `d1adbea` + `68f6556`); we extend it to cover
 /// `<self>.session` admission too. Unblocks the cross-hub
-/// same-tenant directive that LB-49 surfaced.
+/// same-realm directive that LB-49 surfaced.
 fn validate_session_realm(
     caller_ura: &str,
     session_realm: Option<&str>,
@@ -5429,15 +5463,28 @@ fn decode_inner_envelope(b64: &str) -> Result<Vec<u8>, Status> {
 /// **PR-N1 commit 11/N + C1a**. The inner-envelope payload
 /// shape the CLI bridge (`support/federation_invoke.rs::
 /// invoke_via_federation_forward`) emits: a JSON object
-/// carrying the originally-requested `(ability, args)` pair the
-/// user typed plus a `call_id` minted client-side that DEC-N4
+/// carrying the canonical `(ability_ura, args)` pair the user
+/// selected plus a `call_id` minted client-side that DEC-N4
 /// §2.1 threads back through `ForwardInvokeResponse.
 /// correlation_call_id` so the caller can correlate the
 /// response with its awaiting bidi.
 pub(crate) struct InnerPayload {
-    pub ability: String,
+    pub ability_ura: String,
     pub args_bytes: Vec<u8>,
     pub call_id: String,
+}
+
+impl InnerPayload {
+    fn public_ability_for_target(&self, target_ura: &str) -> Result<String, Status> {
+        crate::ura::public_ability_name_from_ability_ura(target_ura, &self.ability_ura).ok_or_else(
+            || {
+                Status::invalid_argument(format!(
+                    "federation.forward_invoke: ability_ura `{}` does not belong to target `{}`",
+                    self.ability_ura, target_ura
+                ))
+            },
+        )
+    }
 }
 
 /// **PR-N1 commit 11/N + C1a**. Decode the base64-then-JSON
@@ -5454,7 +5501,7 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
         return Err(Status::invalid_argument(
             "federation.forward_invoke: inner_envelope_b64 is empty; \
              cross-hub dispatch requires a base64-encoded JSON \
-             {ability, args, call_id} payload",
+             {ability_ura, args, call_id} payload",
         ));
     }
     let parsed: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
@@ -5465,17 +5512,17 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
     let obj = parsed.as_object().ok_or_else(|| {
         Status::invalid_argument(
             "federation.forward_invoke: inner envelope must be a JSON object \
-             with `ability`, `args`, and `call_id` fields",
+             with `ability_ura`, `args`, and `call_id` fields",
         )
     })?;
-    let ability = obj
-        .get("ability")
+    let ability_ura = obj
+        .get("ability_ura")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             Status::invalid_argument(
                 "federation.forward_invoke: inner envelope is missing a non-empty \
-                 string `ability` field",
+                 string `ability_ura` field",
             )
         })?
         .to_string();
@@ -5500,7 +5547,7 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
         ))
     })?;
     Ok(InnerPayload {
-        ability,
+        ability_ura,
         args_bytes,
         call_id,
     })
@@ -5521,7 +5568,7 @@ pub(crate) fn build_peer_envelope(
     use rand::RngCore as _;
 
     let mut forwarded = caller_envelope.cloned().unwrap_or_default();
-    let peer_hub_ura = parse_tenant_from_ura(target_ura)
+    let peer_hub_ura = parse_realm_from_ura(target_ura)
         .map(|realm| crate::ura::hub_ura(&realm))
         .ok_or_else(|| {
             Status::invalid_argument(format!("target_ura is not a valid URA: {target_ura}"))
@@ -5830,8 +5877,20 @@ fn build_invoke_remote_dispatch_frame(
     })
 }
 
-fn agent_scoped_registry_ability(target_ura: &str, ability: &str) -> String {
-    crate::ura::agent_scoped_registry_ability(target_ura, ability)
+fn local_dispatch_ability_key(target_ura: &str, ability: &str) -> String {
+    crate::ura::local_dispatch_ability_key(target_ura, ability)
+}
+
+fn invoke_remote_public_ability_for_owner(
+    subject_device: &str,
+    ability_ura: &str,
+) -> Result<String, Status> {
+    crate::ura::public_ability_name_from_ability_ura(subject_device, ability_ura).ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "<self>.invoke_remote: ability_ura `{ability_ura}` does not belong to \
+                 subject_device `{subject_device}`"
+        ))
+    })
 }
 
 fn build_remote_bidi_open_dispatch_frame(
@@ -5924,13 +5983,13 @@ fn build_remote_bidi_input_frame_for_ability(
 }
 
 fn remote_bidi_target_ura(envelope_open: &EnvelopeOpen) -> Option<String> {
-    let callee = envelope_open
+    envelope_open
         .envelope
         .as_ref()
         .and_then(|env| env.callee.as_ref())
         .map(|callee| callee.ura.trim())
-        .filter(|ura| !ura.is_empty())?;
-    Some(crate::ura::canonicalize_presence_key(callee))
+        .filter(|ura| !ura.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn remote_bidi_subject_ura(envelope_open: &EnvelopeOpen) -> Option<String> {
@@ -6023,7 +6082,7 @@ fn build_unary_ledger_record(
         .map(|identity| identity.ura.clone())
         .filter(|ura| !ura.trim().is_empty())
         .unwrap_or_else(|| crate::ura::hub_ura("localhost"));
-    let realm = parse_tenant_from_ura(&caller_ura).unwrap_or_else(|| "localhost".to_string());
+    let realm = parse_realm_from_ura(&caller_ura).unwrap_or_else(|| "localhost".to_string());
     let callee_ura = envelope
         .and_then(|env| env.callee.as_ref())
         .map(|identity| identity.ura.clone())
@@ -6237,15 +6296,18 @@ fn invocation_resource_owner_from_ura(ura: &str) -> Option<InvocationResourceOwn
     let parsed = crate::ura::parse_ura(ura).ok()?;
     match parsed.kind {
         crate::ura::URAKind::User => Some(InvocationResourceOwner {
-            owner_id: format!("{}.invocations", parsed.user_id),
+            owner_id: format!("{}.invocations", parsed.user_id()?),
             path_prefix: String::new(),
         }),
-        crate::ura::URAKind::Agent => Some(InvocationResourceOwner {
-            owner_id: format!("{}.invocations", parsed.user_id),
-            path_prefix: format!("agents/{}/invocations", parsed.agent_id),
-        }),
+        crate::ura::URAKind::Agent => {
+            let (user_id, agent_id) = parsed.agent_ids()?;
+            Some(InvocationResourceOwner {
+                owner_id: format!("{user_id}.invocations"),
+                path_prefix: format!("agents/{agent_id}/invocations"),
+            })
+        }
         crate::ura::URAKind::Device => Some(InvocationResourceOwner {
-            owner_id: format!("device.{}", parsed.device_id),
+            owner_id: format!("device.{}", parsed.device_id()?),
             path_prefix: "invocations".to_string(),
         }),
         _ => None,
@@ -6332,16 +6394,16 @@ fn wrap_json_response<T: serde::Serialize>(
     Ok(Response::new(invoke_response))
 }
 
-/// **PR-N1 commit 3a/N**. Extract the tenant component from a
-/// canonical EasyNet URA (`easynet:///r/{tenant_id}/...`).
+/// **PR-N1 commit 3a/N**. Extract the realm component from a
+/// canonical EasyNet URA (`easynet:///r/{realm}/...`).
 /// Returns `None` for URAs that do not match the canonical shape.
 ///
-/// Pure function so it composes well into the cross-tenant
+/// Pure function so it composes well into the cross-realm
 /// routing branch landing in commit 3b/N: the dispatcher reads
-/// `request.target_ura`, calls `parse_tenant_from_ura`, and
-/// looks the tenant up in `federated_peers` to obtain a hub URA.
-pub(crate) fn parse_tenant_from_ura(ura: &str) -> Option<String> {
-    crate::ura::parse_ura(ura).ok().map(|parsed| parsed.realm)
+/// `request.target_ura`, calls `parse_realm_from_ura`, and
+/// looks the realm up in `federated_peers` to obtain a hub URA.
+pub(crate) fn parse_realm_from_ura(ura: &str) -> Option<String> {
+    parse_realm_from_register_ura(ura)
 }
 
 fn is_quota_exempt_system_ability(function: &str) -> bool {
@@ -6380,7 +6442,8 @@ fn quota_metered_ability_for_request(request: &InvokeRequest) -> Result<Option<S
         let forward: federation_wrappers::ForwardInvokeRequest =
             parse_json_args(&request.arguments)?;
         let inner = decode_inner_payload(&forward.inner_envelope_b64)?;
-        return Ok(quota_meters_function(&inner.ability).then_some(inner.ability));
+        let public_ability = inner.public_ability_for_target(&forward.target_ura)?;
+        return Ok(quota_meters_function(&public_ability).then_some(public_ability));
     }
     Ok(quota_meters_function(function).then(|| function.to_string()))
 }
@@ -6396,13 +6459,9 @@ mod tests {
     /// Test helper daemon URA — admitted by the test admission
     /// facade via the loopback bypass. Tests that exercise
     /// admission rejection construct a different facade.
-    // URA v4.1.4: daemons are devices, not agents. The
-    // `agent/<bare-id>` device alias is rewritten to `device/<id>` by
-    // `canonicalize_presence_key` at the forward_invoke
-    // entry point — fixtures must use the canonical shape so
-    // self-target equality holds without going through the
-    // coercer (which would mask a real lookup-key mismatch
-    // bug if it appeared in production).
+    // URA v4.1.4: daemons are devices, not agents. Fixtures use the
+    // canonical shape because forward_invoke no longer repairs legacy
+    // `agent/<bare-id>` device aliases at the request boundary.
     const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/device/test-daemon";
 
     fn make_service() -> DaemonInvocationService {
@@ -6412,6 +6471,10 @@ mod tests {
         );
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
             .with_hub_signing_seed([0x11; 32])
+    }
+
+    fn session_request_ability_ura(realm: &str, ability: &str) -> String {
+        crate::ura::hub_ability_ura(realm, ability)
     }
 
     fn signed_delegation_metadata_for_test(
@@ -6462,7 +6525,7 @@ mod tests {
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         }])
@@ -6561,7 +6624,7 @@ mod tests {
 
     #[test]
     fn quota_meters_user_abilities_but_exempts_control_plane() {
-        assert!(quota_meters_function("device.observe.health"));
+        assert!(quota_meters_function("observe.health"));
         assert!(quota_meters_function("agent.todo.run"));
 
         assert!(!quota_meters_function(ABILITY_FEDERATION_HEARTBEAT));
@@ -6585,7 +6648,7 @@ mod tests {
             function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
             arguments: forward_invoke_args_for_ability(
                 "easynet:///r/test-realm/device/target",
-                "device.observe.health",
+                "observe.health",
                 serde_json::json!({}),
             ),
             ..InvokeRequest::default()
@@ -6594,13 +6657,13 @@ mod tests {
             quota_metered_ability_for_request(&user_call)
                 .expect("forward invoke parses")
                 .as_deref(),
-            Some("device.observe.health")
+            Some("observe.health")
         );
 
         let control_call = InvokeRequest {
             function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
             arguments: forward_invoke_args_for_ability(
-                "easynet:///r/test-realm/hub",
+                &crate::ura::hub_ura("test-realm"),
                 ABILITY_FEDERATION_HEARTBEAT,
                 serde_json::json!({}),
             ),
@@ -6633,11 +6696,11 @@ mod tests {
     #[tokio::test]
     async fn forward_invoke_quota_throttles_by_inner_user_ability() {
         let caller_ura = "easynet:///r/test-realm/device/quota-caller";
-        let rt = runtime_with_json_echo("device.observe.health", "handled_by", "quota-test").await;
+        let rt = runtime_with_json_echo("observe.health", "handled_by", "quota-test").await;
         let svc = make_quota_service_for_device_caller(caller_ura, 1).with_local_runtime(rt);
         let args = forward_invoke_args_for_ability(
             TEST_DAEMON_URI,
-            "device.observe.health",
+            "observe.health",
             serde_json::json!({"probe": true}),
         );
 
@@ -6667,7 +6730,7 @@ mod tests {
             .expect_err("second forwarded user ability exhausts quota");
         assert_eq!(second.code(), tonic::Code::ResourceExhausted);
         assert!(
-            second.message().contains("ability=device.observe.health"),
+            second.message().contains("ability=observe.health"),
             "quota error must name the inner user ability, got: {}",
             second.message()
         );
@@ -7171,32 +7234,32 @@ mod tests {
         // bypass admits at the general gate, the N3-5 filter
         // recognises `is_loopback = true` and accepts.
         let svc = make_service();
-        // Two devices online for tenant-x.
+        // Two devices online for realm-x.
         svc.presence.insert(
-            "easynet:///r/tenant-x/device/device-1".to_string(),
+            "easynet:///r/realm-x/device/device-1".to_string(),
             tokio::sync::mpsc::channel(8).0,
         );
         svc.presence.insert(
-            "easynet:///r/tenant-x/device/device-2".to_string(),
+            "easynet:///r/realm-x/device/device-2".to_string(),
             tokio::sync::mpsc::channel(8).0,
         );
-        // One device for an unrelated tenant — must NOT show
+        // One device for an unrelated realm — must NOT show
         // through.
         svc.presence.insert(
-            "easynet:///r/tenant-other/device/device-3".to_string(),
+            "easynet:///r/realm-other/device/device-3".to_string(),
             tokio::sync::mpsc::channel(8).0,
         );
 
         let resp = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_LIST_USER_DEVICES,
-                r#"{"tenant_id":"tenant-x"}"#,
+                r#"{"realm":"realm-x"}"#,
             ))
             .await
             .expect("loopback caller admitted");
         let body: federation_wrappers::ListUserDevicesResponse = parse_response_body(resp);
         assert_eq!(body.devices.len(), 2);
-        let expected_prefix = crate::ura::realm_device_prefix("tenant-x");
+        let expected_prefix = crate::ura::realm_device_prefix("realm-x");
         for entry in &body.devices {
             assert!(entry.agent_ura.starts_with(&expected_prefix));
         }
@@ -7228,7 +7291,7 @@ mod tests {
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Device,
                 added_at_unix_ms: 1_700_000_000_000,
-                origin_tenant_id: None,
+                origin_realm: None,
                 hub_endpoint: None,
                 tls_ca_pem_path: None,
             })
@@ -7247,7 +7310,7 @@ mod tests {
         let req = Request::new(InvokeRequest {
             envelope: Some(envelope),
             function_name: ABILITY_FEDERATION_LIST_USER_DEVICES.to_string(),
-            arguments: br#"{"tenant_id":"tenant-x"}"#.to_vec(),
+            arguments: br#"{"realm":"realm-x"}"#.to_vec(),
             ..InvokeRequest::default()
         });
 
@@ -7278,7 +7341,7 @@ mod tests {
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_700_000_000_000,
-                origin_tenant_id: Some("peer-realm".to_string()),
+                origin_realm: Some("peer-realm".to_string()),
                 hub_endpoint: Some(peer_hub_url.to_string()),
                 tls_ca_pem_path: None,
             }])
@@ -7288,7 +7351,7 @@ mod tests {
         let canned = InvokeResponse {
             result: br#"{
                 "devices":[{
-                    "agent_ura":"easynet:///r/user-tenant/device/dev-peer",
+                    "agent_ura":"easynet:///r/user-realm/device/dev-peer",
                     "node_id":"dev-peer",
                     "status":"active"
                 }]
@@ -7308,7 +7371,7 @@ mod tests {
             .invoke(invoke_request(
                 ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
                 r#"{
-                    "tenant_id":"user-tenant",
+                    "realm":"user-realm",
                     "peer_hub_urls":["https://peer-hub.example:50443"]
                 }"#,
             ))
@@ -7317,7 +7380,7 @@ mod tests {
         let body: federation_wrappers::ProxyListUserDevicesResponse = parse_response_body(resp);
         assert_eq!(body.devices.len(), 1);
         let device = &body.devices[0];
-        assert_eq!(device.agent_ura, "easynet:///r/user-tenant/device/dev-peer");
+        assert_eq!(device.agent_ura, "easynet:///r/user-realm/device/dev-peer");
         assert_eq!(device.origin_realm.as_deref(), Some("peer-realm"));
         assert_eq!(device.hub_endpoint.as_deref(), Some(peer_hub_url));
 
@@ -7330,7 +7393,7 @@ mod tests {
         );
         let peer_args: federation_wrappers::ListUserDevicesRequest =
             serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
-        assert_eq!(peer_args.tenant_id, "user-tenant");
+        assert_eq!(peer_args.realm, "user-realm");
     }
 
     #[tokio::test]
@@ -7352,7 +7415,7 @@ mod tests {
                 public_key_b64: caller_pubkey_b64,
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_700_000_000_000,
-                origin_tenant_id: Some("peer-realm".to_string()),
+                origin_realm: Some("peer-realm".to_string()),
                 hub_endpoint: Some("https://peer-hub.example:50443".to_string()),
                 tls_ca_pem_path: None,
             }])
@@ -7362,8 +7425,7 @@ mod tests {
         let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
             .with_session_realm("local-realm");
 
-        let args =
-            br#"{"tenant_id":"user-tenant","peer_hub_urls":["https://peer-hub.example:50443"]}"#;
+        let args = br#"{"realm":"user-realm","peer_hub_urls":["https://peer-hub.example:50443"]}"#;
         let mut envelope = Envelope {
             caller: Some(AgentIdentity {
                 ura: caller_ura.clone(),
@@ -7433,7 +7495,7 @@ mod tests {
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_700_000_000_000,
-                origin_tenant_id: Some("peer-realm".to_string()),
+                origin_realm: Some("peer-realm".to_string()),
                 hub_endpoint: Some(peer_hub_url.to_string()),
                 tls_ca_pem_path: None,
             }])
@@ -7509,7 +7571,7 @@ mod tests {
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         };
@@ -7985,7 +8047,7 @@ mod tests {
 
         let rt = LocalRuntime::new();
         rt.register_streaming_ability(
-            "device.browser.capture_viewport",
+            "browser.capture_viewport",
             make_ability(|ctx| async move {
                 let args: serde_json::Value =
                     serde_json::from_slice(&ctx.payload).unwrap_or(serde_json::Value::Null);
@@ -8003,7 +8065,7 @@ mod tests {
         let resp = svc
             .invoke_stream(Request::new(InvokeServerStreamRequest {
                 envelope: Some(test_envelope()),
-                function_name: "device.browser.capture_viewport".to_string(),
+                function_name: "browser.capture_viewport".to_string(),
                 arguments: br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#
                     .to_vec(),
                 ..InvokeServerStreamRequest::default()
@@ -8059,7 +8121,11 @@ mod tests {
 
         let args = serde_json::to_vec(&serde_json::json!({
             "mode": "download",
-            "path": path.to_string_lossy(),
+            "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                &path,
+                crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+            )
+            .expect("local fs ResourceRef"),
         }))
         .unwrap();
         let open = make_envelope_open(
@@ -8252,6 +8318,44 @@ mod tests {
             args_content_type: "application/json".to_string(),
             ..EnvelopeOpen::default()
         }
+    }
+
+    fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
+        let mut envelope = test_envelope();
+        envelope.callee = Some(AgentIdentity {
+            ura: callee_ura.to_string(),
+            ..AgentIdentity::default()
+        });
+        EnvelopeOpen {
+            envelope: Some(envelope),
+            target: Some(InvocationTarget {
+                ability_name:
+                    crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
+                        .to_string(),
+                ..InvocationTarget::default()
+            }),
+            ..EnvelopeOpen::default()
+        }
+    }
+
+    #[test]
+    fn remote_bidi_target_ura_preserves_canonical_device_ura() {
+        let open = make_envelope_open_with_callee("  easynet:///r/test-realm/device/dev-B  ");
+        assert_eq!(
+            remote_bidi_target_ura(&open).as_deref(),
+            Some("easynet:///r/test-realm/device/dev-B")
+        );
+    }
+
+    #[test]
+    fn remote_bidi_target_ura_preserves_non_device_callee_for_rejection() {
+        let open = make_envelope_open_with_callee("easynet:///r/test-realm/agent/dev-B");
+        assert_eq!(
+            remote_bidi_target_ura(&open).as_deref(),
+            Some("easynet:///r/test-realm/agent/dev-B"),
+            "remote bidi target extraction must preserve non-device callee URAs so \
+             self-target and presence lookup reject unsupported targets naturally"
+        );
     }
 
     #[test]
@@ -8532,7 +8636,7 @@ mod tests {
         let registry = crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile()
             .expect("remote desktop plugin wire profile loads");
         assert_eq!(
-            registry.bidi_wire_kind_for("device.remote_desktop.attach"),
+            registry.bidi_wire_kind_for("remote_desktop.attach"),
             Some(LocalBidiWireKind::JsonFrames)
         );
     }
@@ -8712,7 +8816,7 @@ mod tests {
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_777_640_000_000,
-            origin_tenant_id: Some("federated-tenant".to_string()),
+            origin_realm: Some("federated-tenant".to_string()),
             hub_endpoint: None,
             tls_ca_pem_path: None,
         };
@@ -8792,7 +8896,7 @@ mod tests {
             43,
             "easynet:///r/realm/device/dev",
             Some("easynet:///r/realm/resource/display-1"),
-            "device.remote_desktop.attach",
+            "remote_desktop.attach",
             br#"{"session_id":"rd-1"}"#,
             HashMap::new(),
         )
@@ -8819,7 +8923,7 @@ mod tests {
                     subject_ura.as_deref(),
                     Some("easynet:///r/realm/resource/display-1")
                 );
-                assert_eq!(ability, "device.remote_desktop.attach");
+                assert_eq!(ability, "remote_desktop.attach");
                 assert_eq!(args, br#"{"session_id":"rd-1"}"#);
             }
             _ => panic!("expected BidiOpen variant"),
@@ -8927,7 +9031,7 @@ mod tests {
         let req_json = serde_json::to_vec(&InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
             subject_ura: None,
-            ability: "echo".into(),
+            ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: HashMap::new(),
@@ -8939,6 +9043,49 @@ mod tests {
             mistaken.is_err(),
             "InvokeRemoteUp::Request must NOT decode as SessionDispatch — \
              the discriminator tags differ ('request' vs 'dispatch')"
+        );
+    }
+
+    #[test]
+    fn invoke_remote_ability_ura_projects_to_public_ability() {
+        let public_ability = invoke_remote_public_ability_for_owner(
+            "easynet:///r/realm/device/dev-B",
+            "easynet:///r/realm/ability/device.dev-B.test.echo",
+        )
+        .expect("device-owned Ability URA belongs to subject device");
+
+        assert_eq!(public_ability, "test.echo");
+    }
+
+    #[test]
+    fn invoke_remote_ability_ura_rejects_wrong_owner() {
+        let err = invoke_remote_public_ability_for_owner(
+            "easynet:///r/realm/device/dev-B",
+            "easynet:///r/realm/ability/device.dev-C.test.echo",
+        )
+        .expect_err("Ability URA for another owner must be rejected");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("does not belong"),
+            "owner mismatch must be explicit, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn invoke_remote_ability_ura_rejects_bare_device_agent_alias() {
+        let err = invoke_remote_public_ability_for_owner(
+            "easynet:///r/realm/agent/dev-B",
+            "easynet:///r/realm/ability/device.dev-B.test.echo",
+        )
+        .expect_err("legacy device-as-agent alias must not be repaired at invoke_remote");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("does not belong"),
+            "alias rejection must be explicit, got: {}",
+            err.message()
         );
     }
 
@@ -8970,44 +9117,52 @@ mod tests {
     // ── PR-N1 commit 3a/N: federation client plumbing tests ──
 
     #[test]
-    fn parse_tenant_from_ura_extracts_tenant_component() {
+    fn parse_realm_from_ura_extracts_realm_component() {
         assert_eq!(
-            parse_tenant_from_ura("easynet:///r/realm-a/device/laptop-1"),
+            parse_realm_from_ura("easynet:///r/realm-a/device/laptop-1"),
             Some("realm-a".to_string())
         );
         assert_eq!(
-            parse_tenant_from_ura("easynet:///r/realm-a/device/device-1"),
+            parse_realm_from_ura("easynet:///r/realm-a/device/device-1"),
             Some("realm-a".to_string())
         );
         assert_eq!(
-            parse_tenant_from_ura("easynet:///r/peer-realm/hub"),
+            parse_realm_from_ura(&crate::ura::hub_ura("peer-realm")),
             Some("peer-realm".to_string())
         );
-    }
-
-    #[test]
-    fn parse_tenant_from_ura_rejects_noncanonical_extra_path_segments() {
-        // Tenant extraction goes through the canonical URA parser, so
-        // malformed alias path tails no longer slip through.
         assert_eq!(
-            parse_tenant_from_ura("easynet:///r/realm-a/agent/n1/skill/foo"),
+            parse_realm_from_ura("easynet:///r/peer-realm/hub"),
+            Some("peer-realm".to_string())
+        );
+        assert_eq!(
+            parse_realm_from_ura("easynet:///r/peer-realm/hub/extra"),
             None
         );
     }
 
     #[test]
-    fn parse_tenant_from_ura_rejects_non_easynet_scheme() {
-        assert_eq!(parse_tenant_from_ura("https://example.com/foo"), None);
-        assert_eq!(parse_tenant_from_ura("file:///r/realm/agent/x"), None);
+    fn parse_realm_from_ura_rejects_noncanonical_extra_path_segments() {
+        // Realm extraction goes through the canonical URA parser, so
+        // malformed alias path tails no longer slip through.
+        assert_eq!(
+            parse_realm_from_ura("easynet:///r/realm-a/agent/n1/skill/foo"),
+            None
+        );
     }
 
     #[test]
-    fn parse_tenant_from_ura_rejects_empty_tenant() {
-        // Malformed URA with empty tenant component must reject —
-        // never silently treat as `tenant = ""` which would always
+    fn parse_realm_from_ura_rejects_non_easynet_scheme() {
+        assert_eq!(parse_realm_from_ura("https://example.com/foo"), None);
+        assert_eq!(parse_realm_from_ura("file:///r/realm/agent/x"), None);
+    }
+
+    #[test]
+    fn parse_realm_from_ura_rejects_empty_realm() {
+        // Malformed URA with empty realm component must reject —
+        // never silently treat as `realm = ""` which would always
         // miss the federated_peers map and surface as
-        // "tenant unknown" instead of "URA malformed".
-        assert_eq!(parse_tenant_from_ura("easynet:///r//device/n1"), None);
+        // "realm unknown" instead of "URA malformed".
+        assert_eq!(parse_realm_from_ura("easynet:///r//device/n1"), None);
     }
 
     #[test]
@@ -9029,8 +9184,8 @@ mod tests {
         let caller = env.caller.unwrap();
         let callee = env.callee.unwrap();
         let subject = env.subject.unwrap();
-        assert_eq!(caller.ura, "easynet:///r/local/hub");
-        assert_eq!(callee.ura, "easynet:///r/peer/hub");
+        assert_eq!(caller.ura, crate::ura::hub_ura("local"));
+        assert_eq!(callee.ura, crate::ura::hub_ura("peer"));
         assert_eq!(subject.ura, "easynet:///r/local/device/dev-a");
         assert_eq!(
             caller.profile,
@@ -9110,11 +9265,11 @@ mod tests {
         assert!(snap.contains_key("hot-reloaded-realm"));
     }
 
-    // ── PR-N1 commit 3b/N: tenant-aware forward_invoke tests ──
+    // ── PR-N1 commit 3b/N: realm-aware forward_invoke tests ──
 
     /// Test fixture: a `FederationClient` that records every
     /// `forward_invoke` call and returns a canned response. Lets
-    /// tests assert the cross-tenant arm dialed the right peer
+    /// tests assert the cross-realm arm dialed the right peer
     /// hub with the right ability + arguments.
     struct RecordingFederationClient {
         recorded:
@@ -9173,8 +9328,27 @@ mod tests {
         args: serde_json::Value,
     ) -> Vec<u8> {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let public_ability = crate::ura::owner_local_ability_name(target_ura, ability);
+        let ability_ura = crate::ura::owner_ability_ura(target_ura, &public_ability)
+            .unwrap_or_else(|| panic!("derive test ability URA for {target_ura} {public_ability}"));
         let inner = serde_json::json!({
-            "ability": ability,
+            "ability_ura": ability_ura,
+            "args": args,
+            "call_id": "test-call-id-1",
+        });
+        let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
+        format!(r#"{{"target_ura":"{target_ura}","inner_envelope_b64":"{inner_b64}"}}"#)
+            .into_bytes()
+    }
+
+    fn forward_invoke_args_for_ability_ura(
+        target_ura: &str,
+        ability_ura: &str,
+        args: serde_json::Value,
+    ) -> Vec<u8> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let inner = serde_json::json!({
+            "ability_ura": ability_ura,
             "args": args,
             "call_id": "test-call-id-1",
         });
@@ -9204,6 +9378,15 @@ mod tests {
         // Build a minimal runtime with one ability that returns
         // a sentinel object so we can prove the bytes came from
         // the local runtime and not a daemon-internal stub.
+        //
+        // Register under the BARE registry key (`demo.echo`, not
+        // `device.demo.echo`). Device-owned abilities enter
+        // `AxonAbilityCatalog` un-prefixed (`fs.read`, `observe.health`,
+        // …) and `sync_runtime_ability` mirrors that bare key into the
+        // LocalRuntime verbatim, so the self-target dispatch key
+        // resolved by `local_dispatch_ability_key(device_ura, "demo.echo")`
+        // — which is also bare — matches. This mirrors the production
+        // convention and the sibling `observe.health` quota test.
         let rt =
             runtime_with_json_echo("demo.echo", "MARKER-C9-1", "self-target-fallthrough-fired")
                 .await;
@@ -9277,9 +9460,9 @@ mod tests {
         let response = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args_for_ability(
+                &forward_invoke_args_for_ability_ura(
                     target_ura,
-                    "chat",
+                    "easynet:///r/test-realm/ability/user.alice.chat",
                     serde_json::json!({"prompt": "hi"}),
                 ),
             )
@@ -9297,6 +9480,80 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("agent-scope-fired"),
             "bare `chat` must dispatch as `alice.chat` for agent URA self-targets"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_rejects_ability_ura_for_different_owner() {
+        let target_ura = TEST_DAEMON_URI;
+        let rt = runtime_with_json_echo(
+            "observe.health",
+            "MARKER-DEVICE-SCOPE",
+            "device-scope-fired",
+        )
+        .await;
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_local_runtime(Arc::clone(&rt));
+
+        let err = svc
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args_for_ability_ura(
+                    target_ura,
+                    "easynet:///r/test-realm/ability/user.alice.chat",
+                    serde_json::json!({"prompt": "hi"}),
+                ),
+            )
+            .await
+            .expect_err("ability_ura owner mismatch must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("does not belong to target"),
+            "error must cite owner mismatch, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_rejects_bare_device_agent_alias() {
+        let alias_target = "easynet:///r/test-realm/agent/dev-B";
+        let canonical_target = "easynet:///r/test-realm/device/dev-B";
+        let canonical_ability = "easynet:///r/test-realm/ability/device.dev-B.observe.health";
+        let presence = Arc::new(PresenceRegistry::new());
+
+        let (alias_tx, alias_rx) = tokio::sync::mpsc::channel(1);
+        drop(alias_rx);
+        presence.insert(alias_target.to_string(), alias_tx);
+        let (canonical_tx, canonical_rx) = tokio::sync::mpsc::channel(1);
+        drop(canonical_rx);
+        presence.insert(canonical_target.to_string(), canonical_tx);
+
+        let admission = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(TEST_DAEMON_URI.to_string()),
+        );
+        let svc = DaemonInvocationService::new(presence, admission)
+            .with_session_realm("test-realm")
+            .with_pending(Arc::new(PendingDispatchMap::new()));
+
+        let err = svc
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args_for_ability_ura(
+                    alias_target,
+                    canonical_ability,
+                    serde_json::json!({}),
+                ),
+            )
+            .await
+            .expect_err("legacy device-as-agent target alias must not be repaired");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("does not belong to target"),
+            "error must cite owner mismatch, got: {}",
+            err.message()
         );
     }
 
@@ -9417,8 +9674,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_local_tenant_takes_fast_path() {
-        // C1a / DEC-N4 §2.1: when `target_ura` tenant matches
+    async fn forward_invoke_local_realm_takes_fast_path() {
+        // C1a / DEC-N4 §2.1: when `target_ura` realm matches
         // the daemon's own realm, the local presence-registry
         // path runs. With no presence entry inserted, the
         // dispatcher surfaces `Status::failed_precondition`
@@ -9452,13 +9709,13 @@ mod tests {
         );
         assert!(
             recorder.calls().is_empty(),
-            "federation client must NOT be called on local-tenant fast-path"
+            "federation client must NOT be called on local-realm fast-path"
         );
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_with_no_client_returns_target_offline() {
-        // C1a / DEC-N4 §2.1: cross-tenant target + no federation
+    async fn forward_invoke_cross_realm_with_no_client_returns_target_offline() {
+        // C1a / DEC-N4 §2.1: cross-realm target + no federation
         // client wired ⇒ `Status::failed_precondition` with the
         // wire-stable `target_offline` reason. The older
         // "Ok with target_online:false" shape is gone.
@@ -9470,7 +9727,7 @@ mod tests {
                 &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
-            .expect_err("cross-tenant without client surfaces target_offline");
+            .expect_err("cross-realm without client surfaces target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert_eq!(
             err.message(),
@@ -9479,14 +9736,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_with_no_peer_entry_returns_target_offline() {
+    async fn forward_invoke_cross_realm_with_no_peer_entry_returns_target_offline() {
         // C1a / DEC-N4 §2.1: federation client wired but the
         // operator-curated `federated_peers` map has no entry
-        // for the target's tenant ⇒ `Status::failed_
+        // for the target's realm ⇒ `Status::failed_
         // precondition` with the `target_offline` reason. The
         // map is the operator's explicit statement of "these
         // are the peer realms I federate with"; an unmapped
-        // tenant is not dialable.
+        // realm is not dialable.
         let canned = InvokeResponse {
             result: br#"{"result_bytes":[]}"#.to_vec(),
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
@@ -9505,7 +9762,7 @@ mod tests {
                 &forward_invoke_args("easynet:///r/unmapped-realm/device/peer-target"),
             )
             .await
-            .expect_err("unmapped tenant surfaces target_offline");
+            .expect_err("unmapped realm surfaces target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert_eq!(
             err.message(),
@@ -9518,7 +9775,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_auto_routes_via_federated_directory_when_opted_in() {
+    async fn forward_invoke_cross_realm_auto_routes_via_federated_directory_when_opted_in() {
         // **Cross-hub auto-route, operator opt-in path**.
         // `federated_peers` is empty so the operator did NOT
         // statically declare `peer-realm → hub_endpoint`. But (a) the
@@ -9529,10 +9786,10 @@ mod tests {
         // dispatcher must then look the device up in
         // `federated_directory`, lift its `hub_endpoint`, and dial
         // there — lifting the requirement that operators
-        // pre-declare every reachable tenant in daemon-config.toml.
+        // pre-declare every reachable realm in daemon-config.toml.
         //
         // The default-off counterpart lives in
-        // `forward_invoke_cross_tenant_directory_fallback_refused_by_default`.
+        // `forward_invoke_cross_realm_directory_fallback_refused_by_default`.
         use crate::services::federation_directory::{
             DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
         };
@@ -9601,14 +9858,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_directory_fallback_refused_by_default() {
+    async fn forward_invoke_cross_realm_directory_fallback_refused_by_default() {
         // **P0 default-off pin**. Same setup as
-        // `forward_invoke_cross_tenant_auto_routes_via_federated_directory_when_opted_in`
+        // `forward_invoke_cross_realm_auto_routes_via_federated_directory_when_opted_in`
         // but the operator has NOT opted in. The directory has the
         // entry, but the dispatcher must refuse to dial — it would
         // be handing an outbound federation request to a peer-hub-
         // controllable URL. The contract is: with the secure
-        // default, an unmapped tenant always returns
+        // default, an unmapped realm always returns
         // `target_offline`, regardless of what the directory sync
         // observed.
         use crate::services::federation_directory::{
@@ -9664,7 +9921,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_directory_entry_without_hub_endpoint_falls_through_to_offline(
+    async fn forward_invoke_cross_realm_directory_entry_without_hub_endpoint_falls_through_to_offline(
     ) {
         // Edge case: the directory has the target URA but the peer's
         // snapshot omitted `hub_endpoint`. Auto-route has nowhere to
@@ -9704,7 +9961,7 @@ mod tests {
         // The opt-in is ON in this test so we exercise the
         // "missing hub_endpoint" branch of the resolver, not the
         // "fallback disabled" branch (which is its own pin in
-        // `forward_invoke_cross_tenant_directory_fallback_refused_by_default`).
+        // `forward_invoke_cross_realm_directory_fallback_refused_by_default`).
         let svc = make_service()
             .with_session_realm("test-realm")
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
@@ -9727,8 +9984,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_with_peer_entry_dials_via_federation_client() {
-        // C1a / DEC-N4 §2.1: cross-tenant + federation client
+    async fn forward_invoke_cross_realm_with_peer_entry_dials_via_federation_client() {
+        // C1a / DEC-N4 §2.1: cross-realm + federation client
         // wired + peer entry present ⇒ federation client called
         // with the peer's hub URA + the *inner* ability decoded
         // from `inner_envelope_b64`. Response carries peer's
@@ -9759,7 +10016,7 @@ mod tests {
         let resp = svc
             .dispatch_federation_forward_invoke(None, &args)
             .await
-            .expect("cross-tenant returns Ok");
+            .expect("cross-realm returns Ok");
 
         // Response carries the peer's `result` bytes verbatim
         // in `result_bytes`, and stamps back the caller's
@@ -9775,7 +10032,7 @@ mod tests {
         // re-wraps the call as another `federation.forward_invoke`
         // so the peer hub's top-level `Invoke::invoke` match routes
         // through `dispatch_federation_forward_invoke` (which owns
-        // local-presence push + same-tenant fan-out + cross-tenant
+        // local-presence push + same-realm fan-out + cross-realm
         // dial). The pre-LB-57 PR-N1 commit 11/N shape (sending the
         // bare inner ability name) landed at the peer's `other` arm
         // → Unimplemented → demo `target_offline`. This assertion
@@ -9790,8 +10047,8 @@ mod tests {
         // ForwardInvokeRequest carrying the SAME target_ura +
         // inner_envelope_b64 the caller hub received, so the
         // peer's `dispatch_federation_forward_invoke` re-runs
-        // its own routing (local-presence / same-tenant fan-out
-        // / cross-tenant dial) against the original payload.
+        // its own routing (local-presence / same-realm fan-out
+        // / cross-realm dial) against the original payload.
         let nested: federation_wrappers::ForwardInvokeRequest =
             serde_json::from_slice(&calls[0].1.arguments)
                 .expect("peer arguments decode as nested ForwardInvokeRequest");
@@ -9843,7 +10100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_peer_request_admits_against_hub_anchor() {
+    async fn forward_invoke_cross_realm_peer_request_admits_against_hub_anchor() {
         // The cross-hub deep harness failure we care about is not
         // "signature field missing" anymore; it is "peer hub rejects
         // the rebuilt federation.forward_invoke wrapper with
@@ -9880,7 +10137,7 @@ mod tests {
         let target_ura = "easynet:///r/peer-realm/device/peer-target";
         svc.dispatch_federation_forward_invoke(None, &forward_invoke_args(target_ura))
             .await
-            .expect("cross-tenant wrapper build succeeds");
+            .expect("cross-realm wrapper build succeeds");
 
         let calls = recorder.calls();
         assert_eq!(calls.len(), 1, "exactly one peer request captured");
@@ -9906,7 +10163,7 @@ mod tests {
                     public_key_b64: caller_pubkey_b64,
                     role: crate::services::realm_trust_anchor::TrustedAgentRole::Hub,
                     added_at_unix_ms: 1_714_492_800_000,
-                    origin_tenant_id: Some("test-realm".to_string()),
+                    origin_realm: Some("test-realm".to_string()),
                     hub_endpoint: Some("https://peer-hub.example:50443".to_string()),
                     tls_ca_pem_path: None,
                 },
@@ -9924,15 +10181,15 @@ mod tests {
     // ── C1b / DEC-N5 §1: ForwardReceipt dual-write tests ──
 
     // Phase 5a removed the three ForwardReceipt-shape tests
-    // (`forward_invoke_cross_tenant_happy_path_records_forward_receipt_with_digest`,
+    // (`forward_invoke_cross_realm_happy_path_records_forward_receipt_with_digest`,
     //  `forward_invoke_target_offline_records_forward_receipt_with_no_digest`,
-    //  `forward_invoke_local_tenant_miss_records_forward_receipt_with_no_digest`).
+    //  `forward_invoke_local_realm_miss_records_forward_receipt_with_no_digest`).
     // Their entire surface was asserting on the now-deleted
     // `SharedReceiptStore`. The *behaviours* those tests pinned
-    // (target_offline returns FailedPrecondition / local-tenant
-    // fast-path miss returns FailedPrecondition / cross-tenant
+    // (target_offline returns FailedPrecondition / local-realm
+    // fast-path miss returns FailedPrecondition / cross-realm
     // happy path returns Ok) are still covered by the
-    // `forward_invoke_local_tenant_takes_fast_path`,
+    // `forward_invoke_local_realm_takes_fast_path`,
     // `forward_invoke_*_target_offline` and
     // `cross_hub_forward_invoke_e2e_in_process` tests further
     // down — those check the wire-level Result, which is the
@@ -9984,7 +10241,7 @@ mod tests {
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: crate::services::realm_trust_anchor::TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         }];
@@ -10052,7 +10309,7 @@ mod tests {
             }
         });
 
-        // Daemon A: empty presence registry; cross-tenant target
+        // Daemon A: empty presence registry; cross-realm target
         // routes via the InProcessPeerClient → daemon B. We
         // forward the envelope verbatim from the test request so
         // daemon B sees `envelope.caller.ura = DAEMON_A_URI` and
@@ -10078,20 +10335,19 @@ mod tests {
         // ── Drive: daemon_a receives a federation.forward_invoke ──
         // PR-N1 commit 11/N rewrote the dispatch path: daemon A
         // now decodes the CLI bridge's `inner_envelope_b64`
-        // (base64 of `{ability, args}`) and sends the inner
-        // ability to the peer instead of re-wrapping in another
-        // `federation.forward_invoke`. For this in-process e2e
-        // we ship `federation.heartbeat` as the inner ability so
-        // daemon B's dispatcher routes to a real handler and
-        // returns a structured JSON shape the test can assert
-        // against.
+        // (base64 of `{ability_ura, args}`) and sends the inner
+        // ability URA to the peer instead of re-wrapping in another
+        // `federation.forward_invoke`.
         //
-        // base64({"ability":"federation.heartbeat","args":{
+        // base64({"ability_ura":".../ability/device.target-device-b.federation.heartbeat","args":{
         //   "membership_ura":"easynet:///r/realm-b/device/target-device-b",
         //   "ts_ms":0
         // }})
+        let public_ability = "federation.heartbeat";
+        let ability_ura = crate::ura::owner_ability_ura(TARGET_DEVICE_URI, public_ability)
+            .expect("target device ability URA");
         let inner_payload = serde_json::json!({
-            "ability": "federation.heartbeat",
+            "ability_ura": ability_ura,
             "args": {
                 "agent_ura": TARGET_DEVICE_URI,
             },
@@ -10118,7 +10374,7 @@ mod tests {
             .expect("e2e forward_invoke returns Ok");
         let body = response.into_inner();
 
-        // ── Assert: cross-tenant chain returned the device's ──
+        // ── Assert: cross-realm chain returned the device's ──
         // canned bytes intact.
         // LB-57 Option A wire shape: the outer InvokeResponse
         // body carries a `ForwardInvokeResponse {result_bytes,
@@ -10201,7 +10457,7 @@ mod tests {
         let svc = make_service().with_session_realm("test-realm");
         let outcome = svc
             .dispatch_session_request(
-                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &session_request_ability_ura("test-realm", ABILITY_FEDERATION_FORWARD_INVOKE),
                 &forward_invoke_args("easynet:///r/test-realm/device/missing-device"),
             )
             .await;
@@ -10218,7 +10474,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_session_request_advertise_agent_updates_store() {
-        // Hot `device.agent.start` runs on the already-open device
+        // Hot `agent.start` runs on the already-open device
         // session, so its hub repair path arrives as a
         // SessionDispatch::Request. The handler must route
         // `federation.advertise_agent` through the same store-writing
@@ -10238,7 +10494,10 @@ mod tests {
         .expect("advertise args encode");
 
         let outcome = svc
-            .dispatch_session_request(ABILITY_FEDERATION_ADVERTISE_AGENT, &args)
+            .dispatch_session_request(
+                &session_request_ability_ura("test-realm", ABILITY_FEDERATION_ADVERTISE_AGENT),
+                &args,
+            )
             .await;
 
         match outcome {
@@ -10268,7 +10527,9 @@ mod tests {
         // timeout). PR-N6 v2 may widen this set once a per-ability
         // admission policy is specified.
         let svc = make_service().with_session_realm("test-realm");
-        let outcome = svc.dispatch_session_request("fs.read", b"{}").await;
+        let outcome = svc
+            .dispatch_session_request(&session_request_ability_ura("test-realm", "fs.read"), b"{}")
+            .await;
         match outcome {
             RequestOutcome::Err {
                 error: SessionRequestError::PermissionDenied { reason },
@@ -10290,12 +10551,35 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn dispatch_session_request_rejects_non_hub_ability_ura() {
+        let svc = make_service().with_session_realm("test-realm");
+        let outcome = svc
+            .dispatch_session_request(
+                "easynet:///r/test-realm/ability/device.device-a.federation.forward_invoke",
+                b"{}",
+            )
+            .await;
+
+        match outcome {
+            RequestOutcome::Err {
+                error: SessionRequestError::PermissionDenied { reason },
+            } => {
+                assert!(
+                    reason.contains("does not belong to hub"),
+                    "wrong owner rejection must be explicit, got: {reason}",
+                );
+            }
+            other => panic!("expected PermissionDenied for wrong-owner Ability URA, got {other:?}"),
+        }
+    }
+
     // ── PR-N6 C5 — hub Request → local-presence fast-path dispatch ──
 
     #[tokio::test]
     async fn dispatch_session_request_forward_invoke_local_presence_hits_fast_path() {
         // **LB-57 Option A acceptance** (same-hub): when the
-        // inbound Request's target_ura tenant matches the hub's
+        // inbound Request's target_ura realm matches the hub's
         // local realm AND the target device is subscribed in
         // this hub's PresenceRegistry, the dispatcher MUST:
         //   1. Push a `SessionDispatch::Dispatch` frame down
@@ -10361,7 +10645,7 @@ mod tests {
 
         let outcome = svc
             .dispatch_session_request(
-                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &session_request_ability_ura("test-realm", ABILITY_FEDERATION_FORWARD_INVOKE),
                 &forward_invoke_args(target_ura),
             )
             .await;
@@ -10437,10 +10721,10 @@ mod tests {
 
         let outcome = svc
             .dispatch_session_request(
-                ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args_for_ability(
+                &session_request_ability_ura("test-realm", ABILITY_FEDERATION_FORWARD_INVOKE),
+                &forward_invoke_args_for_ability_ura(
                     target_ura,
-                    "chat",
+                    "easynet:///r/test-realm/ability/user.alice.chat",
                     serde_json::json!({"prompt": "hi"}),
                 ),
             )
@@ -10483,6 +10767,7 @@ mod tests {
         let handle = std::sync::Arc::new(spawn_escalation_consumer(
             correlation.clone(),
             SessionUpSender::new(up_tx),
+            "test-realm",
         ));
 
         let canned_bytes = b"hub-answered-via-bidi".to_vec();
@@ -10552,6 +10837,7 @@ mod tests {
         let handle = std::sync::Arc::new(spawn_escalation_consumer(
             correlation.clone(),
             SessionUpSender::new(up_tx),
+            "test-realm",
         ));
 
         // Fake hub: complete every Request with TargetOffline.
@@ -10612,6 +10898,7 @@ mod tests {
         let handle = std::sync::Arc::new(spawn_escalation_consumer(
             correlation,
             SessionUpSender::new(up_tx),
+            "test-realm",
         ));
 
         // For this test we drive `escalate_with_timeout` directly
@@ -10655,9 +10942,9 @@ mod tests {
     // ── PR-N6 C5 — session-request resolution markers + e2e ───────────
 
     #[tokio::test]
-    async fn dispatch_session_request_emits_local_fast_path_marker_for_same_tenant_target() {
+    async fn dispatch_session_request_emits_local_fast_path_marker_for_same_realm_target() {
         // C5 acceptance gate: when the inbound Request's
-        // target tenant matches the hub's session realm, the
+        // target realm matches the hub's session realm, the
         // dispatcher MUST emit the spec-locked log marker
         // `[session-request] resolved target via local-fast-path`.
         // A unit test cannot easily intercept stderr without
@@ -10679,8 +10966,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_session_request_routes_local_fast_path_when_target_tenant_matches() {
-        // Smoke check the routing path: same-tenant target with
+    async fn dispatch_session_request_routes_local_fast_path_when_target_realm_matches() {
+        // Smoke check the routing path: same-realm target with
         // an empty PresenceRegistry surfaces as the wire-stable
         // target_offline outcome the device caller can match on.
         // The marker emission is a side-effect of dispatch_session_
@@ -10690,7 +10977,7 @@ mod tests {
         let svc = make_service().with_session_realm("realm-X");
         let outcome = svc
             .dispatch_session_request(
-                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &session_request_ability_ura("realm-X", ABILITY_FEDERATION_FORWARD_INVOKE),
                 &forward_invoke_args("easynet:///r/realm-X/device/missing-device"),
             )
             .await;
@@ -10699,7 +10986,7 @@ mod tests {
                 error: SessionRequestError::TargetOffline,
             } => {}
             other => panic!(
-                "same-tenant target with empty presence must surface TargetOffline \
+                "same-realm target with empty presence must surface TargetOffline \
                  (proves local-fast-path arm fired), got {other:?}"
             ),
         }
@@ -10751,7 +11038,7 @@ mod tests {
 
         let outcome = svc
             .dispatch_session_request(
-                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &session_request_ability_ura("easynet-platform", ABILITY_FEDERATION_FORWARD_INVOKE),
                 &forward_invoke_args(target_ura),
             )
             .await;
@@ -10775,8 +11062,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_session_request_routes_cross_hub_dial_when_target_tenant_differs() {
-        // Cross-tenant target with no federation client wired
+    async fn dispatch_session_request_routes_cross_hub_dial_when_target_realm_differs() {
+        // Cross-realm target with no federation client wired
         // surfaces target_offline from the cross-hub arm. The
         // distinguishing signal vs the local-arm test is the
         // resolution-marker side-effect (cross-hub-dial flavour),
@@ -10784,7 +11071,7 @@ mod tests {
         let svc = make_service().with_session_realm("realm-X");
         let outcome = svc
             .dispatch_session_request(
-                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &session_request_ability_ura("realm-X", ABILITY_FEDERATION_FORWARD_INVOKE),
                 &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await;
@@ -10793,7 +11080,7 @@ mod tests {
                 error: SessionRequestError::TargetOffline,
             } => {}
             other => panic!(
-                "cross-tenant target with no federation client must surface \
+                "cross-realm target with no federation client must surface \
                  TargetOffline (cross-hub arm fall-through), got {other:?}"
             ),
         }
@@ -10802,7 +11089,7 @@ mod tests {
     #[tokio::test]
     async fn end_to_end_device_escalation_resolves_via_hub_session_request() {
         // PR-N6 §三 C5 acceptance: end-to-end 4-process simulated
-        // topology — device-A → hub-A → (same-tenant fast-path
+        // topology — device-A → hub-A → (same-realm fast-path
         // resolution at hub-A) → device-A receives canned bytes.
         //
         // We simulate the topology in-process:
@@ -10838,11 +11125,10 @@ mod tests {
         // before returning. The device's response bytes flow
         // through inline as `result_bytes`, not the earlier
         // empty-bytes "delivery accepted" shape.
-        // URA v4.1.4: device target lives under `device/<id>`, not
-        // `agent/<id>`. The forward_invoke entry point coerces
-        // device aliases via `canonicalize_presence_key`; fixtures
-        // must register presence under the canonical key so
-        // self-equality holds without going through the coercer.
+        // RFC-005: device target lives under `device/<id>`, not
+        // `agent/<id>`. The forward_invoke entry point no longer
+        // repairs device aliases, so fixtures must register and
+        // invoke the canonical owner URA directly.
         let target_ura = "easynet:///r/test-realm/device/dev-B";
         let presence = std::sync::Arc::new(PresenceRegistry::new());
         let (target_tx, mut target_rx): (DispatchSender, _) = mpsc::channel(8);
@@ -10899,6 +11185,7 @@ mod tests {
         let device_handle = spawn_escalation_consumer(
             std::sync::Arc::clone(&correlation),
             SessionUpSender::new(up_tx),
+            "test-realm",
         );
 
         // Fake hub task: decode Request frames, dispatch via
@@ -10917,12 +11204,14 @@ mod tests {
                 };
                 if let SessionDispatch::Request {
                     call_id,
-                    ability,
+                    ability_ura,
                     args,
                     ..
                 } = dispatch
                 {
-                    let outcome = hub_for_task.dispatch_session_request(&ability, &args).await;
+                    let outcome = hub_for_task
+                        .dispatch_session_request(&ability_ura, &args)
+                        .await;
                     correlation_for_hub.complete(call_id, outcome);
                 }
             }
@@ -11061,7 +11350,7 @@ mod tests {
             node_id: "dev-1".to_string(),
             credential_token: "token".to_string(),
             hub_endpoint: "axon://hub.test:50051".to_string(),
-            tenant_id: "test-realm".to_string(),
+            realm: "test-realm".to_string(),
             username: Some("dev".to_string()),
             ..Default::default()
         })
@@ -11201,7 +11490,7 @@ mod tests {
             initial_args: serde_json::to_vec(&serde_json::json!({
                 "type": "request",
                 "subject_device": "easynet:///r/test-realm/agent/dev.liangbing",
-                "ability": "chat",
+                "ability_ura": "easynet:///r/test-realm/ability/dev.liangbing.chat",
                 "args": b"hello-axon-routed".to_vec(),
                 "args_content_envelope": {
                     "content_type": "application/json",
@@ -11255,7 +11544,7 @@ mod tests {
         // arm intercepts every call whose ability is registered
         // locally, regardless of `subject_device`. That caused
         // the Web UI's `<self>.invoke_remote(subject_device=peer,
-        // ability=device.agent.list)` to return THIS daemon's
+        // ability=agent.list)` to return THIS daemon's
         // agents instead of the peer's — the agent-list page
         // lit up with the wrong rows.
         //
@@ -11281,12 +11570,12 @@ mod tests {
         let _hg = crate::facade::cli::test_support::HomeGuard::new();
         let rt = LocalRuntime::new();
         // Register an ability under a name that exists everywhere
-        // (every daemon mirrors `device.agent.list` into its
+        // (every daemon mirrors `agent.list` into its
         // LocalRuntime via the Phase-3 boot sweep). The bug it's
         // pinning: pre-guard, this presence would have hijacked
         // peer-target calls.
         rt.register_ability_with_options(
-            "device.agent.list",
+            "agent.list",
             make_ability(|_| async move { Ok(Vec::new()) }),
             AbilityOptions {
                 modes: AbilityCallModes::RPC,
@@ -11317,9 +11606,9 @@ mod tests {
         );
 
         // 3. A peer-realm hub URA → NOT self target.
-        let peer_realm_hub = "easynet:///r/other-realm/hub";
+        let peer_realm_hub = crate::ura::hub_ura("other-realm");
         assert!(
-            !svc.matches_self_target_ura(peer_realm_hub).await,
+            !svc.matches_self_target_ura(&peer_realm_hub).await,
             "peer realm hub must NOT be self-target"
         );
     }
@@ -11332,7 +11621,7 @@ mod tests {
         // (`invoke_async` → `LedgerSink`) when the runtime hosts the
         // ability — that's the path that gets the canonical record
         // into `invocations.redb` for CLI→daemon notify hops like
-        // `easynet agent add` → `device.agent.start`.
+        // `easynet agent add` → `agent.start`.
         //
         // Returns `(response, axon_took_it=true)` so the caller in
         // `invoke()` skips the manual `record_unary_invocation`

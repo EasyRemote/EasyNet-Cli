@@ -13,14 +13,14 @@
 //
 // Abilities registered here
 // -------------------------
-//   device.node.list        List device nodes (this device + known peers).
-//   device.node.describe     Describe one node by id.
-//   device.node.remove       Remove a node from the realm device registry.
-//   device.ability.deploy    Publish an ability bundle to a target node.
-//   device.ability.uninstall Uninstall a previously deployed ability.
-//   device.remote.exec       One-shot command execution on a target node.
-//   device.node.register     Register THIS device with the realm (lifecycle).
-//   device.node.deregister   Inverse of register_self at shutdown.
+//   node.list        List device nodes (this device + known peers).
+//   node.describe     Describe one node by id.
+//   node.remove       Remove a node from the realm device registry.
+//   ability.deploy    Publish an ability bundle to a target node.
+//   ability.uninstall Uninstall a previously deployed ability.
+//   remote.exec       One-shot command execution on a target node.
+//   node.register     Register THIS device with the realm (lifecycle).
+//   node.deregister   Inverse of register_self at shutdown.
 //
 // Routing model
 // -------------
@@ -44,56 +44,53 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::federation_probe;
+use crate::runtime::resources::filesystem::{self, FilesystemResourceCapability};
 
-pub const ABILITY_LIST_NODES: &str = "device.node.list";
-pub const ABILITY_DESCRIBE_NODE: &str = "device.node.describe";
-pub const ABILITY_REMOVE_NODE: &str = "device.node.remove";
-pub const ABILITY_DEPLOY_ABILITY: &str = "device.ability.deploy";
-pub const ABILITY_UNINSTALL_ABILITY: &str = "device.ability.uninstall";
-pub const ABILITY_EXEC_REMOTE: &str = "device.remote.exec";
-pub const ABILITY_REGISTER_SELF: &str = "device.node.register";
-pub const ABILITY_DEREGISTER_SELF: &str = "device.node.deregister";
+pub const ABILITY_LIST_NODES: &str = "node.list";
+pub const ABILITY_DESCRIBE_NODE: &str = "node.describe";
+pub const ABILITY_REMOVE_NODE: &str = "node.remove";
+pub const ABILITY_DEPLOY_ABILITY: &str = "ability.deploy";
+pub const ABILITY_UNINSTALL_ABILITY: &str = "ability.uninstall";
+pub const ABILITY_EXEC_REMOTE: &str = "remote.exec";
+pub const ABILITY_REGISTER_SELF: &str = "node.register";
+pub const ABILITY_DEREGISTER_SELF: &str = "node.deregister";
 
 /// Register every device operation handler on `reg`. Called once
 /// at daemon boot from `runtime::agents::build_registry_with_services`.
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("node.list", OwnerKind::Device, Arc::new(list_nodes_handler));
     reg.register_rpc_with_owner(
-        "device.node.list",
-        OwnerKind::Device,
-        Arc::new(list_nodes_handler),
-    );
-    reg.register_rpc_with_owner(
-        "device.node.describe",
+        "node.describe",
         OwnerKind::Device,
         Arc::new(describe_node_handler),
     );
     reg.register_rpc_with_owner(
-        "device.node.remove",
+        "node.remove",
         OwnerKind::Device,
         Arc::new(remove_node_handler),
     );
     reg.register_rpc_with_owner(
-        "device.ability.deploy",
+        "ability.deploy",
         OwnerKind::Device,
         Arc::new(deploy_ability_handler),
     );
     reg.register_rpc_with_owner(
-        "device.ability.uninstall",
+        "ability.uninstall",
         OwnerKind::Device,
         Arc::new(uninstall_ability_handler),
     );
     reg.register_rpc_with_owner(
-        "device.remote.exec",
+        "remote.exec",
         OwnerKind::Device,
         Arc::new(exec_remote_handler),
     );
     reg.register_rpc_with_owner(
-        "device.node.register",
+        "node.register",
         OwnerKind::Device,
         Arc::new(register_self_handler),
     );
     reg.register_rpc_with_owner(
-        "device.node.deregister",
+        "node.deregister",
         OwnerKind::Device,
         Arc::new(deregister_self_handler),
     );
@@ -143,7 +140,7 @@ fn federation_not_wired(action: &str) -> anyhow::Error {
     )
 }
 
-// ── device.node.list ─────────────────────────────────────────────
+// ── node.list ─────────────────────────────────────────────
 
 /// List every node visible from this device. v1: just the local
 /// node (federation peer enumeration depends on the dead bridge
@@ -164,7 +161,7 @@ fn list_nodes_handler(_args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-// ── device.node.describe ──────────────────────────────────────────
+// ── node.describe ──────────────────────────────────────────
 
 fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
     let node_id = args
@@ -173,24 +170,31 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
         .unwrap_or("")
         .trim();
     if node_id.is_empty() {
-        anyhow::bail!("device.node.describe: `node_id` is required");
+        anyhow::bail!("node.describe: `node_id` is required");
     }
     let (local_id, _tenant, _hub, paired) = local_identity();
     if is_local_target(node_id, &local_id) {
         if paired {
             if let Some(record) = federation_probe::resolve_device_record(&local_id)? {
-                return Ok(node_json_with_abilities(&record.node, record.abilities));
+                return Ok(node_json_with_abilities(
+                    &record.node,
+                    record.ability_summaries,
+                ));
             }
         }
         let view = federation_probe::collect_device_view();
-        let node =
-            view.nodes.iter().find(|n| n.is_self).ok_or_else(|| {
-                anyhow::anyhow!("device.node.describe: local node is unavailable")
-            })?;
+        let node = view
+            .nodes
+            .iter()
+            .find(|n| n.is_self)
+            .ok_or_else(|| anyhow::anyhow!("node.describe: local node is unavailable"))?;
         return Ok(federation_probe::node_to_json(node));
     }
     if let Some(record) = federation_probe::resolve_device_record(node_id)? {
-        return Ok(node_json_with_abilities(&record.node, record.abilities));
+        return Ok(node_json_with_abilities(
+            &record.node,
+            record.ability_summaries,
+        ));
     }
 
     let view = federation_probe::collect_device_view();
@@ -199,7 +203,7 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
         .as_deref()
         .map(|reason| format!(" ({reason})"))
         .unwrap_or_default();
-    anyhow::bail!("device.node.describe: node {node_id:?} not found{suffix}");
+    anyhow::bail!("node.describe: node {node_id:?} not found{suffix}");
 }
 
 fn node_json_with_abilities(
@@ -213,7 +217,7 @@ fn node_json_with_abilities(
     value
 }
 
-// ── device.node.remove ────────────────────────────────────────────
+// ── node.remove ────────────────────────────────────────────
 
 fn remove_node_handler(args: Value) -> anyhow::Result<Value> {
     let node_id = args
@@ -222,12 +226,12 @@ fn remove_node_handler(args: Value) -> anyhow::Result<Value> {
         .unwrap_or("")
         .trim();
     if node_id.is_empty() {
-        anyhow::bail!("device.node.remove: `node_id` is required");
+        anyhow::bail!("node.remove: `node_id` is required");
     }
     let (local_id, _tenant, _hub, _paired) = local_identity();
     if is_local_target(node_id, &local_id) {
         anyhow::bail!(
-            "device.node.remove refuses to remove this device (would delete its own \
+            "node.remove refuses to remove this device (would delete its own \
              pairing). Use `easynet device reset` for that — it is the local \
              side of the same operation."
         );
@@ -237,19 +241,54 @@ fn remove_node_handler(args: Value) -> anyhow::Result<Value> {
     )))
 }
 
-// ── device.ability.deploy ─────────────────────────────────────────
+// ── ability.deploy ─────────────────────────────────────────
+
+struct AbilityBundle {
+    display_path: String,
+    public_name: String,
+}
+
+impl AbilityBundle {
+    fn from_resource_ref(args: &Value) -> anyhow::Result<Self> {
+        let resolved =
+            filesystem::resolve_filesystem_path(args, FilesystemResourceCapability::Read)?;
+        let dir = resolved.local_path;
+        let display_path = resolved.display_path;
+        if !dir.is_dir() {
+            anyhow::bail!("ability.deploy: resource_ref {display_path:?} is not a directory");
+        }
+
+        let manifest = dir.join("ability.json");
+        if !manifest.is_file() {
+            anyhow::bail!(
+                "ability.deploy: resource_ref {display_path:?} does not contain an ability.json"
+            );
+        }
+
+        let body = std::fs::read_to_string(&manifest)?;
+        let parsed: Value = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}")
+        })?;
+        let public_name = parsed
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("ability.json missing required `name` field"))?;
+
+        Ok(Self {
+            display_path,
+            public_name,
+        })
+    }
+}
 
 fn deploy_ability_handler(args: Value) -> anyhow::Result<Value> {
-    let path = args
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("device.ability.deploy: `path` is required"))?;
     let node_id = args
         .get("node_id")
         .and_then(Value::as_str)
         .unwrap_or("local")
         .trim();
-    let (local_id, _tenant, _hub, _paired) = local_identity();
+    let (local_id, tenant, _hub, _paired) = local_identity();
     if !is_local_target(node_id, &local_id) {
         return Err(federation_not_wired(&format!(
             "deploying an ability to remote node {node_id:?}"
@@ -261,28 +300,17 @@ fn deploy_ability_handler(args: Value) -> anyhow::Result<Value> {
     // `<agent-root>/abilities/`). The `easynet ability deploy`
     // surface stays intact for future use; today it is documentation
     // for the operator that the ability they pointed at is well-formed.
-    let dir = std::path::Path::new(path);
-    if !dir.is_dir() {
-        anyhow::bail!("device.ability.deploy: {path:?} is not a directory");
-    }
-    let manifest = dir.join("ability.json");
-    if !manifest.exists() {
-        anyhow::bail!(
-            "device.ability.deploy: {} does not contain an ability.json",
-            dir.display()
-        );
-    }
-    let body = std::fs::read_to_string(&manifest)?;
-    let parsed: Value = serde_json::from_str(&body)
-        .map_err(|e| anyhow::anyhow!("invalid ability.json at {}: {e}", manifest.display()))?;
-    let ability_name = parsed
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("ability.json missing required `name` field"))?;
+    let bundle = AbilityBundle::from_resource_ref(&args)?;
+    let owner_ura = crate::ura::device_ura(&tenant, &local_id);
+    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, &bundle.public_name)
+        .ok_or_else(|| anyhow::anyhow!("ability.deploy: cannot derive ability_ura"))?;
+    let install_id = format!("local-{}", bundle.public_name);
     Ok(json!({
-        "ability_name": ability_name,
+        "public_name": bundle.public_name,
+        "ability_ura": ability_ura,
         "node_id": local_id,
-        "install_id": format!("local-{ability_name}"),
+        "install_id": install_id,
+        "bundle": bundle.display_path,
         "state": "ACTIVE",
         "note":
             "Single-node deploy verified the manifest and acknowledged the \
@@ -293,13 +321,16 @@ fn deploy_ability_handler(args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-// ── device.ability.uninstall ──────────────────────────────────────
+// ── ability.uninstall ──────────────────────────────────────
 
 fn uninstall_ability_handler(args: Value) -> anyhow::Result<Value> {
-    let ability_name = args
-        .get("ability_name")
+    let ability_ura = args
+        .get("ability_ura")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("device.ability.uninstall: `ability_name` is required"))?;
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("ability.uninstall: `ability_ura` is required"))?;
+    let public_name = ability_public_name(ability_ura)?;
     let node_id = args
         .get("node_id")
         .and_then(Value::as_str)
@@ -308,11 +339,12 @@ fn uninstall_ability_handler(args: Value) -> anyhow::Result<Value> {
     let (local_id, _tenant, _hub, _paired) = local_identity();
     if !is_local_target(node_id, &local_id) {
         return Err(federation_not_wired(&format!(
-            "uninstalling ability {ability_name:?} from remote node {node_id:?}"
+            "uninstalling ability {ability_ura:?} from remote node {node_id:?}"
         )));
     }
     Ok(json!({
-        "ability_name": ability_name,
+        "public_name": public_name,
+        "ability_ura": ability_ura,
         "node_id": local_id,
         "state": "REMOVED",
         "note":
@@ -323,7 +355,18 @@ fn uninstall_ability_handler(args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-// ── device.remote.exec ────────────────────────────────────────────
+fn ability_public_name(ability_ura: &str) -> anyhow::Result<String> {
+    let parsed = crate::ura::parse_ura(ability_ura)
+        .map_err(|e| anyhow::anyhow!("ability.uninstall: invalid `ability_ura`: {e}"))?;
+    if parsed.kind != crate::ura::URAKind::Ability {
+        anyhow::bail!("ability.uninstall: `ability_ura` must be an Ability URA");
+    }
+    crate::ura::ability_name_from_parts(&parsed).ok_or_else(|| {
+        anyhow::anyhow!("ability.uninstall: ability_ura `{ability_ura}` has no public ability name")
+    })
+}
+
+// ── remote.exec ────────────────────────────────────────────
 
 fn exec_remote_handler(args: Value) -> anyhow::Result<Value> {
     let node_id = args
@@ -332,7 +375,7 @@ fn exec_remote_handler(args: Value) -> anyhow::Result<Value> {
         .unwrap_or("")
         .trim();
     if node_id.is_empty() {
-        anyhow::bail!("device.remote.exec: `node_id` is required");
+        anyhow::bail!("remote.exec: `node_id` is required");
     }
     let (local_id, _tenant, _hub, _paired) = local_identity();
     if !is_local_target(node_id, &local_id) {
@@ -350,7 +393,7 @@ fn exec_remote_handler(args: Value) -> anyhow::Result<Value> {
         })
         .unwrap_or_default();
     if argv.is_empty() {
-        anyhow::bail!("device.remote.exec: `command` must be a non-empty array of strings");
+        anyhow::bail!("remote.exec: `command` must be a non-empty array of strings");
     }
     let timeout_ms = args
         .get("timeout_ms")
@@ -379,7 +422,7 @@ fn exec_remote_handler(args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-// ── device.node.register / device.node.deregister ──────────────────
+// ── node.register / node.deregister ──────────────────
 //
 // Boot/shutdown lifecycle. The ability invocation is the canonical
 // entry point per the ontology; the actual transport work — whether
@@ -423,7 +466,7 @@ fn deregister_self_handler(_args: Value) -> anyhow::Result<Value> {
 pub fn list_nodes_description() -> &'static str {
     "List device nodes visible from this daemon. The handler resolves \
      the realm directory through federation.resolve and then directly \
-     probes each discovered device-profile Agent with device.observe.health, \
+     probes each discovered device-profile Agent with observe.health, \
      so callers can distinguish a local-only view, a directory-only view, \
      and a directly reachable peer."
 }
@@ -438,7 +481,7 @@ pub fn list_nodes_input_schema() -> Value {
 
 pub fn describe_node_description() -> &'static str {
     "Describe one node by id from the same live federation-backed view \
-     used by device.node.list. Accepts `local`, this device's actual \
+     used by node.list. Accepts `local`, this device's actual \
      node id, or any resolved peer node id."
 }
 
@@ -464,8 +507,8 @@ pub fn remove_node_input_schema() -> Value {
 }
 
 pub fn deploy_ability_description() -> &'static str {
-    "Publish an ability bundle to a node. Local target validates the \
-     manifest and acknowledges the registration intent. Remote targets \
+    "Publish an ability bundle ResourceRef to a node. Local target validates \
+     the manifest and acknowledges the registration intent. Remote targets \
      defer to the federation Invoke replacement."
 }
 
@@ -473,16 +516,16 @@ pub fn deploy_ability_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["path"],
+        "required": ["resource_ref"],
         "properties": {
-            "path":    { "type": "string" },
+            "resource_ref": filesystem::resource_ref_schema(),
             "node_id": { "type": "string" }
         }
     })
 }
 
 pub fn uninstall_ability_description() -> &'static str {
-    "Uninstall an ability from a node. Mirrors `device.ability.deploy`: \
+    "Uninstall an ability from a node. Mirrors `ability.deploy`: \
      local target acknowledged in v1, remote targets queued for the \
      federation Invoke replacement."
 }
@@ -491,9 +534,9 @@ pub fn uninstall_ability_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["ability_name"],
+        "required": ["ability_ura"],
         "properties": {
-            "ability_name": { "type": "string" },
+            "ability_ura":  { "type": "string" },
             "node_id":      { "type": "string" },
             "install_id":   { "type": "string" }
         }
@@ -527,7 +570,7 @@ pub fn register_self_description() -> &'static str {
 }
 
 pub fn deregister_self_description() -> &'static str {
-    "Inverse of device.node.register at shutdown. v1 acknowledges \
+    "Inverse of node.register at shutdown. v1 acknowledges \
      intent; federation fan-out lands with the Invoke replacement."
 }
 
@@ -553,7 +596,7 @@ mod tests {
         let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
         assert!(
             nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
-            "device.node.list must include the local device entry: {resp}"
+            "node.list must include the local device entry: {resp}"
         );
         assert!(resp.get("federation_view").is_some());
     }
@@ -589,17 +632,47 @@ mod tests {
     }
 
     #[test]
-    fn deploy_ability_rejects_missing_path() {
+    fn deploy_ability_rejects_missing_resource_ref() {
         let err = deploy_ability_handler(json!({})).unwrap_err();
-        assert!(format!("{err}").contains("path"));
+        assert!(format!("{err}").contains("resource_ref"));
     }
 
     #[test]
     fn deploy_ability_local_validates_manifest() {
-        // path doesn't exist → typed error, not a panic.
-        let err = deploy_ability_handler(json!({"path": "/no/such/dir", "node_id": "local"}))
-            .unwrap_err();
-        assert!(format!("{err}").contains("not a directory"));
+        let dir = tempfile::tempdir().unwrap();
+        let resource_ref =
+            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+                .unwrap();
+        let err = deploy_ability_handler(json!({
+            "resource_ref": resource_ref,
+            "node_id": "local"
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("ability.json"));
+    }
+
+    #[test]
+    fn deploy_ability_local_accepts_resource_ref_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ability.json"),
+            r#"{"name":"alice.claude.weather"}"#,
+        )
+        .unwrap();
+        let resource_ref =
+            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+                .unwrap();
+        let resp = deploy_ability_handler(json!({
+            "resource_ref": resource_ref,
+            "node_id": "local"
+        }))
+        .unwrap();
+        assert_eq!(
+            resp.get("public_name").and_then(Value::as_str),
+            Some("alice.claude.weather")
+        );
+        assert_eq!(resp.get("state").and_then(Value::as_str), Some("ACTIVE"));
+        assert!(resp.get("bundle").and_then(Value::as_str).is_some());
     }
 
     #[test]
@@ -627,11 +700,15 @@ mod tests {
     #[test]
     fn uninstall_ability_local_acknowledges_intent() {
         let resp = uninstall_ability_handler(json!({
-            "ability_name": "claude.weather",
+            "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
             "node_id": "local",
         }))
         .unwrap();
         assert_eq!(resp.get("state").and_then(Value::as_str), Some("REMOVED"));
+        assert_eq!(
+            resp.get("ability_ura").and_then(Value::as_str),
+            Some("easynet:///r/localhost/ability/alice.claude.weather")
+        );
     }
 
     #[test]

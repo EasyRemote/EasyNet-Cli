@@ -36,6 +36,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 
+use crate::facade::cli::ability_catalog_row::AbilityCatalogueRow;
 use crate::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
 };
@@ -280,7 +281,7 @@ pub struct WhoamiArgs;
 /// Per RFC-001 §3.2, a device is a first-class agent; a paired
 /// device implicitly carries its owner's identity. So a host that
 /// has run `device join` but not `auth login` still has a usable
-/// identity for most operations — `easynet start` / `easynet ability
+/// identity for most operations — `easynet runtime start` / `easynet ability
 /// invoke` etc. don't require an interactive auth session, only
 /// the device credentials.
 ///
@@ -329,7 +330,7 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             // identity — the device URA — and most CLI commands
             // accept it. Saying "not logged in" without explaining
             // the device pairing was confusing (silan flagged this
-            // when `easynet start` worked despite `whoami` saying
+            // when `easynet runtime start` worked despite `whoami` saying
             // not logged in).
             let realm = c.realm_str().to_string();
             let hub_ura = ura::hub_ura(&realm);
@@ -448,7 +449,7 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 //
 // Why not under `easynet device` (the existing group)?
 // `easynet device list` already exists and talks to the LOCAL
-// daemon UDS via `device.node.list` (device-mode CLI: "what does
+// daemon UDS via `node.list` (device-mode CLI: "what does
 // THIS device see in its hub federation?"). Operator-mode HTTP
 // is a different lens entirely: "what does the BACKEND know about
 // the realm, viewed as the logged-in user?". Keeping the two
@@ -562,7 +563,7 @@ struct AbilityItem {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
-    tool_name: Option<String>,
+    ability_ura: Option<String>,
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
@@ -603,7 +604,7 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({
                 "items": resp.items.iter().map(|a| serde_json::json!({
                     "name": a.name,
-                    "tool_name": a.tool_name,
+                    "ability_ura": a.ability_ura,
                     "version": a.version,
                     "state": a.state,
                 })).collect::<Vec<_>>()
@@ -619,14 +620,14 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
         return Ok(());
     }
     println!(
-        "{:<24} {:<24} {:<10} {:<10}",
-        "NAME", "TOOL", "VERSION", "STATE"
+        "{:<24} {:<64} {:<10} {:<10}",
+        "LABEL", "ABILITY_URA", "VERSION", "STATE"
     );
     for a in &resp.items {
         println!(
-            "{:<24} {:<24} {:<10} {:<10}",
+            "{:<24} {:<64} {:<10} {:<10}",
             a.name.as_deref().unwrap_or("-"),
-            a.tool_name.as_deref().unwrap_or("-"),
+            a.ability_ura.as_deref().unwrap_or("-"),
             a.version.as_deref().unwrap_or("-"),
             a.state.as_deref().unwrap_or("-"),
         );
@@ -636,30 +637,30 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
 
 /// Joint-plan unified path: when the backend HTTP API can't find a
 /// device (typically cross-hub), fall back to the daemon's
-/// `device.node.describe` ability — the same surface
+/// `node.describe` ability — the same surface
 /// `easynet device show` uses post-phase-1.2.
 ///
 /// Routing matches the rest of the CLI:
 ///   * `node_id` matches this device's own node id → invoke
-///     `device.node.describe` locally over the control socket.
+///     `node.describe` locally over the control socket.
 ///   * Otherwise → resolve the target as a canonical device URA:
 ///     cross-hub directory hit first, local-realm fallback second,
-///     then forward_invoke `device.node.describe`.
+///     then forward_invoke `node.describe`.
 ///     The backend HTTP API surface only exposes bare uuid today,
 ///     but a canonical URA still lands here correctly if passed by
 ///     a future caller.
 ///
-/// The legacy `device.node.describe` path handled both arms server-
+/// The legacy `node.describe` path handled both arms server-
 /// side; the daemon-side handler is on the phase 4 cull list. This
 /// helper preserves the operator-visible behaviour while the
 /// dependency moves.
 fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<AbilityListResp> {
     let node = describe_node_via_unified_path(node_id)
-        .with_context(|| format!("invoke device.node.describe for node {node_id}"))?;
+        .with_context(|| format!("invoke node.describe for node {node_id}"))?;
     let abilities = node
         .get("abilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("device.node.describe returned no 'abilities' array"))?;
+        .ok_or_else(|| anyhow!("node.describe returned no 'abilities' array"))?;
     let items = abilities
         .iter()
         .map(ability_item_from_descriptor)
@@ -674,18 +675,15 @@ fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::V
         .as_ref()
         .map(|c| c.node_id.clone())
         .unwrap_or_default();
-    let local_tenant = creds
-        .as_ref()
-        .map(|c| c.tenant_id.clone())
-        .unwrap_or_default();
+    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
 
     let is_local = !local_node.is_empty() && trimmed == local_node;
     if is_local {
         return crate::support::local_invoke::invoke_local_ability(
-            "device.node.describe",
+            "node.describe",
             serde_json::json!({"node_id": "local"}),
         )
-        .context("invoke device.node.describe (local)");
+        .context("invoke node.describe (local)");
     }
 
     describe_node_remote(trimmed, &local_tenant)
@@ -696,13 +694,17 @@ fn describe_node_remote(node: &str, local_tenant: &str) -> anyhow::Result<serde_
     let _ = local_tenant;
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    crate::support::federation_invoke::invoke_via_federation_forward(
-        "device.node.describe",
+    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        &target_ura,
+        "node.describe",
+    )?;
+    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+        ability_ura.as_str(),
         serde_json::json!({"node_id": "local"}),
         &target_ura,
         caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward device.node.describe to target={target_ura}"))
+    .with_context(|| format!("forward node.describe to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -713,29 +715,12 @@ fn describe_node_remote(node: &str, _local_tenant: &str) -> anyhow::Result<serde
 }
 
 fn ability_item_from_descriptor(value: &serde_json::Value) -> AbilityItem {
+    let row = AbilityCatalogueRow::from_value(value);
     AbilityItem {
-        name: value
-            .get("name")
-            .or_else(|| value.get("ability_name"))
-            .or_else(|| value.get("tool_name"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        tool_name: value
-            .get("tool_name")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        version: value
-            .get("version")
-            .or_else(|| value.get("ability_version"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        state: Some(
-            value
-                .get("state")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("ACTIVE")
-                .to_string(),
-        ),
+        name: Some(row.label().to_string()),
+        ability_ura: row.ability_ura().map(str::to_string),
+        version: row.version().map(str::to_string),
+        state: Some(row.state().to_string()),
     }
 }
 
@@ -749,11 +734,10 @@ pub struct ExecArgs {
     ///   easynet auth exec <node> -- ls /tmp
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub cmd: Vec<String>,
-    /// Ability tool name to invoke. Default 'device.shell.run'.
-    /// Override to 'device.process.exec' (typed argv) or any other
-    /// registered tool. Bare 'shell.run' / 'process.exec' are
-    /// accepted as legacy aliases and auto-prefixed with 'device.'.
-    #[arg(long, default_value = "device.shell.run")]
+    /// Canonical advertised ability tool name to invoke. Default
+    /// 'shell.run'. Override to 'process.exec'
+    /// (typed argv) or any other registered tool.
+    #[arg(long, default_value = "shell.run")]
     pub tool: String,
     /// Timeout in milliseconds (default 30s).
     #[arg(long, default_value_t = 30_000)]
@@ -767,25 +751,17 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
     if args.cmd.is_empty() {
         bail!("no command — usage: easynet auth exec <node_id> -- <cmd> [args ...]");
     }
+    let tool_name = canonical_auth_exec_tool_name(&args.tool)?.to_string();
     let session = load_session()?
         .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     // Backend's POST /api/v1/abilities/invoke is what the frontend
     // uses for ad-hoc exec — `node_id` selects the target device,
-    // `tool_name` picks the ability (shell.run / process.exec /
-    // anything advertised by the device's daemon).
+    // `tool_name` picks the canonical ability advertised by the
+    // device's daemon.
     let url = format!("{}/api/v1/abilities/invoke", session.hub_url);
-    // Auto-prefix legacy bare names with `device.` so a caller that
-    // still types `--tool shell.run` lands on the canonical handler
-    // post-RFC-001 v4.1.7. Names already prefixed (`device.*`,
-    // `hub.*`, agent-rooted) pass through unchanged.
-    let canonical_tool = match args.tool.as_str() {
-        "shell.run" => "device.shell.run".to_string(),
-        "process.exec" => "device.process.exec".to_string(),
-        other => other.to_string(),
-    };
-    let arguments = match canonical_tool.as_str() {
+    let arguments = match tool_name.as_str() {
         // shell.run / process.exec take a full command string.
-        "device.shell.run" | "device.process.exec" => {
+        "shell.run" | "process.exec" => {
             serde_json::json!({"command": args.cmd.join(" ")})
         }
         // Anything else: pass cmd tokens as an argv array; the
@@ -793,7 +769,7 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         _ => serde_json::json!({"argv": args.cmd}),
     };
     let body = serde_json::json!({
-        "tool_name": canonical_tool,
+        "tool_name": tool_name,
         "node_id": args.node_id,
         "arguments": arguments,
         "timeout_ms": args.timeout_ms,
@@ -880,6 +856,17 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn canonical_auth_exec_tool_name(raw: &str) -> anyhow::Result<&str> {
+    let tool = raw.trim();
+    if tool.is_empty() {
+        bail!("--tool must be a canonical advertised ability name, e.g. shell.run");
+    }
+    if tool.starts_with("device.") {
+        bail!("--tool must use the public advertised ability name; use shell.run or process.exec");
+    }
+    Ok(tool)
 }
 
 // ── agents ─────────────────────────────────────────────────────
@@ -1079,13 +1066,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ability_item_fallback_maps_federation_descriptor_shape() {
+    fn ability_item_projection_maps_ura_descriptor_shape() {
         let item = ability_item_from_descriptor(&serde_json::json!({
-            "name": "device.shell.run",
+            "name": "shell.run",
+            "ability_ura": "easynet:///r/test/ability/device.dev-1.shell.run",
             "ability_version": "1",
         }));
-        assert_eq!(item.name.as_deref(), Some("device.shell.run"));
+        assert_eq!(item.name.as_deref(), Some("shell.run"));
+        assert_eq!(
+            item.ability_ura.as_deref(),
+            Some("easynet:///r/test/ability/device.dev-1.shell.run")
+        );
         assert_eq!(item.version.as_deref(), Some("1"));
         assert_eq!(item.state.as_deref(), Some("ACTIVE"));
+    }
+
+    #[test]
+    fn auth_exec_tool_name_accepts_canonical_device_tool() {
+        assert_eq!(
+            canonical_auth_exec_tool_name(" shell.run ").unwrap(),
+            "shell.run"
+        );
+        assert_eq!(
+            canonical_auth_exec_tool_name("process.exec").unwrap(),
+            "process.exec"
+        );
+    }
+
+    #[test]
+    fn auth_exec_tool_name_rejects_retired_device_owner_prefix() {
+        let err = canonical_auth_exec_tool_name("device.shell.run").unwrap_err();
+        assert!(
+            err.to_string().contains("shell.run"),
+            "error should name the canonical shell tool: {err}"
+        );
+
+        let err = canonical_auth_exec_tool_name("device.process.exec").unwrap_err();
+        assert!(
+            err.to_string().contains("process.exec"),
+            "error should name the canonical process tool: {err}"
+        );
+    }
+
+    #[test]
+    fn auth_exec_tool_name_rejects_empty_tool_name() {
+        let err = canonical_auth_exec_tool_name("   ").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("canonical advertised ability name"),
+            "error should explain the canonical tool-name contract: {err}"
+        );
     }
 }

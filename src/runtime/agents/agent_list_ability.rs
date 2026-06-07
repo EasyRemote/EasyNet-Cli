@@ -1,4 +1,4 @@
-// EasyNet CLI — device.agent.list ability handler
+// EasyNet CLI — agent.list ability handler
 // =================================================
 //
 // File: src/runtime/agents/agent_list_ability.rs
@@ -25,7 +25,7 @@
 // The shape is deliberately a thin per-row projection — NOT the v2
 // A2A agent-card envelope (that lives at `a2a.bridge.list_skills`,
 // which adds the per-agent skills list and `a2a_schema_version`).
-// `device.agent.list` is the operational view ("what runs here"),
+// `agent.list` is the operational view ("what runs here"),
 // `a2a.bridge.list_skills` is the protocol view ("what an A2A peer
 // would discover"). Two callers, two shapes, one source registry.
 //
@@ -42,9 +42,9 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::directory::AgentDirectory;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_LIST_AGENTS: &str = "device.agent.list";
+pub const ABILITY_LIST_AGENTS: &str = "agent.list";
 
-/// Register `device.agent.list` on the registry.
+/// Register `agent.list` on the registry.
 ///
 /// `registry_provider` runs at handler-call time so a future
 /// hot-reload of `agents.json` is reflected without re-registration.
@@ -54,7 +54,7 @@ where
 {
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(registry_provider);
     reg.register_rpc_with_owner(
-        "device.agent.list",
+        "agent.list",
         OwnerKind::Device,
         Arc::new(move |_args: Value| list_agents_handler(&provider)),
     );

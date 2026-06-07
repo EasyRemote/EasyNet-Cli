@@ -58,9 +58,10 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::profiles::mcp::{
     canonical_ability_name_for_mcp_tool, tool_specs_from_descriptors,
 };
+use crate::runtime::agents::profiles::DEFAULT_MCP_AGENT_ID;
 
-pub const ABILITY_LIST_TOOLS: &str = "device.mcp.bridge.list_tools";
-pub const ABILITY_CALL_TOOL: &str = "device.mcp.bridge.call_tool";
+pub const ABILITY_LIST_TOOLS: &str = "mcp.bridge.list_tools";
+pub const ABILITY_CALL_TOOL: &str = "mcp.bridge.call_tool";
 
 /// Register both bridge abilities on the registry.
 ///
@@ -87,13 +88,13 @@ pub fn register<F>(
         Arc::new(descriptors_provider);
     let provider_for_list = Arc::clone(&provider);
     reg.register_rpc_with_owner(
-        "device.mcp.bridge.list_tools",
-        OwnerKind::Device,
+        "mcp.bridge.list_tools",
+        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
         Arc::new(move |_args: Value| list_tools_handler(&provider_for_list)),
     );
     reg.register_rpc_with_owner(
-        "device.mcp.bridge.call_tool",
-        OwnerKind::Device,
+        "mcp.bridge.call_tool",
+        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
         Arc::new(move |args: Value| call_tool_handler(&provider, &registry_handle, args)),
     );
 }
@@ -117,9 +118,10 @@ fn list_tools_handler(
 /// `mcp.bridge.call_tool` handler.
 ///
 /// Args: `{ "name": "<advertised-mcp-tool-name>", "arguments": <json-value> }`.
-/// Legacy canonical dotted ability names are also accepted for
-/// compatibility. Mirrors the MCP `tools/call` request shape;
-/// `arguments` is optional (some tools take none). Returns
+/// Canonical dotted EasyNet ability names are retained only in
+/// `x-easynet.ability`; callers must use the advertised MCP tool name.
+/// Mirrors the MCP `tools/call` request shape; `arguments` is optional
+/// (some tools take none). Returns
 /// `{ "content": [<text|json blob>], "isError": bool }` per MCP's
 /// `tools/call` response convention.
 ///
@@ -299,22 +301,21 @@ mod tests {
 
     #[test]
     fn registration_makes_both_dispatchable() {
-        let arc = build_bridge_registry(|| vec![d("device.observe.health")]);
+        let arc = build_bridge_registry(|| vec![d("observe.health")]);
         assert!(arc.get_rpc(ABILITY_LIST_TOOLS).is_some());
         assert!(arc.get_rpc(ABILITY_CALL_TOOL).is_some());
     }
 
     #[test]
     fn list_tools_returns_projection_of_provider_descriptors() {
-        let arc =
-            build_bridge_registry(|| vec![d("device.observe.health"), d("device.agent.list")]);
+        let arc = build_bridge_registry(|| vec![d("observe.health"), d("agent.list")]);
         let handler = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
         let resp = handler(json!({})).unwrap();
         let tools = resp["tools"].as_array().expect("tools array");
         assert_eq!(tools.len(), 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"device_observe_health"));
-        assert!(names.contains(&"device_agent_list"));
+        assert!(names.contains(&"observe_health"));
+        assert!(names.contains(&"agent_list"));
     }
 
     #[test]
@@ -376,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn call_tool_keeps_canonical_dotted_name_as_legacy_alias() {
+    fn call_tool_rejects_retired_canonical_dotted_alias() {
         let arc = build_bridge_registry(|| vec![d("test.echo")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({
@@ -384,7 +385,12 @@ mod tests {
             "arguments": {"hello": "world"}
         }))
         .unwrap();
-        assert_eq!(resp["isError"], false);
+        assert_eq!(resp["isError"], true);
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("not found"),
+            "retired dotted alias must not dispatch; got {text:?}"
+        );
     }
 
     #[test]
@@ -392,10 +398,10 @@ mod tests {
         // §A5 enforcement: the descriptor list is the source of
         // truth for which names are callable. test.echo IS in the
         // registry but NOT in the catalogue → call_tool refuses.
-        let arc = build_bridge_registry(|| vec![d("device.observe.health")]); // no test.echo
+        let arc = build_bridge_registry(|| vec![d("observe.health")]); // no test.echo
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({
-            "name": "test.echo",
+            "name": "test_echo",
             "arguments": {}
         }))
         .unwrap();
@@ -418,7 +424,7 @@ mod tests {
         let arc = build_bridge_registry(|| vec![d("nonexistent.ability")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({
-            "name": "nonexistent.ability",
+            "name": "nonexistent_ability",
             "arguments": {}
         }))
         .unwrap();
@@ -465,7 +471,7 @@ mod tests {
         let _ = handle.set(arc.clone());
 
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
-        let resp = handler(json!({"name": "always.fails", "arguments": {}})).unwrap();
+        let resp = handler(json!({"name": "always_fails", "arguments": {}})).unwrap();
         assert_eq!(resp["isError"], true);
         let text = resp["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("planned failure"));
@@ -477,7 +483,7 @@ mod tests {
         // `arguments` key must still dispatch (we substitute Null).
         let arc = build_bridge_registry(|| vec![d("test.echo")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
-        let resp = handler(json!({"name": "test.echo"})).unwrap();
+        let resp = handler(json!({"name": "test_echo"})).unwrap();
         assert_eq!(resp["isError"], false);
     }
 
@@ -496,7 +502,7 @@ mod tests {
         // emitted {body: ...} would break every MCP client.
         let arc = build_bridge_registry(|| vec![d("test.echo")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
-        let resp = handler(json!({"name": "test.echo", "arguments": null})).unwrap();
+        let resp = handler(json!({"name": "test_echo", "arguments": null})).unwrap();
         assert!(resp.get("content").is_some(), "missing `content` key");
         assert!(resp.get("isError").is_some(), "missing `isError` key");
         let content = resp["content"].as_array().expect("content is array");
@@ -516,7 +522,7 @@ mod tests {
         let arc = Arc::new(reg);
         // Deliberately do NOT set the handle.
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
-        let resp = handler(json!({"name": "test.echo"})).unwrap();
+        let resp = handler(json!({"name": "test_echo"})).unwrap();
         assert_eq!(resp["isError"], true);
         let text = resp["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("not initialised"));

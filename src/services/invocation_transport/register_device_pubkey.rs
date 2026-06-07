@@ -23,7 +23,8 @@
 // Inputs
 // ------
 //   {
-//     "agent_ura":      "easynet:///r/{realm}/device/{device_id}" | "easynet:///r/{realm}/hub",
+//     "agent_ura":      "easynet:///r/{realm}/device/{device_id}"
+//                       | "easynet:///r/{realm}/hub",
 //     "public_key_b64": "<base64 standard, 32-byte ed25519 vk>",
 //     "role":           "device" | "backend" | "hub"
 //   }
@@ -32,7 +33,7 @@
 // -------------------------
 // `role = "device"` is allowed to register an out-of-realm
 // `agent_ura`. Production pairing stamps device URAs under the
-// owning user's realm (`tenant_id = user_id`) while the hosting
+// owning user's realm (`realm = user_id`) while the hosting
 // daemon may run a platform realm (for example
 // `easynet-platform`). The trust anchor is keyed by full URA, not
 // by daemon-local realm, so rejecting those device entries would
@@ -153,8 +154,8 @@ pub fn handle(
 
     let parsed_realm = parse_realm_from_ura(&args.agent_ura).ok_or_else(|| {
         Status::invalid_argument(format!(
-            "<self>.register_device_pubkey: agent_ura `{}` does not match the URA \
-             supported canonical/legacy trust-entry shape",
+            "<self>.register_device_pubkey: agent_ura `{}` does not match Axon's \
+             canonical URA grammar",
             args.agent_ura,
         ))
     })?;
@@ -189,7 +190,7 @@ pub fn handle(
         // Device entries from the device-pairing path; those never
         // dial cross-hub, so the federation fields are always
         // `None` here.
-        origin_tenant_id: None,
+        origin_realm: None,
         hub_endpoint: None,
         tls_ca_pem_path: None,
     };
@@ -268,12 +269,12 @@ fn validate_public_key_b64(raw: &str) -> Result<(), Status> {
     Ok(())
 }
 
-/// Extract the realm component from a URA `easynet:///r/{realm}/...`
-/// URA. Returns `None` if the URA does not match the URA shape;
-/// the caller surfaces that as `invalid_argument`. We match on
-/// the canonical `easynet:///r/` prefix per RFC 001 §3.1; non-canon
-/// prefixes (`easynet://...`, query-stringed, etc.) fall through
-/// to `None` so a malformed URA reaches the user not the disk.
+/// Extract the realm component from a canonical Axon URA.
+///
+/// This function is intentionally a thin projection over
+/// `crate::ura::parse_ura`; the CLI daemon must not maintain a
+/// parallel grammar for trust-anchor writes. Malformed hub identities
+/// therefore return `None` and surface to callers as `invalid_argument`.
 pub(crate) fn parse_realm_from_ura(ura: &str) -> Option<String> {
     crate::ura::parse_ura(ura).ok().map(|parsed| parsed.realm)
 }
@@ -336,6 +337,10 @@ mod tests {
             "role": role
         }))
         .expect("encode")
+    }
+
+    fn canonical_hub_ura(realm: &str) -> String {
+        crate::ura::hub_ura(realm)
     }
 
     fn empty_cell() -> SharedTrustAnchor {
@@ -402,10 +407,10 @@ mod tests {
     }
 
     #[test]
-    fn cross_realm_backend_uri_rejected_with_permission_denied() {
+    fn cross_realm_backend_ura_rejected_with_permission_denied() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("easynet:///r/r2/hub", &test_pub_b64(), "backend");
+        let args = args_bytes(&canonical_hub_ura("r2"), &test_pub_b64(), "backend");
 
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject cross-realm backend");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -450,20 +455,21 @@ mod tests {
         let (_dir, path) = fresh_path();
         let old_key = test_pub_b64_with_seed(7);
         let new_key = test_pub_b64_with_seed(8);
+        let r1_hub = canonical_hub_ura("r1");
         let cell = SharedTrustAnchor::new(Arc::new(
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
-                agent_ura: "easynet:///r/r1/hub".to_string(),
+                agent_ura: r1_hub.clone(),
                 public_key_b64: old_key,
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1,
-                origin_tenant_id: Some("r1".to_string()),
+                origin_realm: Some("r1".to_string()),
                 hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
                 tls_ca_pem_path: Some(std::path::PathBuf::from("/tmp/r1.ca.pem")),
             }])
             .expect("stale hub anchor"),
         ));
         handle(
-            &args_bytes("easynet:///r/r1/hub", &new_key, "backend"),
+            &args_bytes(&r1_hub, &new_key, "backend"),
             "r1",
             &path,
             &cell,
@@ -471,7 +477,7 @@ mod tests {
         .expect("backend key rotation ok");
 
         let snap = cell.snapshot();
-        let entry = snap.lookup("easynet:///r/r1/hub").expect("backend present");
+        let entry = snap.lookup(&r1_hub).expect("backend present");
         assert_eq!(entry.public_key_b64, new_key);
         assert_eq!(entry.role, TrustedAgentRole::Hub);
         assert_eq!(
@@ -485,9 +491,7 @@ mod tests {
         assert_eq!(snap.len(), 1);
 
         let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
-        let disk_entry = from_disk
-            .lookup("easynet:///r/r1/hub")
-            .expect("backend present on disk");
+        let disk_entry = from_disk.lookup(&r1_hub).expect("backend present on disk");
         assert_eq!(disk_entry.public_key_b64, new_key);
         assert_eq!(disk_entry.role, TrustedAgentRole::Hub);
         assert_eq!(
@@ -569,9 +573,10 @@ mod tests {
         // the cell + on disk after the second call.
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
+        let r1_hub = canonical_hub_ura("r1");
 
         handle(
-            &args_bytes("easynet:///r/r1/hub", &test_pub_b64(), "backend"),
+            &args_bytes(&r1_hub, &test_pub_b64(), "backend"),
             "r1",
             &path,
             &cell,
@@ -598,9 +603,14 @@ mod tests {
             Some("realm-x".to_string())
         );
         assert_eq!(
+            parse_realm_from_ura(&canonical_hub_ura("abc")),
+            Some("abc".to_string())
+        );
+        assert_eq!(
             parse_realm_from_ura("easynet:///r/abc/hub"),
             Some("abc".to_string())
         );
+        assert_eq!(parse_realm_from_ura("easynet:///r/abc/hub/extra"), None);
         assert_eq!(parse_realm_from_ura("easynet:///r//device/n1"), None);
         assert_eq!(parse_realm_from_ura("https://example.com"), None);
         assert_eq!(parse_realm_from_ura("easynet://r/x/device/n1"), None); // missing third slash

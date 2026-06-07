@@ -191,7 +191,7 @@ impl AsyncWrite for NamedPipeGrpcIo {
 /// `OnceLock<Arc<HotAgentRegistrar>>` stashed by
 /// `build_registry_with_services`. We call
 /// `registrar.set_runtime(local_runtime)` once `local_runtime` is
-/// constructed below so post-boot `device.agent.start` invocations
+/// constructed below so post-boot `agent.start` invocations
 /// land their `<agent>.{chat,discover,invoke}` rows into the live
 /// Axon runtime instead of skipping runtime registration.
 pub fn start_daemon_invocation_transport(
@@ -492,7 +492,7 @@ pub fn start_daemon_invocation_transport(
     // **Phase 5c**. Attach the live `LocalRuntime` to the hot-agent
     // runtime registrar that `build_registry_with_services` constructed
     // earlier. After this `set_runtime` call, every subsequent
-    // `device.agent.start` invocation reaches into the registrar's
+    // `agent.start` invocation reaches into the registrar's
     // populated runtime cell and lands `<agent>.{chat,discover,invoke}`
     // into Axon's `LocalRuntime` — closing the bug where hot-added
     // agents resolved only through the legacy `rpc_fallback` and
@@ -501,7 +501,7 @@ pub fn start_daemon_invocation_transport(
     // The cell is normally populated by `build_registry_with_services`,
     // so `.get()` returns `Some`. We log + skip when absent to keep
     // smoke tests that boot only the transport (without a full registry
-    // build) green: those tests don't call `device.agent.start`, so a
+    // build) green: those tests don't call `agent.start`, so a
     // pending registrar is observably harmless.
     if let Some(registrar) = hot_agent_registrar_cell.get() {
         registrar.set_runtime(Arc::clone(&local_runtime));
@@ -509,7 +509,7 @@ pub fn start_daemon_invocation_transport(
             component = daemon_invocation,
             kind = hot_agent_registrar_runtime_attached,
             message = "HotAgentRegistrar.runtime attached; \
-                       device.agent.start can now register into LocalRuntime",
+                       agent.start can now register into LocalRuntime",
         );
     } else {
         crate::op_event!(
@@ -517,7 +517,7 @@ pub fn start_daemon_invocation_transport(
             kind = hot_agent_registrar_cell_empty,
             level = "warn",
             message = "hot_agent_registrar_cell empty at boot — \
-                       device.agent.start runtime registration will be skipped \
+                       agent.start runtime registration will be skipped \
                        (Invocation transport booted without a populated registry?)",
         );
     }
@@ -569,7 +569,7 @@ pub fn start_daemon_invocation_transport(
     // and federated_peers cell were constructed above so the
     // AdmissionFacade could pick them up too. Here we forward the
     // same handles to the DaemonInvocationService for the
-    // cross-tenant `forward_invoke` dispatch path.
+    // cross-realm `forward_invoke` dispatch path.
     if let Some(client) = dialer.clone() {
         service = service
             .with_federation_client(client)
@@ -605,6 +605,7 @@ pub fn start_daemon_invocation_transport(
             crate::services::invocation_transport::session_escalation::spawn_escalation_consumer_with_outbox(
                 Arc::clone(&correlation),
                 outbox.clone(),
+                config.realm().to_string(),
             ),
         );
         if let (Some(registrar), Some(identity)) =
@@ -734,7 +735,7 @@ pub fn start_daemon_invocation_transport(
     Ok(())
 }
 
-/// Device-mode hot-advertise adapter for `device.agent.start`.
+/// Device-mode hot-advertise adapter for `agent.start`.
 ///
 /// It reuses the already-open `<self>.session` bidi instead of
 /// opening a second hub client from the lifecycle handler. The
@@ -757,7 +758,7 @@ impl SessionHotAgentAdvertiser {
         let host_node_id = crate::ura::parse_ura(&caller_ura)
             .ok()
             .filter(|parsed| parsed.kind == crate::ura::URAKind::Device)
-            .map(|parsed| parsed.device_id);
+            .and_then(|parsed| parsed.device_id().map(str::to_string));
         Self {
             escalation,
             caller_ura,
@@ -857,25 +858,24 @@ fn spawn_session_supervisor(
 ) {
     // Snapshot Axon's runtime catalogue once before wrapping it in a
     // `LocalAxonSessionDispatcher`. The session supervisor's
-    // `federation.advertise_abilities` prelude consumes this list to
-    // populate the hub's `AbilityCatalogStore` so the backend's
-    // `/api/v1/abilities` page surfaces the device's registered
-    // abilities. LocalRuntime is the daemon's live source of truth;
-    // the metadata catalogue is not consulted here.
-    // M2 of the system-namespace migration: at M1 every system
-    // ability is registered under both legacy (`fs.read`,
-    // `01HUB.openai.*`, …) and canonical (`device.fs.read`,
-    // `hub.openai.*`, …) names, both pointing at the same handler.
-    // The advertise prelude must emit canonical only — so the hub's
-    // AbilityCatalogStore + Frontend Abilities page show the
+    // `federation.advertise_abilities` prelude consumes this list as
+    // local input for an RFC-005 owner projection so the backend's
+    // `/api/v1/abilities` page sees bounded summaries. LocalRuntime is
+    // the daemon's live source of truth; the hub-side read model is not.
+    // Latest system-namespace contract: every daemon-local system
+    // ability is registered under its canonical owner prefix
+    // (`fs.read`, `openai.*`, ...). The advertise
+    // prelude emits canonical names only, so the owner
+    // projection read model and Frontend Abilities page show the
     // partitioned shape, and the session-prelude's agent-roster
-    // scanner doesn't produce duplicate `<owner>` entries from the
-    // legacy half. Filter via `published_ability_names()` which has
-    // the catalogue exposure rule (M2 commit: legacy filtered out).
+    // scanner doesn't produce duplicate `<owner>` entries from
+    // implementation-private names. Filter via
+    // `published_ability_names()` which owns the catalogue exposure
+    // rule.
     let ability_catalog: Vec<String> = futures::executor::block_on(local_runtime.list_abilities())
         .into_iter()
         .map(|descriptor| descriptor.name)
-        .filter(|name| crate::runtime::agents::is_canonical_or_unmapped(name))
+        .filter(|name| crate::runtime::agents::is_publishable_catalog_name(name))
         .collect();
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
@@ -1225,6 +1225,29 @@ struct DaemonIdentity {
     signing_seed: Option<SessionSigningSeed>,
 }
 
+/// Narrow read-projection of `~/.easynet/credentials.json` carrying
+/// only the three fields the daemon needs to derive its caller URA +
+/// signing seed.
+///
+/// MUST NOT use `#[serde(deny_unknown_fields)]`. The writer
+/// (`persistence::config::Credentials`) owns the file and its field
+/// set grows over time — `credential_token`, `hub_endpoint`,
+/// `hub_api_base`, `username`, `hub_pubkey_b64`, `hub_tls_ca_pem_b64`
+/// were all added after this projection. A strict reader would reject
+/// the whole file the moment any such field appears, silently
+/// collapsing `load_daemon_identity()` to `None` (the `.ok()?` at the
+/// call site). That drops the daemon's device identity, so the
+/// device-mode `<self>.session` supervisor never starts, the hub
+/// never sees the device's presence, and the backend renders it
+/// REMOVED. This is a projection, not a schema gate: tolerate unknown
+/// fields and read only what we own.
+///
+/// One field IS still rejected: `tenant_id`. It is the retired alias
+/// for `realm` (URA v4.1.4) — a credentials.json carrying it predates
+/// the rename and would derive a daemon URA under the wrong namespace.
+/// We reject it explicitly via a typed sentinel field rather than a
+/// blanket `deny_unknown_fields`, so retirement enforcement survives
+/// without re-introducing the field-drift regression above.
 #[derive(Debug, serde::Deserialize)]
 struct StoredDeviceIdentity {
     #[serde(default)]
@@ -1232,26 +1255,43 @@ struct StoredDeviceIdentity {
     #[serde(default)]
     realm: Option<String>,
     #[serde(default)]
-    tenant_id: Option<String>,
-    #[serde(default)]
     node_id: Option<String>,
+    /// Retired `realm` alias. Present only in pre-v4.1.4 files; its
+    /// presence is a hard parse error (see `deserialize` below).
+    #[serde(default, rename = "tenant_id")]
+    _retired_tenant_id: Option<RejectedTenantId>,
+}
+
+/// Zero-sized marker whose `Deserialize` always errors, naming the
+/// retired field. Used as the type of `StoredDeviceIdentity::tenant_id`
+/// so any credentials.json still carrying `tenant_id` fails the parse
+/// with a clear message, while every other unknown field is tolerated.
+#[derive(Debug)]
+struct RejectedTenantId;
+
+impl<'de> serde::Deserialize<'de> for RejectedTenantId {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Err(serde::de::Error::custom(
+            "credentials.json carries retired `tenant_id`; it was renamed to `realm` in URA \
+             v4.1.4 — re-pair with `easynet join <token>` to rewrite the file",
+        ))
+    }
 }
 
 /// Resolve the daemon's caller URA plus the optional deterministic
 /// signing seed from `~/.easynet/credentials.json`.
 ///
-/// Compatibility rules:
-/// - legacy sparse fixtures that only carry `agent_ura` still load
-///   and boot; they simply omit the signing seed and therefore keep
-///   the old unsigned frame-0 behaviour
-/// - modern credentials with `(realm|tenant_id, node_id)` always
-///   derive the canonical v4.1.4 device URA from those fields,
-///   even when an old `agent_ura` is still persisted alongside
-///   them. This keeps daemon session registration aligned with
-///   CLI-side `forward_invoke` targets during the URA migration.
-/// - once we have the canonical `(realm, node_id)` pair, derive the
-///   same deterministic Ed25519 seed the SDK uses for
-///   `easynet:prv:reg:agent.<node>`
+/// Contract:
+/// - credentials must carry `(realm, node_id)`.
+/// - `tenant_id` is a retired field and is rejected by serde.
+/// - `agent_ura`, when present, is only a consistency checksum; it is
+///   never a fallback identity.
+/// - once we have the canonical `(realm, node_id)` pair, derive the same
+///   deterministic Ed25519 seed the SDK uses for
+///   `easynet:prv:reg:agent.<node>`.
 fn load_daemon_identity() -> Option<DaemonIdentity> {
     let path = expand_home("~/.easynet/credentials.json");
     let raw = std::fs::read_to_string(&path).ok()?;
@@ -1267,16 +1307,7 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
         .as_deref()
         .map(str::trim)
         .filter(|realm| !realm.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            stored
-                .tenant_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|tenant| !tenant.is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| realm_from_agent_ura(&caller_ura));
+        .map(str::to_string);
     let node_id = stored
         .node_id
         .as_deref()
@@ -1323,8 +1354,8 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
 /// - The heartbeat daemon also bootstraps before its first tick.
 /// - `easynet-daemon` can, however, boot in shapes where neither of
 ///   those has fired yet while local CLI surfaces already route
-///   through `BridgeAbilityInvoker` (`device.node.describe` ->
-///   `federation.resolve`, `device.node.list`, etc.).
+///   through `BridgeAbilityInvoker` (`node.describe` ->
+///   `federation.resolve`, `node.list`, etc.).
 ///
 /// In that window the runtime rejects signed federation reads with
 /// `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED`. Bootstrapping here closes
@@ -1467,30 +1498,30 @@ fn canonical_caller_ura_from_stored_identity(stored: &StoredDeviceIdentity) -> O
         .realm
         .as_deref()
         .map(str::trim)
-        .filter(|realm| !realm.is_empty())
-        .or_else(|| {
-            stored
-                .tenant_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|tenant| !tenant.is_empty())
-        });
+        .filter(|realm| !realm.is_empty());
     let node_id = stored
         .node_id
         .as_deref()
         .map(str::trim)
         .filter(|node| !node.is_empty());
 
-    if let (Some(realm), Some(node_id)) = (realm, node_id) {
-        return Some(crate::ura::device_ura(realm, node_id));
-    }
+    let (Some(realm), Some(node_id)) = (realm, node_id) else {
+        return None;
+    };
 
-    stored
+    let expected = crate::ura::device_ura(realm, node_id);
+    if let Some(agent_ura) = stored
         .agent_ura
         .as_deref()
         .map(str::trim)
         .filter(|ura| !ura.is_empty())
-        .map(str::to_string)
+    {
+        if agent_ura != expected {
+            return None;
+        }
+    }
+
+    Some(expected)
 }
 
 // URA v4.1.5: strict parsing via crate::ura::parse_ura per memory
@@ -1519,11 +1550,7 @@ fn device_id_from_caller_ura(ura: &str) -> Option<String> {
     let parsed = crate::ura::parse_ura(ura).ok()?;
     // Only Device-kind URAs carry a device_id field; other kinds
     // leave it empty. Empty == not a device URA.
-    if parsed.device_id.is_empty() {
-        None
-    } else {
-        Some(parsed.device_id)
-    }
+    parsed.device_id().map(str::to_string)
 }
 
 /// Resolve the realm-trust file path. Resolution order:
@@ -1595,10 +1622,13 @@ fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BackendIdentityRecord {
     private_key_seed_hex: String,
-    #[serde(default, alias = "agent_uri")]
+    #[serde(default)]
     agent_ura: String,
+    #[serde(default, rename = "created_at_unix_ms")]
+    _created_at_unix_ms: Option<u64>,
 }
 
 fn upsert_backend_identity_from_disk(
@@ -1638,7 +1668,7 @@ fn upsert_backend_identity_from_disk(
         public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
         role: TrustedAgentRole::Backend,
         added_at_unix_ms: now_unix_ms(),
-        origin_tenant_id: None,
+        origin_realm: None,
         hub_endpoint: None,
         tls_ca_pem_path: None,
     };
@@ -2124,12 +2154,12 @@ mod tests {
     }
 
     #[test]
-    fn canonical_caller_ura_prefers_realm_and_node_over_legacy_agent_ura() {
+    fn canonical_caller_ura_accepts_matching_agent_ura_checksum() {
         let stored = StoredDeviceIdentity {
-            agent_ura: Some("easynet:///r/legacy/agent/old-node".to_string()),
+            agent_ura: Some(crate::ura::device_ura("realm-a", "device-123")),
             realm: Some("realm-a".to_string()),
-            tenant_id: Some("legacy".to_string()),
             node_id: Some("device-123".to_string()),
+            _retired_tenant_id: None,
         };
         assert_eq!(
             canonical_caller_ura_from_stored_identity(&stored).as_deref(),
@@ -2138,12 +2168,73 @@ mod tests {
     }
 
     #[test]
+    fn canonical_caller_ura_rejects_mismatched_agent_ura_checksum() {
+        let stored = StoredDeviceIdentity {
+            agent_ura: Some("easynet:///r/legacy/agent/old-node".to_string()),
+            realm: Some("realm-a".to_string()),
+            node_id: Some("device-123".to_string()),
+            _retired_tenant_id: None,
+        };
+        assert_eq!(canonical_caller_ura_from_stored_identity(&stored), None);
+    }
+
+    #[test]
+    fn daemon_identity_rejects_retired_tenant_id_credentials() {
+        let raw = r#"{
+  "realm": "realm-a",
+  "tenant_id": "tenant-a",
+  "node_id": "device-123"
+}"#;
+        let err = serde_json::from_str::<StoredDeviceIdentity>(raw)
+            .expect_err("retired tenant_id must fail schema parse");
+        assert!(
+            err.to_string().contains("tenant_id"),
+            "error must name retired field: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_identity_parses_full_modern_credentials_json() {
+        // Regression: a credentials.json carrying the FULL modern
+        // field set (everything `persistence::config::Credentials`
+        // writes after v4.1.5 cold-start: credential_token,
+        // hub_endpoint, deploy_signature, hub_api_base, username,
+        // hub_pubkey_b64, hub_tls_ca_pem_b64) must still parse into a
+        // device identity. A `deny_unknown_fields` projection silently
+        // collapsed this to `None`, which stopped the `<self>.session`
+        // supervisor and rendered the device REMOVED on the hub.
+        let raw = r#"{
+  "node_id": "01a5b007-f9c3-41f9-aa6f-7531267651bc",
+  "credential_token": "2929dad1f03f",
+  "hub_endpoint": "https://127.0.0.1:50443",
+  "realm": "localhost",
+  "deploy_signature": "",
+  "hub_api_base": "http://127.0.0.1:8080",
+  "username": "dev",
+  "hub_pubkey_b64": "6Tp8qzyMm2",
+  "hub_tls_ca_pem_b64": "LS0tLS1CRUdJ"
+}"#;
+        let stored = serde_json::from_str::<StoredDeviceIdentity>(raw)
+            .expect("modern credentials.json must parse despite extra fields");
+        let identity =
+            daemon_identity_from_stored(&stored).expect("must derive a device identity");
+        assert_eq!(
+            identity.caller_ura,
+            "easynet:///r/localhost/device/01a5b007-f9c3-41f9-aa6f-7531267651bc",
+        );
+        assert!(
+            identity.signing_seed.is_some(),
+            "device identity must carry a signing seed so `<self>.session` can dial the hub"
+        );
+    }
+
+    #[test]
     fn daemon_identity_from_stored_accepts_realm_only_credentials() {
         let stored = StoredDeviceIdentity {
             agent_ura: None,
             realm: Some("realm-a".to_string()),
-            tenant_id: None,
             node_id: Some("device-123".to_string()),
+            _retired_tenant_id: None,
         };
         let identity = daemon_identity_from_stored(&stored).expect("identity");
         assert_eq!(
@@ -2157,21 +2248,16 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_from_stored_falls_back_to_agent_ura_when_fields_missing() {
+    fn daemon_identity_from_stored_rejects_agent_ura_fallback_when_fields_missing() {
         let stored = StoredDeviceIdentity {
             agent_ura: Some("easynet:///r/realm-a/agent/legacy-node".to_string()),
             realm: None,
-            tenant_id: None,
             node_id: None,
+            _retired_tenant_id: None,
         };
-        let identity = daemon_identity_from_stored(&stored).expect("identity");
-        assert_eq!(
-            identity.caller_ura,
-            "easynet:///r/realm-a/agent/legacy-node"
-        );
         assert!(
-            identity.signing_seed.is_none(),
-            "legacy agent-only credentials stay unsigned until re-pair"
+            daemon_identity_from_stored(&stored).is_none(),
+            "agent_ura is no longer a fallback daemon identity"
         );
     }
 
@@ -2196,7 +2282,7 @@ mod tests {
         let seed = [0xAAu8; 32];
 
         let primary = "easynet:///r/host-test/device/dev-uuid";
-        let hub_overlay = "easynet:///r/host-test/hub";
+        let hub_overlay = crate::ura::hub_ura("host-test");
 
         let source = MasterKeySource::Explicit(pass.to_string());
         let mut vault = Vault::init(&vault_path, &source).expect("init vault");
@@ -2211,8 +2297,8 @@ mod tests {
         let stored = StoredDeviceIdentity {
             agent_ura: None,
             realm: Some("host-test".to_string()),
-            tenant_id: None,
             node_id: Some("dev-uuid".to_string()),
+            _retired_tenant_id: None,
         };
         let identity = daemon_identity_from_stored(&stored).expect("identity");
 
@@ -2244,8 +2330,8 @@ mod tests {
         let stored = StoredDeviceIdentity {
             agent_ura: None,
             realm: Some("realm-no-vault".to_string()),
-            tenant_id: None,
             node_id: Some("dev-uuid".to_string()),
+            _retired_tenant_id: None,
         };
         let identity = daemon_identity_from_stored(&stored).expect("identity");
         assert!(
@@ -2268,7 +2354,7 @@ mod tests {
             identity_dir.join("identity.json"),
             serde_json::json!({
                 "private_key_seed_hex": hex::encode(new_seed),
-                "agent_uri": crate::ura::hub_ura(realm),
+                "agent_ura": crate::ura::hub_ura(realm),
                 "created_at_unix_ms": 1_714_492_800_000i64,
             })
             .to_string(),
@@ -2283,7 +2369,7 @@ mod tests {
             public_key_b64: old_pub,
             role: TrustedAgentRole::Backend,
             added_at_unix_ms: 1,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         }])
@@ -2306,6 +2392,32 @@ mod tests {
                 .expect("backend entry on disk")
                 .public_key_b64,
             want_pub
+        );
+    }
+
+    #[test]
+    fn backend_identity_reader_rejects_retired_agent_uri_alias() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", temp.path());
+
+        let realm = "realm-retired-agent-uri";
+        let identity_dir = temp.path().join(".easynet-hub").join(realm);
+        std::fs::create_dir_all(&identity_dir).expect("identity dir");
+        std::fs::write(
+            identity_dir.join("identity.json"),
+            serde_json::json!({
+                "private_key_seed_hex": hex::encode([0x42u8; 32]),
+                "agent_uri": crate::ura::hub_ura(realm),
+                "created_at_unix_ms": 1_714_492_800_000i64,
+            })
+            .to_string(),
+        )
+        .expect("identity file");
+
+        assert!(
+            read_backend_identity_record(realm).is_none(),
+            "retired agent_uri must not be accepted as backend identity agent_ura"
         );
     }
 
@@ -2346,15 +2458,18 @@ mod tests {
     fn reload_trust_anchor_cell_from_replaces_snapshot() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("realm-trust.toml");
+        let hub_ura = crate::ura::hub_ura("realm");
         std::fs::write(
             &path,
-            r#"
+            format!(
+                r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/realm/hub"
+agent_ura = "{hub_ura}"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
-"#,
+"#
+            ),
         )
         .expect("write trust anchor");
 
@@ -2362,7 +2477,7 @@ added_at_unix_ms = 1714492800000
         let reloaded = reload_trust_anchor_cell_from(&path, &cell).expect("reload succeeds");
         assert_eq!(reloaded, 1);
         assert!(
-            cell.snapshot().lookup("easynet:///r/realm/hub").is_some(),
+            cell.snapshot().lookup(&hub_ura).is_some(),
             "SIGHUP reload must publish the on-disk entry to future admissions"
         );
     }
@@ -2371,15 +2486,18 @@ added_at_unix_ms = 1714492800000
     fn reload_trust_anchor_cell_from_keeps_previous_snapshot_on_parse_error() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("realm-trust.toml");
+        let hub_ura = crate::ura::hub_ura("realm");
         std::fs::write(
             &path,
-            r#"
+            format!(
+                r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/realm/hub"
+agent_ura = "{hub_ura}"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
-"#,
+"#
+            ),
         )
         .expect("write initial trust anchor");
 
@@ -2393,7 +2511,7 @@ added_at_unix_ms = 1714492800000
             "error should name the reload path, got: {err}"
         );
         assert!(
-            cell.snapshot().lookup("easynet:///r/realm/hub").is_some(),
+            cell.snapshot().lookup(&hub_ura).is_some(),
             "failed reload must keep the previously published trust anchor"
         );
     }

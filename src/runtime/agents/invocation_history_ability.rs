@@ -1,5 +1,5 @@
-// EasyNet CLI — device.invocation.* audit abilities
-// =================================================
+// EasyNet CLI — Invocation audit abilities
+// ========================================
 //
 // File: src/runtime/agents/invocation_history_ability.rs
 // Description: Device-owned read-only surfaces over the Axon
@@ -27,10 +27,10 @@ use crate::persistence::daemon_config::{default_config_path, default_ledger_dir,
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
-pub const ABILITY_HISTORY_LIST: &str = "device.invocation.history.list";
-pub const ABILITY_HISTORY_GET: &str = "device.invocation.history.get";
-pub const ABILITY_TRACE_GET: &str = "device.invocation.trace.get";
-pub const ABILITY_HISTORY_PATH: &str = "device.invocation.history.path";
+pub const ABILITY_HISTORY_LIST: &str = "invocation.history.list";
+pub const ABILITY_HISTORY_GET: &str = "invocation.history.get";
+pub const ABILITY_TRACE_GET: &str = "invocation.trace.get";
+pub const ABILITY_HISTORY_PATH: &str = "invocation.history.path";
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
@@ -75,15 +75,10 @@ impl InvocationLedgerReader {
 
     fn list_history(&self, args: Value) -> anyhow::Result<Value> {
         let requested_limit = bounded_limit(args.get("limit").and_then(Value::as_u64));
-        let exclude_abilities = string_set_arg(&args, "exclude_abilities");
-        // `filter.abilities` is the OR-match counterpart to the single
-        // `filter.ability` query predicate: a record is kept if its
-        // ability_name OR ability_ura equals ANY candidate. The frontend
-        // sends every identifier form the ledger might have stored (canonical
-        // URA, registered `agent.ability` name, tool name) in one request so
-        // it no longer probes the ledger once per candidate.
-        let include_abilities = filter_string_set(&args, "abilities");
-        let needs_post_filter = !exclude_abilities.is_empty() || !include_abilities.is_empty();
+        let exclude_ability_uras = string_set_arg(&args, "exclude_ability_uras");
+        let include_ability_uras = filter_string_set(&args, "ability_uras");
+        let needs_post_filter =
+            !exclude_ability_uras.is_empty() || !include_ability_uras.is_empty();
         // Post-filters run after fetch, so over-fetch to keep a full page
         // after retention. Single-valued predicates (caller/callee/subject/
         // state/trace) are still applied at the query source.
@@ -99,7 +94,7 @@ impl InvocationLedgerReader {
             .unwrap_or(false);
         let path = ledger_path_from_config();
         let mut records = self.fetch_records(&path, query)?;
-        retain_by_ability_sets(&mut records, &include_abilities, &exclude_abilities);
+        retain_by_ability_ura_sets(&mut records, &include_ability_uras, &exclude_ability_uras);
         if needs_post_filter {
             records.truncate(requested_limit);
         }
@@ -222,7 +217,7 @@ fn compact_record_value(mut value: Value) -> Value {
         // List views only need routing, timing, state, and error
         // summaries. Full payload envelopes, diagnostics, causal links,
         // receipt-chain, and privacy metadata remain available through
-        // device.invocation.history.get for a single record, avoiding
+        // invocation.history.get for a single record, avoiding
         // multi-megabyte list payloads on active nodes.
         object.remove("args");
         object.remove("result");
@@ -238,7 +233,7 @@ fn string_set_arg(args: &Value, key: &str) -> HashSet<String> {
     value_string_set(args.get(key))
 }
 
-/// Read a string set from `args.filter.<key>` (e.g. `filter.abilities`).
+/// Read a string set from `args.filter.<key>` (e.g. `filter.ability_uras`).
 fn filter_string_set(args: &Value, key: &str) -> HashSet<String> {
     value_string_set(args.get("filter").and_then(|f| f.get(key)))
 }
@@ -255,26 +250,18 @@ fn value_string_set(value: Option<&Value>) -> HashSet<String> {
         .collect()
 }
 
-/// Apply include/exclude ability sets in place. A record survives the
-/// include set if its ability_name OR ability_ura matches ANY entry
-/// (OR-match); it is dropped if either identifier is in the exclude set.
-/// Empty sets are no-ops, so callers can pass either or both.
-fn retain_by_ability_sets(
+/// Apply include/exclude Ability URA sets in place. Empty sets are
+/// no-ops, so callers can pass either or both.
+fn retain_by_ability_ura_sets(
     records: &mut Vec<easynet_axon::invocation::InvocationLedgerRecord>,
     include: &HashSet<String>,
     exclude: &HashSet<String>,
 ) {
     if !include.is_empty() {
-        records.retain(|record| {
-            include.contains(record.ability_name.as_str())
-                || include.contains(record.ability_ura.as_str())
-        });
+        records.retain(|record| include.contains(record.ability_ura.as_str()));
     }
     if !exclude.is_empty() {
-        records.retain(|record| {
-            !exclude.contains(record.ability_name.as_str())
-                && !exclude.contains(record.ability_ura.as_str())
-        });
+        records.retain(|record| !exclude.contains(record.ability_ura.as_str()));
     }
 }
 
@@ -312,25 +299,19 @@ fn apply_filter_object(
     let object = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
-    if let Some(caller) = object.get("caller").and_then(non_empty_str) {
+    validate_filter_keys(object)?;
+    if let Some(caller) = object.get("caller_ura").and_then(non_empty_str) {
         query = query.caller_ura(caller);
     }
-    if let Some(callee) = object.get("callee").and_then(non_empty_str) {
+    let callee_ura = scoped_callee_ura(object)?;
+    if let Some(callee) = callee_ura.as_deref() {
         query = query.callee_ura(callee);
     }
-    if let Some(subjects) = object
-        .get("subject")
-        .map(subject_filter_values)
-        .transpose()?
-    {
+    if let Some(subjects) = subject_filter_values(object)? {
         query = query.subject_uras(subjects);
     }
-    if let Some(ability) = object.get("ability").and_then(non_empty_str) {
-        if ability.starts_with("easynet:///") {
-            query = query.ability_ura(ability);
-        } else {
-            query = query.ability_name(ability);
-        }
+    if let Some(ability_ura) = object.get("ability_ura").and_then(non_empty_str) {
+        query = query.ability_ura(ability_ura);
     }
     if let Some(state) = object.get("state").and_then(non_empty_str) {
         query = query.state(state);
@@ -341,26 +322,61 @@ fn apply_filter_object(
     Ok(query)
 }
 
+fn validate_filter_keys(object: &serde_json::Map<String, Value>) -> anyhow::Result<()> {
+    for key in object.keys() {
+        match key.as_str() {
+            "caller_ura" | "callee_ura" | "agent_ura" | "subject_ura" | "subject_uras"
+            | "ability_ura" | "ability_uras" | "state" | "trace_id" => {}
+            other => anyhow::bail!("unsupported filter field `{other}`"),
+        }
+    }
+    Ok(())
+}
+
+fn scoped_callee_ura(object: &serde_json::Map<String, Value>) -> anyhow::Result<Option<String>> {
+    let callee = object.get("callee_ura").and_then(non_empty_str);
+    let agent = object.get("agent_ura").and_then(non_empty_str);
+    match (callee, agent) {
+        (Some(callee), Some(agent)) if callee != agent => {
+            anyhow::bail!("filter.callee_ura and filter.agent_ura must match when both are set")
+        }
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value.to_string())),
+        (None, None) => Ok(None),
+    }
+}
+
 fn non_empty_str(value: &Value) -> Option<&str> {
     value.as_str().map(str::trim).filter(|s| !s.is_empty())
 }
 
-fn subject_filter_values(value: &Value) -> anyhow::Result<Vec<String>> {
-    if let Some(subject) = non_empty_str(value) {
-        return Ok(vec![subject.to_string()]);
+fn subject_filter_values(
+    object: &serde_json::Map<String, Value>,
+) -> anyhow::Result<Option<Vec<String>>> {
+    let single = object.get("subject_ura");
+    let many = object.get("subject_uras");
+    if single.is_some() && many.is_some() {
+        anyhow::bail!("filter.subject_ura and filter.subject_uras are mutually exclusive");
     }
+    if let Some(value) = single {
+        let subject = non_empty_str(value)
+            .ok_or_else(|| anyhow::anyhow!("filter.subject_ura must be a non-empty string"))?;
+        return Ok(Some(vec![subject.to_string()]));
+    }
+    let Some(value) = many else {
+        return Ok(None);
+    };
     let array = value
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("filter.subject must be a string or an array of strings"))?;
+        .ok_or_else(|| anyhow::anyhow!("filter.subject_uras must be an array of strings"))?;
     let subjects = array
         .iter()
         .filter_map(non_empty_str)
         .map(str::to_string)
         .collect::<Vec<_>>();
     if subjects.is_empty() {
-        anyhow::bail!("filter.subject array must include at least one non-empty string");
+        anyhow::bail!("filter.subject_uras must include at least one non-empty string");
     }
-    Ok(subjects)
+    Ok(Some(subjects))
 }
 
 fn ledger_path_from_config() -> PathBuf {
@@ -373,9 +389,12 @@ fn ledger_resource_ura() -> Option<String> {
     let local = crate::persistence::local_agents::load().ok()?;
     let parsed = crate::ura::parse_ura(&local.host_device_agent_ura).ok()?;
     let owner = match parsed.kind {
-        crate::ura::URAKind::Device => format!("device.{}", parsed.device_id),
-        crate::ura::URAKind::User => format!("{}.invocations", parsed.user_id),
-        crate::ura::URAKind::Agent => format!("{}.invocations", parsed.user_id),
+        crate::ura::URAKind::Device => format!("device.{}", parsed.device_id()?),
+        crate::ura::URAKind::User => format!("{}.invocations", parsed.user_id()?),
+        crate::ura::URAKind::Agent => {
+            let (user_id, _) = parsed.agent_ids()?;
+            format!("{user_id}.invocations")
+        }
         _ => return None,
     };
     Some(crate::ura::resource_dot_ura(
@@ -445,7 +464,7 @@ pub fn list_history_input_schema() -> Value {
         "properties": {
             "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LIMIT },
             "compact": { "type": "boolean" },
-            "exclude_abilities": {
+            "exclude_ability_uras": {
                 "type": "array",
                 "items": { "type": "string", "minLength": 1 }
             },
@@ -505,24 +524,24 @@ fn filter_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "caller": { "type": "string", "description": "Caller URA." },
-            "callee": { "type": "string", "description": "Callee URA." },
-            "subject": {
-                "description": "One subject URA or an array of subject URAs.",
-                "oneOf": [
-                    { "type": "string" },
-                    {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "minItems": 1,
-                        "uniqueItems": true
-                    }
-                ]
+            "caller_ura": { "type": "string", "description": "Caller Agent URA." },
+            "callee_ura": { "type": "string", "description": "Callee/owner Agent URA." },
+            "agent_ura": {
+                "type": "string",
+                "description": "Ability owner/callee Agent URA. Equivalent to callee_ura for history scope."
             },
-            "ability": { "type": "string", "description": "Ability name or ability URA." },
-            "abilities": {
+            "subject_ura": { "type": "string", "description": "Single subject URA." },
+            "subject_uras": {
                 "type": "array",
-                "description": "Ability names or ability URAs. Records match when ability_name or ability_ura equals any value.",
+                "description": "OR-scope over subject URAs.",
+                "items": { "type": "string", "minLength": 1 },
+                "minItems": 1,
+                "uniqueItems": true
+            },
+            "ability_ura": { "type": "string", "description": "Canonical Ability URA." },
+            "ability_uras": {
+                "type": "array",
+                "description": "Canonical Ability URAs. Records match when ability_ura equals any value.",
                 "items": { "type": "string", "minLength": 1 },
                 "minItems": 1,
                 "uniqueItems": true
@@ -646,8 +665,8 @@ mod tests {
         let path = dir.path().join("invocations.redb");
         let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
         let mut noisy = sample_record("req-noisy");
-        noisy.ability_name = "device.terminal.read".to_string();
-        noisy.ability_ura = "easynet:///r/test/ability/device.terminal.read".to_string();
+        noisy.ability_name = "terminal.read".to_string();
+        noisy.ability_ura = "easynet:///r/test/ability/terminal.read".to_string();
         noisy.started_unix_ms = 3;
         let mut wanted = sample_record("req-wanted");
         wanted.started_unix_ms = 2;
@@ -659,7 +678,7 @@ mod tests {
             .list_history(json!({
                 "limit": 1,
                 "compact": true,
-                "exclude_abilities": ["device.terminal.read"]
+                "exclude_ability_uras": ["easynet:///r/test/ability/terminal.read"]
             }))
             .unwrap();
         let records = value
@@ -679,10 +698,10 @@ mod tests {
         let query = query_from_args(&json!({
             "key": { "ura": "easynet:///r/test/resource/alice.invocations/req-test" },
             "filter": {
-                "caller": "easynet:///r/test/device/caller",
-                "callee": "easynet:///r/test/device/callee",
-                "subject": "easynet:///r/test/user/alice",
-                "ability": "device.observe.health",
+                "caller_ura": "easynet:///r/test/device/caller",
+                "agent_ura": "easynet:///r/test/device/callee",
+                "subject_ura": "easynet:///r/test/user/alice",
+                "ability_ura": "easynet:///r/test/ability/hub.observe.health",
                 "state": "completed"
             }
         }))
@@ -695,15 +714,22 @@ mod tests {
             query.caller_ura.as_deref(),
             Some("easynet:///r/test/device/caller")
         );
+        assert_eq!(
+            query.callee_ura.as_deref(),
+            Some("easynet:///r/test/device/callee")
+        );
         assert!(query.subject_uras.contains("easynet:///r/test/user/alice"));
-        assert_eq!(query.ability_name.as_deref(), Some("device.observe.health"));
+        assert_eq!(
+            query.ability_ura.as_deref(),
+            Some("easynet:///r/test/ability/hub.observe.health")
+        );
     }
 
     #[test]
     fn query_from_args_accepts_subject_array() {
         let query = query_from_args(&json!({
             "filter": {
-                "subject": [
+                "subject_uras": [
                     "easynet:///r/test/device/mac-1",
                     "easynet:///r/test/agent/alice.frontend"
                 ]
@@ -717,6 +743,44 @@ mod tests {
         assert!(query
             .subject_uras
             .contains("easynet:///r/test/agent/alice.frontend"));
+    }
+
+    #[test]
+    fn query_from_args_rejects_ambiguous_subject_scope() {
+        let err = query_from_args(&json!({
+            "filter": {
+                "subject_ura": "easynet:///r/test/user/alice",
+                "subject_uras": ["easynet:///r/test/device/mac-1"]
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("mutually exclusive"), "got {err}");
+    }
+
+    #[test]
+    fn query_from_args_rejects_unknown_filter_fields() {
+        let err = query_from_args(&json!({
+            "filter": {
+                "subject": "easynet:///r/test/user/alice"
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unsupported filter field"), "got {err}");
+    }
+
+    #[test]
+    fn query_from_args_rejects_conflicting_agent_and_callee_scope() {
+        let err = query_from_args(&json!({
+            "filter": {
+                "agent_ura": "easynet:///r/test/device/owner-a",
+                "callee_ura": "easynet:///r/test/device/owner-b"
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("must match"), "got {err}");
     }
 
     #[test]
@@ -763,8 +827,8 @@ mod tests {
             .caller_ura("easynet:///r/test/device/caller".to_string())
             .callee_ura("easynet:///r/test/device/callee".to_string())
             .subject_ura("easynet:///r/test/user/alice".to_string())
-            .ability_ura("easynet:///r/test/ability/hub.device.observe.health".to_string())
-            .ability_name("device.observe.health".to_string())
+            .ability_ura("easynet:///r/test/ability/hub.observe.health".to_string())
+            .ability_name("observe.health".to_string())
             .state("completed".to_string())
             .started_unix_ms(1)
             .completed_unix_ms(2)
@@ -811,22 +875,20 @@ mod tests {
     }
 
     #[test]
-    fn list_history_or_matches_multiple_ability_candidates() {
+    fn list_history_or_matches_multiple_ability_uras() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
         let ledger = easynet_axon::invocation::InvocationLedger::open(&path).unwrap();
-        // Same logical ability stored under different identifier forms
-        // across the ledger's history, plus one unrelated ability.
         ledger
             .put(&record_with_ability(
                 "req-by-ura",
-                "chat",
+                "liangbing.chat",
                 "easynet:///r/test/ability/dev.liangbing.chat",
             ))
             .unwrap();
         ledger
             .put(&record_with_ability(
-                "req-by-name",
+                "req-second-ura",
                 "liangbing.chat",
                 "easynet:///r/_system/ability/liangbing.chat",
             ))
@@ -835,21 +897,20 @@ mod tests {
             .put(&record_with_ability(
                 "req-unrelated",
                 "observe.health",
-                "easynet:///r/test/ability/dev.observe.health",
+                "easynet:///r/test/ability/device.dev.observe.health",
             ))
             .unwrap();
         let reader = InvocationLedgerReader::new(Some(Arc::new(ledger)));
 
-        // ONE request carrying every candidate identifier form; the device
-        // OR-matches so the frontend no longer probes once per candidate.
+        // ONE request carrying canonical Ability URAs; local registry names
+        // are not query authority.
         let resp = reader
             .list_history(json!({
                 "limit": 50,
                 "filter": {
-                    "abilities": [
+                    "ability_uras": [
                         "easynet:///r/test/ability/dev.liangbing.chat",
-                        "liangbing.chat",
-                        "chat",
+                        "easynet:///r/_system/ability/liangbing.chat",
                     ]
                 },
             }))
@@ -861,7 +922,10 @@ mod tests {
             .filter_map(|r| r["request_id"].as_str())
             .collect();
         assert!(ids.contains(&"req-by-ura"), "should match by ability_ura");
-        assert!(ids.contains(&"req-by-name"), "should match by ability_name");
+        assert!(
+            ids.contains(&"req-second-ura"),
+            "should match only when its ability_ura is explicitly present"
+        );
         assert!(
             !ids.contains(&"req-unrelated"),
             "non-candidate ability must be excluded, got {ids:?}"
@@ -869,25 +933,26 @@ mod tests {
     }
 
     #[test]
-    fn retain_by_ability_sets_applies_include_then_exclude() {
+    fn retain_by_ability_ura_sets_applies_include_then_exclude() {
         let mut records = vec![
             record_with_ability("a", "chat", "easynet:///r/test/ability/dev.a.chat"),
-            record_with_ability(
-                "b",
-                "device.terminal.read",
-                "easynet:///r/test/ability/dev.b.read",
-            ),
+            record_with_ability("b", "terminal.read", "easynet:///r/test/ability/dev.b.read"),
             record_with_ability(
                 "c",
                 "observe.health",
                 "easynet:///r/test/ability/dev.c.health",
             ),
         ];
-        let include: HashSet<String> = ["chat".to_string(), "device.terminal.read".to_string()]
+        let include: HashSet<String> = [
+            "easynet:///r/test/ability/dev.a.chat".to_string(),
+            "easynet:///r/test/ability/dev.b.read".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let exclude: HashSet<String> = ["easynet:///r/test/ability/dev.b.read".to_string()]
             .into_iter()
             .collect();
-        let exclude: HashSet<String> = ["device.terminal.read".to_string()].into_iter().collect();
-        retain_by_ability_sets(&mut records, &include, &exclude);
+        retain_by_ability_ura_sets(&mut records, &include, &exclude);
         let ids: Vec<&str> = records.iter().map(|r| r.request_id.as_str()).collect();
         assert_eq!(
             ids,

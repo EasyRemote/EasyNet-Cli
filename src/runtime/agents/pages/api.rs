@@ -52,6 +52,7 @@ use serde_json::{json, Value};
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::ura::AbilitySelector;
 
 /// Process-wide handle to the live ability registry. Set once at
 /// boot by `pages::register`; read by the `kind="ability"` branch
@@ -67,6 +68,7 @@ pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>
 
 /// One TOML manifest under `<project>/api/<verb>.toml`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ApiManifest {
     /// Execution mode. v0: `"static_json"` | `"echo"` | `"ability"`.
     #[serde(default = "default_kind")]
@@ -78,11 +80,11 @@ struct ApiManifest {
     /// echoed request body before responding.
     #[serde(default)]
     extra: Option<toml::Value>,
-    /// For `kind = "ability"`: the fully-qualified local ability
-    /// name to invoke. e.g. `web-builder.todo.add_task`. The HTTP
-    /// request body is forwarded verbatim as the ability's args.
+    /// For `kind = "ability"`: canonical Ability URA to invoke.
+    /// The HTTP request body is forwarded verbatim as that ability's
+    /// args; local registry projection happens inside the daemon.
     #[serde(default)]
-    ability: Option<String>,
+    ability_ura: Option<String>,
 }
 
 fn default_kind() -> String {
@@ -210,9 +212,13 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
             // ability — silan's "agent writes a real backend"
             // case. Body becomes the ability's args verbatim;
             // ability response becomes the HTTP body.
-            let target = manifest.ability.ok_or_else(|| {
-                anyhow::anyhow!("api manifest kind=ability requires `ability = \"<name>\"`")
+            let ability_ura = manifest.ability_ura.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "api manifest kind=ability requires `ability_ura = \"<Ability URA>\"`"
+                )
             })?;
+            let selector = AbilitySelector::parse(&ability_ura)
+                .map_err(|e| anyhow::anyhow!("api manifest invalid ability_ura: {e}"))?;
             let body = args.get("body").cloned().unwrap_or(Value::Null);
             let invoke_args = match body {
                 Value::Null => json!({}),
@@ -228,8 +234,14 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                 anyhow::anyhow!("dispatch handle empty; build site forgot to populate OnceLock")
             })?;
             let result = registry
-                .invoke_rpc_json(&target, invoke_args)
-                .map_err(|e| anyhow::anyhow!("ability `{target}` failed: {e}"))?;
+                .invoke_rpc_json(selector.local_registry_ability(), invoke_args)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "ability `{}` ({}) failed: {e}",
+                        selector.ability_ura(),
+                        selector.local_registry_ability()
+                    )
+                })?;
             Ok(json!({
                 "status":       200,
                 "body":         result,
@@ -406,7 +418,7 @@ mod tests {
             user,
             project_id,
             "submit",
-            "kind = \"ability\"\nability = \"demo.backend\"\n",
+            "kind = \"ability\"\nability_ura = \"easynet:///r/acme/ability/alice.demo.backend\"\n",
         );
 
         let resp = handle_api(
@@ -423,6 +435,38 @@ mod tests {
         assert_eq!(resp["status"], 200);
         assert_eq!(resp["body"]["ok"], true);
         assert_eq!(resp["body"]["echo"]["task"], "ship windows support");
+
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn ability_manifest_rejects_retired_bare_ability_field() {
+        let user = "alice-old";
+        let project_id = "todo-old";
+        let key = (user.to_string(), project_id.to_string());
+        let _dir = publish_project_with_manifest(
+            user,
+            project_id,
+            "submit",
+            "kind = \"ability\"\nability = \"demo.backend\"\n",
+        );
+
+        let err = handle_api(
+            user,
+            project_id,
+            "submit",
+            json!({
+                "body": {"task": "retired selector"},
+                "method": "POST"
+            }),
+        )
+        .expect_err("retired manifest ability field must be rejected");
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("unknown field `ability`") || msg.contains("ability_ura"),
+            "error should point at retired ability field or replacement field: {msg}"
+        );
 
         PUBLISHED_PROJECTS.remove(&key);
     }

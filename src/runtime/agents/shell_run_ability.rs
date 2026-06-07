@@ -89,7 +89,7 @@ use crate::support::shellguard::runner::{
 use crate::support::shellguard::security::{self, SecurityVerdict};
 
 /// Wire name. Pinned by AXIOM Tier 2.5; rename = protocol break.
-pub const ABILITY_NAME: &str = "device.shell.run";
+pub const ABILITY_NAME: &str = "shell.run";
 
 /// AXIOM Tier 2.5 profile version. Echoed in every receipt.
 pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
@@ -101,7 +101,7 @@ pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 const BASH_PATHS: &[&str] = &["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"];
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("device.shell.run", OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner("shell.run", OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {

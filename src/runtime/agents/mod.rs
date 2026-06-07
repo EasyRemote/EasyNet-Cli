@@ -13,7 +13,7 @@
 // Naming
 // ------
 // All system abilities are named `system.<feature>[.<verb>]`. Today
-// only `device.observe.health` exists; PR-ATTACH onwards extends the namespace.
+// only `observe.health` exists; PR-ATTACH onwards extends the namespace.
 //
 // Per-feature module layout
 // -------------------------
@@ -50,7 +50,7 @@ pub mod ability_publish_ability;
 /// the `gen-ability-tomls` binary regenerates after any code
 /// change to the metadata.
 pub mod ability_toml;
-/// device.terminal.attach — interactive bidirectional terminal
+/// terminal.attach — interactive bidirectional terminal
 /// stream over InvokeBidi. The seventh and final member of the
 /// AXIOM Tier 2.5 Baseline Locomotion Profile (the streaming
 /// counterpart to process.exec / shell.run). See
@@ -63,7 +63,7 @@ pub mod agent_list_ability;
 /// the RFC-002 keyring vault (different threat model: bearer
 /// capability vs cryptographic identity).
 pub mod api_key_ability;
-/// RFC-012 §RemoteWebSurface — `device.browser.{open_session,
+/// RFC-012 §RemoteWebSurface — `browser.{open_session,
 /// send_input, capture_viewport, close_session}` ability family.
 /// v0 mock handlers (no real WebView); RFC-013 W1–W8 replaces the
 /// mock with wry per platform.
@@ -86,7 +86,7 @@ pub mod eal_executor;
 /// reaches these through `support::local_invoke::invoke_local_ability`,
 /// the same path every other CLI surface uses.
 pub(crate) mod federation_probe;
-/// device.fs.transfer — bidirectional chunked file upload /
+/// fs.transfer — bidirectional chunked file upload /
 /// download. Pairs with the EasyNet backend's
 /// /api/v1/files/{upload,download} HTTP routes; one signed
 /// InvokeBidi session per transfer. Atomic write (staging +
@@ -148,7 +148,7 @@ pub mod media_abilities;
 pub mod meta_ability;
 pub mod mission_ability;
 pub mod network_health_ability;
-/// RFC-006-C v0.1 — `01HUB.openai.{chat_completions,list_models}`
+/// RFC-006-C v0.1 — `openai.{chat_completions,list_models}`
 /// adapter abilities. The OpenAI streaming protocol becomes a
 /// transport view over chat-base ability dispatch sequences.
 pub mod openai_compat_ability;
@@ -172,14 +172,14 @@ pub mod policy_ability;
 pub mod process_exec_ability;
 pub mod profiles;
 pub mod pty_attach_ability;
-/// device.terminal.input / device.terminal.read /
-/// device.terminal.resize — unary-RPC data plane. Used by the
+/// terminal.input / terminal.read /
+/// terminal.resize — unary-RPC data plane. Used by the
 /// EasyNet backend's PTYDriver before the WS bidi optimisation.
 /// Mutually exclusive with pty_attach_ability per session: the
 /// reader thread takes one fd dup, attach takes another, and two
 /// readers on the same PTY race for incoming bytes.
 pub mod pty_io_ability;
-/// device.terminal.create / device.terminal.close — control-
+/// terminal.create / terminal.close — control-
 /// plane lifecycle for PtyService sessions. attach (above) is
 /// the data-plane sibling.
 pub mod pty_lifecycle_ability;
@@ -326,7 +326,7 @@ pub fn build_registry() -> Arc<AxonAbilityCatalog> {
         PagesIdentity::default(),
         None,
         // Smoke-test path: no `LocalRuntime`-backed registrar is
-        // wired, so the OnceLock stays empty and `device.agent.start`
+        // wired, so the OnceLock stays empty and `agent.start`
         // skips runtime sync with an op_event. The agent still lands
         // in `agents.json`.
         Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
@@ -387,10 +387,10 @@ pub fn build_registry_with_runtime(
 /// **Phase 5c**. `hot_agent_registrar_cell` is a late-wired
 /// `OnceLock<Arc<HotAgentRegistrar>>`. Empty at registry-build
 /// time; the boot path populates it AFTER `LocalRuntime` +
-/// `dispatch_handle` are wired. The `device.agent.start` handler
+/// `dispatch_handle` are wired. The `agent.start` handler
 /// reads through this cell at dispatch time to register hot-added
 /// agents into `LocalRuntime`. Tests pass an empty cell —
-/// `device.agent.start` then writes `agents.json` and op_events
+/// `agent.start` then writes `agents.json` and op_events
 /// `hot_agent_runtime_sync_skipped` instead of also touching the runtime.
 /// Result of constructing the daemon's local ability registry.
 ///
@@ -538,15 +538,15 @@ fn build_registry_with_services_result_inner(
     // every external call uniformly instead of going through
     // a shell.run-wrapped curl.
     http_request_ability::register(&mut reg);
-    // device.invocation.* — read-only audit/history surfaces over
+    // invocation.history.* / invocation.trace.* — read-only audit surfaces over
     // the Axon invocation ledger. The ledger is written by the
     // gRPC invocation service; these handlers only expose persisted
     // URA-complete records for UI/backend tracing.
     invocation_history_ability::register(&mut reg, invocation_ledger);
     // AXIOM §"Tier 2.5" Baseline Locomotion — PTY data-plane and
-    // its lifecycle control-plane. device.terminal.create /
-    // device.terminal.close manage the session catalog;
-    // device.terminal.attach pumps stdin/stdout bidirectionally
+    // its lifecycle control-plane. terminal.create /
+    // terminal.close manage the session catalog;
+    // terminal.attach pumps stdin/stdout bidirectionally
     // over InvokeBidi for interactive workloads (REPLs, editors,
     // text-mode TUI). All three share one process-wide PtyService
     // (single Arc, lazy init): a session created by …_create
@@ -557,7 +557,7 @@ fn build_registry_with_services_result_inner(
     let pty_io = pty_io_ability::PtyIoService::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(pty_io.clone()));
     pty_attach_ability::register(&mut reg, Arc::clone(&pty));
-    // device.terminal.input / _read / _resize — unary-RPC data
+    // terminal.input / _read / _resize — unary-RPC data
     // plane. The backend's PTYDriver invokes these for the
     // production HTTP-session terminal flow before the WebSocket
     // bidi optimisation kicks in. Sharing the PtyService Arc with
@@ -565,7 +565,7 @@ fn build_registry_with_services_result_inner(
     // …_create is reachable through all three surfaces (unary,
     // bidi, lifecycle) — operators choose one mode per session.
     pty_io_ability::register(&mut reg, pty, pty_io);
-    // device.fs.transfer — bidi chunked file upload/download.
+    // fs.transfer — bidi chunked file upload/download.
     // Pairs with the EasyNet backend's /api/v1/files/{upload,
     // download} routes. No shared service state needed; the
     // handler opens its own per-session FS handle on each
@@ -586,7 +586,7 @@ fn build_registry_with_services_result_inner(
     media::screen_snapshot::register(&mut reg);
     media::mic_subscribe::register(&mut reg);
     list_resources_ability::register(&mut reg);
-    // device.agent.start / device.agent.stop / device.agent.refresh —
+    // agent.start / agent.stop / agent.refresh —
     // Invoke-side surface of `easynet agent add/remove/refresh`. LLM sub-agents are registry
     // rows (not resident processes), so start ≡ insert into
     // ~/.easynet/agents.json and return the canonical URA;
@@ -594,7 +594,7 @@ fn build_registry_with_services_result_inner(
     //
     // Phase 5c: passes a `OnceLock<Arc<HotAgentRegistrar>>` the
     // boot path populates after `LocalRuntime` is wired. On
-    // `device.agent.start`, the handler reads the
+    // `agent.start`, the handler reads the
     // OnceLock and registers the new agent's
     // `<agent>.{chat,discover,invoke}` into `LocalRuntime` so
     // dispatch goes through the Axon path (which writes ledger
@@ -609,7 +609,7 @@ fn build_registry_with_services_result_inner(
     // register_self, deregister_self). These are the canonical
     // ability surfaces backing the CLI's device + ability subcommands.
     device_ops_ability::register(&mut reg);
-    // device.browser.* — RFC-012 §RemoteWebSurface; v0 mock
+    // browser.* — RFC-012 §RemoteWebSurface; v0 mock
     // handlers per RFC-013 plan. capture_viewport is a streaming
     // verb; the other three are unary RPC.
     browser_session_ability::register(&mut reg);
@@ -683,11 +683,11 @@ fn build_registry_with_services_result_inner(
     // byte-identical to the boot-time handlers built from
     // `agents.json`. The registrar's internal `runtime` OnceLock is
     // left empty here — boot attaches the `LocalRuntime` later, before
-    // any `device.agent.start` call could land.
+    // any `agent.start` call could land.
     //
     // We stash the constructed registrar into the shared
     // `hot_agent_registrar_cell` immediately so the
-    // `device.agent.start` / `.stop` handler closures resolve to a
+    // `agent.start` / `.stop` handler closures resolve to a
     // populated cell as soon as registration completes.
     {
         let hot_registrar =
@@ -971,7 +971,7 @@ fn build_registry_with_services_result_inner(
     // handle used by `[exec] kind="mcp"` ability dispatch. Before this
     // line `mcp_executor::run_mcp_exec` would return a typed error;
     // after this line every MCP surface in the daemon — outbound
-    // `device.mcp.client.*`, reflective registry below, and exec —
+    // `mcp.client.*`, reflective registry below, and exec —
     // shares one connection pool, one config snapshot, one `next_id`
     // sequence per upstream. No silent divergence between surfaces.
     crate::runtime::agents::mcp_executor::set_process_client(mcp_client_svc.clone());
@@ -986,7 +986,7 @@ fn build_registry_with_services_result_inner(
     // dynamic registry overlay. Operators that need legacy blocking
     // behaviour can set EASYNET_MCP_REFLECTION=eager; production
     // operators can set `off` and rely solely on
-    // `device.mcp.client.{list,call}`.
+    // `mcp.client.{list,call}`.
     //
     // **Identity invariant.** The owner URA for reflected abilities
     // is the mcp-profile agent under the daemon's paired user. An
@@ -995,7 +995,7 @@ fn build_registry_with_services_result_inner(
     // a synthetic `user_id = "device"` to mint an agent URA, because
     // per AGENT_IDENTITY.md §2 ("identity, not locator") that would
     // forge an agent identity that no `easynet:///r/.../user/...`
-    // backs. The outbound `device.mcp.client.*` family remains
+    // backs. The outbound `mcp.client.*` family remains
     // available so operators can still reach upstream tools through
     // the explicit-server-name shape; only the bare-name projection
     // is gated on a paired user.
@@ -1016,7 +1016,7 @@ fn build_registry_with_services_result_inner(
         &mcp_client_svc,
         &mut reg,
     );
-    // device.agent.list — operational view of registered LLM
+    // agent.list — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
     let agents_for_device_view = agents.clone();
@@ -1160,7 +1160,7 @@ fn init_keyring_for_daemon(
 /// **Phase 5c**. `hot_agent_registrar_cell` is the OnceLock the
 /// boot path populates with `Arc<HotAgentRegistrar>` after the
 /// `LocalRuntime` + dispatch handle are wired. Passed through to
-/// the `device.agent.start` / `.stop` handlers so post-boot agent
+/// the `agent.start` / `.stop` handlers so post-boot agent
 /// additions are registered into `LocalRuntime`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_registry_for_daemon(
@@ -1243,58 +1243,26 @@ pub fn build_registry_for_daemon_result(
 /// The list is built from the live registry to avoid name drift
 /// between the publisher and the runtime catalogue.
 ///
-/// **M2 of the system-namespace migration**: at M1 every system
-/// ability registered both a legacy name (e.g. `fs.read`) and a
-/// canonical name (e.g. `device.fs.read`); the registry's
-/// `list_abilities()` returns both. This function FILTERS to
-/// canonical-only at M2 — legacy entries become hidden aliases
-/// for inbound dispatch only and are no longer advertised on the
-/// hub agent roster, the TOML manifest catalogue, or the LLM
-/// discover surface. The `is_canonical_or_unmapped` predicate
-/// retains every name whose first segment is in
-/// `{device, hub, <agent-id>, <user-id>}` (canonical / per-agent
-/// / per-user) and drops legacy first segments belonging to the
-/// closed system-namespace set.
-///
-/// At M3 the legacy entries are removed entirely from the
-/// registry; the filter then becomes a no-op.
+/// RFC-005 public catalogue names are owner-local names. Device-owned
+/// handlers may still use implementation-local registry keys while routing,
+/// but public discovery must expose `fs.read`, `skill.list`, `agent.list`,
+/// etc.; the owner is carried by `owner_ura` / `ability_ura`, not duplicated
+/// in the ability name.
 pub fn published_ability_names() -> Vec<String> {
     build_registry()
         .list_abilities()
         .into_iter()
-        .filter(|name| is_canonical_or_unmapped(name))
+        .filter(|name| is_publishable_catalog_name(name))
         .collect()
 }
 
-/// True iff `name` is a canonical post-M2 ability name (or a name
-/// without a legacy/canonical pair, e.g. per-agent / per-user
-/// verbs that always lived under their owner's prefix).
+/// Public catalogue filter after the RFC-005 cleanup.
 ///
-/// Drops the closed set of legacy first-segments that the M1
-/// dual-aliasing covers — those names are still dispatchable
-/// (M1 retained both bindings) but should not appear in any
-/// catalogue surface that publishes "what to call". Public
-/// surfaces (advertise prelude, TOML manifests, MCP bridge,
-/// LLM discover) emit canonical only; legacy continues to work
-/// for any caller that has them hard-coded, but isn't
-/// advertised.
-///
-/// `M3` deletes the legacy registrations entirely; this filter
-/// becomes a no-op then.
-pub fn is_canonical_or_unmapped(name: &str) -> bool {
-    // Legacy first-segments — closed set per M1 mapping table.
-    // Names with these heads are filtered OUT (legacy alias of
-    // a canonical pair).
-    const LEGACY_HEADS: &[&str] = &[
-        "fs", "http", "shell", "process", "observe", "admin", "easynet", "meta", "mission",
-        "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera", "mic",
-        "screen", "speaker", "voice", "skill", "consent", "01HUB",
-    ];
-    if let Some((head, _)) = name.split_once('.') {
-        if LEGACY_HEADS.contains(&head) {
-            return false;
-        }
-    }
+/// No legacy dual-registration remains. Keep this as a named predicate because
+/// the two catalogue builders share the same surface and because future
+/// non-publishable synthetic rows should be excluded here, not by ad-hoc
+/// prefix checks in callers.
+pub fn is_publishable_catalog_name(_name: &str) -> bool {
     true
 }
 
@@ -1342,11 +1310,51 @@ pub fn published_system_abilities() -> Vec<SystemAbilityMetadata> {
     published_abilities_from_registry(&registry)
 }
 
+/// Published system abilities whose owner was declared as `owner` in the
+/// registry.
+///
+/// This is the descriptor-generation path for implementation profiles. Owner
+/// membership comes from `AxonAbilityCatalog::lookup_owner`, not from ability
+/// name prefixes. That keeps the profile catalogue aligned with the handler
+/// registration truth table and prevents broad namespaces such as `device.*`
+/// from accidentally stealing sub-profile abilities.
+pub fn published_system_abilities_for_owner(
+    owner: crate::runtime::ability_dispatch::OwnerKind,
+) -> Vec<SystemAbilityMetadata> {
+    let registry = build_system_registry();
+    published_abilities_from_registry_for_owner(&registry, Some(&owner))
+}
+
+/// Owner declared by the deterministic system registry for one daemon-hosted
+/// ability.
+///
+/// This is the narrow receipt/descriptor classification surface. It exposes
+/// the registry's ownership truth table without letting callers depend on the
+/// registry object or fall back to profile prefix matching.
+pub fn system_ability_owner(
+    ability_name: &str,
+) -> Option<crate::runtime::ability_dispatch::OwnerKind> {
+    let registry = build_system_registry();
+    registry.lookup_owner(ability_name)
+}
+
 fn published_abilities_from_registry(registry: &AxonAbilityCatalog) -> Vec<SystemAbilityMetadata> {
+    published_abilities_from_registry_for_owner(registry, None)
+}
+
+fn published_abilities_from_registry_for_owner(
+    registry: &AxonAbilityCatalog,
+    owner: Option<&crate::runtime::ability_dispatch::OwnerKind>,
+) -> Vec<SystemAbilityMetadata> {
     registry
         .list_abilities()
         .into_iter()
-        .filter(|name| is_canonical_or_unmapped(name))
+        .filter(|name| is_publishable_catalog_name(name))
+        .filter(|name| {
+            owner
+                .map(|expected| registry.lookup_owner(name).as_ref() == Some(expected))
+                .unwrap_or(true)
+        })
         .filter(|name| !name.ends_with(".chat"))
         // RFC-002 §3.3 keyring abilities are owner-namespaced under
         // `device` and self-described by `keyring::abilities` — they
@@ -1420,102 +1428,101 @@ pub fn description_for(name: &str) -> &'static str {
     }
 
     match name {
-        "device.observe.health" => ping::description(),
-        "device.observe.network_health" => network_health_ability::description(),
-        "device.policy.evaluate" => policy_ability::evaluate_description(),
-        "device.policy.simulate" => policy_ability::simulate_description(),
-        "device.session.list" => session_ability::list_description(),
-        "device.session.attach" => session_ability::attach_description(),
-        "device.consent.subscribe" => permission_ability::subscribe_description(),
-        "device.consent.decide" => permission_ability::decide_description(),
-        "device.consent.list_pending" => permission_ability::list_pending_description(),
-        "device.discuss.create" => discuss_ability::create_description(),
-        "device.discuss.post" => discuss_ability::post_description(),
-        "device.discuss.subscribe" => discuss_ability::subscribe_description(),
-        "device.discuss.list_turns" => discuss_ability::list_turns_description(),
-        "device.schedule.add" => schedule_ability::add_description(),
-        "device.schedule.list" => schedule_ability::list_description(),
-        "device.schedule.remove" => schedule_ability::remove_description(),
-        "device.schedule.enable" => schedule_ability::enable_description(),
-        "device.loop.create" => loop_ability::create_description(),
-        "device.loop.status" => loop_ability::status_description(),
-        "device.loop.subscribe" => loop_ability::subscribe_description(),
-        "device.loop.cancel" => loop_ability::cancel_description(),
-        "device.skill.install" => skill_install_ability::install_description(),
-        "device.skill.remove" => skill_install_ability::remove_description(),
-        "device.skill.upgrade" => skill_install_ability::upgrade_description(),
-        "device.mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
-        "device.mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_description(),
-        "device.a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
-        "device.a2a.bridge.send_task" => a2a_bridge_ability::send_task_description(),
-        "device.a2a.client.send_task" => a2a_client_ability::send_task_description(),
-        "device.mcp.client.list" => mcp_client_ability::list_description(),
-        "device.mcp.client.call" => mcp_client_ability::call_description(),
-        "device.agent.list" => agent_list_ability::list_agents_description(),
+        "observe.health" => ping::description(),
+        "observe.network_health" => network_health_ability::description(),
+        "policy.evaluate" => policy_ability::evaluate_description(),
+        "policy.simulate" => policy_ability::simulate_description(),
+        "session.list" => session_ability::list_description(),
+        "session.attach" => session_ability::attach_description(),
+        "consent.subscribe" => permission_ability::subscribe_description(),
+        "consent.decide" => permission_ability::decide_description(),
+        "consent.list_pending" => permission_ability::list_pending_description(),
+        "discuss.create" => discuss_ability::create_description(),
+        "discuss.post" => discuss_ability::post_description(),
+        "discuss.subscribe" => discuss_ability::subscribe_description(),
+        "discuss.list_turns" => discuss_ability::list_turns_description(),
+        "schedule.add" => schedule_ability::add_description(),
+        "schedule.list" => schedule_ability::list_description(),
+        "schedule.remove" => schedule_ability::remove_description(),
+        "schedule.enable" => schedule_ability::enable_description(),
+        "loop.create" => loop_ability::create_description(),
+        "loop.status" => loop_ability::status_description(),
+        "loop.subscribe" => loop_ability::subscribe_description(),
+        "loop.cancel" => loop_ability::cancel_description(),
+        "skill.install" => skill_install_ability::install_description(),
+        "skill.remove" => skill_install_ability::remove_description(),
+        "skill.upgrade" => skill_install_ability::upgrade_description(),
+        "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
+        "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_description(),
+        "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
+        "a2a.bridge.send_task" => a2a_bridge_ability::send_task_description(),
+        "a2a.client.send_task" => a2a_client_ability::send_task_description(),
+        "mcp.client.list" => mcp_client_ability::list_description(),
+        "mcp.client.call" => mcp_client_ability::call_description(),
+        "agent.list" => agent_list_ability::list_agents_description(),
         plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_description(),
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_description(),
-        "device.meta.describe" => meta_ability::describe_description(),
-        "device.meta.list_abilities" => meta_ability::list_abilities_description(),
-        "device.mission.run" => mission_ability::run_description(),
-        "device.mission.track" => mission_ability::track_description(),
-        "device.mission.cancel" => mission_ability::cancel_description(),
+        "meta.describe" => meta_ability::describe_description(),
+        "meta.list_abilities" => meta_ability::list_abilities_description(),
+        "mission.run" => mission_ability::run_description(),
+        "mission.track" => mission_ability::track_description(),
+        "mission.cancel" => mission_ability::cancel_description(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
-        "device.fs.read" => fs_ability::description_read(),
-        "device.fs.write" => fs_ability::description_write(),
-        "device.fs.list" => fs_ability::description_list(),
-        "device.fs.edit" => fs_edit_ability::description(),
-        "device.process.exec" => process_exec_ability::description(),
-        "device.shell.run" => shell_run_ability::description(),
-        "device.http.request" => http_request_ability::description(),
-        "device.invocation.history.list" => invocation_history_ability::list_history_description(),
-        "device.invocation.history.get" => invocation_history_ability::get_history_description(),
-        "device.invocation.trace.get" => invocation_history_ability::get_trace_description(),
-        "device.invocation.history.path" => invocation_history_ability::get_path_description(),
-        "device.terminal.create" => pty_lifecycle_ability::description_create(),
-        "device.terminal.list" => pty_lifecycle_ability::description_list(),
-        "device.terminal.close" => pty_lifecycle_ability::description_close(),
-        "device.terminal.attach" => pty_attach_ability::description(),
-        "device.terminal.input" => pty_io_ability::input_description(),
-        "device.terminal.read" => pty_io_ability::read_description(),
-        "device.terminal.resize" => pty_io_ability::resize_description(),
-        "device.fs.transfer" => file_transfer_ability::description(),
-        "device.agent.start" => agent_lifecycle_ability::start_agent_description(),
-        "device.agent.stop" => agent_lifecycle_ability::stop_agent_description(),
-        "device.agent.refresh" => agent_lifecycle_ability::refresh_agents_description(),
-        "device.node.list" => device_ops_ability::list_nodes_description(),
-        "device.node.describe" => device_ops_ability::describe_node_description(),
-        "device.node.remove" => device_ops_ability::remove_node_description(),
-        "device.ability.deploy" => device_ops_ability::deploy_ability_description(),
-        "device.ability.uninstall" => device_ops_ability::uninstall_ability_description(),
-        "device.remote.exec" => device_ops_ability::exec_remote_description(),
-        "device.node.register" => device_ops_ability::register_self_description(),
-        "device.node.deregister" => device_ops_ability::deregister_self_description(),
-        "device.mission.discuss_round" => orchestration_ability::discuss_round_description(),
-        "device.voice.create_call" => voice_call_ability::create_call_description(),
-        "device.voice.show_call" => voice_call_ability::show_call_description(),
-        "device.voice.join_call" => voice_call_ability::join_call_description(),
-        "device.voice.leave_call" => voice_call_ability::leave_call_description(),
-        "device.voice.end_call" => voice_call_ability::end_call_description(),
-        "device.voice.watch_call" => voice_call_ability::watch_call_description(),
-        "device.voice.report_metrics" => voice_call_ability::report_metrics_description(),
-        "device.voice.list_calls" => voice_call_ability::list_calls_description(),
-        // RFC-012 §RemoteWebSurface — device.browser.* family.
-        "device.browser.open_session" => browser_session_ability::open_session_description(),
-        "device.browser.send_input" => browser_session_ability::send_input_description(),
-        "device.browser.capture_viewport" => {
-            browser_session_ability::capture_viewport_description()
-        }
-        "device.browser.close_session" => browser_session_ability::close_session_description(),
-        "device.admin.status" => admin_status_ability::description(),
-        "device.ability.publish" => ability_publish_ability::publish_description(),
-        "device.ability.unpublish" => ability_publish_ability::unpublish_description(),
-        "device.skill.publish" => skill_publish_ability::publish_description(),
-        "device.skill.unpublish" => skill_publish_ability::unpublish_description(),
-        "device.skill.list" => skill_publish_ability::list_description(),
-        "device.skill.tree" => skill_publish_ability::tree_description(),
-        "device.skill.read_file" => skill_publish_ability::read_file_description(),
-        "device.skill.write_file" => skill_publish_ability::write_file_description(),
-        "device.mission.think" => think_ability::description(),
+        "fs.read" => fs_ability::description_read(),
+        "fs.write" => fs_ability::description_write(),
+        "fs.stat" => fs_ability::description_stat(),
+        "fs.list" => fs_ability::description_list(),
+        "fs.edit" => fs_edit_ability::description(),
+        "process.exec" => process_exec_ability::description(),
+        "shell.run" => shell_run_ability::description(),
+        "http.request" => http_request_ability::description(),
+        "invocation.history.list" => invocation_history_ability::list_history_description(),
+        "invocation.history.get" => invocation_history_ability::get_history_description(),
+        "invocation.trace.get" => invocation_history_ability::get_trace_description(),
+        "invocation.history.path" => invocation_history_ability::get_path_description(),
+        "terminal.create" => pty_lifecycle_ability::description_create(),
+        "terminal.list" => pty_lifecycle_ability::description_list(),
+        "terminal.close" => pty_lifecycle_ability::description_close(),
+        "terminal.attach" => pty_attach_ability::description(),
+        "terminal.input" => pty_io_ability::input_description(),
+        "terminal.read" => pty_io_ability::read_description(),
+        "terminal.resize" => pty_io_ability::resize_description(),
+        "fs.transfer" => file_transfer_ability::description(),
+        "agent.start" => agent_lifecycle_ability::start_agent_description(),
+        "agent.stop" => agent_lifecycle_ability::stop_agent_description(),
+        "agent.refresh" => agent_lifecycle_ability::refresh_agents_description(),
+        "node.list" => device_ops_ability::list_nodes_description(),
+        "node.describe" => device_ops_ability::describe_node_description(),
+        "node.remove" => device_ops_ability::remove_node_description(),
+        "ability.deploy" => device_ops_ability::deploy_ability_description(),
+        "ability.uninstall" => device_ops_ability::uninstall_ability_description(),
+        "remote.exec" => device_ops_ability::exec_remote_description(),
+        "node.register" => device_ops_ability::register_self_description(),
+        "node.deregister" => device_ops_ability::deregister_self_description(),
+        "mission.discuss_round" => orchestration_ability::discuss_round_description(),
+        "voice.create_call" => voice_call_ability::create_call_description(),
+        "voice.show_call" => voice_call_ability::show_call_description(),
+        "voice.join_call" => voice_call_ability::join_call_description(),
+        "voice.leave_call" => voice_call_ability::leave_call_description(),
+        "voice.end_call" => voice_call_ability::end_call_description(),
+        "voice.watch_call" => voice_call_ability::watch_call_description(),
+        "voice.report_metrics" => voice_call_ability::report_metrics_description(),
+        "voice.list_calls" => voice_call_ability::list_calls_description(),
+        // RFC-012 §RemoteWebSurface — browser.* family.
+        "browser.open_session" => browser_session_ability::open_session_description(),
+        "browser.send_input" => browser_session_ability::send_input_description(),
+        "browser.capture_viewport" => browser_session_ability::capture_viewport_description(),
+        "browser.close_session" => browser_session_ability::close_session_description(),
+        "admin.status" => admin_status_ability::description(),
+        "ability.publish" => ability_publish_ability::publish_description(),
+        "ability.unpublish" => ability_publish_ability::unpublish_description(),
+        "skill.publish" => skill_publish_ability::publish_description(),
+        "skill.unpublish" => skill_publish_ability::unpublish_description(),
+        "skill.list" => skill_publish_ability::list_description(),
+        "skill.tree" => skill_publish_ability::tree_description(),
+        "skill.read_file" => skill_publish_ability::read_file_description(),
+        "skill.write_file" => skill_publish_ability::write_file_description(),
+        "mission.think" => think_ability::description(),
         // RFC-005 v3.2 A1–A8 — media abilities. `media_abilities`
         // owns the single source of truth (the `ABILITIES` table);
         // the projection here is one Option lookup, no per-name
@@ -1534,18 +1541,20 @@ pub fn description_for(name: &str) -> &'static str {
         // chooses to advertise them) live behind `hub.openai.*`,
         // queried through `federation.resolve` — the device daemon
         // never pre-registers a `hub.*` name.
-        "device.openai.chat_completions" => {
+        "openai.chat_completions" => {
             "OpenAI-compatible /v1/chat/completions served by the \
-             device daemon. Forwards a chat-completion request to a \
-             host-local chat-base ability (`<agent>.chat`) and \
+             device daemon. Requires `request.model` to be a canonical \
+             agent-owned chat Ability URA, forwards the request to that \
+             host-local chat-base ability (`<agent>.chat`), and then \
              projects the streaming/non-streaming reply into \
              OpenAI's response shape."
         }
-        "device.openai.list_models" => {
+        "openai.list_models" => {
             "OpenAI-compatible /v1/models served by the device daemon. \
              Returns every host-local chat-base ability \
              (`<agent>.chat`) the calling identity has dispatch grants \
-             on, projected as OpenAI `Model` objects."
+             on, projected as OpenAI `Model` objects whose `id` is the \
+             canonical agent-owned chat Ability URA."
         }
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         // `<user>.api_key.{create,list,revoke}` — user-rooted
@@ -1597,102 +1606,101 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
     }
 
     match name {
-        "device.observe.health" => ping::input_schema(),
-        "device.observe.network_health" => network_health_ability::input_schema(),
-        "device.policy.evaluate" => policy_ability::evaluate_input_schema(),
-        "device.policy.simulate" => policy_ability::simulate_input_schema(),
-        "device.session.list" => session_ability::list_input_schema(),
-        "device.session.attach" => session_ability::attach_input_schema(),
-        "device.consent.subscribe" => permission_ability::subscribe_input_schema(),
-        "device.consent.decide" => permission_ability::decide_input_schema(),
-        "device.consent.list_pending" => permission_ability::list_pending_input_schema(),
-        "device.discuss.create" => discuss_ability::create_input_schema(),
-        "device.discuss.post" => discuss_ability::post_input_schema(),
-        "device.discuss.subscribe" => discuss_ability::subscribe_input_schema(),
-        "device.discuss.list_turns" => discuss_ability::list_turns_input_schema(),
-        "device.schedule.add" => schedule_ability::add_input_schema(),
-        "device.schedule.list" => schedule_ability::list_input_schema(),
-        "device.schedule.remove" => schedule_ability::remove_input_schema(),
-        "device.schedule.enable" => schedule_ability::enable_input_schema(),
-        "device.loop.create" => loop_ability::create_input_schema(),
-        "device.loop.status" => loop_ability::status_input_schema(),
-        "device.loop.subscribe" => loop_ability::subscribe_input_schema(),
-        "device.loop.cancel" => loop_ability::cancel_input_schema(),
-        "device.skill.install" => skill_install_ability::install_input_schema(),
-        "device.skill.remove" => skill_install_ability::remove_input_schema(),
-        "device.skill.upgrade" => skill_install_ability::upgrade_input_schema(),
-        "device.mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
-        "device.mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_input_schema(),
-        "device.a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
-        "device.a2a.bridge.send_task" => a2a_bridge_ability::send_task_input_schema(),
-        "device.a2a.client.send_task" => a2a_client_ability::send_task_input_schema(),
-        "device.mcp.client.list" => mcp_client_ability::list_input_schema(),
-        "device.mcp.client.call" => mcp_client_ability::call_input_schema(),
-        "device.agent.list" => agent_list_ability::list_agents_input_schema(),
+        "observe.health" => ping::input_schema(),
+        "observe.network_health" => network_health_ability::input_schema(),
+        "policy.evaluate" => policy_ability::evaluate_input_schema(),
+        "policy.simulate" => policy_ability::simulate_input_schema(),
+        "session.list" => session_ability::list_input_schema(),
+        "session.attach" => session_ability::attach_input_schema(),
+        "consent.subscribe" => permission_ability::subscribe_input_schema(),
+        "consent.decide" => permission_ability::decide_input_schema(),
+        "consent.list_pending" => permission_ability::list_pending_input_schema(),
+        "discuss.create" => discuss_ability::create_input_schema(),
+        "discuss.post" => discuss_ability::post_input_schema(),
+        "discuss.subscribe" => discuss_ability::subscribe_input_schema(),
+        "discuss.list_turns" => discuss_ability::list_turns_input_schema(),
+        "schedule.add" => schedule_ability::add_input_schema(),
+        "schedule.list" => schedule_ability::list_input_schema(),
+        "schedule.remove" => schedule_ability::remove_input_schema(),
+        "schedule.enable" => schedule_ability::enable_input_schema(),
+        "loop.create" => loop_ability::create_input_schema(),
+        "loop.status" => loop_ability::status_input_schema(),
+        "loop.subscribe" => loop_ability::subscribe_input_schema(),
+        "loop.cancel" => loop_ability::cancel_input_schema(),
+        "skill.install" => skill_install_ability::install_input_schema(),
+        "skill.remove" => skill_install_ability::remove_input_schema(),
+        "skill.upgrade" => skill_install_ability::upgrade_input_schema(),
+        "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
+        "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_input_schema(),
+        "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
+        "a2a.bridge.send_task" => a2a_bridge_ability::send_task_input_schema(),
+        "a2a.client.send_task" => a2a_client_ability::send_task_input_schema(),
+        "mcp.client.list" => mcp_client_ability::list_input_schema(),
+        "mcp.client.call" => mcp_client_ability::call_input_schema(),
+        "agent.list" => agent_list_ability::list_agents_input_schema(),
         plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_input_schema(),
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_input_schema(),
-        "device.meta.describe" => meta_ability::describe_input_schema(),
-        "device.meta.list_abilities" => meta_ability::list_abilities_input_schema(),
-        "device.mission.run" => mission_ability::run_input_schema(),
-        "device.mission.track" => mission_ability::track_input_schema(),
-        "device.mission.cancel" => mission_ability::cancel_input_schema(),
+        "meta.describe" => meta_ability::describe_input_schema(),
+        "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
+        "mission.run" => mission_ability::run_input_schema(),
+        "mission.track" => mission_ability::track_input_schema(),
+        "mission.cancel" => mission_ability::cancel_input_schema(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
-        "device.fs.read" => fs_ability::input_schema_read(),
-        "device.fs.write" => fs_ability::input_schema_write(),
-        "device.fs.list" => fs_ability::input_schema_list(),
-        "device.fs.edit" => fs_edit_ability::input_schema(),
-        "device.process.exec" => process_exec_ability::input_schema(),
-        "device.shell.run" => shell_run_ability::input_schema(),
-        "device.http.request" => http_request_ability::input_schema(),
-        "device.invocation.history.list" => invocation_history_ability::list_history_input_schema(),
-        "device.invocation.history.get" => invocation_history_ability::get_history_input_schema(),
-        "device.invocation.trace.get" => invocation_history_ability::get_trace_input_schema(),
-        "device.invocation.history.path" => invocation_history_ability::get_path_input_schema(),
-        "device.terminal.create" => pty_lifecycle_ability::input_schema_create(),
-        "device.terminal.list" => pty_lifecycle_ability::input_schema_list(),
-        "device.terminal.close" => pty_lifecycle_ability::input_schema_close(),
-        "device.terminal.attach" => pty_attach_ability::input_schema(),
-        "device.terminal.input" => pty_io_ability::input_input_schema(),
-        "device.terminal.read" => pty_io_ability::read_input_schema(),
-        "device.terminal.resize" => pty_io_ability::resize_input_schema(),
-        "device.fs.transfer" => file_transfer_ability::input_schema(),
-        "device.agent.start" => agent_lifecycle_ability::start_agent_input_schema(),
-        "device.agent.stop" => agent_lifecycle_ability::stop_agent_input_schema(),
-        "device.agent.refresh" => agent_lifecycle_ability::refresh_agents_input_schema(),
-        "device.node.list" => device_ops_ability::list_nodes_input_schema(),
-        "device.node.describe" => device_ops_ability::describe_node_input_schema(),
-        "device.node.remove" => device_ops_ability::remove_node_input_schema(),
-        "device.ability.deploy" => device_ops_ability::deploy_ability_input_schema(),
-        "device.ability.uninstall" => device_ops_ability::uninstall_ability_input_schema(),
-        "device.remote.exec" => device_ops_ability::exec_remote_input_schema(),
-        "device.node.register" => device_ops_ability::register_self_input_schema(),
-        "device.node.deregister" => device_ops_ability::deregister_self_input_schema(),
-        "device.mission.discuss_round" => orchestration_ability::discuss_round_input_schema(),
-        "device.voice.create_call" => voice_call_ability::create_call_input_schema(),
-        "device.voice.show_call" => voice_call_ability::show_call_input_schema(),
-        "device.voice.join_call" => voice_call_ability::join_call_input_schema(),
-        "device.voice.leave_call" => voice_call_ability::leave_call_input_schema(),
-        "device.voice.end_call" => voice_call_ability::end_call_input_schema(),
-        "device.voice.watch_call" => voice_call_ability::watch_call_input_schema(),
-        "device.voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
-        "device.voice.list_calls" => voice_call_ability::list_calls_input_schema(),
-        // RFC-012 §RemoteWebSurface — device.browser.* family.
-        "device.browser.open_session" => browser_session_ability::open_session_input_schema(),
-        "device.browser.send_input" => browser_session_ability::send_input_input_schema(),
-        "device.browser.capture_viewport" => {
-            browser_session_ability::capture_viewport_input_schema()
-        }
-        "device.browser.close_session" => browser_session_ability::close_session_input_schema(),
-        "device.admin.status" => admin_status_ability::input_schema(),
-        "device.ability.publish" => ability_publish_ability::publish_input_schema(),
-        "device.ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
-        "device.skill.publish" => skill_publish_ability::publish_input_schema(),
-        "device.skill.unpublish" => skill_publish_ability::unpublish_input_schema(),
-        "device.skill.list" => skill_publish_ability::list_input_schema(),
-        "device.skill.tree" => skill_publish_ability::tree_input_schema(),
-        "device.skill.read_file" => skill_publish_ability::read_file_input_schema(),
-        "device.skill.write_file" => skill_publish_ability::write_file_input_schema(),
-        "device.mission.think" => think_ability::input_schema(),
+        "fs.read" => fs_ability::input_schema_read(),
+        "fs.write" => fs_ability::input_schema_write(),
+        "fs.stat" => fs_ability::input_schema_stat(),
+        "fs.list" => fs_ability::input_schema_list(),
+        "fs.edit" => fs_edit_ability::input_schema(),
+        "process.exec" => process_exec_ability::input_schema(),
+        "shell.run" => shell_run_ability::input_schema(),
+        "http.request" => http_request_ability::input_schema(),
+        "invocation.history.list" => invocation_history_ability::list_history_input_schema(),
+        "invocation.history.get" => invocation_history_ability::get_history_input_schema(),
+        "invocation.trace.get" => invocation_history_ability::get_trace_input_schema(),
+        "invocation.history.path" => invocation_history_ability::get_path_input_schema(),
+        "terminal.create" => pty_lifecycle_ability::input_schema_create(),
+        "terminal.list" => pty_lifecycle_ability::input_schema_list(),
+        "terminal.close" => pty_lifecycle_ability::input_schema_close(),
+        "terminal.attach" => pty_attach_ability::input_schema(),
+        "terminal.input" => pty_io_ability::input_input_schema(),
+        "terminal.read" => pty_io_ability::read_input_schema(),
+        "terminal.resize" => pty_io_ability::resize_input_schema(),
+        "fs.transfer" => file_transfer_ability::input_schema(),
+        "agent.start" => agent_lifecycle_ability::start_agent_input_schema(),
+        "agent.stop" => agent_lifecycle_ability::stop_agent_input_schema(),
+        "agent.refresh" => agent_lifecycle_ability::refresh_agents_input_schema(),
+        "node.list" => device_ops_ability::list_nodes_input_schema(),
+        "node.describe" => device_ops_ability::describe_node_input_schema(),
+        "node.remove" => device_ops_ability::remove_node_input_schema(),
+        "ability.deploy" => device_ops_ability::deploy_ability_input_schema(),
+        "ability.uninstall" => device_ops_ability::uninstall_ability_input_schema(),
+        "remote.exec" => device_ops_ability::exec_remote_input_schema(),
+        "node.register" => device_ops_ability::register_self_input_schema(),
+        "node.deregister" => device_ops_ability::deregister_self_input_schema(),
+        "mission.discuss_round" => orchestration_ability::discuss_round_input_schema(),
+        "voice.create_call" => voice_call_ability::create_call_input_schema(),
+        "voice.show_call" => voice_call_ability::show_call_input_schema(),
+        "voice.join_call" => voice_call_ability::join_call_input_schema(),
+        "voice.leave_call" => voice_call_ability::leave_call_input_schema(),
+        "voice.end_call" => voice_call_ability::end_call_input_schema(),
+        "voice.watch_call" => voice_call_ability::watch_call_input_schema(),
+        "voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
+        "voice.list_calls" => voice_call_ability::list_calls_input_schema(),
+        // RFC-012 §RemoteWebSurface — browser.* family.
+        "browser.open_session" => browser_session_ability::open_session_input_schema(),
+        "browser.send_input" => browser_session_ability::send_input_input_schema(),
+        "browser.capture_viewport" => browser_session_ability::capture_viewport_input_schema(),
+        "browser.close_session" => browser_session_ability::close_session_input_schema(),
+        "admin.status" => admin_status_ability::input_schema(),
+        "ability.publish" => ability_publish_ability::publish_input_schema(),
+        "ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
+        "skill.publish" => skill_publish_ability::publish_input_schema(),
+        "skill.unpublish" => skill_publish_ability::unpublish_input_schema(),
+        "skill.list" => skill_publish_ability::list_input_schema(),
+        "skill.tree" => skill_publish_ability::tree_input_schema(),
+        "skill.read_file" => skill_publish_ability::read_file_input_schema(),
+        "skill.write_file" => skill_publish_ability::write_file_input_schema(),
+        "mission.think" => think_ability::input_schema(),
         // RFC-005 v3.2 A1–A8 — media abilities. Same single-source
         // -of-truth pattern as `description_for` above.
         n if media_abilities::input_schema(n).is_some() => {
@@ -1705,13 +1713,28 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         // the OpenAI request envelopes the handler accepts (chat
         // completion body, plus an `auth_token` bearer for the
         // device-local api_key store).
-        "device.openai.chat_completions" => serde_json::json!({
+        "openai.chat_completions" => serde_json::json!({
             "type": "object",
             "required": ["request"],
             "properties": {
                 "request": {
                     "type": "object",
-                    "description": "OpenAI-compatible /v1/chat/completions request body."
+                    "description": "OpenAI-compatible /v1/chat/completions request body. The `model` field must be a canonical agent-owned chat Ability URA.",
+                    "required": ["model", "messages"],
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "description": "Canonical agent-owned chat Ability URA, e.g. easynet:///r/easynet.run/ability/alice.codex.chat."
+                        },
+                        "messages": {
+                            "type": "array",
+                            "description": "OpenAI-compatible chat messages array."
+                        },
+                        "stream": {
+                            "type": "boolean",
+                            "description": "When true, return OpenAI-compatible streaming chunks."
+                        }
+                    }
                 },
                 "auth_token": {
                     "type": "string",
@@ -1719,7 +1742,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
                 }
             }
         }),
-        "device.openai.list_models" => serde_json::json!({
+        "openai.list_models" => serde_json::json!({
             "type": "object",
             "properties": {
                 "auth_token": {
@@ -1847,59 +1870,59 @@ mod tests {
 
         match name {
             // ── Introspection ───────────────────────────────────
-            "device.meta.describe"
-            | "device.meta.list_abilities"
+            "meta.describe"
+            | "meta.list_abilities"
             // `mission.track` reads the persisted run dir of a
             // prior mission.run. Pure read of derived state →
             // Introspection, same logic that puts schedule.list
             // / loop.status here.
-            | "device.mission.track"
-            | "device.mcp.bridge.list_tools"
+            | "mission.track"
+            | "mcp.bridge.list_tools"
             // mcp.client.list — aggregate read of every configured
             // upstream MCP server's tools/list. No mutation;
             // belongs with the introspection-layer reads.
-            | "device.mcp.client.list"
-            | "device.a2a.bridge.list_skills"
-            | "device.agent.list"
-            | "device.invocation.history.list"
-            | "device.invocation.history.get"
-            | "device.invocation.trace.get"
-            | "device.invocation.history.path"
-            | "device.terminal.list"
-            | "device.session.list"
-            | "device.consent.list_pending"
+            | "mcp.client.list"
+            | "a2a.bridge.list_skills"
+            | "agent.list"
+            | "invocation.history.list"
+            | "invocation.history.get"
+            | "invocation.trace.get"
+            | "invocation.history.path"
+            | "terminal.list"
+            | "session.list"
+            | "consent.list_pending"
             // RFC-005 v3.2 A9 — meta.list_resources is a pure read of
             // the local resources table (same shape as
             // meta.list_abilities); Introspection by definition.
-            | "device.meta.list_resources"
+            | "meta.list_resources"
             // discuss.list_turns — RPC snapshot of a room transcript.
             // Pure read; same Introspection class as schedule.list.
-            | "device.discuss.list_turns"
-            | "device.schedule.list"
-            | "device.loop.status"
+            | "discuss.list_turns"
+            | "schedule.list"
+            | "loop.status"
             // skill.list / tree / read_file — private skill package
             // inventory and source inspection. Pure reads.
-            | "device.skill.list"
-            | "device.skill.tree"
-            | "device.skill.read_file" => Some(AbilityLayer::Introspection),
+            | "skill.list"
+            | "skill.tree"
+            | "skill.read_file" => Some(AbilityLayer::Introspection),
             // ── Control / decision ──────────────────────────────
-            "device.policy.evaluate"
-            | "device.policy.simulate"
-            | "device.consent.decide"
-            | "device.consent.subscribe" => Some(AbilityLayer::Control),
+            "policy.evaluate"
+            | "policy.simulate"
+            | "consent.decide"
+            | "consent.subscribe" => Some(AbilityLayer::Control),
             // ── Observation ─────────────────────────────────────
-            "device.observe.health"
-            | "device.observe.network_health"
-            | "device.admin.status"
-            | "device.plugin.status" => Some(AbilityLayer::Observation),
+            "observe.health"
+            | "observe.network_health"
+            | "admin.status"
+            | "plugin.status" => Some(AbilityLayer::Observation),
             // ── Operational (per-feature business verbs) ────────
-            "device.session.attach"
-            | "device.agent.start"
-            | "device.agent.stop"
-            | "device.agent.refresh"
-            | "device.skill.install"
-            | "device.skill.remove"
-            | "device.skill.upgrade"
+            "session.attach"
+            | "agent.start"
+            | "agent.stop"
+            | "agent.refresh"
+            | "skill.install"
+            | "skill.remove"
+            | "skill.upgrade"
             // device-hosted node/ability/remote operations. list_nodes /
             // describe_node read state but conceptually they sit
             // with the federation-tier *operations* (peer
@@ -1910,92 +1933,92 @@ mod tests {
             // verbs (remove_node, deploy_ability, uninstall_ability,
             // exec_remote, register_self, deregister_self)
             // mutate state — Operational unambiguous.
-            | "device.node.list"
-            | "device.node.describe"
-            | "device.node.remove"
-            | "device.ability.deploy"
-            | "device.ability.uninstall"
-            | "device.remote.exec"
-            | "device.node.register"
-            | "device.node.deregister"
-            // device.terminal.* shell-session lifecycle abilities.
+            | "node.list"
+            | "node.describe"
+            | "node.remove"
+            | "ability.deploy"
+            | "ability.uninstall"
+            | "remote.exec"
+            | "node.register"
+            | "node.deregister"
+            // terminal.* shell-session lifecycle abilities.
             // create / close mutate session state; input / read /
             // resize push or pull data over an established session;
             // attach binds the bidi data plane. All operational
             // because each call IS the work for that session step.
-            | "device.terminal.attach"
-            | "device.terminal.create"
-            | "device.terminal.close"
-            | "device.terminal.input"
-            | "device.terminal.read"
-            | "device.terminal.resize"
+            | "terminal.attach"
+            | "terminal.create"
+            | "terminal.close"
+            | "terminal.input"
+            | "terminal.read"
+            | "terminal.resize"
             // mission.discuss_round — sub-turn orchestration
             // ability. Same Operational class as easynet.run /
             // mission.run because the ability IS the work
             // (running one human-bracketed sub-turn of a
             // multi-agent discussion).
-            | "device.mission.discuss_round"
+            | "mission.discuss_round"
             // mission.think — long-running worker+judge loop. Same
             // Operational rationale: the ability IS the work
             // (running an N-cycle reflective loop with two
             // independent chat sessions).
-            | "device.mission.think"
+            | "mission.think"
             // voice.* call signaling abilities. State-mutating
             // (create / join / leave / end / report_metrics) and
             // state-reading (show / watch) — Operational by intent
             // because the call IS the work. Same shape as
             // discuss.subscribe / loop.subscribe sit here.
-            | "device.voice.create_call"
-            | "device.voice.show_call"
-            | "device.voice.join_call"
-            | "device.voice.leave_call"
-            | "device.voice.end_call"
-            | "device.voice.watch_call"
-            | "device.voice.report_metrics"
-            | "device.voice.list_calls"
+            | "voice.create_call"
+            | "voice.show_call"
+            | "voice.join_call"
+            | "voice.leave_call"
+            | "voice.end_call"
+            | "voice.watch_call"
+            | "voice.report_metrics"
+            | "voice.list_calls"
             // mcp.bridge.call_tool / a2a.bridge.send_task — both
             // dispatch into another local ability; the side effects
             // come from that dispatch, not the bridge itself. Sit
             // with the operational verbs because the call surface
             // IS the work.
-            | "device.mcp.bridge.call_tool"
+            | "mcp.bridge.call_tool"
             // mcp.client.call — outbound mirror of bridge.call_tool.
             // Same operational classification: dispatching
             // delegates side effects to the upstream tool.
-            | "device.mcp.client.call"
-            | "device.a2a.bridge.send_task"
+            | "mcp.client.call"
+            | "a2a.bridge.send_task"
             // a2a.client.send_task — outbound mirror of bridge.send_task.
             // Same operational classification: dispatching crosses
             // a wire and mutates the remote node's state.
-            | "device.a2a.client.send_task"
-            | "device.discuss.create"
-            | "device.discuss.post"
-            | "device.discuss.subscribe"
-            | "device.schedule.add"
-            | "device.schedule.remove"
-            | "device.schedule.enable"
-            | "device.loop.create"
-            | "device.loop.subscribe"
-            | "device.loop.cancel"
+            | "a2a.client.send_task"
+            | "discuss.create"
+            | "discuss.post"
+            | "discuss.subscribe"
+            | "schedule.add"
+            | "schedule.remove"
+            | "schedule.enable"
+            | "loop.create"
+            | "loop.subscribe"
+            | "loop.cancel"
             // EAL orchestration. easynet.run / mission.run compile
             // and execute a program (potentially multi-step,
             // potentially cross-agent); easynet.cancel mutates the
             // run state of an in-flight mission. Same Operational
             // class as loop.{create,cancel} for the same reason —
             // the ability IS the work.
-            | "device.mission.run"
-            | "device.mission.cancel"
+            | "mission.run"
+            | "mission.cancel"
             // ability.publish / ability.unpublish / skill.publish /
             // skill.unpublish — curator-driven sinks for judge-validated
             // experience. State-mutating (writes/removes manifests under
             // an agent's workspace). Operational because the ability IS
-            // the work, in the same class as device.ability.deploy /
-            // device.skill.install.
-            | "device.ability.publish"
-            | "device.ability.unpublish"
-            | "device.skill.publish"
-            | "device.skill.unpublish"
-            | "device.skill.write_file"
+            // the work, in the same class as ability.deploy /
+            // skill.install.
+            | "ability.publish"
+            | "ability.unpublish"
+            | "skill.publish"
+            | "skill.unpublish"
+            | "skill.write_file"
             // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
             // filesystem half. fs.read is technically read-only
             // but it returns business content, not just metadata
@@ -2003,32 +2026,33 @@ mod tests {
             // mutates state. fs.list returns directory metadata
             // but its purpose is to enable subsequent fs.read /
             // fs.write — Operational by intent.
-            | "device.fs.read"
-            | "device.fs.write"
-            | "device.fs.list"
-            | "device.fs.edit"
+            | "fs.read"
+            | "fs.write"
+            | "fs.stat"
+            | "fs.list"
+            | "fs.edit"
             // AXIOM Tier 2.5 execution members. process.exec
             // and shell.run are unconditionally Operational —
             // they spawn processes that may do anything; even
             // with the 8-stage shellguard pipeline gating
             // shell.run dispatch, the layer classification
             // tracks privilege not invocation safety.
-            | "device.process.exec"
-            | "device.shell.run"
-            | "device.http.request"
-            | "device.fs.transfer"
+            | "process.exec"
+            | "shell.run"
+            | "http.request"
+            | "fs.transfer"
             // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
             // Operational by intent: each one drives an external
             // device (mic / camera / speaker / screen) or remote
             // model (voice / asr). Subject = resource_ura.
-            | "device.mic.subscribe"
-            | "device.camera.subscribe"
-            | "device.camera.snapshot"
-            | "device.screen.subscribe"
-            | "device.screen.snapshot"
-            | "device.speaker.publish"
-            | "device.voice.subscribe"
-            | "device.voice.transcribe"
+            | "mic.subscribe"
+            | "camera.subscribe"
+            | "camera.snapshot"
+            | "screen.subscribe"
+            | "screen.snapshot"
+            | "speaker.publish"
+            | "voice.subscribe"
+            | "voice.transcribe"
             // RFC-006-C v0.1 — device-local OpenAI protocol shim.
             // chat_completions IS the work (forwards a generation
             // request to a host-local chat-base ability);
@@ -2036,22 +2060,22 @@ mod tests {
             // but its operational role is "answer /v1/models for
             // the OpenAI surface" — both are Operational rather
             // than Introspection.
-            | "device.openai.chat_completions"
-            | "device.openai.list_models"
-            // RFC-012 §RemoteWebSurface — device.browser.* family.
+            | "openai.chat_completions"
+            | "openai.list_models"
+            // RFC-012 §RemoteWebSurface — browser.* family.
             // Operational by intent: opening a WebView session,
             // streaming frames, injecting input, closing the
             // session all drive an external surface (the user's
             // system WebView) under the caller's identity. Same
             // class as media/* verbs.
-            | "device.browser.open_session"
-            | "device.browser.send_input"
-            | "device.browser.capture_viewport"
-            | "device.browser.close_session"
+            | "browser.open_session"
+            | "browser.send_input"
+            | "browser.capture_viewport"
+            | "browser.close_session"
             // Plugin lifecycle reload mutates the daemon's dynamic
             // ability registration table after an install/update/remove
             // transaction has already committed on disk.
-            | "device.plugin.reload"
+            | "plugin.reload"
             => Some(AbilityLayer::Operational),
             // `<user>.api_key.{create,list,revoke}` — user-rooted
             // credential-lifecycle verbs. `<user>` is the active
@@ -2106,9 +2130,9 @@ mod tests {
         // classify as Introspection. A regression that moved one of
         // them to a different layer would fragment the discovery story.
         for name in [
-            "device.meta.list_abilities",
-            "device.mcp.bridge.list_tools",
-            "device.a2a.bridge.list_skills",
+            "meta.list_abilities",
+            "mcp.bridge.list_tools",
+            "a2a.bridge.list_skills",
         ] {
             assert_eq!(
                 classify_ability(name),
@@ -2120,15 +2144,15 @@ mod tests {
 
     #[test]
     fn build_registry_is_non_empty_and_includes_ping() {
-        // Every v1 daemon publishes at least `device.observe.health` so a
+        // Every v1 daemon publishes at least `observe.health` so a
         // peer wanting to test reachability has a known ability.
         // A regression that emptied this list would silently break
         // discovery + smoke tests.
         let reg = build_registry();
         let names = reg.list_abilities();
         assert!(
-            names.iter().any(|n| n == "device.observe.health"),
-            "device.observe.health must be in the v1 registry; got {names:?}"
+            names.iter().any(|n| n == "observe.health"),
+            "observe.health must be in the v1 registry; got {names:?}"
         );
     }
 
@@ -2343,25 +2367,25 @@ mod tests {
         let names: std::collections::BTreeSet<String> = reg.list_abilities().into_iter().collect();
         let must_have = [
             // Filesystem half
-            "device.fs.read",
-            "device.fs.write",
-            "device.fs.list",
-            "device.fs.edit",
+            "fs.read",
+            "fs.write",
+            "fs.list",
+            "fs.edit",
             // Execution half
-            "device.process.exec",
-            "device.shell.run",
+            "process.exec",
+            "shell.run",
             // Outbound network
-            "device.http.request",
+            "http.request",
             // Interactive PTY trio
-            "device.terminal.create",
-            "device.terminal.list",
-            "device.terminal.close",
-            "device.terminal.attach",
+            "terminal.create",
+            "terminal.list",
+            "terminal.close",
+            "terminal.attach",
             // Operator surface added in slice 16
-            "device.admin.status",
-            "device.agent.start",
-            "device.agent.stop",
-            "device.agent.refresh",
+            "admin.status",
+            "agent.start",
+            "agent.stop",
+            "agent.refresh",
         ];
         let missing: Vec<&str> = must_have
             .iter()
@@ -2380,14 +2404,14 @@ mod tests {
     #[test]
     fn published_abilities_includes_skill_list_with_real_metadata() {
         // Load-bearing for the EasyNet frontend's Skills page: the
-        // backend invokes `device.skill.list` against the target node.
+        // backend invokes `skill.list` against the target node.
         // A regression that dropped it from `published_abilities()`
         // would silently empty the Skills page across the device set.
         let metas = published_abilities();
         let skill = metas
             .iter()
-            .find(|m| m.name == "device.skill.list")
-            .expect("device.skill.list must be in published_abilities");
+            .find(|m| m.name == "skill.list")
+            .expect("skill.list must be in published_abilities");
         // Description must NOT be the unknown-name fallback.
         // `(system ability)` is what `description_for` returns when
         // an ability is added without an arm here; pin against it so
@@ -2395,7 +2419,7 @@ mod tests {
         // test instead of shipping a generic blurb to the frontend.
         assert_ne!(
             skill.description, "(system ability)",
-            "device.skill.list must have a real description, not the fallback"
+            "skill.list must have a real description, not the fallback"
         );
         // Input schema must be a JSON Schema object (the wire shape
         // axon-runtime stores). Empty `{}` would also pass `is_object`,
@@ -2408,7 +2432,7 @@ mod tests {
         );
         assert!(
             !skill.hints.streaming_only && !skill.hints.bidi_only,
-            "device.skill.list must stay unary-only; got hints {:?}",
+            "skill.list must stay unary-only; got hints {:?}",
             skill.hints
         );
     }
@@ -2418,7 +2442,7 @@ mod tests {
         let plugin_leaks: Vec<String> = published_system_abilities()
             .into_iter()
             .map(|meta| meta.name)
-            .filter(|name| name.starts_with("device.remote_desktop."))
+            .filter(|name| name.starts_with("remote_desktop."))
             .collect();
         assert!(
             plugin_leaks.is_empty(),
@@ -2430,19 +2454,19 @@ mod tests {
     fn published_abilities_marks_server_stream_routes_as_streaming_only() {
         let metas = published_abilities();
         let expected = [
-            "device.consent.subscribe",
-            "device.discuss.subscribe",
-            "device.loop.subscribe",
-            "device.session.attach",
-            "device.mic.subscribe",
-            "device.camera.subscribe",
-            "device.screen.subscribe",
-            "device.voice.subscribe",
+            "consent.subscribe",
+            "discuss.subscribe",
+            "loop.subscribe",
+            "session.attach",
+            "mic.subscribe",
+            "camera.subscribe",
+            "screen.subscribe",
+            "voice.subscribe",
         ];
         #[cfg(feature = "remote-desktop")]
         let expected = {
             let mut expected = expected.to_vec();
-            expected.push("device.remote_desktop.watch_events");
+            expected.push("remote_desktop.watch_events");
             expected
         };
         #[cfg(not(feature = "remote-desktop"))]
@@ -2464,15 +2488,15 @@ mod tests {
     fn published_abilities_marks_bidi_routes_as_bidi_only() {
         let metas = published_abilities();
         let expected = [
-            "device.fs.transfer",
-            "device.terminal.attach",
-            "device.speaker.publish",
-            "device.voice.transcribe",
+            "fs.transfer",
+            "terminal.attach",
+            "speaker.publish",
+            "voice.transcribe",
         ];
         #[cfg(feature = "remote-desktop")]
         let expected = {
             let mut expected = expected.to_vec();
-            expected.push("device.remote_desktop.attach");
+            expected.push("remote_desktop.attach");
             expected
         };
         #[cfg(not(feature = "remote-desktop"))]
@@ -2709,38 +2733,23 @@ mod tests {
         assert!(path.exists(), "keyring file must have been auto-created");
     }
 
-    /// **M5 lint** — every catalogue entry must be partitioned
-    /// under one of the four owner-prefix shapes from the
-    /// truth-table spec: `device.*`, `hub.*`, `<agent-id>.*`,
-    /// `<user-id>.*`. A new system ability that lands without
-    /// a `device.` / `hub.` prefix fails this test, forcing the
-    /// author to either (a) fix the registration site or (b)
-    /// argue with the spec. The closed sets of legacy roots
-    /// (`fs.`, `01HUB.`, …) MUST stay drained — M3
-    /// already deleted the registrations, M5 pins them.
+    /// RFC-005 lint: public catalogue names are owner-local names.
+    /// Device ownership is carried by `owner_ura` / `ability_ura`, so
+    /// catalogue rows must not expose implementation-local owner prefixes such
+    /// as `fs.read`.
     #[test]
-    fn published_catalogue_uses_only_canonical_prefixes() {
-        const FORBIDDEN_LEGACY_HEADS: &[&str] = &[
-            "fs", "http", "shell", "process", "observe", "admin", "easynet", "meta", "mission",
-            "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera", "mic",
-            "screen", "speaker", "voice", "skill", "consent", "01HUB",
-        ];
+    fn published_catalogue_does_not_duplicate_device_owner_prefix() {
         let names: Vec<String> = published_system_abilities()
             .into_iter()
             .map(|meta| meta.name)
             .collect();
-        let mut violations: Vec<String> = Vec::new();
-        for n in &names {
-            if let Some((head, _)) = n.split_once('.') {
-                if FORBIDDEN_LEGACY_HEADS.contains(&head) {
-                    violations.push(n.clone());
-                }
-            }
-        }
+        let violations: Vec<String> = names
+            .into_iter()
+            .filter(|name| name.starts_with("device."))
+            .collect();
         assert!(
             violations.is_empty(),
-            "post-M3 catalogue must use canonical prefixes only; \
-             found legacy-prefixed names: {violations:?}"
+            "RFC-005 catalogue must not duplicate device ownership in public names: {violations:?}"
         );
     }
 

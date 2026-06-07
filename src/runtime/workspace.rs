@@ -13,35 +13,17 @@
 //
 // Why "projection"
 // ----------------
-// Before PR-3b.3 this file was a creator: `ensure_workspace` built
-// the whole tree from the fat `AgentEntry`. That put policy ("which
-// fields of an agent become which files on disk?") in two places —
-// here and inside AgentDirectory — with nothing pinning the two to
-// one truth. The reversal keeps the agent root a pure source of
-// truth (agent.toml + abilities/ + skills/ + memory/ + runs/ +
-// mcp_servers.json + .env) and makes this module derive the
-// runtime-native files from that source on every invocation. A
-// caller that has mutated `agent.toml` and wants a downstream
-// runtime to see the change re-runs the projection; no state lives
-// only in the derived files.
+// The agent root is the pure source of truth (agent.toml +
+// abilities/ + skills/ + memory/ + runs/ + mcp_servers.json + .env).
+// This module derives runtime-native files from that source on every
+// invocation. A caller that has mutated `agent.toml` and wants a
+// downstream runtime to see the change re-runs the projection; no
+// state lives only in the derived files.
 //
 // Entry points
 // ------------
-// * `ensure_from_directory(dir)` — new primary entry. Takes an
-//   `AgentDirectory` and writes the derived files into it.
-// * `ensure_workspace(name, entry)` — backcompat shim for callers
-//   that still hand over an `AgentEntry`. Resolves to an
-//   `AgentDirectory` (preferring `entry.root_path`, falling back to
-//   `config::agents_root().join(name)` per the consumer-side
-//   fallback rule) and delegates to `ensure_from_directory`.
-//
-// Why keep the shim
-// -----------------
-// PR-3b.3 constrains its blast radius to this file and the
-// dispatcher call site would otherwise be scope creep. Consumers
-// (`runtime::dispatch::send_to_agent_with_depth`, tests) continue
-// to hand over an `AgentEntry`; PR-3b.5 migrates them to hand over
-// an `AgentDirectory` directly and the shim goes away.
+// * `ensure_from_directory(dir)` — takes an `AgentDirectory` and
+//   writes the derived files into it.
 //
 // What this module owns / does NOT own
 // ------------------------------------
@@ -67,7 +49,6 @@ use std::path::{Path, PathBuf};
 use super::toml_escape::toml_basic_string;
 use crate::core::agent_spec::RuntimeKind;
 use crate::persistence::config;
-use crate::registry::agents::{AgentEntry, AgentType};
 use crate::runtime::directory::AgentDirectory;
 
 /// Project an `AgentDirectory` onto the runtime-native layout
@@ -194,91 +175,6 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
     write_ability_author_seed(&root, runtime)?;
 
     Ok(root)
-}
-
-/// Backcompat shim: resolve an `AgentEntry` to an `AgentDirectory`
-/// and delegate. The shim is the only place in this file that
-/// talks to the fat `AgentEntry` surface, so PR-3b.5 can remove
-/// it in one move once every caller has been migrated.
-///
-/// Resolution order:
-/// 1. `entry.root_path` — set on v2-migrated rows by
-///    `registry::agents::migrate_one_entry`.
-/// 2. `config::agents_root().join(agent_name)` — the fallback
-///    used when the row is still shaped as pure v2
-///    (`schema_version == 2`) but `root_path` hasn't been
-///    populated yet. The consumer-side fallback rule keeps
-///    PR-3b.3 from having to backport a writer-side fix to
-///    PR-3b.2. `agents_root()` itself folds over the
-///    new-vs-legacy `agents/` / `workspaces/` fallback from
-///    PR-0b.
-///
-/// If the resolved path does not yet carry an `agent.toml`, we
-/// materialise one from the `AgentEntry` via `spec_from_entry`.
-/// This is the second migration bridge — a v2 row whose on-disk
-/// spec has been deleted must still be usable; we reconstruct a
-/// minimal spec from the surviving registry fields and write
-/// it. Without this, the first dispatch after an `rm -rf`
-/// accident would fail with "agent.toml missing" even though
-/// every piece of data the spec carries is still present in the
-/// registry.
-pub fn ensure_workspace(agent_name: &str, entry: &AgentEntry) -> anyhow::Result<PathBuf> {
-    let root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(agent_name));
-
-    // Resolve or reconstruct the directory. The reconstruction
-    // path is rare (agent.toml deleted manually) but we cover
-    // it because the projection otherwise silently writes into
-    // a directory that `AgentDirectory::open` would refuse on
-    // the next CLI read — a confusing half-state.
-    let directory = if root.join("agent.toml").exists() {
-        AgentDirectory::open(&root)?
-    } else {
-        fs::create_dir_all(&root)?;
-        let spec = spec_from_entry(agent_name, entry);
-        // `AgentDirectory::create` refuses a pre-existing
-        // non-empty root without agent.toml (the partial-failure
-        // guard from PR-3b.1.5). That guard is what we want
-        // here too — if a previous crashed dispatch left
-        // subdirs but no spec, refuse and let the operator
-        // clean up rather than silently claiming the skeleton.
-        AgentDirectory::create(
-            &crate::runtime::directory::Location::Local { root: root.clone() },
-            spec,
-        )?
-    };
-
-    ensure_from_directory(&directory)
-}
-
-/// Reconstruct a minimal `AgentSpec` from the surviving
-/// `AgentEntry` fields. Used only by the backcompat shim when
-/// an agent's on-disk `agent.toml` has been deleted manually.
-/// Each mapping mirrors `registry::agents::migrate_one_entry`
-/// so a double-path (migration then reconstruction) yields the
-/// same spec.
-fn spec_from_entry(agent_name: &str, entry: &AgentEntry) -> crate::core::agent_spec::AgentSpec {
-    let runtime = match entry.agent_type {
-        AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
-        AgentType::Codex => RuntimeKind::Codex,
-        AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
-    };
-    let mut spec = crate::core::agent_spec::AgentSpec::new(agent_name, runtime);
-    spec.model = entry.model.clone();
-    // Match migration's "only persist non-default timeout" rule.
-    // Read the current default through the registry function rather
-    // than hardcoding so a default bump (5 min → 1 hour, 2026-04)
-    // does not silently turn this comparison into a "always persist"
-    // path.
-    if entry.timeout_secs != crate::registry::agents::default_timeout_for_new_rows() {
-        spec.timeout_secs = Some(entry.timeout_secs);
-    }
-    if let Some(label) = &entry.label {
-        spec.description = Some(label.clone());
-    }
-    spec
 }
 
 /// Legacy path helper retained for a small number of read-side
@@ -1101,187 +997,5 @@ mod tests {
             "codex config must carry model from spec; got:\n{codex_toml}"
         );
         cleanup(&root);
-    }
-
-    // ── ensure_workspace (shim) ──────────────────────────────────────────
-
-    use crate::facade::cli::test_support::HomeGuard;
-    use crate::registry::agents::{AgentEntry, AgentType};
-
-    #[test]
-    fn shim_resolves_entry_root_path_when_set() {
-        // A v2-migrated row carries `root_path`. The shim must
-        // prefer it over the default computation — otherwise a
-        // project-local agent whose root is outside the global
-        // tree would be projected into the wrong directory.
-        let _g = HomeGuard::new();
-        let root = std::env::temp_dir().join(format!(
-            "easynet-ws-shim-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0),
-        ));
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        entry.root_path = Some(root.clone());
-
-        let returned = ensure_workspace("alice", &entry).unwrap();
-        assert_eq!(returned, root, "shim must honour entry.root_path");
-        // Derived files must be under the chosen root.
-        assert!(root.join("CLAUDE.md").is_file());
-        cleanup(&root);
-    }
-
-    #[test]
-    fn shim_falls_back_to_agents_root_when_entry_has_no_root_path() {
-        // Fresh v2 rows (written by today's `run_add`, which
-        // does not yet populate `root_path`) still work because
-        // the shim falls back to `agents_root().join(name)`.
-        // This is the consumer-side fallback the PR-3b.2
-        // review flagged: rather than backport a writer-side
-        // fix, the consumer handles the gap.
-        let _g = HomeGuard::new();
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        assert!(entry.root_path.is_none());
-
-        let returned = ensure_workspace("alice", &entry).unwrap();
-        let expected = config::agents_root().join("alice");
-        assert_eq!(returned, expected);
-        assert!(expected.join("CLAUDE.md").is_file());
-        assert!(expected.join("agent.toml").is_file());
-        // The reconstructed spec must have the correct runtime;
-        // a silent mismatch here would dispatch to the wrong
-        // driver on the next call.
-        let spec =
-            AgentSpec::from_toml_str(&fs::read_to_string(expected.join("agent.toml")).unwrap())
-                .unwrap();
-        assert_eq!(spec.runtime, RuntimeKind::ClaudeCode);
-    }
-
-    #[test]
-    fn shim_reuses_existing_agent_toml_without_overwrite() {
-        // If the agent directory already has an `agent.toml`
-        // the shim must open it rather than create afresh. A
-        // create-on-every-dispatch would clobber user edits to
-        // the spec (e.g. a custom `description`).
-        let _g = HomeGuard::new();
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        // First call materialises agent.toml.
-        ensure_workspace("alice", &entry).unwrap();
-        let root = config::agents_root().join("alice");
-        let spec_path = root.join("agent.toml");
-        // Edit the spec on disk.
-        let mut spec = AgentSpec::from_toml_str(&fs::read_to_string(&spec_path).unwrap()).unwrap();
-        spec.description = Some("user-edited".into());
-        fs::write(&spec_path, spec.to_toml_string().unwrap()).unwrap();
-
-        // Second call must NOT overwrite the user's edit.
-        ensure_workspace("alice", &entry).unwrap();
-        let after = AgentSpec::from_toml_str(&fs::read_to_string(&spec_path).unwrap()).unwrap();
-        assert_eq!(
-            after.description.as_deref(),
-            Some("user-edited"),
-            "shim must not overwrite user edits to agent.toml"
-        );
-    }
-
-    /// Parity: the two paths that turn an `AgentEntry` into an
-    /// `AgentSpec` must produce the same mapping.
-    ///
-    /// * `spec_from_entry` (this file) — the reconstruction
-    ///   path inside the `ensure_workspace` shim, hit when
-    ///   `agent.toml` was deleted manually.
-    /// * `registry::agents::migrate_one_entry` — the v1→v2
-    ///   load-time migration path, hit once per legacy row.
-    ///
-    /// Both run on the same fat-field input. If one tightens a
-    /// field mapping (e.g. "carry labels longer than 64 chars
-    /// differently") without the other, a user who triggers
-    /// the shim's reconstruction branch gets a different spec
-    /// than one whose row was migrated at load time. That's
-    /// the heisenbug class this test pins.
-    ///
-    /// We compare via the serialized TOML rather than via
-    /// `AgentSpec` equality so a future field added to
-    /// `AgentSpec` is also guaranteed to survive both paths —
-    /// both sides must know about it.
-    #[test]
-    fn spec_from_entry_agrees_with_migrate_one_entry_mapping() {
-        let _g = HomeGuard::new();
-
-        // Build a fat v1-shaped entry with every mappable
-        // field populated so the parity test covers each
-        // mapping hop, not just the happy case.
-        let mut entry = AgentEntry::new(AgentType::Codex, Some("gpt-5".into()));
-        entry.label = Some("nightly auditor".into());
-        entry.timeout_secs = 900;
-
-        // Reconstruction path: spec_from_entry on the same
-        // input.
-        let spec_via_shim = spec_from_entry("alice", &entry);
-        let toml_via_shim = spec_via_shim.to_toml_string().unwrap();
-
-        // Migration path: seed a v1 registry carrying the same
-        // entry, load it (which triggers the migration + writes
-        // `agent.toml` under `agents_root()/alice/`), then read
-        // the `agent.toml` back.
-        let mut registry = crate::registry::agents::AgentRegistry::default();
-        registry.agents.insert("alice".into(), entry.clone());
-        // Write as v1 by force (schema_version=0) — the
-        // AgentEntry::new helper stamps v2, but we want the
-        // migration path to fire.
-        let mut v1_entry = entry.clone();
-        v1_entry.schema_version = 0;
-        v1_entry.root_path = None;
-        let mut v1_reg = crate::registry::agents::AgentRegistry::default();
-        v1_reg.agents.insert("alice".into(), v1_entry);
-        // Hand-serialize to bypass save_agents()'s validation
-        // (which would stamp v2 on write); the migration is
-        // what we're testing.
-        let json = serde_json::to_string_pretty(&v1_reg).unwrap();
-        let agents_path = config::state_dir().join("agents.json");
-        fs::create_dir_all(config::state_dir()).unwrap();
-        fs::write(&agents_path, json).unwrap();
-
-        // Trigger migration.
-        let loaded = crate::registry::agents::load_agents().unwrap();
-        let root = loaded.agents["alice"].root_path.as_ref().unwrap();
-        let toml_via_migrate = fs::read_to_string(root.join("agent.toml")).unwrap();
-
-        // Parse both back to AgentSpec and compare field-by-field
-        // rather than byte-by-byte; the two writers produce
-        // equivalent-but-possibly-different formatting (both
-        // correct TOML) and we care about semantic identity.
-        let spec_shim = AgentSpec::from_toml_str(&toml_via_shim).unwrap();
-        let spec_migrate = AgentSpec::from_toml_str(&toml_via_migrate).unwrap();
-        assert_eq!(
-            spec_shim, spec_migrate,
-            "spec_from_entry and migrate_one_entry must produce the same spec \
-             for the same AgentEntry input"
-        );
-    }
-
-    #[test]
-    fn shim_refuses_to_overwrite_partial_skeleton() {
-        // The partial-skeleton guard from PR-3b.1.5 must still
-        // fire through the shim. An operator whose earlier
-        // `agent new` crashed before writing agent.toml must
-        // not silently adopt the skeleton on the next
-        // dispatch. The guard lives in `AgentDirectory::create`
-        // and the shim reaches it through the "agent.toml
-        // missing + root exists non-empty" branch.
-        let _g = HomeGuard::new();
-        let root = config::agents_root().join("alice");
-        fs::create_dir_all(root.join("abilities")).unwrap();
-        fs::write(root.join(".env"), "").unwrap();
-        // No agent.toml. No root_path on entry, so the shim
-        // computes the same path.
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        let err = ensure_workspace("alice", &entry)
-            .expect_err("partial skeleton must be refused by shim path");
-        assert!(
-            format!("{err}").contains("half-finished") || format!("{err}").contains("previous")
-        );
     }
 }

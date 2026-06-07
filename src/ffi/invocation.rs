@@ -14,8 +14,8 @@
 //
 // What this module is NOT
 // -----------------------
-// - It is not the retired ability+args ABI. That lives in
-//   `ffi::ability` only as hard-fail retirement symbols.
+// - It is not the retired ability+args ABI. That ABI is not exported
+//   from the clean Invocation-only FFI surface.
 // - It is not an Axon protocol implementation. Axon owns the proto
 //   types and canonical semantics; this module only maps C strings
 //   to the Rust daemon SDK.
@@ -90,7 +90,7 @@ const BIDI_CALLBACK_QUEUE_CAPACITY: usize = 64;
 /// {
 ///   "caller_ura": "...",
 ///   "callee_ura": "...",
-///   "ability": "device.observe.health",
+///   "ability": "observe.health",
 ///   "subject_ura": "...",
 ///   "nonce_base64": "<16 bytes, base64>",
 ///   "causal_context": {"form": "none"},
@@ -1935,7 +1935,7 @@ mod tests {
             serde_json::json!({
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "device.observe.health",
+                "ability": "observe.health",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
@@ -1947,10 +1947,11 @@ mod tests {
     }
 
     fn valid_bidi_invocation_json() -> CString {
+        let callee_ura = crate::ura::hub_ura("acme");
         CString::new(
             serde_json::json!({
                 "caller_ura": "easynet:///r/acme/device/dev-a",
-                "callee_ura": "easynet:///r/acme/hub",
+                "callee_ura": callee_ura,
                 "ability": "device.pty.attach",
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
@@ -1980,7 +1981,7 @@ mod tests {
             r#"{
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "device.observe.health",
+                "ability": "observe.health",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "args": {}
@@ -1999,7 +2000,7 @@ mod tests {
             r#"{
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "device.observe.health",
+                "ability": "observe.health",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AAAAAAAAAAAAAAAAAAAAAA==",
                 "causal_context": {"form": "none"},
@@ -2019,7 +2020,7 @@ mod tests {
             r#"{
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "device.observe.health",
+                "ability": "observe.health",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},

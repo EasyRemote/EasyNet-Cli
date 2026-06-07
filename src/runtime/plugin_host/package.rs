@@ -118,7 +118,7 @@ impl PluginAbilityDescriptor {
     /// discovery source; `AbilityManifest` is only the registry projection used
     /// by `meta.list_abilities` and UI schema rendering. `AbilityManifest`
     /// names are verb-local, so plugin ability names such as
-    /// `device.plugin.echo` project to `echo` while the catalog key remains the
+    /// `plugin.echo` project to `echo` while the catalog key remains the
     /// full ability name.
     pub fn to_registry_manifest(&self) -> Result<crate::core::ability_spec::AbilityManifest> {
         let verb = self.name.rsplit('.').next().ok_or_else(|| {
@@ -638,7 +638,7 @@ pub(crate) mod tests {
         fn register(_: &mut AxonAbilityCatalog, _: PluginRuntimeLimits) {}
         fn ability_specs() -> Vec<BuiltinPluginAbilitySpec> {
             vec![BuiltinPluginAbilitySpec {
-                name: "device.test.echo",
+                name: "test.echo",
                 layer: PluginAbilityLayer::Observation,
                 call_mode: PluginCallMode::Rpc,
                 bidi_wire_kind: None,
@@ -663,7 +663,7 @@ max_sessions = 1
 max_frame_queue = 1
 
 [[ability_metadata]]
-name = "device.test.echo"
+name = "test.echo"
 layer = "control"
 "#;
 
@@ -687,7 +687,7 @@ layer = "control"
         let dir = tempfile::tempdir().expect("tempdir");
         write_test_package(dir.path(), "0.1.0");
         std::fs::write(
-            dir.path().join("abilities/device.test.echo.ability.toml"),
+            dir.path().join("abilities/test.echo.ability.toml"),
             test_descriptor("device.test.other"),
         )
         .expect("drifted descriptor");
@@ -725,14 +725,14 @@ max_sessions = 1
 max_frame_queue = 1
 
 [[ability_metadata]]
-name = "device.test.echo"
+name = "test.echo"
 layer = "control"
 "#,
         )
         .expect("manifest");
         std::fs::write(
-            outside.join("device.test.echo.ability.toml"),
-            test_descriptor("device.test.echo"),
+            outside.join("test.echo.ability.toml"),
+            test_descriptor("test.echo"),
         )
         .expect("escaped descriptor");
 
@@ -765,15 +765,15 @@ max_sessions = 1
 max_frame_queue = 1
 
 [[ability_metadata]]
-name = "device.test.echo"
+name = "test.echo"
 layer = "control"
 "#
             ),
         )
         .expect("manifest");
         std::fs::write(
-            root.join("abilities/device.test.echo.ability.toml"),
-            test_descriptor("device.test.echo"),
+            root.join("abilities/test.echo.ability.toml"),
+            test_descriptor("test.echo"),
         )
         .expect("descriptor");
     }

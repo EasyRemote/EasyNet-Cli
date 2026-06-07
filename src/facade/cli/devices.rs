@@ -9,15 +9,15 @@
 //              filters the returned `DirectoryEntry` set down to
 //              URA-kind = `device` projections.
 //
-// Why the cut over from `device.node.list`
+// Why the cut over from `node.list`
 // -----------------------------------------
-// `device.node.list` was the AXON-RFC-001 P1.5 placeholder that
+// `node.list` was the AXON-RFC-001 P1.5 placeholder that
 // fanned out only the local probe view + a same-realm
 // `federation.resolve` fallback. The joint plan
 // (海峰 + 凉冰, 2026-05-03) collapses every cross-device dispatch
 // onto `federation.forward_invoke`; for read-only directory
 // queries the canonical surface is `federation.discover`. One
-// helper, one path; the legacy `device.node.list` arm gets
+// helper, one path; the legacy `node.list` arm gets
 // removed in the cull phase.
 //
 // Wire shape (post-cut)
@@ -78,7 +78,7 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         .unwrap_or_default();
     let self_ura = creds
         .as_ref()
-        .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id));
+        .map(|c| crate::ura::device_ura(&c.realm, &c.node_id));
 
     let entries = fetch_directory_entries(self_ura.as_deref())?;
     let nodes: Vec<Value> = entries
@@ -167,7 +167,7 @@ fn is_device_entry(entry: &Value) -> bool {
         return false;
     }
     crate::ura::parse_ura(ura)
-        .map(|p| !p.device_id.is_empty() && p.agent_id.is_empty())
+        .map(|p| p.kind == crate::ura::URAKind::Device && p.device_id().is_some())
         .unwrap_or(false)
 }
 

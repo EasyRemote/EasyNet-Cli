@@ -439,7 +439,7 @@ pub(crate) fn invoke_local_daemon_ability(
 ) -> anyhow::Result<serde_json::Value> {
     #[cfg(test)]
     {
-        if function_name.starts_with("device.agent.") {
+        if function_name.starts_with("agent.") {
             return invoke_agent_management_in_process(function_name, _payload_json);
         }
         anyhow::bail!(
@@ -468,6 +468,6 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
 fn local_daemon_loopback_caller_ura() -> String {
     crate::persistence::config::load_credentials()
         .ok()
-        .map(|creds| crate::ura::device_ura(&creds.tenant_id, &creds.node_id))
+        .map(|creds| crate::ura::device_ura(&creds.realm, &creds.node_id))
         .unwrap_or_else(|| crate::ura::device_ura("cli", "local"))
 }

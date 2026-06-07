@@ -1,4 +1,4 @@
-// EasyNet CLI — device.terminal.{input,read,resize} ability handlers
+// EasyNet CLI — terminal.{input,read,resize} ability handlers
 // =====================================================================
 //
 // File: src/runtime/agents/pty_io_ability.rs
@@ -9,9 +9,9 @@
 // every Frontend Terminal session before the WS bidi optimisation
 // lands — depends on this trio:
 //
-//   * `device.terminal.input`  (RPC) — push base64 stdin bytes
-//   * `device.terminal.read`   (RPC) — drain stdout up to timeout
-//   * `device.terminal.resize` (RPC) — set cols × rows
+//   * `terminal.input`  (RPC) — push base64 stdin bytes
+//   * `terminal.read`   (RPC) — drain stdout up to timeout
+//   * `terminal.resize` (RPC) — set cols × rows
 //
 // Why a separate file from `pty_lifecycle_ability`
 // ------------------------------------------------
@@ -75,9 +75,9 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_INPUT: &str = "device.terminal.input";
-pub const ABILITY_PTY_SESSION_READ: &str = "device.terminal.read";
-pub const ABILITY_PTY_SESSION_RESIZE: &str = "device.terminal.resize";
+pub const ABILITY_PTY_SESSION_INPUT: &str = "terminal.input";
+pub const ABILITY_PTY_SESSION_READ: &str = "terminal.read";
+pub const ABILITY_PTY_SESSION_RESIZE: &str = "terminal.resize";
 
 /// Default per-call read budget when the caller doesn't supply one.
 /// 5s matches backend PTYDriver's poll cadence (~200 ms idle reads
@@ -337,22 +337,22 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
         let pty = Arc::clone(&pty);
         let io = io.clone();
         let handler: LocalRpcHandler = Arc::new(move |args: Value| input_handler(&pty, &io, args));
-        reg.register_rpc_with_owner("device.terminal.input", OwnerKind::Device, handler);
+        reg.register_rpc_with_owner("terminal.input", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
         let handler: LocalRpcHandler = Arc::new(move |args: Value| read_handler(&pty, &io, args));
-        reg.register_rpc_with_owner("device.terminal.read", OwnerKind::Device, handler);
+        reg.register_rpc_with_owner("terminal.read", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
         let handler: LocalRpcHandler = Arc::new(move |args: Value| resize_handler(&pty, args));
-        reg.register_rpc_with_owner("device.terminal.resize", OwnerKind::Device, handler);
+        reg.register_rpc_with_owner("terminal.resize", OwnerKind::Device, handler);
     }
 }
 
-/// `device.terminal.input` handler.
+/// `terminal.input` handler.
 ///
 /// Args: `{ session_id: string, data: string (base64) }`.
 /// Returns: `{ ack: bool, bytes_written: int }`. ack=false +
@@ -427,7 +427,7 @@ fn input_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyho
     Ok(json!({"ack": true, "bytes_written": written}))
 }
 
-/// `device.terminal.read` handler.
+/// `terminal.read` handler.
 ///
 /// Args: `{ session_id: string, timeout?: number (seconds) }`.
 /// Returns:
@@ -535,7 +535,7 @@ fn read_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow
     Ok(resp)
 }
 
-/// `device.terminal.resize` handler.
+/// `terminal.resize` handler.
 ///
 /// Args: `{ session_id: string, cols: int, rows: int }`.
 /// Returns: `{ ack: bool }`. ack=false when the session_id is
@@ -640,7 +640,7 @@ pub fn resize_input_schema() -> Value {
 
 pub fn input_description() -> &'static str {
     "Push base64-encoded stdin bytes into a PTY session. Pairs \
-     with device.terminal.read to form the unary RPC data plane \
+     with terminal.read to form the unary RPC data plane \
      used by the EasyNet backend's PTYDriver."
 }
 

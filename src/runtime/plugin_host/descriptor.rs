@@ -57,13 +57,10 @@ mod tests {
         let descriptors = PluginDescriptorProjector::project(&index).expect("descriptors");
         let descriptor = descriptors
             .iter()
-            .find(|descriptor| descriptor.name == "device.test.echo")
+            .find(|descriptor| descriptor.name == "test.echo")
             .expect("installed plugin descriptor");
 
-        assert_eq!(
-            descriptor.description,
-            "test descriptor for device.test.echo"
-        );
+        assert_eq!(descriptor.description, "test descriptor for test.echo");
         assert_eq!(descriptor.input_schema["type"], "object");
     }
 }

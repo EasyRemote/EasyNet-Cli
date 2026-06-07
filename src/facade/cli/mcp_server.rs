@@ -7,7 +7,7 @@
 // server construction lives in
 // `runtime::agents::profiles::mcp::build_stdio_server`; this file is
 // intentionally thin so the MCP edge adapter has exactly one
-// construction site, shared with the `easynet start --mcp` path.
+// construction site, shared with the `easynet runtime start --mcp` path.
 //
 // RFC-001 §A3 quarantine (P4.8d + P4.9): every tool call routes
 // through the daemon-hosted Axon ability surface. No independent

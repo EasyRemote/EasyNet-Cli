@@ -63,7 +63,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
@@ -71,7 +71,7 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::discuss::DiscussService;
 
-pub const ABILITY_DISCUSS_ROUND: &str = "device.mission.discuss_round";
+pub const ABILITY_DISCUSS_ROUND: &str = "mission.discuss_round";
 
 /// Default upper bound on cycles per sub-turn. Generous enough that
 /// a healthy discussion converges (3–5 cycles typical), small
@@ -84,22 +84,46 @@ const DEFAULT_MAX_CYCLES: u32 = 10;
 /// number of agent chat calls; this is the safety governor.
 const HARD_MAX_CYCLES: u32 = 100;
 
-/// Per-agent session map keyed by (room_id, agent_name). Lets
-/// each agent's chat history persist across sub-turns within the
-/// same room — agent A's cycle 3 in sub-turn 2 sees its own
-/// cycles 1+2 from sub-turn 1 in its driver-side transcript,
-/// because we resume the same chat session_id.
+type DispatchRegistryHandle = Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>;
+
+/// Owns `mission.discuss_round` runtime state for one ability registry.
 ///
-/// Module-level state is acceptable here because:
-///   * The map is keyed by RoomId which is itself a unique handle
-///     scoped to one daemon process.
-///   * No `discuss.subscribe`-style streaming is at play — this is
-///     RPC-shaped state that lives only as long as rooms exist.
-///   * A clean restart loses the session_id mapping but also the
-///     rooms, so the client would mint new ids anyway.
-fn agent_sessions() -> &'static Mutex<HashMap<(String, String), String>> {
-    static MAP: OnceLock<Mutex<HashMap<(String, String), String>>> = OnceLock::new();
-    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+/// Invariant 1: `agent_sessions` is keyed by `(room_id, agent_name)` and
+/// stores only the chat session id returned by that agent's `<agent>.chat`
+/// ability.
+/// Invariant 2: session continuity is scoped to this service instance, so
+/// separate registry builds do not share hidden orchestration state.
+/// Invariant 3: nested chat calls dispatch through the registry handle
+/// populated by the daemon build site; this service never opens a recursive
+/// daemon IPC connection.
+#[derive(Debug)]
+struct OrchestrationService {
+    discuss: Arc<DiscussService>,
+    dispatch_registry_handle: DispatchRegistryHandle,
+    agent_sessions: Mutex<HashMap<(String, String), String>>,
+}
+
+impl OrchestrationService {
+    fn new(discuss: Arc<DiscussService>, dispatch_registry_handle: DispatchRegistryHandle) -> Self {
+        Self {
+            discuss,
+            dispatch_registry_handle,
+            agent_sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn prior_session(&self, room_id: &str, agent: &str) -> Option<String> {
+        self.agent_sessions
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&(room_id.to_string(), agent.to_string())).cloned())
+    }
+
+    fn remember_session(&self, room_id: &str, agent: &str, session_id: String) {
+        if let Ok(mut sessions) = self.agent_sessions.lock() {
+            sessions.insert((room_id.to_string(), agent.to_string()), session_id);
+        }
+    }
 }
 
 /// Register `mission.discuss_round`. Called once at daemon boot
@@ -114,355 +138,337 @@ pub fn register(
     discuss: Arc<DiscussService>,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
-    let svc = Arc::clone(&discuss);
-    let handle = Arc::clone(&dispatch_registry_handle);
+    let service = Arc::new(OrchestrationService::new(discuss, dispatch_registry_handle));
     reg.register_rpc_with_owner(
-        "device.mission.discuss_round",
+        "mission.discuss_round",
         OwnerKind::Device,
-        Arc::new(move |args| discuss_round_handler(&svc, &handle, args)),
+        Arc::new(move |args| service.discuss_round(args)),
     );
 }
 
-// ── Handler ─────────────────────────────────────────────────────
+// ── Service methods ─────────────────────────────────────────────
 
-fn discuss_round_handler(
-    svc: &DiscussService,
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-    args: Value,
-) -> anyhow::Result<Value> {
-    let room_id = args
-        .get("room_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("mission.discuss_round: `room_id` is required"))?
-        .to_string();
-    let agents: Vec<String> = args
-        .get("agents")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            anyhow::anyhow!("mission.discuss_round: `agents` (array of strings) is required")
-        })?
-        .iter()
-        .filter_map(Value::as_str)
-        .map(String::from)
-        .collect();
-    if agents.is_empty() {
-        anyhow::bail!("mission.discuss_round: `agents` must contain at least one name");
-    }
-    let max_cycles = args
-        .get("max_cycles")
-        .and_then(Value::as_u64)
-        .map(|n| n.min(HARD_MAX_CYCLES as u64) as u32)
-        .unwrap_or(DEFAULT_MAX_CYCLES);
-    if max_cycles == 0 {
-        anyhow::bail!("mission.discuss_round: `max_cycles` must be ≥ 1");
-    }
-
-    let topic = args
-        .get("topic")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-
-    // Optional caller-supplied role assignments. Shape:
-    // `{ "<agent>": "<role description>", ... }`. When an agent
-    // appears in this map its first-cycle prompt skips the
-    // self-nomination block and tells it the role is already
-    // chosen by the operator. Absent entries trigger the
-    // self-nomination prompt path.
-    let roles: HashMap<String, String> = args
-        .get("roles")
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut errors: Vec<Value> = Vec::new();
-    let mut speakers_per_cycle: Vec<Vec<String>> = Vec::new();
-    let mut termination = "max_cycles_reached";
-
-    for cycle in 1..=max_cycles {
-        // Cycle-start snapshot: every agent this cycle sees the
-        // same transcript. Replies posted within this cycle do not
-        // re-enter same-cycle peers' prompts — they land in the
-        // room (visible to discuss.subscribe streamers) and become
-        // input on cycle N+1.
-        let snapshot = svc
-            .turns_from(&crate::runtime::domain::RoomId::new(&room_id), 0)
-            .map_err(|e| anyhow::anyhow!("read room transcript: {e}"))?;
-        let snapshot_str = render_transcript(&snapshot);
-
-        // Run all agents in parallel for this cycle using OS
-        // threads. We deliberately do NOT spin up a nested tokio
-        // runtime here: this handler already executes on the
-        // daemon's main tokio worker thread, and `Builder::new_*
-        // ... build()` panics with "Cannot start a runtime from
-        // within a runtime". The chat handler we resolve in
-        // `run_agent_cycle` is a sync closure (it returns a
-        // `Value`, not a Future); std::thread::spawn is the
-        // correct primitive. Failures are caught per-thread and
-        // turned into skip + an entry in `errors`.
-        let mut handles: Vec<(
-            String,
-            std::thread::JoinHandle<Result<AgentCycleOutcome, String>>,
-        )> = Vec::with_capacity(agents.len());
-        for agent in &agents {
-            let agent_name = agent.clone();
-            let room_id_for_task = room_id.clone();
-            let snapshot_for_task = snapshot_str.clone();
-            let topic_for_task = topic.clone();
-            let agents_for_task = agents.clone();
-            let cycle_for_task = cycle;
-            let max_for_task = max_cycles;
-            // Clone the registry-handle Arc into each thread so
-            // each can dispatch in-process. `Arc<OnceLock<…>>` is
-            // cheap to clone — refcount bump only.
-            let handle_for_task = Arc::clone(dispatch_registry_handle);
-            let role_for_task = roles.get(&agent_name).cloned();
-            let join = std::thread::spawn(move || {
-                run_agent_cycle(
-                    &room_id_for_task,
-                    &agent_name,
-                    &agents_for_task,
-                    cycle_for_task,
-                    max_for_task,
-                    &snapshot_for_task,
-                    topic_for_task.as_deref(),
-                    role_for_task.as_deref(),
-                    &handle_for_task,
-                )
-            });
-            handles.push((agent.clone(), join));
-        }
-
-        let cycle_results: Vec<(String, Result<AgentCycleOutcome, String>)> = handles
-            .into_iter()
-            .map(|(agent, h)| {
-                let r = match h.join() {
-                    Ok(inner) => inner,
-                    Err(panic_payload) => {
-                        // Try to surface the panic message. `JoinHandle::join`
-                        // returns Err with a `Box<dyn Any + Send>`; the
-                        // common payload types are `&'static str` and
-                        // `String`. Falling back to a generic note when
-                        // neither matches.
-                        let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
-                            (*s).to_string()
-                        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                            s.clone()
-                        } else {
-                            "non-string panic payload".to_string()
-                        };
-                        Err(format!("agent {agent:?} thread panicked: {msg}"))
-                    }
-                };
-                (agent, r)
-            })
+impl OrchestrationService {
+    fn discuss_round(self: &Arc<Self>, args: Value) -> anyhow::Result<Value> {
+        let room_id = args
+            .get("room_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("mission.discuss_round: `room_id` is required"))?
+            .to_string();
+        let agents: Vec<String> = args
+            .get("agents")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                anyhow::anyhow!("mission.discuss_round: `agents` (array of strings) is required")
+            })?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
             .collect();
+        if agents.is_empty() {
+            anyhow::bail!("mission.discuss_round: `agents` must contain at least one name");
+        }
+        let max_cycles = args
+            .get("max_cycles")
+            .and_then(Value::as_u64)
+            .map(|n| n.min(HARD_MAX_CYCLES as u64) as u32)
+            .unwrap_or(DEFAULT_MAX_CYCLES);
+        if max_cycles == 0 {
+            anyhow::bail!("mission.discuss_round: `max_cycles` must be ≥ 1");
+        }
 
-        let mut spoke_this_cycle: Vec<String> = Vec::new();
-        let mut anyone_spoke = false;
-        for (agent, result) in cycle_results {
-            match result {
-                Ok(AgentCycleOutcome::Speak(text)) => {
-                    let post_res = svc.post(
-                        &crate::runtime::domain::RoomId::new(&room_id),
-                        crate::runtime::domain::AgentId::new(&agent),
-                        text,
-                        None,
-                    );
-                    match post_res {
-                        Ok(_seq) => {
-                            spoke_this_cycle.push(agent.clone());
-                            anyone_spoke = true;
+        let topic = args
+            .get("topic")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        // Optional caller-supplied role assignments. Shape:
+        // `{ "<agent>": "<role description>", ... }`. When an agent
+        // appears in this map its first-cycle prompt skips the
+        // self-nomination block and tells it the role is already
+        // chosen by the operator. Absent entries trigger the
+        // self-nomination prompt path.
+        let roles: HashMap<String, String> = args
+            .get("roles")
+            .and_then(Value::as_object)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut errors: Vec<Value> = Vec::new();
+        let mut speakers_per_cycle: Vec<Vec<String>> = Vec::new();
+        let mut termination = "max_cycles_reached";
+
+        for cycle in 1..=max_cycles {
+            // Cycle-start snapshot: every agent this cycle sees the
+            // same transcript. Replies posted within this cycle do not
+            // re-enter same-cycle peers' prompts — they land in the
+            // room (visible to discuss.subscribe streamers) and become
+            // input on cycle N+1.
+            let snapshot = self
+                .discuss
+                .turns_from(&crate::runtime::domain::RoomId::new(&room_id), 0)
+                .map_err(|e| anyhow::anyhow!("read room transcript: {e}"))?;
+            let snapshot_str = render_transcript(&snapshot);
+
+            // Run all agents in parallel for this cycle using OS
+            // threads. We deliberately do NOT spin up a nested tokio
+            // runtime here: this handler already executes on the
+            // daemon's main tokio worker thread, and `Builder::new_*
+            // ... build()` panics with "Cannot start a runtime from
+            // within a runtime". The chat handler we resolve in
+            // `run_agent_cycle` is a sync closure (it returns a
+            // `Value`, not a Future); std::thread::spawn is the
+            // correct primitive. Failures are caught per-thread and
+            // turned into skip + an entry in `errors`.
+            let mut handles: Vec<(
+                String,
+                std::thread::JoinHandle<Result<AgentCycleOutcome, String>>,
+            )> = Vec::with_capacity(agents.len());
+            for agent in &agents {
+                let request = AgentCycleRequest {
+                    room_id: room_id.clone(),
+                    agent: agent.clone(),
+                    agents: agents.clone(),
+                    cycle,
+                    max_cycles,
+                    transcript: snapshot_str.clone(),
+                    topic: topic.clone(),
+                    assigned_role: roles.get(agent).cloned(),
+                };
+                let service = Arc::clone(self);
+                let join = std::thread::spawn(move || service.run_agent_cycle(request));
+                handles.push((agent.clone(), join));
+            }
+
+            let cycle_results: Vec<(String, Result<AgentCycleOutcome, String>)> = handles
+                .into_iter()
+                .map(|(agent, h)| {
+                    let r = match h.join() {
+                        Ok(inner) => inner,
+                        Err(panic_payload) => {
+                            // Try to surface the panic message. `JoinHandle::join`
+                            // returns Err with a `Box<dyn Any + Send>`; the
+                            // common payload types are `&'static str` and
+                            // `String`. Falling back to a generic note when
+                            // neither matches.
+                            let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>()
+                            {
+                                (*s).to_string()
+                            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "non-string panic payload".to_string()
+                            };
+                            Err(format!("agent {agent:?} thread panicked: {msg}"))
                         }
-                        Err(e) => {
-                            errors.push(json!({
-                                "agent":  agent,
-                                "cycle":  cycle,
-                                "phase":  "post",
-                                "error":  format!("{e}"),
-                            }));
+                    };
+                    (agent, r)
+                })
+                .collect();
+
+            let mut spoke_this_cycle: Vec<String> = Vec::new();
+            let mut anyone_spoke = false;
+            for (agent, result) in cycle_results {
+                match result {
+                    Ok(AgentCycleOutcome::Speak(text)) => {
+                        let post_res = self.discuss.post(
+                            &crate::runtime::domain::RoomId::new(&room_id),
+                            crate::runtime::domain::AgentId::new(&agent),
+                            text,
+                            None,
+                        );
+                        match post_res {
+                            Ok(_seq) => {
+                                spoke_this_cycle.push(agent.clone());
+                                anyone_spoke = true;
+                            }
+                            Err(e) => {
+                                errors.push(json!({
+                                    "agent":  agent,
+                                    "cycle":  cycle,
+                                    "phase":  "post",
+                                    "error":  format!("{e}"),
+                                }));
+                            }
                         }
                     }
-                }
-                Ok(AgentCycleOutcome::Skip) => {
-                    // No-op; reflected in cycle log only as
-                    // "this agent did not appear in spoke_this_cycle".
-                }
-                Err(msg) => {
-                    errors.push(json!({
-                        "agent":  agent,
-                        "cycle":  cycle,
-                        "phase":  "chat",
-                        "error":  msg,
-                    }));
+                    Ok(AgentCycleOutcome::Skip) => {
+                        // No-op; reflected in cycle log only as
+                        // "this agent did not appear in spoke_this_cycle".
+                    }
+                    Err(msg) => {
+                        errors.push(json!({
+                            "agent":  agent,
+                            "cycle":  cycle,
+                            "phase":  "chat",
+                            "error":  msg,
+                        }));
+                    }
                 }
             }
-        }
-        speakers_per_cycle.push(spoke_this_cycle);
+            speakers_per_cycle.push(spoke_this_cycle);
 
-        if !anyone_spoke {
-            termination = "all_agents_skipped";
-            break;
+            if !anyone_spoke {
+                termination = "all_agents_skipped";
+                break;
+            }
         }
+
+        let cycles_used = speakers_per_cycle.len() as u32;
+        let agents_who_spoke: Vec<String> = {
+            let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for c in &speakers_per_cycle {
+                for a in c {
+                    set.insert(a.clone());
+                }
+            }
+            set.into_iter().collect()
+        };
+
+        // Surface the full transcript snapshot in the response so the
+        // CLI doesn't have to make a second IPC call to read the turns
+        // back — that second call risks landing on a different
+        // process's listener if `<agent>.chat` spawned an mcp-serve
+        // subprocess that joined the control.sock accept queue while
+        // this round was running. Embedding the turns avoids the race
+        // entirely; callers that want only structural data can still
+        // ignore the field.
+        let final_turns = self
+            .discuss
+            .turns_from(&crate::runtime::domain::RoomId::new(&room_id), 0)
+            .map(|ts| {
+                ts.into_iter()
+                    .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(json!({
+            "room_id":           room_id,
+            "cycles_used":       cycles_used,
+            "max_cycles":        max_cycles,
+            "terminated_reason": termination,
+            "agents_who_spoke":  agents_who_spoke,
+            "speakers_per_cycle": speakers_per_cycle,
+            "errors":            errors,
+            "turns":             final_turns,
+        }))
     }
 
-    let cycles_used = speakers_per_cycle.len() as u32;
-    let agents_who_spoke: Vec<String> = {
-        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for c in &speakers_per_cycle {
-            for a in c {
-                set.insert(a.clone());
-            }
+    /// Run one (agent, cycle) — synthesise the prompt, invoke
+    /// `<agent>.chat` over IPC with the per-(room, agent) session_id,
+    /// classify the reply.
+    ///
+    /// Returns `Err(String)` only when the chat invocation itself
+    /// failed (transport / driver / agent not registered) — those map
+    /// to `errors[]` in the envelope. Skip is `Ok(Skip)`, normal
+    /// speech is `Ok(Speak(reply))`.
+    fn run_agent_cycle(&self, request: AgentCycleRequest) -> Result<AgentCycleOutcome, String> {
+        // Resume per-(room, agent) chat session so the agent's own
+        // history (its prior cycles' reasoning + tool use) carries
+        // forward. First cycle for a new (room, agent) pair has no
+        // prior session — chat handler will mint one and we capture
+        // the returned id for next time.
+        let prior_session = self.prior_session(&request.room_id, &request.agent);
+
+        let qualified_chat = format!("{}.chat", request.agent);
+        let prompt = render_agent_prompt(
+            &request.agent,
+            &request.agents,
+            request.cycle,
+            request.max_cycles,
+            &request.transcript,
+            request.topic.as_deref(),
+            request.assigned_role.as_deref(),
+        );
+        let mut chat_args = json!({
+            "prompt": prompt,
+        });
+        if let Some(sid) = prior_session.as_deref() {
+            chat_args["session_id"] = json!(sid);
         }
-        set.into_iter().collect()
-    };
 
-    // Surface the full transcript snapshot in the response so the
-    // CLI doesn't have to make a second IPC call to read the turns
-    // back — that second call risks landing on a different
-    // process's listener if `<agent>.chat` spawned an mcp-serve
-    // subprocess that joined the control.sock accept queue while
-    // this round was running. Embedding the turns avoids the race
-    // entirely; callers that want only structural data can still
-    // ignore the field.
-    let final_turns = svc
-        .turns_from(&crate::runtime::domain::RoomId::new(&room_id), 0)
-        .map(|ts| {
-            ts.into_iter()
-                .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        // In-process dispatch through the daemon's shared Axon
+        // LocalRuntime. Going through `support::local_invoke` would open
+        // a fresh IPC connection back to the daemon while the original
+        // request is still in flight.
+        let registry = self.dispatch_registry_handle.get().ok_or_else(|| {
+            "internal_error: dispatch registry handle not yet set when \
+             mission.discuss_round invoked"
+                .to_string()
+        })?;
+        // Wrap the chat call in catch_unwind so an `eprintln!` to a
+        // closed stderr (broken pipe → panic in the std macros) does
+        // not take down our orchestration thread. The chat handler
+        // does heavy fd juggling — spawning child processes, dup'ing
+        // stdin/out/err for the LLM subprocess — and on rare paths
+        // its `eprintln!` progress lines can panic when the parent
+        // shell's stderr is no longer reachable. Catching the panic
+        // and surfacing it as a typed error keeps the cycle's other
+        // agents unaffected and surfaces a clean error envelope to
+        // the operator.
+        let response_or_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.invoke_rpc_json(&qualified_chat, chat_args)
+        }));
+        let response = match response_or_panic {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => return Err(format!("{e}")),
+            Err(panic_payload) => {
+                let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
+                    (*s).to_string()
+                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "non-string panic payload from chat handler".to_string()
+                };
+                return Err(format!("chat handler panicked: {msg}"));
+            }
+        };
 
-    Ok(json!({
-        "room_id":           room_id,
-        "cycles_used":       cycles_used,
-        "max_cycles":        max_cycles,
-        "terminated_reason": termination,
-        "agents_who_spoke":  agents_who_spoke,
-        "speakers_per_cycle": speakers_per_cycle,
-        "errors":            errors,
-        "turns":             final_turns,
-    }))
+        // Capture the (possibly newly minted) session_id for next
+        // cycle. Driver may echo the caller's id (resume) or mint a
+        // fresh one (first turn); either way it's correct to remember.
+        if let Some(returned_sid) = response
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            self.remember_session(&request.room_id, &request.agent, returned_sid);
+        }
+
+        let reply = response
+            .get("reply")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if reply.is_empty() || reply.eq_ignore_ascii_case("[SKIP]") {
+            Ok(AgentCycleOutcome::Skip)
+        } else {
+            Ok(AgentCycleOutcome::Speak(reply.to_string()))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AgentCycleRequest {
+    room_id: String,
+    agent: String,
+    agents: Vec<String>,
+    cycle: u32,
+    max_cycles: u32,
+    transcript: String,
+    topic: Option<String>,
+    assigned_role: Option<String>,
 }
 
 #[derive(Debug)]
 enum AgentCycleOutcome {
     Speak(String),
     Skip,
-}
-
-/// Run one (agent, cycle) — synthesise the prompt, invoke
-/// `<agent>.chat` over IPC with the per-(room, agent) session_id,
-/// classify the reply.
-///
-/// Returns `Err(String)` only when the chat invocation itself
-/// failed (transport / driver / agent not registered) — those map
-/// to `errors[]` in the envelope. Skip is `Ok(Skip)`, normal
-/// speech is `Ok(Speak(reply))`.
-#[allow(clippy::too_many_arguments)]
-fn run_agent_cycle(
-    room_id: &str,
-    agent: &str,
-    agents: &[String],
-    cycle: u32,
-    max_cycles: u32,
-    transcript: &str,
-    topic: Option<&str>,
-    assigned_role: Option<&str>,
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) -> Result<AgentCycleOutcome, String> {
-    // Resume per-(room, agent) chat session so the agent's own
-    // history (its prior cycles' reasoning + tool use) carries
-    // forward. First cycle for a new (room, agent) pair has no
-    // prior session — chat handler will mint one and we capture
-    // the returned id for next time.
-    let session_key = (room_id.to_string(), agent.to_string());
-    let prior_session = agent_sessions()
-        .lock()
-        .ok()
-        .and_then(|m| m.get(&session_key).cloned());
-
-    let qualified_chat = format!("{agent}.chat");
-    let prompt = render_agent_prompt(
-        agent,
-        agents,
-        cycle,
-        max_cycles,
-        transcript,
-        topic,
-        assigned_role,
-    );
-    let mut chat_args = json!({
-        "prompt": prompt,
-    });
-    if let Some(sid) = prior_session.as_deref() {
-        chat_args["session_id"] = json!(sid);
-    }
-
-    // In-process dispatch through the daemon's shared Axon
-    // LocalRuntime. Going through `support::local_invoke` would open
-    // a fresh IPC connection back to the daemon while the original
-    // request is still in flight.
-    let registry = dispatch_registry_handle.get().ok_or_else(|| {
-        "internal_error: dispatch registry handle not yet set when \
-             mission.discuss_round invoked"
-            .to_string()
-    })?;
-    // Wrap the chat call in catch_unwind so an `eprintln!` to a
-    // closed stderr (broken pipe → panic in the std macros) does
-    // not take down our orchestration thread. The chat handler
-    // does heavy fd juggling — spawning child processes, dup'ing
-    // stdin/out/err for the LLM subprocess — and on rare paths
-    // its `eprintln!` progress lines can panic when the parent
-    // shell's stderr is no longer reachable. Catching the panic
-    // and surfacing it as a typed error keeps the cycle's other
-    // agents unaffected and surfaces a clean error envelope to
-    // the operator.
-    let response_or_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        registry.invoke_rpc_json(&qualified_chat, chat_args)
-    }));
-    let response = match response_or_panic {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => return Err(format!("{e}")),
-        Err(panic_payload) => {
-            let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
-                (*s).to_string()
-            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "non-string panic payload from chat handler".to_string()
-            };
-            return Err(format!("chat handler panicked: {msg}"));
-        }
-    };
-
-    // Capture the (possibly newly minted) session_id for next
-    // cycle. Driver may echo the caller's id (resume) or mint a
-    // fresh one (first turn); either way it's correct to remember.
-    if let Some(returned_sid) = response
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    {
-        if let Ok(mut m) = agent_sessions().lock() {
-            m.insert(session_key, returned_sid);
-        }
-    }
-
-    let reply = response
-        .get("reply")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if reply.is_empty() || reply.eq_ignore_ascii_case("[SKIP]") {
-        Ok(AgentCycleOutcome::Skip)
-    } else {
-        Ok(AgentCycleOutcome::Speak(reply.to_string()))
-    }
 }
 
 // ── Prompt construction ─────────────────────────────────────────

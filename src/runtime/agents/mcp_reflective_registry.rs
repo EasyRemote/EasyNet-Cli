@@ -68,7 +68,7 @@ pub const MCP_UPSTREAM_SOURCE_PREFIX: &str = "mcp_upstream:";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpReflectionMode {
     /// Do not reflect upstream tools as direct abilities. The
-    /// explicit `device.mcp.client.{list,call}` abilities remain.
+    /// explicit `mcp.client.{list,call}` abilities remain.
     Off,
     /// Return daemon Ready first, then refresh the reflective
     /// catalogue in the dynamic registry overlay.
@@ -181,7 +181,7 @@ pub struct ReflectedAbility {
 /// One failed reflection — kept separate from successes so the
 /// caller can decide whether to fail boot or just log + carry on
 /// (matching the "graceful upstream failure" pattern already used
-/// by `device.mcp.client.list`).
+/// by `mcp.client.list`).
 #[derive(Debug, Clone)]
 pub struct ReflectFailure {
     pub server: String,
@@ -209,7 +209,7 @@ pub struct ReflectResult {
 pub struct McpReflectionSupervisor {
     client: Arc<McpClientService>,
     registry: Arc<AxonAbilityCatalog>,
-    owner_agent_ura: String,
+    owner_ura: String,
     concurrency_limit: usize,
 }
 
@@ -217,18 +217,18 @@ impl McpReflectionSupervisor {
     pub fn new(
         client: Arc<McpClientService>,
         registry: Arc<AxonAbilityCatalog>,
-        owner_agent_ura: impl Into<String>,
+        owner_ura: impl Into<String>,
     ) -> Self {
         Self {
             client,
             registry,
-            owner_agent_ura: owner_agent_ura.into(),
+            owner_ura: owner_ura.into(),
             concurrency_limit: mcp_reflection_concurrency(),
         }
     }
 
-    pub fn owner_agent_ura(&self) -> &str {
-        &self.owner_agent_ura
+    pub fn owner_ura(&self) -> &str {
+        &self.owner_ura
     }
 
     /// Spawn a detached worker thread for lazy reflection. This is
@@ -295,7 +295,7 @@ impl McpReflectionSupervisor {
         for server in server_names {
             let client = Arc::clone(&self.client);
             let registry = Arc::clone(&self.registry);
-            let owner = self.owner_agent_ura.clone();
+            let owner = self.owner_ura.clone();
             let semaphore = Arc::clone(&semaphore);
             handles.push(tokio::spawn(async move {
                 let _permit = semaphore.acquire_owned().await.ok();
@@ -325,7 +325,7 @@ impl McpReflectionSupervisor {
         attach_refresh_sinks(
             Arc::clone(&self.client),
             Arc::clone(&self.registry),
-            self.owner_agent_ura.clone(),
+            self.owner_ura.clone(),
             initially_reflected.clone(),
         )
         .await;
@@ -405,9 +405,9 @@ impl McpReflectionSupervisor {
 pub fn run_eager_blocking(
     client: &McpClientService,
     registry: &mut AxonAbilityCatalog,
-    owner_agent_ura: &str,
+    owner_ura: &str,
 ) -> Option<(BTreeMap<String, Vec<String>>, ReflectResult)> {
-    let fut = async move { reflect_all(client, registry, owner_agent_ura).await };
+    let fut = async move { reflect_all(client, registry, owner_ura).await };
     match run_blocking(fut, "build mcp-reflect runtime") {
         Ok(report) => {
             log_eager_reflect_report(&report);
@@ -450,11 +450,11 @@ pub fn run_eager_blocking(
 pub enum PostArcReflection {
     Skip,
     AttachAfterEager {
-        owner_agent_ura: String,
+        owner_ura: String,
         per_server: BTreeMap<String, Vec<String>>,
     },
     SpawnLazy {
-        owner_agent_ura: String,
+        owner_ura: String,
     },
 }
 
@@ -498,7 +498,7 @@ impl PostArcReflection {
             );
             return Self::Skip;
         };
-        let owner_agent_ura = easynet_axon::ura::agent_ura(realm, user, "mcp");
+        let owner_ura = easynet_axon::ura::agent_ura(realm, user, "mcp");
         match mode {
             McpReflectionMode::Off => {
                 crate::op_event!(
@@ -515,17 +515,15 @@ impl PostArcReflection {
                     kind = reflection_deferred,
                     mode = mode.as_str(),
                 );
-                Self::SpawnLazy { owner_agent_ura }
+                Self::SpawnLazy { owner_ura }
             }
-            McpReflectionMode::Eager => {
-                match run_eager_blocking(client, registry, &owner_agent_ura) {
-                    Some((per_server, _report)) => Self::AttachAfterEager {
-                        owner_agent_ura,
-                        per_server,
-                    },
-                    None => Self::Skip,
-                }
-            }
+            McpReflectionMode::Eager => match run_eager_blocking(client, registry, &owner_ura) {
+                Some((per_server, _report)) => Self::AttachAfterEager {
+                    owner_ura,
+                    per_server,
+                },
+                None => Self::Skip,
+            },
         }
     }
 
@@ -541,14 +539,14 @@ impl PostArcReflection {
         match self {
             Self::Skip => {}
             Self::AttachAfterEager {
-                owner_agent_ura,
+                owner_ura,
                 per_server,
             } => {
-                McpReflectionSupervisor::new(client, registry, owner_agent_ura)
+                McpReflectionSupervisor::new(client, registry, owner_ura)
                     .attach_refresh_sinks_blocking(&per_server);
             }
-            Self::SpawnLazy { owner_agent_ura } => {
-                McpReflectionSupervisor::new(client, registry, owner_agent_ura).spawn_lazy();
+            Self::SpawnLazy { owner_ura } => {
+                McpReflectionSupervisor::new(client, registry, owner_ura).spawn_lazy();
             }
         }
     }
@@ -645,7 +643,7 @@ fn log_reflect_failures(report: &ReflectResult) {
 async fn attach_refresh_sinks(
     client: Arc<McpClientService>,
     registry: Arc<AxonAbilityCatalog>,
-    owner_agent_ura: String,
+    owner_ura: String,
     initially_reflected: BTreeMap<String, Vec<String>>,
 ) {
     let registry_weak = Arc::downgrade(&registry);
@@ -666,7 +664,7 @@ async fn attach_refresh_sinks(
             registry_weak.clone(),
             client_weak.clone(),
             name.clone(),
-            owner_agent_ura.clone(),
+            owner_ura.clone(),
             reflected_for_server,
         ));
         if let Err(e) = client.register_notification_sink(&name, sink).await {
@@ -684,7 +682,7 @@ async fn attach_refresh_sinks(
 }
 
 /// Reflect every tool of every configured upstream server into
-/// `registry`, anchored to `owner_agent_ura` (the mcp-profile
+/// `registry`, anchored to `owner_ura` (the mcp-profile
 /// agent URA the daemon constructs at boot).
 ///
 /// The function is async because `McpClientService::rpc` is async.
@@ -715,7 +713,7 @@ async fn attach_refresh_sinks(
 pub async fn reflect_all(
     client: &McpClientService,
     registry: &mut AxonAbilityCatalog,
-    owner_agent_ura: &str,
+    owner_ura: &str,
 ) -> ReflectResult {
     let mut out = ReflectResult::default();
     for server_name in client.server_names().await {
@@ -729,14 +727,7 @@ pub async fn reflect_all(
         let CatalogFetchOk { spec, tools } = *ok;
         let mut writer = StaticWriter { reg: registry };
         for tool in &tools {
-            match register_one_tool(
-                &mut writer,
-                client,
-                &server_name,
-                owner_agent_ura,
-                &spec,
-                tool,
-            ) {
+            match register_one_tool(&mut writer, client, &server_name, owner_ura, &spec, tool) {
                 Ok(rec) => out.registered.push(rec),
                 Err(fail) => out.failed.push(fail),
             }
@@ -887,7 +878,7 @@ async fn fetch_server_catalog(
 async fn refresh_server_inner<W: RegistryWriter>(
     writer: &mut W,
     client: &McpClientService,
-    owner_agent_ura: &str,
+    owner_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
     flavour: &'static str,
@@ -931,7 +922,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
             diff.unchanged.push(local_name);
             continue;
         }
-        match register_one_tool(writer, client, server_name, owner_agent_ura, &spec, tool) {
+        match register_one_tool(writer, client, server_name, owner_ura, &spec, tool) {
             Ok(rec) => diff.added.push(rec),
             Err(fail) => diff.failed.push(fail),
         }
@@ -965,7 +956,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
 pub async fn refresh_server_dynamic(
     client: &McpClientService,
     registry: &AxonAbilityCatalog,
-    owner_agent_ura: &str,
+    owner_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
 ) -> RefreshDiff {
@@ -973,7 +964,7 @@ pub async fn refresh_server_dynamic(
     refresh_server_inner(
         &mut writer,
         client,
-        owner_agent_ura,
+        owner_ura,
         server_name,
         previously_reflected,
         "dynamic refresh",
@@ -987,7 +978,7 @@ pub async fn refresh_server_dynamic(
 pub async fn refresh_server(
     client: &McpClientService,
     registry: &mut AxonAbilityCatalog,
-    owner_agent_ura: &str,
+    owner_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
 ) -> RefreshDiff {
@@ -995,7 +986,7 @@ pub async fn refresh_server(
     refresh_server_inner(
         &mut writer,
         client,
-        owner_agent_ura,
+        owner_ura,
         server_name,
         previously_reflected,
         "refresh",
@@ -1173,7 +1164,7 @@ fn register_one_tool<W: RegistryWriter>(
     writer: &mut W,
     client: &McpClientService,
     server_name: &str,
-    owner_agent_ura: &str,
+    owner_ura: &str,
     spec: &crate::runtime::execution::mcp_client::McpServerSpec,
     tool: &Value,
 ) -> Result<ReflectedAbility, ReflectFailure> {
@@ -1215,7 +1206,7 @@ fn register_one_tool<W: RegistryWriter>(
         });
     }
     let owner_kind =
-        owner_kind_for_descriptor_owner(owner_agent_ura).map_err(|reason| ReflectFailure {
+        owner_kind_for_descriptor_owner(owner_ura).map_err(|reason| ReflectFailure {
             server: server_name.to_string(),
             tool: Some(upstream_tool.clone()),
             reason,
@@ -1297,21 +1288,20 @@ fn register_one_tool<W: RegistryWriter>(
 
     // Build the descriptor that downstream `meta.list_abilities`
     // and `federation.advertise_abilities` will surface. CRITICAL:
-    // the URA the caller sees later is derived from `owner_agent_ura`
+    // the URA the caller sees later is derived from `owner_ura`
     // + `local_name` (no `mcp_upstream` substring). Provenance goes
     // ONLY into `source`.
-    let descriptor =
-        AbilityDescriptor::new(local_name.clone(), owner_agent_ura, Visibility::Scoped)
-            .map_err(|e| ReflectFailure {
-                server: server_name.to_string(),
-                tool: Some(upstream_tool.clone()),
-                reason: format!("descriptor build failed: {e}"),
-            })?
-            .with_input_schema(input_schema)
-            .with_description(desc_text)
-            .with_source(provenance)
-            .with_metadata_entry("mcp_server", server_name.to_string())
-            .with_metadata_entry("mcp_tool", upstream_tool.clone());
+    let descriptor = AbilityDescriptor::new(local_name.clone(), owner_ura, Visibility::Scoped)
+        .map_err(|e| ReflectFailure {
+            server: server_name.to_string(),
+            tool: Some(upstream_tool.clone()),
+            reason: format!("descriptor build failed: {e}"),
+        })?
+        .with_input_schema(input_schema)
+        .with_description(desc_text)
+        .with_source(provenance)
+        .with_metadata_entry("mcp_server", server_name.to_string())
+        .with_metadata_entry("mcp_tool", upstream_tool.clone());
 
     Ok(ReflectedAbility {
         ability_name: local_name,
@@ -1321,25 +1311,23 @@ fn register_one_tool<W: RegistryWriter>(
     })
 }
 
-fn owner_kind_for_descriptor_owner(owner_agent_ura: &str) -> Result<OwnerKind, String> {
-    let parsed = crate::ura::parse_ura(owner_agent_ura)
-        .map_err(|e| format!("owner URA parse failed: {e}"))?;
+fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String> {
+    let parsed =
+        crate::ura::parse_ura(owner_ura).map_err(|e| format!("owner URA parse failed: {e}"))?;
     match parsed.kind {
         crate::ura::URAKind::Agent => {
-            if parsed.agent_id.is_empty() {
-                Err("owner agent URA is missing agent_id".to_string())
-            } else {
-                Ok(OwnerKind::Agent(parsed.agent_id))
-            }
+            let Some((_, agent_id)) = parsed.agent_ids() else {
+                return Err("owner agent URA is missing agent_id".to_string());
+            };
+            Ok(OwnerKind::Agent(agent_id.to_string()))
         }
         crate::ura::URAKind::Hub => Ok(OwnerKind::Hub),
         crate::ura::URAKind::Device => Ok(OwnerKind::Device),
         crate::ura::URAKind::User => {
-            if parsed.user_id.is_empty() {
-                Err("owner user URA is missing user_id".to_string())
-            } else {
-                Ok(OwnerKind::User(parsed.user_id))
-            }
+            let Some(user_id) = parsed.user_id() else {
+                return Err("owner user URA is missing user_id".to_string());
+            };
+            Ok(OwnerKind::User(user_id.to_string()))
         }
         other => Err(format!(
             "owner URA kind {other:?} cannot own a local ability"
@@ -1401,7 +1389,7 @@ pub struct RegistryRefreshSink {
     registry: std::sync::Weak<AxonAbilityCatalog>,
     client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
     server_name: String,
-    owner_agent_ura: String,
+    owner_ura: String,
     /// Names previously reflected through this sink. Wrapped in Arc
     /// so we can hand a clone to the spawned refresh task without
     /// extending the sink's lifetime (the sink itself lives in the
@@ -1415,14 +1403,14 @@ impl RegistryRefreshSink {
         registry: std::sync::Weak<AxonAbilityCatalog>,
         client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
         server_name: String,
-        owner_agent_ura: String,
+        owner_ura: String,
         initially_reflected: Vec<String>,
     ) -> Self {
         Self {
             registry,
             client,
             server_name,
-            owner_agent_ura,
+            owner_ura,
             reflected_names: std::sync::Arc::new(std::sync::Mutex::new(initially_reflected)),
         }
     }
@@ -1451,7 +1439,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for RegistryRefresh
             .map(|g| g.clone())
             .unwrap_or_default();
         let server = self.server_name.clone();
-        let owner = self.owner_agent_ura.clone();
+        let owner = self.owner_ura.clone();
         let names = std::sync::Arc::clone(&self.reflected_names);
         // We're called from the mcp_client listener task, which is a
         // tokio task — `Handle::current()` is available. observe()
@@ -1630,13 +1618,13 @@ while True:
                 "source must include the server discriminator, got {:?}",
                 rec.descriptor.source
             );
-            assert_eq!(rec.descriptor.owner_agent_ura, owner);
+            assert_eq!(rec.descriptor.owner_ura, owner);
             // The discipline check that gate 2 enforces at script
             // level — assert it in code too so a refactor that
             // accidentally embeds the label in the owner trips
             // here before the gate.
             assert!(
-                !rec.descriptor.owner_agent_ura.contains("mcp_upstream"),
+                !rec.descriptor.owner_ura.contains("mcp_upstream"),
                 "owner URA must NOT contain implementation label"
             );
             assert!(!rec.ability_name.contains("mcp_upstream"));
@@ -1879,9 +1867,9 @@ while True:
             &mut reg,
         );
         match plan {
-            PostArcReflection::SpawnLazy { owner_agent_ura } => {
+            PostArcReflection::SpawnLazy { owner_ura } => {
                 assert_eq!(
-                    owner_agent_ura,
+                    owner_ura,
                     easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
                     "lazy supervisor must receive the canonical mcp-profile URA"
                 );
@@ -1925,11 +1913,11 @@ while True:
 
         match plan {
             PostArcReflection::AttachAfterEager {
-                owner_agent_ura,
+                owner_ura,
                 per_server,
             } => {
                 assert_eq!(
-                    owner_agent_ura,
+                    owner_ura,
                     easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
                 );
                 let echo_entry = per_server

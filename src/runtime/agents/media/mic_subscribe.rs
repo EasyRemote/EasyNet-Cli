@@ -305,7 +305,7 @@ impl MicBackend for SyntheticMicBackend {
 
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn MicBackend>) {
     reg.register_stream_with_envelope_and_owner(
-        "device.mic.subscribe",
+        "mic.subscribe",
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );

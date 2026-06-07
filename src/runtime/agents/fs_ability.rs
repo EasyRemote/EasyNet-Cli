@@ -2,7 +2,7 @@
 // =================================================================
 //
 // File: src/runtime/agents/fs_ability.rs
-// Description: `fs.read`, `fs.write`, `fs.list` — the three
+// Description: `fs.read`, `fs.write`, `fs.stat`, `fs.list` — the
 //              filesystem members of the Baseline Locomotion
 //              Profile (AXIOM §"Tier 2.5"). Implemented as
 //              schema-validated Axon abilities; every call goes
@@ -14,7 +14,8 @@
 //   agent claiming `baseline-locomotion-v1` is required to expose
 //   per AXIOM §"Tier 2.5". The wire surface is normative; the
 //   in-process implementation here is one conformant
-//   realisation.
+//   realisation. RFC-005 makes this a ResourceRef-only public
+//   surface: callers do not send raw host paths.
 // - The abilities are NOT a backend escape hatch. Every operation:
 //     * has a structured input schema (no arbitrary strings),
 //     * is mediated by AXIOM admission (caller signature, nonce
@@ -29,11 +30,11 @@
 //   ability call — bytes counted in KB to MB, not GB. A bigger
 //   payload deserves a payload-ref envelope, not a longer
 //   `fs.read` call.
-// - No process-wide caching, no path normalization beyond the
-//   defensive checks below. Callers express the path they want;
-//   we hand it to the OS verbatim. Sandboxing (chroot, OS
-//   capabilities) is the deployment's responsibility, not the
-//   ability's.
+// - No process-wide caching. Each call revalidates the supplied
+//   ResourceRef, maps its virtual root plus relative path to a
+//   local host path, then performs exactly one filesystem verb.
+//   Sandboxing (chroot, OS capabilities) is deployment's
+//   responsibility, not the ability's.
 // - Redaction in receipts: the receipt records the path, sizes,
 //   and a SHA-256 of the content; it does NOT record the bytes
 //   themselves (a 4 MiB write would otherwise blow up the
@@ -44,12 +45,9 @@
 //   caller; the caller has already proven its identity and right
 //   to act under the supplied subject. The handler does not
 //   second-guess the admission decision.
-// - Path traversal: `..` is permitted because callers may
-//   legitimately address a file via a relative parent. The
-//   security model is: if the caller has the right to invoke
-//   `fs.write` against this agent at all, it has the right to
-//   touch any path the agent can touch. Per-path ACLs are a
-//   higher-tier policy concern, not part of the v1 baseline.
+// - Path traversal: `..` is rejected inside ResourceRef paths.
+//   Per-path ACLs are a higher-tier policy concern, but the v1
+//   filesystem surface is still bounded by virtual roots.
 //
 // Architectural Position:
 // - Sibling of `process_exec_ability.rs` and `http_request_ability.rs`
@@ -71,13 +69,18 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-
 use crate::runtime::ability_dispatch::OwnerKind;
+pub use crate::runtime::resources::filesystem::{
+    resource_ref_for_local_path, FilesystemResourceCapability, ResolvedFilesystemPath,
+};
+
+use crate::runtime::resources::filesystem;
 // ── Wire-name constants (cross-language pins) ─────────────────────
 
-pub const ABILITY_FS_READ: &str = "device.fs.read";
-pub const ABILITY_FS_WRITE: &str = "device.fs.write";
-pub const ABILITY_FS_LIST: &str = "device.fs.list";
+pub const ABILITY_FS_READ: &str = "fs.read";
+pub const ABILITY_FS_WRITE: &str = "fs.write";
+pub const ABILITY_FS_STAT: &str = "fs.stat";
+pub const ABILITY_FS_LIST: &str = "fs.list";
 
 /// Profile membership marker. Receivers MAY surface this in
 /// `agent.describe` so callers can confirm the profile contract
@@ -145,19 +148,18 @@ const DEFAULT_LIST_MAX_ENTRIES: usize = 4096;
 /// daemon startup. The abilities are stateless so registration is
 /// just three handler closures with no per-call setup.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("device.fs.read", OwnerKind::Device, Arc::new(handler_read));
-    reg.register_rpc_with_owner(
-        "device.fs.write",
-        OwnerKind::Device,
-        Arc::new(handler_write),
-    );
-    reg.register_rpc_with_owner("device.fs.list", OwnerKind::Device, Arc::new(handler_list));
+    reg.register_rpc_with_owner("fs.read", OwnerKind::Device, Arc::new(handler_read));
+    reg.register_rpc_with_owner("fs.write", OwnerKind::Device, Arc::new(handler_write));
+    reg.register_rpc_with_owner("fs.stat", OwnerKind::Device, Arc::new(handler_stat));
+    reg.register_rpc_with_owner("fs.list", OwnerKind::Device, Arc::new(handler_list));
 }
 
 // ── fs.read ──────────────────────────────────────────────────────
 
 fn handler_read(args: Value) -> Result<Value> {
-    let path = require_string(&args, "path")?;
+    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Read)?;
+    let path = resolved.local_path.as_path();
+    let path_label = resolved.display_path.as_str();
     let max_bytes = args
         .get("max_bytes")
         .and_then(Value::as_u64)
@@ -188,12 +190,12 @@ fn handler_read(args: Value) -> Result<Value> {
 
     if is_blocked_read_path(path) {
         return Err(anyhow!(
-            "fs.read: {path:?} is on the blocked-device path list"
+            "fs.read: {path_label:?} is on the blocked-device path list"
         ));
     }
 
     let metadata =
-        std::fs::metadata(Path::new(path)).map_err(|e| anyhow!("fs.read: stat {path:?}: {e}"))?;
+        std::fs::metadata(path).map_err(|e| anyhow!("fs.read: stat {path_label:?}: {e}"))?;
     let total_size = metadata.len();
 
     // Stream up to max_bytes + 1, so we can tell "exactly at the
@@ -202,7 +204,7 @@ fn handler_read(args: Value) -> Result<Value> {
     // at the syscall level — a multi-GB special file or a
     // misreported metadata.len cannot OOM us.
     let file =
-        std::fs::File::open(Path::new(path)).map_err(|e| anyhow!("fs.read: open {path:?}: {e}"))?;
+        std::fs::File::open(path).map_err(|e| anyhow!("fs.read: open {path_label:?}: {e}"))?;
     let mut limited = file.take(max_bytes.saturating_add(1));
     let mut content: Vec<u8> = Vec::with_capacity((max_bytes.min(64 * 1024)) as usize);
     limited
@@ -221,7 +223,9 @@ fn handler_read(args: Value) -> Result<Value> {
     let body = match encoding {
         "utf8" => {
             let text = std::str::from_utf8(&content).map_err(|_| {
-                anyhow!("fs.read: file at {path:?} is not valid UTF-8; use encoding=\"binary\"")
+                anyhow!(
+                    "fs.read: file at {path_label:?} is not valid UTF-8; use encoding=\"binary\""
+                )
             })?;
             if offset_lines.is_some() || limit_lines.is_some() {
                 let sliced = slice_lines(text, offset_lines.unwrap_or(1), limit_lines);
@@ -256,7 +260,21 @@ fn handler_read(args: Value) -> Result<Value> {
 /// list, OR does its canonical resolution land on the list?
 /// The double check defends against `/proc/self/cwd/../dev/zero`
 /// or symlinks pointing at `/dev/zero`.
-fn is_blocked_read_path(path: &str) -> bool {
+fn is_blocked_read_path(path: &Path) -> bool {
+    if let Some(path) = path.to_str() {
+        if BLOCKED_READ_PATHS.contains(&path) {
+            return true;
+        }
+    }
+    if let Ok(canon) = std::fs::canonicalize(path) {
+        if let Some(s) = canon.to_str() {
+            return BLOCKED_READ_PATHS.contains(&s);
+        }
+    }
+    false
+}
+
+fn is_blocked_read_path_str(path: &str) -> bool {
     if BLOCKED_READ_PATHS.contains(&path) {
         return true;
     }
@@ -273,7 +291,7 @@ fn is_blocked_read_path(path: &str) -> bool {
 /// depth. Kept named distinctly so a search for `is_blocked_read_path`
 /// still surfaces only the in-module call site.
 pub(crate) fn is_blocked_read_path_for_chat(path: &str) -> bool {
-    is_blocked_read_path(path)
+    is_blocked_read_path_str(path)
 }
 
 /// Return the substring of `text` from line `offset_lines`
@@ -309,7 +327,9 @@ fn slice_lines(text: &str, offset_lines: u64, limit_lines: Option<u64>) -> Strin
 // ── fs.write ─────────────────────────────────────────────────────
 
 fn handler_write(args: Value) -> Result<Value> {
-    let path = require_string(&args, "path")?;
+    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Write)?;
+    let path = resolved.local_path;
+    let path_label = resolved.display_path;
     let create_parents = args
         .get("create_parents")
         .and_then(Value::as_bool)
@@ -320,12 +340,15 @@ fn handler_write(args: Value) -> Result<Value> {
     let raw = decode_content(&args)?;
 
     if create_parents {
-        if let Some(parent) = Path::new(path).parent() {
+        if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| anyhow!("fs.write: mkdir -p {parent:?}: {e}"))?;
             }
         }
+    }
+    if let Some(root) = resolved.virtual_root_path.as_deref() {
+        filesystem::ensure_write_parent_under_root(&path, root)?;
     }
 
     // Resolve a single layer of symlink so that:
@@ -345,8 +368,17 @@ fn handler_write(args: Value) -> Result<Value> {
     // `ls -l`. POSIX rename(2) on a symlink path replaces the
     // symlink itself — not what we want when an agent writes to
     // a config that happens to be a symlink.
-    let written_path = resolve_symlink_one_level(Path::new(path));
+    let written_path = resolve_symlink_one_level(&path);
     let dst: &Path = &written_path;
+    if let Some(root) = resolved.virtual_root_path.as_deref() {
+        if dst.exists() {
+            filesystem::ensure_path_under_root(dst, root).map_err(|e| {
+                anyhow!("fs.write: resolved target escapes resource virtual root: {e}")
+            })?;
+        } else {
+            filesystem::ensure_write_parent_under_root(dst, root)?;
+        }
+    }
 
     // Inspect the existing target to capture its mode (for
     // permission preservation) and its mtime (for the
@@ -446,13 +478,15 @@ fn handler_write(args: Value) -> Result<Value> {
         "mode_preserved": mode_preserved,
         "ability_profile_version": PROFILE_VERSION,
     });
-    if path != dst.to_string_lossy() {
+    if path != dst {
         // We followed a symlink. Surface the resolved path so
         // the caller (and the receipt) record what was actually
         // written. The original symlink path is implicit in the
         // request.
         resp["resolved_target"] = json!(dst.to_string_lossy());
     }
+    resp["resource_ref_revalidated"] = json!(true);
+    resp["display_path"] = json!(path_label);
     Ok(resp)
 }
 
@@ -532,8 +566,18 @@ fn decode_content(args: &Value) -> Result<Vec<u8>> {
 
 // ── fs.list ──────────────────────────────────────────────────────
 
+fn handler_stat(args: Value) -> Result<Value> {
+    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Stat)?;
+    let mut obj = describe_entry(&resolved.local_path, &resolved.display_path)?;
+    obj["ability_profile_version"] = json!(PROFILE_VERSION);
+    obj["resource_ref_revalidated"] = json!(true);
+    obj["display_path"] = json!(resolved.display_path);
+    Ok(obj)
+}
+
 fn handler_list(args: Value) -> Result<Value> {
-    let path = require_string(&args, "path")?;
+    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::List)?;
+    let path = resolved.local_path;
     let max_entries = args
         .get("max_entries")
         .and_then(Value::as_u64)
@@ -547,29 +591,47 @@ fn handler_list(args: Value) -> Result<Value> {
     let mut truncated = false;
 
     if recursive {
-        list_recursive(Path::new(path), max_entries, &mut entries, &mut truncated)?;
+        list_recursive(
+            &path,
+            resolved.display_path.as_str(),
+            max_entries,
+            &mut entries,
+            &mut truncated,
+        )?;
     } else {
-        for entry in std::fs::read_dir(Path::new(path))
-            .map_err(|e| anyhow!("fs.list: read_dir {path:?}: {e}"))?
+        for entry in
+            std::fs::read_dir(&path).map_err(|e| anyhow!("fs.list: read_dir {path:?}: {e}"))?
         {
             if entries.len() >= max_entries {
                 truncated = true;
                 break;
             }
             let entry = entry.map_err(|e| anyhow!("fs.list: iter entry: {e}"))?;
-            entries.push(describe_entry(&entry.path())?);
+            let entry_path = entry.path();
+            let display_path = entry_display_path(
+                resolved.display_path.as_str(),
+                entry_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(""),
+            );
+            entries.push(describe_entry(&entry_path, &display_path)?);
         }
     }
 
-    Ok(json!({
+    let mut response = json!({
         "entries": entries,
         "truncated": truncated,
         "ability_profile_version": PROFILE_VERSION,
-    }))
+    });
+    response["resource_ref_revalidated"] = json!(true);
+    response["display_path"] = json!(resolved.display_path);
+    Ok(response)
 }
 
 fn list_recursive(
     dir: &Path,
+    dir_display_path: &str,
     max_entries: usize,
     out: &mut Vec<Value>,
     truncated: &mut bool,
@@ -582,13 +644,19 @@ fn list_recursive(
         }
         let entry = entry.map_err(|e| anyhow!("fs.list: iter entry: {e}"))?;
         let path = entry.path();
-        out.push(describe_entry(&path)?);
+        let display_path = entry_display_path(
+            dir_display_path,
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(""),
+        );
+        out.push(describe_entry(&path, &display_path)?);
         if path.is_dir() && !path.is_symlink() {
             // is_symlink check prevents infinite loops via
             // self-referential symlinks. A symlink that points
             // back to an ancestor would otherwise blow up the
             // entry list.
-            list_recursive(&path, max_entries, out, truncated)?;
+            list_recursive(&path, &display_path, max_entries, out, truncated)?;
             if *truncated {
                 return Ok(());
             }
@@ -597,7 +665,18 @@ fn list_recursive(
     Ok(())
 }
 
-fn describe_entry(path: &Path) -> Result<Value> {
+fn entry_display_path(parent_display_path: &str, entry_name: &str) -> String {
+    let parent = parent_display_path.trim_end_matches('/');
+    if parent.is_empty() {
+        entry_name.to_string()
+    } else if entry_name.is_empty() {
+        parent.to_string()
+    } else {
+        format!("{parent}/{entry_name}")
+    }
+}
+
+fn describe_entry(path: &Path, display_path: &str) -> Result<Value> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|e| anyhow!("fs.list: stat {path:?}: {e}"))?;
     let kind = if metadata.file_type().is_symlink() {
@@ -611,7 +690,7 @@ fn describe_entry(path: &Path) -> Result<Value> {
     };
     let mut obj = json!({
         "name": path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-        "path": path.to_string_lossy().to_string(),
+        "display_path": display_path,
         "kind": kind,
     });
     if metadata.is_file() {
@@ -630,10 +709,10 @@ fn describe_entry(path: &Path) -> Result<Value> {
 pub fn input_schema_read() -> Value {
     json!({
         "type": "object",
-        "required": ["path"],
+        "required": ["resource_ref"],
         "additionalProperties": false,
         "properties": {
-            "path": { "type": "string", "minLength": 1 },
+            "resource_ref": filesystem::resource_ref_schema(),
             "max_bytes": {
                 "type": "integer",
                 "minimum": 0,
@@ -658,10 +737,10 @@ pub fn input_schema_read() -> Value {
 pub fn input_schema_write() -> Value {
     json!({
         "type": "object",
-        "required": ["path", "content"],
+        "required": ["resource_ref", "content"],
         "additionalProperties": false,
         "properties": {
-            "path": { "type": "string", "minLength": 1 },
+            "resource_ref": filesystem::resource_ref_schema(),
             "content": {
                 "oneOf": [
                     { "type": "string", "description": "base64-encoded by default; pass encoding=\"utf8\" for raw text" },
@@ -684,13 +763,24 @@ pub fn input_schema_write() -> Value {
     })
 }
 
+pub fn input_schema_stat() -> Value {
+    json!({
+        "type": "object",
+        "required": ["resource_ref"],
+        "additionalProperties": false,
+        "properties": {
+            "resource_ref": filesystem::resource_ref_schema()
+        }
+    })
+}
+
 pub fn input_schema_list() -> Value {
     json!({
         "type": "object",
-        "required": ["path"],
+        "required": ["resource_ref"],
         "additionalProperties": false,
         "properties": {
-            "path": { "type": "string", "minLength": 1 },
+            "resource_ref": filesystem::resource_ref_schema(),
             "recursive": { "type": "boolean" },
             "max_entries": { "type": "integer", "minimum": 1 }
         }
@@ -698,7 +788,7 @@ pub fn input_schema_list() -> Value {
 }
 
 pub fn description_read() -> &'static str {
-    "Read a file from the host's filesystem (streamed up to \
+    "Read a file through a revalidated filesystem ResourceRef (streamed up to \
      max_bytes, default 8 MiB, hard cap 100 MiB). With \
      encoding=\"utf8\" the optional offset_lines / limit_lines \
      pair selects a 1-based line window. Blocked-device paths \
@@ -708,22 +798,21 @@ pub fn description_read() -> &'static str {
 }
 
 pub fn description_write() -> &'static str {
-    "Write a file atomically (temp + rename) on the host's filesystem. \
+    "Write a revalidated filesystem ResourceRef atomically (temp + rename). \
      Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
 }
 
+pub fn description_stat() -> &'static str {
+    "Stat a file or directory through a revalidated RFC-005 ResourceRef. Part of the \
+     baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
+}
+
 pub fn description_list() -> &'static str {
-    "List the contents of a directory on the host's filesystem. \
+    "List the contents of a directory through a revalidated filesystem ResourceRef. \
      Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
-
-fn require_string<'a>(args: &'a Value, field: &str) -> Result<&'a str> {
-    args.get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing required string field `{field}`"))
-}
 
 /// Short random suffix for tmp filenames during atomic write.
 /// Uses uuid for a collision-safe value without pulling in a
@@ -743,6 +832,10 @@ mod tests {
         p
     }
 
+    fn local_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
+        filesystem::resource_ref_for_local_path(path, capability).unwrap()
+    }
+
     // ─── fs.read ─────────────────────────────────────────────
 
     #[test]
@@ -752,7 +845,7 @@ mod tests {
         std::fs::write(&path, "hello world").unwrap();
 
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "utf8",
         }))
         .unwrap();
@@ -771,7 +864,7 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
 
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
         }))
         .unwrap();
         let decoded = BASE64_STANDARD
@@ -788,7 +881,7 @@ mod tests {
         std::fs::write(&path, [0xFF, 0xFE, 0xFD]).unwrap();
 
         let err = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "utf8",
         }))
         .unwrap_err();
@@ -803,7 +896,7 @@ mod tests {
         std::fs::write(&path, vec![b'x'; 1000]).unwrap();
 
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "max_bytes": 100,
             "encoding": "utf8",
         }))
@@ -821,7 +914,7 @@ mod tests {
         std::fs::write(&path, "x").unwrap();
 
         let err = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "rot13",
         }))
         .unwrap_err();
@@ -838,31 +931,12 @@ mod tests {
         std::fs::write(&path, "x").unwrap();
 
         let err = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "max_bytes": READ_MAX_BYTES_HARD_CAP + 1,
         }))
         .unwrap_err();
         assert!(err.to_string().contains("hard cap"));
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn read_rejects_blocked_dev_zero() {
-        // /dev/zero would otherwise hang the blocking-pool thread.
-        if !std::path::Path::new("/dev/zero").exists() {
-            return; // Skip on hosts without /dev/zero (Windows).
-        }
-        let err = handler_read(json!({ "path": "/dev/zero" })).unwrap_err();
-        assert!(err.to_string().contains("blocked-device"));
-    }
-
-    #[test]
-    fn read_rejects_blocked_dev_random() {
-        if !std::path::Path::new("/dev/random").exists() {
-            return;
-        }
-        let err = handler_read(json!({ "path": "/dev/random" })).unwrap_err();
-        assert!(err.to_string().contains("blocked-device"));
     }
 
     #[test]
@@ -878,7 +952,7 @@ mod tests {
         let path = dir.join("ten_k.bin");
         std::fs::write(&path, vec![b'.'; 10_240]).unwrap();
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "max_bytes": 1_000_000,
         }))
         .unwrap();
@@ -898,7 +972,7 @@ mod tests {
         std::fs::write(&path, &body).unwrap();
 
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "utf8",
             "offset_lines": 3,
             "limit_lines": 2,
@@ -918,7 +992,7 @@ mod tests {
         let path = dir.join("any.txt");
         std::fs::write(&path, "x\ny\n").unwrap();
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "utf8",
             "offset_lines": 0,
         }))
@@ -933,7 +1007,7 @@ mod tests {
         let path = dir.join("two.txt");
         std::fs::write(&path, "a\nb\n").unwrap();
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "utf8",
             "offset_lines": 100,
         }))
@@ -948,7 +1022,7 @@ mod tests {
         let path = dir.join("any.bin");
         std::fs::write(&path, "x").unwrap();
         let err = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "offset_lines": 1,
         }))
         .unwrap_err();
@@ -969,14 +1043,14 @@ mod tests {
     #[test]
     fn is_blocked_read_path_recognises_known_devices() {
         if std::path::Path::new("/dev/zero").exists() {
-            assert!(is_blocked_read_path("/dev/zero"));
+            assert!(is_blocked_read_path_str("/dev/zero"));
         }
         // Not on the list — even if the file exists, it must
         // not be flagged.
         let dir = temp_dir();
         let path = dir.join("safe.txt");
         std::fs::write(&path, "x").unwrap();
-        assert!(!is_blocked_read_path(path.to_str().unwrap()));
+        assert!(!is_blocked_read_path_str(path.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -988,7 +1062,7 @@ mod tests {
         let path = dir.join("out.txt");
 
         let resp = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "hello",
             "encoding": "utf8",
         }))
@@ -1006,7 +1080,7 @@ mod tests {
         let encoded = BASE64_STANDARD.encode(&bytes);
 
         handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": encoded,
         }))
         .unwrap();
@@ -1020,7 +1094,7 @@ mod tests {
         let nested = dir.join("a/b/c/file.txt");
 
         handler_write(json!({
-            "path": nested.to_str().unwrap(),
+            "resource_ref": local_ref(&nested, FilesystemResourceCapability::Write),
             "content": "x",
             "encoding": "utf8",
             "create_parents": true,
@@ -1036,7 +1110,7 @@ mod tests {
         let nested = dir.join("ghost/file.txt");
 
         let err = handler_write(json!({
-            "path": nested.to_str().unwrap(),
+            "resource_ref": local_ref(&nested, FilesystemResourceCapability::Write),
             "content": "x",
             "encoding": "utf8",
         }))
@@ -1066,7 +1140,7 @@ mod tests {
         std::fs::write(&path, "old").unwrap();
 
         handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "new",
             "encoding": "utf8",
         }))
@@ -1089,7 +1163,7 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("x.bin");
         let err = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": [256, 1, 2],
         }))
         .unwrap_err();
@@ -1106,11 +1180,21 @@ mod tests {
         std::fs::create_dir(dir.join("sub")).unwrap();
 
         let resp = handler_list(json!({
-            "path": dir.to_str().unwrap(),
+            "resource_ref": local_ref(&dir, FilesystemResourceCapability::List),
         }))
         .unwrap();
         let entries = resp["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 2);
+        for entry in entries {
+            assert!(
+                entry.get("path").is_none(),
+                "fs.list entries must not expose daemon host paths: {entry:?}"
+            );
+            assert!(
+                entry["display_path"].as_str().is_some(),
+                "fs.list entries must expose ResourceRef display paths: {entry:?}"
+            );
+        }
         let kinds: Vec<&str> = entries
             .iter()
             .map(|e| e["kind"].as_str().unwrap())
@@ -1127,7 +1211,7 @@ mod tests {
         std::fs::write(dir.join("sub/inner.txt"), "x").unwrap();
 
         let resp = handler_list(json!({
-            "path": dir.to_str().unwrap(),
+            "resource_ref": local_ref(&dir, FilesystemResourceCapability::List),
             "recursive": true,
         }))
         .unwrap();
@@ -1139,6 +1223,22 @@ mod tests {
             .collect();
         assert!(names.contains(&"sub".to_string()));
         assert!(names.contains(&"inner.txt".to_string()));
+        let display_paths: Vec<String> = resp["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["display_path"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            display_paths.iter().any(|path| path.ends_with("/sub")),
+            "recursive list missing sub display path: {display_paths:?}"
+        );
+        assert!(
+            display_paths
+                .iter()
+                .any(|path| path.ends_with("/sub/inner.txt")),
+            "recursive list missing inner display path: {display_paths:?}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1149,7 +1249,7 @@ mod tests {
             std::fs::write(dir.join(format!("f{i}.txt")), "x").unwrap();
         }
         let resp = handler_list(json!({
-            "path": dir.to_str().unwrap(),
+            "resource_ref": local_ref(&dir, FilesystemResourceCapability::List),
             "max_entries": 3,
         }))
         .unwrap();
@@ -1164,7 +1264,10 @@ mod tests {
         std::fs::write(dir.join("file.txt"), b"hello").unwrap();
         std::fs::create_dir(dir.join("sub")).unwrap();
 
-        let resp = handler_list(json!({ "path": dir.to_str().unwrap() })).unwrap();
+        let resp = handler_list(json!({
+            "resource_ref": local_ref(&dir, FilesystemResourceCapability::List),
+        }))
+        .unwrap();
         for entry in resp["entries"].as_array().unwrap() {
             match entry["kind"].as_str().unwrap() {
                 "file" => assert_eq!(entry["size"], json!(5)),
@@ -1175,6 +1278,22 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn public_fs_handlers_require_resource_ref() {
+        for err in [
+            handler_read(json!({ "encoding": "utf8" })).unwrap_err(),
+            handler_write(json!({ "content": "x", "encoding": "utf8" })).unwrap_err(),
+            handler_stat(json!({})).unwrap_err(),
+            handler_list(json!({})).unwrap_err(),
+        ] {
+            assert!(
+                err.to_string()
+                    .contains("resource_ref: missing required object"),
+                "expected ResourceRef-required error, got: {err}"
+            );
+        }
+    }
+
     // ─── Schema sanity ─────────────────────────────────────
 
     #[test]
@@ -1182,16 +1301,27 @@ mod tests {
         for s in [
             input_schema_read(),
             input_schema_write(),
+            input_schema_stat(),
             input_schema_list(),
         ] {
             assert_eq!(s["type"], json!("object"));
-            assert_eq!(s["required"][0], json!("path"));
+            assert!(s["properties"]["resource_ref"].is_object());
+            assert!(s["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("resource_ref")));
+            assert!(s["properties"].get("path").is_none());
         }
     }
 
     #[test]
     fn descriptions_mention_the_profile_name() {
-        for d in [description_read(), description_write(), description_list()] {
+        for d in [
+            description_read(),
+            description_write(),
+            description_stat(),
+            description_list(),
+        ] {
             assert!(d.contains("baseline-locomotion-v1"));
         }
     }
@@ -1221,7 +1351,7 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         let resp = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "new",
             "encoding": "utf8",
         }))
@@ -1246,7 +1376,7 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         let resp = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "new",
             "encoding": "utf8",
             "mode": 0o644,
@@ -1281,7 +1411,7 @@ mod tests {
         }
 
         let resp = handler_write(json!({
-            "path": link.to_str().unwrap(),
+            "resource_ref": local_ref(&link, FilesystemResourceCapability::Write),
             "content": "new",
             "encoding": "utf8",
         }))
@@ -1311,7 +1441,7 @@ mod tests {
         let mtime = file_mtime_ms(&std::fs::metadata(&path).unwrap()).unwrap();
 
         let resp = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "second",
             "encoding": "utf8",
             "expected_mtime_ms": mtime,
@@ -1329,7 +1459,7 @@ mod tests {
         std::fs::write(&path, "first").unwrap();
 
         let err = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "second",
             "encoding": "utf8",
             "expected_mtime_ms": 1u64, // far in the past, will not match
@@ -1349,7 +1479,7 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("nope.txt");
         let err = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "x",
             "encoding": "utf8",
             "expected_mtime_ms": 12345u64,
@@ -1365,7 +1495,7 @@ mod tests {
         let path = dir.join("file.txt");
         std::fs::write(&path, "x").unwrap();
         let resp = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "utf8",
         }))
         .unwrap();
@@ -1386,14 +1516,14 @@ mod tests {
         std::fs::write(&path, "v1").unwrap();
 
         let read = handler_read(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "utf8",
         }))
         .unwrap();
         let mtime = read["mtime_ms"].as_u64().expect("mtime present");
 
         let write = handler_write(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": local_ref(&path, FilesystemResourceCapability::Write),
             "content": "v2",
             "encoding": "utf8",
             "expected_mtime_ms": mtime,

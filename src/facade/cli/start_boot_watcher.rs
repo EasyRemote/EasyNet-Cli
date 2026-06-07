@@ -2,7 +2,7 @@
 // ========================================
 //
 // File: src/facade/cli/start_boot_watcher.rs
-// Description: `easynet start`'s daemon-side bridge. Polls
+// Description: `easynet runtime start`'s daemon-side bridge. Polls
 //              `control.sock` until the freshly-spawned daemon
 //              starts accepting, subscribes to `system.watch_boot`,
 //              and translates each `BootEvent` frame into one call

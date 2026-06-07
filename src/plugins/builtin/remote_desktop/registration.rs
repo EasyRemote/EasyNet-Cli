@@ -5,7 +5,7 @@
 // Description: Catalog mounting for the remote desktop plugin package.
 //
 // Protocol Responsibility:
-// - Binds `device.remote_desktop.*` ability names to the package's handler
+// - Binds `remote_desktop.*` ability names to the package's handler
 //   functions with the correct owner and call mode.
 //
 // Implementation Approach:

@@ -34,7 +34,7 @@
 //     {
 //       "type": "request",
 //       "subject_device": "<canonical device URI>",
-//       "ability":        "<ability the remote device runs>",
+//       "ability_ura":    "<canonical Ability URA the remote owner runs>",
 //       "args":           <bytes — opaque to invoke_remote handler>
 //     }
 //   streams = [{stream_id: 0, content_type: "application/json", ordering: STRICT}]
@@ -149,8 +149,8 @@ pub enum InvokeRemoteUp {
         /// target falls back to `subject_device`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject_ura: Option<String>,
-        /// Ability name the remote device should run.
-        ability: String,
+        /// Canonical Ability URA the remote owner should run.
+        ability_ura: String,
         /// Opaque payload bytes the remote ability consumes. The
         /// invoke_remote initiator and handler do not interpret these.
         args: Vec<u8>,
@@ -235,9 +235,9 @@ pub enum SessionDispatch {
     },
     /// Hub → target device. Open one long-lived local bidi handler
     /// on the target and bind it to `call_id`. Used by the
-    /// same-hub `device.fs.transfer` bridge: the hub forwards the
+    /// same-hub `fs.transfer` bridge: the hub forwards the
     /// backend's InvokeBidi open to the device's local
-    /// `device.fs.transfer` ability, then streams caller input via
+    /// `fs.transfer` ability, then streams caller input via
     /// `BidiInput` and target output back via non-terminal
     /// `Result` frames.
     BidiOpen {
@@ -289,13 +289,13 @@ pub enum SessionDispatch {
     /// typically have ≤1 concurrent CLI invoke in flight.
     Request {
         call_id: [u8; 16],
-        ability: String,
+        ability_ura: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
     },
     /// Hub → device. Reverse direction of `Request`. The hub
-    /// resolved the target via its PresenceRegistry (same-tenant
-    /// fast-path) or via cross-hub dial (target tenant differs)
+    /// resolved the target via its PresenceRegistry (same-realm
+    /// fast-path) or via cross-hub dial (target realm differs)
     /// and is returning the result bytes — or a typed error
     /// describing why resolution failed.
     RequestResult {
@@ -372,13 +372,13 @@ pub fn call_id_hex(call_id: &[u8; 16]) -> String {
 pub async fn invoke_remote(
     channel: Channel,
     subject_device: String,
-    ability: String,
+    ability_ura: String,
     args: Vec<u8>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<InvokeRemoteFrame, Status>> + Send>>, Status> {
     let request = InvokeRemoteUp::Request {
         subject_device,
         subject_ura: None,
-        ability,
+        ability_ura,
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: HashMap::new(),
@@ -579,7 +579,7 @@ mod tests {
         let request_json = serde_json::to_vec(&InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
             subject_ura: None,
-            ability: "echo".into(),
+            ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: HashMap::new(),
@@ -616,7 +616,7 @@ mod tests {
         let original = InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-X".into(),
             subject_ura: Some("easynet:///r/realm/resource/camera-1".into()),
-            ability: "fs.read".into(),
+            ability_ura: "easynet:///r/realm/ability/device.dev-X.fs.read".into(),
             args: vec![1, 2, 3, 255],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: {
@@ -886,8 +886,8 @@ mod tests {
         // PR-N6 wire shape (C2): Request frame device → hub.
         let original = SessionDispatch::Request {
             call_id: [0xab; 16],
-            ability: "fs.read".into(),
-            args: br#"{"path":"/etc/hosts"}"#.to_vec(),
+            ability_ura: "easynet:///r/localhost/ability/hub.federation.forward_invoke".into(),
+            args: br#"{"resource_ref":{"resource_ura":"easynet:///r/localhost/resource/device.local-device/fs/tmp/hosts","owner_ura":"easynet:///r/localhost/device/local-device","namespace":"fs","display_path":"tmp/hosts","capability":"read","expires_unix_ms":4102444800000,"revision":"fs-local-mapping-v1"}}"#.to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };
         let bytes = serde_json::to_vec(&original).expect("encode");
@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn session_dispatch_request_carries_distinct_tag_in_serialised_form() {
         // The `Request` and `Dispatch` variants share the
-        // `(call_id, ability, args)` shape but flow on
+        // `(call_id, ability_ura, args)` shape but flow on
         // opposite directions. The wire-level discriminator
         // is the `type` tag; an existing peer that never
         // saw the new variants will see `{"type":"request",
@@ -951,7 +951,7 @@ mod tests {
         // `#[serde(rename_all = "snake_case")]` shows up here.
         let req = SessionDispatch::Request {
             call_id: [0; 16],
-            ability: "x".into(),
+            ability_ura: "easynet:///r/realm/ability/hub.federation.forward_invoke".into(),
             args: vec![],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };

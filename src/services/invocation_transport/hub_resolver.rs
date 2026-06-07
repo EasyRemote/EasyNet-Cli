@@ -2,7 +2,7 @@
 // =========================
 //
 // File: src/services/invocation_transport/hub_resolver.rs
-// Description: Resolves a cross-tenant `target_tenant` (plus the full
+// Description: Resolves a cross-realm `target_realm` (plus the full
 //              `target_ura` for directory lookups) to a peer hub
 //              endpoint that `forward_invoke` should dial. Owns the
 //              fallback chain that used to live inline in
@@ -50,8 +50,8 @@
 //
 // Static entries take precedence over directory observations so
 // operators retain control: if `daemon-config.toml` pins
-// `tenant-x → https://primary.example`, a directory-observed
-// `https://backup.example` for the same tenant never overrides it.
+// `realm-x → https://primary.example`, a directory-observed
+// `https://backup.example` for the same realm never overrides it.
 //
 // Why directory fallback is opt-in (default-off)
 // ----------------------------------------------
@@ -72,7 +72,7 @@
 // `hub_endpoint` into their snapshot. With the default
 // (`allow_directory_fallback = false`) we never look at that field
 // and dispatch falls back to `target_offline` — the attacker can
-// at best DoS routing for tenants the operator never wired by
+// at best DoS routing for realms the operator never wired by
 // hand, which is already the legacy behaviour.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -88,12 +88,12 @@ use crate::services::federation_directory::{
 /// Distinguishing static-vs-fallback at the type level is
 /// load-bearing: operators monitoring `federated_peers_miss`
 /// telemetry need to know "did the operator-declared map carry
-/// this tenant, or did we fall through to directory observation."
+/// this realm, or did we fall through to directory observation."
 /// A single `Option<String>` collapses the two cases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubResolution {
     /// Static `federated_peers` entry — operator declared this
-    /// `tenant → hub_endpoint` mapping in `daemon-config.toml`.
+    /// `realm → hub_endpoint` mapping in `daemon-config.toml`.
     Static { hub_endpoint: String },
     /// Federated directory fallback — no static entry; the URA
     /// comes from the directory sync's observation of this device
@@ -156,17 +156,17 @@ impl<'a> HubResolver<'a> {
         }
     }
 
-    /// Pick a hub endpoint for `(target_tenant, target_ura)` by
+    /// Pick a hub endpoint for `(target_realm, target_ura)` by
     /// consulting each source in the precedence order documented
     /// in the module header. The caller decides what to do with
     /// the result; `Offline` is not coerced into an `Err` here so
     /// the dispatch service can attach its existing receipt-emission
     /// side effect on the offline branch.
     #[must_use]
-    pub fn resolve(&self, target_tenant: &str, target_ura: &str) -> HubResolution {
+    pub fn resolve(&self, target_realm: &str, target_ura: &str) -> HubResolution {
         // Source 1: static, operator-declared. Always consulted.
         let peers_snapshot = self.static_peers.snapshot();
-        if let Some(ura) = peers_snapshot.get(target_tenant) {
+        if let Some(ura) = peers_snapshot.get(target_realm) {
             return HubResolution::Static {
                 hub_endpoint: ura.clone(),
             };
@@ -222,23 +222,20 @@ mod tests {
 
     #[test]
     fn static_peer_wins_over_directory_observation_even_when_fallback_enabled() {
-        // Both sources carry the tenant; static must win so operator
+        // Both sources carry the realm; static must win so operator
         // intent is authoritative. Even with `allow_directory_fallback
         // = true` the directory must not override an operator pin.
         let mut peers = BTreeMap::new();
-        peers.insert(
-            "tenant-x".to_string(),
-            "https://primary.example".to_string(),
-        );
+        peers.insert("realm-x".to_string(), "https://primary.example".to_string());
         let static_peers = SharedFederatedPeers::new(peers);
         let directory = directory_with_entry(
-            "tenant-x",
-            "easynet:///r/tenant-x/device/d1",
+            "realm-x",
+            "easynet:///r/realm-x/device/d1",
             Some("https://backup.example"),
         );
 
         let resolver = HubResolver::new(&static_peers, &directory, true);
-        let outcome = resolver.resolve("tenant-x", "easynet:///r/tenant-x/device/d1");
+        let outcome = resolver.resolve("realm-x", "easynet:///r/realm-x/device/d1");
 
         assert_eq!(
             outcome,
@@ -252,19 +249,19 @@ mod tests {
     fn directory_fills_in_when_static_missing_and_fallback_enabled() {
         let static_peers = SharedFederatedPeers::default();
         let directory = directory_with_entry(
-            "tenant-y",
-            "easynet:///r/tenant-y/device/d2",
+            "realm-y",
+            "easynet:///r/realm-y/device/d2",
             Some("https://auto.example"),
         );
 
         let resolver = HubResolver::new(&static_peers, &directory, true);
-        let outcome = resolver.resolve("tenant-y", "easynet:///r/tenant-y/device/d2");
+        let outcome = resolver.resolve("realm-y", "easynet:///r/realm-y/device/d2");
 
         assert_eq!(
             outcome,
             HubResolution::DirectoryFallback {
                 hub_endpoint: "https://auto.example".to_string(),
-                target_ura: "easynet:///r/tenant-y/device/d2".to_string(),
+                target_ura: "easynet:///r/realm-y/device/d2".to_string(),
             }
         );
     }
@@ -278,15 +275,15 @@ mod tests {
         // peer rather than dialing an attacker-controllable URL.
         let static_peers = SharedFederatedPeers::default();
         let directory = directory_with_entry(
-            "tenant-untrusted",
-            "easynet:///r/tenant-untrusted/device/d-evil",
+            "realm-untrusted",
+            "easynet:///r/realm-untrusted/device/d-evil",
             Some("https://attacker.example"),
         );
 
         let resolver = HubResolver::new(&static_peers, &directory, false);
         let outcome = resolver.resolve(
-            "tenant-untrusted",
-            "easynet:///r/tenant-untrusted/device/d-evil",
+            "realm-untrusted",
+            "easynet:///r/realm-untrusted/device/d-evil",
         );
 
         assert_eq!(
@@ -301,15 +298,12 @@ mod tests {
         // The opt-in only gates source 2 — operator-declared static
         // peers must continue to resolve regardless of the flag.
         let mut peers = BTreeMap::new();
-        peers.insert(
-            "tenant-x".to_string(),
-            "https://primary.example".to_string(),
-        );
+        peers.insert("realm-x".to_string(), "https://primary.example".to_string());
         let static_peers = SharedFederatedPeers::new(peers);
         let directory = SharedFederatedDirectoryView::default();
 
         let resolver = HubResolver::new(&static_peers, &directory, false);
-        let outcome = resolver.resolve("tenant-x", "easynet:///r/tenant-x/device/anywhere");
+        let outcome = resolver.resolve("realm-x", "easynet:///r/realm-x/device/anywhere");
 
         assert_eq!(
             outcome,
@@ -322,10 +316,10 @@ mod tests {
     #[test]
     fn directory_entry_without_endpoint_is_not_a_hit_when_fallback_enabled() {
         let static_peers = SharedFederatedPeers::default();
-        let directory = directory_with_entry("tenant-z", "easynet:///r/tenant-z/device/d3", None);
+        let directory = directory_with_entry("realm-z", "easynet:///r/realm-z/device/d3", None);
 
         let resolver = HubResolver::new(&static_peers, &directory, true);
-        let outcome = resolver.resolve("tenant-z", "easynet:///r/tenant-z/device/d3");
+        let outcome = resolver.resolve("realm-z", "easynet:///r/realm-z/device/d3");
 
         assert_eq!(outcome, HubResolution::Offline);
     }

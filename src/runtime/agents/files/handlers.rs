@@ -172,7 +172,10 @@ fn sha256_from_ura(ura: &str) -> anyhow::Result<String> {
     if !matches!(parsed.kind, crate::ura::URAKind::Resource) {
         anyhow::bail!("files: URA `{ura}` is not a resource URA");
     }
-    let path = parsed.path.trim_start_matches('/');
+    let path = parsed
+        .resource_path()
+        .unwrap_or_default()
+        .trim_start_matches('/');
     if path.len() != 64 || !path.chars().all(|c| c.is_ascii_hexdigit()) {
         anyhow::bail!("files: URA path is not a 64-hex sha256: `{path}`");
     }

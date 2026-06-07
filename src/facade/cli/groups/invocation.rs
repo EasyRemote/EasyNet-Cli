@@ -3,7 +3,7 @@
 //
 // File: src/facade/cli/groups/invocation.rs
 // Description: `easynet invocation ...` queries the local daemon's
-//              device.invocation.* abilities through Axon's
+//              device-owned invocation.history.* abilities through Axon's
 //              Invocation gRPC surface. The daemon owns the native
 //              ledger handle, so the CLI never races native storage
 //              locks or reimplements ability dispatch.
@@ -49,17 +49,20 @@ pub struct ListArgs {
     /// Filter by state, for example completed or failed.
     #[arg(long)]
     pub state: Option<String>,
-    /// Filter by ability name or ability URA.
-    #[arg(long)]
-    pub ability: Option<String>,
+    /// Filter by canonical Ability URA.
+    #[arg(long = "ability-ura")]
+    pub ability_ura: Option<String>,
     /// Filter by caller URA.
-    #[arg(long)]
+    #[arg(long = "caller-ura")]
     pub caller: Option<String>,
     /// Filter by callee URA.
-    #[arg(long)]
+    #[arg(long = "callee-ura")]
     pub callee: Option<String>,
+    /// Filter by ability owner/callee Agent URA.
+    #[arg(long = "agent-ura")]
+    pub agent_ura: Option<String>,
     /// Filter by subject URA.
-    #[arg(long)]
+    #[arg(long = "subject-ura")]
     pub subject: Option<String>,
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
@@ -137,7 +140,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
         table.add_row(vec![
             record.request_id.clone(),
             record.state.clone(),
-            record.ability_name.clone(),
+            public_ability_label(record),
             caller,
             callee,
             age,
@@ -173,13 +176,14 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .map(|ms| ms.to_string())
         .unwrap_or_else(|| "-".to_string());
     let started = record.started_unix_ms.to_string();
+    let ability = public_ability_label(&record);
     output::kv_section_stdout(&[
         ("invocation_ura", record.invocation_ura.as_str()),
         ("request_id", record.request_id.as_str()),
         ("trace_id", record.trace_id.as_str()),
         ("span_id", record.span_id.as_str()),
         ("state", record.state.as_str()),
-        ("ability", record.ability_name.as_str()),
+        ("ability", ability.as_str()),
         ("ability_ura", record.ability_ura.as_str()),
         ("caller", record.caller_ura.as_str()),
         ("callee", record.callee_ura.as_str()),
@@ -254,7 +258,7 @@ fn print_trace_table(records: &[InvocationRecord]) {
             record.request_id.clone(),
             record.span_id.clone(),
             record.state.clone(),
-            record.ability_name.clone(),
+            public_ability_label(record),
             started,
             elapsed,
         ]);
@@ -350,10 +354,11 @@ where
 fn history_list_args(args: &ListArgs) -> Value {
     let mut filter = Map::new();
     insert_filter_value(&mut filter, "state", args.state.as_deref());
-    insert_filter_value(&mut filter, "ability", args.ability.as_deref());
-    insert_filter_value(&mut filter, "caller", args.caller.as_deref());
-    insert_filter_value(&mut filter, "callee", args.callee.as_deref());
-    insert_filter_value(&mut filter, "subject", args.subject.as_deref());
+    insert_filter_value(&mut filter, "ability_ura", args.ability_ura.as_deref());
+    insert_filter_value(&mut filter, "caller_ura", args.caller.as_deref());
+    insert_filter_value(&mut filter, "callee_ura", args.callee.as_deref());
+    insert_filter_value(&mut filter, "agent_ura", args.agent_ura.as_deref());
+    insert_filter_value(&mut filter, "subject_ura", args.subject.as_deref());
 
     let mut body = Map::new();
     body.insert("limit".to_string(), json!(args.limit));
@@ -377,17 +382,62 @@ fn history_key_for_id(id: &str) -> Value {
     }
 }
 
+fn public_ability_label(record: &InvocationRecord) -> String {
+    crate::ura::public_ability_name_from_ability_ura(&record.callee_ura, &record.ability_ura)
+        .unwrap_or_else(|| record.ability_ura.clone())
+}
+
 fn short_ura(ura: &str) -> String {
     crate::ura::parse_ura(ura)
         .ok()
         .and_then(|parsed| match parsed.kind {
-            crate::ura::URAKind::User => Some(format!("user/{}", parsed.user_id)),
-            crate::ura::URAKind::Device => Some(format!("device/{}", parsed.device_id)),
-            crate::ura::URAKind::Agent => {
-                Some(format!("agent/{}.{}", parsed.user_id, parsed.agent_id))
-            }
+            crate::ura::URAKind::User => parsed.user_id().map(|user_id| format!("user/{user_id}")),
+            crate::ura::URAKind::Device => parsed
+                .device_id()
+                .map(|device_id| format!("device/{device_id}")),
+            crate::ura::URAKind::Agent => parsed
+                .agent_ids()
+                .map(|(user_id, agent_id)| format!("agent/{user_id}.{agent_id}")),
             crate::ura::URAKind::Hub => Some(format!("hub/{}", parsed.realm)),
             _ => None,
         })
         .unwrap_or_else(|| ura.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_list_args_emits_explicit_ura_scope_fields() {
+        let body = history_list_args(&ListArgs {
+            limit: 25,
+            state: Some("completed".into()),
+            ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
+            caller: Some("easynet:///r/test/device/caller".into()),
+            callee: None,
+            agent_ura: Some("easynet:///r/test/device/callee".into()),
+            subject: Some("easynet:///r/test/user/alice".into()),
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(body["limit"], 25);
+        assert_eq!(
+            body["filter"]["ability_ura"],
+            "easynet:///r/test/ability/device.callee.fs.read"
+        );
+        assert_eq!(
+            body["filter"]["caller_ura"],
+            "easynet:///r/test/device/caller"
+        );
+        assert_eq!(
+            body["filter"]["agent_ura"],
+            "easynet:///r/test/device/callee"
+        );
+        assert_eq!(
+            body["filter"]["subject_ura"],
+            "easynet:///r/test/user/alice"
+        );
+        assert!(body["filter"].get("subject").is_none());
+    }
 }

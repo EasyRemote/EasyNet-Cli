@@ -477,13 +477,13 @@ mod tests {
     #[test]
     fn in_memory_role_overlay_signs_with_same_keypair() {
         let device = "easynet:///r/r/device/u";
-        let hub = "easynet:///r/r/hub";
-        let id = make_in_memory_vault(device, vec![hub.into()]);
+        let hub = crate::ura::hub_ura("r");
+        let id = make_in_memory_vault(device, vec![hub.clone()]);
         let pk_a = id.public_key(device).unwrap();
-        let pk_b = id.public_key(hub).unwrap();
+        let pk_b = id.public_key(&hub).unwrap();
         assert_eq!(pk_a.to_bytes(), pk_b.to_bytes(), "overlay shares keypair");
         let sig_a = id.sign(device, b"x").unwrap();
-        let sig_b = id.sign(hub, b"x").unwrap();
+        let sig_b = id.sign(&hub, b"x").unwrap();
         assert_eq!(sig_a.to_bytes(), sig_b.to_bytes());
     }
 

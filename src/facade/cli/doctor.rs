@@ -124,7 +124,7 @@ fn check_runtime() -> Check {
     match config::load() {
         Ok(state) => match state.runtime_kind {
             config::RuntimeKind::DaemonOnly => match crate::support::local_invoke::invoke_local_ability(
-                "device.observe.health",
+                "observe.health",
                 serde_json::json!({"source": "doctor"}),
             ) {
                 Ok(_) => Check {
@@ -280,7 +280,7 @@ fn check_agents() -> Vec<Check> {
             out.push(Check {
                 name: "agents".to_string(),
                 status: CheckStatus::Warn,
-                detail: format!("device.agent.list unavailable: {err}"),
+                detail: format!("agent.list unavailable: {err}"),
                 hint: Some("Start the daemon before checking registered agent rows."),
             });
             Vec::new()

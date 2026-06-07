@@ -117,6 +117,31 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
             LocalAgentsFile::default()
         }
     };
+    if plan.realm.is_empty() || plan.host_device_ura.is_empty() {
+        // Pre-join: nothing to advertise yet (the hub-profile that
+        // would receive the call doesn't know us). Bootstrap skips
+        // hosted-agent URA minting until a canonical realm/user
+        // identity exists; a post-join boot will retry.
+        outcomes.push(PublishOutcome {
+            agent_ura: String::new(),
+            label: "skipped".into(),
+            result: Err("daemon not yet joined to a realm; advertise deferred".into()),
+        });
+        return outcomes;
+    }
+
+    let Some(host_node_id) = host_node_id_from_ura(&plan.host_device_ura) else {
+        outcomes.push(PublishOutcome {
+            agent_ura: plan.host_device_ura.clone(),
+            label: "device".into(),
+            result: Err(format!(
+                "host_device_ura must be a canonical device URA: {}",
+                plan.host_device_ura
+            )),
+        });
+        return outcomes;
+    };
+
     let bootstrap_outcomes = bootstrap::bootstrap_local_agents(plan, &mut file, minter);
     if let Err(e) = local_agents::save(&file) {
         outcomes.push(PublishOutcome {
@@ -127,25 +152,11 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
         // Continue — in-memory state still allows advertise to run.
     }
 
-    if plan.realm.is_empty() || plan.host_device_ura.is_empty() {
-        // Pre-join: nothing to advertise yet (the hub-profile that
-        // would receive the call doesn't know us). The bootstrap
-        // file has been persisted with `<unjoined>` placeholders;
-        // a post-join boot will retry.
-        outcomes.push(PublishOutcome {
-            agent_ura: String::new(),
-            label: "skipped".into(),
-            result: Err("daemon not yet joined to a realm; advertise deferred".into()),
-        });
-        return outcomes;
-    }
-
     // Step 3: advertise the device-profile (Selfsigned, Model A).
     // RFC-002: pass host_node_id so federation.forward_invoke can
     // route inbound forward requests to this daemon's local-tool
-    // dispatch surface. Falls back to the legacy node-less form
-    // when host_device_ura lacks a `/device/<id>` suffix.
-    let host_node_id = host_node_id_from_ura(&plan.host_device_ura);
+    // dispatch surface. Clean RFC-005 publishing requires the host
+    // identity to be a canonical `/device/<id>` URA.
     let device_outcome = advertise::advertise_self_signed_device_with_host_node(
         invoker,
         tenant_id,
@@ -155,7 +166,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
         // empty placeholder so the advertise wire shape stays
         // stable. The hub still records the URA + status.
         "",
-        host_node_id.clone(),
+        Some(host_node_id.clone()),
     );
     outcomes.push(advertise_outcome_to_publish_outcome(
         device_outcome,
@@ -181,7 +192,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
             &plan.realm,
             &o.agent_ura,
             &plan.host_device_ura,
-            host_node_id.clone(),
+            Some(host_node_id.clone()),
         );
         outcomes.push(advertise_outcome_to_publish_outcome(
             outcome,
@@ -199,27 +210,25 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
         mcp_ura.as_deref(),
         &llm_uras,
     );
-    if let Some(host_node_id) = host_node_id.clone() {
-        for descriptor in &mut descriptors {
-            descriptor
-                .metadata
-                .insert("host_node_id".into(), host_node_id.clone());
-        }
+    for descriptor in &mut descriptors {
+        descriptor
+            .metadata
+            .insert("host_node_id".into(), host_node_id.clone());
     }
     stamp_llm_agent_metadata(&mut descriptors, plan, &llm_uras);
 
     // Step 5b: advertise the abilities OWNED by each user-installed
-    // agent (e.g. `alice.chat` and any per-agent verbs declared in
+    // agent (e.g. public `chat` for alice, plus any per-agent verbs declared in
     // `<workspace>/abilities/*.ability.toml`). The `llm` profile's
     // descriptors_for() only emits the generic conversation/session/
     // meta/skill prefixes — without this step the realm directory
-    // never learns that `alice.chat` exists, so the EasyNet
+    // never learns that alice's `chat` projection exists, so the EasyNet
     // frontend's Abilities catalog cannot list it and the user
     // cannot invoke per-agent abilities through the UI.
     //
     // Read the live registry once, look up each user agent's URA
     // in `llm_uras` (bootstrap minted these earlier), call
-    // `abilities_for(name, entry)` to get the per-agent specs, and
+    // `abilities_for_publication(name, entry)` to get the per-agent specs, and
     // convert to AbilityDescriptors owned by the user-agent URA.
     // A registry-load failure degrades to "no per-agent advertise
     // this cycle" rather than blocking the rest of publish — the
@@ -236,10 +245,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                     Some(u) => u,
                     None => continue, // bootstrap didn't mint a URA for this agent
                 };
-                let specs = crate::runtime::abilities::abilities_for(name, entry);
+                let specs = crate::runtime::abilities::abilities_for_publication(name, entry);
                 for spec in specs {
+                    let registry_name = spec.name();
+                    let owner_local_name =
+                        public_agent_ability_name(&owner_ura, name, registry_name);
                     let desc = crate::runtime::ability_descriptor::AbilityDescriptor::new(
-                        spec.name(),
+                        owner_local_name,
                         &owner_ura,
                         crate::runtime::ability_descriptor::Visibility::Scoped,
                     );
@@ -250,12 +262,10 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                                 .with_input_schema(spec.parameters().clone())
                                 .with_hints(crate::runtime::agents::discovery_hints_for(
                                     &live_registry,
-                                    spec.name(),
+                                    registry_name,
                                 ))
                                 .with_source(format!("agent:{name}"));
-                            if let Some(host_node_id) = host_node_id.as_ref() {
-                                d = d.with_metadata_entry("host_node_id", host_node_id.clone());
-                            }
+                            d = d.with_metadata_entry("host_node_id", host_node_id.clone());
                             d = d.with_metadata_entry("runtime", entry.agent_type.to_string());
                             d = d.with_metadata_entry("agent_type", entry.agent_type.to_string());
                             d = d.with_metadata_entry("base_runtime", entry.agent_type.to_string());
@@ -268,7 +278,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                         Err(e) => {
                             outcomes.push(PublishOutcome {
                                 agent_ura: owner_ura.clone(),
-                                label: format!("agent-ability/{}", spec.name()),
+                                label: format!("agent-ability/{registry_name}"),
                                 result: Err(format!("descriptor build failed: {e}")),
                             });
                         }
@@ -290,14 +300,17 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // Group descriptors by owner Agent and advertise each group.
     let mut by_owner: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
     for d in descriptors {
-        by_owner
-            .entry(d.owner_agent_ura.clone())
-            .or_default()
-            .push(d);
+        by_owner.entry(d.owner_ura.clone()).or_default().push(d);
     }
     for (owner_ura, abilities) in by_owner {
-        let result =
-            advertise::advertise_abilities(invoker, tenant_id, &plan.realm, &owner_ura, &abilities);
+        let result = advertise::advertise_abilities(
+            invoker,
+            tenant_id,
+            &plan.realm,
+            &owner_ura,
+            &plan.host_device_ura,
+            &abilities,
+        );
         outcomes.push(PublishOutcome {
             agent_ura: owner_ura.clone(),
             label: format!("abilities/{}", abilities.len()),
@@ -537,8 +550,8 @@ fn host_node_id_from_ura(ura: &str) -> Option<String> {
     // per memory `feedback_no_legacy_ura.md` (strict v4.1.5 only;
     // route every URA parse through `parse_ura`).
     let parsed = crate::ura::parse_ura(ura).ok()?;
-    if parsed.kind == crate::ura::URAKind::Device && !parsed.device_id.is_empty() {
-        return Some(parsed.device_id);
+    if parsed.kind == crate::ura::URAKind::Device {
+        return parsed.device_id().map(str::to_string);
     }
     None
 }
@@ -606,7 +619,7 @@ fn collect_daemon_owned_ability_names() -> Vec<String> {
     // `republish_with_minter` does at advertise time.
     if let Ok(reg) = crate::registry::agents::load_agents() {
         for (agent_name, entry) in &reg.agents {
-            for spec in crate::runtime::abilities::abilities_for(agent_name, entry) {
+            for spec in crate::runtime::abilities::abilities_for_publication(agent_name, entry) {
                 names.push(spec.name().to_string());
             }
         }
@@ -618,6 +631,22 @@ fn collect_daemon_owned_ability_names() -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+fn public_agent_ability_name(
+    owner_ura: &str,
+    local_agent_name: &str,
+    registry_name: &str,
+) -> String {
+    let projected = crate::ura::owner_local_ability_name(owner_ura, registry_name);
+    if projected != registry_name {
+        return projected;
+    }
+    registry_name
+        .strip_prefix(local_agent_name)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .unwrap_or(registry_name)
+        .to_string()
 }
 
 /// Revoke one Agent's directory entry. Used by `easynet agent
@@ -672,10 +701,7 @@ fn stamp_llm_agent_metadata(
         let Some((_, owner_ura)) = llm_uras.iter().find(|(name, _)| name == &sub.name) else {
             continue;
         };
-        for descriptor in descriptors
-            .iter_mut()
-            .filter(|d| d.owner_agent_ura == *owner_ura)
-        {
+        for descriptor in descriptors.iter_mut().filter(|d| d.owner_ura == *owner_ura) {
             descriptor
                 .metadata
                 .insert("runtime".into(), sub.agent_type_display.clone());
@@ -783,6 +809,33 @@ mod tests {
         }
     }
 
+    fn payload_owner_ura(payload: &Value) -> Option<&str> {
+        payload["owner_ura"]
+            .as_str()
+            .or_else(|| payload["agent_ura"].as_str())
+    }
+
+    fn ability_summary_public_name(value: &Value) -> Option<String> {
+        crate::runtime::owner_projection::summary_public_name_from_value(value)
+    }
+
+    #[test]
+    fn owner_local_ability_name_projects_agent_registry_key() {
+        let owner_ura = crate::ura::agent_ura("acme", "u1", "alice");
+        assert_eq!(
+            crate::ura::owner_local_ability_name(&owner_ura, "alice.chat"),
+            "chat"
+        );
+        assert_eq!(
+            crate::ura::owner_local_ability_name(&owner_ura, "alice.files.read"),
+            "files.read"
+        );
+        assert_eq!(
+            crate::ura::owner_local_ability_name(&owner_ura, "chat"),
+            "chat"
+        );
+    }
+
     #[test]
     fn republish_emits_device_advertise_then_each_hosted_then_descriptors() {
         let _h = HomeGuard::new();
@@ -828,15 +881,14 @@ mod tests {
             Some("01DEV".into())
         );
 
-        // Legacy `agent/<bare-uuid>` and `reg/{device,agent}.<id>?tenant_id=...`
-        // forms are rejected per memory `feedback_no_legacy_ura.md`.
+        // Non-device URA roles are rejected.
         assert_eq!(host_node_id_from_ura("easynet:///r/acme/agent/01DEV"), None);
         assert_eq!(
-            host_node_id_from_ura("easynet:///r/prv/reg/device.01DEV?tenant_id=acme"),
+            host_node_id_from_ura("easynet:///r/acme/resource/device.01DEV/fs/tmp"),
             None
         );
         assert_eq!(
-            host_node_id_from_ura("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
+            host_node_id_from_ura("easynet:///r/acme/ability/device.01DEV.fs.read"),
             None
         );
         assert_eq!(
@@ -850,7 +902,7 @@ mod tests {
             host_node_id_from_ura("easynet:///r/acme/resource/01HZ8/fs/etc/hosts"),
             None
         );
-        assert_eq!(host_node_id_from_ura("easynet:///r/acme/hub"), None);
+        assert_eq!(host_node_id_from_ura(&crate::ura::hub_ura("acme")), None);
         assert_eq!(host_node_id_from_ura("easynet:///r/acme/user/alice"), None);
 
         // Malformed inputs — strict parser returns Err, we map to None.
@@ -865,8 +917,8 @@ mod tests {
         let mut plan = plan_for("", "");
         plan.consent = true;
         let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
-        // Pre-join: bootstrap still ran but advertise was skipped.
-        // We should see ZERO calls to the bridge.
+        // Pre-join: no canonical hosted-agent URA can be minted and
+        // no advertise call should reach the bridge.
         assert!(
             invoker.calls().is_empty(),
             "no advertise calls should have happened"
@@ -877,6 +929,30 @@ mod tests {
             .find(|o| o.label == "skipped")
             .expect("expected a 'skipped' outcome");
         assert!(skipped.result.is_err());
+    }
+
+    #[test]
+    fn republish_rejects_non_device_host_ura_before_advertise() {
+        let _h = HomeGuard::new();
+        let invoker = CountingInvoker::new(good_reply());
+        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+
+        let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+
+        assert!(
+            invoker.calls().is_empty(),
+            "invalid host device URA must not reach advertise"
+        );
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].label, "device");
+        assert!(
+            outcomes[0]
+                .result
+                .as_ref()
+                .expect_err("invalid host URA must fail")
+                .contains("canonical device URA"),
+            "error should name the canonical device requirement: {outcomes:?}"
+        );
     }
 
     #[test]
@@ -903,13 +979,13 @@ mod tests {
     fn republish_advertises_user_agent_chat_ability_under_user_agent_owner() {
         // Reproduces the gap caught by an end-to-end audit: when a
         // user installs a claude-code agent named `alice`, the daemon
-        // must advertise `alice.chat` (and any other per-agent
+        // must advertise `chat` (and any other per-agent
         // verbs from <workspace>/abilities/*.ability.toml) so the
         // EasyNet frontend's Abilities catalog can list it AND the
         // backend can route invokes back to alice. Pre-fix the LLM
         // profile only published the generic conversation/session/
-        // meta/skill prefixes, so `alice.chat` never reached the
-        // realm directory and the UI could not see it.
+        // meta/skill prefixes, so alice's public `chat` projection
+        // never reached the realm directory and the UI could not see it.
         let _h = HomeGuard::new();
 
         // Persist an `alice` AgentEntry into the registry so that
@@ -951,17 +1027,16 @@ mod tests {
             .expect("bootstrap must have minted a URA for alice")
             .agent_ura;
 
-        // Find the advertise_abilities call whose payload's
-        // `agent_ura` is alice's URA, and assert `alice.chat`
-        // appears in its abilities list. The daemon may pack
-        // multiple abilities per call; we scan, not require the
-        // first match.
+        // Find the advertise_abilities call owned by alice's URA,
+        // and assert her `chat` AbilityProjectionSummary appears
+        // in its read-model list. The daemon may pack multiple
+        // abilities per call; we scan, not require the first match.
         let calls = invoker.calls();
         let alice_advert = calls
             .iter()
             .find(|(u, p)| {
                 u.contains("federation.advertise_abilities")
-                    && p["agent_ura"].as_str() == Some(alice_ura.as_str())
+                    && payload_owner_ura(p) == Some(alice_ura.as_str())
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -970,45 +1045,43 @@ mod tests {
                     calls.iter().map(|(u, _)| u).collect::<Vec<_>>()
                 )
             });
-        let abilities = alice_advert.1["abilities"]
+        let ability_summaries = alice_advert.1["ability_summaries"]
             .as_array()
-            .expect("abilities array on advertise_abilities payload");
-        let names: Vec<&str> = abilities
+            .expect("ability_summaries array on advertise_abilities payload");
+        let names: Vec<String> = ability_summaries
             .iter()
-            .filter_map(|a| a["name"].as_str())
+            .filter_map(ability_summary_public_name)
             .collect();
         assert!(
-            names.contains(&"alice.chat"),
-            "alice.chat must appear in advertised abilities for {alice_ura:?}; got names = {names:?}"
+            names.iter().any(|name| name == "chat"),
+            "chat must appear in advertised ability summaries for {alice_ura:?}; got names = {names:?}"
         );
-        // Every advertised ability under the alice agent URA must
-        // carry the base runtime+model metadata so the frontend's
-        // ability catalog can render the agent's chip without a
-        // separate lookup. `device.skill.list` is intentionally
-        // NOT asserted here — it is owned by the device profile
-        // (see `runtime::agents::profiles::device`), never by a
-        // per-user agent, and would not legitimately appear in
-        // alice's advertise_abilities payload. An earlier copy of
-        // this test asserted otherwise and drifted from the
-        // ontology when the device/agent profile boundary was
-        // hardened; we pin the honest contract here so a future
-        // regression on the **per-agent** metadata path is what
-        // surfaces, not a synthetic device-profile expectation.
+        // The publish wire no longer exposes raw descriptor
+        // metadata. It exposes the projection summary the resolver
+        // and backend catalog consume: canonical ability URA,
+        // namespace, local name, and policy/schema references.
         {
-            let ability_name = &"alice.chat";
-            let descriptor = abilities
+            let ability_name = "chat";
+            let summary = ability_summaries
                 .iter()
-                .find(|a| a["name"].as_str() == Some(*ability_name))
-                .unwrap_or_else(|| panic!("{ability_name} descriptor must be advertised"));
+                .find(|a| ability_summary_public_name(a).as_deref() == Some(ability_name))
+                .unwrap_or_else(|| panic!("{ability_name} summary must be advertised"));
+            let expected_ura = crate::ura::owner_ability_ura(alice_ura, ability_name)
+                .expect("alice chat ability URA");
             assert_eq!(
-                descriptor["metadata"]["runtime"].as_str(),
-                Some("claude-code"),
-                "{ability_name} must carry base runtime metadata"
+                summary["ability_ura"].as_str(),
+                Some(expected_ura.as_str()),
+                "{ability_name} must carry its canonical owner ability URA"
             );
             assert_eq!(
-                descriptor["metadata"]["model"].as_str(),
-                Some("sonnet"),
-                "{ability_name} must carry base model metadata"
+                summary["namespace"].as_str(),
+                Some(""),
+                "per-agent chat is scoped by owner_ura, not by a duplicated agent namespace"
+            );
+            assert_eq!(
+                summary["local_name"].as_str(),
+                Some("chat"),
+                "{ability_name} must preserve its local callable name"
             );
         }
 
@@ -1067,19 +1140,28 @@ mod tests {
             .iter()
             .find(|(u, p)| {
                 u.contains("federation.advertise_abilities")
-                    && p["agent_ura"].as_str() == Some("easynet:///r/acme/device/01DEV")
+                    && payload_owner_ura(p) == Some("easynet:///r/acme/device/01DEV")
             })
             .expect("device-owner advertise_abilities call must still exist");
-        let abilities = device_advert.1["abilities"]
+        let ability_summaries = device_advert.1["ability_summaries"]
             .as_array()
-            .expect("abilities array on device advertise");
-        let names: Vec<&str> = abilities
+            .expect("ability_summaries array on device advertise");
+        let names: Vec<String> = ability_summaries
             .iter()
-            .filter_map(|a| a["name"].as_str())
+            .filter_map(ability_summary_public_name)
             .collect();
         assert!(
-            names.contains(&"device.fs.read"),
+            names.iter().any(|name| name == "fs.read"),
             "device descriptors must survive per-agent stitch; got names = {names:?}"
+        );
+        let fs_read = ability_summaries
+            .iter()
+            .find(|a| ability_summary_public_name(a).as_deref() == Some("fs.read"))
+            .expect("fs.read summary must be in the device-owner projection");
+        assert_eq!(
+            fs_read["ability_ura"].as_str(),
+            Some("easynet:///r/acme/ability/device.01DEV.fs.read"),
+            "device-owned wire URA must retain the owner public ability namespace"
         );
     }
 

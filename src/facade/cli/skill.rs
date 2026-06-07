@@ -60,6 +60,14 @@ pub struct ListArgs {
     #[arg(long)]
     pub agent: Option<String>,
 
+    /// Canonical owner Agent URA. Filters to that hosted agent.
+    #[arg(long = "agent-ura")]
+    pub agent_ura: Option<String>,
+
+    /// Owner Agent URA or skill package Resource URA.
+    #[arg(long = "subject-ura")]
+    pub subject_ura: Option<String>,
+
     /// Emit a JSON array on stdout instead of a human-readable table.
     #[arg(long)]
     pub json: bool,
@@ -109,14 +117,14 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
 
 fn invoke_daemon_skill_install(args: &InstallArgs) -> anyhow::Result<InstallRecord> {
     let response = crate::support::local_invoke::invoke_local_ability(
-        "device.skill.install",
+        "skill.install",
         json!({
             "source": args.source,
             "agent": args.agent,
             "pin": args.pin,
         }),
     )?;
-    decode_skill_record_response(response, "device.skill.install")
+    decode_skill_record_response(response, "skill.install")
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {
@@ -162,13 +170,15 @@ struct SkillListResponse {
 
 fn invoke_daemon_skill_list(args: &ListArgs) -> anyhow::Result<Vec<InstallRecord>> {
     let response = crate::support::local_invoke::invoke_local_ability(
-        "device.skill.list",
+        "skill.list",
         json!({
             "owner_agent_id": args.agent,
+            "agent_ura": args.agent_ura,
+            "subject_ura": args.subject_ura,
         }),
     )?;
     let decoded: SkillListResponse = serde_json::from_value(response)
-        .map_err(|err| anyhow::anyhow!("device.skill.list returned invalid payload: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("skill.list returned invalid payload: {err}"))?;
     Ok(decoded.items)
 }
 
@@ -179,19 +189,19 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
 
 fn invoke_daemon_skill_upgrade(args: &UpgradeArgs) -> anyhow::Result<InstallRecord> {
     let response = crate::support::local_invoke::invoke_local_ability(
-        "device.skill.upgrade",
+        "skill.upgrade",
         json!({
             "name": args.name,
             "agent": args.agent,
             "to": args.to,
         }),
     )?;
-    decode_skill_record_response(response, "device.skill.upgrade")
+    decode_skill_record_response(response, "skill.upgrade")
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     crate::support::local_invoke::invoke_local_ability(
-        "device.skill.remove",
+        "skill.remove",
         json!({
             "name": args.name,
             "agent": args.agent,

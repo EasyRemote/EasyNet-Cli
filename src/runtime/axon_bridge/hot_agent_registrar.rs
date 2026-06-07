@@ -1,6 +1,6 @@
 //! Hot-add agent registration into `LocalRuntime`.
 //!
-//! Phase 5c blocker: `device.agent.start` / `device.agent.stop`
+//! Phase 5c blocker: `agent.start` / `agent.stop`
 //! currently only mutate `agents.json` on disk. The new agent's
 //! `<agent>.chat / discover / invoke` handlers are NOT registered
 //! anywhere — they only resolve via `AxonAbilityCatalog.rpc_fallback`
@@ -8,13 +8,13 @@
 //! fallback resolver is gone too and every hot-added agent
 //! immediately fails to dispatch.
 //!
-//! This registrar closes the gap. `device.agent.start` calls
+//! This registrar closes the gap. `agent.start` calls
 //! `register_agent(name, entry)` which builds the same three
 //! handler closures `chat_ability::register_dynamic_agent_fallback`
 //! would have synthesised lazily, wraps each through
 //! [`crate::runtime::ability_dispatch::rpc_handler_to_ability_fn`],
 //! and inserts them into [`LocalRuntime`] under the canonical
-//! `<agent>.<verb>` names. `device.agent.stop` calls
+//! `<agent>.<verb>` names. `agent.stop` calls
 //! `unregister_agent(name)` which uses `unregister_ability_by_prefix`
 //! to wipe the `<agent>.*` set in one atomic call.
 //!
@@ -25,7 +25,7 @@
 //! `runtime::agents::build_registry_with_services` in the daemon's
 //! Stage 2; runtime comes later in
 //! `invocation_transport::start_daemon_invocation_transport`).
-//! But `device.agent.start`'s handler closure has to be installed at
+//! But `agent.start`'s handler closure has to be installed at
 //! registry-build time. We bridge that by parking the
 //! [`LocalRuntime`] handle in an internal [`OnceLock`]: the
 //! registrar is constructed *pending* at registry-build time, the
@@ -73,7 +73,7 @@ pub struct HotAgentRegistrar {
     /// Device-mode boot wires this after the long-lived
     /// `<self>.session` escalation channel exists. Tests and
     /// non-device modes leave it empty, in which case
-    /// `device.agent.start` still succeeds locally and the next
+    /// `agent.start` still succeeds locally and the next
     /// reconnect/boot advertise sweep repairs hub visibility.
     hot_advertiser: OnceLock<Arc<dyn HotAgentAdvertiser>>,
 }
@@ -163,7 +163,7 @@ impl HotAgentRegistrar {
     ///
     /// **Replace-capable.** Existing rows are overwritten through
     /// `LocalRuntime::replace_ability`, not ignored as duplicates.
-    /// This is required for `agent set` and `device.agent.refresh`:
+    /// This is required for `agent set` and `agent.refresh`:
     /// both update `agents.json` first and then call this registrar
     /// against names that may already be live in the runtime. The
     /// runtime must therefore swap the handler closure atomically so
@@ -179,7 +179,7 @@ impl HotAgentRegistrar {
                 component = axon_bridge,
                 kind = hot_agent_register_runtime_not_ready,
                 agent = name,
-                message = "device.agent.start landed before LocalRuntime was wired; \
+                message = "agent.start landed before LocalRuntime was wired; \
                           agents.json still written, agent comes up on daemon restart",
             );
             return HotAgentRuntimeSyncOutcome {
@@ -320,7 +320,7 @@ mod tests {
         // (`<self>.invoke_remote`) and the host's session-receive
         // Axon arm (`LocalAxonSessionDispatcher`) both gate on.
         //
-        // Pre-this-PR, `device.agent.start` only wrote `agents.json`
+        // Pre-this-PR, `agent.start` only wrote `agents.json`
         // and the hot-added agent surfaced ONLY through the legacy
         // `rpc_fallback` resolver. Chat worked, but every call went
         // through the legacy path, never reaching the wired
@@ -355,7 +355,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_agent_replaces_existing_runtime_rows_without_duplicate_failures() {
-        // `agent set` and `device.agent.refresh` both call
+        // `agent set` and `agent.refresh` both call
         // `register_agent` for an agent that may already be live.
         // The runtime sync must replace those rows instead of
         // reporting duplicate-name failures and leaving old handler
@@ -433,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn unregister_agent_removes_every_prefix_match_atomically() {
-        // The reverse runtime-sync invariant: `device.agent.stop`
+        // The reverse runtime-sync invariant: `agent.stop`
         // must wipe the `<name>.*` set so `runtime.has_ability`
         // flips back to `false`. Uses `unregister_ability_by_prefix`
         // so the whole set drops in one atomic lock cycle.

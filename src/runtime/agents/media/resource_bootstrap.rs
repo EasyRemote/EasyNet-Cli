@@ -5,7 +5,7 @@
 // ~/.easynet/resources.json so media abilities have resource_ura
 // subjects to bind against. Handlers still perform live availability
 // checks at invocation time; this module only makes stable URAs
-// discoverable through device.meta.list_resources.
+// discoverable through meta.list_resources.
 
 use std::collections::{BTreeMap, HashSet};
 

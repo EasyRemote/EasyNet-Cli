@@ -21,7 +21,7 @@
 //
 // Per-agent registration
 // ----------------------
-// Unlike `device.observe.health` (one handler globally) or `device.session.list`
+// Unlike `observe.health` (one handler globally) or `session.list`
 // (one handler that reads from a shared `SessionService`), chat
 // registers one handler **per agent** in the registry. The handler
 // closure captures the agent name + entry by value, so a later

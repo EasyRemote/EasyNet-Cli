@@ -3,10 +3,10 @@
 //
 // File: src/services/federated_peers_cell.rs
 // Description: A reload-friendly cell holding the daemon's current
-//              operator-curated `tenant → hub_endpoint` map. Built once
+//              operator-curated `realm → hub_endpoint` map. Built once
 //              at boot from `DaemonConfig::federated_peers`,
 //              shared by `DaemonInvocationService::dispatch_federation_
-//              forward_invoke`'s cross-tenant routing arm.
+//              forward_invoke`'s cross-realm routing arm.
 //
 // Why this cell exists
 // --------------------
@@ -45,7 +45,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 /// Shared, reload-friendly cell over the daemon's current
-/// `tenant → hub_endpoint` map. Cheap to clone (one outer `Arc` bump).
+/// `realm → hub_endpoint` map. Cheap to clone (one outer `Arc` bump).
 #[derive(Debug, Clone)]
 pub struct SharedFederatedPeers {
     inner: Arc<RwLock<Arc<BTreeMap<String, String>>>>,

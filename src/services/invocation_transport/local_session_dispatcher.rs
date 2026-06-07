@@ -1228,7 +1228,7 @@ mod tests {
 
         let rt = easynet_axon::invocation::LocalRuntime::new();
         rt.register_ability(
-            "device.camera.snapshot",
+            "camera.snapshot",
             make_ability(|ctx| async move {
                 let subject = ctx
                     .runtime
@@ -1252,7 +1252,7 @@ mod tests {
                 call_id: 7,
                 callee_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
                 subject_ura: Some(subject.to_string()),
-                ability: "device.camera.snapshot".to_string(),
+                ability: "camera.snapshot".to_string(),
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
                 metadata: HashMap::new(),
@@ -1284,7 +1284,7 @@ mod tests {
 
         let rt = easynet_axon::invocation::LocalRuntime::new();
         rt.register_ability_with_options(
-            "device.screen.subscribe",
+            "screen.subscribe",
             make_ability(|ctx| async move {
                 ctx.emit_progress(
                     serde_json::to_vec(&json!({"seq": 1, "width": 640, "height": 360})).unwrap(),
@@ -1314,7 +1314,7 @@ mod tests {
                 call_id: 8,
                 callee_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
                 subject_ura: Some("easynet:///r/acme/resource/display-1".to_string()),
-                ability: "device.screen.subscribe".to_string(),
+                ability: "screen.subscribe".to_string(),
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
                 metadata: HashMap::new(),
@@ -1866,12 +1866,16 @@ mod tests {
         let session_tx = SessionUpSender::new(tx);
 
         let args = serde_json::json!({
-            "path": target.to_string_lossy(),
+            "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                &target,
+                crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+            )
+            .expect("local fs ResourceRef"),
             "encoding": "utf8",
         });
         let frame = dispatch_frame(
             42,
-            "device.fs.read",
+            "fs.read",
             serde_json::to_vec(&args).expect("encode args"),
         );
 
@@ -1934,7 +1938,11 @@ mod tests {
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "upload",
-                    "path": target.to_string_lossy(),
+                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                        &target,
+                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Write,
+                    )
+                    .expect("local fs ResourceRef"),
                 }))
                 .expect("encode args"),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -2005,7 +2013,7 @@ mod tests {
         let mapped = dispatcher
             .map_remote_bidi_output(
                 91,
-                "device.remote_desktop.attach",
+                "remote_desktop.attach",
                 &json!({
                     "type": "frame",
                     "seq": 3,
@@ -2042,7 +2050,7 @@ mod tests {
         let mapped = dispatcher
             .map_remote_bidi_output(
                 92,
-                "device.remote_desktop.attach",
+                "remote_desktop.attach",
                 &json!({
                     "type": "closed",
                     "reason": "client_closed",
@@ -2087,7 +2095,11 @@ mod tests {
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "download",
-                    "path": target.to_string_lossy(),
+                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                        &target,
+                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+                    )
+                    .expect("local fs ResourceRef"),
                 }))
                 .expect("encode args"),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),

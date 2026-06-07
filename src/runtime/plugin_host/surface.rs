@@ -240,7 +240,7 @@ mod tests {
         let rows = PluginSurfaceProjector::project(&index, &plan);
         let row = rows
             .iter()
-            .find(|row| row.ability == "device.test.echo")
+            .find(|row| row.ability == "test.echo")
             .expect("test plugin echo row");
 
         assert!(row.descriptor_published);
@@ -267,12 +267,12 @@ mod tests {
         let index = PluginPackageIndex::from_packages(vec![Arc::new(package)]).expect("index");
         let plan = PluginLoadPlanner::new("linux").plan(&index);
         let mut daemon = BTreeSet::new();
-        daemon.insert("device.test.echo".to_string());
+        daemon.insert("test.echo".to_string());
 
         let rows = PluginSurfaceProjector::project_with_daemon(&index, &plan, Some(&daemon), &[]);
         let row = rows
             .iter()
-            .find(|row| row.ability == "device.test.echo")
+            .find(|row| row.ability == "test.echo")
             .expect("test plugin echo row");
 
         assert_eq!(row.daemon_runtime_status, "loaded");

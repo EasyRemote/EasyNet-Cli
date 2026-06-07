@@ -27,10 +27,8 @@
 //                     generating on-disk runtime config.
 //   workspace       — Projects an agent's state onto its on-disk
 //                     runtime-native layout (.mcp.json / .codex/ /
-//                     CLAUDE.md / AGENTS.md / .git/). Today it
-//                     writes the legacy `workspaces/<name>/`
-//                     layout unchanged; full AgentDirectory-driven
-//                     projection lands in a subsequent PR.
+//                     CLAUDE.md / AGENTS.md / .git/) from the
+//                     AgentDirectory source of truth.
 
 pub(crate) mod abilities;
 pub(crate) mod adapter;
@@ -39,6 +37,7 @@ pub(crate) mod directory;
 pub(crate) mod dispatch;
 pub(crate) mod drivers;
 pub(crate) mod process_runner;
+pub mod resources;
 pub(crate) mod run_store;
 pub(crate) mod session;
 pub(crate) mod skill_store;
@@ -125,7 +124,7 @@ pub mod agents;
 pub mod axon_bridge;
 pub mod dispatch_receipt;
 pub mod federation_client;
-pub mod hosted_receipt;
+pub(crate) mod owner_projection;
 pub mod plugin_host;
 pub mod provisional_ura;
 pub mod publish;

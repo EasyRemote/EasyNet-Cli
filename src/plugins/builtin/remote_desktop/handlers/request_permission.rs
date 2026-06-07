@@ -9,7 +9,7 @@ use crate::plugins::remote_desktop::permissions::{
 };
 use crate::runtime::ability_dispatch::EnvelopeContext;
 
-/// Handle `device.remote_desktop.request_permission`.
+/// Handle `remote_desktop.request_permission`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     env: EnvelopeContext,
     args: Value,

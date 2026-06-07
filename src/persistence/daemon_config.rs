@@ -202,10 +202,10 @@ pub fn ensure_minimal_device_config(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let realm = if creds.tenant_id.trim().is_empty() {
+    let realm = if creds.realm.trim().is_empty() {
         "localhost"
     } else {
-        creds.tenant_id.trim()
+        creds.realm.trim()
     };
     let hub_endpoint = creds.hub_endpoint.trim();
     let body = format!(
@@ -308,10 +308,10 @@ fn sync_existing_device_config_toml(
         return Ok(raw.to_string());
     }
 
-    let realm = if creds.tenant_id.trim().is_empty() {
+    let realm = if creds.realm.trim().is_empty() {
         "localhost"
     } else {
-        creds.tenant_id.trim()
+        creds.realm.trim()
     };
     let hub_endpoint = creds.hub_endpoint.trim();
     let mut changed = false;
@@ -389,10 +389,10 @@ pub struct DaemonConfig {
     tls_key_pem: Option<PathBuf>,
     uds_path: PathBuf,
     ledger_dir: PathBuf,
-    /// **PR-N1 commit 3a/N**. Operator-curated `tenant → hub_endpoint`
+    /// **PR-N1 commit 3a/N**. Operator-curated `realm → hub_endpoint`
     /// map the federation dispatcher consults when `federation.
-    /// forward_invoke` targets a tenant whose realm is not local.
-    /// Empty = no cross-tenant routing configured (legacy
+    /// forward_invoke` targets a realm that is not local.
+    /// Empty = no cross-realm routing configured (legacy
     /// `target_online: false` fallback). PR-N3 will replace this
     /// hand-curated map with the auto-discovered cross-realm
     /// directory; until then the map is the operator's manual
@@ -406,8 +406,8 @@ pub struct DaemonConfig {
     /// dispatcher is allowed to dial a peer hub whose endpoint comes
     /// from an observed `federated_directory` entry (hub-to-hub
     /// sync) — i.e. without an operator-curated `federated_peers`
-    /// mapping for the target tenant. When `false` (the default), an
-    /// unmapped target tenant returns `target_offline` regardless of
+    /// mapping for the target realm. When `false` (the default), an
+    /// unmapped target realm returns `target_offline` regardless of
     /// what the directory has observed.
     ///
     /// **Why default-off:** `federated_directory.hub_endpoint` is a
@@ -584,11 +584,11 @@ impl DaemonConfig {
         &self.ledger_dir
     }
 
-    /// **PR-N1 commit 3a/N**. Operator-curated cross-tenant
+    /// **PR-N1 commit 3a/N**. Operator-curated cross-realm
     /// dispatch map. Empty when the operator did not configure
     /// any federation peers — the federation dispatcher then
     /// falls back to the legacy `target_online: false` shape
-    /// for cross-tenant `federation.forward_invoke` calls.
+    /// for cross-realm `federation.forward_invoke` calls.
     pub fn federated_peers(&self) -> &BTreeMap<String, String> {
         &self.federated_peers
     }
@@ -596,7 +596,7 @@ impl DaemonConfig {
     /// True when the daemon is allowed to dial a peer hub whose
     /// endpoint comes from an observed `federated_directory` entry
     /// (i.e. without an operator-curated `federated_peers` mapping
-    /// for the target tenant). Default `false`; see the field
+    /// for the target realm). Default `false`; see the field
     /// doc-comment for the threat model.
     pub fn allow_directory_auto_route(&self) -> bool {
         self.allow_directory_auto_route
@@ -619,6 +619,7 @@ pub(crate) struct RawDaemonConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RawDaemonSection {
     pub(crate) mode: DaemonMode,
     pub(crate) realm: String,
@@ -632,12 +633,12 @@ pub(crate) struct RawDaemonSection {
     pub(crate) tls_key_pem: Option<String>,
     #[serde(default)]
     pub(crate) uds_path: Option<String>,
-    #[serde(default, alias = "billing_dir")]
+    #[serde(default)]
     pub(crate) ledger_dir: Option<String>,
-    /// PR-N1 commit 3a/N: operator-curated `tenant → hub_endpoint`
-    /// map for cross-tenant `federation.forward_invoke` routing.
-    /// `#[serde(default)]` so legacy daemon-config.toml files
-    /// load unchanged (empty map).
+    /// PR-N1 commit 3a/N: operator-curated `realm → hub_endpoint`
+    /// map for cross-realm `federation.forward_invoke` routing.
+    /// `#[serde(default)]` so configs that omit federation routing
+    /// policy load with an empty map.
     #[serde(default)]
     pub(crate) federated_peers: Option<BTreeMap<String, String>>,
     /// 2026-05-25 P0 hardening: opt-in to dialing peer hubs whose
@@ -993,8 +994,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_billing_dir_key_deserializes_as_ledger_dir() {
-        let parsed: RawDaemonConfig = toml::from_str(
+    fn retired_billing_dir_key_is_rejected() {
+        let err = toml::from_str::<RawDaemonConfig>(
             r#"
             [daemon]
             mode = "device"
@@ -1003,10 +1004,10 @@ mod tests {
             billing_dir = "/tmp/easynet-workspace/billing"
             "#,
         )
-        .expect("legacy billing_dir key must remain accepted");
-        assert_eq!(
-            parsed.daemon.ledger_dir.as_deref(),
-            Some("/tmp/easynet-workspace/billing")
+        .expect_err("retired billing_dir must not deserialize as ledger_dir");
+        assert!(
+            err.to_string().contains("billing_dir"),
+            "error should name retired billing_dir field: {err}"
         );
     }
 
@@ -1228,10 +1229,10 @@ mod tests {
             node_id: "node-1".into(),
             credential_token: "token".into(),
             hub_endpoint: "https://hub.example:50443".into(),
-            tenant_id: "tenant-a".into(),
+            realm: "tenant-a".into(),
             deploy_signature: String::new(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -1272,10 +1273,10 @@ uds_path = "/tmp/custom.sock"
             node_id: "node-1".into(),
             credential_token: "token".into(),
             hub_endpoint: "https://127.0.0.1:50443".into(),
-            tenant_id: "tenant-a".into(),
+            realm: "tenant-a".into(),
             deploy_signature: String::new(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };

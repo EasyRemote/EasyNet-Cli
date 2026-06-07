@@ -21,9 +21,9 @@
 //
 //   1. Tries the local trust anchor first (INV-2 local-first).
 //      Same-realm callers short-circuit before any network I/O.
-//   2. On local miss, parses the caller URA's tenant and checks
+//   2. On local miss, parses the caller URA's realm and checks
 //      the `realm-trust.toml` for a `[[trusted_agent]]` entry
-//      whose `origin_tenant_id` matches that tenant (INV-1
+//      whose `origin_realm` matches that realm (INV-1
 //      federated trust gate). Operators explicitly opt into
 //      cross-realm verification by adding such entries.
 //   3. Calls `federation.resolve_key` on the peer hub via the
@@ -128,9 +128,9 @@ impl SharedFederatedKeyCache {
 
 /// Resolves an `agent_ura` to its Ed25519 verifying key, falling
 /// through to a federated lookup when the local trust anchor has
-/// no entry for the URA and the caller's tenant is one the
+/// no entry for the URA and the caller's realm is one the
 /// operator has marked as federated via DEC-N1 schema-B
-/// `origin_tenant_id` on a `[[trusted_agent]]` entry.
+/// `origin_realm` on a `[[trusted_agent]]` entry.
 pub struct FederatedKeyResolver {
     trust_anchor: Arc<RealmTrustAnchor>,
     federation_client: Option<Arc<dyn FederationClient>>,
@@ -316,13 +316,13 @@ impl FederatedKeyResolver {
 
     /// Cross-realm fall-through. Decision tree per spec §commit 2/N:
     ///
-    /// - `caller_tenant == self_realm` → local-only; do NOT dial
+    /// - `caller realm == self_realm` → local-only; do NOT dial
     ///   federated. Local miss is final.
-    /// - operator did NOT mark caller_tenant as federated (no
-    ///   `[[trusted_agent]] origin_tenant_id = "<tenant>"` entry
+    /// - operator did NOT mark the caller realm as federated (no
+    ///   `[[trusted_agent]] origin_realm = "<realm>"` entry
     ///   in `realm-trust.toml`) → local-only.
     /// - `federated_peers` map has no entry mapping
-    ///   `caller_tenant → hub_endpoint` → cannot dial; return
+    ///   `caller realm → hub_endpoint` → cannot dial; return
     ///   CALLER_KEY_NOT_FOUND.
     /// - dial fails → CALLER_KEY_NOT_FOUND (INV-4 fail-closed).
     ///
@@ -346,8 +346,8 @@ impl FederatedKeyResolver {
             return Err(caller_key_not_found(agent_ura, "no_federation_client"));
         };
 
-        let caller_tenant =
-            crate::services::invocation_transport::daemon_invocation_service::parse_tenant_from_ura(
+        let caller_realm =
+            crate::services::invocation_transport::daemon_invocation_service::parse_realm_from_ura(
                 agent_ura,
             )
             .ok_or_else(|| caller_key_not_found(agent_ura, "malformed_ura"))?;
@@ -360,18 +360,18 @@ impl FederatedKeyResolver {
         // operator signal ("the URA is not trusted in this
         // realm").
         if let Some(self_realm) = self.self_realm.as_deref() {
-            if caller_tenant == self_realm {
+            if caller_realm == self_realm {
                 return Err(caller_key_not_found(agent_ura, "same_realm_local_miss"));
             }
         }
 
         // INV-1 second clause: the operator must have explicitly
-        // marked the caller's tenant as federated. This requires
+        // marked the caller's realm as federated. This requires
         // EITHER a `[[trusted_agent]]` entry whose
-        // `origin_tenant_id` matches the caller's tenant (the
+        // `origin_realm` matches the caller's realm (the
         // canonical schema-B path) OR a `[daemon.federated_peers]`
-        // entry for that tenant. Both signal "I trust this
-        // tenant's hub". We accept both because the operator
+        // entry for that realm. Both signal "I trust this
+        // realm's hub". We accept both because the operator
         // workflow may have populated only one (e.g. via
         // `easynet join` auto-wire, which writes to
         // federated_peers but not to realm-trust.toml).
@@ -379,17 +379,14 @@ impl FederatedKeyResolver {
             .trust_anchor
             .entries_sorted()
             .into_iter()
-            .any(|e| e.origin_tenant_id.as_deref() == Some(caller_tenant.as_str()));
-        let peer_entry = self.federated_peers.get(&caller_tenant);
+            .any(|e| e.origin_realm.as_deref() == Some(caller_realm.as_str()));
+        let peer_entry = self.federated_peers.get(&caller_realm);
         if !trust_entry_marked && peer_entry.is_none() {
-            return Err(caller_key_not_found(agent_ura, "tenant_not_federated"));
+            return Err(caller_key_not_found(agent_ura, "realm_not_federated"));
         }
 
         let Some(peer_hub_endpoint) = peer_entry else {
-            return Err(caller_key_not_found(
-                agent_ura,
-                "no_hub_endpoint_for_tenant",
-            ));
+            return Err(caller_key_not_found(agent_ura, "no_hub_endpoint_for_realm"));
         };
 
         // Build the cross-hub `federation.resolve_key` request.
@@ -526,7 +523,7 @@ mod tests {
             public_key_b64: pk_b64.to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         }
@@ -538,7 +535,7 @@ mod tests {
             public_key_b64: pk_b64.to_string(),
             role: TrustedAgentRole::User,
             added_at_unix_ms: 1_700_000_000_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         }
@@ -652,7 +649,7 @@ mod tests {
         let cross_ura = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
 
-        // No federated_peers entry, no origin_tenant_id-marked
+        // No federated_peers entry, no origin_realm-marked
         // trust entry. The resolver MUST NOT dial — operator did
         // not opt into cross-realm resolution for realm-b.
         let client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);

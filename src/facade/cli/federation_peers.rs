@@ -13,20 +13,20 @@
 // Sources enumerated
 // ------------------
 // 1. `~/.easynet/daemon-config.toml` `[daemon.federated_peers]`
-//    table — the operator-curated `tenant → hub_endpoint` map. Every
-//    entry here is a tenant the local daemon will route
+//    table — the operator-curated `realm → hub_endpoint` map. Every
+//    entry here is a realm the local daemon will route
 //    cross-hub `federation.forward_invoke` calls to.
 // 2. `<EASYNET_REALM_TRUST_PATH or /etc/easynet/realm-trust.toml>`
 //    `[[trusted_agent]]` blocks with `role = "hub"`. These are
 //    the peer hubs the cross-hub dialer's TLS gate accepts. The
-//    schema-B fields (`origin_tenant_id`, `hub_endpoint`,
+//    schema-B fields (`origin_realm`, `hub_endpoint`,
 //    `tls_ca_pem_path`) print alongside so the operator sees
 //    the complete trust picture in one command.
 //
 // What this command does NOT do
 // -----------------------------
 // - Cross-realm directory federation enumeration (i.e. "list
-//   devices on peer hub B for the tenant I belong to"). That
+//   devices on peer hub B for the realm I belong to"). That
 //   requires `<self>.discover` Tier 3 cross-hub merged view +
 //   `federation.subscribe_directory` cross-hub stream, both of
 //   which are PR-N3 territory. Until PR-N3 lands, this command
@@ -46,11 +46,11 @@
 // scripts:
 //
 //     {
-//       "federated_peers": {"<tenant>": "<hub_endpoint>", ...},
+//       "federated_peers": {"<realm>": "<hub_endpoint>", ...},
 //       "trusted_hubs": [
 //         {
 //           "agent_ura": "...",
-//           "origin_tenant_id": "...",
+//           "origin_realm": "...",
 //           "hub_endpoint": "...",
 //           "tls_ca_pem_path": "..."
 //         },
@@ -121,7 +121,7 @@ struct PeersOutput {
 struct TrustedHubEntry {
     agent_ura: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    origin_tenant_id: Option<String>,
+    origin_realm: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hub_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,15 +146,15 @@ pub fn run(args: PeersArgs) -> anyhow::Result<()> {
 }
 
 fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[TrustedHubEntry]) {
-    output::info("federated_peers (operator-curated tenant → hub_endpoint map)");
+    output::info("federated_peers (operator-curated realm → hub_endpoint map)");
     if federated_peers.is_empty() {
         output::detail(
             "(empty)",
-            "no [daemon.federated_peers] entries; cross-tenant routing is disabled",
+            "no [daemon.federated_peers] entries; cross-realm routing is disabled",
         );
     } else {
-        for (tenant, hub_endpoint) in federated_peers {
-            output::detail(tenant, hub_endpoint);
+        for (realm, hub_endpoint) in federated_peers {
+            output::detail(realm, hub_endpoint);
         }
     }
     eprintln!();
@@ -168,8 +168,8 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
     } else {
         for hub in trusted_hubs {
             output::detail("agent_ura", &hub.agent_ura);
-            if let Some(t) = &hub.origin_tenant_id {
-                output::detail("  origin_tenant_id", t);
+            if let Some(t) = &hub.origin_realm {
+                output::detail("  origin_realm", t);
             }
             if let Some(u) = &hub.hub_endpoint {
                 output::detail("  hub_endpoint", u);
@@ -182,9 +182,11 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
     eprintln!();
 
     output::info("To invoke an ability against a peer device, pass --node:");
-    output::info("  easynet ability invoke <ability> --node easynet:///r/<tenant>/device/<node>");
     output::info(
-        "where <tenant> appears in 'federated_peers' above and <node> is the peer device's node_id.",
+        "  easynet ability invoke <ability-ura> --node easynet:///r/<realm>/device/<node>",
+    );
+    output::info(
+        "where <realm> appears in 'federated_peers' above and <node> is the peer device's node_id.",
     );
     output::info(
         "Cross-realm device enumeration (auto-discovering <node>) requires PR-N3 directory federation.",
@@ -238,8 +240,8 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
                     .and_then(|i| i.as_str())
                     .unwrap_or("")
                     .to_string(),
-                origin_tenant_id: table
-                    .get("origin_tenant_id")
+                origin_realm: table
+                    .get("origin_realm")
                     .and_then(|i| i.as_str())
                     .map(str::to_string),
                 hub_endpoint: table
@@ -307,8 +309,8 @@ mod tests {
                         .and_then(|i| i.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    origin_tenant_id: table
-                        .get("origin_tenant_id")
+                    origin_realm: table
+                        .get("origin_realm")
                         .and_then(|i| i.as_str())
                         .map(str::to_string),
                     hub_endpoint: table
@@ -361,9 +363,12 @@ realm = "r1"
 
     #[test]
     fn realm_trust_filters_to_hub_role_only() {
-        let raw = r#"
+        let local_hub = crate::ura::hub_ura("realm");
+        let peer_hub = crate::ura::hub_ura("peer-realm");
+        let raw = format!(
+            r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/realm/hub"
+agent_ura = "{local_hub}"
 public_key_b64 = "AAAA"
 role = "backend"
 added_at_unix_ms = 1700000000000
@@ -375,18 +380,19 @@ role = "device"
 added_at_unix_ms = 1700000000001
 
 [[trusted_agent]]
-agent_ura = "easynet:///r/peer-realm/hub"
+agent_ura = "{peer_hub}"
 public_key_b64 = "CCCC"
 role = "hub"
 added_at_unix_ms = 1700000000002
-origin_tenant_id = "peer-realm"
+origin_realm = "peer-realm"
 hub_endpoint = "https://peer-hub.example:50443"
 tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
-"#;
-        let hubs = parse_trusted_hubs_from(raw);
+"#
+        );
+        let hubs = parse_trusted_hubs_from(&raw);
         assert_eq!(hubs.len(), 1);
-        assert_eq!(hubs[0].agent_ura, "easynet:///r/peer-realm/hub");
-        assert_eq!(hubs[0].origin_tenant_id.as_deref(), Some("peer-realm"));
+        assert_eq!(hubs[0].agent_ura, peer_hub);
+        assert_eq!(hubs[0].origin_realm.as_deref(), Some("peer-realm"));
         assert_eq!(
             hubs[0].hub_endpoint.as_deref(),
             Some("https://peer-hub.example:50443")
@@ -399,34 +405,40 @@ tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
 
     #[test]
     fn realm_trust_with_no_hub_entries_yields_empty_list() {
-        let raw = r#"
+        let local_hub = crate::ura::hub_ura("realm");
+        let raw = format!(
+            r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/realm/hub"
+agent_ura = "{local_hub}"
 public_key_b64 = "AAAA"
 role = "backend"
 added_at_unix_ms = 1700000000000
-"#;
-        let hubs = parse_trusted_hubs_from(raw);
+"#
+        );
+        let hubs = parse_trusted_hubs_from(&raw);
         assert!(hubs.is_empty());
     }
 
     #[test]
     fn realm_trust_hub_entry_missing_schema_b_fields_is_listed() {
-        // Legacy hub entries (predating PR-N1 schema-B) lack
-        // origin_tenant_id / hub_endpoint / tls_ca_pem_path. The
+        // Minimal hub entries lacking
+        // origin_realm / hub_endpoint / tls_ca_pem_path. The
         // listing surface still includes them so the operator
         // sees the trust set as-is and can decide to fill in
         // the missing fields (or remove the entry).
-        let raw = r#"
+        let peer_hub = crate::ura::hub_ura("peer-realm");
+        let raw = format!(
+            r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/peer-realm/hub"
+agent_ura = "{peer_hub}"
 public_key_b64 = "CCCC"
 role = "hub"
 added_at_unix_ms = 1700000000002
-"#;
-        let hubs = parse_trusted_hubs_from(raw);
+"#
+        );
+        let hubs = parse_trusted_hubs_from(&raw);
         assert_eq!(hubs.len(), 1);
-        assert_eq!(hubs[0].origin_tenant_id, None);
+        assert_eq!(hubs[0].origin_realm, None);
         assert_eq!(hubs[0].hub_endpoint, None);
         assert_eq!(hubs[0].tls_ca_pem_path, None);
     }

@@ -215,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
-    //   * the registry's `device.agent.start` / `.stop` handler
+    //   * the registry's `agent.start` / `.stop` handler
     //     closures (capture an Arc clone via
     //     `agent_lifecycle_ability::register`), and
     //   * the Invocation transport's post-`LocalRuntime` wiring
@@ -223,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
     //     ONCE with the actual `HotAgentRegistrar` after
     //     `LocalRuntime` + `dispatch_handle` are wired.
     //
-    // Pre-set, dispatches of `device.agent.start` see an empty
+    // Pre-set, dispatches of `agent.start` see an empty
     // cell and skip runtime registration (logged via op_event); the
     // agent still lands on disk so a daemon restart picks it up via
     // the static registration path. Post-set, every subsequent
@@ -313,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
     // by constructing a RuntimeInvocation adapter record per fire and routing it
     // through Kernel::invoke. The Kernel admits the Session,
     // dispatches the agent, and terminates — Clients subscribed
-    // to device.session.attach see the same lifecycle they would
+    // to session.attach see the same lifecycle they would
     // see for a Client-initiated invoke.
     boot_bus.emit_started("schedule-tick");
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
@@ -520,7 +520,7 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
 ///
 /// Kernel::invoke admits a Session keyed by invocation_id and
 /// emits the lifecycle events Clients subscribe to via
-/// device.session.attach. Failed agent dispatches surface as
+/// session.attach. Failed agent dispatches surface as
 /// `Failed(reason)` Receipts — operators see the same diagnostic
 /// they would see if they dispatched the agent manually.
 ///

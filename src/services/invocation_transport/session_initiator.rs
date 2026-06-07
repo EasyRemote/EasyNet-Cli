@@ -533,14 +533,11 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         }
     }
 
-    // Ability-catalog prelude (URA v4.1.4 dev unblock): publish
-    // every locally-registered ability the daemon knows about to
-    // the hub's `AbilityCatalogStore` via
-    // `federation.advertise_abilities`. The hub projects this back
-    // through `federation.resolve(include_abilities=true)` to drive
-    // the backend's `/api/v1/abilities` page. Without this, the
-    // catalog page renders empty even when devices have
-    // observe.health / fs.read / fs.write / etc. registered.
+    // Owner-projection prelude (AXON-RFC-005): publish every
+    // locally-registered device ability as a bounded owner projection
+    // through `federation.advertise_abilities`. The hub stores the
+    // projection as a read model and projects summaries back through
+    // `federation.resolve(include_abilities=true)`.
     //
     // Best-effort: a failed advertise leaves the catalog page
     // empty for this device but does not block the bidi from
@@ -615,11 +612,11 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 .filter(|v| !v.is_empty())
         })
         .unwrap_or_default();
-    // System / hub-tier namespaces that must never be mistaken
+    // System namespaces that must never be mistaken
     // for sub-agent identities when we synthesise the per-device
     // agent roster for the hub. These are device-internal verbs
-    // (`fs.read`, `device.node.list`, `voice.create_call`, …) or
-    // hub-rooted verbs (`01HUB.openai.chat_completions`); their
+    // (`fs.read`, `node.list`, `voice.create_call`, …) or
+    // device-local verbs (`openai.chat_completions`); their
     // ability-name first segment is a *namespace*, not an agent
     // name, and the federation directory rejects them as agent
     // URAs anyway. Without this skip list every system namespace
@@ -671,7 +668,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // happen to match `<user>.<agent>.chat`-style chat
     // verbs (codex, web-builder, …). Friendly-minted hosted
     // agents like `consent-default-0` registered abilities
-    // under `device.consent.*` and the scanner's SYSTEM
+    // under `consent.*` and the scanner's SYSTEM
     // skip-list filtered them out — so the Frontend
     // DeviceDetailPage saw "0 agents" even when six were
     // hosted. Reading local-agents.json directly fixes this
@@ -708,7 +705,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         let short_label = crate::ura::parse_ura(&hosted.agent_ura)
             .ok()
             .filter(|p| p.kind == crate::ura::URAKind::Agent)
-            .map(|p| format!("{}.{}", p.user_id, p.agent_id))
+            .and_then(|p| {
+                p.agent_ids()
+                    .map(|(user_id, agent_id)| format!("{user_id}.{agent_id}"))
+            })
             .unwrap_or_else(|| hosted.agent_ura.clone());
         entries.push(AdvertiseEntry {
             agent_ura: hosted.agent_ura.clone(),
@@ -749,7 +749,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         let caller_node_id = crate::ura::parse_ura(&caller_ura)
             .ok()
             .filter(|p| p.kind == crate::ura::URAKind::Device)
-            .map(|p| p.device_id);
+            .and_then(|p| p.device_id().map(str::to_string));
         let entries_count = entries.len();
         let labels_display = format!(
             "{:?}",
@@ -797,7 +797,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             let agent_id = crate::ura::parse_ura(&entry.agent_ura)
                 .ok()
                 .filter(|p| p.kind == crate::ura::URAKind::Agent)
-                .map(|p| p.agent_id)
+                .and_then(|p| p.agent_ids().map(|(_, agent_id)| agent_id.to_string()))
                 .unwrap_or_default();
             let host_for_advertise = if USER_SCOPED_AGENT_IDS.contains(&agent_id.as_str()) {
                 None
@@ -1141,17 +1141,12 @@ async fn send_federation_join_prelude(
 }
 
 /// Send a one-shot `federation.advertise_abilities@1` over the same
-/// gRPC channel the session bidi will open on. Publishes the device
-/// daemon's locally-registered ability names to the hub's
-/// `AbilityCatalogStore` so the backend's `/api/v1/abilities` page
-/// can project them under the device's URA.
+/// gRPC channel the session bidi will open on.
 ///
-/// Each ability is represented by a JSON object with `name` and
-/// `tool_name` fields — the minimum the catalog projection needs.
-/// Richer descriptors (input_schema, description, hints) live in
-/// the runtime's per-ability descriptor and can be added here if a
-/// future projection wants them; v1 advertises just enough to
-/// surface the catalog rows.
+/// The prelude publishes an RFC-005 owner projection for the device
+/// owner represented by `caller_ura`. It does not send raw
+/// `AbilityDescriptor` values to the hub; descriptors are local input
+/// used only to derive bounded `AbilityProjectionSummary` rows.
 /// Session-prelude variant of `federation.advertise_agent`. The
 /// device tells the hub "I host agent `<agent_ura>`"; the hub
 /// upserts an `AdvertisedAgentRecord { agent_ura, host_ura }` so
@@ -1204,19 +1199,37 @@ async fn send_advertise_abilities_prelude(
     caller_ura: &str,
     ability_names: &[String],
 ) -> Result<(), tonic::Status> {
-    let abilities: Vec<serde_json::Value> = ability_names
+    let descriptors = ability_names
         .iter()
         .map(|name| {
-            serde_json::json!({
-                "name": name,
-                "tool_name": name,
+            crate::runtime::ability_descriptor::AbilityDescriptor::new(
+                name,
+                caller_ura,
+                crate::runtime::ability_descriptor::Visibility::Scoped,
+            )
+            .map_err(|e| {
+                tonic::Status::invalid_argument(format!(
+                    "federation.advertise_abilities prelude descriptor {name}: {e}"
+                ))
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
+    let projection =
+        crate::runtime::owner_projection::prepare_and_persist(caller_ura, caller_ura, &descriptors)
+            .map_err(|e| {
+                tonic::Status::internal(format!(
+                    "federation.advertise_abilities prelude projection: {e}"
+                ))
+            })?;
 
     let body = serde_json::json!({
         "agent_ura": caller_ura,
-        "abilities": abilities,
+        "owner_ura": projection.owner_ura,
+        "host_device_ura": projection.host_device_ura,
+        "projection_revision": projection.projection_revision,
+        "projection_digest": projection.projection_digest,
+        "lease_expires_unix_ms": projection.lease_expires_unix_ms,
+        "ability_summaries": projection.ability_summaries,
     });
     let arguments = serde_json::to_vec(&body).map_err(|e| {
         tonic::Status::internal(format!(

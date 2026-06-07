@@ -12,7 +12,7 @@ use crate::plugins::remote_desktop::session_lifecycle::ensure_session_control_ac
 use crate::plugins::remote_desktop::view::serialize_session;
 use crate::runtime::ability_dispatch::EnvelopeContext;
 
-/// Handle `device.remote_desktop.show_session`.
+/// Handle `remote_desktop.show_session`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     plugin: Arc<RemoteDesktopPlugin>,
     env: EnvelopeContext,

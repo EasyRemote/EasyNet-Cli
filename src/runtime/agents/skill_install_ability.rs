@@ -1,4 +1,4 @@
-// EasyNet CLI — device.skill.install / skill_remove / skill_upgrade
+// EasyNet CLI — skill.install / skill_remove / skill_upgrade
 // =================================================================
 //
 // File: src/runtime/agents/skill_install_ability.rs
@@ -57,12 +57,13 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::owner_projection::skill_resource_ura;
 use crate::runtime::skill_store::{install_skill, remove_skill, upgrade_skill, InstallRecord};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_INSTALL: &str = "device.skill.install";
-pub const ABILITY_REMOVE: &str = "device.skill.remove";
-pub const ABILITY_UPGRADE: &str = "device.skill.upgrade";
+pub const ABILITY_INSTALL: &str = "skill.install";
+pub const ABILITY_REMOVE: &str = "skill.remove";
+pub const ABILITY_UPGRADE: &str = "skill.upgrade";
 
 /// Register all three skill-management abilities on the registry.
 /// Stateless: no service handle because the helpers read the agent
@@ -71,23 +72,19 @@ pub const ABILITY_UPGRADE: &str = "device.skill.upgrade";
 /// daemon restart).
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
-        "device.skill.install",
+        "skill.install",
         OwnerKind::Device,
         Arc::new(install_handler),
     );
+    reg.register_rpc_with_owner("skill.remove", OwnerKind::Device, Arc::new(remove_handler));
     reg.register_rpc_with_owner(
-        "device.skill.remove",
-        OwnerKind::Device,
-        Arc::new(remove_handler),
-    );
-    reg.register_rpc_with_owner(
-        "device.skill.upgrade",
+        "skill.upgrade",
         OwnerKind::Device,
         Arc::new(upgrade_handler),
     );
 }
 
-/// `device.skill.install` handler.
+/// `skill.install` handler.
 ///
 /// Args: `{ "source": "github:owner/repo[@ref][:subpath]",
 ///          "agent": "<name>",
@@ -109,7 +106,7 @@ fn install_handler(args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "ok": true, "record": record_with_resource_ura(record, agent_ura) }))
 }
 
-/// `device.skill.remove` handler.
+/// `skill.remove` handler.
 ///
 /// Args: `{ "name": "<skill-name>", "agent": "<agent-name>" }`
 /// Returns: `{ "ok": true, "name": "...", "agent": "..." }`
@@ -136,7 +133,7 @@ fn remove_handler(args: Value) -> anyhow::Result<Value> {
     Ok(receipt)
 }
 
-/// `device.skill.upgrade` handler.
+/// `skill.upgrade` handler.
 ///
 /// Args: `{ "name": "<skill-name>",
 ///          "agent": "<agent-name>",
@@ -166,18 +163,6 @@ fn record_with_resource_ura(record: InstallRecord, agent_ura: Option<&str>) -> V
         }
     }
     value
-}
-
-fn skill_resource_ura(agent_ura: &str, skill_name: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(agent_ura).ok()?;
-    if parsed.kind != crate::ura::URAKind::Agent {
-        return None;
-    }
-    Some(crate::ura::resource_dot_ura(
-        &parsed.realm,
-        &format!("agent.{}.{}", parsed.user_id, parsed.agent_id),
-        &format!("skill/{skill_name}"),
-    ))
 }
 
 // ── Discovery surfaces (input schemas + descriptions) ─────────────

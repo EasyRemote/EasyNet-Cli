@@ -35,9 +35,7 @@
 //   * a2a.client.send_task — { target_node_ura, agent_name,
 //                              skill_name, args }. Resolves to
 //                              ability `<agent_name>.<skill_name>`
-//                              on the named remote node. The legacy
-//                              `target_node_uri` field remains accepted
-//                              during the URI-to-URA naming migration.
+//                              on the named remote node.
 //
 // What does NOT live here yet
 // ---------------------------
@@ -59,7 +57,7 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_SEND_TASK: &str = "device.a2a.client.send_task";
+pub const ABILITY_SEND_TASK: &str = "a2a.client.send_task";
 
 /// Register `a2a.client.send_task` on the registry. Stateless;
 /// every call dials the local daemon's `federation.forward_invoke`
@@ -67,7 +65,7 @@ pub const ABILITY_SEND_TASK: &str = "device.a2a.client.send_task";
 /// cross-device dispatch takes after the joint-plan unification.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
-        "device.a2a.client.send_task",
+        "a2a.client.send_task",
         OwnerKind::Device,
         Arc::new(move |args: Value| send_task_handler(args)),
     );
@@ -77,8 +75,6 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///
 /// Args: `{ "target_node_ura": "<URA>", "agent_name": "<agent>",
 ///          "skill_name": "<verb>", "args": <json-value> }`.
-/// The legacy `target_node_uri` spelling is accepted as a read-only
-/// alias so older planners do not fail during the URI-to-URA rename.
 ///
 /// Routes through `federation.forward_invoke` against the target
 /// device URA — the same unified path
@@ -120,8 +116,8 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
             // Without credentials we cannot do this safely — surface
             // a structured error so the caller knows to pass a URA.
             match crate::persistence::config::load_credentials() {
-                Ok(c) if !c.tenant_id.trim().is_empty() => {
-                    crate::ura::device_ura(&c.tenant_id, target_node.trim())
+                Ok(c) if !c.realm.trim().is_empty() => {
+                    crate::ura::device_ura(&c.realm, target_node.trim())
                 }
                 _ => {
                     return Ok(error_response(
@@ -135,10 +131,18 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
 
         let caller_ura = crate::persistence::config::load_credentials()
             .ok()
-            .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::ura::device_ura(c.tenant_id.trim(), c.node_id.trim()));
-        match crate::support::federation_invoke::invoke_via_federation_forward(
-            &ability,
+            .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
+            .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
+        let ability_ura =
+            match crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+                &target_ura,
+                &ability,
+            ) {
+                Ok(ability_ura) => ability_ura,
+                Err(e) => return Ok(error_response(&format!("{e}"))),
+            };
+        match crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+            ability_ura.as_str(),
             task_args,
             &target_ura,
             caller_ura.as_deref(),
@@ -179,18 +183,9 @@ fn error_response(message: &str) -> Value {
 pub fn send_task_input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["agent_name", "skill_name"],
-        "anyOf": [
-            { "required": ["target_node_ura"] },
-            { "required": ["target_node_uri"] }
-        ],
+        "required": ["target_node_ura", "agent_name", "skill_name"],
         "properties": {
             "target_node_ura": {"type": "string", "minLength": 1},
-            "target_node_uri": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Deprecated alias for target_node_ura; accepted during the URI-to-URA migration window."
-            },
             "agent_name": {"type": "string", "minLength": 1},
             "skill_name": {"type": "string", "minLength": 1},
             "args": {
@@ -202,15 +197,7 @@ pub fn send_task_input_schema() -> Value {
 }
 
 fn target_node_field(args: &Value) -> Result<String, String> {
-    match required_nonempty_string(args, "target_node_ura") {
-        Ok(value) => Ok(value),
-        Err(primary) => match required_nonempty_string(args, "target_node_uri") {
-            Ok(value) => Ok(value),
-            Err(_) => Err(format!(
-                "{primary}; legacy alias `target_node_uri` is also accepted"
-            )),
-        },
-    }
+    required_nonempty_string(args, "target_node_ura")
 }
 
 pub fn send_task_description() -> &'static str {
@@ -328,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn send_task_accepts_legacy_target_node_uri_alias() {
+    fn send_task_rejects_retired_target_node_uri_alias() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let arc = fresh_registry();
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
@@ -341,35 +328,24 @@ mod tests {
         assert_eq!(resp["ok"], false);
         let msg = resp["error"].as_str().unwrap();
         assert!(
-            !msg.contains("target_node_ura"),
-            "legacy alias must be accepted before transport/config validation; got: {msg}"
+            msg.contains("`target_node_ura`"),
+            "retired alias must be rejected at validation; got: {msg}"
         );
     }
 
     #[test]
-    fn send_task_input_schema_requires_agent_skill_and_either_target_spelling() {
+    fn send_task_input_schema_requires_canonical_target_node_ura() {
         let s = send_task_input_schema();
         let req = s["required"].as_array().unwrap();
-        for field in ["agent_name", "skill_name"] {
+        for field in ["target_node_ura", "agent_name", "skill_name"] {
             assert!(
                 req.iter().any(|v| v == field),
                 "required field {field} missing from schema"
             );
             assert_eq!(s["properties"][field]["minLength"], 1);
         }
-        assert!(!req.iter().any(|v| v == "target_node_ura"));
-        assert_eq!(s["properties"]["target_node_ura"]["minLength"], 1);
-        assert_eq!(s["properties"]["target_node_uri"]["minLength"], 1);
-        assert!(
-            s["anyOf"]
-                .as_array()
-                .expect("target spelling anyOf exists")
-                .iter()
-                .any(|v| v["required"].as_array().is_some_and(|fields| {
-                    fields.iter().any(|field| field == "target_node_uri")
-                })),
-            "schema must keep legacy target_node_uri alias during migration"
-        );
+        assert!(s["properties"].get("target_node_uri").is_none());
+        assert!(s.get("anyOf").is_none());
         assert_eq!(s["additionalProperties"], false);
     }
 }

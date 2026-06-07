@@ -404,7 +404,7 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // Read tenant/node_id from credentials file (not env vars) to avoid
     // exposing identity in `ps auxe` output.
     let creds = config::load_credentials().context("heartbeat daemon: cannot load credentials")?;
-    let tenant = creds.tenant_id.clone();
+    let tenant = creds.realm.clone();
     let node_id = creds.node_id.clone();
     let hostname = gethostname::gethostname().to_string_lossy().into_owned();
 

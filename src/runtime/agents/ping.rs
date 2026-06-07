@@ -1,4 +1,4 @@
-// EasyNet CLI — device.observe.health smoke ability
+// EasyNet CLI — observe.health smoke ability
 // ========================================
 //
 // File: src/runtime/system/ping.rs
@@ -11,7 +11,7 @@
 // PR-SYS establishes the `system.<feature>` namespace, the
 // stage-1 InvocationTarget resolver, and the stage-2 dispatch
 // executor. Without at least one ability registered, none of those
-// pieces would have a working call site to validate. `device.observe.health`
+// pieces would have a working call site to validate. `observe.health`
 // is the simplest ability that exercises every layer:
 //
 //   1. The wire envelope reaches the IPC layer.
@@ -35,16 +35,12 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name of the ability. Pinned so a future rename trips a
 /// fixture-byte-stability test in `registry::a2a_labels`.
-pub const ABILITY_NAME: &str = "device.observe.health";
+pub const ABILITY_NAME: &str = "observe.health";
 
-/// Register the `device.observe.health` handler on the supplied registry.
+/// Register the `observe.health` handler on the supplied registry.
 /// Called from `runtime::agents::build_registry`.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
-        "device.observe.health",
-        OwnerKind::Device,
-        Arc::new(handler),
-    );
+    reg.register_rpc_with_owner("observe.health", OwnerKind::Device, Arc::new(handler));
 }
 
 /// Health handler. Returns the Axon observe.health contract fields:
@@ -52,7 +48,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///
 /// The body deliberately does no I/O and no global-state mutation.
 /// A future change that adds either should land in a
-/// purpose-built ability, not here, so `device.observe.health` stays a
+/// purpose-built ability, not here, so `observe.health` stays a
 /// reliable smoke target.
 fn handler(args: Value) -> anyhow::Result<Value> {
     let ts = chrono::Utc::now().timestamp_millis();

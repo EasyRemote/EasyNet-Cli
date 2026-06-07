@@ -21,7 +21,7 @@
 //   fallbacks. They never mark the production WebRTC media plane ready.
 //
 // Usage Contract:
-// - `device.remote_desktop.create_session` MUST be called with
+// - `remote_desktop.create_session` MUST be called with
 //   `subject = resource_ura` for a display/window/application.
 // - WebRTC SDP/ICE calls are accepted, audited, and routed to a device-side
 //   WebRTC endpoint when the local media SDK exposes a transport-ready backend.

@@ -12,21 +12,22 @@
 //
 // What lives here
 // ---------------
-//   * meta.describe — `{ ura, identity_summary, abilities_summary,
-//                         metadata }` for the host device-profile.
-//                     identity_summary surfaces the canonical URA
-//                     and signing-authority hint; abilities_summary
-//                     is the count + namespace breakdown so a caller
-//                     can decide whether to follow up with a full
-//                     meta.list_abilities.
+//   * meta.describe — `{ ura, identity_summary,
+//                              abilities_summary, metadata }` for the
+//                            host device-profile.
+//                            identity_summary surfaces the canonical URA
+//                            and signing-authority hint; abilities_summary
+//                            is the count + namespace breakdown so a caller
+//                            can decide whether to follow up with a full
+//                            meta.list_abilities.
 //   * meta.list_abilities — `{ abilities: AbilityDescriptor[] }`.
-//                           The same descriptor catalog mcp.bridge.
-//                           list_tools projects to MCP, but in the
-//                           native ontology shape (no MCP wrapper).
-//                           This is the canonical Invoke surface for
-//                           ability discovery; the MCP ability is
-//                           the edge-protocol projection of the same
-//                           data.
+//                                  The same descriptor catalog
+//                                  mcp.bridge.list_tools projects to MCP,
+//                                  but in the native ontology shape
+//                                  (no MCP wrapper). This is the canonical
+//                                  Invoke surface for ability discovery;
+//                                  the MCP ability is the edge-protocol
+//                                  projection of the same data.
 //
 // Why two abilities, not one
 // --------------------------
@@ -48,8 +49,8 @@ use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use serde_json::{json, Value};
 
-pub const ABILITY_DESCRIBE: &str = "device.meta.describe";
-pub const ABILITY_LIST_ABILITIES: &str = "device.meta.list_abilities";
+pub const ABILITY_DESCRIBE: &str = "meta.describe";
+pub const ABILITY_LIST_ABILITIES: &str = "meta.list_abilities";
 
 /// Register both meta abilities on the registry.
 ///
@@ -129,7 +130,7 @@ fn describe_handler(
 
     // abilities_summary = count + per-namespace count. The breakdown
     // is what makes the response useful to a caller deciding whether
-    // to fetch the full catalogue: "12 abilities, 4 in device.* and
+    // to fetch the full catalogue: "12 abilities, 4 in fs.* and
     // 3 in consent.*" tells you what the device actually does.
     //
     // M0 note: the `split_once('.')` here is intentional and is NOT
@@ -173,6 +174,7 @@ fn list_abilities_handler(
     pages_user: Option<&str>,
 ) -> anyhow::Result<Value> {
     use crate::runtime::ability_descriptor::Visibility;
+    let scope = AbilityListScope::from_args(&args)?;
 
     // Scope parameter (RFC-001 v4.1.7 hub-broadcast contract):
     //   * `"local"` (default) — only abilities the device owns +
@@ -183,12 +185,6 @@ fn list_abilities_handler(
     //     through one call. Hub entries carry their original
     //     descriptor verbatim — the device does not invent
     //     fields.
-    let include_realm = args
-        .get("scope")
-        .and_then(|v| v.as_str())
-        .map(|s| s.eq_ignore_ascii_case("realm"))
-        .unwrap_or(false);
-
     // Phase 1: static profile descriptors (fs.*, http.*, shell.*,
     // <agent>.chat, …). These carry full input/output schemas and
     // descriptions read off the workspace ability TOMLs. We index by
@@ -198,14 +194,7 @@ fn list_abilities_handler(
     let mut catalog: std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor> =
         std::collections::BTreeMap::new();
     for d in static_descriptors {
-        // M2 of the system-namespace migration: drop legacy-named
-        // descriptors. The static catalogue is built off
-        // `published_ability_names()` which now filters to
-        // canonical (M2 commit), so this filter normally drops
-        // nothing — it's defence-in-depth so a stale call site
-        // emitting a legacy descriptor cannot leak into the
-        // synth output.
-        if !crate::runtime::agents::is_canonical_or_unmapped(&d.name) {
+        if !crate::runtime::agents::is_publishable_catalog_name(&d.name) {
             continue;
         }
         let Some(identity) = d.identity() else {
@@ -245,7 +234,7 @@ fn list_abilities_handler(
         // here using credentials + local-agents.json:
         //
         //   * `OwnerKind::Hub`   → realm hub URA, derived from
-        //                          `credentials.tenant_id` via
+        //                          `credentials.realm` via
         //                          `crate::ura::hub_ura`.
         //   * `OwnerKind::Device` → host device URA, read from
         //                          `local-agents.json::host_device_agent_ura`.
@@ -273,7 +262,7 @@ fn list_abilities_handler(
         // populated state and emits the full catalogue.
         let realm = crate::persistence::config::load_credentials()
             .ok()
-            .map(|c| c.tenant_id.trim().to_string())
+            .map(|c| c.realm.trim().to_string())
             .filter(|s| !s.is_empty());
         let local = crate::persistence::local_agents::load().unwrap_or_default();
         let device_owner_ura = if local.host_device_agent_ura.is_empty() {
@@ -290,18 +279,9 @@ fn list_abilities_handler(
         // each invocation.
         let user_segment = pages_user.map(str::to_string);
         for name in registry.list_abilities() {
-            // M2 of the system-namespace migration: filter the live
-            // registry to canonical names only. M1 dual-aliasing
-            // registered both legacy (`fs.read`, `01HUB.openai.*`,
-            // …) and canonical (`device.fs.read`, `device.openai.*`,
-            // …) entries pointing at the same handler; the
-            // catalogue surface (this synth, `published_abilities`,
-            // `easynet ability list`, advertise prelude) emits
-            // canonical only. Inbound dispatch still answers
-            // legacy via the registry's binding; M3 deletes the
-            // legacy registrations and this filter becomes a
-            // no-op.
-            if !crate::runtime::agents::is_canonical_or_unmapped(&name) {
+            // Keep the live registry on the same public-catalogue surface as
+            // `published_abilities`, `easynet ability list`, and advertise.
+            if !crate::runtime::agents::is_publishable_catalog_name(&name) {
                 continue;
             }
             // M0 commit 2: read the owner kind from the registry,
@@ -328,7 +308,7 @@ fn list_abilities_handler(
             let Some(owner) = owner_string.as_deref() else {
                 continue;
             };
-            let public_name = crate::ura::public_ability_name_for_owner(owner, &name);
+            let public_name = crate::ura::owner_local_ability_name(owner, &name);
             let transport_hints = crate::runtime::agents::discovery_hints_for(registry, &name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
@@ -387,7 +367,7 @@ fn list_abilities_handler(
     // to pre-v4.1.7. Each entry's `descriptor` is whatever shape
     // the hub published; we surface it verbatim so the
     // hub schema can evolve without forcing a Cli release.
-    if include_realm {
+    if scope.include_realm {
         let store = crate::services::hub_published_ability_store::global();
         for entry in store.snapshot() {
             let mut desc = entry.descriptor;
@@ -405,7 +385,160 @@ fn list_abilities_handler(
         }
     }
 
+    scope.apply(&mut merged);
     Ok(json!({ "abilities": merged }))
+}
+
+struct AbilityListScope {
+    include_realm: bool,
+    owner_ura: Option<String>,
+    ability_ura: Option<String>,
+}
+
+impl AbilityListScope {
+    fn from_args(args: &Value) -> anyhow::Result<Self> {
+        let object = args
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("meta.list_abilities: args must be a JSON object"))?;
+        for key in object.keys() {
+            match key.as_str() {
+                "scope" | "agent_ura" | "subject_ura" => {}
+                other => {
+                    anyhow::bail!("meta.list_abilities: unsupported field `{other}`")
+                }
+            }
+        }
+
+        let include_realm = match string_arg(object, "scope").as_deref() {
+            None | Some("local") => false,
+            Some("realm") => true,
+            Some(other) => {
+                anyhow::bail!(
+                    "meta.list_abilities: unsupported scope {other:?}; expected `local` or `realm`"
+                )
+            }
+        };
+        let owner_from_agent = string_arg(object, "agent_ura")
+            .map(|ura| parse_owner_scope("agent_ura", &ura).map(|_| ura))
+            .transpose()?;
+        let subject = string_arg(object, "subject_ura")
+            .map(|ura| AbilitySubjectScope::parse(&ura))
+            .transpose()?;
+        let owner_ura = merge_owner_scope(owner_from_agent, subject.as_ref())?;
+        let ability_ura = subject.and_then(|scope| scope.ability_ura);
+
+        Ok(Self {
+            include_realm,
+            owner_ura,
+            ability_ura,
+        })
+    }
+
+    fn apply(&self, abilities: &mut Vec<Value>) {
+        if let Some(owner_ura) = self.owner_ura.as_deref() {
+            abilities.retain(|entry| {
+                entry
+                    .get("owner_ura")
+                    .and_then(Value::as_str)
+                    .map(|candidate| candidate == owner_ura)
+                    .unwrap_or(false)
+            });
+        }
+        if let Some(ability_ura) = self.ability_ura.as_deref() {
+            abilities.retain(|entry| {
+                entry
+                    .get("ability_ura")
+                    .and_then(Value::as_str)
+                    .map(|candidate| candidate == ability_ura)
+                    .unwrap_or(false)
+            });
+        }
+    }
+}
+
+struct AbilitySubjectScope {
+    owner_ura: Option<String>,
+    ability_ura: Option<String>,
+}
+
+impl AbilitySubjectScope {
+    fn parse(subject_ura: &str) -> anyhow::Result<Self> {
+        let parsed = crate::ura::parse_ura(subject_ura).map_err(|e| {
+            anyhow::anyhow!("meta.list_abilities: invalid subject_ura {subject_ura:?}: {e}")
+        })?;
+        match parsed.kind {
+            crate::ura::URAKind::Ability => Ok(Self {
+                owner_ura: None,
+                ability_ura: Some(subject_ura.to_string()),
+            }),
+            crate::ura::URAKind::Agent
+            | crate::ura::URAKind::Device
+            | crate::ura::URAKind::Hub
+            | crate::ura::URAKind::User => Ok(Self {
+                owner_ura: Some(subject_ura.to_string()),
+                ability_ura: None,
+            }),
+            other => anyhow::bail!(
+                "meta.list_abilities: subject_ura must be an owner URA or Ability URA, got {:?}",
+                other
+            ),
+        }
+    }
+}
+
+fn string_arg(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_owner_scope(field: &str, ura: &str) -> anyhow::Result<()> {
+    let parsed = crate::ura::parse_ura(ura)
+        .map_err(|e| anyhow::anyhow!("meta.list_abilities: invalid {field} {ura:?}: {e}"))?;
+    match parsed.kind {
+        crate::ura::URAKind::Agent
+        | crate::ura::URAKind::Device
+        | crate::ura::URAKind::Hub
+        | crate::ura::URAKind::User => Ok(()),
+        other => anyhow::bail!(
+            "meta.list_abilities: {field} must be an owner URA, got {:?}",
+            other
+        ),
+    }
+}
+
+fn merge_owner_scope(
+    owner_ura: Option<String>,
+    subject: Option<&AbilitySubjectScope>,
+) -> anyhow::Result<Option<String>> {
+    match (owner_ura, subject) {
+        (Some(owner_ura), Some(subject)) => {
+            if let Some(subject_owner) = subject.owner_ura.as_deref() {
+                if owner_ura != subject_owner {
+                    anyhow::bail!(
+                        "meta.list_abilities: agent_ura and subject_ura owner must match"
+                    );
+                }
+            }
+            if let Some(ability_ura) = subject.ability_ura.as_deref() {
+                let matches_owner =
+                    crate::ura::public_ability_name_from_ability_ura(&owner_ura, ability_ura)
+                        .is_some();
+                if !matches_owner {
+                    anyhow::bail!(
+                        "meta.list_abilities: agent_ura and subject_ura ability owner must match"
+                    );
+                }
+            }
+            Ok(Some(owner_ura))
+        }
+        (Some(owner_ura), None) => Ok(Some(owner_ura)),
+        (None, Some(subject)) => Ok(subject.owner_ura.clone()),
+        (None, None) => Ok(None),
+    }
 }
 
 fn synthesize_hot_hosted_agent_descriptors(
@@ -436,8 +569,10 @@ fn synthesize_hot_hosted_agent_descriptors(
             continue;
         }
 
-        for spec in crate::runtime::abilities::abilities_for(&agent_name, &entry) {
-            let public_name = crate::ura::public_ability_name_for_owner(&owner_ura, spec.name());
+        let default_chat_name =
+            crate::core::ability_spec::default_chat_manifest().qualified_name(&agent_name);
+        for spec in crate::runtime::abilities::abilities_for_publication(&agent_name, &entry) {
+            let public_name = crate::ura::owner_local_ability_name(&owner_ura, spec.name());
             if public_name.is_empty() {
                 continue;
             }
@@ -464,6 +599,12 @@ fn synthesize_hot_hosted_agent_descriptors(
             }
             if let Some(node_id) = host_node_id.as_ref() {
                 descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
+            }
+            if spec.name() == default_chat_name {
+                let chat_manifest = crate::core::ability_spec::default_chat_manifest();
+                if let Some(output_schema) = chat_manifest.output_schema() {
+                    descriptor = descriptor.with_output_schema(output_schema.clone());
+                }
             }
             let Some(identity) = descriptor.identity() else {
                 continue;
@@ -504,6 +645,14 @@ pub fn list_abilities_input_schema() -> Value {
                     "`local` (default) returns device-owned abilities only. \
                      `realm` adds hub-published abilities the realm hub \
                      broadcast at join + heartbeat (RFC-001 v4.1.7)."
+            },
+            "agent_ura": {
+                "type": "string",
+                "description": "Canonical owner URA. Filters the catalogue to abilities published by that owner."
+            },
+            "subject_ura": {
+                "type": "string",
+                "description": "Owner URA or full Ability URA. Owner URAs filter by publisher; Ability URAs filter to one canonical ability."
             }
         },
         "additionalProperties": false,
@@ -524,6 +673,22 @@ mod tests {
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(name, "easynet:///r/test/device/01DEV", Visibility::Public)
             .expect("test descriptor")
+    }
+
+    fn d_for_owner(name: &str, owner_ura: &str) -> AbilityDescriptor {
+        AbilityDescriptor::new(name, owner_ura, Visibility::Scoped).expect("test descriptor")
+    }
+
+    fn seed_test_credentials(realm: &str, node_id: &str, username: &str) {
+        crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
+            node_id: node_id.to_string(),
+            credential_token: "test-token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            realm: realm.to_string(),
+            username: Some(username.to_string()),
+            ..Default::default()
+        })
+        .expect("seed credentials");
     }
 
     /// Empty OnceLock used by tests that don't care about the
@@ -549,11 +714,11 @@ mod tests {
     }
 
     #[test]
-    fn list_abilities_returns_descriptors_verbatim() {
+    fn list_abilities_projects_static_descriptors_to_public_catalog_names() {
         let mut reg = AxonAbilityCatalog::new();
         register(
             &mut reg,
-            || vec![d("device.observe.health"), d("device.agent.list")],
+            || vec![d("observe.health"), d("agent.list")],
             empty_registry_handle(),
             None,
         );
@@ -561,14 +726,24 @@ mod tests {
         let resp = handler(json!({})).unwrap();
         let abilities = resp["abilities"].as_array().unwrap();
         assert_eq!(abilities.len(), 2);
-        // Round-trips through serde — full descriptor shape preserved.
-        // Post-M3 names are canonical (`device.*` partition).
+        // The internal static descriptors are built from registry
+        // keys (`observe.health`, `agent.list`), while the
+        // product-facing catalogue exposes owner-local public names
+        // (`observe.health`, `agent.list`). The canonical `ability_ura`
+        // carries owner identity.
         let names: Vec<&str> = abilities
             .iter()
             .filter_map(|a| a["name"].as_str())
             .collect();
-        assert!(names.contains(&"device.observe.health"));
-        assert!(names.contains(&"device.agent.list"));
+        assert!(names.contains(&"observe.health"));
+        assert!(names.contains(&"agent.list"));
+        assert!(
+            abilities.iter().all(|a| a["ability_ura"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/ability/")),
+            "every public row must carry canonical ability_ura: {abilities:?}"
+        );
     }
 
     #[test]
@@ -583,7 +758,7 @@ mod tests {
         let mut reg = AxonAbilityCatalog::new();
         register(
             &mut reg,
-            || vec![d("device.observe.health")],
+            || vec![d("observe.health")],
             empty_registry_handle(),
             None,
         );
@@ -613,7 +788,7 @@ mod tests {
             .iter()
             .filter_map(|a| a["name"].as_str().map(String::from))
             .collect();
-        assert!(local_names.contains(&"device.observe.health".to_string()));
+        assert!(local_names.contains(&"observe.health".to_string()));
         assert!(
             !local_names.contains(&"hub.test.scope".to_string()),
             "default scope must not leak hub-broadcast entries"
@@ -627,6 +802,65 @@ mod tests {
             .find(|a| a["name"] == "hub.test.scope")
             .expect("hub.test.scope must be in realm-scope output");
         assert_eq!(hub_entry["source"], "hub:broadcast");
+    }
+
+    #[test]
+    fn list_abilities_filters_by_agent_ura_and_ability_subject() {
+        let alice = "easynet:///r/test-realm/agent/user-1.alice";
+        let bob = "easynet:///r/test-realm/agent/user-1.bob";
+        let mut reg = AxonAbilityCatalog::new();
+        register(
+            &mut reg,
+            move || {
+                vec![
+                    d_for_owner("chat", alice),
+                    d_for_owner("summarise", alice),
+                    d_for_owner("chat", bob),
+                ]
+            },
+            empty_registry_handle(),
+            None,
+        );
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+
+        let by_owner = handler(json!({ "agent_ura": alice })).unwrap();
+        let abilities = by_owner["abilities"].as_array().unwrap();
+        assert_eq!(
+            abilities.len(),
+            2,
+            "agent_ura must scope to the selected owner: {by_owner}"
+        );
+        assert!(abilities.iter().all(|a| a["owner_ura"] == alice));
+
+        let subject = crate::ura::owner_ability_ura(alice, "chat").unwrap();
+        let by_subject = handler(json!({ "subject_ura": subject })).unwrap();
+        let abilities = by_subject["abilities"].as_array().unwrap();
+        assert_eq!(
+            abilities.len(),
+            1,
+            "full Ability URA subject must scope to one ability: {by_subject}"
+        );
+        assert_eq!(abilities[0]["name"], "chat");
+        assert_eq!(abilities[0]["owner_ura"], alice);
+
+        let err = handler(json!({
+            "agent_ura": bob,
+            "subject_ura": crate::ura::owner_ability_ura(alice, "chat").unwrap(),
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("must match"), "got {err}");
+    }
+
+    #[test]
+    fn list_abilities_rejects_unknown_query_fields() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, Vec::new, empty_registry_handle(), None);
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let err = handler(json!({ "agent_id": "legacy" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unsupported field"), "got {err}");
     }
 
     #[test]
@@ -649,19 +883,11 @@ mod tests {
         // developer's real $HOME credentials.json) and fails when
         // run with siblings that HomeGuard a clean dir — which is
         // the race we're closing.
-        use crate::persistence::config::{save_credentials, Credentials};
         use crate::runtime::ability_dispatch::OwnerKind;
         use std::sync::OnceLock;
 
         let _home = crate::facade::cli::test_support::HomeGuard::new();
-        let creds = Credentials {
-            node_id: "test-node".to_string(),
-            credential_token: "test-token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            tenant_id: "alice-realm".to_string(),
-            ..Default::default()
-        };
-        save_credentials(&creds).expect("seed credentials.json fixture");
+        seed_test_credentials("alice-realm", "test-node", "alice");
 
         let mut reg = AxonAbilityCatalog::new();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
@@ -740,18 +966,18 @@ mod tests {
             .iter()
             .find(|a| {
                 a["name"] == "chat"
-                    && a["owner_agent_ura"] == "easynet:///r/alice-realm/agent/user-1.alice"
+                    && a["owner_ura"] == "easynet:///r/alice-realm/agent/user-1.alice"
             })
-            .expect("agent-owned chat must surface as the local verb");
+            .expect("agent-owned chat must surface as the owner-local ability name");
         let chat_owners: std::collections::BTreeSet<&str> = abilities
             .iter()
             .filter(|a| a["name"] == "chat")
-            .filter_map(|a| a["owner_agent_ura"].as_str())
+            .filter_map(|a| a["owner_ura"].as_str())
             .collect();
         assert!(
             chat_owners.contains("easynet:///r/alice-realm/agent/user-1.alice")
                 && chat_owners.contains("easynet:///r/alice-realm/agent/user-1.bob"),
-            "same public ability name must preserve one descriptor per owner, got: {chat_owners:?}"
+            "agent-scoped public names must preserve one descriptor per owner, got: {chat_owners:?}"
         );
         // Description must be the manifest's description, not the
         // generic "no manifest schema" stub.
@@ -781,7 +1007,7 @@ mod tests {
         let subscribe = abilities
             .iter()
             .find(|a| a["name"] == "subscribe")
-            .expect("agent-owned subscribe must surface as the local verb");
+            .expect("agent-owned subscribe must surface as the owner-local ability name");
         assert_eq!(
             subscribe["hints"]["streaming_only"],
             json!(true),
@@ -796,7 +1022,7 @@ mod tests {
         let legacy = abilities
             .iter()
             .find(|a| a["name"] == "legacy")
-            .expect("agent-owned fallback ability must surface as the local verb");
+            .expect("agent-owned fallback ability must surface as the owner-local ability name");
         // Legacy register path leaves the input schema empty —
         // synth falls back to the name-only stub.
         let legacy_desc = legacy["description"].as_str().unwrap_or_default();
@@ -809,7 +1035,7 @@ mod tests {
         let mcp_search = abilities
             .iter()
             .find(|a| a["name"] == "mcp_search")
-            .expect("dynamic MCP ability must surface as the local verb");
+            .expect("dynamic MCP ability must surface as the owner-local ability name");
         assert_eq!(
             mcp_search["schema_summary"]["input"]["properties"]["query"]["type"],
             json!("string"),
@@ -900,9 +1126,13 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|a| a["name"] == "device.hot.echo")
+            .find(|a| a["name"] == "hot.echo")
             .expect("hot-registered dynamic ability must appear");
 
+        assert_eq!(
+            ability["ability_ura"],
+            "easynet:///r/test-realm/ability/device.dev-1.hot.echo"
+        );
         assert_eq!(ability["description"], "Echo a hot-reloaded MCP payload.");
         assert_eq!(
             ability["schema_summary"]["input"]["properties"]["text"]["type"], "string",
@@ -912,20 +1142,12 @@ mod tests {
 
     #[test]
     fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
-        use crate::persistence::config::{save_credentials, Credentials};
         use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
         use crate::registry::agents::{save_agents, AgentEntry, AgentRegistry, AgentType};
         use std::sync::OnceLock;
 
         let _home = crate::facade::cli::test_support::HomeGuard::new();
-        save_credentials(&Credentials {
-            node_id: "dev-1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            tenant_id: "test-realm".to_string(),
-            ..Default::default()
-        })
-        .expect("seed credentials");
+        seed_test_credentials("test-realm", "dev-1", "alice");
 
         let mut local = LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
@@ -970,22 +1192,22 @@ mod tests {
             .iter()
             .find(|a| {
                 a["name"] == "chat"
-                    && a["owner_agent_ura"] == "easynet:///r/test-realm/agent/user-1.alice"
+                    && a["owner_ura"] == "easynet:///r/test-realm/agent/user-1.alice"
             })
             .expect("hot-added hosted agent chat must appear in meta.list_abilities");
         let chat_owners: std::collections::BTreeSet<&str> = abilities
             .iter()
             .filter(|a| a["name"] == "chat")
-            .filter_map(|a| a["owner_agent_ura"].as_str())
+            .filter_map(|a| a["owner_ura"].as_str())
             .collect();
         assert!(
             chat_owners.contains("easynet:///r/test-realm/agent/user-1.alice")
                 && chat_owners.contains("easynet:///r/test-realm/agent/user-1.bob"),
-            "hot-added agents with the same public verb must not collapse: {chat_owners:?}"
+            "hot-added hosted-agent abilities must not collapse: {chat_owners:?}"
         );
 
         assert_eq!(
-            chat["owner_agent_ura"],
+            chat["owner_ura"],
             "easynet:///r/test-realm/agent/user-1.alice"
         );
         assert_eq!(chat["metadata"]["host_node_id"], "dev-1");
@@ -1003,20 +1225,12 @@ mod tests {
 
     #[test]
     fn list_abilities_keeps_same_public_ability_name_for_multiple_hosted_agents() {
-        use crate::persistence::config::{save_credentials, Credentials};
         use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
         use crate::registry::agents::{save_agents, AgentEntry, AgentRegistry, AgentType};
         use std::sync::OnceLock;
 
         let _home = crate::facade::cli::test_support::HomeGuard::new();
-        save_credentials(&Credentials {
-            node_id: "dev-1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            tenant_id: "test-realm".to_string(),
-            ..Default::default()
-        })
-        .expect("seed credentials");
+        seed_test_credentials("test-realm", "dev-1", "alice");
 
         let mut local = LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
@@ -1065,7 +1279,7 @@ mod tests {
 
         let owners: std::collections::BTreeSet<&str> = chats
             .iter()
-            .filter_map(|a| a["owner_agent_ura"].as_str())
+            .filter_map(|a| a["owner_ura"].as_str())
             .collect();
         let ability_uras: std::collections::BTreeSet<&str> = chats
             .iter()
@@ -1077,7 +1291,7 @@ mod tests {
                 "easynet:///r/test-realm/agent/user-1.anthropic",
                 "easynet:///r/test-realm/agent/user-1.backend-engineer",
             ]),
-            "same public ability name `chat` must be retained once per owner; got {chats:?}"
+            "agent-scoped chat names must be retained once per owner; got {chats:?}"
         );
         assert_eq!(
             ability_uras,
@@ -1096,10 +1310,10 @@ mod tests {
             &mut reg,
             || {
                 vec![
-                    d("device.observe.health"),
-                    d("device.agent.list"),
-                    d("device.session.list"),
-                    d("device.consent.subscribe"),
+                    d("observe.health"),
+                    d("agent.list"),
+                    d("session.list"),
+                    d("consent.subscribe"),
                 ]
             },
             empty_registry_handle(),
@@ -1111,12 +1325,10 @@ mod tests {
         let by_ns = resp["abilities_summary"]["by_namespace"]
             .as_object()
             .unwrap();
-        // Post-M3 every system verb is partitioned under `device.*`,
-        // so the namespace summary buckets all 4 under "device".
-        // Device-hosted verbs are grouped under the first segment by
-        // spec, so the second segment remains only a functional family
-        // hint such as agent, observe, session, or skill.
-        assert_eq!(by_ns["device"], 4);
+        assert_eq!(by_ns["observe"], 1);
+        assert_eq!(by_ns["agent"], 1);
+        assert_eq!(by_ns["session"], 1);
+        assert_eq!(by_ns["consent"], 1);
     }
 
     #[test]

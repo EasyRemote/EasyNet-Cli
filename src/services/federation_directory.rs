@@ -127,7 +127,10 @@ pub fn directory_agent_summary_to_entry(
 #[must_use]
 fn agent_ura_to_node_id(agent_ura: &str) -> String {
     match crate::ura::parse_ura(agent_ura) {
-        Ok(parsed) if parsed.kind == crate::ura::URAKind::Device => parsed.device_id,
+        Ok(parsed) if parsed.kind == crate::ura::URAKind::Device => parsed
+            .device_id()
+            .map(str::to_string)
+            .unwrap_or_else(|| agent_ura.to_string()),
         _ => agent_ura.to_string(),
     }
 }
@@ -324,7 +327,7 @@ impl SubscriberFsm {
                 Err(FsmError::ProtocolViolation("second Snapshot mid-stream"))
             }
             (SubscriberState::Pumping, DirectoryEvent::AgentAdvertised { .. })
-            | (SubscriberState::Pumping, DirectoryEvent::AbilitiesAdvertised { .. })
+            | (SubscriberState::Pumping, DirectoryEvent::OwnerProjectionChanged { .. })
             | (SubscriberState::Pumping, DirectoryEvent::AgentRevoked { .. }) => {
                 // Spec §2.3: backoff resets on the first non-
                 // Heartbeat frame in a Pumping window.
@@ -428,11 +431,13 @@ impl DirectoryView {
                 let entry = directory_agent_summary_to_entry(&summary, &self.peer_realm);
                 self.entries.insert(entry.agent_ura.clone(), entry);
             }
-            DirectoryEvent::AbilitiesAdvertised { .. } => {
-                // `DirectoryEntry` has no ability-count field. The
-                // stream contract says ability advertisements follow
-                // an agent advertisement; richer details are resolved
-                // through `federation.resolve`, not invented here.
+            DirectoryEvent::OwnerProjectionChanged { .. } => {
+                // Owner projection changes are not agent-directory
+                // upserts. `DirectoryEntry` carries no projection
+                // revision/digest/ability-count fields; richer
+                // owner ability details are resolved through the
+                // RFC-005 resolver/read model rather than invented
+                // in this agent-keyed view.
             }
             DirectoryEvent::AgentRevoked { agent_ura, .. } => {
                 self.entries.remove(agent_ura);
@@ -1455,6 +1460,20 @@ mod tests {
         DirectoryEvent::Heartbeat { unix_ms }
     }
 
+    fn owner_projection_changed_event() -> DirectoryEvent {
+        DirectoryEvent::OwnerProjectionChanged {
+            owner_ura: "easynet:///r/realm-a/device/device-A".to_string(),
+            host_device_ura: "easynet:///r/realm-a/device/device-A".to_string(),
+            projection_revision: 5,
+            projection_digest: "deadbeef".to_string(),
+            ability_count: 3,
+            stale_count: 0,
+            removed_count: 1,
+            lease_expires_unix_ms: 1_714_493_100_000,
+            unix_ms: 1_714_492_800_000,
+        }
+    }
+
     #[test]
     fn directory_event_snapshot_serialises_with_type_tag() {
         let evt = snapshot_event(vec![sample_entry()]);
@@ -1478,15 +1497,17 @@ mod tests {
             "easynet:///r/realm-a/device/device-A"
         );
 
-        let abilities_bytes = serde_json::to_vec(&DirectoryEvent::AbilitiesAdvertised {
-            agent_ura: "easynet:///r/realm-a/device/device-A".to_string(),
-            count: 3,
-            unix_ms: 1_714_492_800_000,
-        })
-        .unwrap();
-        let abilities: serde_json::Value = serde_json::from_slice(&abilities_bytes).unwrap();
-        assert_eq!(abilities["type"], "abilities_advertised");
-        assert_eq!(abilities["count"], 3);
+        let projection_bytes = serde_json::to_vec(&owner_projection_changed_event()).unwrap();
+        let projection: serde_json::Value = serde_json::from_slice(&projection_bytes).unwrap();
+        assert_eq!(projection["type"], "owner_projection_changed");
+        assert_eq!(
+            projection["owner_ura"],
+            "easynet:///r/realm-a/device/device-A"
+        );
+        assert_eq!(projection["projection_revision"], 5);
+        assert_eq!(projection["projection_digest"], "deadbeef");
+        assert_eq!(projection["ability_count"], 3);
+        assert_eq!(projection["removed_count"], 1);
 
         let revoked_bytes = serde_json::to_vec(&revoked_event(
             "easynet:///r/realm-a/device/dropped",
@@ -1569,11 +1590,7 @@ mod tests {
         fsm.on_frame(&empty_snapshot_event()).expect("snapshot");
         for evt in [
             advertised_event(sample_entry()),
-            DirectoryEvent::AbilitiesAdvertised {
-                agent_ura: "easynet:///r/realm-a/device/device-A".to_string(),
-                count: 2,
-                unix_ms: 1_714_492_800_000,
-            },
+            owner_projection_changed_event(),
             revoked_event("easynet:///r/realm-a/device/x", "drop"),
             heartbeat_event(1_714_492_800_000),
         ] {
@@ -1979,7 +1996,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/hub".to_string(),
+                    crate::ura::hub_ura("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2026,7 +2043,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/hub".to_string(),
+                    crate::ura::hub_ura("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2223,7 +2240,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/hub".to_string(),
+                    crate::ura::hub_ura("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2340,7 +2357,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/hub".to_string(),
+                    crate::ura::hub_ura("realm-a"),
                     client,
                     cell_for_task,
                     cancel_rx,
@@ -2961,7 +2978,8 @@ mod tests {
             );
             let cell = SharedFederatedDirectoryView::default();
 
-            let outcome = poll_once(&client, &peers, Some("easynet:///r/realm-a/hub"), &cell).await;
+            let local_hub = crate::ura::hub_ura("realm-a");
+            let outcome = poll_once(&client, &peers, Some(&local_hub), &cell).await;
 
             assert_eq!(outcome.successful_peers, vec!["realm-b".to_string()]);
             assert!(outcome.failed_peers.is_empty());

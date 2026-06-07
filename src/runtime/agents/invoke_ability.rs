@@ -20,22 +20,14 @@
 // own `<self>.invoke` so the handler's closure carries the caller
 // identity by construction.
 //
-// `easynet.invoke` survives as a thin compat alias that ignores the
-// caller identity (treats it as "anyone"); new skills (the `delegate`
-// SKILL.md) teach the owner-namespaced form so a fresh install lands
-// on the canonical name.
-//
 // Wire shape
 // ----------
-//   args:  { target?: string, ability: string, args?: object }
-//          - target  optional. Omit → calls the calling agent's
-//                    own `<self>.<ability>`. Pass `"<peer>"` to
-//                    cross-call.
-//          - ability required. Bare verb (no `<owner>.` prefix);
-//                    the prefix is constructed from `target` (or
-//                    self if absent).
-//          - args    forwarded as-is to the resolved handler.
-//                    Default `{}` so common calls can omit it.
+//   args:  { ability_ura: string, args?: object }
+//          - ability_ura required. Canonical Ability URA from
+//                        `<self>.discover`; owner, dispatch target,
+//                        and local registry key are derived from it.
+//          - args        forwarded as-is to the resolved handler.
+//                        Default `{}` so common calls can omit it.
 //
 //   returns: { result: <handler return>, fulfilled_by, target,
 //              ability, qualified_name, elapsed_ms }
@@ -49,10 +41,10 @@
 //
 // What this handler does NOT do
 // -----------------------------
-// * Federation routing — `target` must resolve to a local agent. A
-//   future `<self>.invoke` extension can recognise federation-shaped
-//   targets (e.g. `<user>:<agent>`) and route through the federation
-//   layer once it ships; today targets are bare local agent names.
+// * Target-name routing — `ability_ura` is the authority. The handler
+//   derives the local registry key or federation target from the
+//   Ability URA owner; it does not trust an unscoped target+verb pair
+//   as public identity.
 // * Streaming — invoke is the synchronous one-shot RPC surface. For
 //   streaming consumption, callers reach `<agent>.chat` directly via
 //   the dispatcher's stream mode (`InvokeStream` / Subscribe), as
@@ -78,7 +70,7 @@ pub const ABILITY_VERB: &str = "invoke";
 /// Register `<agent_name>.invoke` on the registry.
 ///
 /// `agent_registry_provider` returns the live agent registry at
-/// handler-call time so a hot-added peer becomes a valid `target`
+/// handler-call time so a hot-added peer becomes a valid dispatch target
 /// without re-registration.
 ///
 /// `dispatch_registry_handle` is a `OnceLock` populated by the
@@ -122,8 +114,9 @@ pub fn dispatch(
     args: Value,
 ) -> anyhow::Result<Value> {
     let parsed = InvokeArgs::parse(&args)?;
-    let target = parsed.target.as_deref().unwrap_or(caller);
-    let qualified = format!("{target}.{}", parsed.ability);
+    let target = parsed.dispatch_target.as_str();
+    let qualified = parsed.local_registry_ability.as_str();
+    let public_qualified = parsed.ability_ura.as_str();
 
     // Determine the caller's scope relative to the target ability.
     // self when the call stays inside one agent's own bundle,
@@ -189,7 +182,7 @@ pub fn dispatch(
                         "fulfilled_by": "federation_forward",
                         "target": target,
                         "ability": parsed.ability,
-                        "qualified_name": qualified,
+                        "qualified_name": public_qualified,
                         "elapsed_ms": elapsed_ms,
                     }));
                 }
@@ -265,7 +258,7 @@ pub fn dispatch(
     audit_invoke(
         caller,
         target,
-        &qualified,
+        public_qualified,
         &parsed.args,
         dispatch_result.as_ref(),
         elapsed_ms,
@@ -279,7 +272,7 @@ pub fn dispatch(
         "fulfilled_by": "registry_dispatch",
         "target": target,
         "ability": parsed.ability,
-        "qualified_name": qualified,
+        "qualified_name": public_qualified,
         "elapsed_ms": elapsed_ms,
     }))
 }
@@ -465,8 +458,11 @@ fn lookup_access_policy(
 /// canonical schema (see `parse`).
 #[derive(Debug, Clone, PartialEq)]
 struct InvokeArgs {
-    target: Option<String>,
+    dispatch_target: String,
+    owner_ura: String,
     ability: String,
+    ability_ura: String,
+    local_registry_ability: String,
     args: Value,
     metadata: InvokeMetadata,
 }
@@ -493,39 +489,16 @@ impl InvokeArgs {
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("invalid_args: invoke args must be a JSON object"))?;
 
-        let target = match obj.get("target") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(s)) if s.is_empty() => {
-                anyhow::bail!("invalid_args: `target` must not be the empty string")
-            }
-            Some(Value::String(s)) => Some(s.clone()),
-            Some(other) => {
-                anyhow::bail!("invalid_args: `target` must be a string (agent name); got {other}")
-            }
-        };
-
-        let ability = obj
-            .get("ability")
+        let raw_ability_ura = obj
+            .get("ability_ura")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("invalid_args: `ability` (string) is required"))?
+            .ok_or_else(|| anyhow::anyhow!("invalid_args: `ability_ura` (string) is required"))?
             .to_string();
-        if ability.is_empty() {
-            anyhow::bail!("invalid_args: `ability` must not be empty");
+        if raw_ability_ura.is_empty() {
+            anyhow::bail!("invalid_args: `ability_ura` must not be empty");
         }
-        // The bare verb must NOT contain a dot — the caller passes
-        // the verb separate from the target, and the handler
-        // constructs `<target>.<verb>`. A dotted verb is almost
-        // always a copy-paste mistake (the LLM passed
-        // `"claude.weather"` as `ability` instead of splitting), so
-        // catch it loud at parse rather than dispatching to a
-        // never-registered `claude.claude.weather`.
-        if ability.contains('.') {
-            anyhow::bail!(
-                "invalid_args: `ability` must be the bare verb only \
-                 (no `<owner>.` prefix); got {ability:?}. Pass the \
-                 owner via `target` instead."
-            );
-        }
+        let selector = crate::ura::AbilitySelector::parse(&raw_ability_ura)
+            .map_err(|e| anyhow::anyhow!("invalid_args: {e}"))?;
 
         let args = match obj.get("args") {
             None | Some(Value::Null) => json!({}),
@@ -549,7 +522,7 @@ impl InvokeArgs {
         // signed envelope. Unknown `_`-prefixed fields are
         // accepted-and-dropped so adding new metadata at a later
         // backend version doesn't require a CLI bump.
-        const KNOWN: &[&str] = &["target", "ability", "args"];
+        const KNOWN: &[&str] = &["ability_ura", "args"];
         for key in obj.keys() {
             if KNOWN.contains(&key.as_str()) {
                 continue;
@@ -581,8 +554,11 @@ impl InvokeArgs {
         };
 
         Ok(InvokeArgs {
-            target,
-            ability,
+            dispatch_target: selector.dispatch_target().to_string(),
+            owner_ura: selector.owner_ura().to_string(),
+            ability: selector.public_name().to_string(),
+            ability_ura: raw_ability_ura,
+            local_registry_ability: selector.local_registry_ability().to_string(),
             args,
             metadata,
         })
@@ -594,20 +570,18 @@ impl InvokeArgs {
 pub fn input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["ability"],
+        "required": ["ability_ura"],
         "additionalProperties": false,
         "properties": {
-            "target": {
+            "ability_ura": {
                 "type": "string",
-                "description": "Optional agent name. Omit to call your own \
-                                ability of that name; pass `\"<peer>\"` to \
-                                call a peer's. The full wire name \
-                                `<target>.<ability>` is built for you."
-            },
-            "ability": {
-                "type": "string",
-                "description": "Bare verb (no owner prefix). e.g. `\"weather\"`, \
-                                NOT `\"claude.weather\"`."
+                "description": "Canonical Ability URA returned by \
+                                `<self>.discover`, e.g. \
+                                `easynet:///r/<realm>/ability/<user>.<agent>.weather` \
+                                or \
+                                `easynet:///r/<realm>/ability/device.<device-id>.fs.read`. \
+                                Bare verbs and dotted registry keys are \
+                                rejected."
             },
             "args": {
                 "type": "object",
@@ -627,7 +601,7 @@ pub fn manifest() -> AbilityManifest {
 }
 
 pub fn description() -> &'static str {
-    "Invoke a discovered ability by name. Pair with <self>.discover \
+    "Invoke a discovered ability by Ability URA. Pair with <self>.discover \
      once you've picked a candidate from the discovery ladder. Returns \
      {result, fulfilled_by, target, ability, qualified_name, elapsed_ms}. \
      Typed errors: ability_not_found / permission_denied / \
@@ -724,20 +698,77 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_missing_ability() {
+    fn parse_rejects_missing_ability_ura() {
         let err = InvokeArgs::parse(&json!({})).unwrap_err();
-        assert!(format!("{err}").contains("ability"));
+        assert!(format!("{err}").contains("ability_ura"));
     }
 
     #[test]
     fn parse_rejects_dotted_ability() {
-        let err = InvokeArgs::parse(&json!({"ability": "claude.weather"})).unwrap_err();
-        assert!(format!("{err}").contains("bare verb"));
+        let err = InvokeArgs::parse(&json!({"ability_ura": "claude.weather"})).unwrap_err();
+        assert!(format!("{err}").contains("invalid Ability URA"));
     }
 
     #[test]
-    fn parse_rejects_empty_ability() {
-        let err = InvokeArgs::parse(&json!({"ability": ""})).unwrap_err();
+    fn parse_accepts_agent_owned_ability_ura() {
+        let parsed = InvokeArgs::parse(&json!({
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
+            "args": {"location": "Beijing"}
+        }))
+        .expect("agent-owned Ability URA must parse");
+        assert_eq!(parsed.dispatch_target, "claude");
+        assert_eq!(parsed.owner_ura, "easynet:///r/acme/agent/user-1.claude");
+        assert_eq!(parsed.ability, "weather");
+        assert_eq!(
+            parsed.ability_ura,
+            "easynet:///r/acme/ability/user-1.claude.weather"
+        );
+        assert_eq!(parsed.local_registry_ability, "claude.weather");
+    }
+
+    #[test]
+    fn parse_accepts_device_owned_ability_ura() {
+        let parsed = InvokeArgs::parse(&json!({
+            "ability_ura": "easynet:///r/acme/ability/device.01DEV.fs.read"
+        }))
+        .expect("device-owned Ability URA must parse for federation forwarding");
+        assert_eq!(parsed.dispatch_target, "easynet:///r/acme/device/01DEV");
+        assert_eq!(parsed.owner_ura, "easynet:///r/acme/device/01DEV");
+        assert_eq!(parsed.ability, "fs.read");
+        assert_eq!(parsed.local_registry_ability, "fs.read");
+    }
+
+    #[test]
+    fn parse_rejects_retired_target_field() {
+        let err = InvokeArgs::parse(&json!({
+            "target": "codex",
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather"
+        }))
+        .expect_err("target field is retired; Ability URA owns routing");
+        assert!(format!("{err}").contains("unknown field"));
+    }
+
+    #[test]
+    fn parse_rejects_retired_ability_field() {
+        let err = InvokeArgs::parse(&json!({
+            "ability": "easynet:///r/acme/ability/user-1.claude.weather"
+        }))
+        .expect_err("ability field is retired in favor of ability_ura");
+        assert!(format!("{err}").contains("ability_ura"));
+    }
+
+    #[test]
+    fn parse_rejects_non_ability_ura() {
+        let err = InvokeArgs::parse(&json!({
+            "ability_ura": "easynet:///r/acme/device/01DEV"
+        }))
+        .expect_err("non-ability URA is not an invoke selector");
+        assert!(format!("{err}").contains("/ability/"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_ability_ura() {
+        let err = InvokeArgs::parse(&json!({"ability_ura": ""})).unwrap_err();
         assert!(format!("{err}").contains("empty"));
     }
 
@@ -745,7 +776,7 @@ mod tests {
     fn parse_rejects_unknown_field() {
         // Catches the common typo of `arguments:` instead of `args:`.
         let err = InvokeArgs::parse(&json!({
-            "ability": "weather",
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
             "arguments": {"x": 1}
         }))
         .unwrap_err();
@@ -754,13 +785,14 @@ mod tests {
 
     #[test]
     fn parse_accepts_underscore_prefixed_sidecar_fields() {
+        let caller_ura = crate::ura::hub_ura("silan.localhost");
         // Backend cliipc adapter ships `_caller_ura`, `_request_id`,
         // `_idempotency_key`, `_timeout_ms` as IPC-only sidecars.
         // The handler must accept them silently — they don't enter
         // args_digest / canonical bytes / signed envelope.
         let parsed = InvokeArgs::parse(&json!({
-            "ability": "weather",
-            "_caller_ura": "easynet:///r/silan.localhost/hub",
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
+            "_caller_ura": caller_ura,
             "_request_id": "req-deadbeef00112233",
             "_idempotency_key": "idem-abc",
             "_timeout_ms": 5000,
@@ -768,10 +800,7 @@ mod tests {
         }))
         .expect("sidecar fields must not be rejected");
         assert_eq!(parsed.metadata.request_id, "req-deadbeef00112233");
-        assert_eq!(
-            parsed.metadata.caller_ura,
-            "easynet:///r/silan.localhost/hub",
-        );
+        assert_eq!(parsed.metadata.caller_ura, caller_ura);
         // Sidecars MUST NOT bleed into the inner ability args; the
         // signed args_digest covers `args` exclusively.
         assert_eq!(parsed.args, json!({}));
@@ -782,7 +811,7 @@ mod tests {
         // Forward-compat: a future backend version adding new
         // `_*` metadata must not require a CLI bump.
         let parsed = InvokeArgs::parse(&json!({
-            "ability": "weather",
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
             "_brand_new_metadata_v3": {"nested": true},
         }))
         .unwrap();
@@ -798,7 +827,7 @@ mod tests {
         // than crash, since rejecting would mean a typo in operator
         // tooling could lock out the entire invoke surface.
         let parsed = InvokeArgs::parse(&json!({
-            "ability": "weather",
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
             "_request_id": 12345,
             "_caller_ura": null,
         }))
@@ -811,7 +840,7 @@ mod tests {
     fn parse_still_rejects_unknown_field_without_underscore_prefix() {
         // Underscore-prefix carve-out must not weaken the typo guard.
         let err = InvokeArgs::parse(&json!({
-            "ability": "weather",
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
             "arguments": {"x": 1},
         }))
         .unwrap_err();
@@ -826,9 +855,12 @@ mod tests {
 
     #[test]
     fn parse_defaults_args_to_empty_object_when_absent() {
-        let parsed = InvokeArgs::parse(&json!({"ability": "discover"})).unwrap();
+        let parsed = InvokeArgs::parse(&json!({
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.discover"
+        }))
+        .unwrap();
         assert_eq!(parsed.args, json!({}));
-        assert_eq!(parsed.target, None);
+        assert_eq!(parsed.dispatch_target, "claude");
     }
 
     #[test]
@@ -856,27 +888,50 @@ mod tests {
 
     #[test]
     fn invoke_self_ability_dispatches_through_registry() {
-        // Caller is claude; target unspecified → resolves to claude.weather.
+        // Ability URA owner is claude; local registry dispatch uses claude.weather.
         let weather: crate::runtime::ability_dispatch::LocalRpcHandler = Arc::new(|args: Value| {
             let loc = args.get("location").and_then(Value::as_str).unwrap_or("");
             Ok(json!({"summary": format!("{loc}: clear 18C")}))
         });
         let dispatch = fixture(&[("claude.weather", weather)], AgentRegistry::default());
+        let ability_ura = "easynet:///r/acme/ability/user-1.claude.weather";
         let resp = dispatch(json!({
-            "ability": "weather",
+            "ability_ura": ability_ura,
             "args": {"location": "Beijing"}
         }))
         .unwrap();
         assert_eq!(resp["target"], "claude");
-        assert_eq!(resp["qualified_name"], "claude.weather");
+        assert_eq!(resp["qualified_name"], ability_ura);
         assert_eq!(resp["result"]["summary"], json!("Beijing: clear 18C"));
         assert!(resp["elapsed_ms"].is_u64());
     }
 
     #[test]
+    fn invoke_agent_ability_ura_dispatches_through_local_registry() {
+        let weather: crate::runtime::ability_dispatch::LocalRpcHandler = Arc::new(|args: Value| {
+            let loc = args.get("location").and_then(Value::as_str).unwrap_or("");
+            Ok(json!({"summary": format!("{loc}: clear 18C")}))
+        });
+        let dispatch = fixture(&[("claude.weather", weather)], AgentRegistry::default());
+        let ability_ura = "easynet:///r/acme/ability/user-1.claude.weather";
+        let resp = dispatch(json!({
+            "ability_ura": ability_ura,
+            "args": {"location": "Beijing"}
+        }))
+        .unwrap();
+        assert_eq!(resp["target"], "claude");
+        assert_eq!(resp["ability"], "weather");
+        assert_eq!(resp["qualified_name"], ability_ura);
+        assert_eq!(resp["result"]["summary"], json!("Beijing: clear 18C"));
+    }
+
+    #[test]
     fn invoke_unknown_ability_returns_typed_not_found() {
         let dispatch = fixture(&[], AgentRegistry::default());
-        let err = dispatch(json!({"ability": "nope"})).unwrap_err();
+        let err = dispatch(json!({
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.nope"
+        }))
+        .unwrap_err();
         assert!(format!("{err}").contains("ability_not_found"));
     }
 
@@ -884,8 +939,7 @@ mod tests {
     fn invoke_unknown_target_returns_typed_target_not_registered() {
         let dispatch = fixture(&[], AgentRegistry::default());
         let err = dispatch(json!({
-            "target": "phantom",
-            "ability": "weather"
+            "ability_ura": "easynet:///r/acme/ability/user-1.phantom.weather"
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("target_not_registered"));
@@ -914,8 +968,7 @@ mod tests {
             Arc::new(|_| Ok(json!("should not run")));
         let dispatch = fixture(&[("codex.internal", h)], agents);
         let err = dispatch(json!({
-            "target": "codex",
-            "ability": "internal"
+            "ability_ura": "easynet:///r/acme/ability/user-1.codex.internal"
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("permission_denied"));
@@ -937,12 +990,12 @@ mod tests {
         let h: crate::runtime::ability_dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!({"summary": "Beijing: 18C"})));
         let dispatch = fixture(&[("codex.weather", h)], agents);
+        let ability_ura = "easynet:///r/acme/ability/user-1.codex.weather";
         let resp = dispatch(json!({
-            "target": "codex",
-            "ability": "weather"
+            "ability_ura": ability_ura
         }))
         .unwrap();
-        assert_eq!(resp["qualified_name"], "codex.weather");
+        assert_eq!(resp["qualified_name"], ability_ura);
     }
 
     #[test]
@@ -967,8 +1020,7 @@ mod tests {
             Arc::new(|_| Ok(json!("should not run")));
         let dispatch = fixture(&[("codex.weather", h)], agents);
         let err = dispatch(json!({
-            "target": "codex",
-            "ability": "weather"
+            "ability_ura": "easynet:///r/acme/ability/user-1.codex.weather"
         }))
         .unwrap_err();
         let msg = format!("{err}");
@@ -994,8 +1046,7 @@ mod tests {
             Arc::new(|_| Ok(json!("should not run")));
         let dispatch = fixture(&[("codex.weather", h)], agents);
         let err = dispatch(json!({
-            "target": "codex",
-            "ability": "weather"
+            "ability_ura": "easynet:///r/acme/ability/user-1.codex.weather"
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("permission_denied"));
@@ -1021,12 +1072,12 @@ mod tests {
         let h: crate::runtime::ability_dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!({"summary": "Beijing"})));
         let dispatch = fixture(&[("codex.weather", h)], agents);
+        let ability_ura = "easynet:///r/acme/ability/user-1.codex.weather";
         let resp = dispatch(json!({
-            "target": "codex",
-            "ability": "weather"
+            "ability_ura": ability_ura
         }))
         .unwrap();
-        assert_eq!(resp["qualified_name"], "codex.weather");
+        assert_eq!(resp["qualified_name"], ability_ura);
     }
 
     #[test]
@@ -1038,7 +1089,10 @@ mod tests {
         let chat: crate::runtime::ability_dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!({"reply": "hi"})));
         let dispatch = fixture(&[("claude.chat", chat)], AgentRegistry::default());
-        let resp = dispatch(json!({"ability": "chat"})).unwrap();
+        let resp = dispatch(json!({
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.chat"
+        }))
+        .unwrap();
         assert_eq!(resp["result"]["reply"], "hi");
     }
 
@@ -1047,7 +1101,10 @@ mod tests {
         let failing: crate::runtime::ability_dispatch::LocalRpcHandler =
             Arc::new(|_| anyhow::bail!("upstream_failed: wttr.in returned 503"));
         let dispatch = fixture(&[("claude.weather", failing)], AgentRegistry::default());
-        let err = dispatch(json!({"ability": "weather"})).unwrap_err();
+        let err = dispatch(json!({
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather"
+        }))
+        .unwrap_err();
         assert!(format!("{err}").contains("upstream_failed"));
     }
 
@@ -1071,19 +1128,16 @@ mod tests {
         });
 
         let dispatch = fixture(&[], AgentRegistry::default());
+        let ability_ura = "easynet:///r/exp-realm/ability/device.alice-node.ping";
         let resp = dispatch(json!({
-            "target": "easynet:///r/exp-realm/device/alice-node",
-            "ability": "ping",
+            "ability_ura": ability_ura,
             "args": {"from": "silan"}
         }))
         .unwrap();
         // Forward path returns the inner result Value verbatim — the
         // dispatch layer wraps that with the standard envelope.
         assert_eq!(resp["target"], "easynet:///r/exp-realm/device/alice-node");
-        assert_eq!(
-            resp["qualified_name"],
-            "easynet:///r/exp-realm/device/alice-node.ping"
-        );
+        assert_eq!(resp["qualified_name"], ability_ura);
         assert_eq!(resp["result"]["echo"], "from-alice");
 
         fwd::clear_test_routing();
@@ -1097,8 +1151,7 @@ mod tests {
 
         let dispatch = fixture(&[], AgentRegistry::default());
         let err = dispatch(json!({
-            "target": "easynet:///r/exp-realm/device/unknown",
-            "ability": "ping",
+            "ability_ura": "easynet:///r/exp-realm/ability/device.unknown.ping",
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("target_not_registered"));
@@ -1116,8 +1169,7 @@ mod tests {
 
         let dispatch = fixture(&[], AgentRegistry::default());
         let err = dispatch(json!({
-            "target": "easynet:///r/exp-realm/device/down",
-            "ability": "ping"
+            "ability_ura": "easynet:///r/exp-realm/ability/device.down.ping"
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("AXON_TARGET_OFFLINE"));
@@ -1127,9 +1179,10 @@ mod tests {
 
     #[test]
     fn forward_invoke_skipped_for_non_federation_targets() {
-        // Bare names (legacy local target) MUST stay on the
-        // target_not_registered path even if the router claims to
-        // know them, because is_federation_target rejects bare names.
+        // Agent-owned Ability URAs derive bare agent names as local
+        // dispatch targets. Those MUST stay on the target_not_registered
+        // path even if the router claims to know them, because
+        // is_federation_target rejects bare names.
         let _g = fwd::test_lock();
         fwd::set_test_knower(|_uri| true);
         fwd::set_test_router(|_t, _a, _x| {
@@ -1138,8 +1191,7 @@ mod tests {
 
         let dispatch = fixture(&[], AgentRegistry::default());
         let err = dispatch(json!({
-            "target": "phantom-bare-name",
-            "ability": "ping"
+            "ability_ura": "easynet:///r/acme/ability/user-1.phantom-bare-name.ping"
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("target_not_registered"));
@@ -1161,7 +1213,10 @@ mod tests {
             Arc::clone(&handle),
         );
         let dispatch = reg.resolve_rpc("claude.invoke").unwrap();
-        let err = dispatch(json!({"ability": "discover"})).unwrap_err();
+        let err = dispatch(json!({
+            "ability_ura": "easynet:///r/acme/ability/user-1.claude.discover"
+        }))
+        .unwrap_err();
         assert!(format!("{err}").contains("internal_error"));
         let _ = PathBuf::from("/keep-imports-happy"); // tempfile import lives in fixture
     }

@@ -9,13 +9,13 @@
 //
 // Verbs:
 //   list                        List published abilities                   (-> cli::abilities)
-//   show <node> <name>          Display one endpoint's contract surface    (NEW)
+//   show <ability-ura>          Display one endpoint's contract surface    (NEW)
 //   new <name> [--lang LANG]    Scaffold a new ability project             (-> cli::ability_scaffold)
 //   validate <path>             Lint an ability manifest before deploy     (-> cli::ability_scaffold)
 //   deploy <path> --node <id>   Publish a new ability version              (-> cli::deploy)
-//   uninstall <node> <id>       Remove a deployed ability                  (NEW)
-//   invoke <name> [--node <id>] Call a public ability (auto-routes by      (-> cli::invoke)
-//                               default; --node pins to a specific device)
+//   uninstall <ability-ura>     Remove a deployed ability                  (NEW)
+//   invoke <ability-ura>       Call a public ability by canonical URA      (-> cli::invoke)
+//          [--node <id>]       --node pins to a specific remote device
 //   exec <node> -- <cmd>        One-shot remote shell (ad-hoc ability)     (-> cli::exec)
 //
 // Verbs DELIBERATELY ABSENT:
@@ -75,7 +75,7 @@ pub enum AbilityAction {
     Deploy(deploy::DeployArgs),
     /// Uninstall a previously deployed ability.
     Uninstall(UninstallArgs),
-    /// Invoke a public ability. Auto-routes across the federation unless `--node` pins it.
+    /// Invoke a public ability by canonical Ability URA.
     Invoke(invoke::InvokeArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
@@ -83,11 +83,9 @@ pub enum AbilityAction {
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
-    /// Fully-qualified ability name (e.g. `claude.weather`,
-    /// `easynet.discover`, `observe.health`). The bare-verb form
-    /// is accepted for system abilities; agent-owned abilities
-    /// MUST carry their `<owner>.` prefix.
-    pub name: String,
+    /// Canonical Ability URA (e.g.
+    /// `easynet:///r/localhost/ability/alice.claude.weather`).
+    pub ability_ura: String,
     /// ⚠ Reserved for federation-tier resolution. Today this CLI
     /// pulls metadata from the local daemon's catalogue (post
     /// AXON-RFC-001 P1.5 there is no remote 'list_mcp_tools'
@@ -104,12 +102,8 @@ pub struct ShowArgs {
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
-    /// Target ability name. Post-P1.5 the only addressable form is
-    /// the qualified `<owner>.<verb>`; the historical
-    /// `<node_id> <install_id>` shape is preserved as `--node` and
-    /// `--install-id` so existing scripts keep parsing while the
-    /// federation Invoke replacement is wired.
-    pub name: String,
+    /// Canonical Ability URA to uninstall.
+    pub ability_ura: String,
     /// Reserved for federation-tier uninstall. See '--node' on
     /// 'ability show'.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
@@ -137,18 +131,17 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
+    ensure_ability_ura(&args.ability_ura)?;
     // Joint-plan unified path: `--node` is now wired through
     // `federation.forward_invoke` against the target device URA;
-    // `easynet.discover` runs on the peer daemon, the result
+    // `meta.list_abilities` runs on the peer daemon, the result
     // bridges back, we filter by ability name client-side. Match
     // the routing rules `ability list --node` and `device show`
     // settled on so a single `--node` flag means the same thing
     // across the whole CLI.
     let catalogue = match args.node.as_deref().map(str::trim) {
-        None | Some("local") => {
-            invoke_local_ability("device.meta.list_abilities", serde_json::json!({}))
-                .context("invoke easynet.discover")?
-        }
+        None | Some("local") => invoke_local_ability("meta.list_abilities", serde_json::json!({}))
+            .context("invoke meta.list_abilities")?,
         Some("") => {
             anyhow::bail!(
                 "--node was given but empty; omit the flag to show abilities on the \
@@ -156,7 +149,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
                  an ability hosted on a peer device."
             );
         }
-        Some(node) => invoke_remote_easynet_discover(node)?,
+        Some(node) => invoke_remote_list_abilities(node)?,
     };
     let abilities = catalogue
         .get("abilities")
@@ -166,18 +159,12 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .unwrap_or_default();
     let entry = abilities
         .into_iter()
-        .find(|e| {
-            e.get("name")
-                .or_else(|| e.get("tool_name"))
-                .or_else(|| e.get("ability_name"))
-                .and_then(Value::as_str)
-                == Some(args.name.as_str())
-        })
+        .find(|e| e.get("ability_ura").and_then(Value::as_str) == Some(args.ability_ura.as_str()))
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "ability '{}' not found in this node's catalogue. \
+                "ability_ura '{}' not found in this node's catalogue. \
                  Run `easynet ability list` to see what is registered.",
-                args.name
+                args.ability_ura
             )
         })?;
 
@@ -187,7 +174,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     }
 
     // Human-readable contract surface. The fields below are
-    // best-effort: `easynet.discover` doesn't yet surface every
+    // best-effort: `meta.list_abilities` doesn't yet surface every
     // historical `list_mcp_tools` field (version / state / hosted
     // node), so the renderer falls back to "-" when a field is
     // absent rather than failing — it's a *show* command, missing
@@ -195,9 +182,8 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let name = entry
         .get("name")
         .or_else(|| entry.get("tool_name"))
-        .or_else(|| entry.get("ability_name"))
         .and_then(Value::as_str)
-        .unwrap_or(&args.name);
+        .unwrap_or(&args.ability_ura);
     let version = entry
         .get("ability_version")
         .and_then(Value::as_str)
@@ -211,7 +197,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(Value::as_str)
         .unwrap_or("ACTIVE");
     let owner = entry
-        .get("owner_agent_ura")
+        .get("owner_ura")
         .and_then(Value::as_str)
         .or_else(|| {
             // Fall back to deriving owner from the qualified name
@@ -258,31 +244,44 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 }
 
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
+    ensure_ability_ura(&args.ability_ura)?;
     if !args.yes {
-        let prompt = format!("Uninstall ability '{}' from this device set?", args.name);
+        let prompt = format!(
+            "Uninstall ability '{}' from this device set?",
+            args.ability_ura
+        );
         if !output::confirm(&prompt)? {
             output::info("aborted");
             return Ok(());
         }
     }
-    let mut body = serde_json::json!({ "ability_name": args.name });
+    let mut body = serde_json::json!({ "ability_ura": args.ability_ura.clone() });
     if let Some(node) = args.node.as_deref().filter(|s| !s.trim().is_empty()) {
         body["node_id"] = serde_json::json!(node);
     }
     if let Some(iid) = args.install_id.as_deref().filter(|s| !s.trim().is_empty()) {
         body["install_id"] = serde_json::json!(iid);
     }
-    let result = invoke_local_ability("device.ability.uninstall", body)
-        .context("invoke device.ability.uninstall")?;
-    output::success(&format!("uninstalled {}", args.name));
+    let result =
+        invoke_local_ability("ability.uninstall", body).context("invoke ability.uninstall")?;
+    output::success(&format!("uninstalled {}", args.ability_ura));
     if !result.is_null() {
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     Ok(())
 }
 
+fn ensure_ability_ura(value: &str) -> anyhow::Result<()> {
+    let parsed = crate::ura::parse_ura(value)
+        .map_err(|e| anyhow::anyhow!("expected canonical Ability URA, got {value:?}: {e}"))?;
+    if parsed.kind != crate::ura::URAKind::Ability {
+        anyhow::bail!("expected canonical Ability URA, got {value:?}");
+    }
+    Ok(())
+}
+
 /// Joint-plan unified path: `easynet ability show --node <URA>`
-/// forwards `easynet.discover` to the target device through
+/// forwards `meta.list_abilities` to the target device through
 /// `federation.forward_invoke`. Mirrors the same helper in
 /// `cli/abilities.rs::fetch_remote_catalogue` so a future audit
 /// "every CLI surface that asks a peer device for its catalogue"
@@ -290,20 +289,24 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
 /// go through the shared cross-hub directory lookup helper before
 /// local-realm fallback.
 #[cfg(feature = "axon-pb")]
-fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+fn invoke_remote_list_abilities(node: &str) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    crate::support::federation_invoke::invoke_via_federation_forward(
-        "easynet.discover",
+    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        &target_ura,
+        "meta.list_abilities",
+    )?;
+    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+        ability_ura.as_str(),
         serde_json::json!({}),
         &target_ura,
         caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward easynet.discover to target={target_ura}"))
+    .with_context(|| format!("forward meta.list_abilities to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+fn invoke_remote_list_abilities(node: &str) -> anyhow::Result<Value> {
     Err(crate::support::local_invoke::federation_not_wired_error(
         &format!("showing an ability on remote node {node:?}"),
     ))

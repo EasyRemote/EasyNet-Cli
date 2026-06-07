@@ -15,7 +15,7 @@ use crate::plugins::remote_desktop::transport::apply_remote_ice_candidate_values
 use crate::plugins::remote_desktop::view::serialize_session;
 use crate::runtime::ability_dispatch::EnvelopeContext;
 
-/// Handle `device.remote_desktop.add_ice_candidate`.
+/// Handle `remote_desktop.add_ice_candidate`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     plugin: Arc<RemoteDesktopPlugin>,
     env: EnvelopeContext,

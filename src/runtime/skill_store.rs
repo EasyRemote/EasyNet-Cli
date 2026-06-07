@@ -2,7 +2,7 @@
 // ==========================================
 //
 // File: src/runtime/skill_store.rs
-// Description: Canonical filesystem implementation behind device.skill.* abilities.
+// Description: Canonical filesystem implementation behind skill.* abilities.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,7 +102,7 @@ impl SkillSource {
 /// Pure install helper: fetches the source, atomically moves into
 /// the agent's skills/ dir, writes the install record, and returns
 /// it. No stdout, no CLI dep. Used by `run_install` (CLI) and
-/// `device.skill.install` ability (daemon ability dispatch).
+/// `skill.install` ability (daemon ability dispatch).
 ///
 /// `pub(crate)` because the only callers are in this crate
 /// (run_install in this file + skill_install_ability handler in
@@ -500,7 +500,7 @@ fn file_mtime_iso(path: &std::path::Path) -> Option<String> {
 /// new ref into place, and returns the new InstallRecord on success.
 /// On failure the backup is restored — the caller never observes a
 /// half-upgraded state. No stdout, no CLI dep. Used by `run_upgrade`
-/// (CLI) and `device.skill.upgrade` ability.
+/// (CLI) and `skill.upgrade` ability.
 ///
 /// `pub(crate)` for the same reason as install_skill.
 ///
@@ -585,7 +585,7 @@ pub(crate) fn upgrade_skill(
 
 /// Pure remove helper: deletes the skill directory and returns Ok
 /// when the skill was present and the delete succeeded. No stdout,
-/// no CLI dep. Used by `run_remove` (CLI) and `device.skill.remove`
+/// no CLI dep. Used by `run_remove` (CLI) and `skill.remove`
 /// ability.
 ///
 /// `pub(crate)` for the same reason as install_skill.

@@ -23,7 +23,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn session_created() -> RemoteDe
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
             "media_transport_ready": false,
-            "preview_ability": "device.screen.subscribe",
+            "preview_ability": "screen.subscribe",
         }),
     )
 }

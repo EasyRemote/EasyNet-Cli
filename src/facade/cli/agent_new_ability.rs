@@ -275,10 +275,10 @@ fn resolve_agent_selector(selector: &str) -> anyhow::Result<String> {
                     parsed.kind
                 );
             }
-            if parsed.agent_id.trim().is_empty() {
+            let Some((_, agent_id)) = parsed.agent_ids() else {
                 anyhow::bail!("agent selector URA is missing agent_id");
-            }
-            Ok(parsed.agent_id)
+            };
+            Ok(agent_id.to_string())
         }
         Err(_) => Ok(selector.to_string()),
     }

@@ -16,7 +16,7 @@
 //
 //   2. `Credentials` (credentials.json) — long-lived, survives reboots:
 //      `easynet join` → save_credentials()  |  `easynet reset` → delete_credentials()
-//      Fields: node_id, credential_token, hub_endpoint, tenant_id, deploy_signature.
+//      Fields: node_id, credential_token, hub_endpoint, realm, deploy_signature.
 //      Unix permissions: 0o600 (contains credential_token and deploy_signature).
 //
 //   3. `DeviceSettings` (device_settings.json) — user-controlled knobs:
@@ -385,35 +385,21 @@ pub fn load_and_connect(
 // ─── Device Credentials ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Credentials {
     pub node_id: String,
     pub credential_token: String,
     pub hub_endpoint: String,
-    // URA v4.1.4 backend renamed the wire field `tenant_id` → `realm`
-    // for every device-pairing response (CreatePairingResp,
-    // PairingPreflightResp, DeviceResp).
-    //
-    // The Rust struct keeps `tenant_id` as the in-memory field name
-    // (~15 callsites depend on it) but accepts EITHER `realm` (v4.1.4)
-    // or `tenant_id` (legacy + on-disk v1 credentials.json) on the
-    // wire via serde alias. `default` lets the v1 form decode when
-    // only `tenant_id` is present and the v4.1.4 form when only
-    // `realm` is present. Output side: `serialize` always writes
-    // `tenant_id` (the field name) for backward-compat with any
-    // tooling that still reads credentials.json by hand. A future
-    // amendment can flip serialization to write `realm` once nothing
-    // else reads the file path.
-    #[serde(default, alias = "realm")]
-    pub tenant_id: String,
+    /// Realm this device is paired into.
+    pub realm: String,
     #[serde(default)]
     pub deploy_signature: String,
     /// Optional Hub REST API base URL (e.g. "http://localhost:8080") for local dev.
     /// When absent, derived from `hub_endpoint` by stripping scheme/port and using HTTPS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_api_base: Option<String>,
-    /// URA v2 username — stable slug for the user this device is
-    /// paired to. Optional during the migration window; populated
-    /// by the Phase 14 backend in validate-pairing responses.
+    /// Stable username slug for the user this device is paired to.
+    /// Required for user-rooted and agent-rooted URAs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     /// Realm hub's Ed25519 pubkey (base64), captured during pairing
@@ -437,14 +423,9 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    /// Returns the v4.1.4 realm. After the alias-based serde change
-    /// (Phase 2B'), the value lives in `tenant_id` regardless of
-    /// whether the wire payload used the new `realm` field name or
-    /// the legacy `tenant_id` field name. Callers should still go
-    /// through this helper rather than reading `.tenant_id` directly
-    /// — that way a future field rename will only need one edit.
+    /// Returns the paired realm.
     pub fn realm_str(&self) -> &str {
-        &self.tenant_id
+        &self.realm
     }
 }
 
@@ -457,6 +438,35 @@ impl Credentials {
         }
         let host = extract_api_host(&self.hub_endpoint);
         format!("https://{host}")
+    }
+
+    /// Return the stable username slug carried by device credentials.
+    ///
+    /// Credentials without this slug are structurally incomplete: the
+    /// runtime cannot derive canonical user-rooted or agent-rooted
+    /// URAs from the credential file alone.
+    pub fn username_slug(&self) -> anyhow::Result<&str> {
+        self.username
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "credentials file is missing username — run `easynet join <token>` to re-pair"
+                )
+            })
+    }
+
+    fn validate_complete(&self) -> anyhow::Result<()> {
+        if self.node_id.is_empty()
+            || self.credential_token.is_empty()
+            || self.hub_endpoint.is_empty()
+            || self.realm.is_empty()
+        {
+            anyhow::bail!("credentials file is incomplete — run `easynet join <token>` to re-pair");
+        }
+        self.username_slug()?;
+        Ok(())
     }
 }
 
@@ -566,6 +576,7 @@ pub fn easynet_daemon_pid_path() -> PathBuf {
 }
 
 pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
+    creds.validate_complete()?;
     let dir = state_dir();
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(creds)? + "\n";
@@ -586,13 +597,7 @@ pub fn load_credentials() -> anyhow::Result<Credentials> {
     let data = fs::read_to_string(&path)
         .map_err(|_| anyhow::anyhow!("no credentials found — run `easynet join <token>` first"))?;
     let creds: Credentials = serde_json::from_str(&data)?;
-    if creds.node_id.is_empty()
-        || creds.credential_token.is_empty()
-        || creds.hub_endpoint.is_empty()
-        || creds.tenant_id.is_empty()
-    {
-        anyhow::bail!("credentials file is incomplete — run `easynet join <token>` to re-pair");
-    }
+    creds.validate_complete()?;
     Ok(creds)
 }
 
@@ -674,10 +679,10 @@ mod tests {
             node_id: "n".into(),
             credential_token: "t".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: String::new(),
             hub_api_base: Some("https://api.example.com/".into()),
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -794,10 +799,10 @@ mod tests {
             node_id: "n".into(),
             credential_token: "t".into(),
             hub_endpoint: "axon://my-hub.example.org:50051".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: String::new(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -837,6 +842,102 @@ mod tests {
         assert!(
             err.to_string().contains("daemon-only mode"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn save_credentials_rejects_missing_username() {
+        let _g = HomeGuard::new();
+        let creds = Credentials {
+            node_id: "node".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "axon://hub.example:7700".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+
+        let err = save_credentials(&creds).expect_err("missing username must not persist");
+        assert!(
+            err.to_string().contains("missing username"),
+            "error should name the missing username contract: {err}"
+        );
+    }
+
+    #[test]
+    fn save_credentials_writes_realm_field() {
+        let _g = HomeGuard::new();
+        let creds = Credentials {
+            node_id: "node".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "axon://hub.example:7700".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+
+        save_credentials(&creds).expect("save credentials");
+        let saved = fs::read_to_string(credentials_path()).expect("read credentials");
+        let value: serde_json::Value = serde_json::from_str(&saved).expect("credentials json");
+        assert_eq!(value["realm"], "tenant");
+        assert!(
+            value.get("tenant_id").is_none(),
+            "credentials.json must not write retired tenant_id: {saved}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_rejects_file_without_username() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            credentials_path(),
+            r#"{
+  "node_id": "node",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "tenant",
+  "deploy_signature": ""
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let err = load_credentials().expect_err("missing username must fail on load");
+        assert!(
+            err.to_string().contains("missing username"),
+            "error should name the missing username contract: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_rejects_retired_tenant_id_field() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            credentials_path(),
+            r#"{
+  "node_id": "node",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "tenant_id": "tenant",
+  "deploy_signature": "",
+  "username": "alice"
+}
+"#,
+        )
+        .expect("write retired credentials");
+
+        let err = load_credentials().expect_err("retired tenant_id must fail on load");
+        assert!(
+            err.to_string().contains("tenant_id"),
+            "error should name the retired field: {err}"
         );
     }
 

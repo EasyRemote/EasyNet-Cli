@@ -7,7 +7,7 @@
 // top of the schema-B + TLS-pinned dial shipped by commit 2/N
 // (`ca081bc`). The handler `dispatch_federation_forward_invoke`
 // rewrite shipped by commit 3a/N + 3b/N (`b3a06f4` + `57a42df`)
-// already routes cross-tenant calls through this dialer; commit
+// already routes cross-realm calls through this dialer; commit
 // 4/N hardens the dial path so a slow / dead peer cannot stall
 // the local hub indefinitely.
 //
@@ -212,7 +212,7 @@ pub type HubUri = String;
 pub enum FederationClientError {
     /// The peer hub URI is not present in the local
     /// `RealmTrustAnchor` with the federation role + non-empty
-    /// origin tenant id (DEC-N1 schema-B). Fail-closed:
+    /// origin realm id (DEC-N1 schema-B). Fail-closed:
     /// admission's federated trust set is the only authority on
     /// which peers we may dial.
     #[error("federation peer `{0}` is not in the realm trust anchor; cross-hub dial refused")]
@@ -269,7 +269,7 @@ pub trait FederationClient: Send + Sync {
     ///
     /// 1. Look up `target_hub` in the trust anchor. Reject with
     ///    `PeerNotTrusted` if the entry is missing or its
-    ///    `origin_tenant_id` is `None` (DEC-N1).
+    ///    `origin_realm` is `None` (DEC-N1).
     /// 2. Re-use a cached `tonic::transport::Channel` per peer
     ///    (PR-N1 spec INV-5) — fresh channel per call would
     ///    burn TLS handshakes.
@@ -409,7 +409,7 @@ impl CrossHubDialer {
     /// `services::invocation_transport::start_daemon_invocation_transport`
     /// uses this constructor in `Hub` / `Both` modes so operators
     /// editing the federation peer set (adding `[[trusted_agent]]
-    /// role = "hub"` blocks with the schema-B `origin_tenant_id` /
+    /// role = "hub"` blocks with the schema-B `origin_realm` /
     /// `hub_endpoint` / `tls_ca_pem_path` fields) only need
     /// `kill -HUP <daemon_pid>` — no restart, no in-flight
     /// invoke loss.
@@ -651,7 +651,7 @@ impl FederationClient for CrossHubDialer {
     ) -> Result<InvokeResponse, FederationClientError> {
         // ── 1. Trust gate ────────────────────────────────────
         // `lookup_peer_hub` enforces the schema-B contract:
-        // role == Hub AND origin_tenant_id.is_some() AND
+        // role == Hub AND origin_realm.is_some() AND
         // hub_endpoint == target_hub. A peer that fails any of those
         // is `PeerNotTrusted`. We additionally require
         // `tls_ca_pem_path.is_some()` since DEC-N1 forbids the
@@ -872,7 +872,7 @@ impl CrossHubDialer {
 mod tests {
     //! PR-N1 commit 2/N tests:
     //! - Trust gate: peer not in anchor / wrong role / missing
-    //!   `origin_tenant_id` / missing `tls_ca_pem_path` all surface
+    //!   `origin_realm` / missing `tls_ca_pem_path` all surface
     //!   as `PeerNotTrusted` (DEC-N1 schema-B).
     //! - Channel cache: a configured peer dialed twice produces a
     //!   single cache entry; second call reuses the channel.
@@ -967,11 +967,11 @@ mod tests {
     /// then mutates one field to exercise a specific reject reason.
     fn fed_peer_entry(target_hub: &str, ca_path: PathBuf) -> TrustedAgent {
         TrustedAgent {
-            agent_ura: "easynet:///r/peer-realm/hub".to_string(),
+            agent_ura: crate::ura::hub_ura("peer-realm"),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
-            origin_tenant_id: Some("peer-realm".to_string()),
+            origin_realm: Some("peer-realm".to_string()),
             hub_endpoint: Some(target_hub.to_string()),
             tls_ca_pem_path: Some(ca_path),
         }
@@ -1006,7 +1006,7 @@ mod tests {
     async fn peer_not_trusted_when_role_is_not_hub() {
         // A Backend-role entry whose `hub_endpoint` matches the target
         // is still rejected. `lookup_peer_hub` filters on role +
-        // origin_tenant_id, so a misconfigured TOML that put a
+        // origin_realm, so a misconfigured TOML that put a
         // backend's URL into hub_endpoint does not accidentally make
         // it dialable.
         let target = "https://peer-hub.example:50443".to_string();
@@ -1023,22 +1023,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_not_trusted_when_origin_tenant_id_missing() {
-        // A legacy hub entry written before PR-N1 schema-B has
-        // `origin_tenant_id = None`. The dialer must fail closed —
-        // a hub entry without a tenant tag is structurally
+    async fn peer_not_trusted_when_origin_realm_missing() {
+        // A malformed hub entry with `origin_realm = None` must fail closed:
+        // a hub entry without a realm tag is structurally
         // unsuitable for cross-realm admission key resolution
         // (PR-N2's prerequisite).
         let target = "https://peer-hub.example:50443".to_string();
         let mut entry = fed_peer_entry(&target, PathBuf::from("/dev/null"));
-        entry.origin_tenant_id = None;
+        entry.origin_realm = None;
         let anchor = anchor_with(entry);
 
         let dialer = CrossHubDialer::new(anchor);
         let err = dialer
             .forward_invoke(&target, sample_request("test.echo"))
             .await
-            .expect_err("missing origin_tenant_id must reject");
+            .expect_err("missing origin_realm must reject");
         assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
     }
 

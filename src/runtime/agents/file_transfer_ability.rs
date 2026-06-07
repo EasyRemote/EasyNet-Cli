@@ -1,4 +1,4 @@
-// EasyNet CLI — device.fs.transfer bidi ability
+// EasyNet CLI — fs.transfer bidi ability
 // =================================================
 //
 // File: src/runtime/agents/file_transfer_ability.rs
@@ -10,10 +10,10 @@
 //
 // Wire contract
 // -------------
-// The bidi session's initial args carry the mode + remote path:
+// The bidi session's initial args carry the mode + ResourceRef:
 //
 //   { "mode": "upload" | "download",
-//     "path": "<remote-relative-or-absolute>" }
+//     "resource_ref": { ... RFC-005 filesystem ResourceRef ... } }
 //
 // Frames the handler RECEIVES (from_client):
 //   * upload mode:
@@ -47,16 +47,17 @@
 //
 // Safety
 // ------
-// * Path traversal: `is_blocked_read_path_for_chat` (re-used) guards
-//   against /dev/zero etc. Symlinks are followed via canonicalize();
-//   the canonical path is then re-checked against the block list.
+// * Path traversal: ResourceRef relative paths reject traversal at
+//   parse time. Existing symlink targets are rechecked against the
+//   ResourceRef virtual root before the transfer touches bytes.
 // * Per-call byte cap: 1 GiB. A larger transfer is split into
 //   multiple ability calls or denied — preventing a single Invoke
 //   from filling the disk.
-// * Atomicity for upload: writes go to `<path>.partial.<nonce>`
-//   and rename atomically to `<path>` on success. A mid-transfer
-//   abort leaves the partial visible (caller cleans up on retry)
-//   rather than overwriting an existing file with truncated data.
+// * Atomicity for upload: writes go to `<resolved-target>.partial.<nonce>`
+//   and rename atomically to the ResourceRef target on success. A
+//   mid-transfer abort leaves the partial visible (caller cleans up
+//   on retry) rather than overwriting an existing file with truncated
+//   data.
 // * Read-only for download: opening succeeds when the file is
 //   readable; missing-file surfaces as `{type:"error", code:
 //   "not_found"}` so the backend renders 404-shaped UX.
@@ -74,10 +75,12 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiOutputFrame, BidiSource};
-
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_FILE_TRANSFER: &str = "device.fs.transfer";
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiOutputFrame, BidiSource};
+use crate::runtime::resources::filesystem::{
+    self, FilesystemResourceCapability, ResolvedFilesystemPath,
+};
+pub const ABILITY_FILE_TRANSFER: &str = "fs.transfer";
 
 /// Maximum bytes per file_transfer call. 1 GiB matches order-of-
 /// magnitude what an HTTP upload through nginx would tolerate;
@@ -108,7 +111,7 @@ const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// path stays uniform.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_bidi_with_owner(
-        "device.fs.transfer",
+        "fs.transfer",
         OwnerKind::Device,
         Arc::new(move |args: Value| open_handler(args)),
     );
@@ -134,8 +137,8 @@ fn open_handler(args: Value) -> anyhow::Result<BidiSource> {
         mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
 
     match parsed.mode {
-        Mode::Upload => spawn_upload(parsed.path, xport_to_handler_rx, xport_from_handler_tx),
-        Mode::Download => spawn_download(parsed.path, xport_from_handler_tx),
+        Mode::Upload => spawn_upload(parsed.target, xport_to_handler_rx, xport_from_handler_tx),
+        Mode::Download => spawn_download(parsed.target, xport_from_handler_tx),
     }
 
     Ok(BidiSource {
@@ -153,7 +156,24 @@ enum Mode {
 #[derive(Debug)]
 struct ParsedArgs {
     mode: Mode,
+    target: TransferTarget,
+}
+
+#[derive(Debug)]
+struct TransferTarget {
     path: PathBuf,
+    display_path: String,
+    virtual_root_path: Option<PathBuf>,
+}
+
+impl TransferTarget {
+    fn from_resolved(resolved: ResolvedFilesystemPath) -> Self {
+        Self {
+            path: resolved.local_path,
+            display_path: resolved.display_path,
+            virtual_root_path: resolved.virtual_root_path,
+        }
+    }
 }
 
 impl ParsedArgs {
@@ -167,17 +187,13 @@ impl ParsedArgs {
             "download" => Mode::Download,
             other => anyhow::bail!("`mode` must be \"upload\" or \"download\" (got {other:?})"),
         };
-        let path_str = args
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("`path` required"))?;
-        if path_str.trim().is_empty() {
-            anyhow::bail!("`path` must not be empty");
-        }
-        Ok(Self {
-            mode,
-            path: PathBuf::from(path_str),
-        })
+        let capability = match mode {
+            Mode::Upload => FilesystemResourceCapability::Write,
+            Mode::Download => FilesystemResourceCapability::Read,
+        };
+        let target = filesystem::resolve_filesystem_path_without_existing_target(args, capability)
+            .map(TransferTarget::from_resolved)?;
+        Ok(Self { mode, target })
     }
 }
 
@@ -185,22 +201,28 @@ impl ParsedArgs {
 /// file, hash on the fly. On EOF, fsync + atomic rename, emit
 /// `{type:"complete"}`. On error, emit `{type:"error"}` and bail.
 fn spawn_upload(
-    path: PathBuf,
+    target: TransferTarget,
     mut from_client: mpsc::Receiver<Value>,
     to_client: mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
-        // Path safety. We don't allow writes to /dev/* or similar
-        // — the same blocked-path defence reads use, conservatively
-        // applied to writes too.
-        if let Some(s) = path.to_str() {
-            if super::fs_ability::is_blocked_read_path_for_chat(s) {
-                emit_error(
-                    &to_client,
-                    "blocked_path",
-                    "target path is on the device block list",
-                )
-                .await;
+        let display_path = target.display_path;
+        let path = target.path;
+        if let Some(root) = target.virtual_root_path.as_deref() {
+            if let Err(e) = filesystem::ensure_write_parent_under_root(&path, root) {
+                emit_target_error(&to_client, "root_escape", &format!("{e}"), &display_path).await;
+                return;
+            }
+        }
+        let path = super::fs_ability::resolve_symlink_one_level(&path);
+        if let Some(root) = target.virtual_root_path.as_deref() {
+            let guard = if path.exists() {
+                filesystem::ensure_path_under_root(&path, root)
+            } else {
+                filesystem::ensure_write_parent_under_root(&path, root)
+            };
+            if let Err(e) = guard {
+                emit_target_error(&to_client, "root_escape", &format!("{e}"), &display_path).await;
                 return;
             }
         }
@@ -329,6 +351,8 @@ fn spawn_upload(
                 "type": "complete",
                 "sha256": sha,
                 "bytes": total,
+                "display_path": display_path,
+                "resource_ref_revalidated": true,
             })))
             .await;
     });
@@ -337,20 +361,10 @@ fn spawn_upload(
 /// Download pump: open the file, stream chunks, hash on the fly.
 /// On EOF emit `{type:"complete"}`. On error emit
 /// `{type:"error"}` and bail.
-fn spawn_download(path: PathBuf, to_client: mpsc::Sender<BidiOutputFrame>) {
+fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFrame>) {
     tokio::spawn(async move {
-        // Path safety on the read side too.
-        if let Some(s) = path.to_str() {
-            if super::fs_ability::is_blocked_read_path_for_chat(s) {
-                emit_error(
-                    &to_client,
-                    "blocked_path",
-                    "source path is on the device block list",
-                )
-                .await;
-                return;
-            }
-        }
+        let display_path = target.display_path;
+        let path = target.path;
 
         let metadata = match std::fs::metadata(&path) {
             Ok(m) => m,
@@ -360,16 +374,34 @@ fn spawn_download(path: PathBuf, to_client: mpsc::Sender<BidiOutputFrame>) {
                 } else {
                     "io_error"
                 };
-                emit_error(&to_client, code, &format!("stat {}: {e}", path.display())).await;
+                emit_target_error(
+                    &to_client,
+                    code,
+                    &format!("stat {display_path}: {e}"),
+                    &display_path,
+                )
+                .await;
                 return;
             }
         };
+        if let Some(root) = target.virtual_root_path.as_deref() {
+            if let Err(e) = filesystem::ensure_path_under_root(&path, root) {
+                emit_target_error(&to_client, "root_escape", &format!("{e}"), &display_path).await;
+                return;
+            }
+        }
         if !metadata.is_file() {
-            emit_error(&to_client, "not_a_file", "path is not a regular file").await;
+            emit_target_error(
+                &to_client,
+                "not_a_file",
+                "resource target is not a regular file",
+                &display_path,
+            )
+            .await;
             return;
         }
         if metadata.len() > FILE_TRANSFER_BYTE_CAP {
-            emit_error(
+            emit_target_error(
                 &to_client,
                 "byte_cap_exceeded",
                 &format!(
@@ -377,6 +409,7 @@ fn spawn_download(path: PathBuf, to_client: mpsc::Sender<BidiOutputFrame>) {
                     metadata.len(),
                     FILE_TRANSFER_BYTE_CAP
                 ),
+                &display_path,
             )
             .await;
             return;
@@ -424,6 +457,8 @@ fn spawn_download(path: PathBuf, to_client: mpsc::Sender<BidiOutputFrame>) {
                         "type": "complete",
                         "sha256": sha,
                         "bytes": total,
+                        "display_path": display_path,
+                        "resource_ref_revalidated": true,
                     })))
                     .await;
             }
@@ -450,6 +485,23 @@ async fn emit_error(to_client: &mpsc::Sender<BidiOutputFrame>, code: &str, messa
             "type": "error",
             "code": code,
             "message": message,
+        })))
+        .await;
+}
+
+async fn emit_target_error(
+    to_client: &mpsc::Sender<BidiOutputFrame>,
+    code: &str,
+    message: &str,
+    display_path: &str,
+) {
+    let _ = to_client
+        .send(BidiOutputFrame::json(json!({
+            "type": "error",
+            "code": code,
+            "message": message,
+            "display_path": display_path,
+            "resource_ref_revalidated": true,
         })))
         .await;
 }
@@ -507,21 +559,22 @@ fn hex_lower_bytes(b: &[u8]) -> String {
 pub fn input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["mode", "path"],
+        "required": ["mode", "resource_ref"],
         "additionalProperties": false,
         "properties": {
             "mode": {"type": "string", "enum": ["upload", "download"]},
-            "path": {"type": "string", "minLength": 1},
+            "resource_ref": crate::runtime::resources::filesystem::resource_ref_schema(),
         },
     })
 }
 
 pub fn description() -> &'static str {
     "Bidirectional file transfer between the operator and this \
-     device's filesystem. mode=\"upload\" streams client→file with \
-     atomic rename + SHA-256; mode=\"download\" streams file→client \
-     with on-the-fly hashing. Per-call byte cap 1 GiB; blocked \
-     device paths (e.g. /dev/zero) refused."
+     device's filesystem through a revalidated RFC-005 filesystem \
+     ResourceRef. mode=\"upload\" requires write capability and \
+     streams client→file with atomic rename + SHA-256; \
+     mode=\"download\" requires read capability and streams \
+     file→client with on-the-fly hashing. Per-call byte cap 1 GiB."
 }
 
 #[cfg(test)]
@@ -552,26 +605,32 @@ mod tests {
 
     #[test]
     fn parse_rejects_missing_mode() {
-        let err = ParsedArgs::parse(&json!({"path": "/tmp/x"})).unwrap_err();
+        let err = ParsedArgs::parse(&json!({})).unwrap_err();
         assert!(format!("{err}").contains("mode"));
     }
 
     #[test]
-    fn parse_rejects_missing_path() {
+    fn parse_rejects_missing_resource_ref() {
         let err = ParsedArgs::parse(&json!({"mode": "upload"})).unwrap_err();
-        assert!(format!("{err}").contains("path"));
+        assert!(format!("{err}").contains("resource_ref"));
     }
 
     #[test]
     fn parse_rejects_unknown_mode() {
-        let err = ParsedArgs::parse(&json!({"mode": "wibble", "path": "/tmp/x"})).unwrap_err();
+        let err = ParsedArgs::parse(&json!({"mode": "wibble"})).unwrap_err();
         assert!(format!("{err}").contains("upload"));
     }
 
     #[test]
-    fn parse_rejects_empty_path() {
-        let err = ParsedArgs::parse(&json!({"mode": "upload", "path": "   "})).unwrap_err();
-        assert!(format!("{err}").contains("empty"));
+    fn upload_rejects_read_only_resource_ref() {
+        let path = temp_path("read-only-ref.bin");
+        let resource_ref = transfer_ref(&path, FilesystemResourceCapability::Read);
+        let err = ParsedArgs::parse(&json!({
+            "mode": "upload",
+            "resource_ref": resource_ref,
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("capability read does not permit write"));
     }
 
     #[test]
@@ -592,6 +651,11 @@ mod tests {
         p
     }
 
+    fn transfer_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
+        crate::runtime::resources::filesystem::resource_ref_for_local_path(path, capability)
+            .expect("local transfer ResourceRef")
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn upload_round_trip_writes_file_atomically_with_sha256() {
         // The "看得见" contract: a client-side EOF ends the
@@ -608,7 +672,7 @@ mod tests {
 
         let source = open_handler(json!({
             "mode": "upload",
-            "path": path.to_string_lossy(),
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
         }))
         .expect("open upload");
         // Stash the receivers before moving the channels.
@@ -649,7 +713,7 @@ mod tests {
 
         let source = open_handler(json!({
             "mode": "upload",
-            "path": path.to_string_lossy(),
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
         }))
         .unwrap();
         let to_handler = source.to_client;
@@ -703,7 +767,7 @@ mod tests {
         let path = temp_path("badb64.bin");
         let source = open_handler(json!({
             "mode": "upload",
-            "path": path.to_string_lossy(),
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
         }))
         .unwrap();
         let to_handler = source.to_client;
@@ -735,7 +799,7 @@ mod tests {
 
         let source = open_handler(json!({
             "mode": "download",
-            "path": path.to_string_lossy(),
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Read),
         }))
         .unwrap();
         let mut from_handler = source.from_client;
@@ -771,7 +835,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let source = open_handler(json!({
             "mode": "download",
-            "path": path.to_string_lossy(),
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Read),
         }))
         .unwrap();
         let mut from_handler = source.from_client;
@@ -798,7 +862,7 @@ mod tests {
         std::fs::write(&path, b"small").unwrap();
         let source = open_handler(json!({
             "mode": "download",
-            "path": path.to_string_lossy(),
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Read),
         }))
         .unwrap();
         let mut from_handler = source.from_client;
@@ -813,7 +877,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let source = open_handler(json!({
             "mode": "download",
-            "path": dir.to_string_lossy(),
+            "resource_ref": transfer_ref(&dir, FilesystemResourceCapability::Read),
         }))
         .unwrap();
         let mut from_handler = source.from_client;
@@ -832,7 +896,7 @@ mod tests {
         let path = temp_path("forward_compat.bin");
         let source = open_handler(json!({
             "mode": "upload",
-            "path": path.to_string_lossy(),
+            "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
         }))
         .unwrap();
         let to_handler = source.to_client;

@@ -137,15 +137,16 @@ mod tests {
 
     #[test]
     fn targeted_envelope_has_full_tuple_and_nonce() {
+        let hub = crate::ura::hub_ura("acme");
         let env = ProtoEnvelope::targeted(
             "easynet:///r/acme/device/dev-a",
-            "easynet:///r/acme/hub",
+            &hub,
             "easynet:///r/acme/user/alice",
         )
         .unwrap()
         .into_inner();
         assert_eq!(env.caller.unwrap().ura, "easynet:///r/acme/device/dev-a");
-        assert_eq!(env.callee.unwrap().ura, "easynet:///r/acme/hub");
+        assert_eq!(env.callee.unwrap().ura, hub);
         assert_eq!(env.subject.unwrap().ura, "easynet:///r/acme/user/alice");
         assert_eq!(env.invocation_nonce.len(), 16);
     }

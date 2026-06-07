@@ -682,6 +682,25 @@ pub const DEFAULT_KEYRING_SOCKET_REL: &str = ".easynet/keyring.sock";
 /// Default vault file path.
 pub const DEFAULT_VAULT_REL: &str = ".easynet/keyring.enc";
 
+/// Auto-generated master-key passphrase file.
+///
+/// When the operator has not supplied `EASYNET_KEYRING_PASSPHRASE`,
+/// `easynet join` generates a random passphrase and persists it here
+/// (mode 0600) so that (a) the `easynet-keyring` daemon it spawns can
+/// open/init the vault and (b) every subsequent `easynet runtime start`
+/// can inject the same passphrase into the daemon's environment, which
+/// is what lets the daemon read the encrypted vault across restarts.
+///
+/// This is a deliberate trade-off: the passphrase lands in plaintext
+/// on the same disk as the vault, so it does not protect against an
+/// attacker who already has read access to `~/.easynet`. It still
+/// improves on the pre-keyring state (seed kept only via deterministic
+/// derivation) by isolating the seed behind a rotatable file and
+/// keeping it out of `credentials.json`. Operators who want a real
+/// secret boundary export `EASYNET_KEYRING_PASSPHRASE` themselves and
+/// this file is never written.
+pub const DEFAULT_PASSPHRASE_REL: &str = ".easynet/keyring.pass";
+
 /// Resolve a `~/.easynet/...` path against `$HOME` (or fallback).
 pub fn home_relative(rel: &str) -> PathBuf {
     let home = std::env::var_os("HOME")
@@ -701,11 +720,128 @@ pub fn default_socket_path() -> PathBuf {
     home_relative(DEFAULT_KEYRING_SOCKET_REL)
 }
 
+/// Default path of the auto-generated passphrase file.
+pub fn default_passphrase_path() -> PathBuf {
+    home_relative(DEFAULT_PASSPHRASE_REL)
+}
+
+/// Resolve the keyring master-key passphrase, generating and
+/// persisting one on first use.
+///
+/// Resolution order:
+///   1. `EASYNET_KEYRING_PASSPHRASE` env — operator-supplied secret
+///      takes precedence and is never written to disk.
+///   2. `~/.easynet/keyring.pass` if it already exists — reuse it so
+///      the passphrase stays stable across joins and daemon restarts
+///      (a changed passphrase would orphan the existing vault).
+///   3. Otherwise mint a fresh 256-bit random passphrase, write it to
+///      `~/.easynet/keyring.pass` at mode 0600, and return it.
+///
+/// Returns the passphrase plus whether it was newly generated (so the
+/// caller can surface "generated" vs "reused" in the join stage line).
+pub fn load_or_create_passphrase() -> std::io::Result<(String, bool)> {
+    if let Ok(env) = std::env::var("EASYNET_KEYRING_PASSPHRASE") {
+        if !env.is_empty() {
+            return Ok((env, false));
+        }
+    }
+
+    let path = default_passphrase_path();
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let trimmed = existing.trim().to_string();
+        if !trimmed.is_empty() {
+            return Ok((trimmed, false));
+        }
+    }
+
+    let generated = mint_passphrase();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &generated)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok((generated, true))
+}
+
+/// Mint a fresh 256-bit random passphrase, hex-encoded.
+fn mint_passphrase() -> String {
+    use rand::rngs::OsRng;
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::Verifier;
     use tempfile::TempDir;
+
+    /// Run `f` with `HOME` pointed at a fresh temp dir and
+    /// `EASYNET_KEYRING_PASSPHRASE` forced to `env_pass`, restoring both
+    /// afterwards. Serialised against the rest of the env-mutating tests
+    /// through the shared process-env lock.
+    fn with_home_and_env<R>(env_pass: Option<&str>, f: impl FnOnce(&std::path::Path) -> R) -> R {
+        let _lock = crate::facade::cli::test_support::env_lock();
+        let prev_home = std::env::var("HOME").ok();
+        let prev_pass = std::env::var("EASYNET_KEYRING_PASSPHRASE").ok();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+        match env_pass {
+            Some(p) => std::env::set_var("EASYNET_KEYRING_PASSPHRASE", p),
+            None => std::env::remove_var("EASYNET_KEYRING_PASSPHRASE"),
+        }
+        let out = f(dir.path());
+        match prev_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        match prev_pass {
+            Some(p) => std::env::set_var("EASYNET_KEYRING_PASSPHRASE", p),
+            None => std::env::remove_var("EASYNET_KEYRING_PASSPHRASE"),
+        }
+        out
+    }
+
+    #[test]
+    fn passphrase_is_generated_then_reused_and_persisted_0600() {
+        with_home_and_env(None, |home| {
+            let (first, generated) = load_or_create_passphrase().unwrap();
+            assert!(generated, "first call must mint a passphrase");
+            assert_eq!(first.len(), 64, "256-bit hex passphrase");
+
+            let path = home.join(DEFAULT_PASSPHRASE_REL);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "passphrase file must be 0600");
+            }
+
+            let (second, generated_again) = load_or_create_passphrase().unwrap();
+            assert!(!generated_again, "second call must reuse the file");
+            assert_eq!(first, second, "reused passphrase must be stable");
+        });
+    }
+
+    #[test]
+    fn env_passphrase_takes_precedence_and_is_not_persisted() {
+        with_home_and_env(Some("operator-secret"), |home| {
+            let (pass, generated) = load_or_create_passphrase().unwrap();
+            assert!(!generated);
+            assert_eq!(pass, "operator-secret");
+            assert!(
+                !home.join(DEFAULT_PASSPHRASE_REL).exists(),
+                "env-supplied passphrase must never be written to disk"
+            );
+        });
+    }
 
     fn fresh_seed_hex() -> String {
         let mut seed = [0u8; ED25519_SEED_LEN];
@@ -738,7 +874,7 @@ mod tests {
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
         let device_ura = "easynet:///r/localhost/device/dev-uuid".to_string();
-        let hub_endpoint = "easynet:///r/localhost/hub".to_string();
+        let hub_endpoint = crate::ura::hub_ura("localhost");
         vault
             .put(&device_ura, vec![hub_endpoint.clone()], fresh_seed_hex())
             .unwrap();

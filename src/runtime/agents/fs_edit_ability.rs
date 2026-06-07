@@ -29,7 +29,7 @@
 //
 // Contract
 // --------
-//   * Inputs: path, old_string, new_string, optional
+//   * Inputs: resource_ref, old_string, new_string, optional
 //     replace_all (default false).
 //   * Behaviour:
 //
@@ -103,8 +103,9 @@ use sha2::{Digest, Sha256};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::resources::filesystem::{self, FilesystemResourceCapability};
 /// Wire name. Pinned by the Tier 2.5 surface; rename = protocol break.
-pub const ABILITY_NAME: &str = "device.fs.edit";
+pub const ABILITY_NAME: &str = "fs.edit";
 
 /// Profile membership marker echoed in every receipt.
 pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
@@ -117,11 +118,14 @@ pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 pub const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("device.fs.edit", OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner("fs.edit", OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {
-    let path = require_string(&args, "path")?.to_string();
+    let resolved_path =
+        filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Write)?;
+    let path = resolved_path.local_path;
+    let path_label = resolved_path.display_path;
     let old_string = args
         .get("old_string")
         .and_then(Value::as_str)
@@ -144,8 +148,18 @@ fn handler(args: Value) -> Result<Value> {
     // target (we replace the inode the symlink points at, not
     // the symlink itself). See fs_ability::resolve_symlink_one_level
     // for the same semantics.
-    let resolved = super::fs_ability::resolve_symlink_one_level(Path::new(&path));
+    if let Some(root) = resolved_path.virtual_root_path.as_deref() {
+        filesystem::ensure_write_parent_under_root(&path, root)?;
+    }
+    let resolved = super::fs_ability::resolve_symlink_one_level(&path);
     let dst: &Path = &resolved;
+    if let Some(root) = resolved_path.virtual_root_path.as_deref() {
+        if dst.exists() {
+            filesystem::ensure_path_under_root(dst, root)?;
+        } else {
+            filesystem::ensure_write_parent_under_root(dst, root)?;
+        }
+    }
     let exists = dst.exists();
 
     // expected_mtime_ms guard — caller asserts the file's mtime
@@ -164,7 +178,7 @@ fn handler(args: Value) -> Result<Value> {
                             "expected_mtime_ms": expected,
                             "actual_mtime_ms": actual,
                         })),
-                        &path,
+                        &path_label,
                     ));
                 }
             }
@@ -173,7 +187,7 @@ fn handler(args: Value) -> Result<Value> {
                     "StaleMtime",
                     "expected_mtime_ms set but file does not exist",
                     None,
-                    &path,
+                    &path_label,
                 ));
             }
         }
@@ -188,7 +202,7 @@ fn handler(args: Value) -> Result<Value> {
                 "AmbiguousEmptyOldString",
                 "old_string is empty but the file exists; empty would match every position",
                 None,
-                &path,
+                &path_label,
             ));
         }
         // Create-via-edit. new_string may be empty (creates an
@@ -201,6 +215,8 @@ fn handler(args: Value) -> Result<Value> {
             "matches_replaced": 0,
             "bytes_written": new_string.len(),
             "content_sha256": hex::encode(Sha256::digest(new_string.as_bytes())),
+            "display_path": path_label,
+            "resource_ref_revalidated": true,
             "ability_profile_version": PROFILE_VERSION,
         }));
     }
@@ -212,13 +228,14 @@ fn handler(args: Value) -> Result<Value> {
             "NoSuchFile",
             "target file does not exist",
             None,
-            &path,
+            &path_label,
         ));
     }
 
     // Pre-read size guard — read_file_capped enforces it but
     // we surface the reason cleanly here.
-    let metadata = std::fs::metadata(dst).map_err(|e| anyhow!("fs.edit: stat {path:?}: {e}"))?;
+    let metadata =
+        std::fs::metadata(dst).map_err(|e| anyhow!("fs.edit: stat {path_label:?}: {e}"))?;
     if metadata.len() > MAX_EDIT_FILE_SIZE {
         return Ok(rejection(
             "FileTooLarge",
@@ -228,7 +245,7 @@ fn handler(args: Value) -> Result<Value> {
                 MAX_EDIT_FILE_SIZE
             ),
             None,
-            &path,
+            &path_label,
         ));
     }
 
@@ -238,7 +255,7 @@ fn handler(args: Value) -> Result<Value> {
     // and treating arbitrary binary as UTF-8 to do byte search
     // would silently corrupt non-ASCII content. fs.write is the
     // ability for binary edits.
-    let bytes = std::fs::read(dst).map_err(|e| anyhow!("fs.edit: read {path:?}: {e}"))?;
+    let bytes = std::fs::read(dst).map_err(|e| anyhow!("fs.edit: read {path_label:?}: {e}"))?;
     let text = match String::from_utf8(bytes) {
         Ok(s) => s,
         Err(_) => {
@@ -246,7 +263,7 @@ fn handler(args: Value) -> Result<Value> {
                 "NotUtf8",
                 "fs.edit requires a UTF-8 file; for binary, use fs.write",
                 None,
-                &path,
+                &path_label,
             ));
         }
     };
@@ -260,7 +277,7 @@ fn handler(args: Value) -> Result<Value> {
                 "search_preview": preview(&old_string, 80),
                 "search_bytes": old_string.len(),
             })),
-            &path,
+            &path_label,
         ));
     }
     if count > 1 && !replace_all {
@@ -271,7 +288,7 @@ fn handler(args: Value) -> Result<Value> {
                 "match_count": count,
                 "search_preview": preview(&old_string, 80),
             })),
-            &path,
+            &path_label,
         ));
     }
 
@@ -293,6 +310,8 @@ fn handler(args: Value) -> Result<Value> {
         "matches_replaced": if replace_all { count } else { 1 },
         "bytes_written": new_bytes.len(),
         "content_sha256": hex::encode(Sha256::digest(&new_bytes)),
+        "display_path": path_label,
+        "resource_ref_revalidated": true,
         "ability_profile_version": PROFILE_VERSION,
     }))
 }
@@ -319,12 +338,12 @@ fn preview(s: &str, cap: usize) -> String {
     out
 }
 
-fn rejection(code: &str, message: &str, detail: Option<Value>, path: &str) -> Value {
+fn rejection(code: &str, message: &str, detail: Option<Value>, display_path: &str) -> Value {
     json!({
         "ok": false,
         "code": code,
         "message": message,
-        "path": path,
+        "display_path": display_path,
         "detail": detail.unwrap_or(Value::Null),
         "ability_profile_version": PROFILE_VERSION,
     })
@@ -391,21 +410,15 @@ fn uuid_suffix() -> String {
     s[..12].to_string()
 }
 
-fn require_string<'a>(args: &'a Value, field: &str) -> Result<&'a str> {
-    args.get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("fs.edit: missing required string field `{field}`"))
-}
-
 // ── Schema + description ──────────────────────────────────────────
 
 pub fn input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["path", "old_string", "new_string"],
+        "required": ["resource_ref", "old_string", "new_string"],
         "additionalProperties": false,
         "properties": {
-            "path": { "type": "string", "minLength": 1 },
+            "resource_ref": crate::runtime::resources::filesystem::resource_ref_schema(),
             "old_string": {
                 "type": "string",
                 "description": "Exact substring to find. Empty string + non-existent file = create-new-file with new_string as content."
@@ -428,13 +441,13 @@ pub fn input_schema() -> Value {
 }
 
 pub fn description() -> &'static str {
-    "Surgical string-replace edit on a single text file. Default \
-     contract: old_string MUST occur exactly once; ambiguous \
-     matches reject with the count rather than silently rewriting \
-     all occurrences. Pass replace_all=true to opt into bulk \
-     replacement. File size capped at 1 GiB. Atomic write via \
-     tempfile + fdatasync + rename. Part of the \
-     baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
+    "Surgical string-replace edit on a single text file through a revalidated \
+     RFC-005 filesystem ResourceRef. Default contract: old_string MUST occur \
+     exactly once; ambiguous matches reject with the count rather than silently \
+     rewriting all occurrences. Pass replace_all=true to opt into bulk \
+     replacement. File size capped at 1 GiB. Atomic write via tempfile + \
+     fdatasync + rename. Part of the baseline-locomotion-v1 profile \
+     (AXIOM §Tier 2.5)."
 }
 
 #[cfg(test)]
@@ -461,6 +474,14 @@ mod tests {
         std::fs::read_to_string(path).unwrap()
     }
 
+    fn edit_ref(path: &Path) -> Value {
+        crate::runtime::resources::filesystem::resource_ref_for_local_path(
+            path,
+            crate::runtime::resources::filesystem::FilesystemResourceCapability::Write,
+        )
+        .unwrap()
+    }
+
     // ─── exactly-once happy path ───────────────────────────
 
     #[test]
@@ -469,7 +490,7 @@ mod tests {
         let path = dir.join("a.txt");
         write_file(&path, "hello world");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "world",
             "new_string": "rust",
         }))
@@ -487,7 +508,7 @@ mod tests {
         let path = dir.join("a.txt");
         write_file(&path, "foo foo foo");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "foo",
             "new_string": "bar",
         }))
@@ -506,7 +527,7 @@ mod tests {
         let path = dir.join("a.txt");
         write_file(&path, "foo foo foo");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "foo",
             "new_string": "bar",
             "replace_all": true,
@@ -524,7 +545,7 @@ mod tests {
         let path = dir.join("a.txt");
         write_file(&path, "hello world");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "missing",
             "new_string": "x",
         }))
@@ -543,7 +564,7 @@ mod tests {
         let path = dir.join("new.txt");
         assert!(!path.exists());
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "",
             "new_string": "fresh content",
         }))
@@ -560,7 +581,7 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("empty.txt");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "",
             "new_string": "",
         }))
@@ -577,7 +598,7 @@ mod tests {
         let path = dir.join("exists.txt");
         write_file(&path, "do not touch");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "",
             "new_string": "x",
         }))
@@ -594,7 +615,7 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("nope.txt");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "x",
             "new_string": "y",
         }))
@@ -611,7 +632,7 @@ mod tests {
         let path = dir.join("bin.dat");
         std::fs::write(&path, [0xFF, 0xFE, 0xFD]).unwrap();
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "x",
             "new_string": "y",
         }))
@@ -662,18 +683,18 @@ mod tests {
 
     #[test]
     fn rejection_response_shape() {
-        let v = rejection("Foo", "msg", None, "/tmp/x");
+        let v = rejection("Foo", "msg", None, "tmp/x");
         assert_eq!(v["ok"], json!(false));
         assert_eq!(v["code"], json!("Foo"));
         assert_eq!(v["message"], json!("msg"));
-        assert_eq!(v["path"], json!("/tmp/x"));
+        assert_eq!(v["display_path"], json!("tmp/x"));
         assert_eq!(v["detail"], Value::Null);
     }
 
     // ─── schema ──────────────────────────────────────────
 
     #[test]
-    fn input_schema_requires_path_old_string_new_string() {
+    fn input_schema_requires_resource_ref_old_string_new_string() {
         let s = input_schema();
         let req: Vec<&str> = s["required"]
             .as_array()
@@ -681,9 +702,66 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-        assert!(req.contains(&"path"));
+        assert!(req.contains(&"resource_ref"));
         assert!(req.contains(&"old_string"));
         assert!(req.contains(&"new_string"));
+        assert!(s["properties"].get("path").is_none());
+        assert!(s["properties"].get("resource_ref").is_some());
+    }
+
+    #[test]
+    fn missing_resource_ref_rejects_before_filesystem_access() {
+        let err = handler(json!({
+            "old_string": "old",
+            "new_string": "new",
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("resource_ref: missing required object"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn stale_resource_ref_revision_rejects_before_filesystem_access() {
+        let dir = temp_dir();
+        let path = dir.join("a.txt");
+        write_file(&path, "old");
+        let mut resource_ref = edit_ref(&path);
+        resource_ref["revision"] = json!("stale");
+        let err = handler(json!({
+            "resource_ref": resource_ref,
+            "old_string": "old",
+            "new_string": "new",
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("resource_ref: revision mismatch"));
+        assert_eq!(read_file(&path), "old");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_only_resource_ref_cannot_edit() {
+        let dir = temp_dir();
+        let path = dir.join("a.txt");
+        write_file(&path, "old");
+        let resource_ref = crate::runtime::resources::filesystem::resource_ref_for_local_path(
+            &path,
+            crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+        )
+        .unwrap();
+        let err = handler(json!({
+            "resource_ref": resource_ref,
+            "old_string": "old",
+            "new_string": "new",
+        }))
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("resource_ref: capability read does not permit write"));
+        assert_eq!(read_file(&path), "old");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ─── atomicity ───────────────────────────────────────
@@ -716,7 +794,7 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "old",
             "new_string": "new",
         }))
@@ -743,7 +821,7 @@ mod tests {
             return;
         }
         let resp = handler(json!({
-            "path": link.to_str().unwrap(),
+            "resource_ref": edit_ref(&link),
             "old_string": "first",
             "new_string": "second",
         }))
@@ -763,7 +841,7 @@ mod tests {
         let mtime =
             super::super::fs_ability::file_mtime_ms(&std::fs::metadata(&path).unwrap()).unwrap();
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "old",
             "new_string": "new",
             "expected_mtime_ms": mtime,
@@ -780,7 +858,7 @@ mod tests {
         let path = dir.join("a.txt");
         std::fs::write(&path, "old").unwrap();
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "old",
             "new_string": "new",
             "expected_mtime_ms": 1u64,
@@ -798,7 +876,7 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("nope.txt");
         let resp = handler(json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": edit_ref(&path),
             "old_string": "x",
             "new_string": "y",
             "expected_mtime_ms": 12345u64,

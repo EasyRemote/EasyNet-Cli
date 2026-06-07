@@ -4,7 +4,7 @@
 // File: src/runtime/agents/admin_status_ability.rs
 //
 // Per §18: input `{}`, body `{status, components[]}`. Sibling of
-// device.observe.health (one-line liveness probe) and device.observe.network_health
+// observe.health (one-line liveness probe) and observe.network_health
 // (network-side posture). admin.status is the operator-facing
 // component view: each subsystem's name + a coarse state, plus the
 // daemon's build version. The intent is "what would I show on a
@@ -46,7 +46,7 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_ADMIN_STATUS: &str = "device.admin.status";
+pub const ABILITY_ADMIN_STATUS: &str = "admin.status";
 
 /// Register `admin.status` on the registry.
 ///
@@ -59,7 +59,7 @@ where
 {
     let provider: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(ability_count_provider);
     reg.register_rpc_with_owner(
-        "device.admin.status",
+        "admin.status",
         OwnerKind::Device,
         Arc::new(move |_args: Value| handler(&provider)),
     );

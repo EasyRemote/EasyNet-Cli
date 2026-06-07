@@ -2,9 +2,9 @@
 // =====================================================================
 //
 // File: src/runtime/agents/skill_ability.rs
-// Description: Shared filesystem walk behind `device.skill.list`.
+// Description: Shared filesystem walk behind `skill.list`.
 //              This module is not registered as a standalone system
-//              ability; it exists so `device.skill.list` and CLI
+//              ability; it exists so `skill.list` and CLI
 //              tests use one source of truth for installed skills.
 //
 // Why "skill list" is an ability, not a separate gRPC RPC
@@ -14,7 +14,7 @@
 //
 //   ListMCPTools (federation discovery) → CallMCPTool (execution)
 //
-// MCP tools, sessions (`device.session.list`), schedules
+// MCP tools, sessions (`session.list`), schedules
 // (`schedule.list`), discuss rooms (`discuss.create`),
 // permission requests (`consent.subscribe`), and now
 // skills all use this single pattern. A fresh RPC per resource type
@@ -39,16 +39,25 @@ use serde_json::{json, Value};
 
 use crate::registry::agents;
 
-/// Crate-internal entry for the `device.skill.list` walk.
+/// Crate-internal entry for the `skill.list` walk.
 pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
     list_handler(args)
 }
 
 /// Skill inventory handler.
 ///
-/// Args: `{ "owner_agent_id": "<name>"? }` — when present, filter to
-/// skills owned by that agent; absent or empty = list across every
-/// registered agent.
+/// Args:
+/// ```json
+/// {
+///   "owner_agent_id": "<local agent name>"?,
+///   "agent_ura": "<canonical owner Agent URA>"?,
+///   "subject_ura": "<owner Agent URA or skill package Resource URA>"?
+/// }
+/// ```
+///
+/// `owner_agent_id` is a local workspace selector. `agent_ura` and
+/// `subject_ura` are canonical query scopes. If both forms are
+/// supplied they must resolve to the same hosted agent.
 ///
 /// Returns: `{ "items": [InstalledSkill, ...] }`. The InstalledSkill
 /// shape matches `EasyNet/backend/internal/types/custom_types.go`
@@ -58,22 +67,9 @@ pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
 /// the union of pools is fan-out per agent and the backend's wire
 /// schema requires the field on every row.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
-    let agent_filter = args
-        .as_object()
-        .and_then(|o| o.get("owner_agent_id").or_else(|| o.get("agent_id")))
-        .and_then(Value::as_str)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
     let registry = agents::load_agents()?;
     let local_agents = crate::persistence::local_agents::load().ok();
-    let explicit_agent_ura = args
-        .as_object()
-        .and_then(|o| o.get("agent_ura"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let scope = SkillListScope::from_args(&args, local_agents.as_ref())?;
 
     // Collect rows in the same shape `easynet skill list --json`
     // emitted historically — the backend already knows how to read
@@ -86,48 +82,23 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     let mut rows: Vec<InstallRecord> = Vec::new();
 
     for (name, entry) in &registry.agents {
-        if let Some(filter) = &agent_filter {
+        if let Some(filter) = &scope.owner_agent_id {
             if filter != name {
                 continue;
             }
         }
 
-        // Source 1 — EasyNet-managed installs.
-        //
-        // Path layout depends on agent type. For claude-code agents
-        // we publish skills under `<root>/.claude/skills/<name>/`
-        // (matching Claude Code's project-local skill convention so
-        // the running `claude` subprocess auto-loads them). For
-        // codex agents we use `<root>/skills/<name>/` because codex
-        // has no native project-local skill convention. Either
-        // way, the install record at
-        // `<dir>/.easynet/install.json` carries full provenance.
-        //
-        // We also scan the legacy `<root>/skills/` location for
-        // claude-code agents — earlier published skills (before the
-        // 2026-04-29 fix) live there. New publishes write to
-        // `.claude/skills/`; the legacy walk lets `easynet skill
-        // list` keep surfacing them until they're republished.
+        // Source 1 — EasyNet-managed installs. Path layout is owned
+        // by the agent type and resolved through
+        // `managed_skill_dir_for_agent_type`, so listing and publish
+        // code cannot silently grow another compatibility search path.
         let root = entry
             .root_path
             .clone()
             .unwrap_or_else(|| crate::persistence::config::agents_root().join(name));
-        let mut skill_dirs: Vec<std::path::PathBuf> = Vec::new();
-        match entry.agent_type {
-            crate::registry::agents::AgentType::ClaudeCode => {
-                skill_dirs.push(root.join(".claude").join("skills"));
-                skill_dirs.push(root.join("skills")); // legacy, pre-fix
-            }
-            crate::registry::agents::AgentType::Codex
-            | crate::registry::agents::AgentType::CodexAppServer => {
-                skill_dirs.push(root.join("skills"));
-            }
-        }
-        for skills_dir in &skill_dirs {
-            if !skills_dir.exists() {
-                continue;
-            }
-            if let Ok(read) = std::fs::read_dir(skills_dir) {
+        let skills_dir = managed_skill_dir_for_agent_type(&root, entry.agent_type);
+        if skills_dir.exists() {
+            if let Ok(read) = std::fs::read_dir(&skills_dir) {
                 for dir_entry in read.flatten() {
                     let record_path = dir_entry.path().join(".easynet").join("install.json");
                     if !record_path.exists() {
@@ -165,6 +136,9 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
             scan_global_pool_into(name, label, &pool_dir, &mut rows);
         }
     }
+    if let Some(skill_name) = &scope.skill_name {
+        rows.retain(|row| row.name == *skill_name);
+    }
 
     // Serialise InstallRecord directly — its serde derive emits the
     // wire shape backend already speaks (content_hash via
@@ -175,9 +149,9 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         .into_iter()
         .map(|r| {
             let mut value = serde_json::to_value(&r).unwrap_or(Value::Null);
-            if let Some(resource_ura) = skill_resource_ura(
+            if let Some(resource_ura) = scoped_skill_resource_ura(
                 local_agents.as_ref(),
-                explicit_agent_ura.as_deref(),
+                scope.agent_ura_for_row(&r.agent_id),
                 &r.agent_id,
                 &r.name,
             ) {
@@ -192,7 +166,114 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "items": items }))
 }
 
-fn skill_resource_ura(
+fn managed_skill_dir_for_agent_type(
+    root: &std::path::Path,
+    agent_type: crate::registry::agents::AgentType,
+) -> std::path::PathBuf {
+    match agent_type {
+        crate::registry::agents::AgentType::ClaudeCode => root.join(".claude").join("skills"),
+        crate::registry::agents::AgentType::Codex
+        | crate::registry::agents::AgentType::CodexAppServer => root.join("skills"),
+    }
+}
+
+struct SkillListScope {
+    owner_agent_id: Option<String>,
+    agent_ura: Option<String>,
+    skill_name: Option<String>,
+}
+
+impl SkillListScope {
+    fn from_args(
+        args: &Value,
+        local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+    ) -> anyhow::Result<Self> {
+        let object = args
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("skill.list: args must be a JSON object"))?;
+        for key in object.keys() {
+            match key.as_str() {
+                "owner_agent_id" | "agent_ura" | "subject_ura" => {}
+                other => anyhow::bail!("skill.list: unsupported field `{other}`"),
+            }
+        }
+
+        let owner_agent_id = string_arg(object, "owner_agent_id");
+        let agent_ura = string_arg(object, "agent_ura");
+        let subject = string_arg(object, "subject_ura")
+            .map(|subject| {
+                crate::runtime::owner_projection::project_agent_skill_subject(&subject)
+                    .map_err(|e| anyhow::anyhow!("skill.list: {e}"))
+            })
+            .transpose()?;
+        let scoped_agent_ura = merge_agent_scope(agent_ura, subject.as_ref())?;
+        let scoped_owner = scoped_agent_ura
+            .as_deref()
+            .map(|ura| owner_name_for_agent_ura(local_agents, ura))
+            .transpose()?;
+        if let (Some(owner), Some(scoped_owner)) = (&owner_agent_id, &scoped_owner) {
+            if owner != scoped_owner {
+                anyhow::bail!(
+                    "skill.list: owner_agent_id {owner:?} does not match agent_ura/subject_ura owner {scoped_owner:?}"
+                );
+            }
+        }
+
+        Ok(Self {
+            owner_agent_id: scoped_owner.or(owner_agent_id),
+            agent_ura: scoped_agent_ura,
+            skill_name: subject.and_then(|scope| scope.skill_name),
+        })
+    }
+
+    fn agent_ura_for_row(&self, row_agent_id: &str) -> Option<&str> {
+        match (&self.owner_agent_id, &self.agent_ura) {
+            (Some(owner), Some(agent_ura)) if owner == row_agent_id => Some(agent_ura.as_str()),
+            (None, Some(agent_ura)) => Some(agent_ura.as_str()),
+            _ => None,
+        }
+    }
+}
+
+fn string_arg(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn merge_agent_scope(
+    agent_ura: Option<String>,
+    subject: Option<&crate::runtime::owner_projection::AgentSkillSubjectProjection>,
+) -> anyhow::Result<Option<String>> {
+    match (agent_ura, subject) {
+        (Some(agent_ura), Some(subject)) if agent_ura != subject.agent_ura => {
+            anyhow::bail!("skill.list: agent_ura and subject_ura owner must match")
+        }
+        (Some(agent_ura), _) => Ok(Some(agent_ura)),
+        (None, Some(subject)) => Ok(Some(subject.agent_ura.clone())),
+        (None, None) => Ok(None),
+    }
+}
+
+fn owner_name_for_agent_ura(
+    local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+    agent_ura: &str,
+) -> anyhow::Result<String> {
+    let Some(local_agents) = local_agents else {
+        anyhow::bail!("skill.list: agent_ura requires local-agents.json to resolve local owner");
+    };
+    local_agents
+        .hosted_agents
+        .iter()
+        .find(|entry| entry.agent_ura == agent_ura)
+        .map(|entry| entry.name.clone())
+        .ok_or_else(|| anyhow::anyhow!("skill.list: agent_ura {agent_ura:?} is not hosted here"))
+}
+
+fn scoped_skill_resource_ura(
     local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
     explicit_agent_ura: Option<&str>,
     agent_name: &str,
@@ -201,15 +282,7 @@ fn skill_resource_ura(
     let agent_ura = explicit_agent_ura
         .map(str::to_string)
         .or_else(|| hosted_agent_ura(local_agents?, agent_name))?;
-    let parsed = crate::ura::parse_ura(&agent_ura).ok()?;
-    if parsed.kind != crate::ura::URAKind::Agent {
-        return None;
-    }
-    Some(crate::ura::resource_dot_ura(
-        &parsed.realm,
-        &format!("agent.{}.{}", parsed.user_id, parsed.agent_id),
-        &format!("skill/{skill_name}"),
-    ))
+    crate::runtime::owner_projection::skill_resource_ura(&agent_ura, skill_name)
 }
 
 fn hosted_agent_ura(
@@ -234,7 +307,11 @@ pub fn list_input_schema() -> Value {
             },
             "agent_ura": {
                 "type": "string",
-                "description": "Canonical agent URA for the selected owner; used to derive resource_ura on returned rows."
+                "description": "Canonical owner Agent URA. Filters to that hosted agent and derives resource_ura on returned rows."
+            },
+            "subject_ura": {
+                "type": "string",
+                "description": "Owner Agent URA or skill package Resource URA. A skill Resource URA filters to that single skill."
             }
         },
         "additionalProperties": false,
@@ -265,9 +342,36 @@ mod tests {
         assert_eq!(s["additionalProperties"], false);
         let props = s["properties"].as_object().expect("properties is object");
         assert!(props.contains_key("owner_agent_id"));
+        assert!(props.contains_key("agent_ura"));
+        assert!(props.contains_key("subject_ura"));
         assert_eq!(props["owner_agent_id"]["type"], "string");
         // No `required` array — owner_agent_id is optional (omitted = list
         // across every agent).
         assert!(s.get("required").is_none());
+    }
+
+    #[test]
+    fn managed_skill_dir_for_claude_code_uses_native_project_dir_only() {
+        let root = std::path::Path::new("/tmp/agent-root");
+        let dir =
+            managed_skill_dir_for_agent_type(root, crate::registry::agents::AgentType::ClaudeCode);
+        assert_eq!(dir, root.join(".claude").join("skills"));
+        assert_ne!(
+            dir,
+            root.join("skills"),
+            "claude-code must not scan retired root-level skills directory"
+        );
+    }
+
+    #[test]
+    fn managed_skill_dir_for_codex_profiles_uses_agent_root_skills() {
+        let root = std::path::Path::new("/tmp/agent-root");
+        for agent_type in [
+            crate::registry::agents::AgentType::Codex,
+            crate::registry::agents::AgentType::CodexAppServer,
+        ] {
+            let dir = managed_skill_dir_for_agent_type(root, agent_type);
+            assert_eq!(dir, root.join("skills"));
+        }
     }
 }

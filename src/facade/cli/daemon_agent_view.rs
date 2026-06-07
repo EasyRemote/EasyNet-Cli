@@ -5,7 +5,7 @@ use std::str::FromStr;
 ///
 /// CLI modules use this for prompts, validation, and diagnostics. The
 /// registry itself remains daemon-owned and is exposed through
-/// `device.agent.list`.
+/// `agent.list`.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct DaemonAgentRow {
     pub(crate) name: String,
@@ -64,7 +64,7 @@ struct DaemonAgentListResponse {
 
 pub(crate) fn list_agents() -> anyhow::Result<Vec<DaemonAgentRow>> {
     let response = match crate::support::local_invoke::invoke_local_ability(
-        "device.agent.list",
+        "agent.list",
         serde_json::json!({}),
     ) {
         Ok(response) => response,
@@ -85,14 +85,14 @@ pub(crate) fn list_agents_with_client(
     client: &crate::support::local_daemon_grpc::LocalDaemonAbilityClient,
 ) -> anyhow::Result<Vec<DaemonAgentRow>> {
     let response = client
-        .invoke("device.agent.list", serde_json::json!({}))
-        .map_err(|err| anyhow::anyhow!("device.agent.list failed: {err}"))?;
+        .invoke("agent.list", serde_json::json!({}))
+        .map_err(|err| anyhow::anyhow!("agent.list failed: {err}"))?;
     decode_agent_list_response(response)
 }
 
 fn decode_agent_list_response(response: serde_json::Value) -> anyhow::Result<Vec<DaemonAgentRow>> {
     let decoded: DaemonAgentListResponse = serde_json::from_value(response)
-        .map_err(|err| anyhow::anyhow!("device.agent.list returned invalid payload: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("agent.list returned invalid payload: {err}"))?;
     Ok(decoded.agents)
 }
 

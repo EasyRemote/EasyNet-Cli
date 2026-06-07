@@ -243,7 +243,7 @@ impl PendingDispatchMap {
 }
 
 /// One streamed event flowing back from a target device's remote
-/// bidi session. Same-hub remote `device.fs.transfer` uses this:
+/// bidi session. Same-hub remote `fs.transfer` uses this:
 /// zero or more `Chunk`s followed by exactly one `Terminal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchStreamEvent {

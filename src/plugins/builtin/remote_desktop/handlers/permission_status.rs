@@ -9,7 +9,7 @@ use crate::plugins::remote_desktop::permissions::{
 };
 use crate::runtime::ability_dispatch::EnvelopeContext;
 
-/// Handle `device.remote_desktop.permission_status`.
+/// Handle `remote_desktop.permission_status`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     env: EnvelopeContext,
     args: Value,

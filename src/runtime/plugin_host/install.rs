@@ -347,22 +347,12 @@ mod tests {
     fn plugin_host_install_rejects_active_ability_collision() {
         let root = tempfile::tempdir().expect("root");
         let source_v1 = tempfile::tempdir().expect("source v1");
-        write_sidecar_test_package_with_id(
-            source_v1.path(),
-            "test.sidecar",
-            "0.1.0",
-            "device.test.echo",
-        );
+        write_sidecar_test_package_with_id(source_v1.path(), "test.sidecar", "0.1.0", "test.echo");
         let installer = PluginInstaller::new(root.path());
         installer.install(source_v1.path()).expect("first install");
 
         let source_v2 = tempfile::tempdir().expect("source v2");
-        write_sidecar_test_package_with_id(
-            source_v2.path(),
-            "test.sidecar2",
-            "0.1.0",
-            "device.test.echo",
-        );
+        write_sidecar_test_package_with_id(source_v2.path(), "test.sidecar2", "0.1.0", "test.echo");
         let err = installer
             .install(source_v2.path())
             .expect_err("duplicate ability owner must be rejected before commit");
@@ -374,7 +364,7 @@ mod tests {
     }
 
     fn write_sidecar_test_package(root: &Path, version: &str) {
-        write_sidecar_test_package_with_id(root, "test.sidecar", version, "device.test.echo");
+        write_sidecar_test_package_with_id(root, "test.sidecar", version, "test.echo");
     }
 
     fn write_sidecar_test_package_with_id(root: &Path, id: &str, version: &str, ability: &str) {
@@ -439,15 +429,15 @@ kind = "exec"
 argv = ["bin/exec-plugin"]
 
 [[ability_metadata]]
-name = "device.test.declarative_echo"
+name = "test.declarative_echo"
 layer = "control"
 "#
             ),
         )
         .expect("manifest");
         std::fs::write(
-            root.join("abilities/device.test.declarative_echo.ability.toml"),
-            test_descriptor("device.test.declarative_echo"),
+            root.join("abilities/test.declarative_echo.ability.toml"),
+            test_descriptor("test.declarative_echo"),
         )
         .expect("descriptor");
         write_executable(root.join("bin/exec-plugin"), "#!/bin/sh\n");
@@ -478,15 +468,15 @@ kind = "eal"
 program = "mission \"noop\" {{}}"
 
 [[ability_metadata]]
-name = "device.test.declarative_eal"
+name = "test.declarative_eal"
 layer = "control"
 "#
             ),
         )
         .expect("manifest");
         std::fs::write(
-            root.join("abilities/device.test.declarative_eal.ability.toml"),
-            test_descriptor("device.test.declarative_eal"),
+            root.join("abilities/test.declarative_eal.ability.toml"),
+            test_descriptor("test.declarative_eal"),
         )
         .expect("descriptor");
     }
@@ -517,15 +507,15 @@ server = "test-server"
 tool = "test-tool"
 
 [[ability_metadata]]
-name = "device.test.declarative_mcp"
+name = "test.declarative_mcp"
 layer = "control"
 "#
             ),
         )
         .expect("manifest");
         std::fs::write(
-            root.join("abilities/device.test.declarative_mcp.ability.toml"),
-            test_descriptor("device.test.declarative_mcp"),
+            root.join("abilities/test.declarative_mcp.ability.toml"),
+            test_descriptor("test.declarative_mcp"),
         )
         .expect("descriptor");
     }

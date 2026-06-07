@@ -14,7 +14,7 @@
 //   * One `federation.advertise_abilities` call per user agent
 //   * Owner URA in that payload matches the user-agent URA bootstrap
 //     minted in local-agents.json
-//   * The abilities array contains `<agent>.chat`
+//   * The ability_summaries array contains `chat`
 //
 // We can't talk to a hub from here — that needs a live federation —
 // but we can prove the daemon's exact call sequence against the
@@ -70,6 +70,25 @@ fn read_json(path: &std::path::Path) -> anyhow::Result<Value> {
     let s = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
     serde_json::from_str(&s).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
+}
+
+fn payload_owner_ura(payload: &Value) -> Option<&str> {
+    payload["owner_ura"]
+        .as_str()
+        .or_else(|| payload["agent_ura"].as_str())
+}
+
+fn ability_summary_public_name(value: &Value) -> Option<String> {
+    let local_name = value["local_name"].as_str()?.trim();
+    if local_name.is_empty() {
+        return None;
+    }
+    let namespace = value["namespace"].as_str().unwrap_or("").trim();
+    if namespace.is_empty() {
+        Some(local_name.to_string())
+    } else {
+        Some(format!("{namespace}.{local_name}"))
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -145,11 +164,14 @@ fn main() -> anyhow::Result<()> {
     println!("-- advertise_abilities --");
     for (ura, payload) in &calls {
         if ura.contains("federation.advertise_abilities") {
-            let owner = payload["agent_ura"].as_str().unwrap_or("?");
-            let abilities = payload["abilities"].as_array().cloned().unwrap_or_default();
-            let names: Vec<&str> = abilities
+            let owner = payload_owner_ura(payload).unwrap_or("?");
+            let ability_summaries = payload["ability_summaries"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let names: Vec<String> = ability_summaries
                 .iter()
-                .filter_map(|a| a["name"].as_str())
+                .filter_map(ability_summary_public_name)
                 .collect();
             println!("  owner = {owner}  ({} abilities)", names.len());
             for n in &names {
@@ -170,7 +192,7 @@ fn main() -> anyhow::Result<()> {
     let mut all_pass = true;
     for sub in &plan.llm_sub_agents {
         let agent_name = &sub.name;
-        let expected_chat = format!("{agent_name}.chat");
+        let expected_chat = "chat";
         let agent_ura = hosted
             .iter()
             .find(|e| {
@@ -190,12 +212,13 @@ fn main() -> anyhow::Result<()> {
 
         let found = calls.iter().any(|(ura, payload)| {
             ura.contains("federation.advertise_abilities")
-                && payload["agent_ura"].as_str() == Some(agent_ura.as_str())
-                && payload["abilities"]
+                && payload_owner_ura(payload) == Some(agent_ura.as_str())
+                && payload["ability_summaries"]
                     .as_array()
                     .map(|arr| {
-                        arr.iter()
-                            .any(|a| a["name"].as_str() == Some(expected_chat.as_str()))
+                        arr.iter().any(|a| {
+                            ability_summary_public_name(a).as_deref() == Some(expected_chat)
+                        })
                     })
                     .unwrap_or(false)
         });

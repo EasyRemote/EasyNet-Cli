@@ -56,8 +56,8 @@ use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_LIST_SKILLS: &str = "device.a2a.bridge.list_skills";
-pub const ABILITY_SEND_TASK: &str = "device.a2a.bridge.send_task";
+pub const ABILITY_LIST_SKILLS: &str = "a2a.bridge.list_skills";
+pub const ABILITY_SEND_TASK: &str = "a2a.bridge.send_task";
 
 /// Register both bridge abilities on the registry.
 ///
@@ -82,12 +82,12 @@ pub fn register<F>(
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(registry_provider);
     let provider_for_list = Arc::clone(&provider);
     reg.register_rpc_with_owner(
-        "device.a2a.bridge.list_skills",
+        "a2a.bridge.list_skills",
         OwnerKind::Device,
         Arc::new(move |_args: Value| list_skills_handler(&provider_for_list)),
     );
     reg.register_rpc_with_owner(
-        "device.a2a.bridge.send_task",
+        "a2a.bridge.send_task",
         OwnerKind::Device,
         Arc::new(move |args: Value| send_task_handler(&provider, &local_registry_handle, args)),
     );

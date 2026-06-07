@@ -2,8 +2,8 @@
 // ====================================================
 //
 // File: src/runtime/agents/openai_compat_ability.rs
-// Description: hub-rooted abilities `01HUB.openai.chat_completions`
-//              and `01HUB.openai.list_models` that project EasyNet
+// Description: device-local abilities `openai.chat_completions`
+//              and `openai.list_models` that project EasyNet
 //              chat-base abilities through the OpenAI streaming
 //              completion wire shape (RFC-006-C v0.1).
 //
@@ -163,35 +163,40 @@ fn flatten_messages(messages: &[Value]) -> (String, Option<String>) {
     (prompt, system)
 }
 
-/// Resolve an OpenAI model id to a local chat-base ability name.
+/// Resolve an OpenAI model id to the local dispatch key for an
+/// agent-owned chat ability.
 ///
-/// Preferred shape: canonical ability URA
+/// Required shape: canonical ability URA
 ///   `easynet:///r/<realm>/ability/<user>.<agent>.chat`
-///
-/// Backward-compat shape:
-///   `<agent>` or `<agent>.chat`
 fn resolve_model_to_ability(model: &str) -> anyhow::Result<String> {
-    if model.starts_with("easynet:///") {
-        let parsed = crate::ura::parse_ura(model)
-            .map_err(|e| anyhow::anyhow!("model must be a valid ability URA: {e}"))?;
-        if parsed.kind != crate::ura::URAKind::Ability {
-            anyhow::bail!("model must be an ability URA");
-        }
-        if crate::ura::ability_name_from_parts(&parsed).as_deref() != Some("chat") {
-            anyhow::bail!("model must point to the canonical agent chat ability URA");
-        }
-        return Ok(crate::ura::agent_scoped_registry_ability(
-            &crate::ura::agent_ura(&parsed.realm, &parsed.user_id, &parsed.agent_id),
-            "chat",
-        ));
+    let parsed = crate::ura::parse_ura(model)
+        .map_err(|e| anyhow::anyhow!("model must be a valid canonical Ability URA: {e}"))?;
+    if parsed.kind != crate::ura::URAKind::Ability {
+        anyhow::bail!("model must be a canonical Ability URA");
     }
-    if model.ends_with(".chat") {
-        return Ok(model.to_string());
+    let Some(ability) = parsed.ability() else {
+        anyhow::bail!("model Ability URA has no typed ability owner");
+    };
+    let crate::ura::AbilityOwner::Agent { user_id, agent_id } = ability.owner else {
+        anyhow::bail!("model must point to an agent-owned chat Ability URA");
+    };
+    if crate::ura::ability_name_from_parts(&parsed).as_deref() != Some("chat") {
+        anyhow::bail!("model must point to the canonical agent chat Ability URA");
     }
-    Ok(format!("{model}.chat"))
+    let owner_ura = crate::ura::agent_ura(&parsed.realm, &user_id, &agent_id);
+    Ok(crate::ura::local_dispatch_ability_key(&owner_ura, "chat"))
 }
 
-/// `01HUB.openai.chat_completions`
+/// Validate the public OpenAI-compatible `model` identifier.
+///
+/// The OpenAI wire field stays named `model` for client compatibility,
+/// but EasyNet's value is a canonical agent-owned chat Ability URA,
+/// not a provider nickname and not a daemon-local registry key.
+pub(crate) fn validate_chat_model_id(model: &str) -> anyhow::Result<()> {
+    resolve_model_to_ability(model).map(|_| ())
+}
+
+/// `openai.chat_completions`
 ///
 /// args (one of two shapes accepted):
 ///   1. Direct OpenAI body:
@@ -422,7 +427,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-/// `01HUB.openai.list_models` — return list of chat-base abilities
+/// `openai.list_models` — return list of chat-base abilities
 /// available on this daemon, projected as OpenAI-shape models.
 pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
     let handle =
@@ -436,14 +441,15 @@ pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
         if !is_chat_base(&name) {
             continue;
         }
-        let model_id = project_model_id(registry.as_ref(), &name);
-        models.push(json!({
-            "id":       model_id,
-            "object":   "model",
-            "created":  0,
-            "owned_by": "easynet",
-            "ability":  name,
-        }));
+        if let Some(model_id) = project_model_id(registry.as_ref(), &name) {
+            models.push(json!({
+                "id":       model_id,
+                "object":   "model",
+                "created":  0,
+                "owned_by": "easynet",
+                "ability":  name,
+            }));
+        }
     }
 
     Ok(json!({ "object": "list", "data": models }))
@@ -464,18 +470,18 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
     // pre-registers a `hub.*` name on behalf of the hub: that
     // would let the device daemon lie about what the hub offers.
     reg.register_rpc_with_owner(
-        "device.openai.chat_completions",
+        "openai.chat_completions",
         OwnerKind::Device,
         Arc::new(handle_chat_completions) as LocalRpcHandler,
     );
     reg.register_rpc_with_owner(
-        "device.openai.list_models",
+        "openai.list_models",
         OwnerKind::Device,
         Arc::new(handle_list_models) as LocalRpcHandler,
     );
 }
 
-fn project_model_id(registry: &AxonAbilityCatalog, ability_name: &str) -> String {
+fn project_model_id(registry: &AxonAbilityCatalog, ability_name: &str) -> Option<String> {
     project_model_id_with_identity(registry, ability_name, current_identity().as_ref())
 }
 
@@ -483,21 +489,17 @@ fn project_model_id_with_identity(
     registry: &AxonAbilityCatalog,
     ability_name: &str,
     identity: Option<&OpenAICompatIdentity>,
-) -> String {
-    let Some(identity) = identity else {
-        return ability_name.to_string();
-    };
+) -> Option<String> {
+    let identity = identity?;
     let Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) =
         registry.lookup_owner(ability_name)
     else {
-        return ability_name.to_string();
+        return None;
     };
-    let Some(user) = identity.user.as_deref() else {
-        return ability_name.to_string();
-    };
+    let user = identity.user.as_deref()?;
     let owner_ura = crate::ura::agent_ura(&identity.realm, user, &agent_id);
-    let public_name = crate::ura::public_ability_name_for_owner(&owner_ura, ability_name);
-    crate::ura::ability_ura(&identity.realm, user, &agent_id, &public_name)
+    let public_name = crate::ura::owner_local_ability_name(&owner_ura, ability_name);
+    crate::ura::owner_ability_ura(&owner_ura, &public_name)
 }
 
 // ─── EasyNet URA dereference for multimodal message content ──────
@@ -579,8 +581,10 @@ fn deref_to_data_url(ura: &str) -> anyhow::Result<String> {
     // Owner segment is `<userID>.<owner-tail>` for v4.1.5 dot-id
     // resources (pages: `<u>.<project>`; files: `<u>.files`). Pick
     // the ability dispatch shape based on the owner-tail.
-    let id_part = &parsed.user_id;
-    let path = &parsed.path;
+    let id_part = parsed
+        .resource_owner_id()
+        .ok_or_else(|| anyhow::anyhow!("deref `{ura}`: missing resource owner"))?;
+    let path = parsed.resource_path().unwrap_or_default().to_string();
     let (ability, args) = match id_part.split_once('.') {
         Some((_user, "files")) => (
             format!("{id_part}.get"),
@@ -591,7 +595,7 @@ fn deref_to_data_url(ura: &str) -> anyhow::Result<String> {
             // `path` arg.
             let owner_user = id_part.split('.').next().unwrap_or("");
             let _ = owner_user;
-            let mut pf_path = path.clone();
+            let mut pf_path = path.to_string();
             if !pf_path.starts_with('/') {
                 pf_path = format!("/{pf_path}");
             }
@@ -644,6 +648,50 @@ mod tests {
     }
 
     #[test]
+    fn resolve_model_to_ability_rejects_bare_agent_name() {
+        let err = resolve_model_to_ability("codex").expect_err("bare agent names are not models");
+        assert!(
+            err.to_string()
+                .contains("model must be a valid canonical Ability URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_to_ability_rejects_local_chat_registry_key() {
+        let err =
+            resolve_model_to_ability("codex.chat").expect_err("local dispatch keys are not models");
+        assert!(
+            err.to_string()
+                .contains("model must be a valid canonical Ability URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_to_ability_rejects_non_agent_ability_ura() {
+        let err =
+            resolve_model_to_ability("easynet:///r/easynet.run/ability/device.01HUB.e2e.run.shell")
+                .expect_err("device-owned abilities cannot be OpenAI models");
+        assert!(
+            err.to_string()
+                .contains("model must point to an agent-owned chat Ability URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_to_ability_rejects_non_chat_agent_ability_ura() {
+        let err = resolve_model_to_ability("easynet:///r/easynet.run/ability/alice.codex.plan")
+            .expect_err("non-chat agent abilities cannot be OpenAI models");
+        assert!(
+            err.to_string()
+                .contains("model must point to the canonical agent chat Ability URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn project_model_id_prefers_canonical_ability_ura_for_agent_owned_chat() {
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner("codex.chat", OwnerKind::Agent("codex".into()), ok_handler());
@@ -652,6 +700,50 @@ mod tests {
             realm: "easynet.run".into(),
         };
         let got = project_model_id_with_identity(&reg, "codex.chat", Some(&identity));
-        assert_eq!(got, "easynet:///r/easynet.run/ability/alice.codex.chat");
+        assert_eq!(
+            got.as_deref(),
+            Some("easynet:///r/easynet.run/ability/alice.codex.chat")
+        );
+    }
+
+    #[test]
+    fn project_model_id_drops_chat_key_when_identity_is_missing() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("codex.chat", OwnerKind::Agent("codex".into()), ok_handler());
+
+        assert_eq!(
+            project_model_id_with_identity(&reg, "codex.chat", None),
+            None
+        );
+    }
+
+    #[test]
+    fn project_model_id_drops_chat_key_when_user_is_missing() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("codex.chat", OwnerKind::Agent("codex".into()), ok_handler());
+        let identity = OpenAICompatIdentity {
+            user: None,
+            realm: "easynet.run".into(),
+        };
+
+        assert_eq!(
+            project_model_id_with_identity(&reg, "codex.chat", Some(&identity)),
+            None
+        );
+    }
+
+    #[test]
+    fn project_model_id_drops_non_agent_chat_owner() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("device.chat", OwnerKind::Device, ok_handler());
+        let identity = OpenAICompatIdentity {
+            user: Some("alice".into()),
+            realm: "easynet.run".into(),
+        };
+
+        assert_eq!(
+            project_model_id_with_identity(&reg, "device.chat", Some(&identity)),
+            None
+        );
     }
 }

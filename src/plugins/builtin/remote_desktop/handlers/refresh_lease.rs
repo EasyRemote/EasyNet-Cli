@@ -15,7 +15,7 @@ use crate::plugins::remote_desktop::session_lifecycle::{
 use crate::plugins::remote_desktop::view::serialize_session;
 use crate::runtime::ability_dispatch::EnvelopeContext;
 
-/// Handle `device.remote_desktop.refresh_lease`.
+/// Handle `remote_desktop.refresh_lease`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     plugin: Arc<RemoteDesktopPlugin>,
     env: EnvelopeContext,

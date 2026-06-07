@@ -10,17 +10,18 @@
 //   Tier 2  scope = "device"   — abilities published by other agents
 //                                on this device whose [access].
 //                                visibility ≥ device
-//   Tier 3  scope = "easynet"  — abilities published to the EasyNet
-//                                federation. Calls `federation.resolve`
-//                                against the realm's hub (Hub-profile
-//                                ability, RFC-001 §A14) and projects
-//                                each `ResolvedAgent` into the same
-//                                `Candidate` envelope as the local
-//                                tiers. Failures (no realm joined /
+//   Tier 3  scope = "user"     — abilities published within the caller's
+//                                realm. Calls `federation.resolve` against
+//                                the realm's hub (Hub-profile ability,
+//                                RFC-001 §A14) and projects each
+//                                `ResolvedAgent` into the same `Candidate`
+//                                envelope as the local tiers.
+//   Tier 4  scope = "public"   — explicit cross-tenant hub catalogue.
+//                                Federation failures (no realm joined /
 //                                hub call dropped) surface as typed
 //                                `federation_not_joined` /
-//                                `federation_unavailable` envelopes
-//                                so the LLM falls through gracefully.
+//                                `federation_unavailable` envelopes so the
+//                                LLM falls through gracefully.
 //
 // Why "<self>.discover" and not the legacy "easynet.discover"
 // -----------------------------------------------------------
@@ -31,17 +32,15 @@
 // owner-aware. Registering under `<agent>.discover` per agent gives
 // the handler the agent's identity by construction.
 //
-// `easynet.discover` and `meta.list_abilities` continue to exist as
-// thin compat aliases (see `meta_ability::register`); they return the
-// flat `{abilities: [...]}` catalogue without scope filtering. The
-// `delegate` skill teaches the new owner-namespaced form so a fresh
-// install lands on the canonical name.
+// Retired flat discover aliases must not own this verb. The `delegate`
+// skill teaches the owner-namespaced form so a fresh install lands on
+// the canonical name.
 //
 // Output shape
 // ------------
 //   { "candidates": [
 //       {
-//         "qualified_name": "claude.weather",
+//         "qualified_name": "easynet:///r/acme/ability/user-1.claude.weather",
 //         "owner":          "claude",
 //         "ability":        "weather",
 //         "description":    "...",
@@ -175,11 +174,20 @@ pub fn dispatch(
     }
 
     let agents = agent_registry_provider();
+    let local_agent_uras = LocalAgentAbilityOwners::load();
     let mut rows: Vec<Candidate> = Vec::new();
     for (peer_name, peer_entry) in agents.agents.iter() {
         let manifests = crate::runtime::abilities::manifests_for(peer_name, peer_entry);
         for m in manifests {
-            push_candidate(&mut rows, self_agent, peer_name, peer_entry, &m, scope);
+            push_candidate(
+                &mut rows,
+                &local_agent_uras,
+                self_agent,
+                peer_name,
+                peer_entry,
+                &m,
+                scope,
+            );
         }
     }
 
@@ -255,7 +263,7 @@ fn strip_provider_field(args: &Value) -> Value {
     }
 }
 
-/// Tier 3 — `scope: "easynet"` resolution. Dials the realm's hub via
+/// Federation-tier resolution. Dials the realm's hub via
 /// `federation.resolve`, parses the receipt, projects each
 /// `ResolvedAgent` into the `Candidate` shape the local tiers
 /// already return.
@@ -266,9 +274,8 @@ fn strip_provider_field(args: &Value) -> Value {
 /// a tight loop. The construction cost (~1 ms for a fresh bridge)
 /// is dominated by the hub round-trip; the operational complexity
 /// of threading another OnceLock through the dispatch layer
-/// outweighs the perf win. If discover-on-easynet ever becomes
-/// hot, swap to a stashed `BridgePool` here without touching
-/// callers.
+/// outweighs the perf win. If realm discovery becomes hot, swap to a
+/// stashed `BridgePool` here without touching callers.
 fn resolve_via_federation(
     scope: Scope,
     query: Option<&str>,
@@ -281,7 +288,7 @@ fn resolve_via_federation(
                 "federation_not_joined",
                 &format!(
                     "no usable runtime state ({e}); start the daemon and join \
-                     a realm before scope=\"easynet\""
+                     a realm before scope=\"user\" or scope=\"public\""
                 ),
                 scope,
                 query,
@@ -295,7 +302,7 @@ fn resolve_via_federation(
             return Ok(error_envelope(
                 "federation_not_joined",
                 "no credentials.json; run `easynet device join` to register \
-                 with a hub before scope=\"easynet\"",
+                 with a hub before scope=\"user\" or scope=\"public\"",
                 scope,
                 query,
             ));
@@ -307,13 +314,13 @@ fn resolve_via_federation(
     // both fields and `federation.resolve` accepts it as the realm
     // segment.
     let _ = state;
-    let realm = creds.tenant_id.clone();
-    let tenant = creds.tenant_id.as_str();
+    let realm = creds.realm.clone();
+    let tenant = creds.realm.as_str();
     if realm.is_empty() {
         return Ok(error_envelope(
             "federation_not_joined",
             "credentials.json carries an empty tenant; rejoin via \
-             `easynet device join` before scope=\"easynet\"",
+             `easynet device join` before scope=\"user\" or scope=\"public\"",
             scope,
             query,
         ));
@@ -364,40 +371,20 @@ fn resolve_via_federation(
             continue;
         }
         let owner = agent.ura.clone();
-        for desc in agent.abilities {
-            let bare_ability = desc
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            if bare_ability.is_empty() {
+        for desc in agent.ability_summaries {
+            let Some(summary) = crate::runtime::owner_projection::summary_from_value(&desc) else {
                 continue;
-            }
-            let description = desc
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let input_schema = desc.get("input_schema").cloned().unwrap_or(Value::Null);
-            let qualified_name = if bare_ability.contains('.') {
-                // Hub-side descriptors sometimes carry the
-                // owner-prefixed name verbatim; preserve it.
-                bare_ability.clone()
-            } else {
-                format!("{owner}.{bare_ability}")
             };
-            rows.push(Candidate {
-                qualified_name,
-                owner: owner.clone(),
-                ability: bare_ability,
-                description,
-                input_schema,
-                visibility: Visibility::Public,
-                scope_matched: scope,
-                score: 0.0,
-                reason: String::new(),
-                fulfilled_by: Some("federation"),
-            });
+            let Some(bare_ability) =
+                crate::runtime::owner_projection::summary_public_name(&summary)
+            else {
+                continue;
+            };
+            if let Some(candidate) =
+                candidate_from_federated_summary(&owner, &summary, bare_ability, scope)
+            {
+                rows.push(candidate);
+            }
         }
     }
 
@@ -450,8 +437,8 @@ enum Scope {
     Selfish,
     Device,
     /// All agents under the calling daemon's tenant. Includes
-    /// other devices owned by the same user. The default federation
-    /// query — what "scope: easynet" actually means in practice.
+    /// other devices owned by the same user. This is the default
+    /// federation query.
     User,
     /// Cross-tenant hub catalog. Returns every advertised agent
     /// regardless of tenant. Opt-in for explicit cross-user
@@ -484,24 +471,14 @@ impl Scope {
 /// adding a new spelling means editing this array and the match in
 /// `parse_scope`; the [`scope_enum_matches_parser_acceptance`] test
 /// catches any drift between the two.
-///
-/// `easynet` is retained as a back-compat alias for `user` per
-/// RFC-002 §5. Listed last so new callers prefer `user` /
-/// `public` over the historical name.
-const ACCEPTED_SCOPE_LITERALS: &[&str] = &["self", "device", "user", "public", "easynet"];
+const ACCEPTED_SCOPE_LITERALS: &[&str] = &["self", "device", "user", "public"];
 
 fn parse_scope(args: &Value) -> anyhow::Result<Scope> {
     let raw = args.get("scope").and_then(Value::as_str).unwrap_or("self");
     match raw {
         "self" => Ok(Scope::Selfish),
         "device" => Ok(Scope::Device),
-        // RFC-002 §5 update: `easynet` is the historical name for
-        // the federation tier. We retain it as an alias for `user`
-        // — the scope users actually want when they ask "what's on
-        // my account" — so existing callers keep working. New
-        // callers should prefer `user` for self-tenant queries and
-        // `public` for cross-tenant.
-        "easynet" | "user" => Ok(Scope::User),
+        "user" => Ok(Scope::User),
         "public" => Ok(Scope::Public),
         other => anyhow::bail!(
             "discover: scope = {other:?} is not one of {:?}",
@@ -549,6 +526,28 @@ struct Candidate {
     fulfilled_by: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct LocalAgentAbilityOwners {
+    local_agents: crate::persistence::local_agents::LocalAgentsFile,
+}
+
+impl LocalAgentAbilityOwners {
+    fn load() -> Self {
+        Self {
+            local_agents: crate::persistence::local_agents::load().unwrap_or_default(),
+        }
+    }
+
+    fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
+        crate::persistence::local_agents::lookup_hosted_ura(&self.local_agents, "llm", agent_name)
+    }
+
+    fn ability_ura_for(&self, agent_name: &str, public_name: &str) -> Option<String> {
+        let owner_ura = self.owner_ura_for(agent_name)?;
+        crate::ura::owner_ability_ura(&owner_ura, public_name)
+    }
+}
+
 impl Candidate {
     fn to_json(&self) -> Value {
         json!({
@@ -566,10 +565,45 @@ impl Candidate {
     }
 }
 
+fn candidate_from_federated_summary(
+    owner: &str,
+    summary: &crate::runtime::owner_projection::AbilityProjectionSummary,
+    public_name: String,
+    scope: Scope,
+) -> Option<Candidate> {
+    let ability_ura = summary.ability_ura.trim();
+    if ability_ura.is_empty() {
+        return None;
+    }
+    let input_schema = match (
+        summary.schema_ref.as_deref(),
+        summary.schema_hash.as_deref(),
+    ) {
+        (None, None) => Value::Null,
+        (schema_ref, schema_hash) => json!({
+            "schema_ref": schema_ref,
+            "schema_hash": schema_hash,
+        }),
+    };
+    Some(Candidate {
+        qualified_name: ability_ura.to_string(),
+        owner: owner.to_string(),
+        ability: public_name,
+        description: String::new(),
+        input_schema,
+        visibility: Visibility::Public,
+        scope_matched: scope,
+        score: 0.0,
+        reason: String::new(),
+        fulfilled_by: Some("federation"),
+    })
+}
+
 /// Decide whether one peer ability satisfies the requested scope and
 /// the ability's own `[access]` policy, then push a row.
 fn push_candidate(
     out: &mut Vec<Candidate>,
+    local_agent_uras: &LocalAgentAbilityOwners,
     self_agent: &str,
     peer_name: &str,
     _peer_entry: &AgentEntry,
@@ -609,7 +643,9 @@ fn push_candidate(
         return;
     }
 
-    let qualified_name = format!("{peer_name}.{}", manifest.name());
+    let Some(qualified_name) = local_agent_uras.ability_ura_for(peer_name, manifest.name()) else {
+        return;
+    };
     out.push(Candidate {
         qualified_name,
         owner: peer_name.to_string(),
@@ -644,74 +680,21 @@ fn classify_fulfilled_by(
     }
 }
 
-/// Project a federated-directory entry list (as returned by the
-/// daemon's `federation.discover` ability, surfaced here through
-/// [`crate::support::federation_invoke_shim`]) into the
-/// [`Candidate`] envelope shape used by the rest of the discover
-/// pipeline.
+/// Project a federated-directory entry list into discover candidates.
 ///
-/// Filtering contract
-/// ------------------
-/// - Entries with an empty / missing `agent_ura` are skipped — they
-///   are malformed and we refuse to fabricate a candidate without a
-///   real address.
-/// - Entries whose `status` is not `"active"` are skipped — an
-///   advertised-but-offline peer would surface as a dispatch
-///   candidate the LLM cannot actually reach.
-/// - Display name falls back through `display_name` → `node_id` →
-///   `agent_ura` so the description always names something humans
-///   recognise.
+/// RFC-005 forbids synthesizing ability identities from presence
+/// facts. A directory entry proves that an owner exists or is online;
+/// it does not prove that `<owner>.forward_invoke` is a real public
+/// Ability. Cross-hub routing still uses `federation.forward_invoke`
+/// internally, but discover must only expose callable abilities when
+/// a federated ability summary carries a canonical `ability_ura`.
 ///
-/// Wire shape (matches the inline pre-extraction code byte-for-byte;
-/// see `federated_directory_candidates_*` tests below for the pins):
-/// every federated device becomes ONE candidate whose `ability` is
-/// `forward_invoke` — the only verb routable across hubs today —
-/// and whose `owner` is the device URA itself.
-///
-/// Scope policy is enforced at the call site (`Public` only); the
-/// helper is scope-agnostic and stamps `scope_matched = Public` so a
-/// future caller that wants federated entries under a different
-/// scope must opt in by overwriting the field. This matches
-/// `push_candidate`'s pattern of returning a row with
-/// `scope_matched` already decided.
-fn federated_directory_candidates(entries: &[Value]) -> Vec<Candidate> {
-    let mut out = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let agent_ura = entry.get("agent_ura").and_then(Value::as_str).unwrap_or("");
-        if agent_ura.is_empty() {
-            continue;
-        }
-        let status = entry.get("status").and_then(Value::as_str).unwrap_or("");
-        if status != "active" {
-            continue;
-        }
-        let origin_realm = entry
-            .get("origin_realm")
-            .and_then(Value::as_str)
-            .unwrap_or("(unknown realm)");
-        let display = entry
-            .get("display_name")
-            .and_then(Value::as_str)
-            .or_else(|| entry.get("node_id").and_then(Value::as_str))
-            .unwrap_or(agent_ura);
-        out.push(Candidate {
-            qualified_name: format!("{agent_ura}.forward_invoke"),
-            owner: agent_ura.to_string(),
-            ability: "forward_invoke".to_string(),
-            description: format!(
-                "Cross-hub device `{display}` in realm `{origin_realm}`. \
-                 Reachable via federation.forward_invoke; specify the \
-                 inner ability + args to dispatch."
-            ),
-            input_schema: Value::Null,
-            visibility: Visibility::Public,
-            scope_matched: Scope::Public,
-            score: 0.0,
-            reason: String::new(),
-            fulfilled_by: Some("federated_directory"),
-        });
-    }
-    out
+/// The helper remains separate and tested because the call site still
+/// receives directory entries from older federation surfaces. Keeping
+/// the refusal local prevents future maintenance from reintroducing a
+/// pseudo-Ability projection.
+fn federated_directory_candidates(_entries: &[Value]) -> Vec<Candidate> {
+    Vec::new()
 }
 
 /// Score every candidate against `query`. The scoring is intentionally
@@ -812,9 +795,7 @@ pub fn input_schema() -> Value {
                                 the realm hub. `public` = cross-tenant catalog \
                                 — every agent the hub advertises, regardless \
                                 of tenant; opt-in for explicit cross-user \
-                                discovery. `easynet` is retained as a \
-                                back-compat alias for `user` (RFC-002 §5). \
-                                Federation tiers return federation_not_joined \
+                                discovery. Federation tiers return federation_not_joined \
                                 when the daemon hasn't run `device join`, or \
                                 federation_unavailable when the hub call \
                                 fails — both as typed envelopes, not Err."
@@ -853,10 +834,9 @@ pub fn manifest() -> AbilityManifest {
 pub fn description() -> &'static str {
     "Walk the discovery ladder (self → device → user → public) and \
      return ranked candidates matching the optional query. The \
-     federation tiers (`user` / `public`, plus the back-compat alias \
-     `easynet` for `user`) dial the realm hub via federation.resolve \
-     and project the receipt into the same Candidate envelope as the \
-     local tiers; failures surface as typed envelopes \
+     federation tiers (`user` / `public`) dial the realm hub via \
+     federation.resolve and project the receipt into the same Candidate \
+     envelope as the local tiers; failures surface as typed envelopes \
      ({code: \"federation_not_joined\"} / \"federation_unavailable\") \
      so callers fall through gracefully. Use this BEFORE telling the \
      user you can't do something — another ability on the device or \
@@ -933,6 +913,27 @@ mod tests {
         reg
     }
 
+    fn seed_local_agent_uras(
+        entries: &[(&str, &str)],
+    ) -> crate::facade::cli::test_support::HomeGuard {
+        let guard = crate::facade::cli::test_support::HomeGuard::new();
+        let mut local = crate::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
+            hosted_agents: Vec::new(),
+        };
+        for (agent_name, owner_ura) in entries {
+            crate::persistence::local_agents::upsert_hosted_agent(
+                &mut local, "llm", agent_name, owner_ura,
+            );
+        }
+        crate::persistence::local_agents::save(&local).expect("seed local-agents.json");
+        guard
+    }
+
+    fn ability_ura(owner_ura: &str, public_name: &str) -> String {
+        crate::ura::owner_ability_ura(owner_ura, public_name).expect("test ability URA")
+    }
+
     #[test]
     fn unknown_scope_is_rejected() {
         let mut reg = AxonAbilityCatalog::new();
@@ -1004,29 +1005,22 @@ mod tests {
         let desc = schema["properties"]["scope"]["description"]
             .as_str()
             .expect("scope.description must be a string");
-        for required_token in ["`self`", "`device`", "`user`", "`public`", "`easynet`"] {
+        for required_token in ["`self`", "`device`", "`user`", "`public`"] {
             assert!(
                 desc.contains(required_token),
                 "scope.description must mention {required_token}; got: {desc}"
             );
         }
+        assert!(
+            !desc.contains("`easynet`"),
+            "scope.description must not advertise retired scope alias: {desc}"
+        );
     }
 
     #[test]
-    fn parse_scope_recognises_user_and_public_aliases() {
-        // RFC-002 §5: "user" is the new canonical name for what
-        // "easynet" used to mean. "public" is opt-in cross-tenant.
-        // Both must be accepted; "easynet" stays as a back-compat
-        // alias mapping to User.
+    fn parse_scope_recognises_current_scope_literals() {
         let s = parse_scope(&json!({"scope": "user"})).unwrap();
         assert_eq!(s.as_str(), "user");
-        assert!(s.is_federated());
-        let s = parse_scope(&json!({"scope": "easynet"})).unwrap();
-        assert_eq!(
-            s.as_str(),
-            "user",
-            "easynet alias must canonicalise to user"
-        );
         assert!(s.is_federated());
         let s = parse_scope(&json!({"scope": "public"})).unwrap();
         assert_eq!(s.as_str(), "public");
@@ -1040,13 +1034,16 @@ mod tests {
             .is_federated());
         // Unknown still rejected.
         assert!(parse_scope(&json!({"scope": "unknown-scope"})).is_err());
+        assert!(
+            parse_scope(&json!({"scope": "easynet"})).is_err(),
+            "retired easynet scope alias must not parse"
+        );
     }
 
     #[test]
     fn user_scope_falls_through_when_not_joined() {
-        // Same shape as easynet_scope_unjoined_returns_typed_error_envelope
-        // but exercising the new "user" name explicitly so a future
-        // refactor that drops the alias still has direct coverage.
+        // The user tier is the canonical same-realm federation scope.
+        // Under HomeGuard it should fail softly with a typed envelope.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
@@ -1086,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn easynet_scope_unjoined_returns_typed_error_envelope() {
+    fn user_scope_unjoined_returns_typed_error_envelope() {
         // No ~/.easynet/credentials.json under HomeGuard tmp HOME →
         // resolve_via_federation sees the unjoined state and returns
         // a typed envelope so the LLM falls through gracefully.
@@ -1100,22 +1097,22 @@ mod tests {
             Arc::new(std::sync::OnceLock::new()),
         );
         let h = reg.get_rpc("claude.discover").unwrap();
-        let resp = h(json!({"scope": "easynet"})).unwrap();
+        let resp = h(json!({"scope": "user"})).unwrap();
         let code = resp["error"]["code"].as_str().unwrap_or("");
         assert!(
             code == "federation_not_joined" || code == "federation_unavailable",
             "expected federation_* typed code, got {code:?}; full resp: {resp:#?}"
         );
         assert_eq!(resp["candidates"].as_array().unwrap().len(), 0);
-        // RFC-002 §5 update: scope: "easynet" is the alias; it
-        // canonicalises to "user" in the echo so callers can grep
-        // the new name. Both scope values reach the same federation
-        // path; only the echoed string differs.
         assert_eq!(resp["scope"], "user");
     }
 
     #[test]
     fn self_scope_returns_only_calling_agents_abilities() {
+        let _home = seed_local_agent_uras(&[
+            ("claude", "easynet:///r/acme/agent/user-1.claude"),
+            ("codex", "easynet:///r/acme/agent/user-1.codex"),
+        ]);
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema()).unwrap();
         let (_dir_a, _, entry_a) = workspace_with_manifests("claude", &[("weather", weather)]);
         let summary = AbilityManifest::new("summarize", "Summarise text", obj_schema()).unwrap();
@@ -1142,13 +1139,24 @@ mod tests {
             .collect();
         // claude's seeded chat manifest plus weather; codex's
         // summarize must NOT appear.
-        assert!(names.iter().all(|n| n.starts_with("claude.")));
-        assert!(names.contains(&"claude.weather"));
-        assert!(!names.contains(&"codex.summarize"));
+        let claude_owner = crate::ura::agent_ura("acme", "user-1", "claude");
+        assert!(names.iter().all(|n| {
+            crate::ura::AbilitySelector::parse(n)
+                .map(|selector| selector.owner_ura() == claude_owner)
+                .unwrap_or(false)
+        }));
+        let claude_weather = crate::ura::ability_ura("acme", "user-1", "claude", "weather");
+        let codex_summarize = crate::ura::ability_ura("acme", "user-1", "codex", "summarize");
+        assert!(names.contains(&claude_weather.as_str()));
+        assert!(!names.contains(&codex_summarize.as_str()));
     }
 
     #[test]
     fn device_scope_includes_peers_with_device_visibility() {
+        let _home = seed_local_agent_uras(&[
+            ("claude", "easynet:///r/acme/agent/user-1.claude"),
+            ("codex", "easynet:///r/acme/agent/user-1.codex"),
+        ]);
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
@@ -1177,13 +1185,14 @@ mod tests {
         let h = reg.get_rpc("codex.discover").unwrap();
         let resp = h(json!({"scope": "device", "query": "weather"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
+        let weather_ura = ability_ura("easynet:///r/acme/agent/user-1.claude", "weather");
         assert!(cands
             .iter()
-            .any(|c| c["qualified_name"] == "claude.weather"));
+            .any(|c| c["qualified_name"] == weather_ura.as_str()));
         // Each peer entry must report which tier it matched.
         let weather_entry = cands
             .iter()
-            .find(|c| c["qualified_name"] == "claude.weather")
+            .find(|c| c["qualified_name"] == weather_ura.as_str())
             .unwrap();
         assert_eq!(weather_entry["scope_matched"], "device");
         assert_eq!(weather_entry["visibility"], "device");
@@ -1191,6 +1200,10 @@ mod tests {
 
     #[test]
     fn device_scope_hides_peer_abilities_marked_self_visibility() {
+        let _home = seed_local_agent_uras(&[
+            ("claude", "easynet:///r/acme/agent/user-1.claude"),
+            ("codex", "easynet:///r/acme/agent/user-1.codex"),
+        ]);
         // An author who marked an ability as `[access] visibility = "self"`
         // is opting out of peer discovery. The discover handler must
         // honour that even when the caller asks for scope=device.
@@ -1222,13 +1235,14 @@ mod tests {
         assert!(
             cands
                 .iter()
-                .all(|c| c["qualified_name"] != "claude.internal"),
+                .all(|c| c["qualified_name"] != "easynet:///r/acme/ability/user-1.claude.internal"),
             "self-visibility ability leaked to peer: {cands:#?}"
         );
     }
 
     #[test]
     fn query_scoring_orders_exact_name_match_first() {
+        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
         let weather =
             AbilityManifest::new("weather", "Fetches weather data via wttr.in", obj_schema())
                 .unwrap();
@@ -1352,12 +1366,9 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // federated_directory_candidates — pin tests for the helper
-    // extracted from the inline `Scope::Public` branch. These exist
-    // because the previous shape (a 67-line nested if-let-for-if
-    // block) was un-testable without spinning up a live daemon, so
-    // the projection's filtering rules silently drifted. The helper
-    // moves the rules onto a pure function we can unit-test.
+    // federated_directory_candidates — RFC-005 negative projection
+    // pins. Directory entries are presence facts, not Ability
+    // descriptors, so this helper must never synthesize candidates.
     // -----------------------------------------------------------------
 
     fn active_entry(agent_ura: &str, node_id: &str, display: Option<&str>) -> Value {
@@ -1373,8 +1384,60 @@ mod tests {
         v
     }
 
+    fn federated_summary(
+        ability_ura: &str,
+    ) -> crate::runtime::owner_projection::AbilityProjectionSummary {
+        crate::runtime::owner_projection::AbilityProjectionSummary {
+            ability_ura: ability_ura.to_string(),
+            owner_ura: "easynet:///r/acme/agent/alice.bot".to_string(),
+            namespace: String::new(),
+            local_name: "chat".to_string(),
+            descriptor_revision: "sha256:test".to_string(),
+            schema_ref: None,
+            schema_hash: Some("sha256:schema".to_string()),
+            policy_ref: "visibility:PUBLIC".to_string(),
+            route_summary_ref: None,
+            tags: Vec::new(),
+        }
+    }
+
     #[test]
-    fn federated_directory_helper_projects_active_entry() {
+    fn federated_summary_candidate_requires_ability_ura() {
+        let summary = federated_summary("");
+        let candidate = candidate_from_federated_summary(
+            "easynet:///r/acme/agent/alice.bot",
+            &summary,
+            "chat".to_string(),
+            Scope::Public,
+        );
+
+        assert!(
+            candidate.is_none(),
+            "federated discover must not synthesize owner.public_name identities"
+        );
+    }
+
+    #[test]
+    fn federated_summary_candidate_uses_ability_ura_as_qualified_name() {
+        let ability_ura = "easynet:///r/acme/ability/alice.bot.chat";
+        let summary = federated_summary(ability_ura);
+        let candidate = candidate_from_federated_summary(
+            "easynet:///r/acme/agent/alice.bot",
+            &summary,
+            "chat".to_string(),
+            Scope::Public,
+        )
+        .expect("complete federated summary should project");
+
+        assert_eq!(candidate.qualified_name, ability_ura);
+        assert_eq!(candidate.owner, "easynet:///r/acme/agent/alice.bot");
+        assert_eq!(candidate.ability, "chat");
+        assert_eq!(candidate.visibility, Visibility::Public);
+        assert_eq!(candidate.fulfilled_by, Some("federation"));
+    }
+
+    #[test]
+    fn federated_directory_helper_does_not_project_active_entry() {
         let entries = vec![active_entry(
             "easynet:///r/peer-realm/device/d1",
             "d1",
@@ -1382,105 +1445,34 @@ mod tests {
         )];
         let out = federated_directory_candidates(&entries);
 
-        assert_eq!(out.len(), 1);
-        let c = &out[0];
-        assert_eq!(
-            c.qualified_name,
-            "easynet:///r/peer-realm/device/d1.forward_invoke"
+        assert!(
+            out.is_empty(),
+            "directory presence must not synthesize a forward_invoke Ability candidate"
         );
-        assert_eq!(c.owner, "easynet:///r/peer-realm/device/d1");
-        assert_eq!(c.ability, "forward_invoke");
-        assert_eq!(c.visibility, Visibility::Public);
-        assert_eq!(c.scope_matched, Scope::Public);
-        assert_eq!(c.fulfilled_by, Some("federated_directory"));
-        assert!(c.description.contains("Peer Workstation"));
-        assert!(c.description.contains("peer-realm"));
     }
 
     #[test]
-    fn federated_directory_helper_skips_inactive_status() {
-        // An advertised-but-offline peer is filtered so the LLM does
-        // not see it as a routable candidate. This is the contract
-        // that prevents auto-route from dispatching to a peer the
-        // directory itself believes is unreachable.
-        let mut e = active_entry("easynet:///r/peer/device/d2", "d2", None);
-        e["status"] = Value::String("inactive".into());
-        let out = federated_directory_candidates(&[e]);
-        assert!(out.is_empty(), "inactive entries must be filtered");
-    }
-
-    #[test]
-    fn federated_directory_helper_skips_missing_agent_ura() {
-        // Defensive: a malformed entry without `agent_ura` cannot
-        // become a candidate — we refuse to fabricate an address.
+    fn federated_directory_helper_does_not_project_malformed_entry() {
         let mut e = active_entry("placeholder", "d3", None);
         e.as_object_mut().unwrap().remove("agent_ura");
         let out = federated_directory_candidates(&[e]);
-        assert!(out.is_empty(), "entries without agent_ura must be skipped");
-
-        // Empty string is treated the same as missing.
-        let e2 = active_entry("", "d4", None);
-        let out2 = federated_directory_candidates(&[e2]);
-        assert!(out2.is_empty(), "empty agent_ura must be skipped");
-    }
-
-    #[test]
-    fn federated_directory_helper_falls_back_through_display_name_chain() {
-        // display_name → node_id → agent_ura cascade.
-        // Case A: only node_id present.
-        let only_node = active_entry("easynet:///r/peer/device/d5", "node-from-id", None);
-        let a = federated_directory_candidates(&[only_node]);
-        assert!(a[0].description.contains("node-from-id"));
-
-        // Case B: neither display_name nor node_id present — falls
-        // back to the agent_ura itself.
-        let mut bare = active_entry("easynet:///r/peer/device/d6", "ignored", None);
-        bare.as_object_mut().unwrap().remove("node_id");
-        let b = federated_directory_candidates(&[bare]);
-        assert!(b[0].description.contains("easynet:///r/peer/device/d6"));
-
-        // Case C: display_name wins when both are present.
-        let mut both = active_entry("easynet:///r/peer/device/d7", "the-node-id", None);
-        both["display_name"] = Value::String("Friendly Name".into());
-        let c = federated_directory_candidates(&[both]);
-        assert!(c[0].description.contains("Friendly Name"));
         assert!(
-            !c[0].description.contains("the-node-id"),
-            "display_name must shadow node_id, not concatenate"
+            out.is_empty(),
+            "malformed directory rows also must not be repaired into pseudo abilities"
         );
     }
 
     #[test]
-    fn federated_directory_helper_uses_unknown_realm_when_origin_missing() {
-        // Operator-readable fallback for the description string when
-        // `origin_realm` is absent from the directory snapshot.
-        let mut e = active_entry("easynet:///r/?/device/d8", "d8", Some("Box"));
-        e.as_object_mut().unwrap().remove("origin_realm");
-        let out = federated_directory_candidates(&[e]);
-        assert_eq!(out.len(), 1);
-        assert!(out[0].description.contains("(unknown realm)"));
-    }
-
-    #[test]
-    fn federated_directory_helper_preserves_input_order() {
-        // The discover handler later sorts by score+name, but for
-        // entries with zero score (no query) the projection order
-        // matters for determinism in tests and for SRE reading raw
-        // output.
+    fn federated_directory_helper_does_not_project_multiple_entries() {
         let entries = vec![
             active_entry("easynet:///r/p/device/a", "a", Some("A")),
             active_entry("easynet:///r/p/device/b", "b", Some("B")),
             active_entry("easynet:///r/p/device/c", "c", Some("C")),
         ];
         let out = federated_directory_candidates(&entries);
-        let names: Vec<_> = out.iter().map(|c| c.qualified_name.clone()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "easynet:///r/p/device/a.forward_invoke".to_string(),
-                "easynet:///r/p/device/b.forward_invoke".to_string(),
-                "easynet:///r/p/device/c.forward_invoke".to_string(),
-            ]
+        assert!(
+            out.is_empty(),
+            "presence-only directory snapshots must not expand into Ability candidates"
         );
     }
 }
