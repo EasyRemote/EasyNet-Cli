@@ -28,7 +28,7 @@
 // Limitations
 // -----------
 // - Cross-realm strict admission is not exercised here. PR-N1 ships
-//   "same-account same-tenant cross-hub"; admission against a peer
+//   "same-account same-realm cross-hub"; admission against a peer
 //   realm's signing key is PR-N2 territory. Daemon B's trust anchor
 //   is configured to admit daemon A as a Device-role entry (URI-only
 //   no-op admission per DEC-013).
@@ -37,7 +37,7 @@
 //   itself — a small scaffolding step before the real cross-hub
 //   call. No `<self>.session` reverse channel is opened; we just
 //   need the registry to know about the target URI so the local-
-//   tenant fast-path on daemon B can return `target_online: true`.
+//   realm fast-path on daemon B can return `target_online: true`.
 //   Wait — the cleaner path is to register via the test's own
 //   admission-trusted path, but doing so requires PR-N2's signed
 //   path. For PR-N1 we accept the test asserts "cross-hub call
@@ -173,20 +173,20 @@ tls_key_pem = {key:?}
         cert = cert_pem_path.to_string_lossy(),
         key = key_pem_path.to_string_lossy(),
     );
-    for (tenant, hub_endpoint) in federated_peers {
-        body.push_str(&format!("{tenant:?} = {hub_endpoint:?}\n"));
+    for (realm, hub_endpoint) in federated_peers {
+        body.push_str(&format!("{realm:?} = {hub_endpoint:?}\n"));
     }
     body
 }
 
 /// Build a `realm-trust.toml` body that lists the peer daemons the
 /// caller daemon is allowed to dial cross-hub. Each entry carries
-/// the schema-B `origin_tenant_id` / `hub_endpoint` / `tls_ca_pem_path`
+/// the schema-B `origin_realm` / `hub_endpoint` / `tls_ca_pem_path`
 /// fields so `lookup_peer_hub` admits the dial gate.
 fn realm_trust_body(peers: &[(String, String, String, PathBuf)]) -> String {
-    // (agent_ura, origin_tenant_id, hub_endpoint, ca_path)
+    // (agent_ura, origin_realm, hub_endpoint, ca_path)
     let mut body = String::new();
-    for (i, (agent_ura, origin_tenant_id, hub_endpoint, ca_path)) in peers.iter().enumerate() {
+    for (i, (agent_ura, origin_realm, hub_endpoint, ca_path)) in peers.iter().enumerate() {
         body.push_str(&format!(
             r#"
 [[trusted_agent]]
@@ -194,7 +194,7 @@ agent_ura = {agent_ura:?}
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = {ts}
-origin_tenant_id = {origin_tenant_id:?}
+origin_realm = {origin_realm:?}
 hub_endpoint = {hub_endpoint:?}
 tls_ca_pem_path = {ca_path:?}
 "#,
@@ -213,7 +213,7 @@ async fn spawn_daemon(
     label: &'static str,
     realm: &str,
     listen_tcp_port: u16,
-    cross_hub_peers: Vec<(String, String, String)>, // (peer_agent_ura, peer_tenant, peer_hub_endpoint)
+    cross_hub_peers: Vec<(String, String, String)>, // (peer_agent_ura, peer_realm, peer_hub_endpoint)
 ) -> DaemonHarness {
     let home = tempfile::tempdir().expect("daemon home tempdir");
     let easynet_dir = home.path().join(".easynet");
@@ -228,10 +228,10 @@ async fn spawn_daemon(
     std::fs::write(&cert_path, &cert_pem).expect("write cert pem");
     std::fs::write(&key_path, &key_pem).expect("write key pem");
 
-    // Build the federated_peers map keyed by tenant.
+    // Build the federated_peers map keyed by realm.
     let federated_peers: Vec<(String, String)> = cross_hub_peers
         .iter()
-        .map(|(_, tenant, hub_endpoint)| (tenant.clone(), hub_endpoint.clone()))
+        .map(|(_, peer_realm, hub_endpoint)| (peer_realm.clone(), hub_endpoint.clone()))
         .collect();
 
     let listen_tcp = format!("127.0.0.1:{listen_tcp_port}");
@@ -254,7 +254,7 @@ async fn spawn_daemon(
     let realm_trust_path = easynet_dir.join("realm-trust.toml");
     let realm_trust_peers: Vec<(String, String, String, PathBuf)> = cross_hub_peers
         .iter()
-        .map(|(agent_ura, tenant, hub_endpoint)| {
+        .map(|(agent_ura, peer_realm, hub_endpoint)| {
             // The peer's cert path was passed in by the caller via
             // the cross_hub_peers tuple — but the tuple shape doesn't
             // carry it. Default to a sentinel that the caller then
@@ -262,7 +262,7 @@ async fn spawn_daemon(
             // refactor below.
             (
                 agent_ura.clone(),
-                tenant.clone(),
+                peer_realm.clone(),
                 hub_endpoint.clone(),
                 PathBuf::from("/dev/null"),
             )
@@ -295,7 +295,7 @@ async fn spawn_daemon(
 /// other's cert path.
 fn rewrite_realm_trust(
     home: &Path,
-    peers: &[(String, String, String, PathBuf)], // (agent_ura, tenant, hub_endpoint, ca_path)
+    peers: &[(String, String, String, PathBuf)], // (agent_ura, realm, hub_endpoint, ca_path)
 ) -> std::io::Result<()> {
     let path = home.join(".easynet").join("realm-trust.toml");
     std::fs::write(path, realm_trust_body(peers))
@@ -331,8 +331,8 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     let port_b = pick_free_port();
     let realm_a = "realm-a";
     let realm_b = "realm-b";
-    let agent_a_uri = format!("easynet:///r/{realm_a}/hub");
-    let agent_b_uri = format!("easynet:///r/{realm_b}/hub");
+    let agent_a_uri = easynet_cli::ura::hub_ura(realm_a);
+    let agent_b_uri = easynet_cli::ura::hub_ura(realm_b);
     let target_b_uri = format!("easynet:///r/{realm_b}/device/target-device-b");
     let hub_a_uri = format!("https://127.0.0.1:{port_a}");
     let hub_b_uri = format!("https://127.0.0.1:{port_b}");
@@ -449,8 +449,8 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
             let parsed: ForwardInvokeResponse = serde_json::from_slice(&body.result)
                 .expect("response body is ForwardInvokeResponse JSON");
             // DEC-N4 §2.1: an `Ok(...)` outcome means delivery
-            // accepted (local-tenant fast-path queued the frame on
-            // the target's reverse channel, OR cross-tenant peer
+            // accepted (local-realm fast-path queued the frame on
+            // the target's reverse channel, OR cross-realm peer
             // returned an ability response). The
             // `correlation_call_id` round-trips the caller's
             // `call_id` so the CLI initiator can match the eventual

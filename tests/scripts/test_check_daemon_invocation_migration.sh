@@ -68,7 +68,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "direct DaemonInvocation construction should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-printf '\nNote: Requires a local or remote Axon runtime. The easynet start command auto-spawns one.\n' \
+printf '\nNote: Requires a local or remote Axon runtime. The easynet runtime start command auto-spawns one.\n' \
     >>"$SB/README.md"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -81,5 +81,18 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime invocation semantic fork should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >>"$SB/src/services/invocation_transport/daemon_invocation_service.rs" <<'RS'
+
+#[test]
+fn remote_bidi_target_ura_does_not_repair_bare_device_agent_alias() {
+    panic!("remote bidi target extraction must preserve legacy aliases");
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "remote bidi legacy-alias language should exit 1 (got $rc)"
 
 echo "test_check_daemon_invocation_migration.sh: all cases passed"

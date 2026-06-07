@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-ffi-abi-v2-header.sh.
+# Contract tests for scripts/check-ffi-abi-v3-header.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-ffi-abi-v2-header.sh"
+SCRIPT="$REPO_ROOT/scripts/check-ffi-abi-v3-header.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -15,13 +15,13 @@ make_sandbox() {
     mkdir -p "$sandbox/include" "$sandbox/src" "$sandbox/docs/spec"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp -R "$REPO_ROOT/src/ffi" "$sandbox/src/ffi"
-    cp "$REPO_ROOT/docs/spec/ffi-abi-v2.md" "$sandbox/docs/spec/ffi-abi-v2.md"
+    cp "$REPO_ROOT/docs/spec/ffi-abi-v3.md" "$sandbox/docs/spec/ffi-abi-v3.md"
     echo "$sandbox"
 }
 
 run_check() {
     local sandbox="$1"
-    ( cd "$sandbox" && CHECK_FFI_ABI_V2_HEADER_ROOT="$sandbox" bash "$SCRIPT" )
+    ( cd "$sandbox" && CHECK_FFI_ABI_V3_HEADER_ROOT="$sandbox" bash "$SCRIPT" )
 }
 
 SB="$(make_sandbox)"
@@ -29,7 +29,7 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: clean ABI header
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/#define EASYNET_ABI_VERSION 2u/#define EASYNET_ABI_VERSION 1u/' \
+perl -0pi -e 's/#define EASYNET_ABI_VERSION 3u/#define EASYNET_ABI_VERSION 2u/' \
     "$SB/include/easynet_cli.h"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -68,6 +68,24 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "Rust-exported bidi symbol drift should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '\ntypedef uint64_t EasynetSubscriptionId;\nint32_t easynet_ability_invoke(void);\n' \
+    >>"$SB/include/easynet_cli.h"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired ability+args ABI should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >"$SB/src/ffi/ability.rs" <<'RS'
+#[no_mangle]
+pub unsafe extern "C" fn easynet_ability_invoke() -> i32 { 0 }
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired Rust ability module should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '\ntypedef uint32_t EasynetInitMode;\n#define EASYNET_INIT_AUTO_SPAWN 1\n' \
     >>"$SB/include/easynet_cli.h"
 rc=0
@@ -75,4 +93,4 @@ run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired auto-spawn ABI should exit 1 (got $rc)"
 
-echo "test_check_ffi_abi_v2_header.sh: all cases passed"
+echo "test_check_ffi_abi_v3_header.sh: all cases passed"

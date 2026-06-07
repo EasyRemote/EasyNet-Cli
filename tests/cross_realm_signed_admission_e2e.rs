@@ -212,8 +212,8 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
-    const DAEMON_B_URA: &str = "easynet:///r/realm-b/hub";
     const PEER_HUB_URA: &str = "in-process-A";
+    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
 
     // ── Mint device-A's signing key ─────────────────────────────
     let device_a_key = SigningKey::from_bytes(&[0xA1u8; 32]);
@@ -227,16 +227,14 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
             public_key_b64: device_a_pubkey_b64.clone(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         })
         .expect("append device-A");
     let daemon_a_anchor = Arc::new(daemon_a_anchor_inner);
-    let daemon_a_admission = AdmissionFacade::new(
-        daemon_a_anchor,
-        Some("easynet:///r/realm-a/hub".to_string()),
-    );
+    let daemon_a_admission =
+        AdmissionFacade::new(daemon_a_anchor, Some(easynet_cli::ura::hub_ura(REALM_A)));
     let daemon_a = Arc::new(
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
             .with_session_realm(REALM_A),
@@ -249,7 +247,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // any caller in realm-a.
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: "easynet:///r/realm-a/hub".to_string(),
+        peer_loopback_uri: easynet_cli::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
@@ -257,7 +255,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
 
     let daemon_b_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(DAEMON_B_URA.to_string()),
+        Some(daemon_b_ura.clone()),
     )
     .with_federation(Arc::clone(&federation_client), peers_cell.clone());
     let daemon_b = DaemonInvocationService::new(
@@ -280,7 +278,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // dispatch then fails for an unrelated reason).
     let signed = signed_request(
         DEVICE_A_URA,
-        DAEMON_B_URA,
+        &daemon_b_ura,
         "self.echo",
         b"{}",
         &device_a_key,
@@ -333,7 +331,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     // trusted").
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
-    const DAEMON_B_URA: &str = "easynet:///r/realm-b/hub";
+    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
 
     let device_a_key = SigningKey::from_bytes(&[0xB2u8; 32]);
 
@@ -358,7 +356,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
 
     let daemon_b_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(DAEMON_B_URA.to_string()),
+        Some(daemon_b_ura.clone()),
     )
     .with_federation(federation_client, peers_cell);
     let daemon_b =
@@ -367,7 +365,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
 
     let signed = signed_request(
         DEVICE_A_URA,
-        DAEMON_B_URA,
+        &daemon_b_ura,
         "self.echo",
         b"{}",
         &device_a_key,

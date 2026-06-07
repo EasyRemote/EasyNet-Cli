@@ -80,6 +80,8 @@ use tonic::Request;
 
 const DEVICE_A_URI: &str = "easynet:///r/test-realm/device/device-a";
 const DEVICE_B_URI: &str = "easynet:///r/test-realm/device/device-b";
+const DEVICE_B_ECHO_ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-b.test.echo";
+const DEVICE_B_ECHO_REGISTRY_ABILITY: &str = "device.test.echo";
 
 /// 5-second bound on every blocking await in the test. Real
 /// transport plane round-trips finish in milliseconds; any test
@@ -301,10 +303,10 @@ fn subscribe_directory_request(caller_ura: &str) -> Request<InvokeServerStreamRe
 fn build_test_echo_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
     let runtime = easynet_axon::invocation::LocalRuntime::new();
     futures::executor::block_on(runtime.register_ability(
-        "test.echo",
+        DEVICE_B_ECHO_REGISTRY_ABILITY,
         easynet_axon::invocation::make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
     ))
-    .expect("register test.echo in LocalRuntime");
+    .expect("register device-owned echo ability in LocalRuntime");
     runtime
 }
 
@@ -766,7 +768,11 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
 
         let args = serde_json::to_vec(&json!({
             "mode": "download",
-            "path": path.to_string_lossy(),
+            "resource_ref": easynet_cli::runtime::agents::fs_ability::resource_ref_for_local_path(
+                &path,
+                easynet_cli::runtime::agents::fs_ability::FilesystemResourceCapability::Read,
+            )
+            .expect("local fs ResourceRef"),
         }))
         .unwrap();
         let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(8);
@@ -940,14 +946,14 @@ async fn run_round_trip() {
     });
 
     // Step 4: device A invokes <self>.invoke_remote(target=B,
-    // ability=test.echo, args=...). Open a per-call bidi.
+    // ability_ura=device-B test.echo, args=...). Open a per-call bidi.
     let channel_caller = connect_to_hub(socket_path).await;
     let mut caller_client = InvocationClient::new(channel_caller);
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
         subject_ura: None,
-        ability: "test.echo".to_string(),
+        ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: Default::default(),
@@ -1034,8 +1040,8 @@ async fn run_round_trip() {
         .expect("reply task completes within bound")
         .expect("reply task did not panic");
     assert_eq!(
-        ability, "test.echo",
-        "device B must see the ability name device A invoked"
+        ability, DEVICE_B_ECHO_REGISTRY_ABILITY,
+        "device B must see the owner-scoped registry ability derived from the Ability URA"
     );
 }
 
@@ -1069,7 +1075,7 @@ async fn run_round_trip_via_local_dispatcher() {
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
         subject_ura: None,
-        ability: "test.echo".to_string(),
+        ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: Default::default(),

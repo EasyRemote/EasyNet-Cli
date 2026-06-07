@@ -70,17 +70,166 @@ fn daemon_invocation_migration_script_contract_holds() {
 }
 
 #[test]
-fn ffi_abi_v2_header_script_contract_holds() {
+fn ffi_abi_v3_header_script_contract_holds() {
     // Pins the binding-facing ABI contract: version, error code table,
     // complete Invocation symbols, daemon lifecycle symbols, and
     // retirement of the old auto-spawn init surface.
-    run_bash_script("tests/scripts/test_check_ffi_abi_v2_header.sh");
+    run_bash_script("tests/scripts/test_check_ffi_abi_v3_header.sh");
 }
 
 #[test]
 fn release_package_contract_script_holds() {
     // Pins the release shape consumed by install.sh: runtime binaries,
-    // dendrite bridge, and ABI v2 binding artefacts must be packaged
+    // dendrite bridge, and ABI v3 binding artefacts must be packaged
     // and installed together.
     run_bash_script("tests/scripts/test_check_release_package_contract.sh");
+}
+
+#[test]
+fn system_ability_resource_ref_script_contract_holds() {
+    // Pins host-filesystem ability manifests to ResourceRef-only input.
+    // Skill package-relative paths remain outside this guard by design.
+    run_bash_script("tests/scripts/test_check_system_ability_resource_refs.sh");
+}
+
+#[test]
+fn system_ability_retired_alias_script_contract_holds() {
+    // Pins active system manifests so retired migration aliases are
+    // not re-advertised through discovery surfaces.
+    run_bash_script("tests/scripts/test_check_system_ability_retired_aliases.sh");
+}
+
+#[test]
+fn auth_exec_canonical_tool_script_contract_holds() {
+    // Pins the CLI exec path to canonical advertised tool names. The
+    // retired shell.run/process.exec bare aliases must stay rejected.
+    run_bash_script("tests/scripts/test_check_auth_exec_canonical_tools.sh");
+}
+
+#[test]
+fn credentials_username_contract_script_holds() {
+    // Pins joined device credentials to carrying the stable username
+    // slug. Runtime bootstrap must not recover by reading auth.json.
+    run_bash_script("tests/scripts/test_check_credentials_username_contract.sh");
+}
+
+#[test]
+fn federation_forward_ability_ura_script_contract_holds() {
+    // Pins remote federation invoke callers to explicit Ability URAs
+    // before they enter federation.forward_invoke.
+    run_bash_script("tests/scripts/test_check_federation_forward_ability_ura.sh");
+}
+
+#[test]
+fn canonical_hub_ura_boundary_script_holds() {
+    // Pins realm Hub identity to Axon's canonical /hub builder/parser
+    // and keeps Hub identities singleton-only.
+    run_bash_script("tests/scripts/test_check_canonical_hub_ura_boundary.sh");
+}
+
+#[test]
+fn cli_flat_command_boundary_script_holds() {
+    // Pins the top-level CLI to noun-first command groups. The retired
+    // join/start/stop flat shortcuts must not come back.
+    run_bash_script("tests/scripts/test_check_cli_flat_command_boundary.sh");
+}
+
+#[test]
+fn invoke_ability_ura_input_script_contract_holds() {
+    // Pins <agent>.invoke to canonical ability_ura input only. The
+    // retired target/ability request fields must stay rejected.
+    run_bash_script("tests/scripts/test_check_invoke_ability_ura_input.sh");
+}
+
+#[test]
+fn cli_ability_invoke_ura_script_contract_holds() {
+    // Pins the human CLI ability-invoke front door to canonical
+    // Ability URA selectors, not retired bare registry names.
+    run_bash_script("tests/scripts/test_check_cli_ability_invoke_ura.sh");
+}
+
+#[test]
+fn pages_api_ability_ura_script_contract_holds() {
+    // Pins Pages API kind=ability manifests to canonical Ability URA
+    // selectors, not retired local registry ability names.
+    run_bash_script("tests/scripts/test_check_pages_api_ability_ura.sh");
+}
+
+#[test]
+fn pages_cli_ability_boundary_script_contract_holds() {
+    // Pins the Pages CLI facade to a single typed local selector
+    // instead of scattering <user>.pages.* registry-key formatting.
+    run_bash_script("tests/scripts/test_check_pages_cli_ability_boundary.sh");
+}
+
+#[test]
+fn openai_model_ability_ura_script_contract_holds() {
+    // Pins the OpenAI-compatible model field to canonical
+    // agent-owned chat Ability URAs, not bare provider names.
+    run_bash_script("tests/scripts/test_check_openai_model_ability_ura.sh");
+}
+
+#[test]
+fn voice_call_axon_contract_script_holds() {
+    // Pins voice call signaling responses to the Axon voice contract:
+    // enum names plus numeric codes, not retired dual compatibility
+    // fields such as state_proto/end_reason_proto.
+    run_bash_script("tests/scripts/test_check_voice_call_axon_contract.sh");
+}
+
+#[test]
+fn browser_session_service_boundary_script_holds() {
+    // Pins browser.* session state to a registry-scoped service
+    // instead of a process-global OnceLock-backed store.
+    run_bash_script("tests/scripts/test_check_browser_session_service_boundary.sh");
+}
+
+#[test]
+fn orchestration_service_boundary_script_holds() {
+    // Pins mission.discuss_round session continuity to a registry-
+    // scoped service and keeps agent-cycle inputs grouped.
+    run_bash_script("tests/scripts/test_check_orchestration_service_boundary.sh");
+}
+
+#[test]
+fn discover_scope_boundary_script_holds() {
+    // Pins <agent>.discover to current scope literals only. The
+    // retired easynet alias must stay absent from parser and schema.
+    run_bash_script("tests/scripts/test_check_discover_scope_boundary.sh");
+}
+
+#[test]
+fn skill_list_managed_dir_boundary_script_holds() {
+    // Pins skill.list to the current managed install directory
+    // per agent type. Claude Code no longer scans root-level skills.
+    run_bash_script("tests/scripts/test_check_skill_list_managed_dir_boundary.sh");
+}
+
+#[test]
+fn hosted_receipt_axon_boundary_script_holds() {
+    // Pins hosted receipt audit types to Axon's canonical module.
+    // EasyNet-Cli must not restore the retired runtime re-export shim.
+    run_bash_script("tests/scripts/test_check_hosted_receipt_axon_boundary.sh");
+}
+
+#[test]
+fn workspace_agent_directory_boundary_script_holds() {
+    // Pins runtime workspace projection to AgentDirectory input.
+    // Dispatch must reject invalid registry roots instead of rebuilding
+    // specs from AgentEntry or falling back to the caller cwd.
+    run_bash_script("tests/scripts/test_check_workspace_agent_directory_boundary.sh");
+}
+
+#[test]
+fn dispatch_mission_context_boundary_script_holds() {
+    // Pins intra-mission agent dispatch to a typed mission context.
+    // Missing or forged mission context must fail in every build mode.
+    run_bash_script("tests/scripts/test_check_dispatch_mission_context_boundary.sh");
+}
+
+#[test]
+fn runtime_abilities_manifest_boundary_script_holds() {
+    // Pins per-agent ability discovery to authored manifests under
+    // AgentDirectory. Missing roots must not synthesize chat abilities.
+    run_bash_script("tests/scripts/test_check_runtime_abilities_manifest_boundary.sh");
 }
