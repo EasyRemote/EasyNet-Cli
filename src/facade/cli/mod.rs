@@ -100,6 +100,7 @@ pub(crate) mod agent;
 pub(crate) mod agent_new_ability;
 pub(crate) mod agent_sessions;
 pub(crate) mod auth;
+pub(crate) mod bridge_lib;
 pub(crate) mod completion;
 pub(crate) mod config_cmd;
 pub(crate) mod connect;
@@ -107,6 +108,7 @@ pub(crate) mod daemon_agent_view;
 pub(crate) mod deploy;
 pub(crate) mod devices;
 pub(crate) mod discuss;
+pub(crate) mod docker;
 pub(crate) mod doctor;
 pub(crate) mod exec;
 #[cfg(feature = "axon-pb")]
@@ -296,6 +298,7 @@ const HELP_TEMPLATE: &str = "\
   \x1b[1;36m[Maintenance]\x1b[0m
     \x1b[1mself\x1b[0m                 Update, check version, or uninstall EasyNet CLI
     \x1b[1mdoctor\x1b[0m               Health check — runtime, bridge, agents, MCP connectivity
+    \x1b[1mdocker\x1b[0m               Docker/container operator diagnostics
     \x1b[1mquota\x1b[0m                Inspect or edit the per-consumer invocation quota policy
     \x1b[1mcompletion\x1b[0m           Emit a shell completion script (bash/zsh/fish/powershell)
     \x1b[1mhelp\x1b[0m                 Print this message or the help of the given subcommand
@@ -415,12 +418,16 @@ pub enum Command {
     #[command(display_order = 51)]
     Doctor(doctor::DoctorArgs),
 
+    /// Docker/container operator diagnostics.
+    #[command(display_order = 52)]
+    Docker(docker::DockerArgs),
+
     /// Inspect or edit the per-consumer invocation quota policy.
     #[command(display_order = 53)]
     Quota(quota_cmd::QuotaArgs),
 
     /// Emit a shell completion script (bash/zsh/fish/powershell).
-    #[command(display_order = 52)]
+    #[command(display_order = 54)]
     Completion(completion::CompletionArgs),
 
     // ── Internal ─────────────────────────────────────────────────────────
@@ -462,6 +469,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // Cross-cutting
         Command::SelfCmd(args) => groups::selfcmd::run(args),
         Command::Doctor(args) => doctor::run(args),
+        Command::Docker(args) => docker::run(args),
         Command::Quota(args) => quota_cmd::run(args),
         Command::Completion(args) => completion::run::<App>(args),
 

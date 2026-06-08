@@ -32,6 +32,9 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 
 use crate::persistence::config;
+use crate::runtime::join_connection_state::{
+    record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode, JoinTransition,
+};
 use crate::support::{output, sysinfo};
 
 #[derive(Debug, Deserialize)]
@@ -133,15 +136,26 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         }
     }
 
-    let token = args.token.trim().to_string();
-    validate_token_format(&token)?;
-
     let hub_api_override = args
         .hub_api
         .as_ref()
         .map(|s| s.trim_end_matches('/').to_string());
     let has_explicit_hub_api_override = hub_api_override.is_some();
     let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
+    let token = args.token.trim().to_string();
+    if let Err(err) = validate_token_format(&token) {
+        record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+            JoinFailureCode::JoinFailedPreflight,
+            JoinTransition::PreflightToken,
+            "",
+            "",
+            Some(validate_base.clone()),
+            err.to_string(),
+            false,
+            "cli.join",
+        ));
+        return Err(err);
+    }
 
     let creds = run_join_stages(
         &token,
@@ -150,9 +164,32 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         args.peer_hub.as_deref(),
     )?;
 
+    match args.boot {
+        JoinBoot::No => {
+            render_pairing_summary("Paired successfully", &creds, args.peer_hub.as_deref());
+            output::info("Run 'easynet runtime start' to start the device agent.");
+            Ok(())
+        }
+        JoinBoot::Yes => {
+            output::info("Pairing accepted. Starting daemon (pass '--boot no' to skip)...");
+            super::start::run(super::start::StartArgs::for_join_autostart())
+                .map(|()| {
+                    render_pairing_summary("Join complete", &creds, args.peer_hub.as_deref());
+                })
+                .map_err(|err| {
+                    err.context(
+                        "pairing credentials were saved, but daemon startup failed; \
+                         fix Hub reachability and rerun `easynet runtime start`",
+                    )
+                })
+        }
+    }
+}
+
+fn render_pairing_summary(title: &str, creds: &config::Credentials, peer_hub: Option<&str>) {
     // Final summary block — same `kv_section` styling as `start`
     // so the two commands look like siblings, not strangers.
-    output::success("Paired successfully");
+    output::success(title);
     let realm = creds.realm.clone();
     let mut rows = vec![
         ("node_id", creds.node_id.as_str()),
@@ -160,23 +197,12 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         ("realm", realm.as_str()),
     ];
     let peer_hub_value;
-    if let Some(peer) = args.peer_hub.as_deref() {
+    if let Some(peer) = peer_hub {
         peer_hub_value = peer.to_string();
         rows.push(("peer_hub", peer_hub_value.as_str()));
     }
     output::kv_section(&rows);
     eprintln!();
-
-    match args.boot {
-        JoinBoot::No => {
-            output::info("Run 'easynet runtime start' to start the device agent.");
-            Ok(())
-        }
-        JoinBoot::Yes => {
-            output::info("Starting daemon (pass '--boot no' to skip)...");
-            super::start::run(super::start::StartArgs::for_join_autostart())
-        }
-    }
 }
 
 /// Walk through the eight join-time side effects under a live
@@ -199,9 +225,27 @@ fn run_join_stages(
     let preflight = match preflight_pairing_token(token, validate_base) {
         Ok(p) => {
             renderer.stage_ok("preflight");
+            record_snapshot(JoinConnectionSnapshot::from_parts(
+                JoinConnectionState::PairingTokenPreflighted,
+                Some(JoinTransition::PreflightToken),
+                p.realm.clone(),
+                p.node_id.clone(),
+                Some(validate_base.to_string()),
+                "cli.join",
+            ));
             p
         }
         Err(e) => {
+            record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+                JoinFailureCode::JoinFailedPreflight,
+                JoinTransition::PreflightToken,
+                "",
+                "",
+                Some(validate_base.to_string()),
+                e.to_string(),
+                false,
+                "cli.join",
+            ));
             renderer.stage_failed("preflight", &format!("{e}"));
             renderer.finish();
             return Err(e);
@@ -212,9 +256,25 @@ fn run_join_stages(
     let mut creds = match validate_pairing_token(token, validate_base, &preflight) {
         Ok(c) => {
             renderer.stage_ok("validate-token");
+            record_snapshot(JoinConnectionSnapshot::from_credentials(
+                JoinConnectionState::DeviceValidatedJoining,
+                Some(JoinTransition::ValidateToken),
+                &c,
+                "cli.join",
+            ));
             c
         }
         Err(e) => {
+            record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+                JoinFailureCode::JoinFailedValidate,
+                JoinTransition::ValidateToken,
+                preflight.realm.clone(),
+                preflight.node_id.clone(),
+                Some(validate_base.to_string()),
+                e.to_string(),
+                false,
+                "cli.join",
+            ));
             renderer.stage_failed("validate-token", &format!("{e}"));
             renderer.finish();
             return Err(e);
@@ -226,11 +286,25 @@ fn run_join_stages(
 
     renderer.set_active("save-credentials");
     if let Err(e) = config::save_credentials(&creds) {
+        record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
+            JoinFailureCode::JoinFailedValidate,
+            JoinTransition::SaveCredentials,
+            &creds,
+            e.to_string(),
+            false,
+            "cli.join",
+        ));
         renderer.stage_failed("save-credentials", &format!("{e}"));
         renderer.finish();
         return Err(e);
     }
     renderer.stage_ok("save-credentials");
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::CredentialsSaved,
+        Some(JoinTransition::SaveCredentials),
+        &creds,
+        "cli.join",
+    ));
 
     // Best-effort steps below: a failure does NOT abort the join.
     // They each render as `stage_ok` on success or
@@ -259,8 +333,10 @@ fn run_join_stages(
     // without a restart. Failures here would abort cross-realm
     // routing only; the join itself has already succeeded.
     renderer.set_active("federated-peers");
-    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub);
-    renderer.stage_ok("federated-peers");
+    match super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub) {
+        Ok(()) => renderer.stage_ok("federated-peers"),
+        Err(e) => renderer.stage_skipped("federated-peers", &format!("({e})")),
+    }
 
     // URA v4.1.5 Phase 3C — push a fresh device keypair into the
     // local easynet-keyring vault. The vault is the load-bearing
@@ -291,8 +367,16 @@ fn run_join_stages(
     // overwrite this entry or no-op against the matching pubkey
     // (idempotent).
     renderer.set_active("realm-trust");
-    let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
-    renderer.stage_ok("realm-trust");
+    match super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds) {
+        Ok(()) => renderer.stage_ok("realm-trust"),
+        Err(e) => renderer.stage_skipped("realm-trust", &format!("({e})")),
+    }
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::LocalTrustWired,
+        Some(JoinTransition::WireLocalTrust),
+        &creds,
+        "cli.join",
+    ));
 
     renderer.set_active("refresh-runtime");
     refresh_running_runtime_after_join(&creds);
@@ -357,9 +441,7 @@ fn refresh_running_runtime_after_join(creds: &config::Credentials) {
 /// pre-existing entry stays). Errors only on transport faults
 /// the operator should see.
 fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
-    use crate::services::self_identity::{
-        canonical_self_uras, fresh_seed_hex, KeyringClient, SelfIdentityError,
-    };
+    use crate::services::self_identity::{canonical_self_uras, KeyringClient, SelfIdentityError};
 
     let realm = creds.realm.trim();
     let node_id = creds.node_id.trim();
@@ -378,7 +460,8 @@ fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<
         ensure_keyring_daemon_running()?;
     }
 
-    match client.put(&primary_self, role_overlays, fresh_seed_hex()) {
+    let seed_hex = derive_device_seed_hex(realm, node_id)?;
+    match client.put(&primary_self, role_overlays, seed_hex) {
         Ok(()) => Ok(()),
         // already_exists is benign — re-pairing the same device
         // keeps the existing keypair. Any other error is real.
@@ -814,13 +897,21 @@ fn derive_device_public_key_hex(realm: &str, node_id: &str) -> anyhow::Result<St
     use anyhow::Context as _;
     use base64::Engine as _;
 
-    let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
-    let (_seed, public_key_b64) =
-        crate::runtime::publish::derive_subject_keypair(realm, &subject_id);
+    let (_seed, public_key_b64) = derive_device_keypair(realm, node_id);
     let public_key = base64::engine::general_purpose::STANDARD
         .decode(public_key_b64.as_bytes())
         .context("decode derived device public key")?;
     Ok(hex::encode(public_key))
+}
+
+fn derive_device_seed_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
+    let (seed, _public_key_b64) = derive_device_keypair(realm, node_id);
+    Ok(hex::encode(seed))
+}
+
+fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
+    let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
+    crate::runtime::publish::derive_subject_keypair(realm, &subject_id)
 }
 
 #[cfg(test)]
@@ -1038,6 +1129,21 @@ mod tests {
                 .expect("decode owner b64"),
         );
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn derive_device_seed_hex_matches_pairing_public_key() {
+        let realm = "tenant-a";
+        let node_id = "en-test-node";
+        let seed_hex = derive_device_seed_hex(realm, node_id).expect("derive seed");
+        let seed_bytes = hex::decode(seed_hex).expect("decode seed hex");
+        let seed: [u8; 32] = seed_bytes.as_slice().try_into().expect("seed length");
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+
+        assert_eq!(
+            hex::encode(signing_key.verifying_key().to_bytes()),
+            derive_device_public_key_hex(realm, node_id).expect("derive public key")
+        );
     }
 
     #[test]

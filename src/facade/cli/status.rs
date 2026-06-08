@@ -17,16 +17,25 @@ use clap::Args;
 use serde_json::{json, Value};
 
 use crate::persistence::config;
+use crate::runtime::join_connection_state;
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::net;
 use crate::support::output;
 use crate::ura;
 
 #[derive(Debug, Args)]
-pub struct StatusArgs {}
+pub struct StatusArgs {
+    /// Emit JSON instead of the human-readable report.
+    #[arg(long)]
+    pub json: bool,
+}
 
-pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
+pub fn run(args: StatusArgs) -> anyhow::Result<()> {
+    if args.json {
+        return run_json();
+    }
     output::info(&format!("EasyNet CLI v{}", env!("CARGO_PKG_VERSION")));
+    render_connection_state();
 
     // Pairing block — addressed by URA (the ontology-canonical
     // identity per RFC-001 §3.2). The transport URL
@@ -180,6 +189,58 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         }
         Err(e) => output::info(&format!("Abilities: cannot query ('{e}')")),
     }
+    Ok(())
+}
+
+fn render_connection_state() {
+    let snapshot = join_connection_state::latest_snapshot();
+    output::info("Connection state:");
+    let mut rows = vec![
+        (
+            "State",
+            format!("{} [{}]", snapshot.state, snapshot.state_code),
+        ),
+        (
+            "Transition",
+            snapshot
+                .interrupted_transition
+                .clone()
+                .or(snapshot.transition_id.clone())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    ];
+    if let Some(failure) = snapshot.failure.as_ref() {
+        rows.push(("Failure", failure.code.clone()));
+        rows.push(("Reason", failure.message.clone()));
+    }
+    if !snapshot.device_ura.is_empty() {
+        rows.push(("Device URA", snapshot.device_ura.clone()));
+    }
+    let kv: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    output::kv_section(&kv);
+    eprintln!();
+}
+
+fn run_json() -> anyhow::Result<()> {
+    let connection = join_connection_state::latest_snapshot();
+    let runtime = config::load().ok();
+    let payload = json!({
+        "connection": connection,
+        "runtime": runtime.as_ref().map(|state| json!({
+            "endpoint": state.endpoint,
+            "runtime_kind": match state.runtime_kind {
+                config::RuntimeKind::DaemonOnly => "daemon_only",
+                config::RuntimeKind::AxonBridge => "axon_bridge",
+            },
+            "pid": state.pid,
+            "hub": state.hub,
+            "tenant": state.tenant,
+            "label": state.label,
+            "started_at": state.started_at,
+            "credential_verified": state.credential_verified,
+        })),
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 
