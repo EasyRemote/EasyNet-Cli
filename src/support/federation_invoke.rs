@@ -311,65 +311,45 @@ pub fn invoke_via_federation_forward_ability_ura(
                 )
             }
         })?;
-        let body = response.into_inner();
-        // DEC-N4 §2.1 final shape:
-        // ForwardInvokeResponse { result_bytes, correlation_call_id }
-        // is the wire surface. Parse + extract result_bytes.
-        // For local-realm fast-path the daemon returns
-        // `result_bytes: empty` (the actual ability response
-        // flows back over the reverse-channel correlation
-        // path). For cross-realm the result_bytes is the
-        // peer's full ability response; if it parses as JSON
-        // we hand the parsed value back, otherwise the raw
-        // bytes (lossy decoded as UTF-8) so the CLI can still
-        // print something useful.
-        let envelope: Value = serde_json::from_slice(&body.result).with_context(|| {
+        decode_forward_invoke_response_value(&response.into_inner())
+    })
+}
+
+fn decode_forward_invoke_response_value(
+    body: &easynet_axon::pb::axon::v1::InvokeResponse,
+) -> anyhow::Result<Value> {
+    // DEC-N4 §2.1 final shape:
+    // ForwardInvokeResponse { result_bytes, correlation_call_id }
+    // is the wire surface. The shape belongs to the Axon SDK and
+    // serialises bytes as base64 strings, not JSON byte arrays.
+    // Parsing through the SDK type keeps the CLI display layer from
+    // drifting when the SDK schema changes.
+    let envelope: easynet_axon::ForwardInvokeResponse = serde_json::from_slice(&body.result)
+        .with_context(|| {
             format!(
                 "parse federation.forward_invoke ForwardInvokeResponse envelope: \
                  result_content_type={:?}",
                 body.result_content_type
             )
         })?;
-        let result_bytes_b64 = envelope
-            .get("result_bytes")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|n| n.as_u64())
-                    .map(|n| n as u8)
-                    .collect::<Vec<u8>>()
-            })
-            .unwrap_or_default();
-        if result_bytes_b64.is_empty() {
-            // Local-realm fast-path delivery accepted, or a
-            // cross-hub call where the peer ability genuinely
-            // returned empty bytes. Either way, the
-            // correlation id is the only useful surface to
-            // print.
-            let correlation = envelope
-                .get("correlation_call_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            return Ok(serde_json::json!({
-                "delivery": "accepted",
-                "correlation_call_id": correlation,
-            }));
-        }
-        // Try parsing the peer's ability response as JSON; if
-        // it isn't, fall back to a hex-stringified shape so
-        // the CLI's print path doesn't crash on binary
-        // payloads.
-        match serde_json::from_slice::<Value>(&result_bytes_b64) {
-            Ok(v) => Ok(v),
-            Err(_) => Ok(serde_json::json!({
-                "result_bytes_len": result_bytes_b64.len(),
-                "result_bytes_hex": result_bytes_b64
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>(),
-            })),
-        }
-    })
+
+    decode_forward_result_bytes(&envelope.result_bytes)
+}
+
+fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
+    if result_bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    match serde_json::from_slice::<Value>(result_bytes) {
+        Ok(v) => Ok(v),
+        Err(_) => Ok(serde_json::json!({
+            "result_bytes_len": result_bytes.len(),
+            "result_bytes_hex": result_bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>(),
+        })),
+    }
 }
 
 fn validate_forward_ability_owner(ability_ura: &str, node_ura: &str) -> anyhow::Result<()> {
@@ -802,6 +782,19 @@ mod tests {
     }
 
     #[test]
+    fn target_owned_ability_ura_projects_device_meta_list_resources() {
+        assert_eq!(
+            TargetOwnedAbilityUra::from_selector(
+                "easynet:///r/acme/device/02507271-6034-40df-959c-f90bc930d676",
+                "meta.list_resources",
+            )
+            .expect("device meta.list_resources ability URA")
+            .as_str(),
+            "easynet:///r/acme/ability/device.02507271-6034-40df-959c-f90bc930d676.meta.list_resources"
+        );
+    }
+
+    #[test]
     fn target_owned_ability_ura_accepts_prebuilt_canonical_ura() {
         assert_eq!(
             TargetOwnedAbilityUra::from_ability_ura(
@@ -864,6 +857,62 @@ mod tests {
             err.to_string().contains("invalid target URA"),
             "hub target with tail must fail through Axon parser, got: {err}"
         );
+    }
+
+    #[test]
+    fn decode_forward_invoke_response_decodes_sdk_base64_result_bytes() {
+        let envelope = easynet_axon::ForwardInvokeResponse {
+            result_bytes: br#"{"content":"hello"}"#.to_vec(),
+            correlation_call_id: "cli-call-1".to_string(),
+        };
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            result: serde_json::to_vec(&envelope).expect("encode ForwardInvokeResponse"),
+            result_content_type: "application/json".to_string(),
+            ..Default::default()
+        };
+
+        let value = decode_forward_invoke_response_value(&body).expect("decode response");
+
+        assert_eq!(value["content"], "hello");
+    }
+
+    #[test]
+    fn decode_forward_invoke_response_no_longer_emits_delivery_accepted_shim() {
+        let envelope = easynet_axon::ForwardInvokeResponse {
+            result_bytes: Vec::new(),
+            correlation_call_id: "cli-call-empty".to_string(),
+        };
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            result: serde_json::to_vec(&envelope).expect("encode ForwardInvokeResponse"),
+            result_content_type: "application/json".to_string(),
+            ..Default::default()
+        };
+
+        let value = decode_forward_invoke_response_value(&body).expect("decode response");
+
+        assert_eq!(
+            value,
+            Value::Null,
+            "empty ability payload is a real empty result, not delivery=accepted"
+        );
+    }
+
+    #[test]
+    fn decode_forward_invoke_response_hex_encodes_non_json_payload() {
+        let envelope = easynet_axon::ForwardInvokeResponse {
+            result_bytes: vec![0xde, 0xad, 0xbe, 0xef],
+            correlation_call_id: "cli-call-bin".to_string(),
+        };
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            result: serde_json::to_vec(&envelope).expect("encode ForwardInvokeResponse"),
+            result_content_type: "application/json".to_string(),
+            ..Default::default()
+        };
+
+        let value = decode_forward_invoke_response_value(&body).expect("decode response");
+
+        assert_eq!(value["result_bytes_len"], 4);
+        assert_eq!(value["result_bytes_hex"], "deadbeef");
     }
 
     #[test]

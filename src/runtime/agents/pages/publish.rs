@@ -2,7 +2,7 @@
 // =============================================================
 //
 // File: src/runtime/agents/pages/publish.rs
-// Description: handler for `<user>.pages.publish` — the canonical
+// Description: handler for `pages.publish` — the canonical
 //              create transition of the Resource Execution Model
 //              applied to a folder of static bytes.
 //
@@ -32,7 +32,7 @@ use super::state::{
     persist_registry_for_user, ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
 };
 
-/// Handler invoked when a user calls `<self>.pages.publish`. The
+/// Handler invoked when a user calls `pages.publish`. The
 /// handler is registered once at daemon boot under the user-prefixed
 /// ability name; the dispatcher routes per-user calls to the same
 /// closure (`<self>` is the calling daemon's user identity).
@@ -57,14 +57,14 @@ use super::state::{
 /// `url_root` is the production Hub URL — see
 /// `pages_public_url_root` in `pages/mod.rs`. The daemon's in-process
 /// HTTP listener URL (`http://<project>.<user>.pages.localhost:<port>/`)
-/// is dev-only and is only surfaced by `<user>.pages.get` for
+/// is dev-only and is only surfaced by `pages.get` for
 /// debugging.
 pub fn handle_publish(
     user: &str,
     // The publish surface no longer depends on the daemon's
     // in-process listener — `url_root` is built from `realm` via
     // `pages_public_url_root`. The dev-only listener URL is reported
-    // from `<user>.pages.get` (which still takes the port) when an
+    // from `pages.get` (which still takes the port) when an
     // operator wants it for local curl.
     _listener_port: u16,
     realm: &str,
@@ -104,7 +104,7 @@ pub fn handle_publish(
     if PUBLISHED_PROJECTS.contains_key(&key) {
         anyhow::bail!(
             "project already published: user={user} project_id={project_id} \
-             (call <self>.pages.unpublish first)"
+             (call pages.unpublish first)"
         );
     }
 

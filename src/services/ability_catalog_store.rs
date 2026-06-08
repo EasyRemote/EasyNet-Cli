@@ -40,6 +40,7 @@
 
 use std::sync::Arc;
 
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use serde_json::Value;
 
@@ -92,6 +93,11 @@ impl OwnerAbilityProjectionRow {
             .collect()
     }
 
+    #[must_use]
+    pub(crate) fn is_live_at(&self, now_unix_ms: i64) -> bool {
+        self.lease_expires_unix_ms > now_unix_ms
+    }
+
     #[cfg(test)]
     pub(crate) fn owner_ura(&self) -> &str {
         &self.owner_ura
@@ -123,6 +129,23 @@ impl OwnerAbilityProjectionRow {
     }
 }
 
+/// Outcome of applying a projection publication to the hub read model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectionUpsertOutcome {
+    Inserted,
+    Updated,
+    Idempotent,
+    IgnoredStale,
+    RejectedConflict,
+}
+
+impl ProjectionUpsertOutcome {
+    #[must_use]
+    pub(crate) fn is_stored(self) -> bool {
+        matches!(self, Self::Inserted | Self::Updated | Self::Idempotent)
+    }
+}
+
 /// Stores the most recent owner projection row by owner URA. Cheap clone
 /// (`Arc` wrapper); shared between the advertise dispatch handler and the
 /// resolve dispatch handler inside `DaemonInvocationService`.
@@ -137,16 +160,53 @@ impl AbilityCatalogStore {
         Self::default()
     }
 
-    /// Upsert the owner projection row. Re-call overwrites by owner URA.
-    pub(crate) fn upsert_projection(&self, row: OwnerAbilityProjectionRow) {
-        self.inner.insert(row.owner_ura.clone(), row);
+    /// Upsert the owner projection row behind a per-owner revision fence.
+    ///
+    /// This is read-model protection, not namespace authority: signature,
+    /// caller, and host authorization checks happen before this store. The
+    /// fence prevents stale or conflicting projections that have already
+    /// reached the admitted handler from corrupting resolver summaries.
+    pub(crate) fn upsert_projection(
+        &self,
+        row: OwnerAbilityProjectionRow,
+    ) -> ProjectionUpsertOutcome {
+        match self.inner.entry(row.owner_ura.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(row);
+                ProjectionUpsertOutcome::Inserted
+            }
+            Entry::Occupied(mut entry) => {
+                let current = entry.get();
+                if row.projection_revision < current.projection_revision {
+                    return ProjectionUpsertOutcome::IgnoredStale;
+                }
+                if row.projection_revision == current.projection_revision {
+                    if row.projection_digest == current.projection_digest {
+                        return ProjectionUpsertOutcome::Idempotent;
+                    }
+                    return ProjectionUpsertOutcome::RejectedConflict;
+                }
+                entry.insert(row);
+                ProjectionUpsertOutcome::Updated
+            }
+        }
     }
 
     /// Return namespace-safe ability summaries for an owner, or `None`
     /// when no projection has landed yet for that owner URA.
     pub fn get(&self, owner_ura: &str) -> Option<Vec<Value>> {
+        self.get_at(
+            owner_ura,
+            crate::services::federation_directory::now_unix_ms(),
+        )
+    }
+
+    /// Return namespace-safe ability summaries if the owner's projection
+    /// exists and its lease has not expired at `now_unix_ms`.
+    pub(crate) fn get_at(&self, owner_ura: &str, now_unix_ms: i64) -> Option<Vec<Value>> {
         self.inner
             .get(owner_ura)
+            .filter(|entry| entry.is_live_at(now_unix_ms))
             .map(|entry| entry.summaries_as_json())
     }
 
@@ -188,7 +248,9 @@ mod tests {
         let store = AbilityCatalogStore::new();
         let row = projection_row("easynet:///r/easynet.run/device/abc", vec![summary("read")]);
 
-        store.upsert_projection(row.clone());
+        let outcome = store.upsert_projection(row.clone());
+        assert_eq!(outcome, ProjectionUpsertOutcome::Inserted);
+        assert!(outcome.is_stored());
 
         let got = store
             .get("easynet:///r/easynet.run/device/abc")
@@ -208,8 +270,18 @@ mod tests {
     #[test]
     fn upsert_overwrites_prior_projection_by_owner() {
         let store = AbilityCatalogStore::new();
-        store.upsert_projection(projection_row("ura", vec![summary("read")]));
-        store.upsert_projection(projection_row("ura", vec![summary("write")]));
+        let first = projection_row_with_revision("ura", 1, "sha256:first", vec![summary("read")]);
+        let second =
+            projection_row_with_revision("ura", 2, "sha256:second", vec![summary("write")]);
+
+        assert_eq!(
+            store.upsert_projection(first),
+            ProjectionUpsertOutcome::Inserted
+        );
+        assert_eq!(
+            store.upsert_projection(second),
+            ProjectionUpsertOutcome::Updated
+        );
 
         let got = store.get("ura").unwrap();
         assert_eq!(got.len(), 1);
@@ -217,10 +289,58 @@ mod tests {
     }
 
     #[test]
+    fn stale_revision_does_not_replace_newer_projection() {
+        let store = AbilityCatalogStore::new();
+        let newer = projection_row_with_revision("ura", 7, "sha256:new", vec![summary("write")]);
+        let stale = projection_row_with_revision("ura", 6, "sha256:old", vec![summary("read")]);
+
+        assert_eq!(
+            store.upsert_projection(newer),
+            ProjectionUpsertOutcome::Inserted
+        );
+        assert_eq!(
+            store.upsert_projection(stale),
+            ProjectionUpsertOutcome::IgnoredStale
+        );
+
+        let got = store.get("ura").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["local_name"], "write");
+    }
+
+    #[test]
+    fn equal_revision_digest_conflict_does_not_replace_projection() {
+        let store = AbilityCatalogStore::new();
+        let first = projection_row_with_revision("ura", 7, "sha256:first", vec![summary("read")]);
+        let conflict =
+            projection_row_with_revision("ura", 7, "sha256:conflict", vec![summary("write")]);
+
+        assert_eq!(
+            store.upsert_projection(first.clone()),
+            ProjectionUpsertOutcome::Inserted
+        );
+        assert_eq!(
+            store.upsert_projection(first),
+            ProjectionUpsertOutcome::Idempotent
+        );
+        assert_eq!(
+            store.upsert_projection(conflict),
+            ProjectionUpsertOutcome::RejectedConflict
+        );
+
+        let got = store.get("ura").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["local_name"], "read");
+    }
+
+    #[test]
     fn upsert_empty_projection_stores_empty_not_none() {
         let store = AbilityCatalogStore::new();
 
-        store.upsert_projection(projection_row("ura", Vec::new()));
+        assert_eq!(
+            store.upsert_projection(projection_row("ura", Vec::new())),
+            ProjectionUpsertOutcome::Inserted
+        );
 
         let got = store
             .get("ura")
@@ -228,16 +348,46 @@ mod tests {
         assert!(got.is_empty());
     }
 
+    #[test]
+    fn expired_projection_is_not_returned_to_resolve_readers() {
+        let store = AbilityCatalogStore::new();
+
+        assert_eq!(
+            store.upsert_projection(OwnerAbilityProjectionRow::new(
+                "ura".to_string(),
+                crate::ura::device_ura("easynet.run", "abc"),
+                1,
+                "sha256:digest".to_string(),
+                1_000,
+                vec![summary("read")],
+            )),
+            ProjectionUpsertOutcome::Inserted
+        );
+
+        assert!(store.get_at("ura", 999).is_some());
+        assert!(store.get_at("ura", 1_000).is_none());
+        assert!(store.get_at("ura", 1_001).is_none());
+    }
+
     fn projection_row(
         owner_ura: &str,
+        ability_summaries: Vec<AbilityProjectionSummary>,
+    ) -> OwnerAbilityProjectionRow {
+        projection_row_with_revision(owner_ura, 1, "sha256:digest", ability_summaries)
+    }
+
+    fn projection_row_with_revision(
+        owner_ura: &str,
+        revision: u64,
+        digest: &str,
         ability_summaries: Vec<AbilityProjectionSummary>,
     ) -> OwnerAbilityProjectionRow {
         OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
             crate::ura::device_ura("easynet.run", "abc"),
-            1,
-            "sha256:digest".to_string(),
-            1_714_492_800_000,
+            revision,
+            digest.to_string(),
+            4_102_444_800_000,
             ability_summaries,
         )
     }
@@ -256,6 +406,9 @@ mod tests {
             policy_ref: "visibility:PUBLIC".to_string(),
             route_summary_ref: None,
             tags: vec!["class:unary".to_string()],
+            callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                ability_id,
+            ),
         }
     }
 }

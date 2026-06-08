@@ -84,7 +84,7 @@
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use easynet_axon::invocation::axiom::{
@@ -142,6 +142,51 @@ pub const SESSION_STREAM_ID: u32 = 0;
 /// the hub side and device side use symmetric backpressure
 /// budgets.
 const SESSION_UP_CHANNEL_CAPACITY: usize = 256;
+
+/// One-shot notification used by daemon boot to distinguish "the
+/// supervisor task was spawned" from "Hub admitted this device into
+/// PresenceRegistry". Only the first admission attempt matters for
+/// boot; after the daemon is admitted once, the long-lived supervisor
+/// owns reconnects.
+#[derive(Clone)]
+pub(crate) struct InitialSessionAdmissionProbe {
+    tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>,
+}
+
+impl InitialSessionAdmissionProbe {
+    fn admitted(&self) {
+        self.complete(Ok(()));
+    }
+
+    fn failed(&self, reason: String) {
+        self.complete(Err(reason));
+    }
+
+    fn complete(&self, outcome: Result<(), String>) {
+        let Some(tx) = self
+            .tx
+            .lock()
+            .expect("initial admission probe mutex")
+            .take()
+        else {
+            return;
+        };
+        let _ = tx.send(outcome);
+    }
+}
+
+pub(crate) fn initial_session_admission_probe() -> (
+    InitialSessionAdmissionProbe,
+    tokio::sync::oneshot::Receiver<Result<(), String>>,
+) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    (
+        InitialSessionAdmissionProbe {
+            tx: Arc::new(Mutex::new(Some(tx))),
+        },
+        rx,
+    )
+}
 
 /// Initial backoff interval between reconnect attempts. The
 /// supervisor uses exponential backoff capped at
@@ -381,6 +426,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         escalation_outbox,
         ability_catalog,
         SESSION_IDLE_TIMEOUT,
+        None,
     )
     .await
 }
@@ -397,6 +443,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     >,
     ability_catalog: &[String],
     idle_timeout: Duration,
+    initial_admission: Option<InitialSessionAdmissionProbe>,
 ) -> Result<(), SessionError> {
     let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
         .map_err(|err| SessionError::InvalidEndpoint {
@@ -573,12 +620,11 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     }
 
     // Hosted-agent advertise prelude (RFC-006-B v0.6 §URL +
-    // RFC-006-C v0.1 §INV-2). The hub's
-    // `lookup_target_with_agent_fallback` consults
-    // `AdvertisedAgentStore` when the wire callee is an agent
-    // URA `agent/<u>.<a>`; without these advertise calls the
-    // store is empty and chat-base / page.fetch invocations
-    // fall through to `target_offline`.
+    // RFC-006-C v0.1 §INV-2). RFC-005 namespace.resolve consumes
+    // `AdvertisedAgentStore` when an owner is an agent URA
+    // `agent/<u>.<a>` and selects a hosted-agent route through
+    // the advertising device. Without these advertise calls the
+    // resolver has owner projection but no executable placement.
     //
     // Owner segments derived from the local ability catalog:
     // every ability whose tail is `<owner>.<rest>` implies the
@@ -864,6 +910,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         caller_ura = caller_ura,
         message = "awaiting down-stream frames",
     );
+    if let Some(probe) = &initial_admission {
+        probe.admitted();
+    }
 
     // PR-N6 C4: publish the active up sender so the device-mode
     // escalation consumer task can push `SessionDispatch::Request`
@@ -968,7 +1017,7 @@ impl Drop for OutboxGuard {
 /// the supervisor, this value should become a cell snapshot
 /// rather than an owned `PathBuf`.
 #[allow(clippy::too_many_arguments)]
-pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
+pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_ura: String,
     signing_seed: Option<SessionSigningSeed>,
@@ -978,6 +1027,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
         crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
     >,
     ability_catalog: Vec<String>,
+    initial_admission: Option<InitialSessionAdmissionProbe>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut backoff = SESSION_BACKOFF_INITIAL;
@@ -990,7 +1040,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 );
                 return;
             }
-            result = dial_and_run_session(
+            result = dial_and_run_session_with_idle_timeout(
                 hub_endpoint.clone(),
                 caller_ura.clone(),
                 signing_seed,
@@ -998,6 +1048,8 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 Arc::clone(&dispatcher),
                 escalation_outbox.as_ref(),
                 &ability_catalog,
+                SESSION_IDLE_TIMEOUT,
+                initial_admission.clone(),
             ) => {
                 match result {
                     Ok(()) => {
@@ -1024,6 +1076,9 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                         // CA-trust failure or DNS error is
                         // indistinguishable from a NAT idle drop.
                         let err_msg = format!("{err:#}");
+                        if let Some(probe) = &initial_admission {
+                            probe.failed(err_msg.clone());
+                        }
                         let next_backoff_ms = backoff.as_millis() as u64;
                         crate::op_event!(
                             component = session,
@@ -1150,9 +1205,8 @@ async fn send_federation_join_prelude(
 /// Session-prelude variant of `federation.advertise_agent`. The
 /// device tells the hub "I host agent `<agent_ura>`"; the hub
 /// upserts an `AdvertisedAgentRecord { agent_ura, host_ura }` so
-/// later inbound invocations addressed to that agent URA resolve
-/// to this device's bidi sender via
-/// `lookup_target_with_agent_fallback`.
+/// later `namespace.resolve` calls can select a hosted-agent
+/// next hop through this device.
 async fn send_advertise_agent_prelude(
     client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     caller_ura: &str,
@@ -1223,7 +1277,6 @@ async fn send_advertise_abilities_prelude(
             })?;
 
     let body = serde_json::json!({
-        "agent_ura": caller_ura,
         "owner_ura": projection.owner_ura,
         "host_device_ura": projection.host_device_ura,
         "projection_revision": projection.projection_revision,
@@ -1774,6 +1827,7 @@ mod tests {
             dispatcher,
             None,       // PR-N6 C4: no escalation outbox in this test
             Vec::new(), // ability_catalog: empty in tests
+            None,
             cancel_rx,
         ));
 
@@ -1791,6 +1845,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn supervisor_reports_initial_admission_failure_before_backoff() {
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let (probe, admission_rx) = initial_session_admission_probe();
+
+        let supervisor_handle = tokio::spawn(run_session_supervisor(
+            "http://127.0.0.1:1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
+            None,
+            None,
+            dispatcher,
+            None,
+            Vec::new(),
+            Some(probe),
+            cancel_rx,
+        ));
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), admission_rx)
+            .await
+            .expect("initial admission result is reported before first backoff")
+            .expect("initial admission channel remains open");
+        let err = outcome.expect_err("unreachable hub must fail initial admission");
+        assert!(
+            err.contains("failed to connect to hub `http://127.0.0.1:1`"),
+            "error should preserve the structured SessionError, got: {err}"
+        );
+
+        let _ = cancel_tx.send(());
+        supervisor_handle
+            .await
+            .expect("supervisor task did not panic");
+    }
+
+    #[tokio::test]
+    async fn supervisor_reports_initial_admission_after_bidi_opens() {
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, _server) = spawn_silent_session_hub().await;
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let (probe, admission_rx) = initial_session_admission_probe();
+
+        let supervisor_handle = tokio::spawn(run_session_supervisor(
+            format!("http://{addr}"),
+            "easynet:///r/realm/device/n1".to_string(),
+            None,
+            None,
+            dispatcher,
+            None,
+            Vec::new(),
+            Some(probe),
+            cancel_rx,
+        ));
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), admission_rx)
+            .await
+            .expect("initial admission result is reported when bidi opens")
+            .expect("initial admission channel remains open");
+        outcome.expect("accepted bidi must satisfy initial admission");
+
+        let _ = cancel_tx.send(());
+        supervisor_handle
+            .await
+            .expect("supervisor task did not panic");
+    }
+
+    #[tokio::test]
     async fn silent_hub_triggers_idle_timeout_reconnect_error() {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
@@ -1804,6 +1923,7 @@ mod tests {
             None,
             &[],
             Duration::from_millis(80),
+            None,
         )
         .await;
 
@@ -1830,6 +1950,7 @@ mod tests {
             None,
             &[],
             Duration::from_secs(1),
+            None,
         )
         .await;
 

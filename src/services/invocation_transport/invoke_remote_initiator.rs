@@ -44,7 +44,8 @@
 //     "type":     "result" | "chunk",
 //     "payload":  <bytes>,
 //     "terminal": <bool>,    // present on "result" only
-//     "error":    <string?>  // present on "result" only
+//     "error":    <string?>, // human-readable terminal reason
+//     "failure":  <SessionFailure?> // typed canonical projection
 //   }
 //
 // The MVP-style framing is preserved verbatim (per PR-3 sub-spec §2.3
@@ -63,6 +64,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::Status;
+
+use crate::services::session_failure::SessionFailure;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 #[cfg(test)]
@@ -181,6 +184,8 @@ pub enum InvokeRemoteDown {
         payload: Vec<u8>,
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<SessionFailure>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
     },
 }
@@ -269,6 +274,8 @@ pub enum SessionDispatch {
         payload: Vec<u8>,
         terminal: bool,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<SessionFailure>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
     },
@@ -545,13 +552,20 @@ fn map_one_frame(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> FrameOut
         InvokeRemoteDown::Result {
             payload: _,
             error: Some(msg),
+            failure,
             request_id: _,
-        } => FrameOutcome::Terminal(Err(Status::aborted(format!(
-            "invoke_remote remote error: {msg}"
-        )))),
+        } => {
+            let detail = failure
+                .map(|failure| failure.status_detail())
+                .unwrap_or(msg);
+            FrameOutcome::Terminal(Err(Status::aborted(format!(
+                "invoke_remote remote error: {detail}"
+            ))))
+        }
         InvokeRemoteDown::Result {
             payload,
             error: None,
+            failure: _,
             request_id: _,
         } => FrameOutcome::Terminal(Ok(InvokeRemoteFrame::Done(payload))),
     }
@@ -642,6 +656,7 @@ mod tests {
         let result_ok = InvokeRemoteDown::Result {
             payload: b"final-reply".to_vec(),
             error: None,
+            failure: None,
             request_id: None,
         };
         let bytes = serde_json::to_vec(&result_ok).unwrap();
@@ -651,11 +666,25 @@ mod tests {
         let result_err = InvokeRemoteDown::Result {
             payload: Vec::new(),
             error: Some("target offline".into()),
+            failure: Some(SessionFailure::from_reason(
+                "target offline",
+                "TARGET_NOT_IN_PRESENCE_REGISTRY",
+                true,
+            )),
             request_id: None,
         };
         let bytes = serde_json::to_vec(&result_err).unwrap();
         let recovered: InvokeRemoteDown = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(result_err, recovered);
+    }
+
+    #[test]
+    fn session_failure_status_detail_keeps_code_without_duplicate_parsing() {
+        let failure = SessionFailure::from_explicit("disk_full", "volume is full", true);
+        assert_eq!(failure.status_detail(), "DISK_FULL: volume is full");
+
+        let empty_message = SessionFailure::from_explicit("device_removed", "", false);
+        assert_eq!(empty_message.status_detail(), "DEVICE_REMOVED");
     }
 
     /// Build a synthetic down frame carrying `payload` as the
@@ -692,6 +721,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"the-reply".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),
@@ -732,6 +762,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"final".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),
@@ -764,6 +795,11 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: Vec::new(),
                     error: Some("device dropped before reply".into()),
+                    failure: Some(SessionFailure::from_reason(
+                        "device dropped before reply",
+                        "DEVICE_REMOVED",
+                        true,
+                    )),
                     request_id: None,
                 },
             )),
@@ -775,6 +811,7 @@ mod tests {
         let first = mapped.next().await.expect("one frame");
         let status = first.expect_err("must be Err for error result");
         assert_eq!(status.code(), tonic::Code::Aborted);
+        assert!(status.message().contains("DEVICE_REMOVED"));
         assert!(status.message().contains("device dropped before reply"));
         assert!(mapped.next().await.is_none());
     }
@@ -808,6 +845,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"reply-after-receipt".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),
@@ -853,6 +891,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"reply".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),

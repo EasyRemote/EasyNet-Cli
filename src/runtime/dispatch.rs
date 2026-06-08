@@ -725,10 +725,7 @@ pub fn send_to_agent_with_depth_and_progress(
         ),
         Err(e) => (
             "failed",
-            serde_json::json!({
-                "error": e.to_string(),
-                "duration_ms": duration_ms,
-            }),
+            dispatch_terminal_failure_payload(&e.to_string(), duration_ms),
         ),
     };
     if let Err(e) = session.writer().emit(terminal_type, Some(terminal_payload)) {
@@ -758,6 +755,40 @@ pub fn send_to_agent_with_depth_and_progress(
         tool_calls: output.tool_calls,
         thread_id: output.thread_id,
     })
+}
+
+fn dispatch_terminal_failure_payload(message: &str, duration_ms: u64) -> serde_json::Value {
+    let code = crate::runtime::failure_codes::FailureCodeClassifier::classify_or(
+        message,
+        "INVOCATION_FAILED",
+    );
+    let class = crate::runtime::failure_codes::FailureCodeClassifier::classify_error_class(&code);
+    let retryable = dispatch_failure_retryable(&code);
+    let stage = class.stage.as_str_name();
+    let security_class = class.security_class.as_str_name();
+    serde_json::json!({
+        "error": message,
+        "duration_ms": duration_ms,
+        "failure": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "stage": stage,
+            "security_class": security_class,
+        },
+    })
+}
+
+fn dispatch_failure_retryable(code: &str) -> bool {
+    let code = code.trim().to_ascii_uppercase();
+    code.starts_with("TARGET_")
+        || code.starts_with("PRESENCE_")
+        || code.starts_with("DEVICE_")
+        || code.starts_with("RESOLVE_")
+        || matches!(
+            code.as_str(),
+            "INVOCATION_TIMED_OUT" | "DENDRITE_BRIDGE_LIBRARY_NOT_FOUND"
+        )
 }
 
 /// Delimiters for injected context. HTML comments survive verbatim in
@@ -1855,6 +1886,42 @@ mod tests {
             "failed event must carry non-empty error string, got {:?}",
             events[1]["payload"]
         );
+        assert_eq!(
+            events[1]["payload"]["failure"]["code"], "INVOCATION_FAILED",
+            "failed event must carry canonical typed failure, got {:?}",
+            events[1]["payload"]
+        );
+        assert_eq!(
+            events[1]["payload"]["failure"]["stage"],
+            easynet_axon::pb::axon::v1::ErrorStage::Execution.as_str_name()
+        );
+        assert_eq!(
+            events[1]["payload"]["failure"]["security_class"],
+            easynet_axon::pb::axon::v1::SecurityClass::Unspecified.as_str_name()
+        );
+        assert_eq!(events[1]["payload"]["failure"]["retryable"], false);
+    }
+
+    #[test]
+    fn dispatch_terminal_failure_payload_preserves_specific_runtime_code() {
+        let payload =
+            dispatch_terminal_failure_payload("target device is not in PresenceRegistry", 42);
+
+        assert_eq!(payload["error"], "target device is not in PresenceRegistry");
+        assert_eq!(payload["duration_ms"], 42);
+        assert_eq!(
+            payload["failure"]["code"],
+            "TARGET_NOT_IN_PRESENCE_REGISTRY"
+        );
+        assert_eq!(
+            payload["failure"]["stage"],
+            easynet_axon::pb::axon::v1::ErrorStage::Transport.as_str_name()
+        );
+        assert_eq!(
+            payload["failure"]["security_class"],
+            easynet_axon::pb::axon::v1::SecurityClass::Transport.as_str_name()
+        );
+        assert_eq!(payload["failure"]["retryable"], true);
     }
 
     #[test]

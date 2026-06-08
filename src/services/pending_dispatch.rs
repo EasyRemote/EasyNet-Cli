@@ -66,6 +66,8 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::services::session_failure::SessionFailure;
+
 /// Result the target device sent back for a cross-device dispatch.
 /// Mirrors the shape `<self>.session`'s receive task will hand off
 /// when it sees a `Result` frame on the session up stream.
@@ -76,6 +78,8 @@ pub struct DispatchResult {
     /// `Some(message)` if the target reported an execution error;
     /// `None` for a clean reply.
     pub error: Option<String>,
+    /// Canonical terminal failure projection when the target supplied one.
+    pub failure: Option<SessionFailure>,
     /// Target-side Axon ledger request id when available.
     pub request_id: Option<String>,
 }
@@ -227,6 +231,11 @@ impl PendingDispatchMap {
                 let _ = entry.sender.send(DispatchResult {
                     payload: Vec::new(),
                     error: Some(error_reason.to_string()),
+                    failure: Some(SessionFailure::from_reason(
+                        error_reason,
+                        "TARGET_NOT_IN_PRESENCE_REGISTRY",
+                        true,
+                    )),
                     request_id: None,
                 });
                 count += 1;
@@ -357,6 +366,7 @@ mod tests {
                 DispatchResult {
                     payload: b"reply".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )
@@ -391,6 +401,7 @@ mod tests {
             DispatchResult {
                 payload: b"too late".to_vec(),
                 error: None,
+                failure: None,
                 request_id: None,
             },
         );
@@ -405,11 +416,14 @@ mod tests {
 
         let map_clone = map.clone();
         tokio::spawn(async move {
+            let failure =
+                SessionFailure::from_reason("target ability raised", "INVOCATION_FAILED", false);
             map_clone.complete(
                 id,
                 DispatchResult {
                     payload: Vec::new(),
                     error: Some("target ability raised".into()),
+                    failure: Some(failure),
                     request_id: None,
                 },
             )
@@ -417,6 +431,10 @@ mod tests {
 
         let result = handle.await_reply().await.expect("reply received");
         assert_eq!(result.error.as_deref(), Some("target ability raised"));
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.code.as_str()),
+            Some("INVOCATION_FAILED")
+        );
     }
 
     #[tokio::test]
@@ -459,6 +477,7 @@ mod tests {
                 DispatchResult {
                     payload: b"two".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )
@@ -505,6 +524,7 @@ mod tests {
                         DispatchResult {
                             payload: br#"{"sha256":"abc"}"#.to_vec(),
                             error: None,
+                            failure: None,
                             request_id: None,
                         },
                     )
@@ -522,6 +542,7 @@ mod tests {
             Some(DispatchStreamEvent::Terminal(DispatchResult {
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
                 error: None,
+                failure: None,
                 request_id: None,
             }))
         );
@@ -542,6 +563,7 @@ mod tests {
                 DispatchResult {
                     payload: Vec::new(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )

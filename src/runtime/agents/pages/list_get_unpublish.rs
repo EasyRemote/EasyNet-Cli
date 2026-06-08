@@ -5,9 +5,9 @@
 // Description: three remaining ability handlers for the Pages
 //              reference system.
 //
-//                <user>.pages.list       (operational, read)
-//                <user>.pages.get        (operational, read)
-//                <user>.pages.unpublish  (canonical,    delete)
+//                pages.list       (operational, read)
+//                pages.get        (operational, read)
+//                pages.unpublish  (canonical,    delete)
 //
 // Conformance: RFC-006-B v0.6 §4.3 (unpublish = delete);
 //              list/get are introspection abilities not formally
@@ -25,10 +25,10 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use super::state::{persist_registry_for_user, PUBLISHED_PROJECTS};
 
-/// `<user>.pages.list` — return every project the daemon
+/// `pages.list` — return every project the daemon
 /// currently hosts under this user. `url_root` is the production
 /// Hub URL; the dev-only daemon listener URL is intentionally
-/// **not** included here (use `<user>.pages.get` if you want it).
+/// **not** included here (use `pages.get` if you want it).
 pub fn handle_list(user: &str, realm: &str, _args: Value) -> anyhow::Result<Value> {
     let mut entries = Vec::new();
     for entry in PUBLISHED_PROJECTS.iter() {
@@ -54,7 +54,7 @@ pub fn handle_list(user: &str, realm: &str, _args: Value) -> anyhow::Result<Valu
     Ok(json!({ "projects": entries }))
 }
 
-/// `<user>.pages.get` — return one project's detail.
+/// `pages.get` — return one project's detail.
 pub fn handle_get(
     user: &str,
     listener_port: u16,
@@ -99,7 +99,7 @@ pub fn handle_get(
     }))
 }
 
-/// `<user>.pages.unpublish` — remove the project. Drops the
+/// `pages.unpublish` — remove the project. Drops the
 /// `ProjectHandle` (releasing the folder fd) and removes the
 /// entry from `PUBLISHED_PROJECTS`, then rewrites the user's
 /// restart snapshot. Ability-path unpublish also removes the

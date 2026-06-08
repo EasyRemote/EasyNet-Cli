@@ -62,13 +62,11 @@
 //
 // Failure handling
 // ----------------
-// Each failure in the boot path is logged to stderr with a short
-// `[daemon-invocation]` prefix and returns without panicking. The daemon
-// process keeps running; operators see the error in the logs and
-// fix the config / cert / trust file. The driving rationale: PR-1
-// ships in parallel with axon-runtime still serving production
-// traffic, so a daemon Invocation transport misconfiguration must not take the
-// daemon down.
+// Missing transport config remains a soft skip for pre-transport
+// devices. Once device-mode transport config exists, Hub session
+// admission is fail-closed: boot does not report Ready until the
+// first `<self>.session` bidi is admitted by the Hub. A daemon that
+// is not in PresenceRegistry cannot honestly serve product calls.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -100,13 +98,17 @@ use tokio_stream::wrappers::ReceiverStream;
 #[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
 
-use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
+use crate::persistence::daemon_config::{
+    DaemonConfig, DaemonConfigError, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
+};
 use crate::runtime::publish::derive_subject_keypair;
 use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
 use crate::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
-use crate::services::invocation_transport::session_initiator::run_session_supervisor;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
+use crate::services::invocation_transport::session_initiator::{
+    initial_session_admission_probe, run_session_supervisor,
+};
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{
@@ -130,6 +132,7 @@ use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 /// same cap as the server side; without that the asymmetry triggers
 /// `OutOfRange: decoded message length too large` mid-stream.
 pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const INITIAL_SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[cfg(windows)]
 #[derive(Debug)]
@@ -205,17 +208,31 @@ pub fn start_daemon_invocation_transport(
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
         Ok(cfg) => cfg,
-        Err(err) => {
+        // An ABSENT config is the legitimate "this device has not opted into
+        // the transport plane yet" state: skip the listener, boot continues.
+        Err(DaemonConfigError::ReadFailed { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
             let config_path_display = format!("{}", config_path.display());
-            let err_msg = format!("{err}");
             crate::op_event!(
                 component = daemon_invocation,
-                kind = transport_plane_config_missing,
+                kind = transport_plane_config_absent,
                 config_path = config_path_display,
-                error = err_msg,
-                message = "skipping gRPC listener",
+                message = "no daemon-config.toml; skipping gRPC listener",
             );
             return Ok(());
+        }
+        // A PRESENT-but-broken config (parse error, illegal field, bad TLS
+        // pairing, …) is an operator mistake, not "unconfigured". Silently
+        // skipping the listener here is how a hub boots "successfully" while
+        // never binding its Invocation surface. Fail fast so the mistake is
+        // visible at boot instead of as a mysteriously dead hub.
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "daemon-config.toml at {} is present but invalid; refusing to \
+                 boot the Invocation transport with a broken config",
+                config_path.display(),
+            )));
         }
     };
 
@@ -721,7 +738,7 @@ pub fn start_daemon_invocation_transport(
                 escalation_state,
                 Arc::clone(&local_runtime),
                 Arc::clone(&ability_wire_registry),
-            );
+            )?;
         } else {
             crate::op_event!(
                 component = daemon_invocation,
@@ -855,7 +872,7 @@ fn spawn_session_supervisor(
     )>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
-) {
+) -> anyhow::Result<()> {
     // Snapshot Axon's runtime catalogue once before wrapping it in a
     // `LocalAxonSessionDispatcher`. The session supervisor's
     // `federation.advertise_abilities` prelude consumes this list as
@@ -902,16 +919,13 @@ fn spawn_session_supervisor(
         escalation_state = escalation_state_str,
         message = "LocalAxonSessionDispatcher will execute inbound SessionDispatch::Dispatch frames through Axon LocalRuntime",
     );
-    // Cancel oneshot held for the daemon process's lifetime — the
-    // supervisor exits when the cancel sender drops, which happens
-    // when the tokio runtime tears down at process shutdown. PR-7
-    // wires real graceful-shutdown via the SIGTERM signal handler;
-    // until then `Box::leak` is the idiomatic "this thing lives as
-    // long as the process" expression (clearer than
-    // `std::mem::forget` because it makes the leak the explicit
-    // intent rather than a side-effect of forgetting to drop).
+    // Cancel oneshot held for the daemon process's lifetime after
+    // initial Hub admission succeeds. While boot is still gated on
+    // the first admission result, we keep the sender owned locally so
+    // a failed/timeout boot can stop the spawned supervisor before
+    // returning a hard error.
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    Box::leak(Box::new(cancel_tx));
+    let (initial_admission, initial_admission_rx) = initial_session_admission_probe();
 
     // PR-N6 C4: when escalation is wired (device mode), inject the
     // correlation table into the LocalAxonSessionDispatcher so inbound
@@ -930,6 +944,8 @@ fn spawn_session_supervisor(
     local_dispatcher =
         local_dispatcher.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
     let dispatcher = Arc::new(local_dispatcher);
+    let hub_endpoint_for_wait = hub_endpoint.clone();
+    let caller_ura_for_wait = identity.caller_ura.clone();
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
         identity.caller_ura,
@@ -938,8 +954,50 @@ fn spawn_session_supervisor(
         dispatcher,
         outbox,
         ability_catalog,
+        Some(initial_admission),
         cancel_rx,
     ));
+    if let Err(err) = wait_for_initial_session_admission(
+        &hub_endpoint_for_wait,
+        &caller_ura_for_wait,
+        initial_admission_rx,
+    ) {
+        let _ = cancel_tx.send(());
+        return Err(err);
+    }
+    Box::leak(Box::new(cancel_tx));
+    Ok(())
+}
+
+fn wait_for_initial_session_admission(
+    hub_endpoint: &str,
+    caller_ura: &str,
+    rx: tokio::sync::oneshot::Receiver<Result<(), String>>,
+) -> anyhow::Result<()> {
+    let wait = async move {
+        tokio::time::timeout(INITIAL_SESSION_ADMISSION_TIMEOUT, rx)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "timed out after {}s waiting for Hub to admit `<self>.session` for {caller_ura} via {hub_endpoint}",
+                    INITIAL_SESSION_ADMISSION_TIMEOUT.as_secs()
+                )
+            })?
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "session supervisor ended before reporting initial `<self>.session` admission for {caller_ura} via {hub_endpoint}"
+                )
+            })?
+            .map_err(|reason| {
+                anyhow::anyhow!(
+                    "Hub rejected initial `<self>.session` for {caller_ura} via {hub_endpoint}: {reason}"
+                )
+            })
+    };
+    crate::support::async_bridge::run_blocking(
+        wait,
+        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+    )
 }
 
 #[cfg(unix)]
@@ -2216,8 +2274,7 @@ mod tests {
 }"#;
         let stored = serde_json::from_str::<StoredDeviceIdentity>(raw)
             .expect("modern credentials.json must parse despite extra fields");
-        let identity =
-            daemon_identity_from_stored(&stored).expect("must derive a device identity");
+        let identity = daemon_identity_from_stored(&stored).expect("must derive a device identity");
         assert_eq!(
             identity.caller_ura,
             "easynet:///r/localhost/device/01a5b007-f9c3-41f9-aa6f-7531267651bc",
@@ -2452,6 +2509,37 @@ mod tests {
             None,
         )
         .expect("missing config is a soft skip");
+    }
+
+    #[tokio::test]
+    async fn start_daemon_invocation_transport_fails_fast_on_broken_config() {
+        // A PRESENT but unparseable daemon-config.toml must NOT be treated as
+        // "unconfigured". Silently skipping the listener on a broken config is
+        // how a hub boots "successfully" while never binding its Invocation
+        // surface — the exact failure this guards against. Fail fast instead.
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", temp.path());
+        let cfg_dir = temp.path().join(".easynet");
+        std::fs::create_dir_all(&cfg_dir).expect("mkdir .easynet");
+        std::fs::write(
+            cfg_dir.join("daemon-config.toml"),
+            "[daemon]\nmode = \"hub\"\nthis_is_not_a_valid_field = true\n",
+        )
+        .expect("write broken config");
+
+        let result = start_daemon_invocation_transport(
+            easynet_axon::invocation::LocalRuntime::new(),
+            None,
+            Arc::new(
+                crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+            ),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "a present-but-broken daemon-config.toml must fail fast, not soft-skip the listener",
+        );
     }
 
     #[test]

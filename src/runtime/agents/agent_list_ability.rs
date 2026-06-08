@@ -14,6 +14,7 @@
 // ------------
 //   { "agents": [
 //       { "name": "claude",
+//         "ura": "easynet:///r/<realm>/agent/<user>.claude",
 //         "runtime": "claude-code",
 //         "model": "sonnet",          // null if unset
 //         "label": "primary"          // null if unset
@@ -64,6 +65,14 @@ fn list_agents_handler(
     registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
 ) -> anyhow::Result<Value> {
     let registry = registry_provider();
+    let local_agents = crate::persistence::local_agents::load().unwrap_or_default();
+    Ok(json!({ "agents": agent_rows(&registry, &local_agents) }))
+}
+
+fn agent_rows(
+    registry: &AgentRegistry,
+    local_agents: &crate::persistence::local_agents::LocalAgentsFile,
+) -> Vec<Value> {
     let rows: Vec<Value> = registry
         .agents
         .iter()
@@ -78,8 +87,11 @@ fn list_agents_handler(
             };
             let model = spec_model.or_else(|| e.model.clone());
             let timeout_secs = spec_timeout_secs.unwrap_or(e.timeout_secs);
+            let ura =
+                crate::persistence::local_agents::lookup_hosted_ura(&local_agents, "llm", name);
             json!({
                 "name": name,
+                "ura": ura.map(Value::String).unwrap_or(Value::Null),
                 "runtime": e.agent_type.to_string(),
                 "model": model.map(Value::String).unwrap_or(Value::Null),
                 "label": e.label.clone().map(Value::String).unwrap_or(Value::Null),
@@ -90,7 +102,7 @@ fn list_agents_handler(
             })
         })
         .collect();
-    Ok(json!({ "agents": rows }))
+    rows
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -149,6 +161,27 @@ mod tests {
         assert_eq!(rows[0]["runtime"], "claude-code");
         assert_eq!(rows[0]["model"], "sonnet");
         assert_eq!(rows[0]["label"], "primary");
+    }
+
+    #[test]
+    fn list_agents_projects_hosted_agent_ura_from_local_agents() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "claude".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
+        );
+        let mut local_agents = crate::persistence::local_agents::LocalAgentsFile::default();
+        crate::persistence::local_agents::upsert_hosted_agent(
+            &mut local_agents,
+            "llm",
+            "claude",
+            "easynet:///r/acme/agent/alice.claude",
+        );
+
+        let rows = agent_rows(&registry, &local_agents);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["ura"], "easynet:///r/acme/agent/alice.claude");
     }
 
     #[test]

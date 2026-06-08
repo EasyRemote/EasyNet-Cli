@@ -73,6 +73,7 @@ pub mod list_user_pubkeys;
 pub mod local_session_dispatcher;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;
+pub mod route_resolver;
 pub mod session_escalation;
 pub mod session_initiator;
 

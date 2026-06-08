@@ -20,6 +20,43 @@ use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 pub(crate) const OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT: usize = 64;
 const OWNER_PROJECTION_LEASE_TTL_MS: i64 = 60_000;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) struct AbilityCallableFlags {
+    pub read_only: bool,
+    pub destructive: bool,
+    pub idempotent: bool,
+    pub streaming_only: bool,
+    pub bidi_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct AbilityInputFieldSummary {
+    pub name: String,
+    pub required: bool,
+    pub value_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) struct AbilityCallableSummary {
+    pub public_name: String,
+    pub description: String,
+    pub ability_class: String,
+    pub input_fields: Vec<AbilityInputFieldSummary>,
+    pub flags: AbilityCallableFlags,
+}
+
+impl AbilityCallableSummary {
+    #[cfg(test)]
+    pub(crate) fn minimal(public_name: impl Into<String>) -> Self {
+        let public_name = public_name.into();
+        Self {
+            description: public_name.clone(),
+            public_name,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AbilityProjectionSummary {
     pub ability_ura: String,
@@ -32,6 +69,8 @@ pub(crate) struct AbilityProjectionSummary {
     pub policy_ref: String,
     pub route_summary_ref: Option<String>,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub callable_summary: AbilityCallableSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -189,7 +228,7 @@ fn format_unix_ms(now_ms: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn summary_from_descriptor(
+pub(crate) fn summary_from_descriptor(
     descriptor: &AbilityDescriptor,
 ) -> Result<AbilityProjectionSummary, String> {
     let ability_ura = descriptor.canonical_ability_ura().ok_or_else(|| {
@@ -226,7 +265,74 @@ fn summary_from_descriptor(
         policy_ref: visibility_policy_ref(descriptor.visibility).to_string(),
         route_summary_ref: Some(format!("route-ref::{ability_ura}")),
         tags,
+        callable_summary: callable_summary_from_descriptor(descriptor, &public_name),
     })
+}
+
+fn callable_summary_from_descriptor(
+    descriptor: &AbilityDescriptor,
+    public_name: &str,
+) -> AbilityCallableSummary {
+    AbilityCallableSummary {
+        public_name: public_name.to_string(),
+        description: if descriptor.description.trim().is_empty() {
+            public_name.to_string()
+        } else {
+            descriptor.description.trim().to_string()
+        },
+        ability_class: descriptor.ability_class().as_str().to_string(),
+        input_fields: input_field_summaries(&descriptor.schema_summary.input),
+        flags: AbilityCallableFlags {
+            read_only: descriptor.hints.read_only,
+            destructive: descriptor.hints.destructive,
+            idempotent: descriptor.hints.idempotent,
+            streaming_only: descriptor.hints.streaming_only,
+            bidi_only: descriptor.hints.bidi_only,
+        },
+    }
+}
+
+fn input_field_summaries(schema: &Value) -> Vec<AbilityInputFieldSummary> {
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    properties
+        .iter()
+        .map(|(name, property)| AbilityInputFieldSummary {
+            name: name.to_string(),
+            required: required.contains(name),
+            value_type: property_value_type(property),
+        })
+        .collect()
+}
+
+fn property_value_type(property: &Value) -> String {
+    if let Some(ty) = property.get("type").and_then(Value::as_str) {
+        return ty.to_string();
+    }
+    for aggregate in ["oneOf", "anyOf", "allOf"] {
+        if property.get(aggregate).is_some() {
+            return aggregate.to_string();
+        }
+    }
+    if property.get("enum").is_some() {
+        return "enum".to_string();
+    }
+    if property.get("const").is_some() {
+        return "const".to_string();
+    }
+    "unknown".to_string()
 }
 
 fn split_public_name(public_name: &str) -> (String, String) {
@@ -317,6 +423,7 @@ fn canonical_summary_json(summary: &AbilityProjectionSummary) -> Value {
         "policy_ref": summary.policy_ref,
         "route_summary_ref": summary.route_summary_ref,
         "tags": summary.tags,
+        "callable_summary": summary.callable_summary,
     })
 }
 
@@ -484,8 +591,47 @@ mod tests {
         assert_eq!(summary.policy_ref, "visibility:PUBLIC");
         assert!(summary.descriptor_revision.starts_with("sha256:"));
         assert!(summary.schema_hash.as_ref().unwrap().starts_with("sha256:"));
+        assert_eq!(summary.callable_summary.public_name, "fs.read");
+        assert_eq!(summary.callable_summary.description, "fs.read");
+        assert_eq!(summary.callable_summary.ability_class, "query");
         assert_eq!(prepared.publication.projection_revision, 1);
         assert_eq!(prepared.publication.lease_expires_unix_ms, 61_000);
+    }
+
+    #[test]
+    fn filesystem_summary_publishes_callable_fields_without_host_paths() {
+        let owner = "easynet:///r/acme/device/01DEV";
+        let descriptor = descriptor("fs.read", owner)
+            .with_description(crate::runtime::agents::fs_ability::description_read())
+            .with_input_schema(crate::runtime::agents::fs_ability::input_schema_read());
+        let summary = summary_from_descriptor(&descriptor).expect("summary");
+
+        let fields = summary
+            .callable_summary
+            .input_fields
+            .iter()
+            .map(|field| {
+                (
+                    field.name.as_str(),
+                    field.required,
+                    field.value_type.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            fields.contains(&("resource_ref", true, "object")),
+            "filesystem callable summary must advertise ResourceRef input: {fields:?}"
+        );
+        assert!(fields.contains(&("max_bytes", false, "integer")));
+        assert!(fields.contains(&("encoding", false, "string")));
+
+        let wire = serde_json::to_string(&summary).expect("summary serializes");
+        assert!(
+            !wire.contains("/Users/")
+                && !wire.contains("/private/")
+                && !wire.contains("\"properties\""),
+            "projection summary must not publish raw host paths or full schema: {wire}"
+        );
     }
 
     #[test]
@@ -501,6 +647,7 @@ mod tests {
             policy_ref: "visibility:PUBLIC".into(),
             route_summary_ref: None,
             tags: Vec::new(),
+            callable_summary: AbilityCallableSummary::minimal("fs.read"),
         };
         let value = serde_json::to_value(&summary).expect("summary serializes");
 
@@ -524,6 +671,7 @@ mod tests {
             policy_ref: "visibility:SCOPED".into(),
             route_summary_ref: None,
             tags: Vec::new(),
+            callable_summary: AbilityCallableSummary::minimal("chat"),
         };
 
         assert_eq!(summary_public_name(&summary).as_deref(), Some("chat"));

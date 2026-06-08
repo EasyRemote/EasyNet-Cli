@@ -34,7 +34,7 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler, Owne
 /// the daemon's user identity (the `<user>` segment in every
 /// pages-rooted URI), the realm, and the in-daemon Hub listener
 /// port (only used to format the dev-only listener URL surfaced
-/// from `<user>.pages.get`).
+/// from `pages.get`).
 #[derive(Debug, Clone)]
 pub struct PagesConfig {
     pub user: String,
@@ -62,7 +62,7 @@ pub struct PagesConfig {
 /// operator confusion (silan's review: "对应hub的public的地址描述
 /// 不准确"), so we now return the hub form here and demote the
 /// daemon-local form to `pages_dev_listener_url_root`, surfaced
-/// only by `<user>.pages.get` for debugging.
+/// only by `pages.get` for debugging.
 pub fn pages_public_url_root(realm: &str, user: &str, project_id: &str) -> String {
     format!("https://{realm}/web/{user}/{project_id}/")
 }
@@ -71,7 +71,7 @@ pub fn pages_public_url_root(realm: &str, user: &str, project_id: &str) -> Strin
 /// project. Only meaningful when `EASYNET_PAGES_PORT` is set and
 /// the daemon spawned its local listener; in production this URL
 /// resolves to nothing. Returned as a secondary field from
-/// `<user>.pages.get` so an operator running `easynet pages show
+/// `pages.get` so an operator running `easynet pages show
 /// <project>` can see both the production URL and the local
 /// listener URL during dev.
 pub fn pages_dev_listener_url_root(user: &str, project_id: &str, listener_port: u16) -> String {
@@ -141,11 +141,7 @@ fn register_management_abilities(
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
         publish::handle_publish(&user, listener_port, &realm, registry, args)
     });
-    reg.register_rpc_with_owner(
-        format!("{}.pages.publish", config.user),
-        owner.clone(),
-        publish_handler,
-    );
+    reg.register_rpc_with_owner("pages.publish", owner.clone(), publish_handler);
 
     let user = config.user.clone();
     let unpublish_handle = Arc::clone(&dispatch_handle);
@@ -155,28 +151,20 @@ fn register_management_abilities(
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
         list_get_unpublish::handle_unpublish_with_registry(&user, registry.as_ref(), args)
     });
-    reg.register_rpc_with_owner(
-        format!("{}.pages.unpublish", config.user),
-        owner.clone(),
-        unpublish_handler,
-    );
+    reg.register_rpc_with_owner("pages.unpublish", owner.clone(), unpublish_handler);
 
     let user = config.user.clone();
     let realm = config.realm.clone();
     let list_handler: LocalRpcHandler =
         Arc::new(move |args| list_get_unpublish::handle_list(&user, &realm, args));
-    reg.register_rpc_with_owner(
-        format!("{}.pages.list", config.user),
-        owner.clone(),
-        list_handler,
-    );
+    reg.register_rpc_with_owner("pages.list", owner.clone(), list_handler);
 
     let user = config.user.clone();
     let realm = config.realm.clone();
     let listener_port = config.listener_port;
     let get_handler: LocalRpcHandler =
         Arc::new(move |args| list_get_unpublish::handle_get(&user, listener_port, &realm, args));
-    reg.register_rpc_with_owner(format!("{}.pages.get", config.user), owner, get_handler);
+    reg.register_rpc_with_owner("pages.get", owner, get_handler);
 }
 
 pub(crate) fn register_project_abilities(

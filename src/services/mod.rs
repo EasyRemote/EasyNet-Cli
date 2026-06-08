@@ -86,6 +86,7 @@
 // source for non-terminal calls.
 
 pub mod control;
+pub mod session_failure;
 
 /// Daemon-owned Axon `Invocation` transport hosted by
 /// `easynet-daemon`.

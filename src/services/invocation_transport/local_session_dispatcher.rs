@@ -37,6 +37,7 @@ use crate::services::invocation_transport::invoke_remote_initiator::{
 use crate::services::invocation_transport::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
+use crate::services::session_failure::SessionFailure;
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
@@ -112,6 +113,22 @@ struct RemoteBidiOpenRequest {
 }
 
 impl LocalAxonSessionDispatcher {
+    fn session_failure(reason: &str) -> SessionFailure {
+        SessionFailure::from_reason(reason, "INVOCATION_FAILED", false)
+    }
+
+    fn session_error_result(call_id: u64, message: impl Into<String>) -> SessionDispatch {
+        let message = message.into();
+        SessionDispatch::Result {
+            call_id,
+            payload: Vec::new(),
+            terminal: true,
+            failure: Some(Self::session_failure(&message)),
+            error: Some(message),
+            request_id: None,
+        }
+    }
+
     fn is_json_frame_bidi(&self, ability: &str) -> bool {
         Self::is_json_frame_bidi_with(&self.ability_wire, ability)
     }
@@ -234,10 +251,12 @@ impl LocalAxonSessionDispatcher {
         let request_id = outcome.invocation_id.clone();
         let (payload, error) =
             crate::runtime::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
+        let failure = error.as_ref().map(|reason| Self::session_failure(reason));
         Some(SessionDispatch::Result {
             call_id,
             payload,
             terminal: true,
+            failure,
             error,
             request_id,
         })
@@ -321,6 +340,7 @@ impl LocalAxonSessionDispatcher {
                                 call_id,
                                 payload: Vec::new(),
                                 terminal: true,
+                                failure: None,
                                 error: None,
                                 request_id: None,
                             }
@@ -338,6 +358,7 @@ impl LocalAxonSessionDispatcher {
                                 call_id,
                                 payload: frame.payload,
                                 terminal,
+                                failure: None,
                                 error: None,
                                 request_id: None,
                             }
@@ -345,13 +366,10 @@ impl LocalAxonSessionDispatcher {
                     }
                     Err(err) => {
                         sent_terminal = true;
-                        SessionDispatch::Result {
+                        Self::session_error_result(
                             call_id,
-                            payload: Vec::new(),
-                            terminal: true,
-                            error: Some(format!("<self>.session: stream frame failed: {err}")),
-                            request_id: None,
-                        }
+                            format!("<self>.session: stream frame failed: {err}"),
+                        )
                     }
                 };
                 let terminal = matches!(dispatch, SessionDispatch::Result { terminal: true, .. });
@@ -364,6 +382,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: Vec::new(),
                     terminal: true,
+                    failure: None,
                     error: None,
                     request_id: None,
                 };
@@ -395,13 +414,7 @@ impl LocalAxonSessionDispatcher {
     }
 
     fn file_transfer_terminal_error(call_id: u64, message: impl Into<String>) -> SessionDispatch {
-        SessionDispatch::Result {
-            call_id,
-            payload: Vec::new(),
-            terminal: true,
-            error: Some(message.into()),
-            request_id: None,
-        }
+        Self::session_error_result(call_id, message)
     }
 
     fn validate_session_args_content(
@@ -450,6 +463,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: raw,
                     terminal: false,
+                    failure: None,
                     error: None,
                     request_id: None,
                 }))
@@ -464,6 +478,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload,
                     terminal: true,
+                    failure: None,
                     error: None,
                     request_id: None,
                 }))
@@ -491,6 +506,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload,
                     terminal: true,
+                    failure: Some(Self::session_failure(&reason)),
                     error: Some(reason),
                     request_id: None,
                 }))
@@ -519,6 +535,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: raw,
                     terminal: false,
+                    failure: None,
                     error: None,
                     request_id: None,
                 }))
@@ -527,6 +544,7 @@ impl LocalAxonSessionDispatcher {
                 call_id,
                 payload: Vec::new(),
                 terminal: true,
+                failure: None,
                 error: None,
                 request_id: None,
             })),
@@ -569,6 +587,7 @@ impl LocalAxonSessionDispatcher {
                 call_id,
                 payload,
                 terminal,
+                failure: None,
                 error: None,
                 request_id: None,
             }));
@@ -689,6 +708,7 @@ impl LocalAxonSessionDispatcher {
                         call_id,
                         payload: frame.payload,
                         terminal: frame.terminal,
+                        failure: None,
                         error: None,
                         request_id: None,
                     })
@@ -996,13 +1016,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
         let result = if let Err(reason) =
             Self::validate_session_args_content(&ability, &args_content_envelope)
         {
-            Ok(SessionDispatch::Result {
-                call_id,
-                payload: Vec::new(),
-                terminal: true,
-                error: Some(reason),
-                request_id: None,
-            })
+            Ok(Self::session_error_result(call_id, reason))
         } else if let Some(stream_open) = self
             .open_stream_via_axon(
                 callee_ura.as_deref(),
@@ -1022,13 +1036,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                     );
                     return Ok(());
                 }
-                Err(reason) => Ok(SessionDispatch::Result {
-                    call_id,
-                    payload: Vec::new(),
-                    terminal: true,
-                    error: Some(reason),
-                    request_id: None,
-                }),
+                Err(reason) => Ok(Self::session_error_result(call_id, reason)),
             }
         } else if let Some(axon_result) = self
             .try_dispatch_via_axon(
@@ -1049,21 +1057,19 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
             // there is no legacy RPC fallback from session frames.
             Ok(axon_result)
         } else {
-            Ok(SessionDispatch::Result {
+            Ok(Self::session_error_result(
                 call_id,
-                payload: Vec::new(),
-                terminal: true,
-                error: Some(format!(
+                format!(
                     "<self>.session: ability `{ability}` is not registered in Axon LocalRuntime"
-                )),
-                request_id: None,
-            })
+                ),
+            ))
         }?;
 
         let result = match result {
             SessionDispatch::Result {
                 payload,
                 terminal,
+                failure,
                 error,
                 request_id,
                 ..
@@ -1071,6 +1077,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 call_id,
                 payload,
                 terminal,
+                failure,
                 error,
                 request_id,
             },
@@ -1208,12 +1215,15 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 1);
                 assert!(terminal, "RPC reply is terminal");
                 assert_eq!(error, None, "test.echo must succeed");
+                assert!(failure.is_none(), "successful RPC must not carry failure");
                 let value: serde_json::Value =
                     serde_json::from_slice(&payload).expect("payload decodes as JSON");
                 assert_eq!(value, json!({"echo": "args-from-A"}));
@@ -1449,6 +1459,7 @@ mod tests {
                 error,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 42);
                 assert!(terminal, "Axon-routed reply still terminal");
@@ -1509,11 +1520,20 @@ mod tests {
         };
         let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).unwrap();
         match parsed {
-            SessionDispatch::Result { error, payload, .. } => {
+            SessionDispatch::Result {
+                error,
+                failure,
+                payload,
+                ..
+            } => {
                 assert!(payload.is_empty(), "runtime miss carries no payload");
                 let err = error.expect("runtime miss must surface an error");
                 assert!(err.contains("test.echo"));
                 assert!(err.contains("LocalRuntime"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected Result, got {other:?}"),
         }
@@ -1543,14 +1563,20 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 7);
                 assert!(terminal, "error reply must be terminal");
                 assert!(payload.is_empty(), "failed dispatch carries no payload");
                 let err = error.expect("missing ability must surface error");
                 assert!(err.contains("missing.ability"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -1587,8 +1613,10 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 11);
                 assert!(terminal, "rejection reply must be terminal");
@@ -1599,6 +1627,10 @@ mod tests {
                     "error must name the rejected ability; got: {err}"
                 );
                 assert!(err.contains("LocalRuntime"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -1670,14 +1702,20 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 9);
                 assert!(terminal, "malformed args error must be terminal");
                 assert!(payload.is_empty());
                 let err = error.expect("error message required");
                 assert!(err.contains("payload not JSON"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -1721,14 +1759,20 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 19);
                 assert!(terminal);
                 assert!(payload.is_empty());
                 let err = error.expect("encrypted dispatch must fail closed");
                 assert!(err.contains("encrypted args"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
                 assert!(
                     !err.contains("non-JSON"),
                     "encrypted bytes must not be parsed as plaintext JSON"
@@ -1753,6 +1797,7 @@ mod tests {
             payload: Vec::new(),
             terminal: true,
             error: None,
+            failure: None,
             request_id: None,
         };
         let bogus_bytes = serde_json::to_vec(&bogus).expect("encode bogus");
@@ -1896,6 +1941,7 @@ mod tests {
                 error,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 42);
                 assert!(terminal, "fs.read RPC reply is terminal");
@@ -1991,6 +2037,7 @@ mod tests {
                 error,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 77);
                 assert!(terminal, "upload completion must be terminal");
@@ -2141,6 +2188,7 @@ mod tests {
                     error,
                     payload,
                     request_id: _,
+                    ..
                 } => {
                     assert_eq!(call_id, 88);
                     assert!(error.is_none(), "download must succeed, got {error:?}");

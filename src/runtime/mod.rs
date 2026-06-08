@@ -60,7 +60,9 @@ pub(crate) mod workspace;
 //     never consumes it, but the trait needs to be reachable from
 //     future out-of-tree consumers.
 pub mod domain;
+pub mod failure_codes;
 pub mod invocation;
+pub mod join_connection_state;
 pub mod kernel_api;
 pub mod receipt_subscriber;
 

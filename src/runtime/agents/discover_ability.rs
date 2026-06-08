@@ -1398,6 +1398,9 @@ mod tests {
             policy_ref: "visibility:PUBLIC".to_string(),
             route_summary_ref: None,
             tags: Vec::new(),
+            callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                "chat",
+            ),
         }
     }
 
