@@ -930,6 +930,7 @@ async fn run_round_trip() {
             payload: REPLY_MARKER.to_vec(),
             terminal: true,
             error: None,
+            failure: None,
             request_id: None,
         };
         let payload = serde_json::to_vec(&result).expect("encode Result");

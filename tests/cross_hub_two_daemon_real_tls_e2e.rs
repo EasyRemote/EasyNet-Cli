@@ -322,9 +322,10 @@ fn sighup_daemon(child: &Child) -> std::io::Result<()> {
     }
 }
 
+// Requires the `axon-pb` feature (the transport plane is feature-gated) and
+// the built `easynet-daemon` binary, which cargo provides via CARGO_BIN_EXE.
+// Runs by default under `cargo test --features axon-pb`.
 #[tokio::test]
-#[ignore = "PR-N1 commit 7/N integration test — slow + requires built daemon binary; \
-           run via `cargo test --features axon-pb --test cross_hub_two_daemon_real_tls_e2e -- --ignored`"]
 async fn cross_hub_two_daemon_real_tls_round_trip() {
     // ── 1. Pick ports + spawn daemon B (the peer hub) ────────
     let port_a = pick_free_port();
@@ -353,7 +354,24 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     )
     .await;
 
-    // ── 2. Rewrite each daemon's realm-trust.toml with the
+    // ── 2. Wait for both daemons' TCP+TLS listeners to bind ──
+    //
+    // This MUST happen before we SIGHUP. The daemon installs its
+    // SIGHUP reload handler during the transport-boot stage; a SIGHUP
+    // delivered before that handler is installed hits the default
+    // disposition (terminate) and silently kills the daemon mid-boot.
+    // Binding the TCP listener is downstream of handler install, so a
+    // successful bind proves the daemon is ready to receive SIGHUP.
+    assert!(
+        wait_for_tcp_bind(port_a, Duration::from_secs(10)).await,
+        "daemon A failed to bind TCP+TLS on port {port_a}",
+    );
+    assert!(
+        wait_for_tcp_bind(port_b, Duration::from_secs(10)).await,
+        "daemon B failed to bind TCP+TLS on port {port_b}",
+    );
+
+    // ── 3. Rewrite each daemon's realm-trust.toml with the
     //      OTHER daemon's cert path, then SIGHUP to reload ────
     rewrite_realm_trust(
         daemon_a.home.path(),
@@ -382,18 +400,8 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
         sighup_daemon(&daemon_b.child).expect("SIGHUP B");
     }
 
-    // ── 3. Wait for both daemons' TCP+TLS listeners to bind ──
-    assert!(
-        wait_for_tcp_bind(port_a, Duration::from_secs(10)).await,
-        "daemon A failed to bind TCP+TLS on port {port_a}",
-    );
-    assert!(
-        wait_for_tcp_bind(port_b, Duration::from_secs(10)).await,
-        "daemon B failed to bind TCP+TLS on port {port_b}",
-    );
-
-    // Give the daemon a moment to finish the SIGHUP reload after
-    // bind. A 200ms cushion is more than enough.
+    // Give the daemon a moment to finish the SIGHUP reload. A 200ms
+    // cushion is more than enough.
     sleep(Duration::from_millis(200)).await;
 
     // ── 4. Build a TLS gRPC client for daemon A ──────────────
