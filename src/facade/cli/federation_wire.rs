@@ -31,12 +31,9 @@
 //
 // Failure handling
 // ----------------
-// Every step is best-effort. If daemon-config.toml does not
-// exist (this device has never run hub mode), or the file is
-// not parseable, the helper logs a warning and returns — the
-// `easynet device join` flow is the user-facing hot path and must not
-// fail because of a federated_peers wiring step. The user can
-// always edit daemon-config.toml by hand later.
+// The join command treats this helper as a best-effort side effect, but the
+// helper itself returns failures. That keeps the stage UI honest: a skipped
+// federation wiring step must not be rendered as a completed one.
 //
 // Why CLI-side and not backend-side
 // ---------------------------------
@@ -165,9 +162,10 @@ fn resolve_peer_hub_endpoint(
 
 /// Auto-wire the `(realm, peer_hub)` mapping from a
 /// successful `easynet device join` into the local daemon's
-/// `[daemon.federated_peers]` table. Best-effort: every error
-/// logs a warning and returns Ok(()) so the user-facing join
-/// flow never fails on this step.
+/// `[daemon.federated_peers]` table. The join flow treats this
+/// side effect as best-effort, but this helper still returns real
+/// errors so the stage renderer can distinguish "done" from
+/// "skipped with reason".
 ///
 /// `operator_peer_hub` is the optional `--peer-hub` flag. When
 /// set it overrides the credentials-derived endpoint; when
@@ -191,11 +189,10 @@ pub fn auto_wire_federated_peer_from_credentials(
     let raw = match fs::read_to_string(&path) {
         Ok(s) => s,
         Err(err) => {
-            eprintln!(
-                "[easynet device join] could not read {} ({err}); skipping federated_peers auto-wire",
+            anyhow::bail!(
+                "could not read {} for federated_peers auto-wire: {err}",
                 path.display()
             );
-            return Ok(());
         }
     };
 
@@ -214,12 +211,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     let with_peer = match upsert_federated_peer_in_toml(&raw, &creds.realm, peer_hub) {
         Ok(s) => s,
         Err(err) => {
-            eprintln!(
-                "[easynet device join] could not edit daemon-config.toml ({err}); skipping \
-                 federated_peers auto-wire. Add the entry manually under \
-                 `[daemon.federated_peers]` if you want cross-hub routing for this tenant."
-            );
-            return Ok(());
+            anyhow::bail!("could not edit daemon-config.toml for federated_peers: {err}");
         }
     };
 
@@ -267,11 +259,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     }
 
     if let Err(err) = atomic_write(&path, updated.as_bytes()) {
-        eprintln!(
-            "[easynet device join] could not write daemon-config.toml ({err}); skipping \
-             federated_peers auto-wire"
-        );
-        return Ok(());
+        anyhow::bail!("could not write daemon-config.toml for federated_peers: {err}");
     }
 
     // Best-effort SIGHUP so the running daemon picks up the new
@@ -311,11 +299,11 @@ pub fn auto_wire_federated_peer_from_credentials(
 ///
 /// Failure handling
 /// ----------------
-/// Mirrors `auto_wire_federated_peer_from_credentials`: every step
-/// is best-effort; failures log and return Ok so the join hot
-/// path never aborts on this step. Empty `realm` or
-/// `node_id` is a silent no-op (test fixtures with synthetic
-/// credentials hit this).
+/// Mirrors `auto_wire_federated_peer_from_credentials`: the join
+/// command treats this as a best-effort stage, but this helper
+/// returns real errors so operator output remains truthful. Empty
+/// `realm` or `node_id` is a silent no-op (test fixtures with
+/// synthetic credentials hit this).
 ///
 /// Path resolution
 /// ---------------
@@ -335,11 +323,10 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.exists() {
         if let Err(err) = fs::create_dir_all(parent) {
-            eprintln!(
-                "[easynet device join] could not create {} ({err}); skipping realm-trust auto-wire",
+            anyhow::bail!(
+                "could not create {} for realm-trust auto-wire: {err}",
                 parent.display()
             );
-            return Ok(());
         }
     }
 
@@ -347,11 +334,10 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         Ok(s) => s,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(err) => {
-            eprintln!(
-                "[easynet device join] could not read {} ({err}); skipping realm-trust auto-wire",
+            anyhow::bail!(
+                "could not read {} for realm-trust auto-wire: {err}",
                 path.display()
             );
-            return Ok(());
         }
     };
 
@@ -397,26 +383,10 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         match upsert_self_trusted_agent(&raw, &agent_ura, &public_key_b64, added_at_unix_ms) {
             Ok(s) => s,
             Err(err) => {
-                eprintln!(
-                    "[easynet device join] could not edit realm-trust.toml ({err}); skipping \
-                 realm-trust auto-wire. Add the device entry manually under \
-                 `[[trusted_agent]]` if you want local hub-mode admission for \
-                 this device."
-                );
-                return Ok(());
+                anyhow::bail!("could not edit realm-trust.toml for device entry: {err}");
             }
         };
-    let hub_ca_pem_path = match persist_hub_tls_ca_pem_for_join(creds) {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!(
-                "[easynet device join] could not persist hub TLS CA PEM ({err}); continuing without \
-                 a local CA pin. Self-signed hub dials may fail until you write \
-                 `tls_ca_pem_path` for {hub_ura} by hand."
-            );
-            None
-        }
-    };
+    let hub_ca_pem_path = persist_hub_tls_ca_pem_for_join(creds)?;
 
     let updated = match hub_pubkey_b64_opt {
         Some(hub_pubkey_b64) => match upsert_hub_trusted_agent(
@@ -430,25 +400,16 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         ) {
             Ok(s) => s,
             Err(err) => {
-                eprintln!(
-                    "[easynet device join] could not append hub entry to realm-trust.toml ({err}); \
-                     backend's federation.* calls will be admission-rejected until you \
-                     add `[[trusted_agent]] role = \"hub\"' for {hub_ura} by hand."
-                );
-                after_device
+                anyhow::bail!("could not append hub entry {hub_ura} to realm-trust.toml: {err}");
             }
         },
         None => {
-            eprintln!(
-                "[easynet device join] backend hub identity not yet on disk for realm \
-                 {tenant} (no `~/.easynet-hub/{tenant}/identity.json` found); \
-                 skipping hub trust-anchor entry. Re-run `easynet device join` \
-                 after backend's first boot, or restart the daemon — backend \
-                 will populate the trust set via `<self>.register_device_pubkey` \
-                 once it can dial the daemon.",
-                tenant = creds.realm.trim(),
+            anyhow::bail!(
+                "pairing response did not include hub_public_key_b64, and no local \
+                 ~/.easynet-hub/{}/identity.json fallback exists; refusing to mark \
+                 realm-trust complete without the hub trust-anchor entry",
+                creds.realm.trim()
             );
-            after_device
         }
     };
 
@@ -458,11 +419,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     }
 
     if let Err(err) = atomic_write(&path, updated.as_bytes()) {
-        eprintln!(
-            "[easynet device join] could not write realm-trust.toml ({err}); skipping \
-             realm-trust auto-wire"
-        );
-        return Ok(());
+        anyhow::bail!("could not write realm-trust.toml: {err}");
     }
 
     // Best-effort SIGHUP so a co-located hub-mode daemon picks up
@@ -1159,6 +1116,55 @@ added_at_unix_ms = 1
         };
         auto_wire_self_realm_trust_from_credentials(&creds)
             .expect("empty node_id is a no-op (no panic, no write)");
+    }
+
+    #[test]
+    fn auto_wire_self_realm_trust_errors_without_hub_trust_material() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let trust_path = tmp.path().join("realm-trust.toml");
+
+        let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
+        std::env::set_var("HOME", tmp.path());
+        struct EnvGuard(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
+                    None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+                }
+                match self.1.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _guard = EnvGuard(prev, prev_home);
+
+        let creds = Credentials {
+            node_id: "dev-1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "https://hub-a:50443".into(),
+            realm: "tenant-a".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+
+        let err = auto_wire_self_realm_trust_from_credentials(&creds)
+            .expect_err("missing hub trust material must not render as completed");
+        assert!(
+            err.to_string().contains("hub_public_key_b64"),
+            "error should name the missing pairing trust field, got {err:#}"
+        );
+        assert!(
+            !trust_path.exists(),
+            "realm-trust write should remain atomic when hub entry cannot be completed"
+        );
     }
 
     #[test]

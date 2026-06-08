@@ -58,7 +58,7 @@ impl PagesAbilityVerb {
 /// paired identity or `EASYNET_PAGES_USER` dev override.
 ///
 /// Invariant 2: `local_registry_ability` is the only place in the CLI
-/// facade that formats the local `<user>.pages.<verb>` registry key.
+/// facade that selects the owner-local `pages.<verb>` registry key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PagesAbility {
     user: String,
@@ -78,7 +78,7 @@ impl PagesAbility {
     }
 
     fn local_registry_ability(&self) -> String {
-        format!("{}.{}", self.user, self.verb.public_name())
+        self.verb.public_name().to_string()
     }
 }
 
@@ -368,7 +368,7 @@ mod tests {
     fn pages_ability_projects_to_local_registry_key() {
         let ability =
             PagesAbility::for_user("alice", PagesAbilityVerb::Publish).expect("pages ability");
-        assert_eq!(ability.local_registry_ability(), "alice.pages.publish");
+        assert_eq!(ability.local_registry_ability(), "pages.publish");
     }
 
     #[test]
