@@ -158,7 +158,8 @@ use crate::services::invocation_transport::revoke_user_pubkey::{
     handle as handle_revoke_user_pubkey, ABILITY_SELF_REVOKE_USER_PUBKEY,
 };
 use crate::services::invocation_transport::route_resolver::{
-    DaemonRouteResolver, DelegatedInvokeRoute, ResolveRouteFailure, SelectedInvokeRoute,
+    DaemonRouteResolver, DelegatedInvokeRoute, LocalRuntimeAuthoritySnapshot, ResolveRouteFailure,
+    SelectedInvokeRoute,
 };
 use crate::services::invocation_transport::session_initiator::{
     SessionSigningSeed, ABILITY_SELF_SESSION,
@@ -909,7 +910,7 @@ impl Invocation for DaemonInvocationService {
             }
             ABILITY_FEDERATION_HEARTBEAT => self.dispatch_federation_heartbeat(&inner.arguments),
             ABILITY_FEDERATION_RESOLVE => self.dispatch_federation_resolve(&inner.arguments),
-            ABILITY_NAMESPACE_RESOLVE => self.dispatch_namespace_resolve(&inner.arguments),
+            ABILITY_NAMESPACE_RESOLVE => self.dispatch_namespace_resolve(&inner.arguments).await,
             ABILITY_FEDERATION_RESOLVE_KEY => {
                 self.dispatch_federation_resolve_key(&inner.arguments)
             }
@@ -941,6 +942,13 @@ impl Invocation for DaemonInvocationService {
             }
             ABILITY_SELF_REVOKE_USER_PUBKEY => self.dispatch_revoke_user_pubkey(&inner.arguments),
             ABILITY_SELF_LIST_USER_PUBKEYS => self.dispatch_list_user_pubkeys(&inner.arguments),
+            // `runtime.*` are node-internal admin handshakes hosted by the
+            // receiving daemon, not owner-routed abilities. Dispatch them
+            // directly on the LocalRuntime so a hub-owner callee URA does
+            // not get rejected as `NXDOMAIN owner is not online`.
+            name if is_runtime_admin_ability(name) => {
+                self.dispatch_runtime_admin_ability(&inner).await
+            }
             // Catch-all user abilities must pass through namespace.resolve
             // before Axon LocalRuntime dispatch. The runtime executes the
             // selected route; it is not a resolver fallback.
@@ -1075,10 +1083,11 @@ impl Invocation for DaemonInvocationService {
                         // `dispatch_remote_bidi` keeps owning the presence
                         // lookup and frame plumbing; the resolver acts as a
                         // validation gate only.
-                        match self
+                        let route_result = self
                             .daemon_route_resolver()
-                            .resolve_route(&target_ura, other)
-                        {
+                            .await
+                            .resolve_route(&target_ura, other);
+                        match route_result {
                             Ok(route) if route.is_authoritative_local_or_better() => {
                                 return self.dispatch_remote_bidi(&route, envelope_open, up).await;
                             }
@@ -1337,25 +1346,43 @@ fn selected_host_unavailable_message(selected_route: &SelectedInvokeRoute) -> St
 }
 
 impl DaemonInvocationService {
-    fn daemon_route_resolver(&self) -> DaemonRouteResolver<'_> {
-        let resolver = DaemonRouteResolver::new(
+    /// Build the RFC-005 route resolver wired with every authority this
+    /// daemon owns: local presence, hosted-agent placement, owner
+    /// projection, optional peer delegation, and — when the daemon runs as
+    /// a device with a live `LocalRuntime` — this device's own namespace
+    /// authority (RFC-005 §4 / D105).
+    ///
+    /// The device-local authority is a snapshot of the runtime dispatch
+    /// table captured here, so a route for this device's own ability is
+    /// proven from the live local bindings rather than the hub projection
+    /// cache. Capturing the snapshot is the only async step; the resolver
+    /// itself stays synchronous.
+    async fn daemon_route_resolver(&self) -> DaemonRouteResolver<'_> {
+        let mut resolver = DaemonRouteResolver::new(
             &self.presence,
             Some(self.advertised_agents.as_ref()),
             Some(self.ability_catalog.as_ref()),
         );
-        match self
+        if let Some(local_realm) = self
             .session_realm
             .as_deref()
             .filter(|realm| !realm.is_empty())
         {
-            Some(local_realm) => resolver.with_peer_delegation(
+            resolver = resolver.with_peer_delegation(
                 local_realm,
                 &self.federated_peers,
                 &self.federated_directory,
                 self.allow_directory_auto_route,
-            ),
-            None => resolver,
+            );
         }
+        if let (Some(device_ura), Some(runtime)) =
+            (self.admission.daemon_ura(), self.local_runtime.as_ref())
+        {
+            let snapshot = LocalRuntimeAuthoritySnapshot::capture(runtime).await;
+            resolver =
+                resolver.with_device_local_authority(device_ura.to_string(), Box::new(snapshot));
+        }
+        resolver
     }
 
     fn record_unary_invocation(
@@ -1432,7 +1459,12 @@ impl DaemonInvocationService {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::HeartbeatRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_heartbeat(&request, &self.presence);
+        let response = federation_wrappers::handle_heartbeat(
+            &request,
+            &self.presence,
+            Some(self.ability_catalog.as_ref()),
+            now_unix_ms(),
+        );
         wrap_json_response(&response)
     }
 
@@ -1462,6 +1494,7 @@ impl DaemonInvocationService {
 
         let selected_route = self
             .daemon_route_resolver()
+            .await
             .resolve_route(&target_ura, ability)
             .map_err(route_negative_status)?;
 
@@ -1576,6 +1609,73 @@ impl DaemonInvocationService {
         (response, axon_started)
     }
 
+    /// Dispatch a node-internal `runtime.*` admin ability directly on this
+    /// daemon's `LocalRuntime`, bypassing `namespace.resolve`.
+    ///
+    /// `runtime.*` abilities (e.g. `runtime.bootstrap_self_identity`) are
+    /// node-internal control-plane handshakes hosted by whichever daemon
+    /// receives them — exactly like `<self>.*`. Their wire `callee` is the
+    /// caller's *claimed* authority owner (a backend sets it to the hub
+    /// URA), which is not a routable owner on this daemon's presence
+    /// directory. Routing them through owner resolution therefore returns
+    /// a spurious `NXDOMAIN owner is not online`. The admin handler is
+    /// registered in the runtime under the ability name verbatim, so we
+    /// dispatch by name and let the SDK admin surface enforce its own
+    /// authority checks.
+    async fn dispatch_runtime_admin_ability(
+        &self,
+        request: &InvokeRequest,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ability = request.function_name.trim();
+        let Some(runtime) = self.local_runtime.as_ref() else {
+            return Err(Status::failed_precondition(format!(
+                "easynet-daemon: runtime admin ability `{ability}` cannot run because Axon \
+                 LocalRuntime is not wired at boot"
+            )));
+        };
+        if runtime.ability_options(ability).await.is_none() {
+            return Err(Status::not_found(format!(
+                "easynet-daemon: runtime admin ability `{ability}` is not installed in Axon \
+                 LocalRuntime on this node"
+            )));
+        }
+        let envelope = request.envelope.clone().ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "easynet-daemon: runtime admin ability `{ability}` request missing envelope"
+            ))
+        })?;
+        let wire = crate::runtime::axon_bridge::dispatch_shim::admitted_from_wire_parts(
+            envelope,
+            ability.to_string(),
+            request.arguments.clone(),
+        )
+        .map_err(|err| status_from_axon_invoke_error("Invoke", ability, err))?;
+        let outcome =
+            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_admitted(runtime, wire).await;
+        let crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome {
+            invocation_id,
+            payload_bytes,
+            error,
+            ..
+        } = outcome;
+        match error {
+            None => Ok(Response::new(InvokeResponse {
+                header: invocation_id.map(|request_id| ResponseHeader {
+                    request_id,
+                    status: "completed".to_string(),
+                    ..ResponseHeader::default()
+                }),
+                result: payload_bytes,
+                result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+                ..InvokeResponse::default()
+            })),
+            Some(err) => Err(Status::failed_precondition(format!(
+                "local-rpc axon dispatch: runtime admin ability `{ability}` failed: {err}"
+            ))),
+        }
+    }
+
     fn dispatch_register_device_pubkey(
         &self,
         arguments: &[u8],
@@ -1660,16 +1760,20 @@ impl DaemonInvocationService {
             &self.presence,
             Some(self.advertised_agents.as_ref()),
             Some(self.ability_catalog.as_ref()),
+            self.admission.daemon_ura(),
         );
         wrap_json_response(&response)
     }
 
-    fn dispatch_namespace_resolve(
+    async fn dispatch_namespace_resolve(
         &self,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: serde_json::Value = parse_json_args(arguments)?;
-        let response = self.daemon_route_resolver().resolve_query_json(&request);
+        let response = self
+            .daemon_route_resolver()
+            .await
+            .resolve_query_json(&request);
         wrap_json_response(&response)
     }
 
@@ -2193,7 +2297,9 @@ impl DaemonInvocationService {
         // session dispatch pushes to selected `execution_host_ura`,
         // and the frame carries selected `callee_ura` +
         // `dispatch_name`.
-        let selected_local_route = match self.resolve_forward_invoke_route(&request, &inner_payload)
+        let selected_local_route = match self
+            .resolve_forward_invoke_route(&request, &inner_payload)
+            .await
         {
             Ok(route) => Some(route),
             Err(err) => {
@@ -2269,14 +2375,16 @@ impl DaemonInvocationService {
         // so reaching this cross-realm tail proves `target_realm` was
         // `Some` and equal to a non-local realm. We intentionally do
         // not re-thread it here.
-        let delegated_route =
-            match self.resolve_cross_realm_forward_delegation(&request, &inner_payload) {
-                Ok(route) => route,
-                Err(status) => {
-                    record_offline_receipt();
-                    return Err(status);
-                }
-            };
+        let delegated_route = match self
+            .resolve_cross_realm_forward_delegation(&request, &inner_payload)
+            .await
+        {
+            Ok(route) => route,
+            Err(status) => {
+                record_offline_receipt();
+                return Err(status);
+            }
+        };
         let target_hub_endpoint = delegated_route.primary_endpoint().ok_or_else(|| {
             Status::failed_precondition(federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON)
         })?;
@@ -2297,7 +2405,7 @@ impl DaemonInvocationService {
         result
     }
 
-    fn resolve_forward_invoke_route(
+    async fn resolve_forward_invoke_route(
         &self,
         request: &federation_wrappers::ForwardInvokeRequest,
         inner_payload: &InnerPayload,
@@ -2318,6 +2426,7 @@ impl DaemonInvocationService {
 
         let selected_route = self
             .daemon_route_resolver()
+            .await
             .resolve_route(&inner_payload.ability_ura, "")
             .map_err(route_negative_status)?;
 
@@ -2439,7 +2548,7 @@ impl DaemonInvocationService {
         }
     }
 
-    fn resolve_cross_realm_forward_delegation(
+    async fn resolve_cross_realm_forward_delegation(
         &self,
         request: &federation_wrappers::ForwardInvokeRequest,
         inner_payload: &InnerPayload,
@@ -2460,6 +2569,7 @@ impl DaemonInvocationService {
 
         let delegation = self
             .daemon_route_resolver()
+            .await
             .resolve_delegation(&inner_payload.ability_ura, "")
             .map_err(route_negative_status)?
             .ok_or_else(|| {
@@ -3163,6 +3273,7 @@ impl DaemonInvocationService {
 
         let selected_route = self
             .daemon_route_resolver()
+            .await
             .resolve_route(&target_ura, ability)
             .map_err(route_negative_status)?;
         if !selected_route.is_authoritative_local_or_better() {
@@ -3595,6 +3706,7 @@ impl DaemonInvocationService {
 
         let selected_route = self
             .daemon_route_resolver()
+            .await
             .resolve_route(&target_ura, ability)
             .map_err(route_negative_status)?;
         if !selected_route.is_authoritative_local_or_better() {
@@ -3745,7 +3857,11 @@ impl DaemonInvocationService {
             metadata,
         } = request;
 
-        let selected_route = match self.daemon_route_resolver().resolve_route(&ability_ura, "") {
+        let selected_route = match self
+            .daemon_route_resolver()
+            .await
+            .resolve_route(&ability_ura, "")
+        {
             Ok(route) if route.is_authoritative_local_or_better() => route,
             Ok(route) => {
                 return invoke_remote_inband_error_response(route_profile_blocked_message(&route))
@@ -4553,19 +4669,58 @@ fn map_local_bidi_handler_frame(
             }
             _ => LocalBidiHandlerFrame::Ignore,
         },
-        LocalBidiWireKind::JsonFrames => match serde_json::to_vec(value) {
-            Ok(payload) => LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-                payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                    stream_id: stdout_stream_id,
-                    data: payload,
-                    ..BinaryChunk::default()
-                })),
-                ..InvokeBidiDown::default()
-            }),
-            Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
-                "InvokeBidi local-runtime: JSON frame re-encode failed: {err}"
-            )),
-        },
+        LocalBidiWireKind::JsonFrames => {
+            let payload = match serde_json::to_vec(value) {
+                Ok(payload) => payload,
+                Err(err) => {
+                    return LocalBidiHandlerFrame::ProtocolFailure(format!(
+                        "InvokeBidi local-runtime: JSON frame re-encode failed: {err}"
+                    ));
+                }
+            };
+            match value.get("type").and_then(|field| field.as_str()) {
+                Some("error") => {
+                    let code = value.get("code").and_then(|field| field.as_str());
+                    LocalBidiHandlerFrame::Terminal(
+                        build_bidi_terminal_receipt_with_payload_and_failure_code(
+                            easynet_axon::invocation::InvocationState::Failed,
+                            json_frame_error_reason(value),
+                            Some((payload, "application/json")),
+                            code,
+                        ),
+                    )
+                }
+                Some("closed") => {
+                    LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload(
+                        easynet_axon::invocation::InvocationState::Completed,
+                        String::new(),
+                        Some((payload, "application/json")),
+                    ))
+                }
+                _ => LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                        stream_id: stdout_stream_id,
+                        data: payload,
+                        ..BinaryChunk::default()
+                    })),
+                    ..InvokeBidiDown::default()
+                }),
+            }
+        }
+    }
+}
+
+fn json_frame_error_reason(value: &serde_json::Value) -> String {
+    match (
+        value.get("code").and_then(|field| field.as_str()),
+        value.get("message").and_then(|field| field.as_str()),
+    ) {
+        (Some(code), Some(message)) if !code.trim().is_empty() && !message.trim().is_empty() => {
+            format!("{code}: {message}")
+        }
+        (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
+        (Some(code), _) if !code.trim().is_empty() => code.to_string(),
+        _ => "JSON-frame bidi handler returned error".to_string(),
     }
 }
 
@@ -4861,7 +5016,10 @@ impl DaemonInvocationService {
             }
         };
 
-        if let Ok(selected_route) = self.resolve_forward_invoke_route(&request, &inner_payload) {
+        if let Ok(selected_route) = self
+            .resolve_forward_invoke_route(&request, &inner_payload)
+            .await
+        {
             let selected_host_is_self = self
                 .matches_self_target_ura(&selected_route.execution_host_ura)
                 .await;
@@ -4901,7 +5059,10 @@ impl DaemonInvocationService {
             return;
         }
 
-        match self.resolve_cross_realm_forward_delegation(&request, &inner_payload) {
+        match self
+            .resolve_cross_realm_forward_delegation(&request, &inner_payload)
+            .await
+        {
             Ok(delegation) => {
                 let endpoint = delegation.primary_endpoint().unwrap_or("");
                 crate::op_event!(
@@ -5156,6 +5317,14 @@ async fn drain_session_up_stream(
                     Some(easynet_axon::pb::axon::v1::bidi_control::Control::Eof(true))
                 ) {
                     break;
+                }
+                let refreshed = refresh_session_owner_projection_lease(&service, &caller_ura);
+                if refreshed {
+                    crate::op_event!(
+                        component = session_accept,
+                        kind = up_heartbeat_projection_lease_refreshed,
+                        caller = caller_ura,
+                    );
                 }
                 continue;
             }
@@ -5414,6 +5583,30 @@ async fn drain_session_up_stream(
             outcome = "superseded_by_newer_session",
         );
     }
+}
+
+fn refresh_session_owner_projection_lease(
+    service: &DaemonInvocationService,
+    caller_ura: &str,
+) -> bool {
+    refresh_session_owner_projection_lease_at(
+        service,
+        caller_ura,
+        crate::services::federation_directory::now_unix_ms(),
+    )
+}
+
+fn refresh_session_owner_projection_lease_at(
+    service: &DaemonInvocationService,
+    caller_ura: &str,
+    now_unix_ms: i64,
+) -> bool {
+    let owner_ura = caller_ura.trim();
+    if owner_ura.is_empty() {
+        return false;
+    }
+    let new_expiry = crate::runtime::owner_projection::lease_expiry_from_now(now_unix_ms);
+    service.ability_catalog.refresh_lease(owner_ura, new_expiry)
 }
 
 /// Session-realm gate.
@@ -6376,6 +6569,13 @@ fn ledger_authority_binding_for_request(request: &InvokeRequest) -> &'static str
     }
 }
 
+/// True for node-internal `runtime.*` admin handshakes that the receiving
+/// daemon hosts directly on its `LocalRuntime` and must not route through
+/// owner-presence resolution (e.g. `runtime.bootstrap_self_identity`).
+fn is_runtime_admin_ability(function: &str) -> bool {
+    function.trim().starts_with("runtime.")
+}
+
 fn bootstrap_authority_ability_for_ledger(function: &str) -> bool {
     matches!(
         function,
@@ -7124,6 +7324,60 @@ mod tests {
         let body: federation_wrappers::HeartbeatResponse = parse_response_body(resp);
         assert_eq!(body.membership_status, "active");
         assert_eq!(body.realm_directory_size, 0);
+    }
+
+    #[test]
+    fn session_control_heartbeat_renews_caller_owner_projection_lease() {
+        let svc = make_service();
+        let owner_ura = TEST_DAEMON_URI;
+        let public_name = "agent.list";
+        let ability_ura =
+            crate::ura::owner_ability_ura(owner_ura, public_name).expect("ability ura");
+        svc.ability_catalog.upsert_projection(
+            crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+                owner_ura.to_string(),
+                owner_ura.to_string(),
+                1,
+                "sha256:test".to_string(),
+                1,
+                vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+                    ability_ura: ability_ura.clone(),
+                    owner_ura: owner_ura.to_string(),
+                    namespace: "agent".to_string(),
+                    local_name: "list".to_string(),
+                    descriptor_revision: "sha256:descriptor".to_string(),
+                    schema_ref: None,
+                    schema_hash: None,
+                    policy_ref: "visibility:PUBLIC".to_string(),
+                    route_summary_ref: Some(format!("route-ref::{ability_ura}")),
+                    tags: vec!["class:unary".to_string()],
+                    callable_summary:
+                        crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                            public_name.to_string(),
+                        ),
+                }],
+            ),
+        );
+
+        assert!(
+            svc.ability_catalog.get_at(owner_ura, 2).is_none(),
+            "test starts from an expired projection"
+        );
+        assert!(refresh_session_owner_projection_lease_at(
+            &svc, owner_ura, 2
+        ));
+
+        let row = svc
+            .ability_catalog
+            .projection_for_owner(owner_ura)
+            .expect("projection still stored");
+        assert_eq!(row.projection_revision(), 1);
+        assert_eq!(row.projection_digest(), "sha256:test");
+        assert!(row.lease_expires_unix_ms() > 2);
+        assert!(
+            svc.ability_catalog.get_at(owner_ura, 2).is_some(),
+            "refreshed projection is visible to namespace.resolve again"
+        );
     }
 
     #[tokio::test]
@@ -8289,10 +8543,10 @@ mod tests {
 
         match svc.invoke(invoke_request("nope.nope", "{}")).await {
             Err(err) => {
-                assert_eq!(err.code(), tonic::Code::NotFound);
+                assert_eq!(err.code(), tonic::Code::FailedPrecondition);
                 assert!(
                     err.message()
-                        .contains("not registered in Axon LocalRuntime"),
+                        .contains("does not register a dispatchable route"),
                     "expected the not-registered message; got: {}",
                     err.message()
                 );
@@ -8305,13 +8559,11 @@ mod tests {
     async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
         use easynet_axon::invocation::LocalRuntime;
 
+        // No SDK admin installed: the runtime admin path must report the
+        // missing handler, never fabricate a CLI-side ack. No catalog
+        // route is published — `runtime.*` bypasses owner resolution.
         let rt = LocalRuntime::new();
         let svc = make_service().with_local_runtime(Arc::clone(&rt));
-        publish_test_route(
-            &svc,
-            TEST_DAEMON_URI,
-            federation_wrappers::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
-        );
         let args = r#"{
             "tenant_id":"tenant-a",
             "node_id":"node-a",
@@ -8329,8 +8581,7 @@ mod tests {
             Err(err) => {
                 assert_eq!(err.code(), tonic::Code::NotFound);
                 assert!(
-                    err.message()
-                        .contains("not registered in Axon LocalRuntime"),
+                    err.message().contains("not installed in Axon LocalRuntime"),
                     "expected SDK LocalRuntime missing-handler diagnostic; got: {}",
                     err.message()
                 );
@@ -8348,14 +8599,13 @@ mod tests {
         use easynet_axon::invocation::LocalRuntime;
         use ed25519_dalek::SigningKey;
 
+        // Admin installed, NO catalog route published: `runtime.*`
+        // dispatches directly on the LocalRuntime, proving it bypasses
+        // owner-presence resolution (the production bug was a hub-owner
+        // callee resolving to NXDOMAIN on the device daemon).
         let rt = LocalRuntime::new();
         rt.install_bootstrap_self_identity_admin().await.unwrap();
         let svc = make_service().with_local_runtime(Arc::clone(&rt));
-        publish_test_route(
-            &svc,
-            TEST_DAEMON_URI,
-            federation_wrappers::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
-        );
         let key = SigningKey::from_bytes(&[0x44; 32]);
         let args = serde_json::json!({
             "tenant_id": "tenant-a",
@@ -9338,6 +9588,71 @@ mod tests {
     }
 
     #[test]
+    fn map_local_bidi_handler_json_frames_error_becomes_failed_receipt() {
+        let frame = map_local_bidi_handler_frame(
+            LocalBidiWireKind::JsonFrames,
+            &serde_json::json!({
+                "type": "error",
+                "code": "permission_denied",
+                "message": "screen capture permission denied",
+            }),
+            3,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
+                payload: Some(DownPayload::Receipt(receipt)),
+                ..
+            }) => {
+                assert_eq!(
+                    receipt.state,
+                    easynet_axon::invocation::InvocationState::Failed.to_wire_i32()
+                );
+                assert_eq!(receipt.payload_content_type, "application/json");
+                assert_eq!(
+                    receipt.reason,
+                    "permission_denied: screen capture permission denied"
+                );
+                let failure = receipt.failure.as_ref().expect("typed receipt failure");
+                assert_eq!(failure.code, "PERMISSION_DENIED");
+                assert_eq!(failure.message, receipt.reason);
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&receipt.payload).expect("json payload");
+                assert_eq!(payload["type"], "error");
+            }
+            other => panic!("expected JSON error → failed receipt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_handler_json_frames_closed_becomes_completed_receipt() {
+        let frame = map_local_bidi_handler_frame(
+            LocalBidiWireKind::JsonFrames,
+            &serde_json::json!({
+                "type": "closed",
+                "reason": "client_closed",
+            }),
+            3,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
+                payload: Some(DownPayload::Receipt(receipt)),
+                ..
+            }) => {
+                assert_eq!(
+                    receipt.state,
+                    easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+                );
+                assert!(receipt.failure.is_none());
+                assert_eq!(receipt.payload_content_type, "application/json");
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&receipt.payload).expect("json payload");
+                assert_eq!(payload["type"], "closed");
+            }
+            other => panic!("expected JSON closed → completed receipt, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn map_local_bidi_ability_json_frames_forwards_raw_binary_payload() {
         let frame = map_local_bidi_ability_frame(
             LocalBidiWireKind::JsonFrames,
@@ -10251,7 +10566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_self_target_unknown_ability_returns_not_found() {
+    async fn forward_invoke_self_target_unknown_ability_returns_route_negative() {
         let rt = easynet_axon::invocation::LocalRuntime::new();
         let svc = make_service()
             .with_session_realm("test-realm")
@@ -10268,12 +10583,16 @@ mod tests {
                 ),
             )
             .await
-            .expect_err("known self target with unknown ability must be NotFound");
-        assert_eq!(err.code(), tonic::Code::NotFound);
+            .expect_err("known self target with unknown ability must be rejected");
+        // RFC-005 D105: the device's own runtime is the authority, so an
+        // ability the runtime does not host is a resolver NODATA negative.
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert!(
-            err.message()
-                .contains("not registered in Axon LocalRuntime"),
-            "expected LocalRuntime not-found diagnostic, got: {err}"
+            err.message().contains(ROUTE_NEGATIVE_CODE)
+                && err
+                    .message()
+                    .contains("does not register a dispatchable route"),
+            "expected a typed resolver negative, got: {err}"
         );
     }
 
@@ -12213,6 +12532,7 @@ mod tests {
             crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
         let selected_route = svc
             .daemon_route_resolver()
+            .await
             .resolve_route(&ability_ura, "")
             .expect("resolver selects agent route");
         assert_eq!(selected_route.owner_ura, owner_ura);
@@ -12438,9 +12758,11 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_local_rpc_selected_route_rejects_when_runtime_misses() {
-        // Resolver has selected a route, but runtime does not host
-        // the dispatch key. This is an executor wiring error, not a
-        // resolver fallback.
+        // A device-owned ability is the device's own runtime authority
+        // (RFC-005 D105): when the runtime does not host the dispatch key,
+        // the resolver itself rejects with a typed NODATA negative — the
+        // catalog row alone cannot manufacture a route. There is no
+        // select-then-fail-at-executor window for self-owned abilities.
         use easynet_axon::invocation::LocalRuntime;
 
         let _hg = crate::facade::cli::test_support::HomeGuard::new();
@@ -12457,10 +12779,11 @@ mod tests {
             "runtime miss means no Axon invocation was started"
         );
         let err = result.expect_err("runtime miss rejects without alternate dispatch");
-        assert_eq!(err.code(), tonic::Code::NotFound);
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert!(
-            err.message().contains("Axon LocalRuntime"),
-            "error must name the runtime source of truth, got: {err}"
+            err.message().contains(ROUTE_NEGATIVE_CODE)
+                && err.message().contains("does not register a dispatchable route"),
+            "error must be a typed resolver negative naming the missing dispatch binding, got: {err}"
         );
     }
 
