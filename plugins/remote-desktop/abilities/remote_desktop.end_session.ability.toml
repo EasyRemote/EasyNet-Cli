@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.remote_desktop.end_session"
+name = "remote_desktop.end_session"
 description = "Close a remote desktop session. Idempotent after the first terminal close."
 
 [input_schema]

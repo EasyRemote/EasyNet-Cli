@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.remote_desktop.set_description"
+name = "remote_desktop.set_description"
 description = "Attach a WebRTC-style local or remote session description to a remote desktop session. A remote SDP offer starts the device-side direct WebRTC media endpoint and returns the SDP answer in local_description; media is not routed through unary Invoke."
 
 [input_schema]

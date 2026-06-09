@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.remote_desktop.refresh_lease"
+name = "remote_desktop.refresh_lease"
 description = "Refresh a non-terminal remote desktop session lease."
 
 [input_schema]

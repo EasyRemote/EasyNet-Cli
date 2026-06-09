@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.remote_desktop.attach"
+name = "remote_desktop.attach"
 description = "Attach a bounded Axon InvokeBidi media plane to an existing remote desktop session. Subject MUST match the resource_ura bound when the session was created. Control metadata remains reliable JSON, while live H.264/JPEG media chunks are bounded and may drop stale frames to preserve low latency; WebRTC remains the preferred direct transport when negotiation succeeds."
 
 [input_schema]

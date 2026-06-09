@@ -22,52 +22,52 @@ max_sessions = 128
 max_frame_queue = 1
 
 [[ability_metadata]]
-name = "device.remote_desktop.create_session"
+name = "remote_desktop.create_session"
 layer = "control"
 call_mode = "rpc"
 
 [[ability_metadata]]
-name = "device.remote_desktop.show_session"
+name = "remote_desktop.show_session"
 layer = "observation"
 call_mode = "rpc"
 
 [[ability_metadata]]
-name = "device.remote_desktop.set_description"
+name = "remote_desktop.set_description"
 layer = "control"
 call_mode = "rpc"
 
 [[ability_metadata]]
-name = "device.remote_desktop.add_ice_candidate"
+name = "remote_desktop.add_ice_candidate"
 layer = "control"
 call_mode = "rpc"
 
 [[ability_metadata]]
-name = "device.remote_desktop.watch_events"
+name = "remote_desktop.watch_events"
 layer = "observation"
 call_mode = "stream"
 
 [[ability_metadata]]
-name = "device.remote_desktop.refresh_lease"
+name = "remote_desktop.refresh_lease"
 layer = "control"
 call_mode = "rpc"
 
 [[ability_metadata]]
-name = "device.remote_desktop.end_session"
+name = "remote_desktop.end_session"
 layer = "control"
 call_mode = "rpc"
 
 [[ability_metadata]]
-name = "device.remote_desktop.attach"
+name = "remote_desktop.attach"
 layer = "operational"
 call_mode = "bidi"
 bidi_wire_kind = "json_frames"
 
 [[ability_metadata]]
-name = "device.remote_desktop.permission_status"
+name = "remote_desktop.permission_status"
 layer = "observation"
 call_mode = "rpc"
 
 [[ability_metadata]]
-name = "device.remote_desktop.request_permission"
+name = "remote_desktop.request_permission"
 layer = "control"
 call_mode = "rpc"

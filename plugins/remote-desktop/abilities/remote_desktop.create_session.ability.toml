@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.remote_desktop.create_session"
+name = "remote_desktop.create_session"
 description = "Create a remote desktop control session for a display/window/application resource. Subject MUST be the resource_ura in the invocation envelope. The session advertises WebRTC as the production media transport and exposes quality targets; diagnostic preview paths stay marked fallback."
 
 [input_schema]

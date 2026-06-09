@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.remote_desktop.watch_events"
+name = "remote_desktop.watch_events"
 description = "Watch remote desktop control events. v1 returns the bounded current snapshot through InvokeStream; live fan-out follows the Axon contract."
 
 [input_schema]

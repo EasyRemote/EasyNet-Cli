@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.remote_desktop.add_ice_candidate"
+name = "remote_desktop.add_ice_candidate"
 description = "Append one ICE candidate to a remote desktop session's signaling log."
 
 [input_schema]
