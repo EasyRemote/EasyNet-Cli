@@ -95,7 +95,11 @@ impl OwnerAbilityProjectionRow {
 
     #[must_use]
     pub(crate) fn is_live_at(&self, now_unix_ms: i64) -> bool {
-        self.lease_expires_unix_ms > now_unix_ms
+        // C4: lease cancelled (ISS-002) — a non-positive lease means
+        // "never expires", mirroring Axon's `expire_leases` guard
+        // (`lease > 0`). Owner projections now publish lease=0, so the
+        // hub read model must keep serving them indefinitely.
+        self.lease_expires_unix_ms <= 0 || self.lease_expires_unix_ms > now_unix_ms
     }
 
     #[cfg(test)]
@@ -184,6 +188,13 @@ impl AbilityCatalogStore {
                     if row.projection_digest == current.projection_digest {
                         return ProjectionUpsertOutcome::Idempotent;
                     }
+                    if row.host_device_ura == current.host_device_ura
+                        && row.ability_summaries == current.ability_summaries
+                        && row.lease_expires_unix_ms > current.lease_expires_unix_ms
+                    {
+                        entry.insert(row);
+                        return ProjectionUpsertOutcome::Updated;
+                    }
                     return ProjectionUpsertOutcome::RejectedConflict;
                 }
                 entry.insert(row);
@@ -208,6 +219,28 @@ impl AbilityCatalogStore {
             .get(owner_ura)
             .filter(|entry| entry.is_live_at(now_unix_ms))
             .map(|entry| entry.summaries_as_json())
+    }
+
+    /// Extend an owner projection's lease to `new_expires_unix_ms` in
+    /// response to a `federation.heartbeat` refresh.
+    ///
+    /// RFC-005: heartbeat refreshes the lease only — it MUST NOT mutate
+    /// projection contents, revision, or digest. This therefore touches
+    /// `lease_expires_unix_ms` and nothing else, and never shrinks an
+    /// existing lease (a late/duplicate heartbeat cannot pull the
+    /// expiry backwards). Returns `true` when a live-or-revivable row was
+    /// extended, `false` when no projection exists for the owner (the
+    /// device must re-publish via `advertise_abilities` first).
+    pub(crate) fn refresh_lease(&self, owner_ura: &str, new_expires_unix_ms: i64) -> bool {
+        match self.inner.get_mut(owner_ura) {
+            Some(mut row) => {
+                if new_expires_unix_ms > row.lease_expires_unix_ms {
+                    row.lease_expires_unix_ms = new_expires_unix_ms;
+                }
+                true
+            }
+            None => false,
+        }
     }
 
     /// Return the full stored row for tests.
@@ -334,6 +367,39 @@ mod tests {
     }
 
     #[test]
+    fn equal_revision_same_content_new_lease_refreshes_projection() {
+        let store = AbilityCatalogStore::new();
+        let first = projection_row_with_revision_and_lease(
+            "ura",
+            7,
+            "sha256:first",
+            1_000,
+            vec![summary("read")],
+        );
+        let refresh = projection_row_with_revision_and_lease(
+            "ura",
+            7,
+            "sha256:refreshed-lease",
+            2_000,
+            vec![summary("read")],
+        );
+
+        assert_eq!(
+            store.upsert_projection(first),
+            ProjectionUpsertOutcome::Inserted
+        );
+        assert_eq!(
+            store.upsert_projection(refresh),
+            ProjectionUpsertOutcome::Updated
+        );
+
+        let row = store.projection_for_owner("ura").expect("projection");
+        assert_eq!(row.projection_digest(), "sha256:refreshed-lease");
+        assert_eq!(row.lease_expires_unix_ms(), 2_000);
+        assert!(store.get_at("ura", 1_500).is_some());
+    }
+
+    #[test]
     fn upsert_empty_projection_stores_empty_not_none() {
         let store = AbilityCatalogStore::new();
 
@@ -382,12 +448,28 @@ mod tests {
         digest: &str,
         ability_summaries: Vec<AbilityProjectionSummary>,
     ) -> OwnerAbilityProjectionRow {
+        projection_row_with_revision_and_lease(
+            owner_ura,
+            revision,
+            digest,
+            4_102_444_800_000,
+            ability_summaries,
+        )
+    }
+
+    fn projection_row_with_revision_and_lease(
+        owner_ura: &str,
+        revision: u64,
+        digest: &str,
+        lease_expires_unix_ms: i64,
+        ability_summaries: Vec<AbilityProjectionSummary>,
+    ) -> OwnerAbilityProjectionRow {
         OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
             crate::ura::device_ura("easynet.run", "abc"),
             revision,
             digest.to_string(),
-            4_102_444_800_000,
+            lease_expires_unix_ms,
             ability_summaries,
         )
     }

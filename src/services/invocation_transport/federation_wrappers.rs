@@ -429,8 +429,17 @@ pub(crate) fn handle_advertise_abilities(
 #[derive(Debug, Clone, Deserialize)]
 pub struct HeartbeatRequest {
     /// URA of the agent reporting in. Used only for log context now;
-    /// liveness comes from the registry's stream membership.
+    /// liveness comes from the registry's stream membership. The device's
+    /// heartbeat payload (see `runtime/advertise.rs`) does not send this
+    /// field, so it must deserialize as optional — a missing `agent_ura`
+    /// is a valid heartbeat, not a wire error.
+    #[serde(default)]
     pub agent_ura: String,
+    /// Owner URAs whose ability projection leases this heartbeat renews.
+    /// The device batches its own owners (device + hosted agents) here so
+    /// the hub keeps their projections live without a full re-advertise.
+    #[serde(default)]
+    pub refresh_owner_uras: Vec<String>,
 }
 
 /// Response payload for `federation.heartbeat`.
@@ -442,6 +451,11 @@ pub struct HeartbeatResponse {
     /// for byte-identical state, MAY-differ field per spec §4.2
     /// (registry may have churned between identical-looking calls).
     pub realm_directory_size: usize,
+    /// Number of `refresh_owner_uras` whose projection lease this
+    /// heartbeat actually renewed (owners without a stored projection are
+    /// skipped). Lets the device detect when it must re-advertise.
+    #[serde(default)]
+    pub refreshed_owner_count: usize,
 }
 
 /// Handle a `federation.heartbeat` invocation.
@@ -452,13 +466,32 @@ pub struct HeartbeatResponse {
 /// `realm_directory_size` field is read from the registry snapshot
 /// for transparency to operators reading audit logs.
 #[must_use]
-pub fn handle_heartbeat(
-    _request: &HeartbeatRequest,
+pub(crate) fn handle_heartbeat(
+    request: &HeartbeatRequest,
     registry: &PresenceRegistry,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    now_unix_ms: i64,
 ) -> HeartbeatResponse {
+    // RFC-005: heartbeat renews the owner projection lease only; it must
+    // not mutate projection contents, revision, or digest. Extend the
+    // lease for every owner the device batched into `refresh_owner_uras`
+    // so its device/hosted-agent abilities stay resolvable between full
+    // re-advertise cycles. Unknown owners are skipped (the device must
+    // `advertise_abilities` before its first projection exists).
+    let mut refreshed_owner_count = 0_usize;
+    if let Some(catalog) = catalog {
+        let new_expiry = crate::runtime::owner_projection::lease_expiry_from_now(now_unix_ms);
+        for owner_ura in &request.refresh_owner_uras {
+            let owner_ura = owner_ura.trim();
+            if !owner_ura.is_empty() && catalog.refresh_lease(owner_ura, new_expiry) {
+                refreshed_owner_count += 1;
+            }
+        }
+    }
     HeartbeatResponse {
         membership_status: "active".to_string(),
         realm_directory_size: registry.snapshot().len(),
+        refreshed_owner_count,
     }
 }
 
@@ -490,12 +523,14 @@ pub fn handle_resolve(
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
     catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    self_device_ura: Option<&str>,
 ) -> ResolveResponse {
     handle_resolve_at(
         request,
         registry,
         advertised_agents,
         catalog,
+        self_device_ura,
         crate::services::federation_directory::now_unix_ms(),
     )
 }
@@ -509,6 +544,7 @@ pub(crate) fn handle_resolve_at(
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
     catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    self_device_ura: Option<&str>,
     now_unix_ms: i64,
 ) -> ResolveResponse {
     let prefix = request.effective_ura_prefix();
@@ -520,7 +556,7 @@ pub(crate) fn handle_resolve_at(
             continue;
         }
         let abilities = if want_abilities {
-            resolved_owner_projection_values(catalog, &ura, now_unix_ms)
+            resolved_owner_projection_values(catalog, &ura, self_device_ura, now_unix_ms)
         } else {
             Vec::new()
         };
@@ -616,17 +652,69 @@ pub(crate) fn handle_namespace_resolve_at(
     .resolve_query_json(query)
 }
 
+/// Namespace-safe ability summaries for one in-presence owner, merging
+/// two authorities:
+///
+/// 1. The owner's **static device profile** (RFC-005 §4 / D105): a
+///    device is the authority for its own control-plane surface
+///    (`terminal.*`, `agent.*`, `skill.*`, `fs.*`, `meta.*`). This is
+///    derived from the live registry and **never expires**, so a device's
+///    own abilities stay resolvable on its own daemon even though the
+///    daemon never receives its projection back into its local catalog
+///    (it advertises that projection up to the hub, not to itself), and
+///    regardless of any hub-side lease.
+/// 2. The **hub projection catalog** (lease-filtered): dynamic projection
+///    summaries for hosted agents and any owner this daemon is the hub
+///    for. These overlay the static profile by public name.
+///
+/// The static device profile is included only when `owner_ura` is THIS
+/// daemon's own device URA (`self_device_ura`): a daemon is the authority
+/// for its own device surface, but a hub resolving a *remote* device must
+/// not fabricate that device's profile — it only knows what the remote
+/// device advertised into the catalog.
+///
+/// Without (1), the device daemon's own catalog is empty and every
+/// device-owned ability lists as NODATA — the production bug behind the
+/// empty Abilities page and `terminal.list`/`agent.list`/`skill.list`
+/// "owner is online but does not publish" failures.
 fn resolved_owner_projection_values(
     catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
     owner_ura: &str,
+    self_device_ura: Option<&str>,
     now_unix_ms: i64,
 ) -> Vec<serde_json::Value> {
-    match catalog {
-        Some(catalog) => catalog.get_at(owner_ura, now_unix_ms).unwrap_or_default(),
-        None => device_owner_projection_values(owner_ura),
+    let mut by_public_name = std::collections::BTreeMap::<String, serde_json::Value>::new();
+    let mut order = Vec::new();
+    let mut push = |summary: serde_json::Value| {
+        let Some(key) = crate::runtime::owner_projection::summary_from_value(&summary)
+            .and_then(|parsed| crate::runtime::owner_projection::summary_public_name(&parsed))
+        else {
+            return;
+        };
+        if by_public_name.insert(key.clone(), summary).is_none() {
+            order.push(key);
+        }
+    };
+
+    if self_device_ura.is_some_and(|self_ura| self_ura == owner_ura) {
+        for summary in device_owner_projection_values(owner_ura) {
+            push(summary);
+        }
     }
+    if let Some(catalog) = catalog {
+        for summary in catalog.get_at(owner_ura, now_unix_ms).unwrap_or_default() {
+            push(summary);
+        }
+    }
+
+    order
+        .into_iter()
+        .filter_map(|key| by_public_name.remove(&key))
+        .collect()
 }
 
+/// Static device-profile ability summaries for a device-owned URA. Empty
+/// for non-device owners (agents/hubs publish through the catalog).
 fn device_owner_projection_values(owner_ura: &str) -> Vec<serde_json::Value> {
     if !crate::ura::parse_ura(owner_ura)
         .map(|parsed| parsed.kind == crate::ura::URAKind::Device)
@@ -1265,10 +1353,106 @@ mod tests {
         );
         let req = HeartbeatRequest {
             agent_ura: "easynet:///r/realm/device/a".to_string(),
+            refresh_owner_uras: Vec::new(),
         };
-        let resp = handle_heartbeat(&req, &registry);
+        let resp = handle_heartbeat(&req, &registry, None, 1_000);
         assert_eq!(resp.membership_status, "active");
         assert_eq!(resp.realm_directory_size, 2);
+        assert_eq!(resp.refreshed_owner_count, 0);
+    }
+
+    #[test]
+    fn handle_heartbeat_renews_owner_projection_lease() {
+        // The exact production bug: a device's projection is published with
+        // a lease, the lease expires, and `terminal.list` (and every other
+        // device-owned ability) silently drops out of `namespace.resolve`
+        // with NODATA. Heartbeat must renew the lease so the projection
+        // stays resolvable without a full re-advertise.
+        let registry = PresenceRegistry::new();
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let owner_ura = "easynet:///r/realm/device/a";
+        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+
+        let ability_ura =
+            crate::ura::owner_ability_ura(owner_ura, "terminal.list").expect("ability ura");
+        let publish_at = 1_000_i64;
+        let lease = crate::runtime::owner_projection::lease_expiry_from_now(publish_at);
+        catalog.upsert_projection(
+            crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+                owner_ura.to_string(),
+                owner_ura.to_string(),
+                1,
+                "sha256:digest".to_string(),
+                lease,
+                vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+                    ability_ura: ability_ura.clone(),
+                    owner_ura: owner_ura.to_string(),
+                    namespace: "terminal".to_string(),
+                    local_name: "list".to_string(),
+                    descriptor_revision: "sha256:desc".to_string(),
+                    schema_ref: None,
+                    schema_hash: None,
+                    policy_ref: "visibility:PUBLIC".to_string(),
+                    route_summary_ref: Some(format!("route-ref::{ability_ura}")),
+                    tags: Vec::new(),
+                    callable_summary:
+                        crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                            "terminal.list",
+                        ),
+                }],
+            ),
+        );
+
+        // After the lease expires, the projection is filtered out.
+        let after_expiry = lease + 1;
+        assert!(catalog.get_at(owner_ura, after_expiry).is_none());
+
+        // A heartbeat at that moment renews the lease...
+        let req = HeartbeatRequest {
+            agent_ura: owner_ura.to_string(),
+            refresh_owner_uras: vec![owner_ura.to_string()],
+        };
+        let resp = handle_heartbeat(&req, &registry, Some(&catalog), after_expiry);
+        assert_eq!(resp.refreshed_owner_count, 1);
+
+        // ...and the device-owned ability is resolvable again, with its
+        // contents and revision unchanged (lease-only refresh).
+        let got = catalog
+            .get_at(owner_ura, after_expiry)
+            .expect("lease renewed");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["local_name"], "list");
+        let row = catalog.projection_for_owner(owner_ura).unwrap();
+        assert_eq!(row.projection_revision(), 1);
+        assert_eq!(row.projection_digest(), "sha256:digest");
+    }
+
+    #[test]
+    fn handle_heartbeat_skips_unknown_owner() {
+        let registry = PresenceRegistry::new();
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let req = HeartbeatRequest {
+            agent_ura: "easynet:///r/realm/device/a".to_string(),
+            refresh_owner_uras: vec!["easynet:///r/realm/device/never-published".to_string()],
+        };
+        let resp = handle_heartbeat(&req, &registry, Some(&catalog), 5_000);
+        assert_eq!(resp.refreshed_owner_count, 0);
+    }
+
+    #[test]
+    fn heartbeat_request_deserializes_device_payload_without_agent_ura() {
+        // The device's actual heartbeat payload (runtime/advertise.rs) sends
+        // `since_abilities_revision` + `refresh_owner_uras` and NO
+        // `agent_ura`. The wrapper request must accept it — a missing
+        // `agent_ura` is a valid heartbeat, not a deserialization error.
+        let payload = serde_json::json!({
+            "since_abilities_revision": 7,
+            "refresh_owner_uras": ["easynet:///r/realm/device/a"],
+        });
+        let req: HeartbeatRequest =
+            serde_json::from_value(payload).expect("device heartbeat payload must deserialize");
+        assert!(req.agent_ura.is_empty());
+        assert_eq!(req.refresh_owner_uras, vec!["easynet:///r/realm/device/a"]);
     }
 
     #[test]
@@ -1294,6 +1478,7 @@ mod tests {
                 filter: None,
             },
             &registry,
+            None,
             None,
             None,
         );
@@ -1332,6 +1517,7 @@ mod tests {
             &registry,
             None,
             None,
+            None,
         );
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].ura, "easynet:///r/realm-a/device/x");
@@ -1340,11 +1526,11 @@ mod tests {
     #[test]
     fn handle_resolve_includes_device_owned_ability_routes_for_live_devices() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm/device/dev-1".to_string(),
-            make_dispatch_sender(),
-        );
+        let self_device_ura = "easynet:///r/realm/device/dev-1";
+        registry.insert(self_device_ura.to_string(), make_dispatch_sender());
 
+        // This daemon IS dev-1: its own device profile is the authority for
+        // its control-plane surface, included even with an empty catalog.
         let resp = handle_resolve(
             &ResolveRequest {
                 ura_prefix: Some("easynet:///r/realm/device/".to_string()),
@@ -1354,6 +1540,7 @@ mod tests {
             &registry,
             None,
             None,
+            Some(self_device_ura),
         );
 
         assert_eq!(resp.agents.len(), 1);
@@ -1373,6 +1560,36 @@ mod tests {
         assert!(
             names.contains("skill.list"),
             "device route summary must include skill.list; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn handle_resolve_does_not_fabricate_profile_for_remote_device() {
+        // A hub resolving a DIFFERENT device must not synthesize that
+        // device's profile from descriptors_for — it only knows what the
+        // remote device advertised (here: nothing). Self gate is another
+        // device's URA, so the static profile must not leak in.
+        let registry = PresenceRegistry::new();
+        let remote_device = "easynet:///r/realm/device/dev-remote";
+        registry.insert(remote_device.to_string(), make_dispatch_sender());
+
+        let resp = handle_resolve(
+            &ResolveRequest {
+                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
+                include_abilities: true,
+                filter: None,
+            },
+            &registry,
+            None,
+            None,
+            Some("easynet:///r/realm/device/dev-self"),
+        );
+
+        assert_eq!(resp.agents.len(), 1);
+        assert!(
+            resp.agents[0].abilities.is_empty(),
+            "remote device profile must not be fabricated; got {:?}",
+            resp.agents[0].abilities
         );
     }
 
@@ -1412,6 +1629,7 @@ mod tests {
             &registry,
             Some(&advertised),
             Some(&catalog),
+            None,
         );
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].ura, "easynet:///r/realm/agent/user.alice");
@@ -1456,6 +1674,7 @@ mod tests {
             &registry,
             None,
             Some(&catalog),
+            None,
             999,
         );
         assert_eq!(live.agents.len(), 1);
@@ -1470,6 +1689,7 @@ mod tests {
             &registry,
             None,
             Some(&catalog),
+            None,
             1_000,
         );
         assert_eq!(expired.agents.len(), 1);

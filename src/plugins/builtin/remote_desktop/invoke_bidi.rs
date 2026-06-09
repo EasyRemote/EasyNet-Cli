@@ -272,12 +272,8 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
                         REASON_PREVIEW_CAPTURE_FAILED,
                         message.clone(),
                     );
-                    let _ = control_to_client
-                        .send(BidiOutputFrame::json(json!({
-                            "type": "error",
-                            "code": REASON_RESOURCE_UNAVAILABLE,
-                            "message": message,
-                        })))
+                    terminal_guard
+                        .send_error(&control_to_client, REASON_RESOURCE_UNAVAILABLE, message)
                         .await;
                     break;
                 }

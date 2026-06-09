@@ -60,12 +60,12 @@ use easynet_cli::services::control::discovery::DaemonIdentity;
 use easynet_cli::services::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 use easynet_cli::services::control::{discovery, runtime_dispatch, server};
 
+const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 /// Heartbeat is opt-in: only spawn the legacy loop if the parent
 /// process configured an endpoint. This lets `cargo run --bin
 /// easynet-daemon` boot in IPC-only mode for FFI smoke tests without
 /// requiring a Hub.
 const ENV_HB_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
-const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -291,7 +291,10 @@ async fn main() -> anyhow::Result<()> {
     // are logged but do not tear down the IPC server; if heartbeat
     // dies the device is in a degraded state but Client UIs can still
     // attach via FFI.
-    if std::env::var_os(ENV_HB_ENDPOINT).is_some() {
+    let heartbeat_endpoint = std::env::var(ENV_HB_ENDPOINT)
+        .ok()
+        .filter(|endpoint| !endpoint.trim().is_empty());
+    if heartbeat_endpoint.is_some() {
         boot_bus.emit_started("heartbeat");
         if let Err(err) = std::thread::Builder::new()
             .name("easynet-heartbeat".into())

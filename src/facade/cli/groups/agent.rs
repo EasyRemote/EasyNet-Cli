@@ -93,9 +93,9 @@ pub enum AgentAction {
     /// Requires a paired, running local runtime.
     /// Use after authoring a new `<agent>/abilities/<verb>.ability.toml`
     /// so the new ability is invokable cross-process without daemon
-    /// restart. The in-daemon dispatcher's fallback resolver picks
-    /// up new TOMLs automatically; this command propagates the same
-    /// view to axon-runtime's `runtime_local_tools` registry. Pass
+    /// restart. The in-daemon hot registrar materializes new TOMLs
+    /// into the live runtime; this command propagates the same view
+    /// to axon-runtime's `runtime_local_tools` registry. Pass
     /// `--agent <name>` to refresh only one row.
     Refresh(agent_cmd::RefreshArgs),
     /// Inspect this agent's persisted chat history (the JSONL log

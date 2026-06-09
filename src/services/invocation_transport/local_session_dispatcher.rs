@@ -117,6 +117,17 @@ impl LocalAxonSessionDispatcher {
         SessionFailure::from_reason(reason, "INVOCATION_FAILED", false)
     }
 
+    fn session_failure_from_handler_code(
+        explicit_code: Option<&str>,
+        reason: &str,
+    ) -> SessionFailure {
+        explicit_code
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(|code| SessionFailure::from_explicit(code, reason, false))
+            .unwrap_or_else(|| Self::session_failure(reason))
+    }
+
     fn session_error_result(call_id: u64, message: impl Into<String>) -> SessionDispatch {
         let message = message.into();
         SessionDispatch::Result {
@@ -484,10 +495,8 @@ impl LocalAxonSessionDispatcher {
                 }))
             }
             Some("error") => {
-                let reason = match (
-                    value.get("code").and_then(Value::as_str),
-                    value.get("message").and_then(Value::as_str),
-                ) {
+                let code = value.get("code").and_then(Value::as_str);
+                let reason = match (code, value.get("message").and_then(Value::as_str)) {
                     (Some(code), Some(message))
                         if !code.trim().is_empty() && !message.trim().is_empty() =>
                     {
@@ -506,7 +515,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload,
                     terminal: true,
-                    failure: Some(Self::session_failure(&reason)),
+                    failure: Some(Self::session_failure_from_handler_code(code, &reason)),
                     error: Some(reason),
                     request_id: None,
                 }))
@@ -576,19 +585,27 @@ impl LocalAxonSessionDispatcher {
             return Self::map_remote_pty_output(call_id, value);
         }
         if Self::is_json_frame_bidi_with(registry, ability) {
-            let terminal = matches!(
-                value.get("type").and_then(Value::as_str),
-                Some("closed") | Some("error")
-            );
+            let frame_type = value.get("type").and_then(Value::as_str);
+            let terminal = matches!(frame_type, Some("closed") | Some("error"));
             let payload = serde_json::to_vec(value).map_err(|err| {
                 SessionDispatchError::Other(format!("plugin JSON-frame bidi encode failed: {err}"))
             })?;
+            let (failure, error) = if frame_type == Some("error") {
+                let reason = json_frame_error_reason(value);
+                let code = value.get("code").and_then(Value::as_str);
+                (
+                    Some(Self::session_failure_from_handler_code(code, &reason)),
+                    Some(reason),
+                )
+            } else {
+                (None, None)
+            };
             return Ok(Some(SessionDispatch::Result {
                 call_id,
                 payload,
                 terminal,
-                failure: None,
-                error: None,
+                failure,
+                error,
                 request_id: None,
             }));
         }
@@ -851,6 +868,20 @@ impl LocalAxonSessionDispatcher {
             .await;
         }
         Ok(())
+    }
+}
+
+fn json_frame_error_reason(value: &Value) -> String {
+    match (
+        value.get("code").and_then(Value::as_str),
+        value.get("message").and_then(Value::as_str),
+    ) {
+        (Some(code), Some(message)) if !code.trim().is_empty() && !message.trim().is_empty() => {
+            format!("{code}: {message}")
+        }
+        (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
+        (Some(code), _) if !code.trim().is_empty() => code.to_string(),
+        _ => "JSON-frame bidi handler returned error".to_string(),
     }
 }
 
@@ -2076,11 +2107,13 @@ mod tests {
                 payload,
                 terminal,
                 error,
+                failure,
                 request_id: _,
             } => {
                 assert_eq!(call_id, 91);
                 assert!(!terminal);
                 assert_eq!(error, None);
+                assert!(failure.is_none());
                 let payload: Value = serde_json::from_slice(&payload).expect("json payload");
                 assert_eq!(payload["type"], "frame");
                 assert_eq!(payload["seq"], 3);
@@ -2107,7 +2140,59 @@ mod tests {
             .expect("closed forwards");
 
         match mapped {
-            SessionDispatch::Result { terminal, .. } => assert!(terminal),
+            SessionDispatch::Result {
+                terminal,
+                error,
+                failure,
+                ..
+            } => {
+                assert!(terminal);
+                assert!(error.is_none());
+                assert!(failure.is_none());
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_bidi_error_frame_is_typed_terminal_failure() {
+        let dispatcher = remote_desktop_wire_dispatcher();
+        let mapped = dispatcher
+            .map_remote_bidi_output(
+                93,
+                "remote_desktop.attach",
+                &json!({
+                    "type": "error",
+                    "code": "permission_denied",
+                    "message": "screen capture permission denied",
+                }),
+            )
+            .expect("map succeeds")
+            .expect("error forwards");
+
+        match mapped {
+            SessionDispatch::Result {
+                terminal,
+                error,
+                failure,
+                payload,
+                ..
+            } => {
+                assert!(terminal);
+                assert_eq!(
+                    error.as_deref(),
+                    Some("permission_denied: screen capture permission denied")
+                );
+                let failure = failure.expect("typed failure");
+                assert_eq!(failure.code, "PERMISSION_DENIED");
+                assert_eq!(
+                    failure.message,
+                    "permission_denied: screen capture permission denied"
+                );
+                let payload: Value = serde_json::from_slice(&payload).expect("json payload");
+                assert_eq!(payload["type"], "error");
+            }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
     }
@@ -2115,8 +2200,10 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     fn remote_desktop_wire_dispatcher() -> LocalAxonSessionDispatcher {
         LocalAxonSessionDispatcher::new().with_ability_wire_registry(Arc::new(
-            crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile()
-                .expect("remote desktop plugin wire profile loads"),
+            crate::runtime::ability_wire::AbilityWireRegistry::for_test_plugin_bidi([(
+                "remote_desktop.attach".to_string(),
+                crate::runtime::ability_wire::AbilityBidiWireKind::JsonFrames,
+            )]),
         ))
     }
 
@@ -2207,5 +2294,76 @@ mod tests {
 
         assert_eq!(streamed, bytes);
         assert!(saw_terminal, "download must emit terminal completion frame");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_file_transfer_download_missing_file_returns_typed_terminal_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("missing-download.bin");
+
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let session_tx = SessionUpSender::new(tx);
+
+        disp.handle_down(
+            session_frame(SessionDispatch::BidiOpen {
+                call_id: 89,
+                callee_ura: None,
+                subject_ura: None,
+                ability: crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                    .to_string(),
+                args: serde_json::to_vec(&json!({
+                    "mode": "download",
+                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                        &target,
+                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+                    )
+                    .expect("local fs ResourceRef"),
+                }))
+                .expect("encode args"),
+                args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                metadata: HashMap::new(),
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("bidi open succeeds");
+
+        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("terminal failure within 3s")
+            .expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                failure,
+                payload,
+                request_id: _,
+            } => {
+                assert_eq!(call_id, 89);
+                assert!(terminal, "download failure must be terminal");
+                let error = error.expect("terminal error string");
+                assert!(
+                    error.contains("not_found"),
+                    "download failure must preserve handler code, got: {error}"
+                );
+                let failure = failure.expect("typed terminal failure");
+                assert_eq!(failure.code, "NOT_FOUND");
+                assert_eq!(failure.message, error);
+                let payload: Value = serde_json::from_slice(&payload).expect("json payload");
+                assert_eq!(payload["type"], "error");
+                assert_eq!(payload["code"], "not_found");
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
     }
 }

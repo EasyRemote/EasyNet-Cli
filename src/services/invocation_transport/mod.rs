@@ -44,12 +44,11 @@
 //
 // Why feature-gated
 // -----------------
-// `axon-pb` (declared in `Cargo.toml`) gates the entire generated
-// `pb` module. Building without it lets developers without `protoc`
-// on PATH compile the existing CLI; turning it on opts in to the
-// new daemon transport plane. RFC-003 PR-10 (production canary)
-// flips the default; until then, builds for production take the
-// feature explicitly.
+// `axon-pb` (declared in `Cargo.toml`) gates the SDK-owned generated
+// `pb` module. It is enabled by default because this transport is the
+// current product invocation plane. Specialist `--no-default-features`
+// builds may still omit it, but those builds are not daemon/product
+// builds and must not be used for live discovery or routing validation.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

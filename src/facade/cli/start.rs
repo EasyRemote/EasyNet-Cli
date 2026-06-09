@@ -232,6 +232,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     crate::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
     let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
+    bootstrap_local_agent_projection(&creds).context("sync local agent owner projection")?;
 
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::RuntimeStarting,
@@ -593,6 +594,20 @@ pub(crate) fn build_bootstrap_plan_from(
     username: &str,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
     crate::runtime::agents::profiles::bootstrap::build_plan_from_registry(realm, node_id, username)
+}
+
+fn bootstrap_local_agent_projection(
+    creds: &config::Credentials,
+) -> anyhow::Result<Vec<crate::runtime::agents::profiles::bootstrap::BootstrapOutcome>> {
+    let plan = build_bootstrap_plan(creds)?;
+    let mut file = crate::persistence::local_agents::load()?;
+    let outcomes = crate::runtime::agents::profiles::bootstrap::bootstrap_local_agents(
+        &plan,
+        &mut file,
+        &crate::runtime::agents::profiles::bootstrap::UuidMinter,
+    );
+    crate::persistence::local_agents::save(&file)?;
+    Ok(outcomes)
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.

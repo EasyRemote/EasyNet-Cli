@@ -71,6 +71,15 @@ impl OwnerProjectionCursorFile {
         self.projections
             .sort_by(|a, b| a.owner_ura.cmp(&b.owner_ura));
     }
+
+    /// Drop one owner's cursor. Used on `agent.stop` so the stopped
+    /// agent leaves `heartbeat_refresh_owner_uras` and is no longer
+    /// re-published. Returns `true` if a cursor was removed. ISS-002.
+    pub(crate) fn remove(&mut self, owner_ura: &str) -> bool {
+        let before = self.projections.len();
+        self.projections.retain(|p| p.owner_ura != owner_ura);
+        self.projections.len() != before
+    }
 }
 
 #[cfg(test)]
@@ -130,5 +139,26 @@ mod tests {
         assert_eq!(file.projections[0].owner_ura, "a");
         assert_eq!(file.projections[1].projection_revision, 2);
         assert_eq!(file.cursor_for("z").unwrap().projection_digest, "new");
+    }
+
+    #[test]
+    fn remove_drops_owner_and_reports_whether_present() {
+        // ISS-002: agent.stop drops the owner cursor so it leaves the
+        // heartbeat refresh batch and is not re-published.
+        let mut file = OwnerProjectionCursorFile::default();
+        file.upsert(OwnerProjectionCursor {
+            owner_ura: "easynet:///r/acme/agent/alice.claude".into(),
+            host_device_ura: "easynet:///r/acme/device/01DEV".into(),
+            projection_revision: 3,
+            projection_digest: "d".into(),
+            content_fingerprint: "f".into(),
+            lease_expires_unix_ms: 0,
+            updated_at: "t".into(),
+        });
+
+        assert!(file.remove("easynet:///r/acme/agent/alice.claude"));
+        assert!(file.cursor_for("easynet:///r/acme/agent/alice.claude").is_none());
+        // Idempotent: removing an absent owner reports false, no panic.
+        assert!(!file.remove("easynet:///r/acme/agent/alice.claude"));
     }
 }

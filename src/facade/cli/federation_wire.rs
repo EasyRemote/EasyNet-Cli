@@ -474,10 +474,17 @@ fn read_backend_hub_pubkey_b64(realm: &str) -> Option<String> {
     let raw = std::fs::read_to_string(&path).ok()?;
 
     #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct BackendIdentityRecord {
         private_key_seed_hex: String,
+        agent_ura: String,
+        #[serde(rename = "created_at_unix_ms")]
+        _created_at_unix_ms: u64,
     }
     let parsed: BackendIdentityRecord = serde_json::from_str(&raw).ok()?;
+    if parsed.agent_ura != crate::ura::hub_ura(realm) {
+        return None;
+    }
     let seed_bytes = hex::decode(parsed.private_key_seed_hex.trim()).ok()?;
     if seed_bytes.len() != 32 {
         return None;
@@ -795,9 +802,26 @@ fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn endpoint_of(r: &PeerHubResolution) -> &str {
         r.endpoint()
+    }
+
+    fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        struct HomeEnvGuard(Option<std::ffi::OsString>);
+        impl Drop for HomeEnvGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _guard = HomeEnvGuard(prev_home);
+        f()
     }
 
     #[test]
@@ -1165,6 +1189,40 @@ added_at_unix_ms = 1
             !trust_path.exists(),
             "realm-trust write should remain atomic when hub entry cannot be completed"
         );
+    }
+
+    #[test]
+    fn read_backend_hub_pubkey_rejects_legacy_agent_uri_field() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let identity_dir = tmp.path().join(".easynet-hub").join("tenant-a");
+        std::fs::create_dir_all(&identity_dir).expect("create identity dir");
+        std::fs::write(
+            identity_dir.join("identity.json"),
+            r#"{"private_key_seed_hex":"2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a","agent_uri":"easynet:///r/tenant-a/hub","created_at_unix_ms":1}"#,
+        )
+        .expect("write identity.json");
+
+        with_home(tmp.path(), || {
+            assert_eq!(read_backend_hub_pubkey_b64("tenant-a"), None);
+        });
+    }
+
+    #[test]
+    fn read_backend_hub_pubkey_rejects_mismatched_agent_ura() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let identity_dir = tmp.path().join(".easynet-hub").join("tenant-a");
+        std::fs::create_dir_all(&identity_dir).expect("create identity dir");
+        std::fs::write(
+            identity_dir.join("identity.json"),
+            r#"{"private_key_seed_hex":"2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a","agent_ura":"easynet:///r/other/hub","created_at_unix_ms":1}"#,
+        )
+        .expect("write identity.json");
+
+        with_home(tmp.path(), || {
+            assert_eq!(read_backend_hub_pubkey_b64("tenant-a"), None);
+        });
     }
 
     #[test]
