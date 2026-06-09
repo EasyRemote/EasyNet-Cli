@@ -15,7 +15,7 @@ use super::{DaemonError, Result};
 
 const DEFAULT_DAEMON_BIN: &str = "easynet-daemon";
 const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(3);
-const DEFAULT_START_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_START_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const START_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 

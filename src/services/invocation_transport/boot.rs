@@ -63,10 +63,13 @@
 // Failure handling
 // ----------------
 // Missing transport config remains a soft skip for pre-transport
-// devices. Once device-mode transport config exists, Hub session
-// admission is fail-closed: boot does not report Ready until the
-// first `<self>.session` bidi is admitted by the Hub. A daemon that
-// is not in PresenceRegistry cannot honestly serve product calls.
+// devices. Once device-mode transport config exists, local gRPC
+// listener readiness is daemon-owned: the daemon reports its UDS
+// Invocation surface as ready when it is actually listening. Hub
+// `<self>.session` admission is observed in a background task and
+// logged as an admission signal, but transient hub latency must not
+// make the local control plane kill an otherwise healthy daemon
+// before it can reconnect and republish owner projections.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -78,7 +81,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 
 use crate::runtime::axon_bridge::hot_agent_registrar::{
-    HotAgentAdvertiseOutcome, HotAgentAdvertiseRequest, HotAgentAdvertiser,
+    HotAgentAdvertiseOutcome, HotAgentAdvertiseRequest, HotAgentAdvertiser, HotAgentRevokeRequest,
 };
 use crate::services::invocation_transport::invoke_remote_initiator::{
     RequestOutcome, SessionRequestError,
@@ -512,8 +515,8 @@ pub fn start_daemon_invocation_transport(
     // `agent.start` invocation reaches into the registrar's
     // populated runtime cell and lands `<agent>.{chat,discover,invoke}`
     // into Axon's `LocalRuntime` — closing the bug where hot-added
-    // agents resolved only through the legacy `rpc_fallback` and
-    // therefore skipped the `LedgerSink` audit row.
+    // agents were visible in product metadata but not materialized in
+    // Axon's runtime, therefore skipping the `LedgerSink` audit row.
     //
     // The cell is normally populated by `build_registry_with_services`,
     // so `.get()` returns `Some`. We log + skip when absent to keep
@@ -738,6 +741,7 @@ pub fn start_daemon_invocation_transport(
                 escalation_state,
                 Arc::clone(&local_runtime),
                 Arc::clone(&ability_wire_registry),
+                plugin_runtime_manager.clone(),
             )?;
         } else {
             crate::op_event!(
@@ -813,11 +817,87 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
                 };
             }
         };
+        // ISS-002: carry the abilities advertise alongside the identity
+        // advertise so a hot ability add/remove reaches the hub on the
+        // same `<self>.session` escalation, immediately — not at the
+        // next heartbeat. Identity is advertised first (the abilities
+        // projection references the agent record); the abilities
+        // advertise is best-effort and reported via the outcome error.
+        let abilities_payload = request.abilities_payload;
+        let escalation = Arc::clone(&self.escalation);
+        let Some(outcome) = crate::support::async_bridge::try_run_blocking_in_tokio(async move {
+            let agent_outcome = escalation
+                .escalate_with_timeout(
+                    "federation.advertise_agent".to_string(),
+                    args,
+                    Duration::from_secs(5),
+                )
+                .await;
+            // Only advertise abilities if the identity advertise landed —
+            // an abilities projection for an unknown agent is rejected.
+            // `escalate_with_timeout` builds the hub ability URA from the
+            // ability name + session realm, so no resource URA is needed.
+            if matches!(agent_outcome, RequestOutcome::Ok { .. }) {
+                if let Some(payload) = abilities_payload {
+                    let abilities_outcome = escalation
+                        .escalate_with_timeout(
+                            "federation.advertise_abilities".to_string(),
+                            payload,
+                            Duration::from_secs(5),
+                        )
+                        .await;
+                    if let RequestOutcome::Err { error } = abilities_outcome {
+                        // Identity is up; abilities will reconcile on the
+                        // next heartbeat refresh. Surface the soft error.
+                        return RequestOutcome::Err { error };
+                    }
+                }
+            }
+            agent_outcome
+        }) else {
+            return HotAgentAdvertiseOutcome {
+                advertised: false,
+                error: Some(
+                    "no tokio runtime available for hot federation.advertise_agent".to_string(),
+                ),
+            };
+        };
+        match outcome {
+            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome {
+                advertised: true,
+                error: None,
+            },
+            RequestOutcome::Err { error } => HotAgentAdvertiseOutcome {
+                advertised: false,
+                error: Some(render_session_request_error(&error)),
+            },
+        }
+    }
+
+    fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest) -> HotAgentAdvertiseOutcome {
+        // ISS-002 (agent.stop, symmetric to advertise): remove the agent
+        // identity from the hub directory via `federation.revoke` on the
+        // same `<self>.session` escalation. `escalate_with_timeout`
+        // builds the hub ability URA from the ability name + session
+        // realm, so only the JSON args are passed here.
+        let body = serde_json::json!({
+            "agent_ura": request.agent_ura,
+            "reason": request.reason,
+        });
+        let args = match serde_json::to_vec(&body) {
+            Ok(args) => args,
+            Err(err) => {
+                return HotAgentAdvertiseOutcome {
+                    advertised: false,
+                    error: Some(format!("encode federation.revoke args: {err}")),
+                };
+            }
+        };
         let escalation = Arc::clone(&self.escalation);
         let Some(outcome) = crate::support::async_bridge::try_run_blocking_in_tokio(async move {
             escalation
                 .escalate_with_timeout(
-                    "federation.advertise_agent".to_string(),
+                    "federation.revoke".to_string(),
                     args,
                     Duration::from_secs(5),
                 )
@@ -825,9 +905,7 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         }) else {
             return HotAgentAdvertiseOutcome {
                 advertised: false,
-                error: Some(
-                    "no tokio runtime available for hot federation.advertise_agent".to_string(),
-                ),
+                error: Some("no tokio runtime available for hot federation.revoke".to_string()),
             };
         };
         match outcome {
@@ -872,28 +950,16 @@ fn spawn_session_supervisor(
     )>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+    plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
 ) -> anyhow::Result<()> {
-    // Snapshot Axon's runtime catalogue once before wrapping it in a
-    // `LocalAxonSessionDispatcher`. The session supervisor's
-    // `federation.advertise_abilities` prelude consumes this list as
-    // local input for an RFC-005 owner projection so the backend's
-    // `/api/v1/abilities` page sees bounded summaries. LocalRuntime is
-    // the daemon's live source of truth; the hub-side read model is not.
-    // Latest system-namespace contract: every daemon-local system
-    // ability is registered under its canonical owner prefix
-    // (`fs.read`, `openai.*`, ...). The advertise
-    // prelude emits canonical names only, so the owner
-    // projection read model and Frontend Abilities page show the
-    // partitioned shape, and the session-prelude's agent-roster
-    // scanner doesn't produce duplicate `<owner>` entries from
-    // implementation-private names. Filter via
-    // `published_ability_names()` which owns the catalogue exposure
-    // rule.
-    let ability_catalog: Vec<String> = futures::executor::block_on(local_runtime.list_abilities())
-        .into_iter()
-        .map(|descriptor| descriptor.name)
-        .filter(|name| crate::runtime::agents::is_publishable_catalog_name(name))
-        .collect();
+    // Build the device-owner descriptor projection from the same profile
+    // registry that powers `meta.list_abilities`. RFC-005 route selection
+    // consumes the hub-side owner projection; constructing it from bare
+    // `LocalRuntime.list_abilities()` names made the prelude a second,
+    // lossy catalogue path and could omit newly-added device abilities from
+    // `namespace.resolve` while the local daemon could still dispatch them.
+    let ability_descriptors =
+        device_owner_session_descriptors(&identity.caller_ura, plugin_runtime_manager.as_deref());
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
     } else {
@@ -919,11 +985,10 @@ fn spawn_session_supervisor(
         escalation_state = escalation_state_str,
         message = "LocalAxonSessionDispatcher will execute inbound SessionDispatch::Dispatch frames through Axon LocalRuntime",
     );
-    // Cancel oneshot held for the daemon process's lifetime after
-    // initial Hub admission succeeds. While boot is still gated on
-    // the first admission result, we keep the sender owned locally so
-    // a failed/timeout boot can stop the spawned supervisor before
-    // returning a hard error.
+    // Cancel oneshot held for the daemon process's lifetime. Hub
+    // admission is observed asynchronously below: the local Invocation
+    // transport is a daemon-owned readiness surface and must not be
+    // blocked by federation prelude latency or transient hub outages.
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let (initial_admission, initial_admission_rx) = initial_session_admission_probe();
 
@@ -953,51 +1018,104 @@ fn spawn_session_supervisor(
         hub_ca_pem_path,
         dispatcher,
         outbox,
-        ability_catalog,
+        ability_descriptors,
         Some(initial_admission),
         cancel_rx,
     ));
-    if let Err(err) = wait_for_initial_session_admission(
-        &hub_endpoint_for_wait,
-        &caller_ura_for_wait,
+    spawn_initial_session_admission_observer(
+        hub_endpoint_for_wait,
+        caller_ura_for_wait,
         initial_admission_rx,
-    ) {
-        let _ = cancel_tx.send(());
-        return Err(err);
-    }
+    );
     Box::leak(Box::new(cancel_tx));
     Ok(())
 }
 
-fn wait_for_initial_session_admission(
-    hub_endpoint: &str,
-    caller_ura: &str,
-    rx: tokio::sync::oneshot::Receiver<Result<(), String>>,
-) -> anyhow::Result<()> {
-    let wait = async move {
-        tokio::time::timeout(INITIAL_SESSION_ADMISSION_TIMEOUT, rx)
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "timed out after {}s waiting for Hub to admit `<self>.session` for {caller_ura} via {hub_endpoint}",
-                    INITIAL_SESSION_ADMISSION_TIMEOUT.as_secs()
-                )
-            })?
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "session supervisor ended before reporting initial `<self>.session` admission for {caller_ura} via {hub_endpoint}"
-                )
-            })?
-            .map_err(|reason| {
-                anyhow::anyhow!(
-                    "Hub rejected initial `<self>.session` for {caller_ura} via {hub_endpoint}: {reason}"
-                )
-            })
+fn device_owner_session_descriptors(
+    owner_ura: &str,
+    plugin_runtime_manager: Option<&crate::runtime::plugin_host::PluginRuntimeManager>,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+
+    let mut descriptors = crate::runtime::agents::profiles::device::descriptors_for(owner_ura);
+    let Some(manager) = plugin_runtime_manager else {
+        return descriptors;
     };
-    crate::support::async_bridge::run_blocking(
-        wait,
-        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
-    )
+    let Ok(state) = manager.state() else {
+        return descriptors;
+    };
+    let Ok(plugin_descriptors) =
+        crate::runtime::plugin_host::PluginDescriptorProjector::project(state.index())
+    else {
+        return descriptors;
+    };
+
+    descriptors.extend(plugin_descriptors.into_iter().filter_map(|plugin| {
+        AbilityDescriptor::new(plugin.name, owner_ura, Visibility::Scoped)
+            .ok()
+            .map(|descriptor| {
+                let descriptor = descriptor
+                    .with_description(plugin.description)
+                    .with_input_schema(plugin.input_schema)
+                    .with_hints(plugin.hints)
+                    .with_source("plugin:package");
+                if let Some(output_schema) = plugin.output_schema {
+                    descriptor.with_output_schema(output_schema)
+                } else {
+                    descriptor
+                }
+            })
+    }));
+    descriptors
+}
+
+fn spawn_initial_session_admission_observer(
+    hub_endpoint: String,
+    caller_ura: String,
+    rx: tokio::sync::oneshot::Receiver<Result<(), String>>,
+) {
+    tokio::spawn(async move {
+        match tokio::time::timeout(INITIAL_SESSION_ADMISSION_TIMEOUT, rx).await {
+            Ok(Ok(Ok(()))) => {
+                crate::op_event!(
+                    component = session,
+                    kind = initial_admission_observed,
+                    hub_endpoint = hub_endpoint,
+                    caller_ura = caller_ura,
+                );
+            }
+            Ok(Ok(Err(reason))) => {
+                crate::op_event!(
+                    component = session,
+                    kind = initial_admission_failed,
+                    hub_endpoint = hub_endpoint,
+                    caller_ura = caller_ura,
+                    reason = reason,
+                    message = "daemon remains up; session supervisor will reconnect with backoff",
+                );
+            }
+            Ok(Err(_closed)) => {
+                crate::op_event!(
+                    component = session,
+                    kind = initial_admission_probe_closed,
+                    hub_endpoint = hub_endpoint,
+                    caller_ura = caller_ura,
+                    message = "session supervisor ended before reporting initial admission",
+                );
+            }
+            Err(_elapsed) => {
+                crate::op_event!(
+                    component = session,
+                    kind = initial_admission_pending,
+                    hub_endpoint = hub_endpoint,
+                    caller_ura = caller_ura,
+                    timeout_ms = INITIAL_SESSION_ADMISSION_TIMEOUT.as_millis(),
+                    message =
+                        "daemon remains up; session supervisor is still attempting hub admission",
+                );
+            }
+        }
+    });
 }
 
 #[cfg(unix)]
@@ -2209,6 +2327,45 @@ mod tests {
     fn expand_home_passthrough_for_absolute_path() {
         let expanded = expand_home("/etc/easynet/realm-trust.toml");
         assert_eq!(expanded, PathBuf::from("/etc/easynet/realm-trust.toml"));
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn device_owner_session_descriptors_include_builtin_plugin_abilities() {
+        let index = crate::runtime::plugin_host::PluginPackageIndex::builtin()
+            .expect("builtin plugin index loads");
+        let state = crate::runtime::plugin_host::PluginRuntimeState::from_index_with_planner(
+            index,
+            crate::runtime::plugin_host::PluginLoadPlanner::current_without_env_gates(),
+        );
+        let manager = crate::runtime::plugin_host::PluginRuntimeManager::from_state(state);
+        let descriptors =
+            device_owner_session_descriptors("easynet:///r/acme/device/dev-1", Some(&manager));
+        let names = descriptors
+            .iter()
+            .map(|descriptor| descriptor.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(
+            names.contains("remote_desktop.refresh_lease"),
+            "device owner projection must publish remote desktop lease refresh; got {names:?}"
+        );
+        let watch_events = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "remote_desktop.watch_events")
+            .expect("watch_events descriptor");
+        assert!(
+            watch_events.hints.streaming_only,
+            "device owner projection must preserve plugin stream hints"
+        );
+        let attach = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "remote_desktop.attach")
+            .expect("attach descriptor");
+        assert!(
+            attach.hints.bidi_only,
+            "device owner projection must preserve plugin bidi hints"
+        );
     }
 
     #[test]
