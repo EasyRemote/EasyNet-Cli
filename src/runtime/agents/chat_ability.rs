@@ -681,13 +681,30 @@ pub(crate) fn invoke_direct_with_progress(
         })
         .collect();
 
+    let usage_value = usage.unwrap_or(Value::Null);
+
+    // Persist the turn to the agent's per-session JSONL transcript —
+    // same contract as the `agent send` CLI path (run_send). Without
+    // this, hub-routed chat (backend → daemon dispatch, e.g. the
+    // Frontend Group page) leaves no trace for `chat.history.{list,
+    // get}` to read. Best-effort: a disk failure must not break the
+    // in-flight reply.
+    crate::persistence::chat_sessions::write_turn_best_effort(
+        agent_name,
+        &session_id,
+        &parsed.prompt,
+        &resp.content,
+        &tool_calls_json,
+        &usage_value,
+    );
+
     Ok(json!({
         "session_id": session_id,
         "reply": resp.content,
         "skills_loaded": skills_loaded,
         "tool_calls": tool_calls_json,
         "context_used": Value::Array(context_used),
-        "usage": usage.unwrap_or(Value::Null),
+        "usage": usage_value,
         "elapsed_ms": elapsed_ms,
     }))
 }
@@ -928,6 +945,17 @@ fn stream_handler(
                     } else {
                         session_id_for_thread.clone()
                     };
+                    let usage_value = usage.unwrap_or(Value::Null);
+                    // Persist the streamed turn too — same transcript
+                    // contract as the RPC path (invoke_direct_with_progress).
+                    crate::persistence::chat_sessions::write_turn_best_effort(
+                        &agent_name_owned,
+                        &resolved_session_id,
+                        &prompt_owned,
+                        &resp.content,
+                        &tool_calls_json,
+                        &usage_value,
+                    );
                     json!({
                         "type": "done",
                         "session_id": resolved_session_id,
@@ -935,7 +963,7 @@ fn stream_handler(
                         "skills_loaded": skills_loaded_for_thread,
                         "tool_calls": tool_calls_json,
                         "context_used": context_used_for_thread,
-                        "usage": usage.unwrap_or(Value::Null),
+                        "usage": usage_value,
                         "elapsed_ms": elapsed_ms,
                     })
                 }

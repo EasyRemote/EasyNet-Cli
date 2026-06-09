@@ -1198,25 +1198,13 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         },
     };
     // Server-minted session id (when caller passed none) or echoed-back
-    // (when the caller pinned one via --follow / --session-id). Used by
-    // the persistence write below AND echoed to the user so they can
-    // copy it for a later --session-id call.
+    // (when the caller pinned one via --follow / --session-id). Echoed
+    // to the user so they can copy it for a later --session-id call.
     let response_session_id: Option<String> = reply_obj
         .as_ref()
         .and_then(|obj| obj.get("session_id"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let tool_calls: Vec<Value> = reply_obj
-        .as_ref()
-        .and_then(|obj| obj.get("tool_calls"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let usage_value: Value = reply_obj
-        .as_ref()
-        .and_then(|obj| obj.get("usage"))
-        .cloned()
-        .unwrap_or(Value::Null);
 
     eprintln!();
     eprintln!(
@@ -1271,20 +1259,12 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     }
     eprintln!();
 
-    // Persist the turn to the agent's per-session JSONL log so
-    // future `--follow` / `--resume` / `agent sessions show` calls
-    // can find it. Best-effort by contract — a disk-full or
-    // permission failure must NOT abort the in-flight chat reply.
-    if let Some(sid) = response_session_id.as_deref() {
-        crate::persistence::chat_sessions::write_turn_best_effort(
-            &args.name,
-            sid,
-            &prompt,
-            &reply_text,
-            &tool_calls,
-            &usage_value,
-        );
-    }
+    // Turn persistence happens inside the chat ability handler
+    // (`chat_ability::invoke_direct_with_progress` →
+    // `write_turn_best_effort`) so hub-routed and CLI-routed chats
+    // share one transcript writer. Writing here too would record the
+    // same turn twice — this path reaches the handler via the
+    // `{agent}.chat(...)` mission above.
 
     // Render the agent's final reply as markdown when stdout is a TTY;
     // otherwise print raw text so piping into other tools stays clean.
