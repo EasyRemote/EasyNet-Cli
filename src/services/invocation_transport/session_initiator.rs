@@ -1543,22 +1543,30 @@ fn build_hosted_agent_ability_descriptors(
 /// `pages.list` relative name the backend invokes. Using `pages.list`
 /// directly would project to `list` and stay NODATA.
 fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<AbilityDescriptor> {
-    // Mirror src/runtime/agents/pages/mod.rs register_management_abilities.
-    const PAGES_ABILITIES_RELATIVE: &[&str] =
-        &["pages.list", "pages.publish", "pages.get", "pages.unpublish"];
-    PAGES_ABILITIES_RELATIVE
-        .iter()
-        .filter_map(|relative| {
+    // Single source of truth with the local registration in
+    // src/runtime/agents/pages/mod.rs, so the advertised descriptor
+    // carries the same input schema (project_id / folder requirements)
+    // the Frontend InvokeAbilityDialog needs — otherwise it shows
+    // "No input required" and empty-arg invokes 400 with missing arg.
+    crate::runtime::agents::pages::management_ability_specs()
+        .into_iter()
+        .filter_map(|spec| {
+            // Descriptor name = `pages.<verb>` so public_name() (which
+            // strips the owner `pages.` agent-id prefix) projects back
+            // to the `<verb>`... wait: see the name-match note. The
+            // resolver matches the relative name `pages.list`, so the
+            // descriptor name must be `pages.pages.list`.
+            let descriptor_name = format!("pages.{}", spec.relative_name);
             AbilityDescriptor::new(
-                format!("pages.{relative}"),
+                descriptor_name,
                 owner_ura,
                 crate::runtime::ability_descriptor::Visibility::Scoped,
             )
             .ok()
             .map(|descriptor| {
                 descriptor
-                    .with_description(crate::runtime::agents::description_for_owned(relative))
-                    .with_input_schema(crate::runtime::agents::input_schema_for(relative))
+                    .with_description(spec.description)
+                    .with_input_schema(spec.input_schema)
                     .with_source("synthetic:pages")
             })
         })
@@ -1771,6 +1779,19 @@ mod tests {
         );
         // All four management abilities are present.
         assert_eq!(descriptors.len(), 4);
+
+        // The advertised descriptor must carry the input schema so the
+        // Frontend InvokeAbilityDialog renders a form (not "No input
+        // required" → empty-arg invoke → missing project_id 400).
+        let get = descriptors
+            .iter()
+            .find(|d| d.public_name() == "pages.get")
+            .expect("pages.get descriptor present");
+        let schema = &get.schema_summary.input;
+        assert_eq!(
+            schema["required"][0], "project_id",
+            "pages.get must advertise project_id as required, got: {schema}"
+        );
     }
 
     /// A mock dispatcher that just records every down frame it

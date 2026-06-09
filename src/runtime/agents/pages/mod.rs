@@ -144,19 +144,7 @@ fn register_management_abilities(
     reg.register_rpc_with_spec(
         "pages.publish",
         owner.clone(),
-        pages_manifest(
-            "publish",
-            "Publish a folder of static bytes as a website under this user.",
-            serde_json::json!({
-                "type": "object",
-                "required": ["project_id", "folder"],
-                "properties": {
-                    "project_id": { "type": "string", "description": "URA-safe project id (alnum + _ + -, max 64)." },
-                    "folder": { "type": "string", "description": "Absolute path to the folder to publish." },
-                    "visibility": { "type": "string", "description": "Visibility; only `public` is supported in MVP.", "default": "public" }
-                }
-            }),
-        ),
+        manifest_for_verb("pages.publish"),
         publish_handler,
     );
 
@@ -171,11 +159,7 @@ fn register_management_abilities(
     reg.register_rpc_with_spec(
         "pages.unpublish",
         owner.clone(),
-        pages_manifest(
-            "unpublish",
-            "Unpublish a project: release the folder fd and unregister the fetch ability.",
-            pages_project_id_schema(),
-        ),
+        manifest_for_verb("pages.unpublish"),
         unpublish_handler,
     );
 
@@ -188,11 +172,7 @@ fn register_management_abilities(
     reg.register_rpc_with_spec(
         "pages.list",
         owner.clone(),
-        pages_manifest(
-            "list",
-            "List the page projects this user currently publishes on this daemon.",
-            serde_json::json!({ "type": "object", "properties": {} }),
-        ),
+        manifest_for_verb("pages.list"),
         list_handler,
     );
 
@@ -204,13 +184,20 @@ fn register_management_abilities(
     reg.register_rpc_with_spec(
         "pages.get",
         owner,
-        pages_manifest(
-            "get",
-            "Return one published project's detail (folder, visibility, URLs).",
-            pages_project_id_schema(),
-        ),
+        manifest_for_verb("pages.get"),
         get_handler,
     );
+}
+
+/// Build the `AbilityManifest` for a `pages.<verb>` from the shared
+/// spec list. The manifest `name` is the bare verb (`get`), since `.`
+/// is the agent/verb separator AbilityManifest rejects.
+fn manifest_for_verb(relative_name: &str) -> crate::core::ability_spec::AbilityManifest {
+    let spec = management_ability_specs()
+        .into_iter()
+        .find(|s| s.relative_name == relative_name)
+        .unwrap_or_else(|| panic!("no pages spec for {relative_name}"));
+    pages_manifest(pages_verb_tail(spec.relative_name), spec.description, spec.input_schema)
 }
 
 /// Build an `AbilityManifest` for a pages verb. Panics only on a
