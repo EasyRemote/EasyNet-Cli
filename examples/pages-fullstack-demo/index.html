@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+  <title>EasyNet Pages — Full-Stack Demo</title>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>EasyNet Pages — full stack</h1>
+      <p class="dim">
+        Static frontend + a real backend, both served by your daemon through the
+        Hub. The list below is fetched from
+        <code>GET api/products</code> (a <code>static_json</code> manifest); the
+        form posts to <code>POST api/feedback</code> (an <code>echo</code>
+        manifest). No nginx, no build step, no external server.
+      </p>
+    </header>
+
+    <section>
+      <h2>Products <span class="dim" id="products-source"></span></h2>
+      <ul id="products"><li class="dim">loading…</li></ul>
+    </section>
+
+    <section>
+      <h2>Leave feedback</h2>
+      <form id="feedback-form">
+        <input id="name" name="name" placeholder="your name" autocomplete="off" required />
+        <textarea id="message" name="message" placeholder="what do you think?" required></textarea>
+        <button type="submit">Send to backend</button>
+      </form>
+      <pre id="feedback-result" class="result" hidden></pre>
+    </section>
+
+    <footer class="dim">
+      Served by <code>&lt;user&gt;.&lt;project&gt;.page.fetch</code>;
+      API by <code>&lt;user&gt;.&lt;project&gt;.api.&lt;verb&gt;</code>.
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

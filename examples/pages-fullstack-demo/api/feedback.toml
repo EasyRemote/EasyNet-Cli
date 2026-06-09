@@ -1,0 +1,15 @@
+# api/feedback.toml — backend endpoint: POST api/feedback
+#
+# kind = "echo" returns the request body merged with the static `extra`
+# table below. The frontend POSTs {"name": "...", "message": "..."} and
+# the response is that object with the `extra` fields overlaid on top —
+# a stand-in "we received your submission" backend without writing Rust.
+#
+# For a backend that actually persists across requests, switch to
+# kind = "ability" with `ability_ura = "<your add_feedback Ability URA>"`
+# (see examples/pages-fullstack-demo/README.md).
+kind = "echo"
+
+[extra]
+received = true
+note = "stored by the api/feedback echo manifest"
