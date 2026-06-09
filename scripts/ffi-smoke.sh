@@ -40,8 +40,8 @@ case "$(uname -s)" in
 esac
 LIB_PATH="$REPO_ROOT/target/debug/libeasynet_cli.${LIB_EXT}"
 
-echo "[ffi-smoke] rebuilding libeasynet_cli + easynet-daemon (debug, axon-pb)..."
-(cd "$REPO_ROOT" && cargo build --lib --bin easynet-daemon --features axon-pb)
+echo "[ffi-smoke] rebuilding libeasynet_cli + easynet-daemon (debug, product defaults)..."
+(cd "$REPO_ROOT" && cargo build --lib --bin easynet-daemon)
 
 # Hermetic state root. The smoke must not kill a developer's real
 # daemon or mutate their real ~/.easynet credentials/sockets.

@@ -102,7 +102,7 @@ mkdir -p "$out_dir"
 stage_dir="$(mktemp -d /tmp/easynet-release-stage-XXXXXX)"
 trap 'rm -rf "$stage_dir"' EXIT
 
-cargo_args_cli=(--bin easynet --bin easynet-daemon --bin easynet-keyring --features axon-pb)
+cargo_args_cli=(--bin easynet --bin easynet-daemon --bin easynet-keyring)
 cargo_args_bridge=(--lib)
 if [ "$build_profile" = "release" ]; then
     cargo_args_cli=("${cargo_args_cli[@]}" --release)

@@ -55,8 +55,8 @@ for arg in "$@"; do
 done
 
 if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
-  echo "[chat-smoke] building easynet + easynet-daemon (debug, axon-pb)..."
-  (cd "$REPO_ROOT" && cargo build --features axon-pb --bin easynet --bin easynet-daemon)
+  echo "[chat-smoke] building easynet + easynet-daemon (debug, product defaults)..."
+  (cd "$REPO_ROOT" && cargo build --bin easynet --bin easynet-daemon)
 fi
 
 # Detect mode: pick the first agent name from the registry if present,

@@ -23,8 +23,8 @@ for arg in "$@"; do
 done
 
 if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
-  echo "[smoke] building easynet + easynet-daemon (debug, axon-pb)..."
-  (cd "$REPO_ROOT" && cargo build --features axon-pb --bin easynet --bin easynet-daemon)
+  echo "[smoke] building easynet + easynet-daemon (debug, product defaults)..."
+  (cd "$REPO_ROOT" && cargo build --bin easynet --bin easynet-daemon)
 fi
 
 pkill -f "$DAEMON_BIN" 2>/dev/null || true

@@ -7,7 +7,7 @@ license = "Apache-2.0"
 build = "build.rs"
 
 [features]
-default = []
+default = ["axon-pb", "remote-desktop"]
 
 # Compile schemas/*.proto into Rust types via prost-build. Off by
 # default in v1 so developers without protoc installed can still
@@ -18,9 +18,9 @@ default = []
 proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
 
 # Enable Axon's SDK-owned `pb` module exposing the tonic server-side
-# `Invocation` trait that RFC-003 PR-1 implements. Off by default —
-# daemon-side `axon_serve` gates its build on this feature so the
-# default developer path stays proto-free. The SDK owns Axon proto
+# `Invocation` trait that RFC-003 PR-1 implements. This is part of the
+# current runtime plane: daemon invocation transport, remote routing, receipt
+# forwarding, and live discovery all depend on it. The SDK owns Axon proto
 # codegen; CLI must not compile `../EasyNet-Axon/.../proto` directly.
 axon-pb = [
     "easynet-axon/grpc",
@@ -38,8 +38,11 @@ axon-pb = [
 demo-fixture = []
 
 # Compile the in-tree remote desktop plugin package and its media transport
-# stack. Off by default so the core CLI/daemon build is not coupled to the
-# experimental WebRTC/OpenH264/native-capture dependency surface.
+# stack. This is part of the current product surface: Frontend remote desktop,
+# plugin discovery, and typed remote_desktop.* receipts all depend on these
+# ability names being present in ordinary daemon builds. Operators can still
+# disable runtime loading with EASYNET_REMOTE_DESKTOP_PLUGIN=off; that gate must
+# not change descriptor generation.
 remote-desktop = [
     "dep:openh264",
     "dep:webrtc",
@@ -338,9 +341,10 @@ version = "0.1"
 optional = true
 
 # Native Apple media dependencies. The objc2 foundation/core crates are
-# unconditional on macOS because `camera.snapshot` uses AVFoundation even when
-# the remote-desktop plugin is off. ScreenCaptureKit and VideoToolbox remain
-# optional and are enabled only by the `remote-desktop` plugin feature.
+# unconditional on macOS because `camera.snapshot` uses AVFoundation. The
+# remote desktop media stack uses ScreenCaptureKit and VideoToolbox through the
+# `remote-desktop` feature, which is enabled by default for the product daemon
+# and can be omitted only with `--no-default-features` specialist builds.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
