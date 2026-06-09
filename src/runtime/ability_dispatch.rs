@@ -261,18 +261,6 @@ pub type LocalBidiHandler = Arc<dyn Fn(Value) -> anyhow::Result<BidiSource> + Se
 pub type LocalBidiHandlerWithEnvelope =
     Arc<dyn Fn(EnvelopeContext, Value) -> anyhow::Result<BidiSource> + Send + Sync>;
 
-/// Resolver consulted on a registry miss. Returns `Some(handler)`
-/// when the resolver can synthesize one for the queried ability
-/// (e.g. a `<agent>.<verb>` whose TOML was added to the workspace
-/// after daemon boot — the dynamic per-agent fallback uses this
-/// to discover newly-authored abilities at invoke time without
-/// daemon restart). `None` keeps the legacy "not found" semantics.
-///
-/// One resolver per registry — the daemon owns this slot and uses
-/// it for the agent-workspace path. Returning `Send + Sync` so the
-/// registry stays clone-friendly on the Arc share.
-pub type LocalFallbackResolver = Arc<dyn Fn(&str) -> Option<LocalRpcHandler> + Send + Sync>;
-
 #[derive(Clone, Default)]
 struct RuntimeHandlerSet {
     rpc: Option<LocalRpcHandler>,
@@ -675,7 +663,6 @@ pub struct AxonAbilityCatalog {
     rpc: BTreeMap<String, LocalRpcHandler>,
     stream: BTreeMap<String, LocalStreamHandler>,
     bidi: BTreeMap<String, LocalBidiHandler>,
-    rpc_fallback: Option<LocalFallbackResolver>,
     // ── Envelope-aware variants (PR-DISPATCHER-SUBJECT) ──────
     // Separate maps so legacy `register_*` callers stay on the
     // args-only signature (zero churn) and only abilities that
@@ -807,7 +794,6 @@ impl std::fmt::Debug for AxonAbilityCatalog {
             .field("owner_count", &self.owner.len())
             .field("manifest_count", &self.manifests.len())
             .field("dynamic_ext_count", &dynamic_count)
-            .field("has_rpc_fallback", &self.rpc_fallback.is_some())
             .finish()
     }
 }
@@ -1345,8 +1331,8 @@ impl AxonAbilityCatalog {
     /// MCP server's tool name happens to collide with a boot-
     /// registered system ability, the static owner is canonical.
     /// Returns `Some(OwnerKind)` by value (rather than `&OwnerKind`)
-    /// because the dynamic-side fallback requires reading through
-    /// an RwLock — `&` would tie the borrow to the lock guard.
+    /// because the dynamic side table is guarded by an RwLock — `&`
+    /// would tie the borrow to the lock guard.
     pub fn lookup_owner(&self, ability: &str) -> Option<OwnerKind> {
         if let Some(o) = self.owner.get(ability) {
             return Some(o.clone());
@@ -1811,11 +1797,10 @@ impl AxonAbilityCatalog {
         dyn_ext.rpc.contains_key(ability) || dyn_ext.rpc_with_env.contains_key(ability)
     }
 
-    /// List all statically-registered RPC ability names. Does NOT
-    /// include names that only resolve through the fallback chain
-    /// (those are synthesised at lookup time and have no static
-    /// listing). Used by RFC-006-C `openai.list_models` to
-    /// project chat-base abilities into the /v1/models response.
+    /// List all registered RPC ability names. Dynamic names must
+    /// already be materialised in the runtime or `dynamic_ext`; the
+    /// catalogue no longer synthesises fallback handlers on lookup
+    /// miss.
     pub fn list_rpc_names(&self) -> Vec<String> {
         let mut names = BTreeSet::new();
         if let Some(runtime) = self.runtime() {
@@ -1840,17 +1825,10 @@ impl AxonAbilityCatalog {
         names.into_iter().collect()
     }
 
-    /// Owned-clone counterpart that consults the fallback resolver
-    /// on a registry miss. Existing call sites that take `&Arc<...>`
-    /// keep using `get_rpc`; the runtime adapter and test-only invoke
-    /// probes use this so a `<agent>.<verb>` written to disk post-boot
-    /// is found via the fallback without forcing the registry to be
-    /// mutable.
-    ///
-    /// Lookup order: static map → dynamic side table → fallback
-    /// resolver. The hot-reload sink writes only the dynamic side,
-    /// so the runtime lookup path stays lock-free for everything
-    /// registered at boot.
+    /// Owned-clone counterpart that consults the static map and
+    /// dynamic side table. Misses stay misses; post-boot abilities
+    /// must be explicitly registered into `LocalRuntime` or
+    /// `dynamic_ext`.
     pub fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
         if let Some(h) = self.rpc.get(ability) {
             return Some(Arc::clone(h));
@@ -1863,9 +1841,6 @@ impl AxonAbilityCatalog {
             if let Some(h) = dyn_ext.rpc.get(ability) {
                 return Some(Arc::clone(h));
             }
-        }
-        if let Some(resolver) = self.rpc_fallback.as_ref() {
-            return resolver(ability);
         }
         None
     }
@@ -1938,37 +1913,6 @@ impl AxonAbilityCatalog {
             .read()
             .expect("dynamic_ext RwLock poisoned");
         dyn_ext.rpc_with_env.get(ability).map(Arc::clone)
-    }
-
-    /// Install the RPC fallback resolver. Called once by the daemon
-    /// boot path after every static handler is in place. Replaces
-    /// any prior resolver — single-writer registry semantics still
-    /// hold; only the daemon installs this.
-    pub fn set_rpc_fallback(&mut self, resolver: LocalFallbackResolver) {
-        self.rpc_fallback = Some(resolver);
-    }
-
-    /// Chain a new fallback resolver in front of any existing one.
-    /// The new resolver is consulted first; on its `None`, the
-    /// previously-installed resolver (if any) is consulted. Order
-    /// of registration therefore matters at boot — the LAST chained
-    /// resolver wins on competing patterns. Used by reference
-    /// systems (e.g. RFC-006-B Pages) that synthesise per-instance
-    /// abilities at lookup time and must coexist with the
-    /// chat-style `<agent>.<verb>` resolver.
-    pub fn chain_rpc_fallback(&mut self, resolver: LocalFallbackResolver) {
-        match self.rpc_fallback.take() {
-            None => self.rpc_fallback = Some(resolver),
-            Some(prior) => {
-                let chained: LocalFallbackResolver = Arc::new(move |name: &str| {
-                    if let Some(h) = resolver(name) {
-                        return Some(h);
-                    }
-                    prior(name)
-                });
-                self.rpc_fallback = Some(chained);
-            }
-        }
     }
 
     /// Returns Some when a stream handler is registered for `ability`.

@@ -661,11 +661,9 @@ fn build_registry_with_services_result_inner(
     // The shared OnceLock consumed by every ability that needs
     // to resolve against the live catalogue post-boot:
     // mcp.bridge.call_tool, a2a.bridge.send_task, meta.list_abilities,
-    // per-agent <agent>.invoke, and the dynamic fallback resolver
-    // installed by chat_ability::register. Created BEFORE
-    // chat_ability::register so the fallback resolver — which gains
-    // the ability to synthesize `<self>.invoke` for hot-added agents
-    // — can close over it. Set once after `Arc::new(reg)` below.
+    // and per-agent <agent>.invoke. Created before agent ability
+    // registration so every handler can close over the same live
+    // registry handle. Set once after `Arc::new(reg)` below.
     let local_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
         Arc::new(std::sync::OnceLock::new());
     plugin_lifecycle_ability::register(
@@ -842,7 +840,7 @@ fn build_registry_with_services_result_inner(
     // the dispatch registry handle (`local_registry_handle` above) to
     // resolve the target ability through the live registry — including
     // entries registered AFTER chat_ability runs (mission.run,
-    // meta.list_abilities, the dynamic fallback resolver). The handle
+    // meta.list_abilities, hot-materialized agent abilities). The handle
     // is in scope here, so wiring sits next to the other consumers
     // (mcp_bridge / meta / a2a_bridge).
     //
@@ -1821,6 +1819,34 @@ pub fn rfc006_for(name: &str) -> Option<ability_toml::Rfc006Metadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn published_ability_names_contains_agent_list_and_terminal_list() {
+        // Diagnostic for the production NODATA: agent.list resolves but
+        // terminal.list does not. Both are OwnerKind::Device RPC abilities
+        // and both must be in the published set that (a) drives the device
+        // profile and (b) is registered into the live LocalRuntime via
+        // runtime.register_local_tool.
+        let names = published_ability_names();
+        assert!(
+            names.iter().any(|n| n == "agent.list"),
+            "agent.list missing from published names"
+        );
+        assert!(
+            names.iter().any(|n| n == "terminal.list"),
+            "terminal.list missing from published names; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_list_is_owner_kind_device() {
+        use crate::runtime::ability_dispatch::OwnerKind;
+        assert_eq!(
+            system_ability_owner("terminal.list"),
+            Some(OwnerKind::Device)
+        );
+        assert_eq!(system_ability_owner("agent.list"), Some(OwnerKind::Device));
+    }
 
     /// Semantic layer for an ability. See
     /// docs/rfc/AXON-RFC-001-ability-layers.md for the contract each

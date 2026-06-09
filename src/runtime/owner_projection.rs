@@ -109,6 +109,33 @@ pub(crate) fn prepare_and_persist(
     Ok(prepared.publication)
 }
 
+/// Build a tombstone publication for `owner_ura` (empty ability set,
+/// revision bumped strictly past the prior cursor so the hub's D26
+/// fence accepts it) and drop the local cursor so the owner leaves the
+/// heartbeat refresh batch. Used on `agent.stop`: advertising the empty
+/// complete-set makes the hub remove every prior projected ability
+/// (complete-set REPLACE → `removed = old − ∅ = all`). Returns `None`
+/// when no prior cursor existed (nothing to tombstone). ISS-002.
+pub(crate) fn prepare_removal_and_persist(
+    owner_ura: &str,
+    host_device_ura: &str,
+) -> Result<Option<OwnerProjectionPublication>, String> {
+    let mut file = owner_projections::load()
+        .map_err(|e| format!("load owner projection cursor failed: {e}"))?;
+    if file.cursor_for(owner_ura).is_none() {
+        return Ok(None);
+    }
+    // Empty descriptor set → empty summaries; prepare_at bumps the
+    // revision past the prior cursor (new-content branch) so the hub
+    // accepts the tombstone as strictly-newer.
+    let prepared = prepare_at(owner_ura, host_device_ura, &[], &file, now_unix_ms())?;
+    let publication = prepared.publication;
+    file.remove(owner_ura);
+    owner_projections::save(&file)
+        .map_err(|e| format!("save owner projection cursor failed: {e}"))?;
+    Ok(Some(publication))
+}
+
 pub(crate) fn heartbeat_refresh_owner_uras() -> Result<Vec<String>, String> {
     let file = owner_projections::load()
         .map_err(|e| format!("load owner projection cursor failed: {e}"))?;
@@ -143,24 +170,30 @@ fn prepare_at(
 
     let fingerprint = content_fingerprint(owner_ura, host_device_ura, &summaries);
     let previous = cursors.cursor_for(owner_ura);
-    let reusable_previous = previous.filter(|cursor| {
-        cursor.content_fingerprint == fingerprint
-            && cursor.lease_expires_unix_ms > 0
-            && !cursor.projection_digest.trim().is_empty()
-    });
+    let same_content_previous = previous.filter(|cursor| cursor.content_fingerprint == fingerprint);
     let (projection_revision, projection_digest, lease_expires_unix_ms) =
-        if let Some(cursor) = reusable_previous {
-            (
-                cursor.projection_revision,
-                cursor.projection_digest.clone(),
-                cursor.lease_expires_unix_ms,
-            )
+        if let Some(cursor) = same_content_previous {
+            let revision = cursor.projection_revision.max(1);
+            // C4: lease cancelled (ISS-002) — publish lease=0 so the hub
+            // treats the projection as non-expiring (Axon expire_leases
+            // guards on lease > 0). TTL-as-existence is replaced by
+            // event-driven advertise on agent.start.
+            let lease_expires_unix_ms = 0;
+            let digest = projection_digest(
+                owner_ura,
+                host_device_ura,
+                revision,
+                lease_expires_unix_ms,
+                &summaries,
+            );
+            (revision, digest, lease_expires_unix_ms)
         } else {
             let revision = match previous {
                 Some(cursor) => cursor.projection_revision.saturating_add(1).max(1),
                 None => 1,
             };
-            let lease_expires_unix_ms = lease_expiry_from_now(now_ms);
+            // C4: lease cancelled (ISS-002) — see same-content branch above.
+            let lease_expires_unix_ms = 0;
             let digest = projection_digest(
                 owner_ura,
                 host_device_ura,
@@ -211,7 +244,10 @@ fn heartbeat_refresh_owner_uras_from_file(file: &OwnerProjectionCursorFile) -> V
         .collect()
 }
 
-fn lease_expiry_from_now(now_ms: i64) -> i64 {
+/// Lease expiry `OWNER_PROJECTION_LEASE_TTL_MS` after `now_ms`. Shared by
+/// projection publication and `federation.heartbeat` lease refresh so both
+/// renew to the same TTL and the lease window cannot drift between them.
+pub(crate) fn lease_expiry_from_now(now_ms: i64) -> i64 {
     now_ms.saturating_add(OWNER_PROJECTION_LEASE_TTL_MS)
 }
 
@@ -595,7 +631,34 @@ mod tests {
         assert_eq!(summary.callable_summary.description, "fs.read");
         assert_eq!(summary.callable_summary.ability_class, "query");
         assert_eq!(prepared.publication.projection_revision, 1);
-        assert_eq!(prepared.publication.lease_expires_unix_ms, 61_000);
+        // C4: lease cancelled (ISS-002) — projections publish lease=0.
+        assert_eq!(prepared.publication.lease_expires_unix_ms, 0);
+    }
+
+    #[test]
+    fn empty_set_tombstone_bumps_revision_past_prior_and_clears_summaries() {
+        // ISS-002 stop side: re-advertising an empty complete-set must
+        // bump the revision strictly past the prior projection (so the
+        // hub's D26 fence accepts the tombstone) and carry zero
+        // summaries (so complete-set REPLACE removes every prior ability).
+        let owner = "easynet:///r/acme/agent/alice.claude";
+        let host = "easynet:///r/acme/device/01DEV";
+        let descriptors = vec![descriptor("chat", owner)];
+        let mut file = OwnerProjectionCursorFile::default();
+        let first = prepare_at(owner, host, &descriptors, &file, 1_000).expect("first publish");
+        file.upsert(first.cursor);
+        assert_eq!(first.publication.projection_revision, 1);
+
+        let tombstone = prepare_at(owner, host, &[], &file, 2_000).expect("tombstone publish");
+        assert!(
+            tombstone.publication.projection_revision > first.publication.projection_revision,
+            "tombstone revision must be strictly newer for the hub fence to accept it"
+        );
+        assert!(
+            tombstone.publication.ability_summaries.is_empty(),
+            "tombstone must carry an empty complete-set so the hub removes all prior abilities"
+        );
+        assert_eq!(tombstone.publication.lease_expires_unix_ms, 0);
     }
 
     #[test]
@@ -720,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_content_reuses_revision_digest_and_digest_bound_lease() {
+    fn unchanged_content_reuses_revision_with_cancelled_lease() {
         let owner = "easynet:///r/acme/device/01DEV";
         let descriptors = vec![descriptor("fs.read", owner)];
         let first = prepare_at(
@@ -736,15 +799,18 @@ mod tests {
 
         let second = prepare_at(owner, owner, &descriptors, &file, 30_000).expect("second");
         assert_eq!(second.publication.projection_revision, 1);
+        // C4: lease cancelled (ISS-002) — with lease=0 the digest no longer
+        // drifts with the clock, so a re-publish of unchanged content keeps
+        // the same revision, the same digest, and lease=0.
         assert_eq!(
             second.publication.projection_digest,
             file.cursor_for(owner).unwrap().projection_digest
         );
+        assert_eq!(second.publication.lease_expires_unix_ms, 0);
         assert_eq!(
-            second.publication.lease_expires_unix_ms,
-            file.cursor_for(owner).unwrap().lease_expires_unix_ms
+            file.cursor_for(owner).unwrap().lease_expires_unix_ms,
+            0
         );
-        assert_eq!(second.publication.lease_expires_unix_ms, 61_000);
     }
 
     #[test]
@@ -772,7 +838,8 @@ mod tests {
             second.publication.projection_digest,
             file.cursor_for(owner).unwrap().projection_digest
         );
-        assert_eq!(second.publication.lease_expires_unix_ms, 90_000);
+        // C4: lease cancelled (ISS-002) — projections publish lease=0.
+        assert_eq!(second.publication.lease_expires_unix_ms, 0);
     }
 
     #[test]

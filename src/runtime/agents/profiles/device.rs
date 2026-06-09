@@ -94,6 +94,24 @@ mod tests {
             "terminal.input",
             "terminal.read",
             "terminal.resize",
+            // Device agent lifecycle is also device-owned. These abilities
+            // must be advertised by the device projection before RFC-005
+            // resolve-before-invoke can start or refresh hosted agents.
+            "agent.start",
+            "agent.stop",
+            "agent.refresh",
+            "meta.list_resources",
+            // Skill management and skill package file browsing are
+            // device-owned because the package tree lives on this host.
+            "skill.install",
+            "skill.remove",
+            "skill.upgrade",
+            "skill.publish",
+            "skill.unpublish",
+            "skill.list",
+            "skill.tree",
+            "skill.read_file",
+            "skill.write_file",
         ] {
             assert!(
                 names.contains(name),

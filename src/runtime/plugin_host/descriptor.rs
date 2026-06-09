@@ -6,8 +6,11 @@
 
 use serde_json::Value;
 
+use crate::runtime::ability_descriptor::AbilityHints;
+use crate::runtime::plugin_host::errors::PluginHostError;
 use crate::runtime::plugin_host::errors::Result;
 use crate::runtime::plugin_host::index::PluginPackageIndex;
+use crate::runtime::plugin_host::manifest::PluginCallMode;
 
 /// Descriptor-generation metadata for one plugin-owned ability.
 #[derive(Debug, Clone)]
@@ -15,6 +18,8 @@ pub struct PluginAbilityMetadata {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    pub output_schema: Option<Value>,
+    pub hints: AbilityHints,
 }
 
 /// Descriptor projector over package index state.
@@ -27,15 +32,38 @@ impl PluginDescriptorProjector {
         let mut out = Vec::new();
         for package in index.packages() {
             for descriptor in package.ability_descriptors() {
+                let ability = package
+                    .manifest()
+                    .ability(descriptor.name())
+                    .ok_or_else(|| PluginHostError::DescriptorProjectionFailed {
+                        ability: descriptor.name().to_string(),
+                        reason: "ability descriptor has no matching manifest metadata".to_string(),
+                    })?;
                 out.push(PluginAbilityMetadata {
                     name: descriptor.name().to_string(),
                     description: descriptor.description().to_string(),
                     input_schema: descriptor.input_schema().clone(),
+                    output_schema: descriptor.output_schema().cloned(),
+                    hints: hints_for_call_mode(ability.call_mode()),
                 });
             }
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+}
+
+fn hints_for_call_mode(call_mode: PluginCallMode) -> AbilityHints {
+    match call_mode {
+        PluginCallMode::Rpc => AbilityHints::default(),
+        PluginCallMode::Stream => AbilityHints {
+            streaming_only: true,
+            ..AbilityHints::default()
+        },
+        PluginCallMode::Bidi => AbilityHints {
+            bidi_only: true,
+            ..AbilityHints::default()
+        },
     }
 }
 
@@ -62,5 +90,32 @@ mod tests {
 
         assert_eq!(descriptor.description, "test descriptor for test.echo");
         assert_eq!(descriptor.input_schema["type"], "object");
+        assert_eq!(descriptor.hints, AbilityHints::default());
+        assert!(descriptor.output_schema.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn plugin_host_descriptor_projector_preserves_manifest_call_modes() {
+        let index = crate::runtime::plugin_host::PluginPackageIndex::builtin()
+            .expect("builtin plugin index loads");
+        let descriptors = PluginDescriptorProjector::project(&index).expect("descriptors");
+        let watch_events = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "remote_desktop.watch_events")
+            .expect("remote desktop watch_events descriptor");
+        let attach = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "remote_desktop.attach")
+            .expect("remote desktop attach descriptor");
+
+        assert!(
+            watch_events.hints.streaming_only,
+            "InvokeStream plugin abilities must advertise streaming_only"
+        );
+        assert!(
+            attach.hints.bidi_only,
+            "InvokeBidi plugin abilities must advertise bidi_only"
+        );
     }
 }

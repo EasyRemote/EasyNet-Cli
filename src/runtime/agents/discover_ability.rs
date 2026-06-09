@@ -116,10 +116,10 @@ pub fn register_for_agent<F>(
 /// output contract (accepts `{scope, query, top_k}`, returns
 /// `{candidates, scope, query}`). Builtin is the default.
 ///
-/// Exposed so the dynamic per-agent fallback resolver in
-/// `chat_ability::register_dynamic_agent_fallback` can synthesise a
-/// handler for a hot-added agent without re-running this module's
-/// register_for_agent (which requires `&mut AxonAbilityCatalog`).
+/// Exposed so HotAgentRegistrar can build the same handler for a
+/// hot-added agent and materialise it in LocalRuntime without
+/// re-running this module's `register_for_agent` (which requires
+/// `&mut AxonAbilityCatalog`).
 pub fn dispatch(
     self_agent: &str,
     agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,

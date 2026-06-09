@@ -1,17 +1,18 @@
 //! Hot-add agent registration into `LocalRuntime`.
 //!
 //! Phase 5c blocker: `agent.start` / `agent.stop`
-//! currently only mutate `agents.json` on disk. The new agent's
-//! `<agent>.chat / discover / invoke` handlers are NOT registered
-//! anywhere — they only resolve via `AxonAbilityCatalog.rpc_fallback`
-//! at lookup time. Once Phase 5c retires `AxonAbilityCatalog`, the
-//! fallback resolver is gone too and every hot-added agent
-//! immediately fails to dispatch.
+//! used to mutate only `agents.json` on disk. The new agent's
+//! `<agent>.chat / discover / invoke` handlers were not registered
+//! in the Axon runtime; an older catalog lookup-miss fallback
+//! synthesized them on demand. RFC-005 route selection cannot rely
+//! on such hidden executable routes, so hot additions must now
+//! materialise runtime handlers before the owner projection is
+//! advertised.
 //!
 //! This registrar closes the gap. `agent.start` calls
 //! `register_agent(name, entry)` which builds the same three
-//! handler closures `chat_ability::register_dynamic_agent_fallback`
-//! would have synthesised lazily, wraps each through
+//! handler closures the boot path registers for static agents, wraps
+//! each through
 //! [`crate::runtime::ability_dispatch::rpc_handler_to_ability_fn`],
 //! and inserts them into [`LocalRuntime`] under the canonical
 //! `<agent>.<verb>` names. `agent.stop` calls
@@ -63,9 +64,8 @@ pub struct HotAgentRegistrar {
     /// point return `None` and the registrar no-ops.
     runtime: OnceLock<Arc<LocalRuntime>>,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-    /// Same `dispatch_handle` the chat-fallback resolver was given;
-    /// the discover + invoke handlers re-enter local dispatch
-    /// through it to resolve peer-agent ability descriptors.
+    /// The discover + invoke handlers re-enter local dispatch through
+    /// this handle to resolve peer-agent ability descriptors.
     dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
     /// Optional hub-advertise bridge for hot-added hosted agents.
     ///
@@ -94,9 +94,22 @@ pub struct HotAgentRuntimeSyncOutcome {
 }
 
 /// Input for a hot hosted-agent advertise pass.
+///
+/// `agent_ura` drives `federation.advertise_agent` (identity). When
+/// `abilities_payload` + `abilities_resource_ura` are present, the
+/// advertiser ALSO fires `federation.advertise_abilities` on the same
+/// transport so a hot ability add/remove reaches the hub immediately
+/// instead of waiting for the next heartbeat. ISS-002.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotAgentAdvertiseRequest {
     pub agent_ura: String,
+    /// Pre-encoded `federation.advertise_abilities` args (built from the
+    /// just-persisted owner projection via
+    /// `advertise::advertise_abilities_payload`). `None` skips the
+    /// abilities advertise (identity-only). The advertiser targets the
+    /// hub federation surface by ability name, so no resource URA is
+    /// carried here.
+    pub abilities_payload: Option<Vec<u8>>,
 }
 
 /// Outcome for best-effort hub advertisement after hot agent add.
@@ -104,6 +117,16 @@ pub struct HotAgentAdvertiseRequest {
 pub struct HotAgentAdvertiseOutcome {
     pub advertised: bool,
     pub error: Option<String>,
+}
+
+/// Input for a hot hosted-agent revoke pass (`agent.stop`). Drives
+/// `federation.revoke` so the agent identity is removed from the hub
+/// directory immediately, symmetric to `advertise_hosted_agent`.
+/// ISS-002.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotAgentRevokeRequest {
+    pub agent_ura: String,
+    pub reason: String,
 }
 
 /// Narrow abstraction over the transport used to notify the hub
@@ -116,6 +139,19 @@ pub struct HotAgentAdvertiseOutcome {
 pub trait HotAgentAdvertiser: Send + Sync {
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
         -> HotAgentAdvertiseOutcome;
+
+    /// Revoke a hot-removed hosted agent's identity from the hub
+    /// directory (`federation.revoke`). Default is a no-op outcome so
+    /// recorders/tests that only care about advertise need not
+    /// implement it; the device-mode session advertiser overrides it.
+    /// ISS-002.
+    fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest) -> HotAgentAdvertiseOutcome {
+        let _ = request;
+        HotAgentAdvertiseOutcome {
+            advertised: false,
+            error: None,
+        }
+    }
 }
 
 impl HotAgentRegistrar {
@@ -321,11 +357,11 @@ mod tests {
         // Axon arm (`LocalAxonSessionDispatcher`) both gate on.
         //
         // Pre-this-PR, `agent.start` only wrote `agents.json`
-        // and the hot-added agent surfaced ONLY through the legacy
-        // `rpc_fallback` resolver. Chat worked, but every call went
-        // through the legacy path, never reaching the wired
-        // `LedgerSink` — so `invocations.redb` stayed empty even on
-        // successful chats. This test pins the fix at the
+        // and the hot-added agent surfaced ONLY through the retired
+        // lookup-miss catalog path. Chat worked, but every call went
+        // through that path, never reaching the wired `LedgerSink` —
+        // so `invocations.redb` stayed empty even on successful
+        // chats. This test pins the fix at the
         // registrar layer; the boot-side wiring + lifecycle handler
         // wiring are tested separately.
         let registrar = build_pending();

@@ -276,6 +276,31 @@ pub fn abilities_for_publication(agent_name: &str, entry: &AgentEntry) -> Vec<Ag
     specs
 }
 
+/// Project a daemon-local agent ability key into the public ability
+/// name owned by `owner_ura`.
+///
+/// The daemon dispatch table stores implementation-qualified keys
+/// such as `anthropic.chat`. RFC-005 owner projections publish
+/// owner-local names such as `chat`. Prefer the URA-owned projection
+/// first; the local registry name is a fallback for transitional rows
+/// where the persisted agent URA's `agent_id` does not exactly match
+/// the local registry key.
+pub fn public_agent_ability_name(
+    owner_ura: &str,
+    local_agent_name: &str,
+    registry_name: &str,
+) -> String {
+    let projected = crate::ura::owner_local_ability_name(owner_ura, registry_name);
+    if projected != registry_name {
+        return projected;
+    }
+    registry_name
+        .strip_prefix(local_agent_name)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .unwrap_or(registry_name)
+        .to_string()
+}
+
 /// Like `abilities_for`, but returns the full `AbilityManifest` for
 /// each ability rather than the discovery-trimmed `AgentAbilitySpec`.
 ///

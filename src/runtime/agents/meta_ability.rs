@@ -64,9 +64,9 @@ pub const ABILITY_LIST_ABILITIES: &str = "meta.list_abilities";
 /// it to enumerate every CURRENTLY-REGISTERED ability — including
 /// abilities registered AFTER `meta_ability::register` ran (e.g.
 /// `mission.run`, per-agent `<agent>.<verb>` chat-translation
-/// handlers, the dynamic per-agent fallback resolver). The static
-/// profile descriptor catalogue is merged on top so first-class
-/// abilities (fs.read, http.request, ...) keep their full schemas;
+/// handlers, hot-materialized agent abilities). The static profile
+/// descriptor catalogue is merged on top so first-class abilities
+/// (fs.read, http.request, ...) keep their full schemas;
 /// runtime-only entries (mission.run, hot-reloaded agent abilities)
 /// surface with a synthesized descriptor when the static catalogue
 /// has nothing for them. Without this two-source merge, the LLM
@@ -219,15 +219,15 @@ fn list_abilities_handler(
     // already cover gets a synthesised minimal descriptor. This
     // catches (a) abilities registered AFTER meta_ability itself
     // (mission.run, easynet.* aliases), (b) per-agent verbs that the
-    // dynamic fallback resolver wires up at boot from each agent's
-    // workspace `abilities/*.toml`, and (c) any future ability whose
-    // author forgot to thread it through the profile catalogue.
+    // hot registrar materializes at boot from each agent's workspace
+    // `abilities/*.toml`, and (c) any future ability whose author
+    // forgot to thread it through the profile catalogue.
     if let Some(registry) = registry_handle.get() {
         // Owner URAs for the synthesised descriptors below. These
         // entries are abilities registered into `AxonAbilityCatalog`
         // that no static profile descriptor covers (RFC-002
         // `device.keyring.*`, the runtime `easynet.*` / `mission.*`
-        // aliases, dynamic per-agent fallbacks, …). The owner-kind
+        // aliases, hot-materialized per-agent entries, …). The owner-kind
         // for each ability is read from the registry's
         // `lookup_owner` table (M0 of the system-namespace
         // migration); we resolve that kind to an authoritative URA

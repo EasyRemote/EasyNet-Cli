@@ -139,7 +139,7 @@ pub fn register(
     reg: &mut AxonAbilityCatalog,
     agents: &AgentRegistry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+    _dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
     for (agent_name, entry) in &agents.agents {
         register_for_agent(reg, agent_name.clone(), entry.clone(), Arc::clone(&loaders));
@@ -150,19 +150,12 @@ pub fn register(
     // the dispatch handle is in scope, since `<agent>.invoke` needs
     // to resolve through the live registry).
     //
-    // After every static `<agent>.chat` + per-verb handler is in
-    // place, install a single fallback resolver so:
-    //
-    //   * a `<agent>.<verb>` whose `*.ability.toml` is added to the
-    //     workspace post-boot becomes invokable at the next call
-    //     without daemon restart (existing TOML hot-reload story);
-    //   * a brand-new `easynet agent add <name>` is picked up
-    //     automatically — the resolver re-reads `agents.json` per
-    //     miss and synthesises `<self>.chat` / `<self>.discover` /
-    //     `<self>.invoke` on the fly. Pre-fix this required a daemon
-    //     restart.
-    let agents_snapshot = Arc::new(agents.clone());
-    register_dynamic_agent_fallback(reg, agents_snapshot, loaders, dispatch_handle);
+    // No lookup-miss fallback is installed here. Post-boot agent
+    // additions flow through HotAgentRegistrar, which materialises
+    // handlers in LocalRuntime and advertises the owner projection.
+    // A name that is absent from LocalRuntime must remain absent so
+    // RFC-005 resolve-before-invoke can return a typed negative
+    // instead of a hidden, locally-synthesised route.
 }
 
 /// Register a single `<agent>.chat` handler. Factored out so a
@@ -203,7 +196,7 @@ pub fn register_for_agent(
     );
 
     // For every OTHER ability the agent declares via its
-    // workspace `<root>/abilities/*.toml`, register a fallback
+    // workspace `<root>/abilities/*.toml`, register an adapter
     // handler that dispatches back to this agent's chat with a
     // synthesised prompt instructing it to fulfill the named
     // ability with the given args. Without this, an agent could
@@ -212,7 +205,7 @@ pub fn register_for_agent(
     // invoke them: the dispatcher returns NOT_FOUND for every
     // <agent>.<ability> name that isn't `<agent>.chat`.
     //
-    // The fallback handler is intentionally simple: "act as
+    // The adapter handler is intentionally simple: "act as
     // ability X with args Y" — the agent's own CLAUDE.md /
     // SKILL.md define what fulfilling the ability means; this
     // function just routes the call.
@@ -252,10 +245,9 @@ pub fn register_for_agent(
 /// Build one chat-translation RPC handler for an agent's
 /// non-`chat` ability. Pulled out as a free fn so both the
 /// boot-time pre-registration loop in `register_for_agent` and
-/// the post-boot fallback resolver in
-/// `register_dynamic_agent_fallback` produce byte-for-byte the
-/// same handler — keeps the "ability fulfilled by chat" contract
-/// in exactly one place.
+/// HotAgentRegistrar produce byte-for-byte the same handler. This
+/// keeps the "ability fulfilled by chat" contract in exactly one
+/// place.
 ///
 /// The handler synthesises a prompt instructing the agent to
 /// fulfill the declared ability `<bare_ability>` with the caller's
@@ -375,111 +367,7 @@ pub(crate) fn build_agent_ability_handler(
     })
 }
 
-/// Install the per-agent fallback resolver on `reg`. After every
-/// agent's static `register_for_agent` has run, the daemon boot
-/// code calls this once so a `<agent>.<verb>` whose `*.ability.toml`
-/// landed in the workspace AFTER boot still routes correctly: the
-/// dispatcher's lookup-miss path consults this resolver, which
-/// re-reads the workspace's `abilities/` directory and synthesises
-/// a fresh chat-translation handler on the fly.
-///
-/// Hot-add of brand-new agents
-/// ---------------------------
-/// The resolver re-loads `~/.easynet/agents.json` on every miss so
-/// that `easynet agent add <name>` is picked up without a daemon
-/// restart. Pre-fix the closure captured an `Arc<AgentRegistry>`
-/// snapshot from boot — a newly-added agent's `<self>.chat` /
-/// `<self>.discover` / `<self>.invoke` would all miss until the
-/// daemon was killed and brought back. Re-loading on miss costs one
-/// `read_to_string + serde_json` per miss; the registry is small and
-/// the lookup miss is itself the slow path.
-///
-/// `dispatch_handle` is the same `OnceLock` consumed by
-/// `runtime::agents::build_registry_with_services` for the
-/// per-agent `<agent>.invoke` builtin. We thread it here so a
-/// brand-new agent's invoke handler can resolve through the live
-/// registry — without it, hot-added invoke would have nowhere to
-/// dispatch.
-///
-/// `loaders` is shared across every agent. A miss in the registry
-/// that does NOT match any `<agent>.<verb>` shape is passed through
-/// to the legacy "no handler registered" error.
-pub(crate) fn register_dynamic_agent_fallback(
-    reg: &mut AxonAbilityCatalog,
-    _agents_snapshot: Arc<crate::registry::agents::AgentRegistry>,
-    loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) {
-    reg.set_rpc_fallback(Arc::new(
-        move |ability: &str| -> Option<crate::runtime::ability_dispatch::LocalRpcHandler> {
-            // Split `<agent>.<verb>` once; trailing dots in the verb
-            // are preserved for forward compat (a future ability
-            // could legitimately contain a dot).
-            let (agent_name, bare_verb) = ability.split_once('.')?;
-
-            // Re-load agents.json on every miss. A daemon boot
-            // ago `easynet agent add <newname>` would not be
-            // visible; re-loading per call is what makes the
-            // hot-add story real. Failure to read is treated as
-            // "no agent" — the legacy not-found semantics still
-            // apply.
-            let live_agents = crate::registry::agents::load_agents().ok()?;
-            let entry = live_agents.agents.get(agent_name)?.clone();
-
-            // Three synthesis paths in priority order:
-            //   1. self-bundle builtins (chat / discover / invoke)
-            //      — synthesise the same handler the boot path
-            //      would have registered, so a hot-added agent
-            //      gets `<self>.chat` etc. immediately.
-            //   2. workspace TOML — re-enumerate `abilities/*.toml`
-            //      and build the chat-translation or shell-exec
-            //      handler the manifest declares.
-            //   3. miss — return None.
-            match bare_verb {
-                "chat" => {
-                    return Some(build_chat_handler_for(
-                        agent_name.to_string(),
-                        entry,
-                        Arc::clone(&loaders),
-                    ));
-                }
-                "discover" => {
-                    return Some(build_discover_handler_for(
-                        agent_name.to_string(),
-                        Arc::clone(&dispatch_handle),
-                    ));
-                }
-                "invoke" => {
-                    return Some(build_invoke_handler_for(
-                        agent_name.to_string(),
-                        Arc::clone(&dispatch_handle),
-                    ));
-                }
-                _ => { /* fall through to TOML path */ }
-            }
-
-            // TOML path: re-enumerate this agent's abilities at
-            // lookup time. `abilities_for` is filesystem-backed,
-            // so a TOML written post-boot becomes visible
-            // immediately.
-            let specs = crate::runtime::abilities::abilities_for(agent_name, &entry);
-            let qualified = format!("{agent_name}.{bare_verb}");
-            let matched = specs.iter().any(|s| s.name() == qualified);
-            if !matched {
-                return None;
-            }
-
-            Some(build_agent_ability_handler(
-                agent_name.to_string(),
-                entry,
-                Arc::clone(&loaders),
-                bare_verb.to_string(),
-            ))
-        },
-    ));
-}
-
-/// Synthesise an `<agent>.chat` handler for the fallback path. Same
+/// Build an `<agent>.chat` handler. Same
 /// shape as the boot-time registration in `register_for_agent`,
 /// pulled out as a helper so the hot-add and boot paths produce
 /// byte-identical handlers.
@@ -1730,6 +1618,10 @@ mod tests {
         // No collateral registrations.
         assert!(reg.get_rpc("alice.voice").is_none());
         assert!(reg.get_rpc("system.chat").is_none());
+        assert!(
+            reg.resolve_rpc("charlie.chat").is_none(),
+            "lookup miss must stay a miss; hot agents are materialised through HotAgentRegistrar"
+        );
     }
 
     #[test]
@@ -2483,10 +2375,9 @@ model = "sonnet"
         )
         .expect("agent.toml write");
 
-        // Build the handler the same way the registration paths do
-        // (boot-time pre-register and post-boot fallback both call
-        // build_agent_ability_handler — see register_for_agent and
-        // register_dynamic_agent_fallback).
+        // Build the handler the same way the registration paths do:
+        // boot-time pre-registration and HotAgentRegistrar both call
+        // build_agent_ability_handler.
         let mut entry = AgentEntry::new(crate::registry::agents::AgentType::ClaudeCode, None);
         // `root_path` is the field that `manifests_for` (and
         // `abilities_for`) read to find the on-disk abilities/

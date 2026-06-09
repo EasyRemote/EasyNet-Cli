@@ -248,8 +248,11 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                 let specs = crate::runtime::abilities::abilities_for_publication(name, entry);
                 for spec in specs {
                     let registry_name = spec.name();
-                    let owner_local_name =
-                        public_agent_ability_name(&owner_ura, name, registry_name);
+                    let owner_local_name = crate::runtime::abilities::public_agent_ability_name(
+                        &owner_ura,
+                        name,
+                        registry_name,
+                    );
                     let desc = crate::runtime::ability_descriptor::AbilityDescriptor::new(
                         owner_local_name,
                         &owner_ura,
@@ -631,22 +634,6 @@ fn collect_daemon_owned_ability_names() -> Vec<String> {
     names.sort();
     names.dedup();
     names
-}
-
-fn public_agent_ability_name(
-    owner_ura: &str,
-    local_agent_name: &str,
-    registry_name: &str,
-) -> String {
-    let projected = crate::ura::owner_local_ability_name(owner_ura, registry_name);
-    if projected != registry_name {
-        return projected;
-    }
-    registry_name
-        .strip_prefix(local_agent_name)
-        .and_then(|rest| rest.strip_prefix('.'))
-        .unwrap_or(registry_name)
-        .to_string()
 }
 
 /// Revoke one Agent's directory entry. Used by `easynet agent

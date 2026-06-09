@@ -1893,11 +1893,11 @@ mod tests {
         );
         assert_eq!(
             events[1]["payload"]["failure"]["stage"],
-            easynet_axon::pb::axon::v1::ErrorStage::Execution.as_str_name()
+            "ERROR_STAGE_EXECUTION"
         );
         assert_eq!(
             events[1]["payload"]["failure"]["security_class"],
-            easynet_axon::pb::axon::v1::SecurityClass::Unspecified.as_str_name()
+            "SECURITY_CLASS_UNSPECIFIED"
         );
         assert_eq!(events[1]["payload"]["failure"]["retryable"], false);
     }
@@ -1913,13 +1913,10 @@ mod tests {
             payload["failure"]["code"],
             "TARGET_NOT_IN_PRESENCE_REGISTRY"
         );
-        assert_eq!(
-            payload["failure"]["stage"],
-            easynet_axon::pb::axon::v1::ErrorStage::Transport.as_str_name()
-        );
+        assert_eq!(payload["failure"]["stage"], "ERROR_STAGE_TRANSPORT");
         assert_eq!(
             payload["failure"]["security_class"],
-            easynet_axon::pb::axon::v1::SecurityClass::Transport.as_str_name()
+            "SECURITY_CLASS_TRANSPORT"
         );
         assert_eq!(payload["failure"]["retryable"], true);
     }

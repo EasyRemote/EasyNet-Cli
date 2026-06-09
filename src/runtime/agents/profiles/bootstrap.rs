@@ -227,6 +227,12 @@ pub fn bootstrap_local_agents<M: UraMinter>(
 
     file.hosted_agents
         .retain(|e| is_current_agent_ura(&e.agent_ura, &plan.realm, &plan.user_id));
+    if !file.host_device_agent_ura.is_empty() {
+        let signing_authority = format!("hosted_by:{}", file.host_device_agent_ura);
+        for entry in &mut file.hosted_agents {
+            entry.signing_authority = signing_authority.clone();
+        }
+    }
 
     let mut outcomes = Vec::new();
     let mut process = |profile: &str, name: &str, outcomes: &mut Vec<BootstrapOutcome>| {
@@ -502,6 +508,30 @@ mod tests {
         plan.host_device_ura = "easynet:///r/acme/device/01DEV".into();
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         assert_eq!(file.host_device_agent_ura, "easynet:///r/acme/device/01DEV");
+    }
+
+    #[test]
+    fn existing_rows_refresh_signing_authority_when_host_device_changes() {
+        let mut file = LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/OLD".into(),
+            hosted_agents: vec![HostedAgentEntry {
+                profile: "llm".into(),
+                name: "claude".into(),
+                agent_ura: "easynet:///r/acme/agent/u1.claude".into(),
+                signing_authority: "hosted_by:easynet:///r/acme/device/OLD".into(),
+                first_seen_at: String::new(),
+            }],
+        };
+        let plan = plan_with(false, false, false, &[("claude", "claude-code")]);
+        let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].reused);
+        assert_eq!(file.host_device_agent_ura, "easynet:///r/acme/device/01DEV");
+        assert_eq!(
+            file.hosted_agents[0].signing_authority,
+            "hosted_by:easynet:///r/acme/device/01DEV"
+        );
     }
 
     // ── current canonical row reuse ───────────────────────────────

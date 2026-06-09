@@ -77,9 +77,8 @@ pub const ABILITY_VERB: &str = "invoke";
 /// daemon's boot path AFTER `Arc::new(reg)`. The handler reads
 /// through it so it can dispatch into peer abilities that were
 /// registered after this `register_for_agent` call ran (the agent
-/// registration order is deterministic, but mission_ability /
-/// per-agent fallback resolvers register later in the boot
-/// sequence).
+/// registration order is deterministic, but some runtime-backed
+/// handlers are materialised later in the boot sequence).
 pub fn register_for_agent<F>(
     reg: &mut AxonAbilityCatalog,
     agent_name: String,
@@ -103,10 +102,10 @@ pub fn register_for_agent<F>(
 /// Public per-call entry point. Validates args, applies access policy,
 /// resolves the target handler, dispatches.
 ///
-/// Exposed so the dynamic per-agent fallback resolver in
-/// `chat_ability::register_dynamic_agent_fallback` can synthesise a
-/// handler for a hot-added agent without re-running this module's
-/// register_for_agent (which requires `&mut AxonAbilityCatalog`).
+/// Exposed so HotAgentRegistrar can build the same handler for a
+/// hot-added agent and materialise it in LocalRuntime without
+/// re-running this module's `register_for_agent` (which requires
+/// `&mut AxonAbilityCatalog`).
 pub fn dispatch(
     caller: &str,
     agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
@@ -422,7 +421,7 @@ fn sha256_hex_of_json(v: &Value) -> String {
 /// Look up the target ability's access policy by reading its on-disk
 /// manifest. Returns `None` for any ability whose manifest is not
 /// discoverable (builtin self-bundle abilities, abilities served by
-/// the agent fallback resolver, etc.) — callers treat None as
+/// hot-materialized runtime handlers, etc.) — callers treat None as
 /// "skip the check, trust the dispatch layer".
 fn lookup_access_policy(
     agents: &AgentRegistry,

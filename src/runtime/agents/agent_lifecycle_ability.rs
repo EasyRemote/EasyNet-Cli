@@ -349,12 +349,76 @@ fn start_agent_handler(
     let (runtime_registered, runtime_failed) = runtime_sync_outcome
         .map(|o| (o.registered, o.failed))
         .unwrap_or((0, 0));
+
+    // ISS-002 closed loop: persist this hot-added agent's owner
+    // projection into the cursor file NOW. Previously agent.start only
+    // advertised the agent identity (advertise_hosted_agent) and never
+    // built the ability projection, so the owner_ura never landed in
+    // `owner-projections.json` — it was therefore absent from
+    // `heartbeat_refresh_owner_uras`, its 60s lease was never renewed,
+    // and the hub sweeper dropped the chat ability after expiry. With
+    // lease cancelled (lease=0) projections no longer expire, and
+    // persisting the cursor here makes the owner event-driven instead of
+    // boot-only. Best-effort: a cursor write failure degrades to
+    // "advertise still attempts" + an op_event, never blocks agent.start.
+    let owner_projection_descriptors = build_hot_agent_descriptors(&name, &entry, &agent_ura);
+    let mut abilities_payload: Option<Vec<u8>> = None;
+    if let Some(host_device_ura) = config::load_credentials()
+        .ok()
+        .map(|creds| crate::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+        .filter(|ura| !ura.is_empty())
+    {
+        match crate::runtime::owner_projection::prepare_and_persist(
+            &agent_ura,
+            &host_device_ura,
+            &owner_projection_descriptors,
+        ) {
+            Ok(publication) => {
+                // Persisted to the cursor → owner now appears in
+                // `heartbeat_refresh_owner_uras`. Also build the wire
+                // payload so the advertiser pushes it to the hub NOW
+                // (event-driven), not at the next heartbeat. ISS-002.
+                match crate::runtime::advertise::advertise_abilities_payload(
+                    &agent_ura,
+                    &publication,
+                )
+                .and_then(|payload| {
+                    serde_json::to_vec(&payload)
+                        .map_err(|e| format!("encode advertise_abilities payload: {e}"))
+                }) {
+                    Ok(bytes) => abilities_payload = Some(bytes),
+                    Err(err) => crate::op_event!(
+                        component = agent_lifecycle,
+                        kind = hot_agent_abilities_payload_build_failed,
+                        agent_name = name.as_str(),
+                        agent_ura = agent_ura.as_str(),
+                        error = err.as_str(),
+                        message = "owner projection persisted but advertise payload \
+                                   build failed; hub learns abilities on next \
+                                   heartbeat refresh instead",
+                    ),
+                }
+            }
+            Err(err) => crate::op_event!(
+                component = agent_lifecycle,
+                kind = hot_agent_owner_projection_persist_failed,
+                agent_name = name.as_str(),
+                agent_ura = agent_ura.as_str(),
+                error = err.as_str(),
+                message = "agent registered but owner projection cursor was not \
+                           persisted; abilities resolvable locally but may lag in \
+                           the hub directory until next boot republish",
+            ),
+        }
+    }
+
     let hub_advertise_outcome = hot_registrar
         .as_ref()
         .and_then(|registrar| registrar.hot_agent_advertiser())
         .map(|advertiser| {
             advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
                 agent_ura: agent_ura.clone(),
+                abilities_payload: abilities_payload.clone(),
             })
         });
     if let Some(outcome) = hub_advertise_outcome.as_ref() {
@@ -392,6 +456,66 @@ fn start_agent_handler(
         "model": entry.model.clone(),
         "entry": entry.clone(),
     }))
+}
+
+/// Build the owner-projection ability descriptors for one hot-added
+/// agent, using the SAME construction as the boot-time republish path
+/// (`runtime::publish` step 5b): `abilities_for_publication` →
+/// owner-local public name → `AbilityDescriptor`. Kept byte-equivalent
+/// to boot so the hot-add path is not a second, lossy catalogue (the
+/// divergence that previously omitted newly-added abilities from
+/// `namespace.resolve`). ISS-002.
+fn build_hot_agent_descriptors(
+    name: &str,
+    entry: &AgentEntry,
+    agent_ura: &str,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    let live_registry = crate::runtime::agents::build_registry();
+    let mut descriptors = Vec::new();
+    for spec in crate::runtime::abilities::abilities_for_publication(name, entry) {
+        let registry_name = spec.name();
+        let owner_local_name = crate::runtime::abilities::public_agent_ability_name(
+            agent_ura,
+            name,
+            registry_name,
+        );
+        match crate::runtime::ability_descriptor::AbilityDescriptor::new(
+            owner_local_name,
+            agent_ura,
+            crate::runtime::ability_descriptor::Visibility::Scoped,
+        ) {
+            Ok(desc) => {
+                let mut desc = desc
+                    .with_description(spec.description())
+                    .with_input_schema(spec.parameters().clone())
+                    .with_hints(crate::runtime::agents::discovery_hints_for(
+                        &live_registry,
+                        registry_name,
+                    ))
+                    .with_source(format!("agent:{name}"))
+                    .with_metadata_entry("runtime", entry.agent_type.to_string())
+                    .with_metadata_entry("agent_type", entry.agent_type.to_string())
+                    .with_metadata_entry("base_runtime", entry.agent_type.to_string());
+                if let Some(model) = entry.model.as_ref() {
+                    desc = desc
+                        .with_metadata_entry("model", model.clone())
+                        .with_metadata_entry("base_model", model.clone());
+                }
+                descriptors.push(desc);
+            }
+            Err(err) => crate::op_event!(
+                component = agent_lifecycle,
+                kind = hot_agent_descriptor_build_failed,
+                agent_name = name,
+                agent_ura = agent_ura,
+                ability = registry_name,
+                error = err.to_string().as_str(),
+                message = "skipped one ability descriptor for the hot-added agent's \
+                           owner projection; remaining abilities still publish",
+            ),
+        }
+    }
+    descriptors
 }
 
 fn runtime_kind_from(t: AgentType) -> RuntimeKind {
@@ -476,6 +600,105 @@ fn stop_agent_handler(
     } else {
         None
     };
+
+    // ISS-002 closed loop (stop side, symmetric to start): tell the hub
+    // the agent's abilities are gone NOW instead of waiting for the next
+    // heartbeat. We advertise an empty complete-set so the hub's
+    // complete-set REPLACE tombstones every prior projected ability
+    // (removed = old − ∅), and we drop the local cursor so the owner
+    // leaves the heartbeat refresh batch. Best-effort: failures degrade
+    // to "reconciles on next boot/heartbeat" + an op_event.
+    if ack {
+        if let (Ok(agent_ura), Some(host_device_ura)) = (
+            agent_ura_for_name(&name),
+            config::load_credentials()
+                .ok()
+                .map(|creds| crate::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+                .filter(|ura| !ura.is_empty()),
+        ) {
+            let advertiser = hot_registrar
+                .get()
+                .and_then(|registrar| registrar.hot_agent_advertiser());
+
+            // Step 1: tombstone the agent's abilities (empty complete-set
+            // → hub removes all prior projected abilities) + drop the
+            // local cursor so the owner leaves the heartbeat batch.
+            match crate::runtime::owner_projection::prepare_removal_and_persist(
+                &agent_ura,
+                &host_device_ura,
+            ) {
+                Ok(Some(publication)) => {
+                    let tombstone_payload =
+                        crate::runtime::advertise::advertise_abilities_payload(
+                            &agent_ura,
+                            &publication,
+                        )
+                        .and_then(|payload| {
+                            serde_json::to_vec(&payload).map_err(|e| {
+                                format!("encode advertise_abilities tombstone payload: {e}")
+                            })
+                        })
+                        .ok();
+                    if let (Some(payload), Some(advertiser)) =
+                        (tombstone_payload, advertiser.as_ref())
+                    {
+                        let outcome = advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
+                            agent_ura: agent_ura.clone(),
+                            abilities_payload: Some(payload),
+                        });
+                        if let Some(err) = outcome.error.as_ref() {
+                            crate::op_event!(
+                                component = agent_lifecycle,
+                                kind = hot_agent_stop_tombstone_soft_failed,
+                                agent_name = name.as_str(),
+                                agent_ura = agent_ura.as_str(),
+                                error = err.as_str(),
+                                message = "agent stopped locally but hub ability \
+                                           tombstone advertise failed; hub reconciles \
+                                           on next heartbeat refresh",
+                            );
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = hot_agent_stop_tombstone_build_failed,
+                    agent_name = name.as_str(),
+                    agent_ura = agent_ura.as_str(),
+                    error = err.as_str(),
+                    message = "agent stopped but owner projection tombstone could \
+                               not be built; hub reconciles on next heartbeat",
+                ),
+            }
+
+            // Step 2: revoke the agent IDENTITY from the hub directory
+            // (federation.revoke), symmetric to advertise_hosted_agent on
+            // start. Without this the agent record lingers in the hub
+            // catalogue after stop (with lease cancelled it would not age
+            // out on its own). ISS-002.
+            if let Some(advertiser) = advertiser.as_ref() {
+                let outcome = advertiser.revoke_hosted_agent(
+                    crate::runtime::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest {
+                        agent_ura: agent_ura.clone(),
+                        reason: "agent.stop".to_string(),
+                    },
+                );
+                if let Some(err) = outcome.error.as_ref() {
+                    crate::op_event!(
+                        component = agent_lifecycle,
+                        kind = hot_agent_stop_revoke_soft_failed,
+                        agent_name = name.as_str(),
+                        agent_ura = agent_ura.as_str(),
+                        error = err.as_str(),
+                        message = "agent stopped locally but hub identity revoke \
+                                   failed; the agent record may linger in the hub \
+                                   directory until operator revoke or hub restart",
+                    );
+                }
+            }
+        }
+    }
 
     Ok(json!({
         "ack": ack,

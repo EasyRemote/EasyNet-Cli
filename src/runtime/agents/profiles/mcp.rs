@@ -722,9 +722,8 @@ fn per_agent_workspace_descriptors(
     // the cross-agent surface — when agent A is the active LLM and
     // the user asks for something only agent B has the skill for,
     // agent A's tool list now includes `<B>.<verb>` so the LLM can
-    // route to it. Calling those tools dispatches through the
-    // daemon's per-agent fallback resolver, which then runs B's
-    // own chat-translation handler with B's own skills exposed.
+    // route to it. Calling those tools dispatches through B's
+    // materialized per-agent handler with B's own skills exposed.
     //
     // `<other_name>.chat` is excluded for the same reason: chat is
     // the agent's outgoing surface, not a callable tool. Calling

@@ -362,6 +362,19 @@ pub fn advertise_abilities<I: AbilityInvoker>(
         host_device_ura,
         abilities,
     )?;
+    let payload = advertise_abilities_payload(agent_ura, &projection)?;
+    invoker.invoke_ability(tenant_id, &resource_ura, payload)
+}
+
+/// Build the `federation.advertise_abilities` wire payload from an
+/// already-persisted owner projection. Single source of the wire shape
+/// so the boot-time `advertise_abilities` path and the event-driven
+/// hot-add advertiser (see `agent_lifecycle_ability` / the
+/// `<self>.session` advertiser) cannot drift. ISS-002.
+pub(crate) fn advertise_abilities_payload(
+    agent_ura: &str,
+    projection: &crate::runtime::owner_projection::OwnerProjectionPublication,
+) -> Result<Value, String> {
     let args = AdvertiseAbilitiesArgs {
         agent_ura,
         owner_ura: &projection.owner_ura,
@@ -371,9 +384,7 @@ pub fn advertise_abilities<I: AbilityInvoker>(
         lease_expires_unix_ms: projection.lease_expires_unix_ms,
         ability_summaries: &projection.ability_summaries,
     };
-    let payload =
-        serde_json::to_value(&args).map_err(|e| format!("encode advertise_abilities args: {e}"))?;
-    invoker.invoke_ability(tenant_id, &resource_ura, payload)
+    serde_json::to_value(&args).map_err(|e| format!("encode advertise_abilities args: {e}"))
 }
 
 /// Inbound counterpart to the advertise pair above:
@@ -831,7 +842,8 @@ mod tests {
         assert_eq!(payload["host_device_ura"], "easynet:///r/acme/device/01DEV");
         assert_eq!(payload["projection_revision"], 1);
         assert!(payload["projection_digest"].as_str().unwrap().len() >= 64);
-        assert!(payload["lease_expires_unix_ms"].as_i64().unwrap() > 0);
+        // C4: lease cancelled (ISS-002) — projection publishes lease=0.
+        assert_eq!(payload["lease_expires_unix_ms"].as_i64().unwrap(), 0);
         assert!(
             payload.get("abilities").is_none(),
             "owner projection publication must not send raw AbilityDescriptor payloads"
