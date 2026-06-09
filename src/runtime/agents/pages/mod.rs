@@ -155,8 +155,10 @@ fn register_management_abilities(
 
     let user = config.user.clone();
     let realm = config.realm.clone();
-    let list_handler: LocalRpcHandler =
-        Arc::new(move |args| list_get_unpublish::handle_list(&user, &realm, args));
+    let list_listener_port = config.listener_port;
+    let list_handler: LocalRpcHandler = Arc::new(move |args| {
+        list_get_unpublish::handle_list(&user, list_listener_port, &realm, args)
+    });
     reg.register_rpc_with_owner("pages.list", owner.clone(), list_handler);
 
     let user = config.user.clone();
