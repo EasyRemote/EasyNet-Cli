@@ -1,0 +1,150 @@
+// EasyNet CLI — chat.history.{list,get} handlers
+// =================================================================
+//
+// File: src/runtime/agents/chat_history_ability.rs
+// Description: Two device-level read-only abilities that expose the
+//              per-agent chat transcripts already persisted by the
+//              chat ability to `~/.easynet/agents/<agent>/sessions/`.
+//
+//   * `chat.history.list` (RPC) — list an agent's chat sessions
+//                                  (id, started_at, last_turn_at,
+//                                  turn_count, prompt_preview),
+//                                  most-recent-first.
+//   * `chat.history.get`  (RPC) — read one session's JSONL turns
+//                                  (the session_meta line + every
+//                                  turn record), verbatim.
+//
+// The persistence + readers already exist in
+// `crate::persistence::chat_sessions`; this module only registers
+// them as invokable abilities so the Hub/backend (and ultimately the
+// Frontend Group page) can read transcripts over the wire instead of
+// only via the local `easynet agent chat-history` CLI command.
+//
+// Owner is Device: transcripts are device-local files, read off
+// whichever device hosted the agent — matching `session.list`.
+//
+// Author: Silan Hu <silan.hu@u.nus.edu>
+// Copyright (c) 2026 EasyNet. All rights reserved.
+
+use serde_json::{json, Value};
+
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+
+pub const ABILITY_LIST: &str = "chat.history.list";
+pub const ABILITY_GET: &str = "chat.history.get";
+
+/// Register the two chat-history read abilities. Called from
+/// `runtime::agents::build_registry`.
+pub fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner(
+        ABILITY_LIST,
+        OwnerKind::Device,
+        std::sync::Arc::new(list_handler),
+    );
+    reg.register_rpc_with_owner(
+        ABILITY_GET,
+        OwnerKind::Device,
+        std::sync::Arc::new(get_handler),
+    );
+}
+
+/// `chat.history.list` — args `{ "agent": string }`.
+/// Returns `{ "agent": string, "sessions": [SessionDescriptor, ...] }`.
+fn list_handler(args: Value) -> anyhow::Result<Value> {
+    let agent = require_agent(&args)?;
+    let sessions = crate::persistence::chat_sessions::list_sessions(&agent);
+    let json_sessions: Vec<Value> = sessions
+        .iter()
+        .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
+        .collect();
+    Ok(json!({ "agent": agent, "sessions": json_sessions }))
+}
+
+/// `chat.history.get` — args `{ "agent": string, "session_id": string }`.
+/// Returns `{ "agent", "session_id", "turns": [<jsonl value>, ...] }`
+/// where each value is one verbatim JSONL line (the leading
+/// `session_meta` row plus every `turn` record).
+fn get_handler(args: Value) -> anyhow::Result<Value> {
+    let agent = require_agent(&args)?;
+    let session_id = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("chat.history.get: `session_id` required"))?
+        .to_string();
+    let turns = crate::persistence::chat_sessions::load_session(&agent, &session_id)?;
+    Ok(json!({ "agent": agent, "session_id": session_id, "turns": turns }))
+}
+
+fn require_agent(args: &Value) -> anyhow::Result<String> {
+    args.get("agent")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("chat.history: `agent` required"))
+}
+
+pub fn list_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "agent": {"type": "string", "description": "Agent name whose chat sessions to list."}
+        },
+        "required": ["agent"],
+        "additionalProperties": false,
+    })
+}
+
+pub fn get_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "agent": {"type": "string", "description": "Agent name that owns the session."},
+            "session_id": {"type": "string", "description": "Session id to read (from chat.history.list)."}
+        },
+        "required": ["agent", "session_id"],
+        "additionalProperties": false,
+    })
+}
+
+pub fn list_description() -> &'static str {
+    "List an agent's persisted chat sessions (id, started_at, last_turn_at, turn_count, \
+     prompt_preview), most-recent-first."
+}
+
+pub fn get_description() -> &'static str {
+    "Read one chat session's transcript turns (the session_meta line plus every recorded \
+     turn: prompt, reply, tool_calls, usage), verbatim."
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_requires_agent() {
+        let err = list_handler(json!({})).unwrap_err();
+        assert!(err.to_string().contains("agent"));
+    }
+
+    #[test]
+    fn get_requires_agent_and_session_id() {
+        assert!(get_handler(json!({"session_id": "s1"}))
+            .unwrap_err()
+            .to_string()
+            .contains("agent"));
+        assert!(get_handler(json!({"agent": "demo"}))
+            .unwrap_err()
+            .to_string()
+            .contains("session_id"));
+    }
+
+    #[test]
+    fn schemas_declare_required_args() {
+        assert_eq!(list_input_schema()["required"][0], "agent");
+        let get_schema = get_input_schema();
+        let get_req = get_schema["required"].as_array().unwrap();
+        assert!(get_req.iter().any(|v| v == "agent"));
+        assert!(get_req.iter().any(|v| v == "session_id"));
+    }
+}

@@ -47,6 +47,7 @@
 // itself is already `pub`.
 pub mod chat_sessions;
 pub mod config;
+pub mod context_store;
 /// Daemon-side configuration for the gRPC InvocationServer
 /// (`~/.easynet/daemon-config.toml`). Authored by RFC-003 PR-1; see
 /// `pr-drafts/PR-0-spec-daemon-invocation-server.md §1` for the

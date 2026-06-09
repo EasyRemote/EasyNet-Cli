@@ -69,6 +69,8 @@ pub mod api_key_ability;
 /// mock with wry per platform.
 pub mod browser_session_ability;
 pub mod chat_ability;
+pub mod chat_history_ability;
+pub mod context_ability;
 pub mod context_loaders;
 pub mod device_ops_ability;
 pub mod discover_ability;
@@ -666,6 +668,12 @@ fn build_registry_with_services_result_inner(
     // (see policy_ability module preamble).
     policy_ability::register(&mut reg);
     session_ability::register(&mut reg, sessions);
+    // chat.history.{list,get} — read-only access to the per-agent
+    // chat transcripts the chat ability already persists on disk.
+    chat_history_ability::register(&mut reg);
+    // context.* — device-global clipboard history, mapped project
+    // folders, and favorites (the Frontend Context page surface).
+    context_ability::register(&mut reg);
     permission_ability::register(&mut reg, perms);
     discuss_ability::register(&mut reg, Arc::clone(&discuss));
     schedule_ability::register(&mut reg, schedule);
@@ -1444,6 +1452,11 @@ pub fn description_for(name: &str) -> &'static str {
         "policy.simulate" => policy_ability::simulate_description(),
         "session.list" => session_ability::list_description(),
         "session.attach" => session_ability::attach_description(),
+        "chat.history.list" => chat_history_ability::list_description(),
+        "chat.history.get" => chat_history_ability::get_description(),
+        name if name.starts_with("context.") => {
+            context_ability::description_for(name).unwrap_or("Context surface ability.")
+        }
         "consent.subscribe" => permission_ability::subscribe_description(),
         "consent.decide" => permission_ability::decide_description(),
         "consent.list_pending" => permission_ability::list_pending_description(),
@@ -1622,6 +1635,10 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "policy.simulate" => policy_ability::simulate_input_schema(),
         "session.list" => session_ability::list_input_schema(),
         "session.attach" => session_ability::attach_input_schema(),
+        "chat.history.list" => chat_history_ability::list_input_schema(),
+        "chat.history.get" => chat_history_ability::get_input_schema(),
+        name if name.starts_with("context.") => context_ability::input_schema_for(name)
+            .unwrap_or_else(|| serde_json::json!({"type": "object"})),
         "consent.subscribe" => permission_ability::subscribe_input_schema(),
         "consent.decide" => permission_ability::decide_input_schema(),
         "consent.list_pending" => permission_ability::list_pending_input_schema(),

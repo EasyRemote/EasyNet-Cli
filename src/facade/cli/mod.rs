@@ -138,6 +138,7 @@ pub(crate) mod mission_runs;
 /// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
 /// `<user>.pages.{publish,unpublish,list,get}` and the
 /// `<user>.<project_id>.page.fetch` family.
+pub(crate) mod context;
 pub(crate) mod pages;
 /// #185 — `easynet quota` owner verb to inspect/edit the per-consumer
 /// invocation quota policy (`[daemon.quota]`).
@@ -362,6 +363,8 @@ pub enum Command {
     /// Publish a folder of static bytes as a website.
     #[command(display_order = 31)]
     Pages(pages::PagesArgs),
+    /// Context surface: clipboard tracking + mapped project folders.
+    Context(context::ContextArgs),
 
     /// Mint / list / revoke OpenAI-compat API keys.
     #[command(name = "api-key", display_order = 32)]
@@ -457,6 +460,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Mission(args) => groups::mission::run(args),
         Command::Skill(args) => skill::run(args),
         Command::Pages(args) => pages::run(args),
+        Command::Context(args) => context::run(args),
         Command::ApiKey(args) => api_key_cli::run(args),
         Command::LlmApi(args) => llm_api::run(args),
         Command::Runtime(args) => groups::runtime::run(args),

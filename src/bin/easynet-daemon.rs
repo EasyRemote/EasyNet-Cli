@@ -312,6 +312,14 @@ async fn main() -> anyhow::Result<()> {
         boot_bus.emit_skipped("heartbeat");
     }
 
+    // Clipboard tracker (Context surface). Always spawned; the thread
+    // is inert (config-stat + sleep) until `easynet context clipboard
+    // on` flips the persisted flag, so an off-by-default user pays one
+    // sleeping thread and zero clipboard access.
+    boot_bus.emit_started("clipboard-tracker");
+    easynet_cli::services::clipboard_tracker::spawn();
+    boot_bus.emit_ok("clipboard-tracker");
+
     // Schedule tick runner. Fires due schedules every TICK_PERIOD
     // by constructing a RuntimeInvocation adapter record per fire and routing it
     // through Kernel::invoke. The Kernel admits the Session,

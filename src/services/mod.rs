@@ -85,6 +85,7 @@
 // deletion. Until that lands, the operator log is the audit
 // source for non-terminal calls.
 
+pub mod clipboard_tracker;
 pub mod control;
 pub mod session_failure;
 
