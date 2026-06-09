@@ -141,7 +141,24 @@ fn register_management_abilities(
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
         publish::handle_publish(&user, listener_port, &realm, registry, args)
     });
-    reg.register_rpc_with_owner("pages.publish", owner.clone(), publish_handler);
+    reg.register_rpc_with_spec(
+        "pages.publish",
+        owner.clone(),
+        pages_manifest(
+            "publish",
+            "Publish a folder of static bytes as a website under this user.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["project_id", "folder"],
+                "properties": {
+                    "project_id": { "type": "string", "description": "URA-safe project id (alnum + _ + -, max 64)." },
+                    "folder": { "type": "string", "description": "Absolute path to the folder to publish." },
+                    "visibility": { "type": "string", "description": "Visibility; only `public` is supported in MVP.", "default": "public" }
+                }
+            }),
+        ),
+        publish_handler,
+    );
 
     let user = config.user.clone();
     let unpublish_handle = Arc::clone(&dispatch_handle);
@@ -151,7 +168,16 @@ fn register_management_abilities(
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
         list_get_unpublish::handle_unpublish_with_registry(&user, registry.as_ref(), args)
     });
-    reg.register_rpc_with_owner("pages.unpublish", owner.clone(), unpublish_handler);
+    reg.register_rpc_with_spec(
+        "pages.unpublish",
+        owner.clone(),
+        pages_manifest(
+            "unpublish",
+            "Unpublish a project: release the folder fd and unregister the fetch ability.",
+            pages_project_id_schema(),
+        ),
+        unpublish_handler,
+    );
 
     let user = config.user.clone();
     let realm = config.realm.clone();
@@ -159,14 +185,108 @@ fn register_management_abilities(
     let list_handler: LocalRpcHandler = Arc::new(move |args| {
         list_get_unpublish::handle_list(&user, list_listener_port, &realm, args)
     });
-    reg.register_rpc_with_owner("pages.list", owner.clone(), list_handler);
+    reg.register_rpc_with_spec(
+        "pages.list",
+        owner.clone(),
+        pages_manifest(
+            "list",
+            "List the page projects this user currently publishes on this daemon.",
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ),
+        list_handler,
+    );
 
     let user = config.user.clone();
     let realm = config.realm.clone();
     let listener_port = config.listener_port;
     let get_handler: LocalRpcHandler =
         Arc::new(move |args| list_get_unpublish::handle_get(&user, listener_port, &realm, args));
-    reg.register_rpc_with_owner("pages.get", owner, get_handler);
+    reg.register_rpc_with_spec(
+        "pages.get",
+        owner,
+        pages_manifest(
+            "get",
+            "Return one published project's detail (folder, visibility, URLs).",
+            pages_project_id_schema(),
+        ),
+        get_handler,
+    );
+}
+
+/// Build an `AbilityManifest` for a pages verb. Panics only on a
+/// programmer error (a malformed literal schema), which a unit test
+/// catches at build time — never at runtime with author input.
+fn pages_manifest(
+    name: &str,
+    description: &str,
+    input_schema: serde_json::Value,
+) -> crate::core::ability_spec::AbilityManifest {
+    crate::core::ability_spec::AbilityManifest::new(name, description, input_schema)
+        .expect("static pages manifest is well-formed")
+}
+
+/// The `{ project_id }` input schema shared by `pages.get` and
+/// `pages.unpublish` — both require the caller to name the project.
+fn pages_project_id_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "required": ["project_id"],
+        "properties": {
+            "project_id": { "type": "string", "description": "The project id to act on." }
+        }
+    })
+}
+
+/// One management verb's advertise-facing spec: the registry-relative
+/// ability name (`pages.list`), a human description, and the input
+/// schema. Single source of truth shared by the local registration
+/// (manifests) AND the session-prelude advertise descriptor builder,
+/// so the Frontend InvokeAbilityDialog renders the right form whether
+/// it reads the local manifest or the advertised descriptor.
+pub(crate) struct PagesAbilitySpec {
+    pub relative_name: &'static str,
+    pub description: &'static str,
+    pub input_schema: serde_json::Value,
+}
+
+/// The four user-scoped pages management verbs and their schemas.
+pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
+    vec![
+        PagesAbilitySpec {
+            relative_name: "pages.list",
+            description: "List the page projects this user currently publishes on this daemon.",
+            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+        },
+        PagesAbilitySpec {
+            relative_name: "pages.publish",
+            description: "Publish a folder of static bytes as a website under this user.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["project_id", "folder"],
+                "properties": {
+                    "project_id": { "type": "string", "description": "URA-safe project id (alnum + _ + -, max 64)." },
+                    "folder": { "type": "string", "description": "Absolute path to the folder to publish." },
+                    "visibility": { "type": "string", "description": "Visibility; only `public` is supported in MVP.", "default": "public" }
+                }
+            }),
+        },
+        PagesAbilitySpec {
+            relative_name: "pages.get",
+            description: "Return one published project's detail (folder, visibility, URLs).",
+            input_schema: pages_project_id_schema(),
+        },
+        PagesAbilitySpec {
+            relative_name: "pages.unpublish",
+            description: "Unpublish a project: release the folder fd and unregister the fetch ability.",
+            input_schema: pages_project_id_schema(),
+        },
+    ]
+}
+
+/// The verb tail of a `pages.<verb>` relative name (the bare manifest
+/// name AbilityManifest requires — `.` is the agent/verb separator).
+pub(crate) fn pages_verb_tail(relative_name: &str) -> &str {
+    relative_name.strip_prefix("pages.").unwrap_or(relative_name)
 }
 
 pub(crate) fn register_project_abilities(
@@ -215,5 +335,35 @@ fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
     project_ids.sort();
     for project_id in project_ids {
         register_project_abilities(reg, user, &project_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_management_manifests_are_well_formed_and_declare_required_args() {
+        // The `.expect()` in pages_manifest must never fire at runtime.
+        // Also pin that get/unpublish require project_id (the bug that
+        // showed "No input required" and 400'd on empty invoke).
+        let id = pages_project_id_schema();
+        assert_eq!(id["required"][0], "project_id");
+
+        let get = pages_manifest("get", "d", pages_project_id_schema());
+        assert_eq!(get.input_schema()["required"][0], "project_id");
+
+        let publish = pages_manifest(
+            "publish",
+            "d",
+            serde_json::json!({
+                "type": "object",
+                "required": ["project_id", "folder"],
+                "properties": { "project_id": {"type": "string"}, "folder": {"type": "string"} }
+            }),
+        );
+        let req = publish.input_schema()["required"].as_array().unwrap();
+        assert!(req.iter().any(|v| v == "folder"));
+        assert!(req.iter().any(|v| v == "project_id"));
     }
 }
