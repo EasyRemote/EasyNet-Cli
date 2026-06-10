@@ -670,6 +670,25 @@ impl McpClientService {
             .join("mcp_clients.json")
     }
 
+    /// Drop every cached upstream connection (stdio child handles,
+    /// listener tasks, HTTP clients). The next call per server
+    /// reconnects lazily on the CALLER's runtime.
+    ///
+    /// Why this exists: boot-time eager reflection drives
+    /// `reflect_all` on a temporary helper runtime
+    /// (`mcp_reflective_registry::run_eager_blocking`). Connections
+    /// born there die with that runtime — a serve-time reuse touches
+    /// a shut-down tokio context ("A Tokio 1.x context was found,
+    /// but it is being shutdown"). Reflection callers reset the
+    /// cache before their helper runtime drops.
+    pub async fn reset_connections(&self) {
+        let mut g = self.inner.lock().await;
+        for row in g.servers.values_mut() {
+            row.conn = None;
+            row.http_conn = None;
+        }
+    }
+
     /// Construct from an in-memory file (test path or operator-
     /// supplied snapshot). Production callers prefer `from_path`.
     pub fn from_file(file: McpClientsFile) -> Self {

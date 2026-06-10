@@ -407,7 +407,15 @@ pub fn run_eager_blocking(
     registry: &mut AxonAbilityCatalog,
     owner_ura: &str,
 ) -> Option<(BTreeMap<String, Vec<String>>, ReflectResult)> {
-    let fut = async move { reflect_all(client, registry, owner_ura).await };
+    let fut = async move {
+        let report = reflect_all(client, registry, owner_ura).await;
+        // Connections born on this helper runtime die with it; leaving
+        // them cached would hand serve-time invocations a shut-down
+        // tokio context. Reflection is a one-shot tools/list — reset so
+        // the first real invocation reconnects on the daemon's runtime.
+        client.reset_connections().await;
+        report
+    };
     match run_blocking(fut, "build mcp-reflect runtime") {
         Ok(report) => {
             log_eager_reflect_report(&report);
