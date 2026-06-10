@@ -428,9 +428,16 @@ fn filter_dimensions(
     fallback_display: &SCDisplay,
 ) -> anyhow::Result<(usize, usize)> {
     if entry.kind == ResourceType::Display {
+        // SCDisplay reports width/height in POINTS, while
+        // SCStreamConfiguration wants PIXELS. Without the
+        // pointPixelScale multiply, a 2x Retina panel captures at
+        // half resolution and the browser-side upscale blurs every
+        // glyph (observed: 1470×956 captured on a 2940×1912 panel).
+        let info = unsafe { SCShareableContent::infoForFilter(filter) };
+        let scale = f64::from(unsafe { info.pointPixelScale() }.max(1.0));
         let width = unsafe { fallback_display.width() };
         let height = unsafe { fallback_display.height() };
-        return positive_dimensions(width as f64, height as f64);
+        return positive_dimensions(width as f64 * scale, height as f64 * scale);
     }
     let info = unsafe { SCShareableContent::infoForFilter(filter) };
     let rect = unsafe { info.contentRect() };
