@@ -547,7 +547,32 @@ impl<'a> DaemonRouteResolver<'a> {
 
         if let Some(device_local) = device_local {
             if owner_matches_self {
-                return self.resolve_route_from_device_local(&selector, device_local);
+                return self.resolve_route_from_device_local(
+                    &selector,
+                    device_local,
+                    device_local.device_ura.clone(),
+                );
+            }
+            // Device-owned agent hosted by THIS device (ratified
+            // 2026-06-11): the device is the authority for its own
+            // agents by construction — presence and dispatch bindings
+            // are proven against the device, while the route's
+            // owner/callee keep the agent-grained identity.
+            if let Some(device_id) = crate::ura::parse_ura(&selector.owner_ura)
+                .ok()
+                .and_then(|p| p.device_agent_ids().map(|(d, _)| d.to_string()))
+            {
+                let self_is_host = crate::ura::parse_ura(&device_local.device_ura)
+                    .ok()
+                    .and_then(|p| p.device_id().map(str::to_string))
+                    .is_some_and(|self_id| self_id == device_id);
+                if self_is_host {
+                    return self.resolve_route_from_device_local(
+                        &selector,
+                        device_local,
+                        device_local.device_ura.clone(),
+                    );
+                }
             }
         }
 
@@ -557,12 +582,17 @@ impl<'a> DaemonRouteResolver<'a> {
     /// Resolve a device-owned ability from this device's live runtime
     /// dispatch table. ABILITY existence and the executable ROUTE are both
     /// proven locally (D105), so the answer is `AuthoritativeLocal`.
+    /// `authority_ura` is the DEVICE the lookups run against; it equals
+    /// `selector.owner_ura` for device-owned abilities and the hosting
+    /// device's URA for device-owned agents (whose owner stays the
+    /// agent-grained identity on the returned route).
     fn resolve_route_from_device_local(
         &self,
         selector: &RouteSelector,
         device_local: &DeviceLocalAuthoritySource,
+        authority_ura: String,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
-        if !self.registry.snapshot().contains(&selector.owner_ura) {
+        if !self.registry.snapshot().contains(&authority_ura) {
             return Err(ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
                 reason: axon_pb::NegativeReason::Noroute,
@@ -572,7 +602,7 @@ impl<'a> DaemonRouteResolver<'a> {
 
         let ability = device_local
             .authority
-            .resolve_device_ability(&selector.owner_ura, &selector.public_name)
+            .resolve_device_ability(&authority_ura, &selector.public_name)
             .ok_or_else(|| ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
                 reason: axon_pb::NegativeReason::Nodata,
@@ -601,7 +631,7 @@ impl<'a> DaemonRouteResolver<'a> {
             query_name: selector.query_name.clone(),
             owner_ura: selector.owner_ura.clone(),
             callee_ura: selector.owner_ura.clone(),
-            execution_host_ura: selector.owner_ura.clone(),
+            execution_host_ura: authority_ura,
             host_node_id: None,
             ability_ura: selector.ability_ura.clone(),
             route_ura,

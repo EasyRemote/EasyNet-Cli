@@ -705,6 +705,7 @@ fn dispatch_to_agent(
                 effective_parents,
                 timeout,
                 Some(trace_id),
+                Some(&agent_id.name),
             ) {
                 Ok((value, meta)) => {
                     return Ok(StepDispatchOutcome {

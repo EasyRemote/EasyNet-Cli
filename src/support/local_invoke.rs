@@ -105,6 +105,7 @@ pub fn invoke_local_ability_with_invocation_meta(
     causal_parents: &[Value],
     step_timeout: Option<std::time::Duration>,
     trace_id: Option<&str>,
+    callee_agent: Option<&str>,
 ) -> anyhow::Result<(Value, Value)> {
     crate::support::local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta(
         ability,
@@ -113,6 +114,7 @@ pub fn invoke_local_ability_with_invocation_meta(
         causal_parents,
         step_timeout,
         trace_id,
+        callee_agent,
     )
 }
 
