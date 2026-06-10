@@ -421,15 +421,25 @@ impl Parser {
             if *self.peek() == Token::Dot {
                 self.advance();
                 let acc = self.expect_ident()?;
-                anyhow::ensure!(
-                    acc == "output",
-                    "unknown accessor '.{acc}' (only '.output' supported in member-call args)"
-                );
-                return Ok(FieldValue::VarRef { var_name: ident });
+                // `.output` references a step's `let` binding;
+                // `.result` references a named loop's exported
+                // `<name>.result` binding (planner seeds it on a
+                // winning iteration) — the binding key carries the
+                // suffix, matching the planner's export name.
+                return match acc.as_str() {
+                    "output" => Ok(FieldValue::VarRef { var_name: ident }),
+                    "result" => Ok(FieldValue::VarRef {
+                        var_name: format!("{ident}.result"),
+                    }),
+                    _ => anyhow::bail!(
+                        "unknown accessor '.{acc}' (only '.output' and '.result' \
+                         supported in member-call args)"
+                    ),
+                };
             }
             anyhow::bail!(
                 "bare identifier '{ident}' is not a valid argument value; \
-                 use a string literal, number, bool, or '<var>.output'"
+                 use a string literal, number, bool, '<var>.output', or '<loop>.result'"
             );
         }
         // Scalar literals: consume and destructure in one step.
@@ -471,11 +481,15 @@ impl Parser {
             if *self.peek() == Token::Dot {
                 self.advance();
                 let acc = self.expect_ident()?;
-                anyhow::ensure!(
-                    acc == "output",
-                    "unknown accessor '.{acc}' (only '.output' supported)"
-                );
-                return Ok(FieldValue::VarRef { var_name: ident });
+                return match acc.as_str() {
+                    "output" => Ok(FieldValue::VarRef { var_name: ident }),
+                    "result" => Ok(FieldValue::VarRef {
+                        var_name: format!("{ident}.result"),
+                    }),
+                    _ => anyhow::bail!(
+                        "unknown accessor '.{acc}' (only '.output' and '.result' supported)"
+                    ),
+                };
             }
             return Ok(FieldValue::String(ident));
         }

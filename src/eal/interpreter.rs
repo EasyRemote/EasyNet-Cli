@@ -468,6 +468,22 @@ fn dispatch_remote_via_forward_invoke(
     }
 }
 
+/// Per-mission-run dispatch context.
+///
+/// `trace_id` is the mission run's id (minted once per run in
+/// `execute_with_dispatcher`, equal to `ExecutionTrace::mission_id`).
+/// Dispatchers that lower steps onto the Axon Invocation surface stamp
+/// it on every envelope's `trace_id` operational-metadata field, so the
+/// daemon ledger groups one mission run's invocations and
+/// `easynet invocation trace <mission_id>` reconstructs the run's
+/// receipt graph. It is not an Invocation axiom field — causal
+/// placement stays in `causal_context`.
+#[derive(Debug, Clone, Copy)]
+pub struct RunContext<'a> {
+    pub tenant: &'a str,
+    pub trace_id: &'a str,
+}
+
 pub trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
     /// `IrTarget` enum and the typed `AbilityName` — there is no
@@ -486,7 +502,7 @@ pub trait StepDispatcher {
     /// ignore them.
     fn dispatch(
         &self,
-        tenant: &str,
+        run: RunContext<'_>,
         target: &IrTarget,
         ability: &AbilityName,
         arguments: &Value,
@@ -573,7 +589,7 @@ fn load_registry_or_warn() -> crate::registry::agents::AgentRegistry {
 impl StepDispatcher for AgentAwareDispatcher {
     fn dispatch(
         &self,
-        tenant: &str,
+        run: RunContext<'_>,
         target: &IrTarget,
         ability: &AbilityName,
         arguments: &Value,
@@ -581,12 +597,17 @@ impl StepDispatcher for AgentAwareDispatcher {
         causal_parents: &[Value],
     ) -> Result<StepDispatchOutcome, EalError> {
         match target {
-            IrTarget::Agent(agent_id) => {
-                dispatch_to_agent(&self.registry, agent_id, ability, arguments, causal_parents)
-            }
+            IrTarget::Agent(agent_id) => dispatch_to_agent(
+                &self.registry,
+                agent_id,
+                ability,
+                arguments,
+                causal_parents,
+                run.trace_id,
+            ),
             IrTarget::Device { node_id } => {
                 let _ = timeout_ms;
-                dispatch_remote_via_forward_invoke(tenant, node_id, ability.as_str(), arguments)
+                dispatch_remote_via_forward_invoke(run.tenant, node_id, ability.as_str(), arguments)
                     .map(Into::into)
             }
         }
@@ -606,6 +627,7 @@ fn dispatch_to_agent(
     ability: &AbilityName,
     arguments: &Value,
     causal_parents: &[Value],
+    trace_id: &str,
 ) -> Result<StepDispatchOutcome, EalError> {
     // Registry is keyed by string today (see Step 4
     // follow-up: registry will be keyed by AgentId itself).
@@ -682,6 +704,7 @@ fn dispatch_to_agent(
                 None,
                 effective_parents,
                 timeout,
+                Some(trace_id),
             ) {
                 Ok((value, meta)) => {
                     return Ok(StepDispatchOutcome {
@@ -913,10 +936,22 @@ pub fn execute_with_dispatcher(
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
     let mission_id = uuid::Uuid::new_v4().to_string();
+    // One trace id per mission run, equal to the mission id: every
+    // lowered invocation envelope carries it, so the daemon ledger can
+    // group the run (`easynet invocation trace <mission_id>`).
+    let run = RunContext {
+        tenant,
+        trace_id: &mission_id,
+    };
     let mission_start = Instant::now();
     let started_at = now_unix_ms();
 
     let mut captured: HashMap<String, CapturedResult> = HashMap::new();
+    // Run-level receipt graph: every completed step's invocation
+    // record in execution order, loop-internal steps included. This
+    // is what `__runner_receipt_graph__` substitutes to — the graph
+    // is a run-level fact, independent of binding scopes.
+    let mut receipt_graph: Vec<Value> = Vec::new();
     // `skipped_bindings` mirrors `captured`: when a step with an
     // `output_binding` is skipped (either directly or by dependency),
     // its binding name lands here instead of in `captured`. Downstream
@@ -962,12 +997,13 @@ pub fn execute_with_dispatcher(
                     let calls = calls_from_partition(call_steps);
                     execute_calls_phase_partition(
                         dispatcher,
-                        tenant,
+                        run,
                         &calls,
                         phase_idx,
                         &mut global_step,
                         total,
                         &mut captured,
+                        &mut receipt_graph,
                         &mut skipped_bindings,
                         &mut completed,
                         &mut failed,
@@ -979,12 +1015,13 @@ pub fn execute_with_dispatcher(
                 PhasePartition::Loop(lp) => {
                     execute_loop(
                         dispatcher,
-                        tenant,
+                        run,
                         lp,
                         phase_idx,
                         &mut global_step,
                         total,
                         &mut captured,
+                        &mut receipt_graph,
                         &mut completed,
                         &mut failed,
                         &mut aborted,
@@ -1133,25 +1170,17 @@ fn causal_parents_from_captured(
 }
 
 /// Replace any top-level [`RECEIPT_GRAPH_SENTINEL`] argument value
-/// with the current receipt graph (one entry per bound completed
-/// step's invocation record).
-fn substitute_receipt_graph(args: &mut Value, captured: &HashMap<String, CapturedResult>) {
+/// with the run-level receipt graph: every completed step's invocation
+/// record so far, in execution order — including loop-internal steps,
+/// whose bindings never reach the outer captured map. The graph is a
+/// run-level fact, not a binding-scope projection.
+fn substitute_receipt_graph(args: &mut Value, receipt_graph: &[Value]) {
     let Some(object) = args.as_object_mut() else {
         return;
     };
-    if !object
-        .values()
-        .any(|v| v.as_str() == Some(RECEIPT_GRAPH_SENTINEL))
-    {
-        return;
-    }
-    let graph: Vec<Value> = captured
-        .values()
-        .filter_map(|c| c.invocation.clone())
-        .collect();
     for value in object.values_mut() {
         if value.as_str() == Some(RECEIPT_GRAPH_SENTINEL) {
-            *value = Value::Array(graph.clone());
+            *value = Value::Array(receipt_graph.to_vec());
         }
     }
 }
@@ -1161,12 +1190,14 @@ fn substitute_receipt_graph(args: &mut Value, captured: &HashMap<String, Capture
 ///
 /// Parallel path uses rayon's work-stealing threadpool (amortizes thread creation
 /// across phases) and crossbeam's lock-free SegQueue for result collection.
+#[allow(clippy::too_many_arguments)] // mirrors the sibling phase-executor signatures
 fn dispatch_batch(
     dispatcher: &dyn StepDispatcher,
-    tenant: &str,
+    run: RunContext<'_>,
     steps: &[IrStep],
     indices: &[usize],
     captured: &HashMap<String, CapturedResult>,
+    receipt_graph: &[Value],
     skipped_bindings: &std::collections::HashSet<String>,
     parallel: bool,
 ) -> Vec<(usize, StepExecResult)> {
@@ -1238,7 +1269,7 @@ fn dispatch_batch(
                 }
             };
             let mut merged_args = merged_args;
-            substitute_receipt_graph(&mut merged_args, captured);
+            substitute_receipt_graph(&mut merged_args, receipt_graph);
             let causal_parents = causal_parents_from_captured(step, captured);
             tasks.push((local_idx, thread_dispatcher, merged_args, causal_parents));
         }
@@ -1250,7 +1281,7 @@ fn dispatch_batch(
                 scope.spawn(move |_| {
                     let result = execute_step_with_retry(
                         thread_dispatcher.as_ref(),
-                        tenant,
+                        run,
                         step,
                         &merged_args,
                         &causal_parents,
@@ -1298,10 +1329,10 @@ fn dispatch_batch(
                 }
             };
             let mut merged_args = merged_args;
-            substitute_receipt_graph(&mut merged_args, captured);
+            substitute_receipt_graph(&mut merged_args, receipt_graph);
             let causal_parents = causal_parents_from_captured(step, captured);
             let result =
-                execute_step_with_retry(dispatcher, tenant, step, &merged_args, &causal_parents);
+                execute_step_with_retry(dispatcher, run, step, &merged_args, &causal_parents);
             results.push((local_idx, result));
         }
         results
@@ -1317,6 +1348,7 @@ fn process_batch(
     global_step: &mut usize,
     total: usize,
     captured: &mut HashMap<String, CapturedResult>,
+    receipt_graph: &mut Vec<Value>,
     skipped_bindings: &mut std::collections::HashSet<String>,
     completed: &mut usize,
     failed: &mut usize,
@@ -1334,6 +1366,9 @@ fn process_batch(
         match outcome {
             StepOutcome::Completed => {
                 *completed += 1;
+                if let Some(invocation) = trace.invocation.as_ref() {
+                    receipt_graph.push(invocation.clone());
+                }
                 if let Some(ref binding) = step.output_binding {
                     if let Some(bytes) = result_bytes {
                         captured.insert(
@@ -1378,12 +1413,13 @@ fn process_batch(
 #[allow(clippy::too_many_arguments)]
 fn execute_calls_phase_partition(
     dispatcher: &dyn StepDispatcher,
-    tenant: &str,
+    run: RunContext<'_>,
     steps: &[IrCall],
     phase_idx: usize,
     global_step: &mut usize,
     total: usize,
     captured: &mut HashMap<String, CapturedResult>,
+    receipt_graph: &mut Vec<Value>,
     skipped_bindings: &mut std::collections::HashSet<String>,
     completed: &mut usize,
     failed: &mut usize,
@@ -1419,10 +1455,11 @@ fn execute_calls_phase_partition(
 
     let required_results = dispatch_batch(
         dispatcher,
-        tenant,
+        run,
         steps,
         &required_indices,
         captured,
+        receipt_graph,
         skipped_bindings,
         can_parallel,
     );
@@ -1433,6 +1470,7 @@ fn execute_calls_phase_partition(
         global_step,
         total,
         captured,
+        receipt_graph,
         skipped_bindings,
         completed,
         failed,
@@ -1444,10 +1482,11 @@ fn execute_calls_phase_partition(
     if !*aborted && !optional_indices.is_empty() {
         let optional_results = dispatch_batch(
             dispatcher,
-            tenant,
+            run,
             steps,
             &optional_indices,
             captured,
+            receipt_graph,
             skipped_bindings,
             can_parallel,
         );
@@ -1458,6 +1497,7 @@ fn execute_calls_phase_partition(
             global_step,
             total,
             captured,
+            receipt_graph,
             skipped_bindings,
             completed,
             failed,
@@ -1492,12 +1532,13 @@ fn execute_calls_phase_partition(
 #[allow(clippy::too_many_arguments)]
 fn execute_loop(
     dispatcher: &dyn StepDispatcher,
-    tenant: &str,
+    run: RunContext<'_>,
     lp: &IrLoop,
     phase_idx: usize,
     global_step: &mut usize,
     total: usize,
     outer_captured: &mut HashMap<String, CapturedResult>,
+    receipt_graph: &mut Vec<Value>,
     completed: &mut usize,
     failed: &mut usize,
     aborted: &mut bool,
@@ -1554,12 +1595,13 @@ fn execute_loop(
         );
         let body_ok = run_loop_block_sequentially(
             dispatcher,
-            tenant,
+            run,
             &body_calls,
             phase_idx,
             global_step,
             total,
             &mut iter_captured,
+            receipt_graph,
             &mut iter_skipped,
             completed,
             failed,
@@ -1582,12 +1624,13 @@ fn execute_loop(
         // `<name>.result`.
         let verify_ok = run_loop_block_sequentially(
             dispatcher,
-            tenant,
+            run,
             &verify_calls,
             phase_idx,
             global_step,
             total,
             &mut iter_captured,
+            receipt_graph,
             &mut iter_skipped,
             completed,
             failed,
@@ -1607,18 +1650,14 @@ fn execute_loop(
         // regardless of whether the verify last call had an explicit
         // `let`, we capture by synthetic binding below.
         let final_call = &verify_calls[verify_last_idx];
-        let verify_bytes: Option<&Vec<u8>> = final_call
+        let final_capture: Option<&CapturedResult> = final_call
             .output_binding
             .as_ref()
-            .and_then(|b| iter_captured.get(b).map(|c| &c.value))
-            .or_else(|| {
-                iter_captured
-                    .get(LOOP_VERIFY_SYNTHETIC_BINDING)
-                    .map(|c| &c.value)
-            });
+            .and_then(|b| iter_captured.get(b))
+            .or_else(|| iter_captured.get(LOOP_VERIFY_SYNTHETIC_BINDING));
 
-        let verify_bytes = match verify_bytes {
-            Some(b) => b,
+        let final_capture = match final_capture {
+            Some(c) => c,
             None => {
                 eprintln!(
                     "  {}",
@@ -1633,7 +1672,7 @@ fn execute_loop(
             }
         };
 
-        let done = match verify_output_done(verify_bytes) {
+        let done = match verify_output_done(&final_capture.value) {
             VerifyDone::True => true,
             VerifyDone::False => false,
             VerifyDone::Malformed(reason) => {
@@ -1660,14 +1699,16 @@ fn execute_loop(
                 .green()
             );
             if let Some(ref rb) = lp.result_binding {
+                // The loop result IS the winning iteration's final
+                // verify output, so that step's invocation record is
+                // the binding's producer — downstream steps name it as
+                // their causal parent, keeping the receipt chain
+                // connected across the loop boundary.
                 outer_captured.insert(
                     rb.clone(),
                     CapturedResult {
-                        value: verify_bytes.clone(),
-                        // Loop result bindings carry no single
-                        // invocation record (the value is the verify
-                        // step of the final iteration).
-                        invocation: None,
+                        value: final_capture.value.clone(),
+                        invocation: final_capture.invocation.clone(),
                     },
                 );
             }
@@ -1736,12 +1777,13 @@ fn flatten_loop_leaves(
 #[allow(clippy::too_many_arguments)]
 fn run_loop_block_sequentially(
     dispatcher: &dyn StepDispatcher,
-    tenant: &str,
+    run: RunContext<'_>,
     steps: &[IrCall],
     phase_idx: usize,
     global_step: &mut usize,
     total: usize,
     iter_captured: &mut HashMap<String, CapturedResult>,
+    receipt_graph: &mut Vec<Value>,
     iter_skipped: &mut std::collections::HashSet<String>,
     completed: &mut usize,
     failed: &mut usize,
@@ -1770,6 +1812,7 @@ fn run_loop_block_sequentially(
                     global_step,
                     total,
                     iter_captured,
+                    receipt_graph,
                     iter_skipped,
                     completed,
                     failed,
@@ -1795,6 +1838,7 @@ fn run_loop_block_sequentially(
                     global_step,
                     total,
                     iter_captured,
+                    receipt_graph,
                     iter_skipped,
                     completed,
                     failed,
@@ -1806,22 +1850,36 @@ fn run_loop_block_sequentially(
             }
         };
 
-        // Loop-internal steps dispatch without causal parents for now;
-        // receipt-chained loops are a follow-up once loop semantics
-        // pin how iteration receipts should join.
-        let result = execute_step_with_retry(dispatcher, tenant, step, &merged_args, &[]);
+        let mut merged_args = merged_args;
+        substitute_receipt_graph(&mut merged_args, receipt_graph);
+
+        // Within an iteration, causal parents follow `input_refs`
+        // exactly as in flat phases — the receipt chain stays
+        // connected through loop bodies. Cross-iteration receipt
+        // joins are out of scope until the loop-semantics RFC pins
+        // how iteration receipts should join (iteration scopes are
+        // hermetic per RFC §3.1 v1, so no binding can reference a
+        // prior iteration today anyway).
+        let causal_parents = causal_parents_from_captured(step, iter_captured);
+        let result = execute_step_with_retry(dispatcher, run, step, &merged_args, &causal_parents);
 
         // Mirror the "capture under synthetic binding for last step"
         // side-effect by copying result_bytes into iter_captured
         // before handing to process_batch (which would only capture
-        // if output_binding is Some).
+        // if output_binding is Some). The invocation record rides
+        // along so the loop's result binding can name its producer.
         if i == last_idx {
-            if let StepExecResult::Ok { result_bytes, .. } = &result {
+            if let StepExecResult::Ok {
+                result_bytes,
+                invocation,
+                ..
+            } = &result
+            {
                 iter_captured.insert(
                     LOOP_VERIFY_SYNTHETIC_BINDING.to_string(),
                     CapturedResult {
                         value: result_bytes.clone(),
-                        invocation: None,
+                        invocation: invocation.clone(),
                     },
                 );
             }
@@ -1835,6 +1893,7 @@ fn run_loop_block_sequentially(
             global_step,
             total,
             iter_captured,
+            receipt_graph,
             iter_skipped,
             completed,
             failed,
@@ -1855,6 +1914,23 @@ enum VerifyDone {
     Malformed(String),
 }
 
+/// Peel the daemon shell-executor envelope (`{result, fulfilled_by,
+/// ...}`, with `result` carrying the handler's stdout as a JSON
+/// string) so `done` checks and downstream consumers see the
+/// handler's own payload. Non-envelope values pass through untouched.
+fn peel_shell_envelope(v: serde_json::Value) -> serde_json::Value {
+    let Some(obj) = v.as_object() else { return v };
+    if !(obj.contains_key("result") && obj.contains_key("fulfilled_by")) {
+        return v;
+    }
+    match &obj["result"] {
+        serde_json::Value::String(inner) => {
+            serde_json::from_str(inner).unwrap_or_else(|_| serde_json::Value::String(inner.clone()))
+        }
+        inner => inner.clone(),
+    }
+}
+
 fn verify_output_done(bytes: &[u8]) -> VerifyDone {
     let v: serde_json::Value = match serde_json::from_slice(bytes) {
         Ok(v) => v,
@@ -1862,6 +1938,7 @@ fn verify_output_done(bytes: &[u8]) -> VerifyDone {
             return VerifyDone::Malformed(format!("verify output is not JSON-decodable ({e})"));
         }
     };
+    let v = peel_shell_envelope(v);
     let obj = match v.as_object() {
         Some(o) => o,
         None => {
@@ -1884,7 +1961,7 @@ fn verify_output_done(bytes: &[u8]) -> VerifyDone {
 
 fn execute_step_with_retry(
     dispatcher: &dyn StepDispatcher,
-    tenant: &str,
+    run: RunContext<'_>,
     step: &IrStep,
     arguments: &Value,
     causal_parents: &[Value],
@@ -1920,7 +1997,7 @@ fn execute_step_with_retry(
             None
         };
         let res = dispatcher.dispatch(
-            tenant,
+            run,
             &step.target,
             &step.ability,
             arguments,
@@ -2402,7 +2479,7 @@ mod tests {
     impl StepDispatcher for MockDispatcher {
         fn dispatch(
             &self,
-            _tenant: &str,
+            _run: RunContext<'_>,
             _target: &IrTarget,
             ability: &AbilityName,
             _arguments: &Value,
@@ -2696,6 +2773,7 @@ mod tests {
             &ability,
             &serde_json::json!({"prompt": "hi"}),
             &[],
+            "trace-test",
         )
         .expect_err("bogus binary must fail on local chat dispatch");
         let msg = format!("{err}");
@@ -2990,7 +3068,7 @@ mod tests {
         impl StepDispatcher for SeqOnlyDispatcher {
             fn dispatch(
                 &self,
-                _: &str,
+                _: RunContext<'_>,
                 _target: &IrTarget,
                 ability: &AbilityName,
                 _: &Value,
@@ -3079,7 +3157,7 @@ mod tests {
     impl StepDispatcher for ShapeRecordingDispatcher {
         fn dispatch(
             &self,
-            _tenant: &str,
+            _run: RunContext<'_>,
             target: &IrTarget,
             ability: &AbilityName,
             arguments: &Value,
@@ -3113,7 +3191,7 @@ mod tests {
         impl StepDispatcher for CategorisedDispatcher {
             fn dispatch(
                 &self,
-                _tenant: &str,
+                _run: RunContext<'_>,
                 _target: &IrTarget,
                 _ability: &AbilityName,
                 _arguments: &Value,
@@ -3531,7 +3609,7 @@ mod tests {
     impl StepDispatcher for ScriptedDispatcher {
         fn dispatch(
             &self,
-            _tenant: &str,
+            _run: RunContext<'_>,
             _target: &IrTarget,
             ability: &AbilityName,
             _arguments: &Value,
@@ -3601,6 +3679,202 @@ mod tests {
             winner.contains("winner"),
             "result must carry verify final output; got: {winner}"
         );
+    }
+
+    /// Loop-internal steps thread causal parents from the iteration
+    /// scope and receive the mission run's `RunContext` (trace_id =
+    /// mission_id): the receipt chain stays connected inside loop
+    /// bodies, and every lowered envelope is ledger-groupable.
+    #[test]
+    fn loop_steps_thread_causal_parents_and_trace_id() {
+        struct RecordingDispatcher {
+            // (ability, trace_id, causal_parents) per dispatch.
+            calls: Arc<Mutex<Vec<(String, String, Vec<Value>)>>>,
+        }
+        impl StepDispatcher for RecordingDispatcher {
+            fn dispatch(
+                &self,
+                run: RunContext<'_>,
+                _target: &IrTarget,
+                ability: &AbilityName,
+                _arguments: &Value,
+                _timeout_ms: Option<u64>,
+                causal_parents: &[Value],
+            ) -> Result<StepDispatchOutcome, EalError> {
+                let qualified = format!("a.{}", ability.as_str());
+                self.calls.lock().unwrap().push((
+                    ability.as_str().to_string(),
+                    run.trace_id.to_string(),
+                    causal_parents.to_vec(),
+                ));
+                Ok(StepDispatchOutcome {
+                    value: serde_json::json!({"done": true}),
+                    invocation: Some(serde_json::json!({
+                        "ability": qualified,
+                        "invocation_ura": format!("ura:{qualified}"),
+                        "receipt": {"anchor": {
+                            "receipt_ura": format!("ura:{qualified}/receipt/1"),
+                            "receipt_hash": "ab",
+                        }},
+                    })),
+                })
+            }
+            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+                Err(EalError::Internal("single-thread".into()))
+            }
+        }
+
+        let src = r#"
+            mission "t" {
+                loop "review" max_iters: 2 {
+                    body { let draft = a.step(p: "x") }
+                    verify { a.ok(doc: draft.output) }
+                }
+            }"#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let d = RecordingDispatcher {
+            calls: Arc::clone(&calls),
+        };
+        let report = execute_with_dispatcher(&d, "test", &ir).unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "one iteration: body + verify");
+        for (ability, trace_id, _) in calls.iter() {
+            assert_eq!(
+                trace_id, &report.trace.mission_id,
+                "{ability}: every dispatch must carry the run's trace id"
+            );
+            assert!(!trace_id.is_empty());
+        }
+        let (_, _, step_parents) = &calls[0];
+        assert!(
+            step_parents.is_empty(),
+            "iteration root must have no causal parents"
+        );
+        let (_, _, ok_parents) = &calls[1];
+        assert_eq!(
+            ok_parents.len(),
+            1,
+            "verify step must name the body step as its causal parent"
+        );
+        assert_eq!(
+            ok_parents[0].get("node").and_then(Value::as_str),
+            Some("a.step")
+        );
+    }
+
+    /// `done: bool` must be found through the daemon shell-executor
+    /// envelope: lowered verify steps capture `{result: "<stdout
+    /// json>", fulfilled_by, ...}`, with the handler payload nested
+    /// as a JSON string.
+    #[test]
+    fn verify_done_peels_shell_envelope() {
+        let envelope = serde_json::json!({
+            "result": "{\"op\":\"eval.loop_gate\",\"done\":true}",
+            "fulfilled_by": "device/loopback",
+            "exit_code": 0,
+        });
+        let bytes = serde_json::to_vec(&envelope).unwrap();
+        assert!(matches!(verify_output_done(&bytes), VerifyDone::True));
+
+        // Bare payloads (in-process dispatch) still work.
+        let bare = serde_json::to_vec(&serde_json::json!({"done": false})).unwrap();
+        assert!(matches!(verify_output_done(&bare), VerifyDone::False));
+    }
+
+    /// A named loop's `<name>.result` export feeds a downstream step
+    /// (`.result` accessor): the downstream step names the winning
+    /// iteration's final verify invocation as its causal parent (the
+    /// receipt chain crosses the loop boundary), and the run-level
+    /// `__runner_receipt_graph__` substitution carries loop-internal
+    /// invocation records.
+    #[test]
+    fn loop_result_feeds_downstream_step_with_receipt_chain() {
+        struct ArgRecordingDispatcher {
+            // (ability, arguments, causal_parents) per dispatch.
+            calls: Arc<Mutex<Vec<(String, Value, Vec<Value>)>>>,
+        }
+        impl StepDispatcher for ArgRecordingDispatcher {
+            fn dispatch(
+                &self,
+                _run: RunContext<'_>,
+                _target: &IrTarget,
+                ability: &AbilityName,
+                arguments: &Value,
+                _timeout_ms: Option<u64>,
+                causal_parents: &[Value],
+            ) -> Result<StepDispatchOutcome, EalError> {
+                let qualified = format!("a.{}", ability.as_str());
+                self.calls.lock().unwrap().push((
+                    ability.as_str().to_string(),
+                    arguments.clone(),
+                    causal_parents.to_vec(),
+                ));
+                Ok(StepDispatchOutcome {
+                    value: serde_json::json!({"done": true}),
+                    invocation: Some(serde_json::json!({
+                        "ability": qualified,
+                        "invocation_ura": format!("ura:{qualified}"),
+                        "receipt": {"anchor": {
+                            "receipt_ura": format!("ura:{qualified}/receipt/1"),
+                            "receipt_hash": "ab",
+                        }},
+                    })),
+                })
+            }
+            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+                Err(EalError::Internal("single-thread".into()))
+            }
+        }
+
+        let src = r#"
+            mission "t" {
+                loop "refine" max_iters: 2 {
+                    body { let draft = a.step(p: "x") }
+                    verify { let gated = a.ok(doc: draft.output) }
+                }
+                let published = a.publish(
+                    doc: refine.result,
+                    receipt_graph: "__runner_receipt_graph__"
+                )
+            }"#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let d = ArgRecordingDispatcher {
+            calls: Arc::clone(&calls),
+        };
+        let report = execute_with_dispatcher(&d, "test", &ir).unwrap();
+        assert_eq!(report.steps_failed, 0);
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 3, "body + verify + downstream publish");
+        let (ability, publish_args, publish_parents) = &calls[2];
+        assert_eq!(ability, "publish");
+        // Loop-boundary receipt edge: the publish step's parent is the
+        // winning iteration's final verify invocation.
+        assert_eq!(publish_parents.len(), 1);
+        assert_eq!(
+            publish_parents[0].get("node").and_then(Value::as_str),
+            Some("a.ok")
+        );
+        // `doc:` resolved from the loop's exported result payload.
+        assert_eq!(
+            publish_args.get("doc").and_then(|d| d.get("done")),
+            Some(&Value::Bool(true))
+        );
+        // Run-level receipt graph: loop-internal records included.
+        let graph = publish_args
+            .get("receipt_graph")
+            .and_then(Value::as_array)
+            .expect("sentinel must substitute to an array");
+        let nodes: Vec<_> = graph
+            .iter()
+            .filter_map(|e| e.get("ability").and_then(Value::as_str))
+            .collect();
+        assert_eq!(nodes, vec!["a.step", "a.ok"]);
     }
 
     /// RFC §5.2: `LoopExhausted` — max_iters reached without

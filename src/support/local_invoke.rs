@@ -95,12 +95,16 @@ pub fn invoke_local_ability_with_subject(
 /// prior steps' metadata; they are encoded into the envelope's
 /// `causal_context` (explicit `Empty` for a root step, `ReceiptRef`
 /// scalar for one parent, ordered `ReceiptList` for a join).
+/// `trace_id` is the mission run's id; it is stamped on the
+/// envelope's operational-metadata `trace_id` field so the daemon
+/// ledger groups every step of one run under one trace.
 pub fn invoke_local_ability_with_invocation_meta(
     ability: &str,
     args: Value,
     subject: Option<String>,
     causal_parents: &[Value],
     step_timeout: Option<std::time::Duration>,
+    trace_id: Option<&str>,
 ) -> anyhow::Result<(Value, Value)> {
     crate::support::local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta(
         ability,
@@ -108,6 +112,7 @@ pub fn invoke_local_ability_with_invocation_meta(
         subject,
         causal_parents,
         step_timeout,
+        trace_id,
     )
 }
 

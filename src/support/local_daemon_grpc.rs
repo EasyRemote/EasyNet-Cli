@@ -463,6 +463,7 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     subject: Option<String>,
     causal_parents: &[serde_json::Value],
     step_timeout: Option<Duration>,
+    trace_id: Option<&str>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     use anyhow::{anyhow, bail, Context};
     use easynet_axon::pb::axon::v1 as pb;
@@ -528,6 +529,11 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
         envelope.causal_context = Some(pb::CausalContext {
             form: Some(causal_form),
         });
+        // `trace_id` is Envelope operational metadata (outside the
+        // caller-signature region), so stamping it post-build is safe.
+        if let Some(trace_id) = trace_id.map(str::trim).filter(|t| !t.is_empty()) {
+            envelope.trace_id = trace_id.to_string();
+        }
     }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -632,8 +638,11 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
 
     let meta = serde_json::json!({
         "request_id": request_id,
-        "invocation_ura": ledger_record.get("invocation_ura").cloned().unwrap_or(Value::Null),
+        // Deliberately the LEDGER's trace_id, not the submitted one:
+        // the record must report what the daemon persisted, so a
+        // daemon that drops trace_id is visible instead of masked.
         "trace_id": ledger_record.get("trace_id").cloned().unwrap_or(Value::Null),
+        "invocation_ura": ledger_record.get("invocation_ura").cloned().unwrap_or(Value::Null),
         "caller_ura": caller_ura.clone(),
         "callee_ura": caller_ura,
         "ability": function_name,
@@ -654,6 +663,7 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     _subject: Option<String>,
     _causal_parents: &[serde_json::Value],
     _step_timeout: Option<std::time::Duration>,
+    _trace_id: Option<&str>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     anyhow::bail!(
         "invoking `{}` with invocation metadata requires the `axon-pb` feature; \

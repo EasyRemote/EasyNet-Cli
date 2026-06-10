@@ -59,6 +59,10 @@ pub struct AdmittedWireDispatch {
     pub envelope: InvocationEnvelope,
     pub signature: Option<CallerSignature>,
     pub payload: Vec<u8>,
+    /// Operational trace-correlation id from the wire envelope
+    /// (empty when the caller sent none). Threaded into the Axon
+    /// runtime so the ledger record carries it.
+    pub trace_id: String,
 }
 
 /// Reassemble (envelope, signature, payload) from the wire
@@ -100,6 +104,7 @@ pub fn admitted_from_wire_parts(
     target_ability_name: String,
     initial_args: Vec<u8>,
 ) -> Result<AdmittedWireDispatch, AxonError> {
+    let trace_id = envelope.trace_id.clone();
     let caller = envelope
         .caller
         .ok_or_else(|| AxonError::invalid_argument("wire envelope missing caller"))?;
@@ -135,6 +140,7 @@ pub fn admitted_from_wire_parts(
         envelope: envelope_sdk,
         signature,
         payload: initial_args,
+        trace_id,
     })
 }
 
@@ -296,9 +302,11 @@ pub async fn dispatch_rpc_admitted(
         envelope,
         signature,
         payload,
+        trace_id,
     } = wire;
+    let trace_id = (!trace_id.is_empty()).then_some(trace_id);
     match runtime
-        .invoke_admitted_async(envelope, signature, payload, None, None)
+        .invoke_admitted_async(envelope, signature, payload, None, None, trace_id)
         .await
     {
         Ok((handle, _signed)) => drain_to_outcome(handle).await,
@@ -319,9 +327,11 @@ pub async fn open_stream_admitted(
         envelope,
         signature,
         payload,
+        trace_id,
     } = wire;
+    let trace_id = (!trace_id.is_empty()).then_some(trace_id);
     let (handle, _signed) = runtime
-        .invoke_admitted_stream_async(envelope, signature, payload, None, None)
+        .invoke_admitted_stream_async(envelope, signature, payload, None, None, trace_id)
         .await?;
     Ok(handle)
 }
@@ -362,6 +372,8 @@ pub async fn open_stream_local_with_subject(
             envelope,
             signature: None,
             payload: args,
+            // Daemon-internal synthetic envelope: no wire trace id.
+            trace_id: String::new(),
         },
     )
     .await
@@ -375,9 +387,11 @@ pub async fn open_bidi_admitted(
         envelope,
         signature,
         payload,
+        trace_id,
     } = wire;
+    let trace_id = (!trace_id.is_empty()).then_some(trace_id);
     let (handle, _signed) = runtime
-        .invoke_admitted_bidi_async(envelope, signature, payload, None, None)
+        .invoke_admitted_bidi_async(envelope, signature, payload, None, None, trace_id)
         .await?;
     Ok(handle)
 }
@@ -410,6 +424,8 @@ pub async fn open_bidi_local_with_subject(
             envelope,
             signature: None,
             payload: args,
+            // Daemon-internal synthetic envelope: no wire trace id.
+            trace_id: String::new(),
         },
     )
     .await
@@ -494,6 +510,8 @@ pub async fn dispatch_rpc_local_with_subject(
             envelope,
             signature: None,
             payload: args,
+            // Daemon-internal synthetic envelope: no wire trace id.
+            trace_id: String::new(),
         },
     )
     .await
