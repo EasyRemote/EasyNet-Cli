@@ -2391,6 +2391,46 @@ mod tests {
         }
     }
 
+    /// Read one full HTTP/1.1 request — header block plus exactly
+    /// `Content-Length` body bytes — off `stream`. A single `read()`
+    /// is NOT enough here: ureq writes the header block and the JSON
+    /// body in separate syscalls, so they can arrive as separate TCP
+    /// segments. A server that answers after the first segment and
+    /// drops the socket leaves the in-flight body unread in the
+    /// receive buffer; the kernel then resets the connection and the
+    /// client surfaces a transport error instead of the 200 (the
+    /// 1-in-3 flake of `credential_warmup_posts_current_device_credential`
+    /// recorded on 2026-06-11).
+    fn read_full_http_request(stream: &mut std::net::TcpStream) -> String {
+        let mut buf: Vec<u8> = Vec::with_capacity(4096);
+        let mut chunk = [0_u8; 4096];
+        loop {
+            if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.trim()
+                            .eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if buf.len() >= header_end + 4 + content_length {
+                    return String::from_utf8_lossy(&buf).to_string();
+                }
+            }
+            let n = stream.read(&mut chunk).expect("read verify request");
+            if n == 0 {
+                // Peer closed mid-request; return what arrived so the
+                // assertion failure shows the truncated request.
+                return String::from_utf8_lossy(&buf).to_string();
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+
     #[test]
     fn credential_warmup_posts_current_device_credential() {
         let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind verify server");
@@ -2398,9 +2438,7 @@ mod tests {
         let (tx, rx) = std_mpsc::channel::<String>();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept verify request");
-            let mut buf = [0_u8; 4096];
-            let n = stream.read(&mut buf).expect("read verify request");
-            tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
+            tx.send(read_full_http_request(&mut stream))
                 .expect("send captured request");
             stream
                 .write_all(
