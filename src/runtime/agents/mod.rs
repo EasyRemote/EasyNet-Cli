@@ -1447,7 +1447,24 @@ pub(crate) fn discovery_hints_for(
     let has_rpc = registry.has_rpc(name);
     let has_stream = registry.has_stream(name);
     let has_bidi = registry.has_bidi(name);
+    // Derive the purity hints from the ability's semantic layer — one
+    // source of truth (classify_ability). Introspection/Observation are
+    // pure reads (read_only + idempotent: re-issuing yields the same
+    // snapshot, no side effect). Control is a pure decision (idempotent,
+    // not a business read). Operational verbs change the world (neither).
+    // These hints ride meta.list_abilities into the catalog, so the
+    // frontend coalesces pure-read invokes from the catalog instead of
+    // re-classifying ability names locally. `destructive` stays a
+    // conservative false: the layer model does not assert destructiveness,
+    // and the hint is advisory only (RFC §1.6).
+    let (read_only, idempotent) = match classify_ability(name) {
+        Some(AbilityLayer::Introspection) | Some(AbilityLayer::Observation) => (true, true),
+        Some(AbilityLayer::Control) => (false, true),
+        Some(AbilityLayer::Operational) | None => (false, false),
+    };
     crate::runtime::ability_descriptor::AbilityHints {
+        read_only,
+        idempotent,
         streaming_only: has_stream && !has_rpc && !has_bidi,
         bidi_only: has_bidi,
         ..Default::default()
@@ -1868,6 +1885,301 @@ pub fn rfc006_for(name: &str) -> Option<ability_toml::Rfc006Metadata> {
 ///   we mint a single-threaded runtime, drive it to completion, and
 ///   drop it.
 ///
+
+// ── Ability semantic layer (production) ──────────────────────────
+// Promoted out of the test module: the layer classification is an
+// ontology property of each ability, not a test fixture. It drives
+// the read_only / destructive / idempotent discovery hints that flow
+// to the frontend via meta.list_abilities, so callers read purity
+// from the catalog instead of re-deriving it (no parallel truth).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AbilityLayer {
+    /// Pure, side-effect free, deterministic for a catalog snapshot.
+    Introspection,
+    /// Pure decision functions (no mutation of catalog state).
+    /// `consent.decide` is the documented exception: write-only-
+    /// after-decision.
+    Control,
+    /// Derived state only; never triggers behaviour elsewhere.
+    Observation,
+    /// Per-feature business verbs (chat, schedule, loop, discuss,
+    /// session, skill management). Not subject to the
+    /// layer-purity rules; they ARE the work.
+    Operational,
+}
+
+/// Classify a published ability name by the §"three layers"
+/// model. A name with no match returns `None` and the
+/// completeness test below fails — forcing the author of any
+/// new ability to either pick a layer or update this table.
+pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
+    // Per-agent chat handlers are operational by definition.
+    if name.ends_with(".chat") {
+        return Some(AbilityLayer::Operational);
+    }
+
+    if let Some(layer) = crate::runtime::plugin_host::ability_layer_for(name) {
+        return Some(match layer {
+            crate::runtime::plugin_host::PluginAbilityLayer::Introspection => {
+                AbilityLayer::Introspection
+            }
+            crate::runtime::plugin_host::PluginAbilityLayer::Control => AbilityLayer::Control,
+            crate::runtime::plugin_host::PluginAbilityLayer::Observation => {
+                AbilityLayer::Observation
+            }
+            crate::runtime::plugin_host::PluginAbilityLayer::Operational => {
+                AbilityLayer::Operational
+            }
+        });
+    }
+
+    match name {
+        // ── Introspection ───────────────────────────────────
+        "meta.describe"
+        | "meta.list_abilities"
+        // `mission.track` reads the persisted run dir of a
+        // prior mission.run. Pure read of derived state →
+        // Introspection, same logic that puts schedule.list
+        // / loop.status here.
+        | "mission.track"
+        | "mcp.bridge.list_tools"
+        // mcp.client.list — aggregate read of every configured
+        // upstream MCP server's tools/list. No mutation;
+        // belongs with the introspection-layer reads.
+        | "mcp.client.list"
+        | "a2a.bridge.list_skills"
+        | "agent.list"
+        | "invocation.history.list"
+        | "invocation.history.get"
+        | "invocation.trace.get"
+        | "invocation.history.path"
+        | "terminal.list"
+        | "session.list"
+        | "consent.list_pending"
+        // RFC-005 v3.2 A9 — meta.list_resources is a pure read of
+        // the local resources table (same shape as
+        // meta.list_abilities); Introspection by definition.
+        | "meta.list_resources"
+        // discuss.list_turns — RPC snapshot of a room transcript.
+        // Pure read; same Introspection class as schedule.list.
+        | "discuss.list_turns"
+        | "schedule.list"
+        | "loop.status"
+        // skill.list / tree / read_file — private skill package
+        // inventory and source inspection. Pure reads.
+        | "skill.list"
+        | "skill.tree"
+        | "skill.read_file"
+        // chat.history.* — pure reads of persisted chat
+        // transcripts (JSONL under the agent workspace). Same
+        // Introspection class as invocation.history.*.
+        | "chat.history.list"
+        | "chat.history.get"
+        // context.* reads — clipboard history, mapped-folder
+        // browse, favorites, and persisted media captures are
+        // all pure reads of device-local context state.
+        | "context.clipboard.list"
+        | "context.clipboard.get"
+        | "context.folders.list"
+        | "context.fs.list"
+        | "context.favorites.list"
+        | "context.captures.list"
+        | "context.captures.get" => Some(AbilityLayer::Introspection),
+        // ── Control / decision ──────────────────────────────
+        "policy.evaluate"
+        | "policy.simulate"
+        | "consent.decide"
+        // context mutations — flip clipboard tracking, add /
+        // remove favorites: device-context configuration writes,
+        // same decision class as consent.decide.
+        | "context.clipboard.track"
+        | "context.favorites.add"
+        | "context.favorites.remove"
+        | "consent.subscribe" => Some(AbilityLayer::Control),
+        // ── Observation ─────────────────────────────────────
+        "observe.health"
+        | "observe.network_health"
+        | "admin.status"
+        | "plugin.status" => Some(AbilityLayer::Observation),
+        // ── Operational (per-feature business verbs) ────────
+        "session.attach"
+        | "agent.start"
+        | "agent.stop"
+        | "agent.refresh"
+        | "skill.install"
+        | "skill.remove"
+        | "skill.upgrade"
+        // device-hosted node/ability/remote operations. list_nodes /
+        // describe_node read state but conceptually they sit
+        // with the federation-tier *operations* (peer
+        // enumeration, network health) — Operational by
+        // intent, mirroring how schedule.list / loop.status
+        // got bumped into the introspection layer because they
+        // describe daemon-managed state. The remaining
+        // verbs (remove_node, deploy_ability, uninstall_ability,
+        // exec_remote, register_self, deregister_self)
+        // mutate state — Operational unambiguous.
+        | "node.list"
+        | "node.describe"
+        | "node.remove"
+        | "ability.deploy"
+        | "ability.uninstall"
+        | "remote.exec"
+        | "node.register"
+        | "node.deregister"
+        // terminal.* shell-session lifecycle abilities.
+        // create / close mutate session state; input / read /
+        // resize push or pull data over an established session;
+        // attach binds the bidi data plane. All operational
+        // because each call IS the work for that session step.
+        | "terminal.attach"
+        | "terminal.create"
+        | "terminal.close"
+        | "terminal.input"
+        | "terminal.read"
+        | "terminal.resize"
+        // mission.discuss_round — sub-turn orchestration
+        // ability. Same Operational class as easynet.run /
+        // mission.run because the ability IS the work
+        // (running one human-bracketed sub-turn of a
+        // multi-agent discussion).
+        | "mission.discuss_round"
+        // mission.think — long-running worker+judge loop. Same
+        // Operational rationale: the ability IS the work
+        // (running an N-cycle reflective loop with two
+        // independent chat sessions).
+        | "mission.think"
+        // voice.* call signaling abilities. State-mutating
+        // (create / join / leave / end / report_metrics) and
+        // state-reading (show / watch) — Operational by intent
+        // because the call IS the work. Same shape as
+        // discuss.subscribe / loop.subscribe sit here.
+        | "voice.create_call"
+        | "voice.show_call"
+        | "voice.join_call"
+        | "voice.leave_call"
+        | "voice.end_call"
+        | "voice.watch_call"
+        | "voice.report_metrics"
+        | "voice.list_calls"
+        // mcp.bridge.call_tool / a2a.bridge.send_task — both
+        // dispatch into another local ability; the side effects
+        // come from that dispatch, not the bridge itself. Sit
+        // with the operational verbs because the call surface
+        // IS the work.
+        | "mcp.bridge.call_tool"
+        // mcp.client.call — outbound mirror of bridge.call_tool.
+        // Same operational classification: dispatching
+        // delegates side effects to the upstream tool.
+        | "mcp.client.call"
+        | "a2a.bridge.send_task"
+        // a2a.client.send_task — outbound mirror of bridge.send_task.
+        // Same operational classification: dispatching crosses
+        // a wire and mutates the remote node's state.
+        | "a2a.client.send_task"
+        | "discuss.create"
+        | "discuss.post"
+        | "discuss.subscribe"
+        | "schedule.add"
+        | "schedule.remove"
+        | "schedule.enable"
+        | "loop.create"
+        | "loop.subscribe"
+        | "loop.cancel"
+        // EAL orchestration. easynet.run / mission.run compile
+        // and execute a program (potentially multi-step,
+        // potentially cross-agent); easynet.cancel mutates the
+        // run state of an in-flight mission. Same Operational
+        // class as loop.{create,cancel} for the same reason —
+        // the ability IS the work.
+        | "mission.run"
+        | "mission.cancel"
+        // ability.publish / ability.unpublish / skill.publish /
+        // skill.unpublish — curator-driven sinks for judge-validated
+        // experience. State-mutating (writes/removes manifests under
+        // an agent's workspace). Operational because the ability IS
+        // the work, in the same class as ability.deploy /
+        // skill.install.
+        | "ability.publish"
+        | "ability.unpublish"
+        | "skill.publish"
+        | "skill.unpublish"
+        | "skill.write_file"
+        // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
+        // filesystem half. fs.read is technically read-only
+        // but it returns business content, not just metadata
+        // — Operational rather than Observation. fs.write
+        // mutates state. fs.list returns directory metadata
+        // but its purpose is to enable subsequent fs.read /
+        // fs.write — Operational by intent.
+        | "fs.read"
+        | "fs.write"
+        | "fs.stat"
+        | "fs.list"
+        | "fs.edit"
+        // AXIOM Tier 2.5 execution members. process.exec
+        // and shell.run are unconditionally Operational —
+        // they spawn processes that may do anything; even
+        // with the 8-stage shellguard pipeline gating
+        // shell.run dispatch, the layer classification
+        // tracks privilege not invocation safety.
+        | "process.exec"
+        | "shell.run"
+        | "http.request"
+        | "fs.transfer"
+        // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
+        // Operational by intent: each one drives an external
+        // device (mic / camera / speaker / screen) or remote
+        // model (voice / asr). Subject = resource_ura.
+        | "mic.subscribe"
+        | "camera.subscribe"
+        | "camera.snapshot"
+        | "screen.subscribe"
+        | "screen.snapshot"
+        | "speaker.publish"
+        | "voice.subscribe"
+        | "voice.transcribe"
+        // RFC-006-C v0.1 — device-local OpenAI protocol shim.
+        // chat_completions IS the work (forwards a generation
+        // request to a host-local chat-base ability);
+        // list_models reads the caller's dispatch-grant set,
+        // but its operational role is "answer /v1/models for
+        // the OpenAI surface" — both are Operational rather
+        // than Introspection.
+        | "openai.chat_completions"
+        | "openai.list_models"
+        // RFC-012 §RemoteWebSurface — browser.* family.
+        // Operational by intent: opening a WebView session,
+        // streaming frames, injecting input, closing the
+        // session all drive an external surface (the user's
+        // system WebView) under the caller's identity. Same
+        // class as media/* verbs.
+        | "browser.open_session"
+        | "browser.send_input"
+        | "browser.capture_viewport"
+        | "browser.close_session"
+        // Plugin lifecycle reload mutates the daemon's dynamic
+        // ability registration table after an install/update/remove
+        // transaction has already committed on disk.
+        | "plugin.reload"
+        => Some(AbilityLayer::Operational),
+        // `<user>.api_key.{create,list,revoke}` — user-rooted
+        // credential-lifecycle verbs. `<user>` is the active
+        // identity (uuid in prod, `"test"` in fixtures), so we
+        // match by suffix rather than enumerating one identity.
+        // All three are Operational because the ability IS the
+        // work (issuing / listing / revoking a credential), in
+        // the same class as ability.publish / skill.publish.
+        n if n.ends_with(".api_key.create")
+            || n.ends_with(".api_key.list")
+            || n.ends_with(".api_key.revoke") =>
+        {
+            Some(AbilityLayer::Operational)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1900,297 +2212,28 @@ mod tests {
         assert_eq!(system_ability_owner("agent.list"), Some(OwnerKind::Device));
     }
 
-    /// Semantic layer for an ability. See
-    /// docs/rfc/AXON-RFC-001-ability-layers.md for the contract each
-    /// layer enforces. The classifier below + the
-    /// `ability_layer_classification_is_complete` test together
-    /// guarantee every published name lands in exactly one layer.
-    #[derive(Debug, PartialEq, Eq)]
-    enum AbilityLayer {
-        /// Pure, side-effect free, deterministic for a catalog snapshot.
-        Introspection,
-        /// Pure decision functions (no mutation of catalog state).
-        /// `consent.decide` is the documented exception: write-only-
-        /// after-decision.
-        Control,
-        /// Derived state only; never triggers behaviour elsewhere.
-        Observation,
-        /// Per-feature business verbs (chat, schedule, loop, discuss,
-        /// session, skill management). Not subject to the
-        /// layer-purity rules; they ARE the work.
-        Operational,
-    }
-
-    /// Classify a published ability name by the §"three layers"
-    /// model. A name with no match returns `None` and the
-    /// completeness test below fails — forcing the author of any
-    /// new ability to either pick a layer or update this table.
-    fn classify_ability(name: &str) -> Option<AbilityLayer> {
-        // Per-agent chat handlers are operational by definition.
-        if name.ends_with(".chat") {
-            return Some(AbilityLayer::Operational);
-        }
-
-        if let Some(layer) = crate::runtime::plugin_host::ability_layer_for(name) {
-            return Some(match layer {
-                crate::runtime::plugin_host::PluginAbilityLayer::Introspection => {
-                    AbilityLayer::Introspection
-                }
-                crate::runtime::plugin_host::PluginAbilityLayer::Control => AbilityLayer::Control,
-                crate::runtime::plugin_host::PluginAbilityLayer::Observation => {
-                    AbilityLayer::Observation
-                }
-                crate::runtime::plugin_host::PluginAbilityLayer::Operational => {
-                    AbilityLayer::Operational
-                }
-            });
-        }
-
-        match name {
-            // ── Introspection ───────────────────────────────────
-            "meta.describe"
-            | "meta.list_abilities"
-            // `mission.track` reads the persisted run dir of a
-            // prior mission.run. Pure read of derived state →
-            // Introspection, same logic that puts schedule.list
-            // / loop.status here.
-            | "mission.track"
-            | "mcp.bridge.list_tools"
-            // mcp.client.list — aggregate read of every configured
-            // upstream MCP server's tools/list. No mutation;
-            // belongs with the introspection-layer reads.
-            | "mcp.client.list"
-            | "a2a.bridge.list_skills"
-            | "agent.list"
-            | "invocation.history.list"
-            | "invocation.history.get"
-            | "invocation.trace.get"
-            | "invocation.history.path"
-            | "terminal.list"
-            | "session.list"
-            | "consent.list_pending"
-            // RFC-005 v3.2 A9 — meta.list_resources is a pure read of
-            // the local resources table (same shape as
-            // meta.list_abilities); Introspection by definition.
-            | "meta.list_resources"
-            // discuss.list_turns — RPC snapshot of a room transcript.
-            // Pure read; same Introspection class as schedule.list.
-            | "discuss.list_turns"
-            | "schedule.list"
-            | "loop.status"
-            // skill.list / tree / read_file — private skill package
-            // inventory and source inspection. Pure reads.
-            | "skill.list"
-            | "skill.tree"
-            | "skill.read_file"
-            // chat.history.* — pure reads of persisted chat
-            // transcripts (JSONL under the agent workspace). Same
-            // Introspection class as invocation.history.*.
-            | "chat.history.list"
-            | "chat.history.get"
-            // context.* reads — clipboard history, mapped-folder
-            // browse, favorites, and persisted media captures are
-            // all pure reads of device-local context state.
-            | "context.clipboard.list"
-            | "context.clipboard.get"
-            | "context.folders.list"
-            | "context.fs.list"
-            | "context.favorites.list"
-            | "context.captures.list"
-            | "context.captures.get" => Some(AbilityLayer::Introspection),
-            // ── Control / decision ──────────────────────────────
-            "policy.evaluate"
-            | "policy.simulate"
-            | "consent.decide"
-            // context mutations — flip clipboard tracking, add /
-            // remove favorites: device-context configuration writes,
-            // same decision class as consent.decide.
-            | "context.clipboard.track"
-            | "context.favorites.add"
-            | "context.favorites.remove"
-            | "consent.subscribe" => Some(AbilityLayer::Control),
-            // ── Observation ─────────────────────────────────────
-            "observe.health"
-            | "observe.network_health"
-            | "admin.status"
-            | "plugin.status" => Some(AbilityLayer::Observation),
-            // ── Operational (per-feature business verbs) ────────
-            "session.attach"
-            | "agent.start"
-            | "agent.stop"
-            | "agent.refresh"
-            | "skill.install"
-            | "skill.remove"
-            | "skill.upgrade"
-            // device-hosted node/ability/remote operations. list_nodes /
-            // describe_node read state but conceptually they sit
-            // with the federation-tier *operations* (peer
-            // enumeration, network health) — Operational by
-            // intent, mirroring how schedule.list / loop.status
-            // got bumped into the introspection layer because they
-            // describe daemon-managed state. The remaining
-            // verbs (remove_node, deploy_ability, uninstall_ability,
-            // exec_remote, register_self, deregister_self)
-            // mutate state — Operational unambiguous.
-            | "node.list"
-            | "node.describe"
-            | "node.remove"
-            | "ability.deploy"
-            | "ability.uninstall"
-            | "remote.exec"
-            | "node.register"
-            | "node.deregister"
-            // terminal.* shell-session lifecycle abilities.
-            // create / close mutate session state; input / read /
-            // resize push or pull data over an established session;
-            // attach binds the bidi data plane. All operational
-            // because each call IS the work for that session step.
-            | "terminal.attach"
-            | "terminal.create"
-            | "terminal.close"
-            | "terminal.input"
-            | "terminal.read"
-            | "terminal.resize"
-            // mission.discuss_round — sub-turn orchestration
-            // ability. Same Operational class as easynet.run /
-            // mission.run because the ability IS the work
-            // (running one human-bracketed sub-turn of a
-            // multi-agent discussion).
-            | "mission.discuss_round"
-            // mission.think — long-running worker+judge loop. Same
-            // Operational rationale: the ability IS the work
-            // (running an N-cycle reflective loop with two
-            // independent chat sessions).
-            | "mission.think"
-            // voice.* call signaling abilities. State-mutating
-            // (create / join / leave / end / report_metrics) and
-            // state-reading (show / watch) — Operational by intent
-            // because the call IS the work. Same shape as
-            // discuss.subscribe / loop.subscribe sit here.
-            | "voice.create_call"
-            | "voice.show_call"
-            | "voice.join_call"
-            | "voice.leave_call"
-            | "voice.end_call"
-            | "voice.watch_call"
-            | "voice.report_metrics"
-            | "voice.list_calls"
-            // mcp.bridge.call_tool / a2a.bridge.send_task — both
-            // dispatch into another local ability; the side effects
-            // come from that dispatch, not the bridge itself. Sit
-            // with the operational verbs because the call surface
-            // IS the work.
-            | "mcp.bridge.call_tool"
-            // mcp.client.call — outbound mirror of bridge.call_tool.
-            // Same operational classification: dispatching
-            // delegates side effects to the upstream tool.
-            | "mcp.client.call"
-            | "a2a.bridge.send_task"
-            // a2a.client.send_task — outbound mirror of bridge.send_task.
-            // Same operational classification: dispatching crosses
-            // a wire and mutates the remote node's state.
-            | "a2a.client.send_task"
-            | "discuss.create"
-            | "discuss.post"
-            | "discuss.subscribe"
-            | "schedule.add"
-            | "schedule.remove"
-            | "schedule.enable"
-            | "loop.create"
-            | "loop.subscribe"
-            | "loop.cancel"
-            // EAL orchestration. easynet.run / mission.run compile
-            // and execute a program (potentially multi-step,
-            // potentially cross-agent); easynet.cancel mutates the
-            // run state of an in-flight mission. Same Operational
-            // class as loop.{create,cancel} for the same reason —
-            // the ability IS the work.
-            | "mission.run"
-            | "mission.cancel"
-            // ability.publish / ability.unpublish / skill.publish /
-            // skill.unpublish — curator-driven sinks for judge-validated
-            // experience. State-mutating (writes/removes manifests under
-            // an agent's workspace). Operational because the ability IS
-            // the work, in the same class as ability.deploy /
-            // skill.install.
-            | "ability.publish"
-            | "ability.unpublish"
-            | "skill.publish"
-            | "skill.unpublish"
-            | "skill.write_file"
-            // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
-            // filesystem half. fs.read is technically read-only
-            // but it returns business content, not just metadata
-            // — Operational rather than Observation. fs.write
-            // mutates state. fs.list returns directory metadata
-            // but its purpose is to enable subsequent fs.read /
-            // fs.write — Operational by intent.
-            | "fs.read"
-            | "fs.write"
-            | "fs.stat"
-            | "fs.list"
-            | "fs.edit"
-            // AXIOM Tier 2.5 execution members. process.exec
-            // and shell.run are unconditionally Operational —
-            // they spawn processes that may do anything; even
-            // with the 8-stage shellguard pipeline gating
-            // shell.run dispatch, the layer classification
-            // tracks privilege not invocation safety.
-            | "process.exec"
-            | "shell.run"
-            | "http.request"
-            | "fs.transfer"
-            // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
-            // Operational by intent: each one drives an external
-            // device (mic / camera / speaker / screen) or remote
-            // model (voice / asr). Subject = resource_ura.
-            | "mic.subscribe"
-            | "camera.subscribe"
-            | "camera.snapshot"
-            | "screen.subscribe"
-            | "screen.snapshot"
-            | "speaker.publish"
-            | "voice.subscribe"
-            | "voice.transcribe"
-            // RFC-006-C v0.1 — device-local OpenAI protocol shim.
-            // chat_completions IS the work (forwards a generation
-            // request to a host-local chat-base ability);
-            // list_models reads the caller's dispatch-grant set,
-            // but its operational role is "answer /v1/models for
-            // the OpenAI surface" — both are Operational rather
-            // than Introspection.
-            | "openai.chat_completions"
-            | "openai.list_models"
-            // RFC-012 §RemoteWebSurface — browser.* family.
-            // Operational by intent: opening a WebView session,
-            // streaming frames, injecting input, closing the
-            // session all drive an external surface (the user's
-            // system WebView) under the caller's identity. Same
-            // class as media/* verbs.
-            | "browser.open_session"
-            | "browser.send_input"
-            | "browser.capture_viewport"
-            | "browser.close_session"
-            // Plugin lifecycle reload mutates the daemon's dynamic
-            // ability registration table after an install/update/remove
-            // transaction has already committed on disk.
-            | "plugin.reload"
-            => Some(AbilityLayer::Operational),
-            // `<user>.api_key.{create,list,revoke}` — user-rooted
-            // credential-lifecycle verbs. `<user>` is the active
-            // identity (uuid in prod, `"test"` in fixtures), so we
-            // match by suffix rather than enumerating one identity.
-            // All three are Operational because the ability IS the
-            // work (issuing / listing / revoking a credential), in
-            // the same class as ability.publish / skill.publish.
-            n if n.ends_with(".api_key.create")
-                || n.ends_with(".api_key.list")
-                || n.ends_with(".api_key.revoke") =>
-            {
-                Some(AbilityLayer::Operational)
-            }
-            _ => None,
-        }
+    #[test]
+    fn discovery_hints_read_only_tracks_ability_layer() {
+        // The read_only discovery hint is the wire carrier of ability
+        // purity: it rides meta.list_abilities to the catalog so the
+        // frontend coalesces pure-read invokes without re-classifying.
+        // Pin the layer→hint mapping so a future classification change
+        // can't silently flip a verb's coalescability.
+        let reg = build_registry();
+        // Introspection read → read_only + idempotent.
+        let h = discovery_hints_for(&reg, "meta.list_resources");
+        assert!(h.read_only && h.idempotent, "introspection read: {h:?}");
+        // Observation read → read_only + idempotent.
+        let h = discovery_hints_for(&reg, "observe.health");
+        assert!(h.read_only && h.idempotent, "observation read: {h:?}");
+        // Control decision → idempotent but NOT read_only.
+        let h = discovery_hints_for(&reg, "consent.decide");
+        assert!(!h.read_only && h.idempotent, "control decision: {h:?}");
+        // Operational verb → neither (side effects; never coalescable).
+        let h = discovery_hints_for(&reg, "screen.snapshot");
+        assert!(!h.read_only && !h.idempotent, "operational verb: {h:?}");
+        let h = discovery_hints_for(&reg, "remote_desktop.create_session");
+        assert!(!h.read_only, "create_session must not be read_only: {h:?}");
     }
 
     #[test]
