@@ -2417,7 +2417,14 @@ impl DaemonInvocationService {
                     inner_payload.ability_ura,
                 ))
             })?;
-        if selector.owner_ura() != request.target_ura {
+        // Hosted-agent abilities are owned by an AGENT but execute on
+        // the device that hosts it — whether `target` hosts the agent
+        // is the resolver's to confirm (checked against the resolved
+        // execution host below), not a local string equality.
+        let owner_is_agent = crate::ura::parse_ura(selector.owner_ura())
+            .map(|parsed| parsed.kind == crate::ura::URAKind::Agent)
+            .unwrap_or(false);
+        if selector.owner_ura() != request.target_ura && !owner_is_agent {
             return Err(Status::invalid_argument(format!(
                 "federation.forward_invoke: ability_ura `{}` does not belong to target `{}`",
                 inner_payload.ability_ura, request.target_ura,
@@ -2433,9 +2440,16 @@ impl DaemonInvocationService {
         if !selected_route.is_authoritative_local_or_better() {
             return Err(route_profile_blocked_status(&selected_route));
         }
-        if selected_route.owner_ura != request.target_ura {
+        // The forward target must be either the route's OWNER (the
+        // pre-existing contract: device/hub/agent-targeted forwards)
+        // or its EXECUTION HOST (hosted-agent abilities addressed via
+        // the device that hosts them). Anything else is a
+        // mis-addressed forward.
+        let target_matches = selected_route.owner_ura == request.target_ura
+            || selected_route.execution_host_ura == request.target_ura;
+        if !target_matches {
             return Err(Status::invalid_argument(route_owner_mismatch_message(
-                &selected_route.owner_ura,
+                &selected_route.execution_host_ura,
                 &inner_payload.ability_ura,
                 &request.target_ura,
             )));
@@ -10511,8 +10525,14 @@ mod tests {
         );
     }
 
+    /// Contract update (hosted-agent addressing, 2026-06-11): an
+    /// agent-owned ability forwarded at a device target is no longer
+    /// vetoed by local string equality — whether the device hosts the
+    /// agent is the RESOLVER's call. An unhosted agent therefore fails
+    /// at resolution with a precise route negative instead of a local
+    /// InvalidArgument.
     #[tokio::test]
-    async fn forward_invoke_rejects_ability_ura_for_different_owner() {
+    async fn forward_invoke_agent_ability_unhosted_by_target_fails_at_resolution() {
         let target_ura = TEST_DAEMON_URI;
         let rt = runtime_with_json_echo(
             "observe.health",
@@ -10534,11 +10554,11 @@ mod tests {
                 ),
             )
             .await
-            .expect_err("ability_ura owner mismatch must reject");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+            .expect_err("unhosted agent ability must fail at resolution");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert!(
-            err.message().contains("does not belong to target"),
-            "error must cite owner mismatch, got: {}",
+            err.message().contains(ROUTE_NEGATIVE_CODE),
+            "error must be a route negative, got: {}",
             err.message()
         );
     }
