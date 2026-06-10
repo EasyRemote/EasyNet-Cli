@@ -637,7 +637,21 @@ pub fn start_daemon_invocation_transport(
             )));
         }
         service = service.with_session_escalation(Arc::clone(&handle));
-        Some((correlation, outbox, handle))
+        // One DeviceTrustSync per daemon: the self-targeted
+        // `<self>.invoke_remote` dispatch arm (service) and the
+        // `<self>.session` dispatcher both warm the anchor through
+        // this instance, sharing its single-flight map and negative
+        // cache. It rides the session escalation channel built above.
+        let device_trust_sync = Arc::new(
+            crate::services::invocation_transport::device_trust_sync::DeviceTrustSync::new(
+                config.realm().to_string(),
+                trust_anchor_path.clone(),
+                trust_anchor_cell.clone(),
+                Arc::clone(&handle),
+            ),
+        );
+        service = service.with_device_trust_sync(Arc::clone(&device_trust_sync));
+        Some((correlation, outbox, device_trust_sync))
     } else {
         None
     };
@@ -958,7 +972,7 @@ fn spawn_session_supervisor(
     escalation_state: Option<(
         Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
         crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
-        Arc<crate::services::invocation_transport::session_escalation::SessionEscalationHandle>,
+        Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
     )>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
@@ -1010,8 +1024,8 @@ fn spawn_session_supervisor(
     // RequestResult frames complete the matching pending entry,
     // and forward the SharedSessionOutbox to the supervisor so it
     // publishes the active up_tx on every successful dial.
-    let (correlation, outbox, escalation_handle) = match escalation_state {
-        Some((c, o, h)) => (Some(c), Some(o), Some(h)),
+    let (correlation, outbox, device_trust_sync) = match escalation_state {
+        Some((c, o, s)) => (Some(c), Some(o), Some(s)),
         None => (None, None, None),
     };
     let mut local_dispatcher = LocalAxonSessionDispatcher::new();
@@ -1025,16 +1039,12 @@ fn spawn_session_supervisor(
     // on a miss, over the SAME authenticated session channel the
     // paired-user sync and hot-agent advertising use (a device-local
     // resolve_key invoke would be answered from this daemon's own
-    // anchor and can never learn a new key).
-    if let Some(handle) = escalation_handle {
-        local_dispatcher = local_dispatcher.with_device_trust_sync(Arc::new(
-            crate::services::invocation_transport::device_trust_sync::DeviceTrustSync::new(
-                user_trust_sync.daemon_realm.clone(),
-                user_trust_sync.trust_anchor_path.clone(),
-                user_trust_sync.cell.clone(),
-                handle,
-            ),
-        ));
+    // anchor and can never learn a new key). The Arc is the daemon's
+    // single DeviceTrustSync, built next to the escalation consumer
+    // in `start_daemon_invocation_transport` and shared with the
+    // service's self-targeted `<self>.invoke_remote` dispatch arm.
+    if let Some(sync) = device_trust_sync {
+        local_dispatcher = local_dispatcher.with_device_trust_sync(sync);
     }
     let dispatcher = Arc::new(local_dispatcher);
     let hub_endpoint_for_wait = hub_endpoint.clone();

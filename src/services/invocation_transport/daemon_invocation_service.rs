@@ -357,6 +357,21 @@ pub struct DaemonInvocationService {
             crate::services::invocation_transport::session_escalation::SessionEscalationHandle,
         >,
     >,
+    /// On-miss device trust sync, shared with the device's
+    /// `<self>.session` dispatcher — boot constructs ONE instance per
+    /// daemon so both consumers share the same single-flight map and
+    /// negative cache. Consulted by the self-targeted
+    /// `<self>.invoke_remote` dispatch arm before a device-signed
+    /// origin claim is verified, so a first-contact cross-device
+    /// caller warms the local anchor instead of failing closed on
+    /// CALLER_KEY_NOT_FOUND. `None` on hub/both daemons: the hub IS
+    /// the realm's key registrar — its anchor is authoritative and
+    /// has no upstream to warm from. Boot wires `Some` only under
+    /// `mode = "device"`, alongside `escalation` (the sync rides the
+    /// same session channel).
+    device_trust_sync: Option<
+        Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
+    >,
     /// Workspace-scoped invocation ledger. Boot wires this to
     /// `<ledger_dir>/invocations.redb`; tests may inject a temp
     /// ledger. The service writes complete unary invoke records
@@ -458,6 +473,7 @@ impl DaemonInvocationService {
             federated_bindings: None,
             subscribe_v2_heartbeat_interval_ms: 30_000,
             escalation: None,
+            device_trust_sync: None,
             invocation_ledger: None,
             local_runtime: None,
             ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
@@ -584,6 +600,18 @@ impl DaemonInvocationService {
         >,
     ) -> Self {
         self.escalation = Some(handle);
+        self
+    }
+
+    /// Attach the daemon's shared on-miss device trust sync. See the
+    /// `device_trust_sync` field invariant: device-mode boot passes
+    /// the SAME `Arc` it hands the `<self>.session` dispatcher.
+    #[must_use]
+    pub fn with_device_trust_sync(
+        mut self,
+        sync: Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
+    ) -> Self {
+        self.device_trust_sync = Some(sync);
         self
     }
 
@@ -2958,6 +2986,14 @@ impl DaemonInvocationService {
                 caller_ura = origin.caller_ura.as_str(),
                 ability = dispatch_ability.as_str(),
             );
+            // Cross-device callers: warm the anchor from the hub on a
+            // miss (resolve_key trust sync), mirroring the
+            // `<self>.session` dispatcher arm. Admission below stays
+            // local-anchor-authoritative; a failed sync just lets the
+            // dispatch fail closed with the precise admission error.
+            if let Some(sync) = self.device_trust_sync.as_ref() {
+                sync.ensure_caller_key(&origin.caller_ura).await;
+            }
             // Signature verifies against the signed PUBLIC name; the
             // handler resolves under the route's dispatch key when the
             // two differ (agent-owned abilities).
@@ -12739,6 +12775,117 @@ mod tests {
             stream.next().await.is_none(),
             "self-target stream is one-shot"
         );
+    }
+
+    #[tokio::test]
+    async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
+        // Honest-report 2026-06-11 item 15: the self-targeted
+        // `<self>.invoke_remote` arm must consult the daemon's
+        // DeviceTrustSync before verifying a device-signed origin
+        // claim, exactly like the `<self>.session` dispatcher arm —
+        // first-contact cross-device callers warm the anchor instead
+        // of failing closed on a cold one. Admission itself must STAY
+        // fail-closed: the fabricated signature below cannot admit.
+        use easynet_axon::invocation::{
+            make_ability, AbilityCallModes, AbilityOptions, BackpressurePolicy, LocalRuntime,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        use futures::StreamExt;
+
+        static RESOLVER_CONSULTED: AtomicBool = AtomicBool::new(false);
+        fn recording_resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            RESOLVER_CONSULTED.store(true, Ordering::SeqCst);
+            Ok(vec![])
+        }
+
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let rt = LocalRuntime::new();
+        rt.register_ability_with_options(
+            "liangbing.chat",
+            make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            AbilityOptions {
+                modes: AbilityCallModes::RPC,
+                backpressure: BackpressurePolicy::Unbounded,
+            },
+        )
+        .await
+        .unwrap();
+
+        let anchor_dir = tempfile::tempdir().expect("tmp anchor dir");
+        let cell = crate::services::trust_anchor_cell::SharedTrustAnchor::new(Arc::new(
+            crate::services::realm_trust_anchor::RealmTrustAnchor::from_entries(vec![])
+                .expect("empty anchor"),
+        ));
+        let sync = Arc::new(
+            crate::services::invocation_transport::device_trust_sync::DeviceTrustSync::with_static_source_for_tests(
+                "test-realm".into(),
+                anchor_dir.path().join("realm-trust.toml"),
+                cell,
+                recording_resolver,
+            ),
+        );
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_local_runtime(Arc::clone(&rt))
+            .with_device_trust_sync(sync);
+        let owner_ura = "easynet:///r/test-realm/agent/dev.liangbing";
+        publish_test_route(&svc, owner_ura, "chat");
+        let ability_ura =
+            crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
+        let selected_route = svc
+            .daemon_route_resolver()
+            .await
+            .resolve_route(&ability_ura, "")
+            .expect("resolver selects agent route");
+
+        let claim = crate::services::invocation_transport::origin_caller::OriginCallerClaim {
+            caller_ura: "easynet:///r/test-realm/device/first-contact".into(),
+            ability: "chat".into(),
+            signature_b64: B64.encode([0_u8; 64]),
+            signer_pubkey_b64: B64.encode([0_u8; 32]),
+            nonce_b64: B64.encode([0_u8; 16]),
+        };
+
+        let response = svc
+            .dispatch_self_targeted_invoke_remote(
+                &selected_route,
+                None,
+                b"payload".as_slice(),
+                &std::collections::HashMap::new(),
+                Some(&claim),
+            )
+            .await
+            .expect("claim dispatch completes in-band");
+
+        assert!(
+            RESOLVER_CONSULTED.load(Ordering::SeqCst),
+            "device-signed origin claim must warm DeviceTrustSync before verification"
+        );
+
+        let mut stream = response.into_inner();
+        let frame = stream
+            .next()
+            .await
+            .expect("one terminal frame")
+            .expect("terminal frame is in-band");
+        let chunk = match frame.payload.expect("frame payload") {
+            DownPayload::BinaryChunk(chunk) => chunk,
+            other => panic!("expected BinaryChunk, got {other:?}"),
+        };
+        let down: InvokeRemoteDown =
+            serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
+        match down {
+            InvokeRemoteDown::Result { error, .. } => {
+                assert!(
+                    error.is_some(),
+                    "fabricated signature must fail closed, not admit"
+                );
+            }
+            other => panic!("expected terminal Result, got {other:?}"),
+        }
     }
 
     #[tokio::test]

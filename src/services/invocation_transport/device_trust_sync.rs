@@ -89,6 +89,26 @@ impl DeviceTrustSync {
         }
     }
 
+    /// Test seam for sibling-module tests: a sync whose hub
+    /// round-trip is a pure function. The service's self-targeted
+    /// dispatch arm pins its warm-on-miss contract against this
+    /// (`daemon_invocation_service` tests); production construction
+    /// stays escalation-only via `new`.
+    #[cfg(test)]
+    pub(crate) fn with_static_source_for_tests(
+        daemon_realm: String,
+        trust_anchor_path: PathBuf,
+        cell: SharedTrustAnchor,
+        resolver: fn(&str) -> anyhow::Result<Vec<String>>,
+    ) -> Self {
+        Self::with_source(
+            daemon_realm,
+            trust_anchor_path,
+            cell,
+            KeySource::Static(resolver),
+        )
+    }
+
     async fn resolve_from_hub(&self, agent_ura: &str) -> anyhow::Result<Vec<String>> {
         match &self.source {
             KeySource::Session(handle) => {
