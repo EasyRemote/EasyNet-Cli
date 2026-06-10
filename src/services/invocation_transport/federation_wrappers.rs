@@ -733,7 +733,7 @@ fn device_owner_projection_values(owner_ura: &str) -> Vec<serde_json::Value> {
 
 // ─── federation.resolve_key ────────────────────────────────────────
 
-fn resolve_key_response(public_key_b64: &str) -> ResolveKeyResponse {
+fn resolve_key_response(public_key_b64: &str, all_keys_b64: Vec<String>) -> ResolveKeyResponse {
     let public_key_hex = BASE64_STANDARD
         .decode(public_key_b64.as_bytes())
         .map(hex::encode)
@@ -741,7 +741,26 @@ fn resolve_key_response(public_key_b64: &str) -> ResolveKeyResponse {
     ResolveKeyResponse {
         public_key_b64: public_key_b64.to_string(),
         public_key_hex,
+        public_keys_b64: if all_keys_b64.is_empty() {
+            vec![public_key_b64.to_string()]
+        } else {
+            all_keys_b64
+        },
     }
+}
+
+/// Every key registered under `agent_ura` when it is a multi-key user
+/// URA; empty for single-key roles (device/backend/hub), letting
+/// `resolve_key_response` fall back to the primary key.
+fn all_user_keys_b64(
+    trust_anchor: &crate::services::realm_trust_anchor::RealmTrustAnchor,
+    agent_ura: &str,
+) -> Vec<String> {
+    trust_anchor
+        .lookup_user_all(agent_ura)
+        .iter()
+        .map(|e| e.public_key_b64.clone())
+        .collect()
 }
 
 /// Handle a `federation.resolve_key` invocation.
@@ -777,7 +796,10 @@ pub fn handle_resolve_key(
         });
     if let Some(pk) = presented_pubkey_b64.as_deref() {
         if let Some(entry) = trust_anchor.lookup_user_by_pubkey(&request.agent_ura, pk) {
-            return Some(resolve_key_response(&entry.public_key_b64));
+            return Some(resolve_key_response(
+                &entry.public_key_b64,
+                all_user_keys_b64(trust_anchor, &request.agent_ura),
+            ));
         }
         if matches!(
             crate::ura::parse_ura(&request.agent_ura).map(|parsed| parsed.kind),
@@ -786,9 +808,12 @@ pub fn handle_resolve_key(
             return None;
         }
     }
-    trust_anchor
-        .lookup(&request.agent_ura)
-        .map(|entry| resolve_key_response(&entry.public_key_b64))
+    trust_anchor.lookup(&request.agent_ura).map(|entry| {
+        resolve_key_response(
+            &entry.public_key_b64,
+            all_user_keys_b64(trust_anchor, &request.agent_ura),
+        )
+    })
 }
 
 // ─── federation.discover (PR-N3 N3-4) ──────────────────────────────
