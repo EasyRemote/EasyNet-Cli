@@ -37,7 +37,6 @@ use base64::Engine as _;
 use easynet_axon::invocation::{
     AgentIdentity, CallerSignature, CausalContext, InvocationEnvelope, SubjectIdentity, UraProfile,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::runtime::axon_bridge::dispatch_shim::WireDispatch;
 
@@ -51,30 +50,11 @@ pub const ORIGIN_CALLER_METADATA_KEY: &str = "x-easynet-origin-caller";
 
 const ED25519_ALGORITHM: &str = "ed25519";
 
-/// Typed wire shape of the origin-caller claim. Travels as a
-/// first-class `origin_caller` field on `InvokeRemoteUp::Request`
-/// and `SessionDispatch::Dispatch` (invocation-unity §22.2: security
-/// material rides typed fields, not raw metadata strings). Base64
-/// fields are decoded at validation time; an undecodable field makes
-/// the whole claim invalid (caller fails closed, never silently
-/// mis-binds).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OriginCallerClaim {
-    /// Canonical user URA that signed the inner invocation.
-    pub caller_ura: String,
-    /// The AXIOM `ability` field the browser signed over — the PUBLIC
-    /// ability name (e.g. `remote_desktop.create_session`), NOT the
-    /// daemon-local dispatch key. The device must rebuild the canonical
-    /// bytes with this exact string or the signature won't verify.
-    pub ability: String,
-    /// Base64 ed25519 signature over the INNER canonical bytes.
-    pub signature_b64: String,
-    /// Base64 32-byte raw ed25519 verifying key the device resolves
-    /// the signature against (key_id_hint for the KeyResolver).
-    pub signer_pubkey_b64: String,
-    /// Base64 16-byte inner invocation nonce.
-    pub nonce_b64: String,
-}
+/// The claim's wire shape is protocol material and lives in the Axon
+/// SDK (it rides `ForwardInvokeRequest` as well as the CLI-owned
+/// session frames). Re-exported here so every existing dispatch-site
+/// path keeps reading naturally.
+pub use easynet_axon::OriginCallerClaim;
 
 /// Decoded, validated origin-caller authorization.
 #[derive(Debug, Clone)]

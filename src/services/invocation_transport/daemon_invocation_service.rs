@@ -2345,6 +2345,7 @@ impl DaemonInvocationService {
                     &inner_payload,
                     &selected_route,
                     &correlation_call_id,
+                    request.origin_caller.as_ref(),
                 )
                 .await
             {
@@ -2468,6 +2469,7 @@ impl DaemonInvocationService {
             inner_envelope_b64: request.inner_envelope_b64.clone(),
             causal_context_bytes: request.causal_context_bytes.clone(),
             forward_deadline_ms: request.forward_deadline_ms,
+            origin_caller: request.origin_caller.clone(),
         };
         let nested_arguments = serde_json::to_vec(&nested).map_err(|err| {
             Status::internal(format!(
@@ -2650,6 +2652,7 @@ impl DaemonInvocationService {
         inner_payload: &InnerPayload,
         selected_route: &SelectedInvokeRoute,
         correlation_call_id: &str,
+        origin_caller: Option<&crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let pending = self.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(
@@ -2684,12 +2687,15 @@ impl DaemonInvocationService {
         let dispatch_frame = build_invoke_remote_dispatch_frame(
             call_id,
             &selected_route.callee_ura,
+            // No explicit subject: the executing device defaults the
+            // inner subject to the callee — the same rule the
+            // origin-caller claim signs over.
             None,
             &dispatch_ability,
             &inner_payload.args_bytes,
             SessionContentEnvelope::plaintext_json(),
             HashMap::new(),
-            None,
+            origin_caller.cloned(),
         )?;
 
         match sender.try_send(Ok(dispatch_frame)) {

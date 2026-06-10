@@ -2274,6 +2274,7 @@ mod tests {
                 inner_envelope_b64: String::new(),
                 causal_context_bytes: Vec::new(),
                 forward_deadline_ms: 0,
+                origin_caller: None,
             },
             "call-id-7",
             target_reply.clone(),
@@ -2294,6 +2295,7 @@ mod tests {
                 inner_envelope_b64: String::new(),
                 causal_context_bytes: Vec::new(),
                 forward_deadline_ms: 0,
+                origin_caller: None,
             },
             "call-id-8",
             Vec::new(),
@@ -2327,6 +2329,7 @@ mod tests {
             inner_envelope_b64: String::new(),
             causal_context_bytes: audit_bytes.clone(),
             forward_deadline_ms: 12_345,
+                origin_caller: None,
         };
         let bytes = serde_json::to_vec(&original).unwrap();
 

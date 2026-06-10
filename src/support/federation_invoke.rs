@@ -199,6 +199,15 @@ pub fn invoke_via_federation_forward_ability_ura(
     // result. We use a nanosecond+rng id; the value is opaque
     // to the daemon, only the round-trip equality matters.
     let call_id = generate_call_id();
+    // Sign over the exact byte shape the hub re-serialises: the hub
+    // decodes `args` to a `serde_json::Value` and re-encodes it before
+    // pushing the dispatch frame, so the claim must cover to_vec(Value)
+    // of the SAME value — not whatever bytes the operator typed.
+    let args_bytes_for_claim =
+        serde_json::to_vec(&args).context("serialise args for origin-caller claim")?;
+    let origin_caller = caller_ura.and_then(|caller| {
+        device_origin_claim(caller, ability_ura, node_ura, &args_bytes_for_claim)
+    });
     let inner_payload = json!({
         "ability_ura": ability_ura,
         "args": args,
@@ -229,6 +238,7 @@ pub fn invoke_via_federation_forward_ability_ura(
         inner_envelope_b64,
         causal_context_bytes: Vec::new(),
         forward_deadline_ms: 0,
+        origin_caller,
     };
     let forward_args_bytes =
         serde_json::to_vec(&forward_request).context("serialise ForwardInvokeRequest")?;
@@ -350,6 +360,71 @@ fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
                 .collect::<String>(),
         })),
     }
+}
+
+/// Sign the origin-caller claim with the SUBMITTING DEVICE's
+/// registered key (the same derivation `device join` registered into
+/// the hub trust set), so the executing device can verify the inner
+/// canonical bytes cryptographically and run the ability with the
+/// real caller instead of the `_system` trust-domain placeholder.
+///
+/// The signed tuple must match what the executing device rebuilds
+/// (`OriginCaller::into_wire_dispatch` fed by the hub's dispatch
+/// frame): callee = the ability's owner identity (the route resolver
+/// selects exactly this as callee), subject = the callee default (the
+/// forward path relays no explicit subject), causal = None, ability =
+/// the PUBLIC name, args = the hub-re-serialised bytes.
+///
+/// Returns `None` when the caller is not a device URA — fidelity is
+/// additive; execution then proceeds with the trust-domain identity.
+fn device_origin_claim(
+    caller_ura: &str,
+    ability_ura: &str,
+    target_ura: &str,
+    args_bytes: &[u8],
+) -> Option<easynet_axon::OriginCallerClaim> {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine as _;
+    use easynet_axon::invocation::{
+        canonical_invocation_bytes, AgentIdentity, CausalContext, InvocationEnvelope,
+        SubjectIdentity, UraProfile,
+    };
+    use ed25519_dalek::Signer as _;
+
+    let parsed = parse_ura(caller_ura).ok()?;
+    if parsed.kind != URAKind::Device {
+        return None;
+    }
+    let device_id = parsed.device_id()?.to_string();
+    let callee_ura = crate::ura::ability_owner_identity_ura(ability_ura)?;
+    let public_ability =
+        crate::ura::public_ability_name_from_ability_ura(target_ura, ability_ura)?;
+
+    let subject_id = easynet_axon::invocation::private_agent_subject_id(&device_id);
+    let (seed, signer_pubkey_b64) =
+        crate::runtime::publish::derive_subject_keypair(&parsed.realm, &subject_id);
+    let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+
+    let nonce = easynet_axon::invocation::fresh_nonce();
+
+    let envelope = InvocationEnvelope::from_wire_parts(
+        AgentIdentity::new(caller_ura.to_string(), UraProfile::EasynetStrictV2),
+        AgentIdentity::new(callee_ura.clone(), UraProfile::EasynetStrictV2),
+        SubjectIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+        nonce,
+        CausalContext::None,
+        public_ability.clone(),
+        args_bytes,
+    );
+    let signature = signing.sign(&canonical_invocation_bytes(&envelope));
+
+    Some(easynet_axon::OriginCallerClaim {
+        caller_ura: caller_ura.to_string(),
+        ability: public_ability,
+        signature_b64: B64.encode(signature.to_bytes()),
+        signer_pubkey_b64,
+        nonce_b64: B64.encode(nonce),
+    })
 }
 
 fn validate_forward_ability_owner(ability_ura: &str, node_ura: &str) -> anyhow::Result<()> {
@@ -587,6 +662,77 @@ fn base64_engine_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole fidelity contract in one place: the claim the
+    /// submitting device signs must verify against the canonical bytes
+    /// the EXECUTING device rebuilds from the hub's dispatch frame
+    /// (callee = route owner, subject = callee default, ability =
+    /// public name, args = hub-re-serialised bytes).
+    #[test]
+    fn device_origin_claim_round_trips_executing_device_rebuild() {
+        use easynet_axon::invocation::canonical_invocation_bytes;
+        use ed25519_dalek::{Verifier as _, VerifyingKey};
+
+        let caller = "easynet:///r/easynet.run/device/node-a";
+        let target = "easynet:///r/easynet.run/device/node-b";
+        let ability_ura = "easynet:///r/easynet.run/ability/alice.bfilter.code_filter";
+        let args_bytes =
+            serde_json::to_vec(&serde_json::json!({"rows": "[]", "code": "return True"}))
+                .expect("args bytes");
+
+        let claim = device_origin_claim(caller, ability_ura, target, &args_bytes)
+            .expect("device caller produces a claim");
+        assert_eq!(claim.caller_ura, caller);
+        assert_eq!(claim.ability, "bfilter.code_filter");
+
+        // Executing-device side: decode and rebuild exactly as
+        // `LocalAxonSessionDispatcher` does (claim -> wire dispatch with
+        // the frame's callee and the subject default).
+        let origin =
+            crate::services::invocation_transport::origin_caller::OriginCaller::from_claim(
+                claim.clone(),
+            )
+            .expect("claim decodes");
+        let route_callee = "easynet:///r/easynet.run/agent/alice.bfilter";
+        let wire = origin.into_wire_dispatch(route_callee, route_callee, args_bytes.clone());
+
+        use base64::Engine as _;
+        let pubkey: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(&claim.signer_pubkey_b64)
+            .expect("pubkey b64")
+            .try_into()
+            .expect("32 bytes");
+        let verifying = VerifyingKey::from_bytes(&pubkey).expect("verifying key");
+        let signature = ed25519_dalek::Signature::from_slice(&wire.signature.signature)
+            .expect("signature shape");
+        verifying
+            .verify(&canonical_invocation_bytes(&wire.envelope), &signature)
+            .expect("rebuilt canonical bytes must verify against the device claim");
+
+        // Tampered args must NOT verify (fail closed at admission).
+        let mut tampered = args_bytes.clone();
+        tampered[0] ^= 1;
+        let origin2 =
+            crate::services::invocation_transport::origin_caller::OriginCaller::from_claim(claim)
+                .expect("claim decodes");
+        let wire2 = origin2.into_wire_dispatch(route_callee, route_callee, tampered);
+        assert!(verifying
+            .verify(&canonical_invocation_bytes(&wire2.envelope), &signature)
+            .is_err());
+    }
+
+    /// Non-device callers (users, agents) produce no device claim —
+    /// fidelity is additive, never fabricated.
+    #[test]
+    fn device_origin_claim_requires_device_caller() {
+        assert!(device_origin_claim(
+            "easynet:///r/easynet.run/user/alice",
+            "easynet:///r/easynet.run/ability/alice.bfilter.code_filter",
+            "easynet:///r/easynet.run/device/node-b",
+            b"{}",
+        )
+        .is_none());
+    }
 
     #[test]
     fn parse_node_ura_accepts_canonical_shape() {
