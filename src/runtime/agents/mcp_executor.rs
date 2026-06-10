@@ -146,16 +146,7 @@ pub fn run_mcp_exec_with_invocation_context(
              `[exec] kind=\"mcp\"` ability is invoked"
         )
     })?;
-    crate::op_event!(
-        component = mcp_executor,
-        kind = exec_probe,
-        thread = format!("{:?}", std::thread::current().name()),
-        flavor = tokio::runtime::Handle::try_current()
-            .map(|h| format!("{:?}", h.runtime_flavor()))
-            .unwrap_or_else(|_| "none".into()),
-    );
     let result = block_on_async(async move {
-        crate::op_event!(component = mcp_executor, kind = exec_probe_inside_future);
         client
             .rpc(
                 &server,
