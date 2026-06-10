@@ -92,6 +92,10 @@ pub struct LocalAxonSessionDispatcher {
     /// declarations are projected into this table at boot so the dispatcher
     /// does not query package state through process-global helpers.
     ability_wire: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+    /// On-miss device key sync for cross-device origin-caller claims
+    /// (see `device_trust_sync`). `None` outside device-mode boot.
+    device_trust_sync:
+        Option<Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>>,
 }
 
 type LocalBidiWireKind = crate::runtime::ability_wire::AbilityBidiWireKind;
@@ -163,6 +167,7 @@ impl LocalAxonSessionDispatcher {
             remote_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             local_runtime: None,
             ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
+            device_trust_sync: None,
         }
     }
 
@@ -174,6 +179,15 @@ impl LocalAxonSessionDispatcher {
         registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
     ) -> Self {
         self.ability_wire = registry;
+        self
+    }
+
+    #[must_use]
+    pub fn with_device_trust_sync(
+        mut self,
+        sync: Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
+    ) -> Self {
+        self.device_trust_sync = Some(sync);
         self
     }
 
@@ -268,6 +282,13 @@ impl LocalAxonSessionDispatcher {
                 caller_ura = origin.caller_ura.as_str(),
                 ability = ability,
             );
+            // Cross-device callers: warm the anchor from the hub on a
+            // miss (resolve_key trust sync). Admission below stays
+            // local-anchor-authoritative; a failed sync just lets the
+            // dispatch fail closed with the precise admission error.
+            if let Some(sync) = self.device_trust_sync.as_ref() {
+                sync.ensure_caller_key(&origin.caller_ura).await;
+            }
             let inner_subject = subject_ura
                 .filter(|s| !s.trim().is_empty())
                 .or(callee_ura)

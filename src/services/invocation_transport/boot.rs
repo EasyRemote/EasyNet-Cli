@@ -1020,6 +1020,16 @@ fn spawn_session_supervisor(
     local_dispatcher = local_dispatcher.with_local_runtime(Arc::clone(&local_runtime));
     local_dispatcher =
         local_dispatcher.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
+    // Cross-device origin-caller claims: warm the anchor from the hub
+    // on a miss (same authority direction and write policy as the
+    // paired-user sync the supervisor carries below).
+    local_dispatcher = local_dispatcher.with_device_trust_sync(Arc::new(
+        crate::services::invocation_transport::device_trust_sync::DeviceTrustSync::new(
+            user_trust_sync.daemon_realm.clone(),
+            user_trust_sync.trust_anchor_path.clone(),
+            user_trust_sync.cell.clone(),
+        ),
+    ));
     let dispatcher = Arc::new(local_dispatcher);
     let hub_endpoint_for_wait = hub_endpoint.clone();
     let caller_ura_for_wait = identity.caller_ura.clone();
