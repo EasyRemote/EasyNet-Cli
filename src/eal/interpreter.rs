@@ -257,6 +257,14 @@ pub struct ExecutionTrace {
     pub steps_skipped: usize,
     pub outcome: MissionOutcome,
     pub step_traces: Vec<StepTrace>,
+    /// Per-step seven-tuple invocation records (envelope echo +
+    /// ledger receipt anchors) for steps lowered onto the daemon
+    /// Invocation surface, in execution order. The receipt-level
+    /// ability graph: nodes are the records' `ability` names, edges
+    /// come from each record's `causal_context.parents`. Empty when
+    /// no step produced an invocation record (offline run).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ability_graph: Vec<Value>,
     /// Number of steps whose traces were dropped due to the
     /// in-memory cap (see `TRACE_CAP_TOTAL`). Zero means every step
     /// is present in `step_traces`. Nonzero means there are exactly
@@ -289,6 +297,14 @@ pub struct StepTrace {
     pub result_size_bytes: Option<usize>,
     pub result_sha256: Option<String>,
     pub error: Option<String>,
+    /// Seven-tuple Axon invocation record for this step when it was
+    /// lowered onto the daemon Invocation surface: envelope echo
+    /// (caller/callee/ability/subject/nonce/causal_context) plus the
+    /// ledger-assigned invocation_ura, trace_id, and receipt anchors.
+    /// None for receipt-less dispatch paths (in-process fallback,
+    /// agent CLI) — absence is recorded, never fabricated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<Value>,
     /// Mirrors `IrStep::input_refs` — kept as a `BTreeMap` for the same
     /// reason: stable JSON output for trace files. A trace JSON whose
     /// key order shifted between runs would defeat any "diff two
@@ -337,6 +353,11 @@ pub struct ExecutionReport {
 
 struct CapturedResult {
     value: Vec<u8>,
+    /// Seven-tuple invocation record for the step that produced this
+    /// binding, when the step was lowered onto the daemon's Axon
+    /// Invocation surface (None for in-process fallback dispatch).
+    /// Downstream steps read this to name their causal parents.
+    invocation: Option<Value>,
 }
 
 // ── Dispatch backend trait (enables test injection) ──
@@ -457,6 +478,12 @@ pub trait StepDispatcher {
     /// future telemetry) can branch on category rather than parsing
     /// English strings. The error is converted to its display form
     /// when stored in `StepExecResult::Error.message`.
+    /// `causal_parents` carries the producing steps' receipt anchors
+    /// (`{node, invocation_ura, receipt_ura, receipt_hash}` objects)
+    /// for this step's `input_refs`. Dispatchers that lower onto the
+    /// Axon Invocation surface encode them as the envelope's
+    /// `causal_context`; transports without an invocation surface
+    /// ignore them.
     fn dispatch(
         &self,
         tenant: &str,
@@ -464,11 +491,34 @@ pub trait StepDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-    ) -> Result<Value, EalError>;
+        causal_parents: &[Value],
+    ) -> Result<StepDispatchOutcome, EalError>;
 
     /// Create an independent clone for parallel dispatch.
     /// Each thread in a phase needs its own dispatcher.
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError>;
+}
+
+/// Successful dispatch outcome: the step's result value plus, when
+/// the step was lowered onto the daemon's Axon Invocation surface,
+/// the seven-tuple invocation record (envelope echo + ledger receipt
+/// anchors). `invocation: None` means the step executed through a
+/// path that emits no Axon invocation (in-process fallback, agent
+/// CLI dispatch) — the trace records that honestly rather than
+/// fabricating a receipt.
+#[derive(Debug)]
+pub struct StepDispatchOutcome {
+    pub value: Value,
+    pub invocation: Option<Value>,
+}
+
+impl From<Value> for StepDispatchOutcome {
+    fn from(value: Value) -> Self {
+        Self {
+            value,
+            invocation: None,
+        }
+    }
 }
 
 // ── Agent-Aware Dispatcher ──
@@ -528,14 +578,16 @@ impl StepDispatcher for AgentAwareDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-    ) -> Result<Value, EalError> {
+        causal_parents: &[Value],
+    ) -> Result<StepDispatchOutcome, EalError> {
         match target {
             IrTarget::Agent(agent_id) => {
-                dispatch_to_agent(&self.registry, agent_id, ability, arguments)
+                dispatch_to_agent(&self.registry, agent_id, ability, arguments, causal_parents)
             }
             IrTarget::Device { node_id } => {
                 let _ = timeout_ms;
                 dispatch_remote_via_forward_invoke(tenant, node_id, ability.as_str(), arguments)
+                    .map(Into::into)
             }
         }
     }
@@ -553,7 +605,8 @@ fn dispatch_to_agent(
     agent_id: &crate::core::agent_id::AgentId,
     ability: &AbilityName,
     arguments: &Value,
-) -> Result<Value, EalError> {
+    causal_parents: &[Value],
+) -> Result<StepDispatchOutcome, EalError> {
     // Registry is keyed by string today (see Step 4
     // follow-up: registry will be keyed by AgentId itself).
     // For now, look up by the canonical Display form.
@@ -594,10 +647,67 @@ fn dispatch_to_agent(
         .find(|m| m.name() == bare_ability);
     if let Some(manifest) = manifest_match {
         if let Some(exec) = manifest.exec() {
+            // Lower the step onto the daemon's Axon Invocation surface
+            // first: the daemon executes the same `[exec]` manifest but
+            // the call becomes a ledger-recorded seven-tuple invocation
+            // (caller/callee/ability/subject/nonce/causal_context/args)
+            // whose receipt anchors downstream steps reference as their
+            // causal parents. The in-process executor below remains the
+            // offline path (daemon down / ability not registered yet)
+            // and is recorded with `invocation: None` — no fabricated
+            // receipts.
+            //
+            // `adapter_fault: "drop_causal_context"` is the phase-1
+            // benchmark fault-injection knob (Easynet-Semantic-Operator-
+            // Integration negative missions): it models a binding that
+            // fails to preserve causal placement, so the invocation is
+            // emitted with an empty causal_context while the argument
+            // still reaches the adapter.
+            let qualified = format!("{}.{}", agent_id.name, bare_ability);
+            let effective_parents: &[Value] = if arguments
+                .get("adapter_fault")
+                .and_then(Value::as_str)
+                == Some("drop_causal_context")
+            {
+                &[]
+            } else {
+                causal_parents
+            };
+            match crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
+                &qualified,
+                arguments.clone(),
+                None,
+                effective_parents,
+            ) {
+                Ok((value, meta)) => {
+                    return Ok(StepDispatchOutcome {
+                        value,
+                        invocation: Some(meta),
+                    });
+                }
+                Err(err) => {
+                    let lower = err.to_string().to_ascii_lowercase();
+                    let daemon_offline = lower.contains("daemon not running")
+                        || lower.contains("listener unreachable")
+                        || lower.contains("connect to local axon daemon")
+                        || lower.contains("requires the `axon-pb` feature");
+                    let unregistered = lower.contains("unknown_ability")
+                        || lower.contains("not_found")
+                        || lower.contains("no local handler registered");
+                    if !(daemon_offline || unregistered) {
+                        // The daemon ran the same manifest and failed for
+                        // real; re-running in-process would double-execute
+                        // a side-effecting ability to mask a true error.
+                        return Err(EalError::Unavailable(format!(
+                            "daemon invoke {qualified}: {err}"
+                        )));
+                    }
+                }
+            }
             let timeout = manifest
                 .timeout_seconds()
                 .map(std::time::Duration::from_secs);
-            return match exec {
+            return (match exec {
                 crate::core::ability_spec::AbilityExec::Shell(spec) => {
                     crate::runtime::agents::shell_executor::run_shell_exec(spec, arguments, timeout)
                         .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
@@ -615,7 +725,8 @@ fn dispatch_to_agent(
                     crate::runtime::agents::mcp_executor::run_mcp_exec(spec, arguments)
                         .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
                 }
-            };
+            })
+            .map(Into::into);
         }
     }
 
@@ -634,6 +745,7 @@ fn dispatch_to_agent(
             arguments.clone(),
             None,
         )
+        .map(Into::into)
         .map_err(|e| EalError::Unavailable(format!("agent chat: {e}")));
     }
 
@@ -657,7 +769,7 @@ fn dispatch_to_agent(
     //   * daemon returned any other typed error → propagate.
     let qualified = format!("{}.{}", agent_id.name, ability.as_str());
     match try_dispatch_via_daemon(&qualified, arguments) {
-        DaemonDispatch::Result(value) => return Ok(value),
+        DaemonDispatch::Result(value) => return Ok(value.into()),
         DaemonDispatch::AbilityNotFound => { /* fall through to chat */ }
         DaemonDispatch::DaemonDown(reason) => {
             return Err(EalError::Unavailable(format!("daemon: {reason}")));
@@ -694,7 +806,8 @@ fn dispatch_to_agent(
         "output": response.content,
         "model": response.model,
         "duration_ms": response.duration_ms,
-    }))
+    })
+    .into())
 }
 
 /// Outcome of attempting to dispatch a `<agent>.<verb>` call through
@@ -903,6 +1016,18 @@ pub fn execute_with_dispatcher(
              retained; see ExecutionTrace::traces_truncated)"
         );
     }
+    let ability_graph: Vec<Value> = step_traces
+        .iter()
+        .filter_map(|step_trace| {
+            step_trace.invocation.as_ref().map(|meta| {
+                let mut entry = meta.clone();
+                if let Some(object) = entry.as_object_mut() {
+                    object.insert("step_id".into(), Value::String(step_trace.step_id.clone()));
+                }
+                entry
+            })
+        })
+        .collect();
     let trace = ExecutionTrace {
         schema_version: EXECUTION_TRACE_SCHEMA_VERSION,
         mission_id,
@@ -916,6 +1041,7 @@ pub fn execute_with_dispatcher(
         steps_skipped: skipped,
         outcome,
         step_traces,
+        ability_graph,
         traces_truncated,
     };
 
@@ -945,6 +1071,9 @@ enum StepExecResult {
         completed_at: u64,
         retry_count: u32,
         retry_history: Vec<RetryRecord>,
+        /// Seven-tuple invocation record from the daemon lowering
+        /// path; None when the step ran through a receipt-less path.
+        invocation: Option<Value>,
     },
     Error {
         message: String,
@@ -959,6 +1088,71 @@ enum StepExecResult {
     /// in `process_step_result` regardless of this step's own
     /// `optional` / `on_failure` flags — propagating skip is the point.
     SkippedByDependency { message: String, started_at: u64 },
+}
+
+/// Sentinel an EAL author writes as an argument value to receive the
+/// runner's receipt graph — the seven-tuple invocation records of all
+/// bound steps completed so far. Substituted at argument-resolution
+/// time (the runner owns receipt refs; `.receipt` is deliberately not
+/// an EAL user value). Steps that don't ask don't pay.
+const RECEIPT_GRAPH_SENTINEL: &str = "__runner_receipt_graph__";
+
+/// Collect the causal-parent receipt anchors for one step from the
+/// producers named in its `input_refs`. A producer that ran through a
+/// receipt-less path contributes no anchor — the edge is omitted, not
+/// fabricated.
+fn causal_parents_from_captured(
+    step: &IrStep,
+    captured: &HashMap<String, CapturedResult>,
+) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
+    let mut parents = Vec::new();
+    for binding in step.input_refs.values() {
+        if !seen.insert(binding.clone()) {
+            continue;
+        }
+        let Some(produced) = captured.get(binding) else {
+            continue;
+        };
+        let Some(meta) = produced.invocation.as_ref() else {
+            continue;
+        };
+        let anchor = meta
+            .pointer("/receipt/anchor")
+            .cloned()
+            .unwrap_or(Value::Null);
+        parents.push(serde_json::json!({
+            "node": meta.get("ability").cloned().unwrap_or(Value::Null),
+            "invocation_ura": meta.get("invocation_ura").cloned().unwrap_or(Value::Null),
+            "receipt_ura": anchor.get("receipt_ura").cloned().unwrap_or(Value::Null),
+            "receipt_hash": anchor.get("receipt_hash").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    parents
+}
+
+/// Replace any top-level [`RECEIPT_GRAPH_SENTINEL`] argument value
+/// with the current receipt graph (one entry per bound completed
+/// step's invocation record).
+fn substitute_receipt_graph(args: &mut Value, captured: &HashMap<String, CapturedResult>) {
+    let Some(object) = args.as_object_mut() else {
+        return;
+    };
+    if !object
+        .values()
+        .any(|v| v.as_str() == Some(RECEIPT_GRAPH_SENTINEL))
+    {
+        return;
+    }
+    let graph: Vec<Value> = captured
+        .values()
+        .filter_map(|c| c.invocation.clone())
+        .collect();
+    for value in object.values_mut() {
+        if value.as_str() == Some(RECEIPT_GRAPH_SENTINEL) {
+            *value = Value::Array(graph.clone());
+        }
+    }
 }
 
 /// Dispatch a batch of steps (identified by `indices` into `steps`) in parallel or sequentially.
@@ -981,7 +1175,8 @@ fn dispatch_batch(
     if parallel && indices.len() > 1 {
         // Pre-resolve arguments and pre-clone dispatchers on the main thread,
         // so the rayon closure only captures Send types (no &dyn StepDispatcher).
-        let mut tasks: Vec<(usize, Box<dyn StepDispatcher + Send>, Value)> = Vec::new();
+        type PreparedTask = (usize, Box<dyn StepDispatcher + Send>, Value, Vec<Value>);
+        let mut tasks: Vec<PreparedTask> = Vec::new();
         // Lock-free result queue — each rayon task pushes without contention.
         let collector = SegQueue::new();
         for &local_idx in indices {
@@ -1041,11 +1236,14 @@ fn dispatch_batch(
                     continue;
                 }
             };
-            tasks.push((local_idx, thread_dispatcher, merged_args));
+            let mut merged_args = merged_args;
+            substitute_receipt_graph(&mut merged_args, captured);
+            let causal_parents = causal_parents_from_captured(step, captured);
+            tasks.push((local_idx, thread_dispatcher, merged_args, causal_parents));
         }
         // Spawn rayon tasks — closure captures only Send types.
         rayon::scope(|scope| {
-            for (local_idx, thread_dispatcher, merged_args) in tasks {
+            for (local_idx, thread_dispatcher, merged_args, causal_parents) in tasks {
                 let step = &steps[local_idx];
                 let collector_ref = &collector;
                 scope.spawn(move |_| {
@@ -1054,6 +1252,7 @@ fn dispatch_batch(
                         tenant,
                         step,
                         &merged_args,
+                        &causal_parents,
                     );
                     collector_ref.push((local_idx, result));
                 });
@@ -1097,7 +1296,11 @@ fn dispatch_batch(
                     continue;
                 }
             };
-            let result = execute_step_with_retry(dispatcher, tenant, step, &merged_args);
+            let mut merged_args = merged_args;
+            substitute_receipt_graph(&mut merged_args, captured);
+            let causal_parents = causal_parents_from_captured(step, captured);
+            let result =
+                execute_step_with_retry(dispatcher, tenant, step, &merged_args, &causal_parents);
             results.push((local_idx, result));
         }
         results
@@ -1132,7 +1335,13 @@ fn process_batch(
                 *completed += 1;
                 if let Some(ref binding) = step.output_binding {
                     if let Some(bytes) = result_bytes {
-                        captured.insert(binding.clone(), CapturedResult { value: bytes });
+                        captured.insert(
+                            binding.clone(),
+                            CapturedResult {
+                                value: bytes,
+                                invocation: trace.invocation.clone(),
+                            },
+                        );
                     }
                 }
             }
@@ -1454,6 +1663,10 @@ fn execute_loop(
                     rb.clone(),
                     CapturedResult {
                         value: verify_bytes.clone(),
+                        // Loop result bindings carry no single
+                        // invocation record (the value is the verify
+                        // step of the final iteration).
+                        invocation: None,
                     },
                 );
             }
@@ -1592,7 +1805,10 @@ fn run_loop_block_sequentially(
             }
         };
 
-        let result = execute_step_with_retry(dispatcher, tenant, step, &merged_args);
+        // Loop-internal steps dispatch without causal parents for now;
+        // receipt-chained loops are a follow-up once loop semantics
+        // pin how iteration receipts should join.
+        let result = execute_step_with_retry(dispatcher, tenant, step, &merged_args, &[]);
 
         // Mirror the "capture under synthetic binding for last step"
         // side-effect by copying result_bytes into iter_captured
@@ -1604,6 +1820,7 @@ fn run_loop_block_sequentially(
                     LOOP_VERIFY_SYNTHETIC_BINDING.to_string(),
                     CapturedResult {
                         value: result_bytes.clone(),
+                        invocation: None,
                     },
                 );
             }
@@ -1669,6 +1886,7 @@ fn execute_step_with_retry(
     tenant: &str,
     step: &IrStep,
     arguments: &Value,
+    causal_parents: &[Value],
 ) -> StepExecResult {
     // MissionControl semantics: `max_retries` is the number of retries AFTER the
     // first attempt, so total attempts = 1 + max_retries.
@@ -1706,10 +1924,12 @@ fn execute_step_with_retry(
             &step.ability,
             arguments,
             step_timeout_ms,
+            causal_parents,
         );
 
         match res {
-            Ok(result) => {
+            Ok(outcome) => {
+                let StepDispatchOutcome { value: result, invocation } = outcome;
                 // Serializing a `serde_json::Value` back to bytes can
                 // only fail if the Value contains NaN / ±∞ numbers —
                 // JSON has no representation for those. A dispatcher
@@ -1747,6 +1967,7 @@ fn execute_step_with_retry(
                     completed_at,
                     retry_count: attempt,
                     retry_history,
+                    invocation,
                 };
             }
             Err(e) => {
@@ -1904,6 +2125,7 @@ fn process_step_result(
             completed_at,
             retry_count,
             retry_history,
+            invocation,
         } => {
             let bind_info = step
                 .output_binding
@@ -1945,6 +2167,7 @@ fn process_step_result(
                 result_size_bytes: Some(size),
                 result_sha256: Some(result_sha256),
                 error: None,
+                invocation,
                 input_refs: step.input_refs.clone(),
                 output_binding: step.output_binding.clone(),
             };
@@ -1993,6 +2216,7 @@ fn process_step_result(
                 result_size_bytes: None,
                 result_sha256: None,
                 error: Some(message),
+                invocation: None,
                 input_refs: step.input_refs.clone(),
                 output_binding: step.output_binding.clone(),
             };
@@ -2029,6 +2253,7 @@ fn process_step_result(
                 result_size_bytes: None,
                 result_sha256: None,
                 error: Some(message),
+                invocation: None,
                 input_refs: step.input_refs.clone(),
                 output_binding: step.output_binding.clone(),
             };
@@ -2181,7 +2406,8 @@ mod tests {
             ability: &AbilityName,
             _arguments: &Value,
             _timeout_ms: Option<u64>,
-        ) -> Result<Value, EalError> {
+            _causal_parents: &[Value],
+        ) -> Result<StepDispatchOutcome, EalError> {
             let ability_str = ability.as_str().to_string();
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
             self.calls
@@ -2213,7 +2439,8 @@ mod tests {
                 "ok": true,
                 "call_num": call_num,
                 "function": ability_str,
-            }))
+            })
+            .into())
         }
 
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -2247,6 +2474,7 @@ mod tests {
             retry_history: vec![],
             result_size_bytes: None,
             result_sha256: None,
+            invocation: None,
             error: None,
             input_refs: BTreeMap::new(),
             output_binding: None,
@@ -2466,6 +2694,7 @@ mod tests {
             &agent_id,
             &ability,
             &serde_json::json!({"prompt": "hi"}),
+            &[],
         )
         .expect_err("bogus binary must fail on local chat dispatch");
         let msg = format!("{err}");
@@ -2765,9 +2994,10 @@ mod tests {
                 ability: &AbilityName,
                 _: &Value,
                 _: Option<u64>,
-            ) -> Result<Value, EalError> {
+                _: &[Value],
+            ) -> Result<StepDispatchOutcome, EalError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Ok(serde_json::json!({"ok": true, "function": ability.as_str()}))
+                Ok(serde_json::json!({"ok": true, "function": ability.as_str()}).into())
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
                 Err(EalError::Internal("not cloneable".into()))
@@ -2853,12 +3083,13 @@ mod tests {
             ability: &AbilityName,
             arguments: &Value,
             _timeout_ms: Option<u64>,
-        ) -> Result<Value, EalError> {
+            _causal_parents: &[Value],
+        ) -> Result<StepDispatchOutcome, EalError> {
             self.seen
                 .lock()
                 .unwrap()
                 .push((target.clone(), ability.clone(), arguments.clone()));
-            Ok(serde_json::json!({"ok": true}))
+            Ok(serde_json::json!({"ok": true}).into())
         }
 
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -2886,7 +3117,8 @@ mod tests {
                 _ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-            ) -> Result<Value, EalError> {
+                _causal_parents: &[Value],
+            ) -> Result<StepDispatchOutcome, EalError> {
                 Err(EalError::NotFound("device 'node-x' not registered".into()))
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -2946,6 +3178,7 @@ mod tests {
             steps_skipped: 0,
             outcome: MissionOutcome::Completed,
             step_traces: vec![],
+            ability_graph: vec![],
             traces_truncated: 0,
         };
 
@@ -3051,6 +3284,7 @@ mod tests {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{not json".to_vec(),
+                invocation: None,
             },
         );
 
@@ -3155,6 +3389,7 @@ mod tests {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{\"answer\": 42}".to_vec(),
+                invocation: None,
             },
         );
 
@@ -3300,7 +3535,8 @@ mod tests {
             ability: &AbilityName,
             _arguments: &Value,
             _timeout_ms: Option<u64>,
-        ) -> Result<Value, EalError> {
+            _causal_parents: &[Value],
+        ) -> Result<StepDispatchOutcome, EalError> {
             let k = ability.as_str().to_string();
             self.calls.lock().unwrap().push(k.clone());
             self.depth_observations
@@ -3314,10 +3550,10 @@ mod tests {
                 if *cur < script.len() {
                     let v = script[*cur].clone();
                     *cur += 1;
-                    return Ok(v);
+                    return Ok(v.into());
                 }
             }
-            Ok(self.default.clone())
+            Ok(self.default.clone().into())
         }
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
             // Loops are sequential by design — no thread cloning needed

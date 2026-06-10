@@ -81,6 +81,34 @@ pub fn invoke_local_ability_with_subject(
     )
 }
 
+/// Same as [`invoke_local_ability_with_subject`] but returns the
+/// invocation record alongside the result.
+///
+/// This is the EAL mission runner's lowering surface: each mission
+/// step becomes one complete seven-tuple Axon invocation. The
+/// returned metadata value carries the envelope echo (caller /
+/// callee / ability / subject / nonce / causal_context) plus the
+/// ledger-assigned `invocation_ura`, `trace_id`, and receipt-chain
+/// anchors — the material a downstream step needs to name THIS step
+/// as its causal parent. `causal_parents` entries are
+/// `{node, invocation_ura, receipt_ura, receipt_hash}` objects from
+/// prior steps' metadata; they are encoded into the envelope's
+/// `causal_context` (explicit `Empty` for a root step, `ReceiptRef`
+/// scalar for one parent, ordered `ReceiptList` for a join).
+pub fn invoke_local_ability_with_invocation_meta(
+    ability: &str,
+    args: Value,
+    subject: Option<String>,
+    causal_parents: &[Value],
+) -> anyhow::Result<(Value, Value)> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta(
+        ability,
+        args,
+        subject,
+        causal_parents,
+    )
+}
+
 /// Standard error message for any CLI surface that semantically
 /// requires the federation tier (cross-node enumeration, remote
 /// dispatch, voice/video signaling). The federation Invoke surface
