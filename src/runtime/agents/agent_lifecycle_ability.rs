@@ -775,6 +775,7 @@ fn refresh_agents_handler(
                 "name": name,
                 "runtime_registered": outcome.registered,
                 "runtime_failed": outcome.failed,
+                "runtime_removed": outcome.removed,
                 "runtime_not_ready": outcome.runtime_not_ready,
             }));
         }
@@ -795,6 +796,10 @@ fn refresh_agents_handler(
         .iter()
         .filter_map(|row| row.get("runtime_failed").and_then(Value::as_u64))
         .sum::<u64>();
+    let runtime_removed = agent_results
+        .iter()
+        .filter_map(|row| row.get("runtime_removed").and_then(Value::as_u64))
+        .sum::<u64>();
     let runtime_not_ready = agent_results.iter().any(|row| {
         row.get("runtime_not_ready")
             .and_then(Value::as_bool)
@@ -806,6 +811,7 @@ fn refresh_agents_handler(
         "agents_scanned": agent_results.len(),
         "runtime_registered": runtime_registered,
         "runtime_failed": runtime_failed,
+        "runtime_removed": runtime_removed,
         "agents": agent_results,
     }))
 }

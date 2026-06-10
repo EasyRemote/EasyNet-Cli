@@ -2329,6 +2329,10 @@ fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
         .get("runtime_failed")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    let removed = response
+        .get("runtime_removed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
     if let Some(rows) = response.get("agents").and_then(serde_json::Value::as_array) {
         for row in rows {
             let name = row
@@ -2343,14 +2347,22 @@ fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
                 .get("runtime_failed")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
+            let row_removed = row
+                .get("runtime_removed")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             output::detail(
                 "refreshed",
-                &format!("{name}: registered {row_registered}, failed {row_failed}"),
+                &format!(
+                    "{name}: registered {row_registered}, failed {row_failed}, \
+                     removed {row_removed}"
+                ),
             );
         }
     }
     output::success(&format!(
-        "daemon refreshed {scanned} agent(s): registered {registered}, failed {failed}"
+        "daemon refreshed {scanned} agent(s): registered {registered}, \
+         failed {failed}, removed {removed}"
     ));
     Ok(())
 }

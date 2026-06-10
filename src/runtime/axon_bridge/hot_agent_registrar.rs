@@ -86,6 +86,12 @@ pub struct HotAgentRuntimeSyncOutcome {
     pub registered: usize,
     pub replaced: usize,
     pub failed: usize,
+    /// Rows reconciled away: previously-registered `<agent>.*`
+    /// abilities whose backing manifest is gone. The registrar owns
+    /// the whole `<agent>.` LocalRuntime namespace (see
+    /// `unregister_agent`'s prefix wipe), so anything it did not
+    /// just (re-)register is stale by definition.
+    pub removed: usize,
     /// True when the call landed before `set_runtime` was called.
     /// Distinguishes "deliberate no-op due to boot ordering" from
     /// "every register attempt errored". The disk side still wrote
@@ -225,15 +231,21 @@ impl HotAgentRegistrar {
         };
 
         let mut outcome = HotAgentRuntimeSyncOutcome::default();
+        // Every row this sync (re-)registers; the reconcile pass at
+        // the end removes any other `<name>.*` row still in the
+        // runtime — its backing manifest is gone.
+        let mut synced: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // ── chat
         let chat_handler =
             build_chat_handler_for(name.to_string(), entry.clone(), Arc::clone(&self.loaders));
+        synced.insert(format!("{name}.chat"));
         Self::try_replace(runtime, &format!("{name}.chat"), chat_handler, &mut outcome).await;
 
         // ── discover
         let discover_handler =
             build_discover_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
+        synced.insert(format!("{name}.discover"));
         Self::try_replace(
             runtime,
             &format!("{name}.discover"),
@@ -245,6 +257,7 @@ impl HotAgentRegistrar {
         // ── invoke
         let invoke_handler =
             build_invoke_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
+        synced.insert(format!("{name}.invoke"));
         Self::try_replace(
             runtime,
             &format!("{name}.invoke"),
@@ -271,7 +284,27 @@ impl HotAgentRegistrar {
                 Arc::clone(&self.loaders),
                 bare,
             );
+            synced.insert(ability_name.clone());
             Self::try_replace(runtime, &ability_name, h, &mut outcome).await;
+        }
+
+        // ── reconcile: a provider withdraws an ability by deleting
+        // its TOML; the row must leave the live runtime on the next
+        // sync, not on the next daemon restart.
+        for stale in runtime.ability_names_with_prefix(&format!("{name}.")).await {
+            if synced.contains(&stale) {
+                continue;
+            }
+            if runtime.unregister_ability(&stale).await.is_some() {
+                outcome.removed += 1;
+                crate::op_event!(
+                    component = axon_bridge,
+                    kind = hot_agent_ability_reconciled_removed,
+                    agent = name,
+                    ability = stale.as_str(),
+                    message = "ability manifest gone; row removed from LocalRuntime",
+                );
+            }
         }
 
         outcome
@@ -344,6 +377,43 @@ mod tests {
 
     fn build_pending() -> Arc<HotAgentRegistrar> {
         HotAgentRegistrar::new_pending(Arc::new(Vec::new()), Arc::new(OnceLock::new()))
+    }
+
+    /// Reconcile pin: a `<agent>.*` row whose backing manifest is
+    /// gone (registered by an earlier sync) must leave the runtime on
+    /// the next `register_agent`, while the rows this sync owns stay.
+    /// This is what lets a provider WITHDRAW an ability via
+    /// `agent refresh` instead of a daemon restart.
+    #[tokio::test]
+    async fn register_agent_reconciles_rows_without_backing_manifests() {
+        use easynet_axon::invocation::make_ability;
+
+        let registrar = build_pending();
+        let rt = LocalRuntime::new();
+        registrar.set_runtime(Arc::clone(&rt));
+
+        // Simulate an earlier sync's TOML ability whose manifest has
+        // since been deleted: the row exists in the runtime but no
+        // current source will re-register it.
+        rt.register_ability(
+            "liangbing.ghost_op",
+            make_ability(|_ctx| async move { Ok(Vec::new()) }),
+        )
+        .await;
+        assert!(rt.has_ability("liangbing.ghost_op").await);
+
+        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let outcome = registrar.register_agent("liangbing", &entry).await;
+
+        assert_eq!(outcome.removed, 1, "stale row must be reconciled away");
+        assert!(
+            !rt.has_ability("liangbing.ghost_op").await,
+            "withdrawn ability must leave the live runtime"
+        );
+        assert!(
+            rt.has_ability("liangbing.chat").await,
+            "rows owned by this sync must survive the reconcile"
+        );
     }
 
     #[tokio::test]
