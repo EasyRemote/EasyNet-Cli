@@ -164,6 +164,12 @@ pub enum InvokeRemoteUp {
         /// represented by a hub/backend caller.
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
+        /// Typed browser-signed user identity (DEC-EU user-caller
+        /// pass-through). First-class field per invocation-unity
+        /// §22.2; the legacy `x-easynet-origin-caller` metadata item
+        /// is its rolling-upgrade fallback.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     },
 }
 
@@ -237,6 +243,12 @@ pub enum SessionDispatch {
         args_content_envelope: SessionContentEnvelope,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
+        /// Typed browser-signed user identity, forwarded verbatim from
+        /// `InvokeRemoteUp::Request.origin_caller`. The target device
+        /// verifies it and runs the ability with the real user as
+        /// Caller.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     },
     /// Hub → target device. Open one long-lived local bidi handler
     /// on the target and bind it to `call_id`. Used by the
@@ -389,6 +401,7 @@ pub async fn invoke_remote(
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: HashMap::new(),
+        origin_caller: None,
     };
     let initial_args = serde_json::to_vec(&request)
         .map_err(|err| Status::internal(format!("encode invoke_remote request: {err}")))?;
@@ -597,6 +610,7 @@ mod tests {
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: HashMap::new(),
+            origin_caller: None,
         })
         .unwrap();
         let frame = build_envelope_open_frame(&request_json);
@@ -638,6 +652,7 @@ mod tests {
                 metadata.insert("x-easynet-delegation".to_string(), "proof".to_string());
                 metadata
             },
+            origin_caller: None,
         };
         let bytes = serde_json::to_vec(&original).unwrap();
         let recovered: InvokeRemoteUp = serde_json::from_slice(&bytes).unwrap();

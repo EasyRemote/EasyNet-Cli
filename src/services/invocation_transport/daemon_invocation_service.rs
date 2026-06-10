@@ -2675,6 +2675,7 @@ impl DaemonInvocationService {
             &inner_payload.args_bytes,
             SessionContentEnvelope::plaintext_json(),
             HashMap::new(),
+            None,
         )?;
 
         match sender.try_send(Ok(dispatch_frame)) {
@@ -2887,6 +2888,8 @@ impl DaemonInvocationService {
         selected_route: &SelectedInvokeRoute,
         subject_ura: Option<&str>,
         args: &[u8],
+        metadata: &std::collections::HashMap<String, String>,
+        origin_claim: Option<&crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         crate::op_event!(
             component = daemon_invocation,
@@ -2905,24 +2908,75 @@ impl DaemonInvocationService {
         };
 
         let dispatch_ability = selected_route.dispatch_key();
-        let outcome = match subject_ura {
-            Some(subject) if !subject.trim().is_empty() => {
-                crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
-                    runtime,
-                    &selected_route.callee_ura,
-                    subject,
-                    &dispatch_ability,
-                    args.to_vec(),
-                )
-                .await
+        let inner_subject = subject_ura
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(selected_route.callee_ura.as_str());
+
+        // Inner user-caller pass-through: when the hub/backend attached a
+        // browser-signed user claim (typed `origin_caller` field, with the
+        // legacy metadata item as rolling-upgrade fallback), dispatch the
+        // inner ability with the REAL user as caller via
+        // `invoke_externally_signed_*` (cryptographic admission against
+        // the user's registered pubkey). This is what lets fail-closed
+        // abilities (remote desktop consent) see the user instead of the
+        // `_system` trust-domain placeholder. Absent → existing path.
+        let origin_caller = match crate::services::invocation_transport::origin_caller::OriginCaller::resolve(origin_claim, metadata) {
+            Ok(oc) => oc,
+            Err(err) => {
+                // A present-but-malformed authority must fail closed, not
+                // silently downgrade to _system.
+                return invoke_remote_inband_error_response(format!(
+                    "<self>.invoke_remote: invalid origin caller claim: {err}"
+                ));
             }
-            _ => {
-                crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
-                    runtime,
-                    &dispatch_ability,
-                    args.to_vec(),
-                )
-                .await
+        };
+
+        let outcome = if let Some(origin) = origin_caller {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = invoke_remote_self_target_user_caller,
+                caller_ura = origin.caller_ura.as_str(),
+                ability = dispatch_ability.as_str(),
+            );
+            // Signature verifies against the signed PUBLIC name; the
+            // handler resolves under the route's dispatch key when the
+            // two differ (agent-owned abilities).
+            let dispatch_key = if dispatch_ability == origin.public_ability() {
+                None
+            } else {
+                Some(dispatch_ability.clone())
+            };
+            let wire = origin.into_wire_dispatch(
+                &selected_route.callee_ura,
+                inner_subject,
+                args.to_vec(),
+            );
+            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_with_dispatch_key(
+                runtime,
+                wire,
+                dispatch_key,
+            )
+            .await
+        } else {
+            match subject_ura {
+                Some(subject) if !subject.trim().is_empty() => {
+                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
+                        runtime,
+                        &selected_route.callee_ura,
+                        subject,
+                        &dispatch_ability,
+                        args.to_vec(),
+                    )
+                    .await
+                }
+                _ => {
+                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
+                        runtime,
+                        &dispatch_ability,
+                        args.to_vec(),
+                    )
+                    .await
+                }
             }
         };
         let request_id = outcome.invocation_id.clone();
@@ -3855,6 +3909,7 @@ impl DaemonInvocationService {
             args,
             args_content_envelope,
             metadata,
+            origin_caller,
         } = request;
 
         let selected_route = match self
@@ -3955,6 +4010,8 @@ impl DaemonInvocationService {
                     &selected_route,
                     subject_ura.as_deref(),
                     &args,
+                    &metadata,
+                    origin_caller.as_ref(),
                 )
                 .await;
         }
@@ -4011,6 +4068,7 @@ impl DaemonInvocationService {
             &args,
             args_content_envelope,
             metadata,
+            origin_caller,
         )?;
         match target_sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
@@ -4926,13 +4984,14 @@ impl DaemonInvocationService {
     /// consults, then maps the result into the typed `RequestOutcome`
     /// shape.
     ///
-    /// Spec scope (PR-N6 v1): forwards `federation.forward_invoke`
-    /// plus the hosted-agent self-advertise repair path
-    /// (`federation.advertise_agent`). Other ability names return
+    /// Spec scope: forwards `federation.forward_invoke` plus the
+    /// hosted-agent self-advertise repair pair —
+    /// `federation.advertise_agent` (identity, PR-N6 v1) and
+    /// `federation.advertise_abilities` (hot-add ability projection,
+    /// ISS-002 closure). Other ability names return
     /// `PermissionDenied` so the device-side caller surfaces a
-    /// structured error instead of a silent timeout — PR-N6 v2 may
-    /// widen this set once a per-ability admission policy is
-    /// specified.
+    /// structured error instead of a silent timeout; widening
+    /// further awaits a per-ability admission policy.
     ///
     /// Trust boundary (PR-N6 spec §"What this spec does NOT cover"):
     /// the bidi was established with a signed Bootstrap frame, so
@@ -4977,12 +5036,31 @@ impl DaemonInvocationService {
                     Err(status) => map_status_to_session_request_error(status),
                 }
             }
+            // Hot-add ability projection: `easynet agent add` while the
+            // session is live pushes the new agent's ability payload
+            // through this Request frame (agent_lifecycle ISS-002).
+            // Without this arm the identity advertise above lands but
+            // the hub directory shows the agent with ZERO abilities
+            // until a stop/start republish. Routes to the same handler
+            // the unary Invoke path uses.
+            ABILITY_FEDERATION_ADVERTISE_ABILITIES => {
+                match self.dispatch_federation_advertise_abilities(args) {
+                    Ok(response) => {
+                        let body = response.into_inner();
+                        RequestOutcome::Ok {
+                            result_bytes: body.result,
+                        }
+                    }
+                    Err(status) => map_status_to_session_request_error(status),
+                }
+            }
             other => RequestOutcome::Err {
                 error: SessionRequestError::PermissionDenied {
                     reason: format!(
                         "session_request: ability `{other}` is not yet routed; \
-                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}` and \
-                         `{ABILITY_FEDERATION_ADVERTISE_AGENT}` are wired in PR-N6 v1"
+                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}`, \
+                         `{ABILITY_FEDERATION_ADVERTISE_AGENT}`, and \
+                         `{ABILITY_FEDERATION_ADVERTISE_ABILITIES}` are wired"
                     ),
                 },
             },
@@ -6095,6 +6173,7 @@ pub(crate) fn read_hub_identity_seed(realm: &str) -> Result<[u8; 32], String> {
 /// channel. Encoding failure is impossible for the current variant
 /// (call_id u64, owned String, owned Vec<u8>) but mapped to
 /// `Status::internal` for forward-compatibility per letter 25 §"flag".
+#[allow(clippy::too_many_arguments)]
 fn build_invoke_remote_dispatch_frame(
     call_id: u64,
     callee_ura: &str,
@@ -6103,6 +6182,7 @@ fn build_invoke_remote_dispatch_frame(
     args: &[u8],
     args_content_envelope: SessionContentEnvelope,
     metadata: HashMap<String, String>,
+    origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
 ) -> Result<DispatchFrame, Status> {
     let payload = SessionDispatch::Dispatch {
         call_id,
@@ -6114,6 +6194,7 @@ fn build_invoke_remote_dispatch_frame(
         args: args.to_vec(),
         args_content_envelope,
         metadata,
+        origin_caller,
     };
     let bytes = serde_json::to_vec(&payload).map_err(|err| {
         Status::internal(format!(
@@ -9837,6 +9918,7 @@ mod tests {
             b"hello",
             SessionContentEnvelope::plaintext_json(),
             metadata,
+            None,
         )
         .expect("built");
         let payload = match frame.frame.payload.expect("frame has payload") {
@@ -9855,8 +9937,10 @@ mod tests {
                 args,
                 args_content_envelope,
                 metadata,
+                origin_caller,
             } => {
                 assert_eq!(call_id, 42);
+                assert!(origin_caller.is_none(), "no claim attached in this test");
                 assert_eq!(callee_ura.as_deref(), Some("easynet:///r/realm/device/dev"));
                 assert_eq!(
                     subject_ura.as_deref(),
@@ -10020,6 +10104,7 @@ mod tests {
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: HashMap::new(),
+            origin_caller: None,
         })
         .unwrap();
         // Decoding as the wrong type must fail.
@@ -11508,6 +11593,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_session_request_routes_advertise_abilities() {
+        // Hot `agent.start` pushes the new agent's ability projection
+        // over the live session as a `federation.advertise_abilities`
+        // Request frame (agent_lifecycle ISS-002). Before this arm
+        // existed the identity advertise above landed but the abilities
+        // frame bounced with PermissionDenied — the hub showed the
+        // agent with zero abilities until a stop/start republish.
+        let svc = make_service().with_session_realm("test-realm");
+        let args = serde_json::to_vec(&serde_json::json!({
+            "owner_ura": "easynet:///r/test-realm/agent/dev.anthropic",
+            "host_device_ura": "easynet:///r/test-realm/device/test-daemon",
+            "projection_revision": 1,
+            "projection_digest": "digest-1",
+            "lease_expires_unix_ms": 0,
+            "ability_summaries": [],
+        }))
+        .expect("advertise_abilities args encode");
+
+        let outcome = svc
+            .dispatch_session_request(
+                &session_request_ability_ura("test-realm", ABILITY_FEDERATION_ADVERTISE_ABILITIES),
+                &args,
+            )
+            .await;
+
+        match outcome {
+            RequestOutcome::Ok { result_bytes } => {
+                let body: federation_wrappers::AdvertiseAbilitiesResponse =
+                    serde_json::from_slice(&result_bytes)
+                        .expect("body decodes as AdvertiseAbilitiesResponse");
+                assert!(body.ack, "hub must ack the hot-add ability projection");
+            }
+            other => panic!("expected advertise_abilities Ok outcome, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn dispatch_session_request_unknown_ability_returns_permission_denied() {
         // PR-N6 v1 only routes the small explicit set used by
         // invoke forwarding and hosted-agent self-advertise repair.
@@ -12545,6 +12667,8 @@ mod tests {
                 &selected_route,
                 None,
                 b"hello-axon-routed".as_slice(),
+                &std::collections::HashMap::new(),
+                None,
             )
             .await
             .expect("self-target selected route dispatches");

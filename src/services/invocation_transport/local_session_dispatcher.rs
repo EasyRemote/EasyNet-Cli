@@ -228,6 +228,8 @@ impl LocalAxonSessionDispatcher {
         subject_ura: Option<&str>,
         ability: &str,
         args: &[u8],
+        metadata: &std::collections::HashMap<String, String>,
+        origin_claim: Option<&crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     ) -> Option<SessionDispatch> {
         let runtime = self.local_runtime.as_ref()?;
         if !runtime.has_ability(ability).await {
@@ -239,24 +241,76 @@ impl LocalAxonSessionDispatcher {
             call_id = call_id,
             ability = ability,
         );
-        let outcome = match (callee_ura, subject_ura) {
-            (Some(callee), Some(subject)) if !subject.trim().is_empty() => {
-                crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
-                    runtime,
-                    callee,
-                    subject,
-                    ability,
-                    args.to_vec(),
-                )
-                .await
+
+        // Inner user-caller pass-through: when the hub/backend attached a
+        // browser-signed user claim (typed `origin_caller` field, legacy
+        // metadata item as rolling-upgrade fallback), dispatch with the
+        // REAL user as caller via `invoke_externally_signed_*`
+        // (cryptographic admission) instead of the `_system`
+        // trust-domain default. This is what lets fail-closed abilities
+        // (remote desktop consent) see the user. Absent → existing
+        // path. Malformed → fail closed.
+        let origin_caller = match crate::services::invocation_transport::origin_caller::OriginCaller::resolve(origin_claim, metadata) {
+            Ok(oc) => oc,
+            Err(err) => {
+                return Some(Self::session_error_result(
+                    call_id,
+                    format!("<self>.session: invalid origin caller claim: {err}"),
+                ));
             }
-            _ => {
-                crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
-                    runtime,
-                    ability,
-                    args.to_vec(),
-                )
-                .await
+        };
+
+        let outcome = if let Some(origin) = origin_caller {
+            crate::op_event!(
+                component = local_session_dispatcher,
+                kind = dispatch_via_axon_user_caller,
+                call_id = call_id,
+                caller_ura = origin.caller_ura.as_str(),
+                ability = ability,
+            );
+            let inner_subject = subject_ura
+                .filter(|s| !s.trim().is_empty())
+                .or(callee_ura)
+                .unwrap_or(ability);
+            let inner_callee = callee_ura.unwrap_or(ability);
+            // The browser signed the PUBLIC ability name (origin.ability,
+            // e.g. `chat`); the hub addressed the owner-scoped dispatch
+            // KEY (`ability`, e.g. `demo.chat`) which is what's actually
+            // in the local registry. Verify against the signed name, but
+            // resolve + launch the handler under the dispatch key — else
+            // agent-owned abilities fail `unknown_ability:<public>`.
+            let dispatch_key = if ability == origin.public_ability() {
+                None
+            } else {
+                Some(ability.to_string())
+            };
+            let wire = origin.into_wire_dispatch(inner_callee, inner_subject, args.to_vec());
+            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_with_dispatch_key(
+                runtime,
+                wire,
+                dispatch_key,
+            )
+            .await
+        } else {
+            match (callee_ura, subject_ura) {
+                (Some(callee), Some(subject)) if !subject.trim().is_empty() => {
+                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
+                        runtime,
+                        callee,
+                        subject,
+                        ability,
+                        args.to_vec(),
+                    )
+                    .await
+                }
+                _ => {
+                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
+                        runtime,
+                        ability,
+                        args.to_vec(),
+                    )
+                    .await
+                }
             }
         };
         let request_id = outcome.invocation_id.clone();
@@ -398,6 +452,24 @@ impl LocalAxonSessionDispatcher {
                     request_id: None,
                 };
                 let _ = Self::send_dispatch_up(&outbound, &dispatch).await;
+            }
+            // Cancellation must reach the RUNTIME task, not just this
+            // forwarder. Dropping the handle alone leaves the ability's
+            // emit loop alive holding its stream source — post-cancel
+            // the mic.subscribe pipeline kept the cpal capture thread
+            // (and the microphone) hot indefinitely, and the
+            // context-capture tee never saw its consumer leave
+            // (2026-06-10). cancel() is idempotent and a no-op on
+            // already-terminal invocations, so the clean-EOS path and
+            // the error path are both safe to route through here.
+            if let Err(err) = handle.cancel("session stream closed").await {
+                let err_msg = err.to_string();
+                crate::op_event!(
+                    component = local_session_dispatcher,
+                    kind = stream_runtime_cancel_failed,
+                    call_id = call_id,
+                    error = err_msg,
+                );
             }
             let mut guard = match sessions.lock() {
                 Ok(g) => g,
@@ -942,34 +1014,45 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
         // so a down-stream Result is meaningless; ignore
         // (matches prior staging behaviour). `Request` frames
         // are device → hub and never appear here.
-        let (call_id, callee_ura, subject_ura, ability, args, args_content_envelope) =
-            match dispatch {
-                SessionDispatch::Dispatch {
+        let (
+            call_id,
+            callee_ura,
+            subject_ura,
+            ability,
+            args,
+            args_content_envelope,
+            metadata,
+            origin_caller,
+        ) = match dispatch {
+            SessionDispatch::Dispatch {
+                call_id,
+                callee_ura,
+                subject_ura,
+                ability,
+                args,
+                args_content_envelope,
+                metadata,
+                origin_caller,
+            } => {
+                let args_bytes = args.len();
+                crate::op_event!(
+                    component = local_session_dispatcher,
+                    kind = received_dispatch_frame,
+                    call_id = call_id,
+                    ability = ability,
+                    args_bytes = args_bytes,
+                );
+                (
                     call_id,
                     callee_ura,
                     subject_ura,
                     ability,
                     args,
                     args_content_envelope,
-                    metadata: _metadata,
-                } => {
-                    let args_bytes = args.len();
-                    crate::op_event!(
-                        component = local_session_dispatcher,
-                        kind = received_dispatch_frame,
-                        call_id = call_id,
-                        ability = ability,
-                        args_bytes = args_bytes,
-                    );
-                    (
-                        call_id,
-                        callee_ura,
-                        subject_ura,
-                        ability,
-                        args,
-                        args_content_envelope,
-                    )
-                }
+                    metadata,
+                    origin_caller,
+                )
+            }
                 SessionDispatch::BidiOpen {
                     call_id,
                     callee_ura,
@@ -1076,6 +1159,8 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 subject_ura.as_deref(),
                 &ability,
                 &args,
+                &metadata,
+                origin_caller.as_ref(),
             )
             .await
         {
@@ -1187,6 +1272,7 @@ mod tests {
             args,
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: HashMap::new(),
+            origin_caller: None,
         };
         let payload = serde_json::to_vec(&dispatch).expect("encode dispatch");
         InvokeBidiDown {
@@ -1297,6 +1383,7 @@ mod tests {
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
                 metadata: HashMap::new(),
+                origin_caller: None,
             }),
             &session_tx,
         )
@@ -1359,6 +1446,7 @@ mod tests {
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
                 metadata: HashMap::new(),
+                origin_caller: None,
             }),
             &session_tx,
         )
@@ -1773,6 +1861,7 @@ mod tests {
                     key_id: "session-key-1".to_string(),
                 },
                 metadata: HashMap::new(),
+                origin_caller: None,
             }),
             &session_tx,
         )

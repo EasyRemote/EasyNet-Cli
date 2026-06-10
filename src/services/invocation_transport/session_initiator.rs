@@ -429,6 +429,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         ability_descriptors,
         SESSION_IDLE_TIMEOUT,
         None,
+        None,
     )
     .await
 }
@@ -446,6 +447,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     ability_descriptors: &[AbilityDescriptor],
     idle_timeout: Duration,
     initial_admission: Option<InitialSessionAdmissionProbe>,
+    user_trust_sync: Option<&UserTrustSync>,
 ) -> Result<(), SessionError> {
     warm_device_credential_for_session(&caller_ura).await;
 
@@ -522,6 +524,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             endpoint: hub_endpoint.clone(),
             source: err,
         })?;
+    // Cheap tonic Channel clone retained for the user-key re-sync
+    // loop spawned after the preludes (its requests multiplex over
+    // this same connection).
+    let resync_channel = channel.clone();
 
     // Bump client-side gRPC message limits to match the server side.
     // The tonic-default 4 MiB decoder cap aborted `<self>.session`
@@ -631,6 +637,36 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             );
         }
     }
+
+    // DEC-EU user-key sync prelude: import the paired user's signing
+    // key from the hub registrar into the local trust anchor so the
+    // admission gate can verify user-signed envelopes arriving via
+    // invoke_remote user-caller pass-through. Advisory — the helper
+    // logs its own failures and never blocks the session.
+    //
+    // Plus a session-lifetime refresh loop: keys registered at the
+    // hub AFTER this dial (a new browser, a key rotation) become
+    // admissible without waiting for a session re-dial. The loop's
+    // requests multiplex over this session's channel; the drop-guard
+    // aborts it when the session ends, and the next dial starts a
+    // fresh one. Cost: one resolve_key unary per interval.
+    let _user_trust_resync_guard = if let Some(sync) = user_trust_sync {
+        sync_paired_user_trust_prelude(&mut client, &caller_ura, sync).await;
+        let sync = sync.clone();
+        let resync_caller = caller_ura.clone();
+        Some(AbortOnDrop(tokio::spawn(async move {
+            let mut resync_client =
+                easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(
+                    resync_channel,
+                );
+            loop {
+                tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
+                sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, &sync).await;
+            }
+        })))
+    } else {
+        None
+    };
 
     // Hosted-agent advertise prelude (RFC-006-B v0.6 §URL +
     // RFC-006-C v0.1 §INV-2). RFC-005 namespace.resolve consumes
@@ -1067,6 +1103,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
     >,
     ability_descriptors: Vec<AbilityDescriptor>,
     initial_admission: Option<InitialSessionAdmissionProbe>,
+    user_trust_sync: Option<UserTrustSync>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut backoff = SESSION_BACKOFF_INITIAL;
@@ -1089,6 +1126,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 &ability_descriptors,
                 SESSION_IDLE_TIMEOUT,
                 initial_admission.clone(),
+                user_trust_sync.as_ref(),
             ) => {
                 match result {
                     Ok(()) => {
@@ -1458,6 +1496,185 @@ async fn send_advertise_abilities_prelude(
     invoke_prelude_unary(client, request, "federation.advertise_abilities")
         .await
         .map(|_| ())
+}
+
+/// Handles the daemon needs to import its paired user's signing key
+/// into the local realm trust anchor at session-establish time.
+///
+/// DEC-EU user-as-first-class-caller + invoke_remote user-caller
+/// pass-through: the device-side admission gate verifies the user's
+/// envelope signature against the LOCAL trust anchor only (INV-1:
+/// same-realm local miss is final — no federation fall-through). But
+/// user signing keys are registered at the realm's hub, the identity
+/// registrar, by the backend. This sync closes that gap with the
+/// correct authority direction: the device PULLS its own paired
+/// user's key over the session channel it already authenticated
+/// (pinned hub TLS CA + hub trust row), then writes the row through
+/// the same `register_device_pubkey` write policy the gRPC surface
+/// uses. Admission stays local-anchor-authoritative; the anchor is
+/// just kept warm.
+#[derive(Clone)]
+pub struct UserTrustSync {
+    pub daemon_realm: String,
+    pub trust_anchor_path: PathBuf,
+    pub cell: crate::services::trust_anchor_cell::SharedTrustAnchor,
+}
+
+/// Cadence of the session-lifetime user-key refresh loop. One
+/// resolve_key unary per tick; 60s bounds the "new browser key
+/// registered but not yet admissible at the device" window without
+/// meaningful load.
+const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Aborts the wrapped task when dropped — ties a background loop's
+/// lifetime to the owning scope (here: one dialed session).
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Pull the paired user's pubkey from the hub and import it into the
+/// local trust anchor. Advisory: every failure path logs and returns —
+/// a device whose user key cannot be synced must still come online
+/// (abilities that don't need user-signed admission keep working; the
+/// next session dial retries the sync).
+async fn sync_paired_user_trust_prelude(
+    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_ura: &str,
+    sync: &UserTrustSync,
+) {
+    let Ok(creds) = crate::persistence::config::load_credentials() else {
+        return; // unpaired device — nothing to sync
+    };
+    let Some(username) = creds
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let realm = creds.realm.trim();
+    if realm != sync.daemon_realm {
+        // Roaming device anchored at a foreign realm: user keys stay
+        // home-realm-authoritative (register_device_pubkey's cross-
+        // realm rule); admission for such callers is a DEC-EU
+        // §multi-realm follow-up, not this sync's job.
+        return;
+    }
+    let user_ura = crate::ura::user_ura(realm, username);
+
+    let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura })) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let request = match crate::services::invocation_transport::ProtoEnvelope::caller_only(
+        caller_ura,
+    )
+    .and_then(|env| {
+        env.invoke_request(
+            crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+            args,
+        )
+    }) {
+        Ok(req) => req,
+        Err(_) => return,
+    };
+    let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
+        Ok(resp) => resp,
+        Err(status) => {
+            let code = status.code();
+            let msg = status.message();
+            crate::op_event!(
+                component = session,
+                kind = user_trust_sync_resolve_failed,
+                code = code,
+                error = msg,
+                user_ura = user_ura,
+            );
+            return;
+        }
+    };
+    // DEC-EU multi-device: the hub returns every key registered
+    // under the user URA (`public_keys_b64`); older hubs only emit
+    // the single `public_key_b64`. Import ALL of them — the browser
+    // signing the next invoke may hold any one of the user's keys,
+    // and admission verifies against the local anchor's full set.
+    let parsed = serde_json::from_slice::<serde_json::Value>(&response.result).ok();
+    let mut pubkeys: Vec<String> = parsed
+        .as_ref()
+        .and_then(|v| v.get("public_keys_b64"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|k| k.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if pubkeys.is_empty() {
+        if let Some(pk) = parsed
+            .as_ref()
+            .and_then(|v| v.get("public_key_b64"))
+            .and_then(|pk| pk.as_str())
+        {
+            pubkeys.push(pk.to_string());
+        }
+    }
+    if pubkeys.is_empty() {
+        crate::op_event!(
+            component = session,
+            kind = user_trust_sync_resolve_empty,
+            user_ura = user_ura,
+            message = "hub returned no user keys — user key not registered at hub yet",
+        );
+        return;
+    }
+
+    for pubkey_b64 in pubkeys {
+        let register_args = match serde_json::to_vec(&serde_json::json!({
+            "agent_ura": user_ura,
+            "public_key_b64": pubkey_b64,
+            "role": "user",
+        })) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match crate::services::invocation_transport::register_device_pubkey::handle(
+            &register_args,
+            &sync.daemon_realm,
+            &sync.trust_anchor_path,
+            &sync.cell,
+        ) {
+            Ok(_) => {
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_ok,
+                    user_ura = user_ura,
+                );
+            }
+            Err(status) if status.code() == tonic::Code::AlreadyExists => {
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_already_present,
+                    user_ura = user_ura,
+                );
+            }
+            Err(status) => {
+                let code = status.code();
+                let msg = status.message();
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_write_failed,
+                    code = code,
+                    error = msg,
+                    user_ura = user_ura,
+                );
+            }
+        }
+    }
 }
 
 async fn invoke_prelude_unary(
@@ -2297,6 +2514,7 @@ mod tests {
             &descriptors,
             Duration::from_millis(80),
             None,
+            None, // user_trust_sync: not exercised here
         )
         .await;
 
@@ -2367,6 +2585,7 @@ mod tests {
             &descriptors,
             Duration::from_millis(80),
             None,
+            None, // user_trust_sync: not exercised here
         )
         .await;
         assert!(
@@ -2455,6 +2674,7 @@ mod tests {
             None,       // PR-N6 C4: no escalation outbox in this test
             Vec::new(), // ability_descriptors: empty in tests
             None,
+            None, // user_trust_sync: not exercised here
             cancel_rx,
         ));
 
@@ -2486,6 +2706,7 @@ mod tests {
             None,
             Vec::new(),
             Some(probe),
+            None, // user_trust_sync: not exercised here
             cancel_rx,
         ));
 
@@ -2521,6 +2742,7 @@ mod tests {
             None,
             Vec::new(),
             Some(probe),
+            None, // user_trust_sync: not exercised here
             cancel_rx,
         ));
 
@@ -2551,6 +2773,7 @@ mod tests {
             &[],
             Duration::from_millis(80),
             None,
+            None, // user_trust_sync: not exercised here
         )
         .await;
 
@@ -2578,6 +2801,7 @@ mod tests {
             &[],
             Duration::from_secs(1),
             None,
+            None, // user_trust_sync: not exercised here
         )
         .await;
 

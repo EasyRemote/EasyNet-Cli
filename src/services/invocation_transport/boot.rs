@@ -734,6 +734,16 @@ pub fn start_daemon_invocation_transport(
             // LocalAxonSessionDispatcher inside the supervisor receives
             // the correlation table so inbound RequestResult frames
             // resolve the awaiting dispatcher futures.
+            // DEC-EU user-key sync: hand the supervisor the trust-
+            // anchor write handle so each established session imports
+            // the paired user's signing key from the hub registrar
+            // (see session_initiator::UserTrustSync).
+            let user_trust_sync =
+                crate::services::invocation_transport::session_initiator::UserTrustSync {
+                    daemon_realm: config.realm().to_string(),
+                    trust_anchor_path: trust_anchor_path.clone(),
+                    cell: trust_anchor_cell.clone(),
+                };
             spawn_session_supervisor(
                 hub_endpoint,
                 identity,
@@ -742,6 +752,7 @@ pub fn start_daemon_invocation_transport(
                 Arc::clone(&local_runtime),
                 Arc::clone(&ability_wire_registry),
                 plugin_runtime_manager.clone(),
+                user_trust_sync,
             )?;
         } else {
             crate::op_event!(
@@ -951,6 +962,7 @@ fn spawn_session_supervisor(
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
+    user_trust_sync: crate::services::invocation_transport::session_initiator::UserTrustSync,
 ) -> anyhow::Result<()> {
     // Build the device-owner descriptor projection from the same profile
     // registry that powers `meta.list_abilities`. RFC-005 route selection
@@ -1020,6 +1032,7 @@ fn spawn_session_supervisor(
         outbox,
         ability_descriptors,
         Some(initial_admission),
+        Some(user_trust_sync),
         cancel_rx,
     ));
     spawn_initial_session_admission_observer(

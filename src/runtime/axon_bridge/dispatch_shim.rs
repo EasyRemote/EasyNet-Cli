@@ -248,13 +248,33 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
 /// that admission / dispatch / audit / persist live in Axon and
 /// CLI owns only the transport translation.
 pub async fn dispatch_rpc(runtime: &Arc<LocalRuntime>, wire: WireDispatch) -> RpcDispatchOutcome {
+    dispatch_rpc_with_dispatch_key(runtime, wire, None).await
+}
+
+/// Like [`dispatch_rpc`], but resolves the registered handler under
+/// `dispatch_ability` while verifying the signature against the
+/// envelope's signed (public) ability name. EasyNet's user-caller
+/// pass-through uses this so a browser-signed public name (`chat`)
+/// runs the owner-scoped dispatch key the hub addressed (`demo.chat`).
+pub async fn dispatch_rpc_with_dispatch_key(
+    runtime: &Arc<LocalRuntime>,
+    wire: WireDispatch,
+    dispatch_ability: Option<String>,
+) -> RpcDispatchOutcome {
     let WireDispatch {
         envelope,
         signature,
         payload,
     } = wire;
     match runtime
-        .invoke_externally_signed_async(envelope, signature, payload, None, None)
+        .invoke_externally_signed_dispatch_async(
+            envelope,
+            signature,
+            payload,
+            None,
+            None,
+            dispatch_ability,
+        )
         .await
     {
         Ok((handle, _signed)) => drain_to_outcome(handle).await,

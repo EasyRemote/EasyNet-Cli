@@ -70,6 +70,7 @@ pub mod invocation_wire;
 pub mod invoke_remote_initiator;
 pub mod list_user_pubkeys;
 pub mod local_session_dispatcher;
+pub mod origin_caller;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;
 pub mod route_resolver;
