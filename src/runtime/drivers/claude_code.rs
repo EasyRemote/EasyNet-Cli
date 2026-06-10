@@ -259,7 +259,7 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
             args.push(mcp_json.to_string_lossy().to_string());
         }
         // G2 — installed skills as Claude Code plugins.
-        // `device.skill.install` writes to <cwd>/skills/<name>/.
+        // `skill.install` writes to <cwd>/skills/<name>/.
         // Claude Code's `--plugin-dir <path>` accepts a directory
         // whose subdirs each look like a plugin (containing a
         // skills/ / commands/ / agents/ / hooks/ subtree). When

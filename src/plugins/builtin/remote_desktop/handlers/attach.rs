@@ -21,7 +21,7 @@ use crate::runtime::ability_dispatch::{
     BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
 };
 
-/// Handle `device.remote_desktop.attach`.
+/// Handle `remote_desktop.attach`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     plugin: Arc<RemoteDesktopPlugin>,
     env: EnvelopeContext,
@@ -320,13 +320,12 @@ mod tests {
                 .into_json_value()
                 .unwrap();
             assert_eq!(error["type"], json!("error"));
-            let closed = tokio::time::timeout(Duration::from_secs(2), bidi.from_client.recv())
-                .await
-                .unwrap()
-                .unwrap()
-                .into_json_value()
-                .unwrap();
-            assert_eq!(closed["type"], json!("closed"));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), bidi.from_client.recv())
+                    .await
+                    .is_err(),
+                "terminal error must not be followed by a duplicate closed frame"
+            );
 
             plugin.session_store().with_sessions(|sessions| {
                 let session = sessions.get("rd-capture-failed").unwrap();

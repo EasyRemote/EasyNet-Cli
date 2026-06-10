@@ -1,0 +1,17 @@
+schema_version = "1"
+name = "remote_desktop.end_session"
+description = "Close a remote desktop session. Idempotent after the first terminal close."
+
+[input_schema]
+type = "object"
+required = ["session_id", "session_token"]
+additionalProperties = false
+
+[input_schema.properties.reason]
+type = "string"
+
+[input_schema.properties.session_id]
+type = "string"
+
+[input_schema.properties.session_token]
+type = "string"

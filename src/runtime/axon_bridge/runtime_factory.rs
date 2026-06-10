@@ -81,10 +81,23 @@ fn ledger_invocation_ura(invocation_id: &str, binding: &AxiomBinding) -> String 
 }
 
 fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
-    easynet_axon::ura::published_route_ura(&binding.callee.ura, ability_name)
-        .or_else(|| easynet_axon::ura::published_route_ura(&binding.caller.ura, ability_name))
+    // RFC-005: a route names the same canonical `/ability/` URA the owner
+    // publishes. Axon's ledger sink passes the daemon registry key here
+    // (`liangbing.chat`, `fs.read`, ...), while public Ability URAs
+    // store the owner-local name (`chat`, `fs.read`, ...). Project through
+    // the CLI URA boundary object before calling Axon's canonical builder;
+    // do not duplicate URI grammar in this adapter.
+    let callee_public_name =
+        crate::ura::owner_local_ability_name(&binding.callee.ura, ability_name);
+    let caller_public_name =
+        crate::ura::owner_local_ability_name(&binding.caller.ura, ability_name);
+
+    easynet_axon::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
+        .or_else(|| {
+            easynet_axon::ura::published_route_ura(&binding.caller.ura, &caller_public_name)
+        })
         .unwrap_or_else(|| {
-            easynet_axon::ura::device_ability_resource_ura("_system", "system", ability_name)
+            easynet_axon::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
         })
 }
 
@@ -151,7 +164,10 @@ mod tests {
         );
         let fallback_binding = AxiomBinding {
             caller: fallback_caller.clone(),
-            callee: AgentIdentity::new("easynet:///r/localhost/hub", UraProfile::EasynetStrictV2),
+            callee: AgentIdentity::new(
+                crate::ura::hub_ura("localhost"),
+                UraProfile::EasynetStrictV2,
+            ),
             subject: SubjectIdentity::new(
                 "easynet:///r/localhost/user/dev",
                 UraProfile::EasynetStrictV2,
@@ -167,9 +183,12 @@ mod tests {
                 principal_ura: fallback_caller.ura.clone(),
             },
         };
+        // RFC-005 removed the device ability *resource* route; the
+        // last-resort fallback (neither binding URA publishes the route)
+        // now names a hub-owned system ability URA.
         assert_eq!(
             ledger_route_ura("chat", &fallback_binding),
-            "easynet:///r/_system/resource/device.system/ability/chat"
+            "easynet:///r/_system/ability/hub.system.chat"
         );
     }
 }

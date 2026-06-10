@@ -1,0 +1,43 @@
+schema_version = "1"
+name = "fs.transfer"
+description = "Bidirectional file transfer between the operator and this device's filesystem through a revalidated RFC-005 filesystem ResourceRef. mode=\"upload\" requires write capability and streams client→file with atomic rename + SHA-256; mode=\"download\" requires read capability and streams file→client with on-the-fly hashing. Per-call byte cap 1 GiB."
+
+[input_schema]
+type = "object"
+required = ["mode", "resource_ref"]
+additionalProperties = false
+
+[input_schema.properties.mode]
+type = "string"
+enum = ["upload", "download"]
+
+[input_schema.properties.resource_ref]
+type = "object"
+required = ["resource_ura", "owner_ura", "namespace", "capability", "expires_unix_ms", "revision"]
+additionalProperties = false
+
+[input_schema.properties.resource_ref.properties.capability]
+type = "string"
+enum = ["list", "stat", "read", "write"]
+
+[input_schema.properties.resource_ref.properties.display_path]
+type = "string"
+
+[input_schema.properties.resource_ref.properties.expires_unix_ms]
+type = "integer"
+
+[input_schema.properties.resource_ref.properties.namespace]
+type = "string"
+enum = ["fs"]
+
+[input_schema.properties.resource_ref.properties.owner_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.resource_ref.properties.resource_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.resource_ref.properties.revision]
+type = "string"
+minLength = 1

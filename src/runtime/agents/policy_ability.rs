@@ -52,8 +52,9 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_EVALUATE: &str = "device.policy.evaluate";
-pub const ABILITY_SIMULATE: &str = "device.policy.simulate";
+use crate::runtime::agents::profiles::DEFAULT_POLICY_AGENT_ID;
+pub const ABILITY_EVALUATE: &str = "policy.evaluate";
+pub const ABILITY_SIMULATE: &str = "policy.simulate";
 
 /// v1 decision-cache TTL. Long enough that a chatty admission gate
 /// doesn't re-call evaluate per envelope, short enough that a
@@ -64,13 +65,13 @@ const DECISION_TTL_SECS: i64 = 300;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
-        "device.policy.evaluate",
-        OwnerKind::Device,
+        "policy.evaluate",
+        OwnerKind::Agent(DEFAULT_POLICY_AGENT_ID.to_string()),
         Arc::new(|args: Value| evaluate_handler(args)),
     );
     reg.register_rpc_with_owner(
-        "device.policy.simulate",
-        OwnerKind::Device,
+        "policy.simulate",
+        OwnerKind::Agent(DEFAULT_POLICY_AGENT_ID.to_string()),
         Arc::new(|args: Value| simulate_handler(args)),
     );
 }

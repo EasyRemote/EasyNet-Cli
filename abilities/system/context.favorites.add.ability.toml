@@ -1,0 +1,20 @@
+schema_version = "1"
+name = "context.favorites.add"
+description = "Star a clipboard entry, file, or folder."
+
+[input_schema]
+type = "object"
+required = ["kind", "label", "reference"]
+additionalProperties = false
+
+[input_schema.properties.kind]
+type = "string"
+description = "clipboard | file | folder"
+
+[input_schema.properties.label]
+type = "string"
+description = "Display label."
+
+[input_schema.properties.reference]
+type = "string"
+description = "Clip id or path the favorite points at."

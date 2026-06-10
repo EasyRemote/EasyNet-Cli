@@ -1,4 +1,4 @@
-// EasyNet CLI — device.terminal.{create,list,close} ability handlers
+// EasyNet CLI — terminal.{create,list,close} ability handlers
 // =================================================================
 //
 // File: src/runtime/agents/pty_lifecycle_ability.rs
@@ -6,12 +6,12 @@
 // Per RFC §18 + the C-M3a/b/c plan, PTY-hosted sessions are exposed
 // through three abilities:
 //
-//   * device.terminal.create  (this file, RPC) — open a PTY,
+//   * terminal.create  (this file, RPC) — open a PTY,
 //                                spawn a child, return session_id
-//   * device.terminal.list    (this file, RPC) — snapshot live PTYs
-//   * device.terminal.close   (this file, RPC) — kill the child,
+//   * terminal.list    (this file, RPC) — snapshot live PTYs
+//   * terminal.close   (this file, RPC) — kill the child,
 //                                drop the session row
-//   * device.terminal.attach  (C-M3c, BIDI)    — wire stdin/stdout
+//   * terminal.attach  (C-M3c, BIDI)    — wire stdin/stdout
 //                                between the IPC bidi pipe and the
 //                                PTY master fd; the InvokeBidi
 //                                machinery from C-M3a is the
@@ -41,9 +41,9 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_CREATE: &str = "device.terminal.create";
-pub const ABILITY_PTY_SESSION_LIST: &str = "device.terminal.list";
-pub const ABILITY_PTY_SESSION_CLOSE: &str = "device.terminal.close";
+pub const ABILITY_PTY_SESSION_CREATE: &str = "terminal.create";
+pub const ABILITY_PTY_SESSION_LIST: &str = "terminal.list";
+pub const ABILITY_PTY_SESSION_CLOSE: &str = "terminal.close";
 
 /// Description published by the dispatcher's `description_for`
 /// arm. Mirrors AXIOM Tier 2.5 §"Baseline Locomotion / pty"
@@ -51,8 +51,8 @@ pub const ABILITY_PTY_SESSION_CLOSE: &str = "device.terminal.close";
 /// here as in `meta.list_abilities`.
 pub fn description_create() -> &'static str {
     "Create an interactive PTY session and return its opaque \
-     session_id. Pair with device.terminal.attach (data plane) \
-     and device.terminal.close (lifecycle teardown). Part of \
+     session_id. Pair with terminal.attach (data plane) \
+     and terminal.close (lifecycle teardown). Part of \
      the baseline-locomotion-v1 profile."
 }
 
@@ -65,13 +65,13 @@ pub fn description_close() -> &'static str {
 
 pub fn description_list() -> &'static str {
     "List live PTY sessions owned by this device daemon. Returns \
-     daemon-minted session_id values suitable for device.terminal.attach, \
+     daemon-minted session_id values suitable for terminal.attach, \
      input/read/resize, and close. Equivalent to the PTY-internal list \
      used by the lifecycle subsystem; the `terminal` namespace is the \
      stable operator-facing alias."
 }
 
-/// JSON Schema for device.terminal.create input. All fields
+/// JSON Schema for terminal.create input. All fields
 /// optional; the service fills VT100 defaults (80×24, terminal env,
 /// host shell).
 pub fn input_schema_create() -> Value {
@@ -132,19 +132,19 @@ pub fn register(
     let svc_for_create = Arc::clone(&pty);
     let create_h: LocalRpcHandler =
         Arc::new(move |args: Value| create_handler(&svc_for_create, args));
-    reg.register_rpc_with_owner("device.terminal.create", OwnerKind::Device, create_h);
+    reg.register_rpc_with_owner("terminal.create", OwnerKind::Device, create_h);
 
     let svc_for_list = Arc::clone(&pty);
     let list_h: LocalRpcHandler = Arc::new(move |args: Value| list_handler(&svc_for_list, args));
-    reg.register_rpc_with_owner("device.terminal.list", OwnerKind::Device, list_h);
+    reg.register_rpc_with_owner("terminal.list", OwnerKind::Device, list_h);
 
     let pty_for_close = pty;
     let close_h: LocalRpcHandler =
         Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args));
-    reg.register_rpc_with_owner("device.terminal.close", OwnerKind::Device, close_h);
+    reg.register_rpc_with_owner("terminal.close", OwnerKind::Device, close_h);
 }
 
-/// `device.terminal.create` handler.
+/// `terminal.create` handler.
 ///
 /// Args: `{ cols?, rows?, command?, command_args?, cwd?, env? }`.
 /// All fields optional; the service fills defaults.
@@ -159,7 +159,7 @@ fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "session_id": id.as_str() }))
 }
 
-/// `device.terminal.list` handler.
+/// `terminal.list` handler.
 ///
 /// Args: `{}`.
 ///
@@ -186,7 +186,7 @@ fn list_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "sessions": sessions }))
 }
 
-/// `device.terminal.close` handler.
+/// `terminal.close` handler.
 ///
 /// Args: `{ session_id }`.
 ///
@@ -332,8 +332,8 @@ pub fn create_input_schema() -> Value {
 
 pub fn create_description() -> &'static str {
     "Open a new PTY-hosted child session. Returns the session_id \
-     callers hand to device.terminal.attach (bidi) and \
-     device.terminal.close (close+reap)."
+     callers hand to terminal.attach (bidi) and \
+     terminal.close (close+reap)."
 }
 
 pub fn list_description() -> &'static str {

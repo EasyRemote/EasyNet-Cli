@@ -1,8 +1,8 @@
-// EasyNet CLI — Tenant suffix resolver (RFC-002 §7)
+// EasyNet CLI — Realm suffix resolver (RFC-002 §7)
 // ===================================================
 //
-// Maps `tenant_id` strings (the values stored in the credentials
-// file under `tenant_id`) to:
+// Maps realm strings (the values stored in the credentials file
+// under `realm`) to:
 //
 //   - admission mode: Local-fast vs Federated
 //   - hub endpoint(s) to dial for federation calls
@@ -34,8 +34,8 @@ pub enum AdmissionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UraScope {
-    /// Tenant-private federation posture (informational; v4.1.5 URAs
-    /// do not embed `?tenant_id=` — tenant rides envelope).
+    /// Realm-private federation posture (informational; v4.1.5 URAs
+    /// do not embed `?tenant_id=` — tenant binding rides envelope).
     Prv,
     /// Organisation-scoped public-ish; bound-tenant mode applies.
     Org,
@@ -51,7 +51,7 @@ impl UraScope {
 }
 
 #[derive(Debug, Clone)]
-pub struct TenantResolution {
+pub struct RealmResolution {
     pub mode: AdmissionMode,
     pub scope: UraScope,
     /// Hub endpoints (URLs) to dial for federation.* calls. Empty
@@ -59,8 +59,8 @@ pub struct TenantResolution {
     /// configuration; the resolver returns the *resolved* list, not
     /// raw input. Multiple endpoints permit failover.
     pub hub_endpoints: Vec<String>,
-    /// Echo of the tenant_id used (for traceability in receipts).
-    pub tenant_id: String,
+    /// Echo of the realm used for traceability in receipts.
+    pub realm: String,
 }
 
 /// Static configuration for resolver behaviour. In production this is
@@ -68,10 +68,10 @@ pub struct TenantResolution {
 /// `ResolverConfig` directly.
 #[derive(Debug, Clone, Default)]
 pub struct ResolverConfig {
-    /// Endpoints to use for any tenant ending in `.easynet`. Empty by
+    /// Endpoints to use for any realm ending in `.easynet`. Empty by
     /// default — operators opt in by adding endpoints.
     pub easynet_rendezvous: Vec<String>,
-    /// Per-domain static hub overrides. Maps full tenant_id (or
+    /// Per-domain static hub overrides. Maps full realm (or
     /// suffix `.<host>`) to hub endpoints. Used for `<host>.com`-style
     /// realms when DNS TXT lookup is not configured (or in tests).
     pub static_hubs: std::collections::HashMap<String, Vec<String>>,
@@ -132,34 +132,34 @@ impl<'de> serde::Deserialize<'de> for ResolverConfig {
     }
 }
 
-/// Resolve a tenant_id into mode + scope + endpoints.
-pub fn resolve(tenant_id: &str, cfg: &ResolverConfig) -> TenantResolution {
-    let lower = tenant_id.to_ascii_lowercase();
+/// Resolve a realm into mode + scope + endpoints.
+pub fn resolve(realm: &str, cfg: &ResolverConfig) -> RealmResolution {
+    let lower = realm.to_ascii_lowercase();
 
     if let Some(endpoints) = cfg.static_hubs.get(&lower) {
-        return TenantResolution {
+        return RealmResolution {
             mode: AdmissionMode::Federated,
             scope: UraScope::Org,
             hub_endpoints: endpoints.clone(),
-            tenant_id: tenant_id.to_string(),
+            realm: realm.to_string(),
         };
     }
 
     if lower.ends_with(".localhost") || lower == "localhost" {
-        return TenantResolution {
+        return RealmResolution {
             mode: AdmissionMode::LocalFast,
             scope: UraScope::Prv,
             hub_endpoints: Vec::new(),
-            tenant_id: tenant_id.to_string(),
+            realm: realm.to_string(),
         };
     }
 
     if lower.ends_with(".easynet") {
-        return TenantResolution {
+        return RealmResolution {
             mode: AdmissionMode::Federated,
             scope: UraScope::Org,
             hub_endpoints: cfg.easynet_rendezvous.clone(),
-            tenant_id: tenant_id.to_string(),
+            realm: realm.to_string(),
         };
     }
 
@@ -168,34 +168,34 @@ pub fn resolve(tenant_id: &str, cfg: &ResolverConfig) -> TenantResolution {
     // static_hubs entry configured, otherwise federation is a no-op
     // until the operator adds one.
     if lower.contains('.') {
-        return TenantResolution {
+        return RealmResolution {
             mode: AdmissionMode::Federated,
             scope: UraScope::Org,
             hub_endpoints: Vec::new(),
-            tenant_id: tenant_id.to_string(),
+            realm: realm.to_string(),
         };
     }
 
     // Bare token (legacy `tenant-test`, `acme`, etc.). Backward-compat:
     // treat as Local-fast under prv scope.
-    TenantResolution {
+    RealmResolution {
         mode: AdmissionMode::LocalFast,
         scope: UraScope::Prv,
         hub_endpoints: Vec::new(),
-        tenant_id: tenant_id.to_string(),
+        realm: realm.to_string(),
     }
 }
 
 /// Build a v4.1.5 standard device URA. Shape is identical regardless
 /// of `resolution.scope` (prv/org) — v4.1.5 §A.URA-7 has only one
 /// device URI form: `easynet:///r/<realm>/device/<node-id>`. The
-/// realm is the tenant_id; tenant binding rides envelope, not URI,
+/// realm rides in the URA; tenant binding rides envelope, not URI,
 /// so the legacy `?tenant_id=<t>` query is gone. The `scope` field
-/// remains on `TenantResolution` as informational metadata for the
+/// remains on `RealmResolution` as informational metadata for the
 /// federation layer's hub-discovery decision but does NOT appear in
 /// any URI.
-pub fn canonical_device_ura(node_id: &str, resolution: &TenantResolution) -> String {
-    crate::ura::device_ura(&resolution.tenant_id, node_id)
+pub fn canonical_device_ura(node_id: &str, resolution: &RealmResolution) -> String {
+    crate::ura::device_ura(&resolution.realm, node_id)
 }
 
 #[cfg(test)]

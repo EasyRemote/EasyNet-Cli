@@ -1,4 +1,4 @@
-// EasyNet CLI — device.agent.list ability handler
+// EasyNet CLI — agent.list ability handler
 // =================================================
 //
 // File: src/runtime/agents/agent_list_ability.rs
@@ -14,6 +14,7 @@
 // ------------
 //   { "agents": [
 //       { "name": "claude",
+//         "ura": "easynet:///r/<realm>/agent/<user>.claude",
 //         "runtime": "claude-code",
 //         "model": "sonnet",          // null if unset
 //         "label": "primary"          // null if unset
@@ -25,7 +26,7 @@
 // The shape is deliberately a thin per-row projection — NOT the v2
 // A2A agent-card envelope (that lives at `a2a.bridge.list_skills`,
 // which adds the per-agent skills list and `a2a_schema_version`).
-// `device.agent.list` is the operational view ("what runs here"),
+// `agent.list` is the operational view ("what runs here"),
 // `a2a.bridge.list_skills` is the protocol view ("what an A2A peer
 // would discover"). Two callers, two shapes, one source registry.
 //
@@ -42,9 +43,9 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::directory::AgentDirectory;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_LIST_AGENTS: &str = "device.agent.list";
+pub const ABILITY_LIST_AGENTS: &str = "agent.list";
 
-/// Register `device.agent.list` on the registry.
+/// Register `agent.list` on the registry.
 ///
 /// `registry_provider` runs at handler-call time so a future
 /// hot-reload of `agents.json` is reflected without re-registration.
@@ -54,7 +55,7 @@ where
 {
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(registry_provider);
     reg.register_rpc_with_owner(
-        "device.agent.list",
+        "agent.list",
         OwnerKind::Device,
         Arc::new(move |_args: Value| list_agents_handler(&provider)),
     );
@@ -64,6 +65,14 @@ fn list_agents_handler(
     registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
 ) -> anyhow::Result<Value> {
     let registry = registry_provider();
+    let local_agents = crate::persistence::local_agents::load().unwrap_or_default();
+    Ok(json!({ "agents": agent_rows(&registry, &local_agents) }))
+}
+
+fn agent_rows(
+    registry: &AgentRegistry,
+    local_agents: &crate::persistence::local_agents::LocalAgentsFile,
+) -> Vec<Value> {
     let rows: Vec<Value> = registry
         .agents
         .iter()
@@ -78,8 +87,11 @@ fn list_agents_handler(
             };
             let model = spec_model.or_else(|| e.model.clone());
             let timeout_secs = spec_timeout_secs.unwrap_or(e.timeout_secs);
+            let ura =
+                crate::persistence::local_agents::lookup_hosted_ura(&local_agents, "llm", name);
             json!({
                 "name": name,
+                "ura": ura.map(Value::String).unwrap_or(Value::Null),
                 "runtime": e.agent_type.to_string(),
                 "model": model.map(Value::String).unwrap_or(Value::Null),
                 "label": e.label.clone().map(Value::String).unwrap_or(Value::Null),
@@ -90,7 +102,7 @@ fn list_agents_handler(
             })
         })
         .collect();
-    Ok(json!({ "agents": rows }))
+    rows
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -149,6 +161,27 @@ mod tests {
         assert_eq!(rows[0]["runtime"], "claude-code");
         assert_eq!(rows[0]["model"], "sonnet");
         assert_eq!(rows[0]["label"], "primary");
+    }
+
+    #[test]
+    fn list_agents_projects_hosted_agent_ura_from_local_agents() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "claude".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
+        );
+        let mut local_agents = crate::persistence::local_agents::LocalAgentsFile::default();
+        crate::persistence::local_agents::upsert_hosted_agent(
+            &mut local_agents,
+            "llm",
+            "claude",
+            "easynet:///r/acme/agent/alice.claude",
+        );
+
+        let rows = agent_rows(&registry, &local_agents);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["ura"], "easynet:///r/acme/agent/alice.claude");
     }
 
     #[test]

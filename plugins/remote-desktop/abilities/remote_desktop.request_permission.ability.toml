@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "remote_desktop.request_permission"
+description = "Ask the operating system for the screen-capture permission required by native remote desktop. On macOS this calls CoreGraphics' Screen Recording TCC request API from the daemon-side ability process."
+
+[input_schema]
+type = "object"
+additionalProperties = false

@@ -188,27 +188,27 @@ fn user_join_two_devices_chat_round_trip() {
     });
 
     // ── Step 5: build device1's invoke pipeline. agent1 calls
-    //    `<self>.invoke(target=<device2_uri>, ability="chat",
-    //    args={message: "hello"})`. The dispatch sees the target
-    //    is not in device1's local registry, recognises the
-    //    federation URA, asks the test forward invoker, gets
-    //    back the reversed message, wraps it in the standard
-    //    invoke envelope. End-to-end.
+    //    `<self>.invoke(ability=<device-owned chat Ability URA>,
+    //    args={message: "hello"})`. The dispatch derives the
+    //    target device URA and owner-local public ability from the
+    //    Ability URA, recognises the federation target, asks the
+    //    test forward invoker, gets back the reversed message, and
+    //    wraps it in the standard invoke envelope. End-to-end.
     let agent1_invoke = build_registry_with_invoke("agent1", device1_agents);
+    let device2_chat_ability_ura =
+        format!("easynet:///r/{tenant}/ability/device.{device2_node_id}.chat");
     let resp = agent1_invoke(json!({
-        "target":  device2_uri,
-        "ability": "chat",
+        "ability_ura": device2_chat_ability_ura,
         "args":    {"message": "hello cross-device"},
     }))
     .unwrap();
 
-    // Pin the wire shape: target URA, qualified name composed
-    // from the URA + ability, and the result matches what
-    // device2's handler computed. fulfilled_by = federation_forward
-    // confirms the call took the cross-device path, not the
-    // local-registry path.
+    // Pin the wire shape: target URA, canonical Ability URA, and
+    // the result matches what device2's handler computed.
+    // fulfilled_by = federation_forward confirms the call took the
+    // cross-device path, not the local-registry path.
     assert_eq!(resp["target"], device2_uri);
-    assert_eq!(resp["qualified_name"], format!("{device2_uri}.chat"));
+    assert_eq!(resp["qualified_name"], device2_chat_ability_ura);
     assert_eq!(resp["fulfilled_by"], "federation_forward");
     assert_eq!(resp["result"]["echoed"], "ecived-ssorc olleh");
     assert_eq!(resp["result"]["from"], "agent2");
@@ -243,8 +243,7 @@ fn unknown_remote_target_falls_through_to_typed_error() {
 
     let agent1_invoke = build_registry_with_invoke("agent1", device1_agents);
     let err = agent1_invoke(json!({
-        "target":  "easynet:///r/silan.localhost/device/never-registered",
-        "ability": "chat",
+        "ability_ura": "easynet:///r/silan.localhost/ability/device.never-registered.chat",
         "args":    {"message": "hi"},
     }))
     .unwrap_err();
@@ -301,14 +300,17 @@ fn agent1_can_invoke_local_agent_without_federation_path() {
         Arc::clone(&runtime),
         "agent1.invoke",
         json!({
-            "target":  "agent2",
-            "ability": "summarize",
+            "ability_ura": "easynet:///r/silan.localhost/ability/user-1.agent2.summarize",
             "args":    {"text": "twenty-four characters!!"},
         }),
     )
     .unwrap();
     let _keep_catalog_alive = arc_reg;
     assert_eq!(resp["target"], "agent2");
+    assert_eq!(
+        resp["qualified_name"],
+        "easynet:///r/silan.localhost/ability/user-1.agent2.summarize"
+    );
     assert_eq!(resp["fulfilled_by"], "registry_dispatch");
     assert_eq!(resp["result"]["summary"], "24 chars");
 

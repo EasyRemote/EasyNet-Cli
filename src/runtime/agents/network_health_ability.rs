@@ -1,10 +1,10 @@
-// EasyNet CLI — device.observe.network_health ability handler
+// EasyNet CLI — observe.network_health ability handler
 // =======================================================
 //
 // File: src/runtime/agents/network_health_ability.rs
 //
 // Per §18: input `{}`, body `{links[], latency, ...}`. Sibling of
-// device.observe.health (which is a unary smoke probe — does the ability
+// observe.health (which is a unary smoke probe — does the ability
 // pipeline answer at all). network_health surfaces the *network*
 // posture: who do we believe we're joined to, what hosted Agents are
 // alive locally, is dendrite reachable.
@@ -33,7 +33,7 @@
 //
 //   * local daemon liveness (the handler itself),
 //   * one federation.resolve,
-//   * at most one direct device.observe.health probe per discovered
+//   * at most one direct observe.health probe per discovered
 //     device-profile Agent.
 //
 // That is enough to answer the CLI-facing question "is this daemon
@@ -51,11 +51,11 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::federation_probe;
 
-pub const ABILITY_NETWORK_HEALTH: &str = "device.observe.network_health";
+pub const ABILITY_NETWORK_HEALTH: &str = "observe.network_health";
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
-        "device.observe.network_health",
+        "observe.network_health",
         OwnerKind::Device,
         Arc::new(|_args: Value| handler()),
     );
@@ -135,7 +135,7 @@ pub fn input_schema() -> Value {
 
 pub fn description() -> &'static str {
     "Report the daemon's live network posture: local daemon reachability, \
-     realm-directory reachability, and direct device.observe.health probe status \
+     realm-directory reachability, and direct observe.health probe status \
      for each discovered peer device."
 }
 

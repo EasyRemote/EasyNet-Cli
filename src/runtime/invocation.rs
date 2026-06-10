@@ -56,7 +56,7 @@ pub type Ura = String;
 /// Ability member-call name.
 ///
 /// This is the registry function name (`<agent>.<verb>`,
-/// `device.skill.list`, `federation.resolve_key`, ...). The route or
+/// `skill.list`, `federation.resolve_key`, ...). The route or
 /// resource URA that locates a published ability is carried by the
 /// envelope/registry layers, not by this dispatch key.
 pub type AbilityName = String;
@@ -446,7 +446,7 @@ mod tests {
         let inv = RuntimeInvocation::try_new(
             "easynet:///r/localhost/device/dev-a".into(),
             "easynet:///r/localhost/device/dev-b".into(),
-            "device.skill.list".into(),
+            "skill.list".into(),
             "easynet:///r/localhost/device/dev-b".into(),
             RuntimeCausalContext::Null,
             json!({}),

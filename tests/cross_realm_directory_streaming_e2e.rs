@@ -124,11 +124,11 @@ impl FederationClient for InProcessStreamingForwarder {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     // ── Daemon A: realm-a, hosts the upstream PresenceRegistry ──
-    let daemon_a_loopback = "easynet:///r/realm-a/hub";
+    let daemon_a_loopback = easynet_cli::ura::hub_ura("realm-a");
     let daemon_a_presence = Arc::new(PresenceRegistry::new());
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(daemon_a_loopback.to_string()),
+        Some(daemon_a_loopback.clone()),
     );
     let daemon_a = Arc::new(
         DaemonInvocationService::new(Arc::clone(&daemon_a_presence), daemon_a_admission)
@@ -139,7 +139,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     let daemon_b_directory = SharedFederatedDirectoryView::default();
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessStreamingForwarder {
         peer_daemon: Arc::clone(&daemon_a),
-        peer_loopback_uri: daemon_a_loopback.to_string(),
+        peer_loopback_uri: daemon_a_loopback.clone(),
     });
 
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
@@ -148,7 +148,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
-            "easynet:///r/realm-b/hub".to_string(),
+            easynet_cli::ura::hub_ura("realm-b"),
             federation_client,
             cell_for_task,
             cancel_rx,
@@ -208,11 +208,11 @@ async fn streaming_chain_propagates_presence_remove() {
     // Same harness; this time after the Online propagates, we
     // remove the entry on daemon A and assert the Remove frame
     // flows through to daemon B's cell.
-    let daemon_a_loopback = "easynet:///r/realm-a/hub";
+    let daemon_a_loopback = easynet_cli::ura::hub_ura("realm-a");
     let daemon_a_presence = Arc::new(PresenceRegistry::new());
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(daemon_a_loopback.to_string()),
+        Some(daemon_a_loopback.clone()),
     );
     let daemon_a = Arc::new(
         DaemonInvocationService::new(Arc::clone(&daemon_a_presence), daemon_a_admission)
@@ -222,7 +222,7 @@ async fn streaming_chain_propagates_presence_remove() {
     let daemon_b_directory = SharedFederatedDirectoryView::default();
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessStreamingForwarder {
         peer_daemon: Arc::clone(&daemon_a),
-        peer_loopback_uri: daemon_a_loopback.to_string(),
+        peer_loopback_uri: daemon_a_loopback.clone(),
     });
 
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
@@ -231,7 +231,7 @@ async fn streaming_chain_propagates_presence_remove() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
-            "easynet:///r/realm-b/hub".to_string(),
+            easynet_cli::ura::hub_ura("realm-b"),
             federation_client,
             cell_for_task,
             cancel_rx,

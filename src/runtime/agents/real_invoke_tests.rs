@@ -31,7 +31,7 @@
 //
 // What "real" means here
 // ----------------------
-// * For pure / observable abilities (device.observe.health, meta.*),
+// * For pure / observable abilities (observe.health, meta.*),
 //   real == we read fields from the response and check they
 //   reflect the live registry / runtime.
 // * For HOME-bound persistence (admin.status, device.* _agent),
@@ -72,6 +72,14 @@ use super::*;
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+fn fs_ref(
+    path: &std::path::Path,
+    capability: crate::runtime::resources::filesystem::FilesystemResourceCapability,
+) -> Value {
+    crate::runtime::resources::filesystem::resource_ref_for_local_path(path, capability)
+        .expect("local fs ResourceRef")
+}
+
 /// Build the production registry inside a HomeGuard so any
 /// HOME-touching boot logic (mcp_clients.json discovery,
 /// agents.json load, etc.) lands in a fresh tempdir.
@@ -81,7 +89,7 @@ fn registry_with_temp_home() -> (
 ) {
     let guard = crate::facade::cli::test_support::HomeGuard::new();
     // build_registry_for_daemon does the agent-registry load that
-    // some abilities need (device.agent.list, chat-per-agent etc).
+    // some abilities need (agent.list, chat-per-agent etc).
     let reg = build_registry_for_daemon(
         Arc::new(crate::runtime::execution::session::SessionService::new()),
         Arc::new(crate::runtime::execution::permission::PermissionService::new()),
@@ -113,6 +121,27 @@ fn materialise_skill_fixture(
     std::fs::create_dir_all(&skill_dir).expect("create skill fixture dir");
     crate::persistence::config::atomic_write(&skill_dir.join("SKILL.md"), body.as_bytes())
         .expect("write skill fixture body");
+    let meta_dir = skill_dir.join(".easynet");
+    std::fs::create_dir_all(&meta_dir).expect("create skill fixture metadata dir");
+    let install = crate::runtime::skill_store::InstallRecord {
+        name: skill_name.to_string(),
+        description: body.to_string(),
+        agent_id: owner.clone(),
+        source: crate::runtime::skill_store::SkillSource {
+            kind: "fixture".to_string(),
+            identifier: "real-invoke-tests".to_string(),
+            ref_: None,
+            subpath: None,
+        },
+        skill_tree_hash: "sha256:fixture".to_string(),
+        size_bytes: body.len() as u64,
+        installed_at: "2026-06-07T00:00:00Z".to_string(),
+        last_checked_at: None,
+        upgrade_available: false,
+    };
+    let install_json = serde_json::to_vec_pretty(&install).expect("serialize install fixture");
+    crate::persistence::config::atomic_write(&meta_dir.join("install.json"), &install_json)
+        .expect("write install fixture");
 
     let mut registry = crate::registry::agents::load_agents().unwrap_or_default();
     let mut entry =
@@ -167,26 +196,23 @@ fn invoke(name: &str, args: Value) -> Value {
 
 #[test]
 fn real_observe_health_returns_ok_and_timestamp() {
-    let resp = invoke("device.observe.health", json!({}));
+    let resp = invoke("observe.health", json!({}));
     // Ping echoes args + adds `ts`. Some implementations also
     // return `ok`. Assert at least one of these is present —
     // the contract is "non-empty, observable response".
     assert!(
         resp.get("ts").is_some() || resp.get("ok").is_some() || resp.is_object(),
-        "device.observe.health response unexpected: {resp}"
+        "observe.health response unexpected: {resp}"
     );
-    assert!(
-        resp.is_object(),
-        "device.observe.health must return an object"
-    );
+    assert!(resp.is_object(), "observe.health must return an object");
 }
 
 #[test]
 fn real_observe_network_health_describes_the_node() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.observe.network_health", json!({})))
-        .expect("device.observe.network_health");
+        .execute_rpc(target("observe.network_health", json!({})))
+        .expect("observe.network_health");
     // Actual shape: `{view, schema, joined, host_device_ura,
     // hosted_agent_count, latency_ms, links: [...]}`. We assert
     // a few load-bearing fields so a regression that empties
@@ -200,11 +226,8 @@ fn real_observe_network_health_describes_the_node() {
 fn real_invocation_history_list_returns_records_array() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target(
-            "device.invocation.history.list",
-            json!({ "limit": 5 }),
-        ))
-        .expect("device.invocation.history.list");
+        .execute_rpc(target("invocation.history.list", json!({ "limit": 5 })))
+        .expect("invocation.history.list");
     let body = resp.as_object().expect("object");
     assert!(
         body.get("records").and_then(Value::as_array).is_some(),
@@ -213,11 +236,33 @@ fn real_invocation_history_list_returns_records_array() {
 }
 
 #[test]
+fn real_invocation_history_list_accepts_explicit_ura_scope() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "invocation.history.list",
+            json!({
+                "limit": 5,
+                "filter": {
+                    "agent_ura": "easynet:///r/test/device/callee",
+                    "subject_ura": "easynet:///r/test/user/alice"
+                }
+            }),
+        ))
+        .expect("invocation.history.list with URA scope");
+    let body = resp.as_object().expect("object");
+    assert!(
+        body.get("records").and_then(Value::as_array).is_some(),
+        "history list must accept agent_ura + subject_ura scope: {resp}"
+    );
+}
+
+#[test]
 fn real_invocation_history_path_returns_ledger_location() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.invocation.history.path", json!({})))
-        .expect("device.invocation.history.path");
+        .execute_rpc(target("invocation.history.path", json!({})))
+        .expect("invocation.history.path");
     let body = resp.as_object().expect("object");
     assert!(
         body.get("ledger_path").and_then(Value::as_str).is_some()
@@ -231,10 +276,10 @@ fn real_invocation_history_get_accepts_request_id() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.invocation.history.get",
+            "invocation.history.get",
             json!({ "key": { "request_id": "missing-real-invoke-request" } }),
         ))
-        .expect("device.invocation.history.get");
+        .expect("invocation.history.get");
     let body = resp.as_object().expect("object");
     assert!(
         body.contains_key("record"),
@@ -247,10 +292,10 @@ fn real_invocation_trace_get_returns_graph_shape() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.invocation.trace.get",
+            "invocation.trace.get",
             json!({ "key": { "trace_id": "missing-real-invoke-trace" } }),
         ))
-        .expect("device.invocation.trace.get");
+        .expect("invocation.trace.get");
     let body = resp.as_object().expect("object");
     assert!(
         body.get("nodes").and_then(Value::as_array).is_some()
@@ -263,8 +308,8 @@ fn real_invocation_trace_get_returns_graph_shape() {
 fn real_meta_describe_returns_self_identity() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.meta.describe", json!({})))
-        .expect("device.meta.describe");
+        .execute_rpc(target("meta.describe", json!({})))
+        .expect("meta.describe");
     assert!(resp.is_object());
 }
 
@@ -272,11 +317,11 @@ fn real_meta_describe_returns_self_identity() {
 fn real_meta_list_abilities_returns_at_least_observe_health() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.meta.list_abilities", json!({})))
-        .expect("device.meta.list_abilities");
+        .execute_rpc(target("meta.list_abilities", json!({})))
+        .expect("meta.list_abilities");
     let body = resp.as_object().expect("object");
     // The exact key depends on the handler — could be `abilities`
-    // or `tools` etc. Find any array and assert device.observe.health
+    // or `tools` etc. Find any array and assert observe.health
     // is in it.
     let mut found_observe = false;
     for (_k, v) in body {
@@ -286,7 +331,7 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
                     .as_object()
                     .and_then(|o| o.get("name").or_else(|| o.get("ability")))
                     .and_then(Value::as_str);
-                if name_field == Some("device.observe.health") {
+                if name_field == Some("observe.health") {
                     found_observe = true;
                     break;
                 }
@@ -298,20 +343,20 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
     }
     assert!(
         found_observe,
-        "meta.list_abilities must include device.observe.health: got {resp}"
+        "meta.list_abilities must include observe.health: got {resp}"
     );
 }
 
 #[test]
 fn real_meta_list_abilities_returns_observe_health() {
-    // `device.meta.list_abilities` is the canonical introspection
+    // `meta.list_abilities` is the canonical introspection
     // ability. Pin the body's shape: at least one array containing
-    // `device.observe.health` — a regression that broke the descriptor
+    // `observe.health` — a regression that broke the descriptor
     // merge or registered the wrong handler trips here.
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.meta.list_abilities", json!({})))
-        .expect("device.meta.list_abilities");
+        .execute_rpc(target("meta.list_abilities", json!({})))
+        .expect("meta.list_abilities");
     let body = resp.as_object().expect("object");
     let mut found = false;
     for (_k, v) in body {
@@ -321,7 +366,7 @@ fn real_meta_list_abilities_returns_observe_health() {
                     .as_object()
                     .and_then(|o| o.get("name").or_else(|| o.get("ability")))
                     .and_then(Value::as_str);
-                if name == Some("device.observe.health") {
+                if name == Some("observe.health") {
                     found = true;
                     break;
                 }
@@ -333,7 +378,7 @@ fn real_meta_list_abilities_returns_observe_health() {
     }
     assert!(
         found,
-        "device.meta.list_abilities must include device.observe.health: got {resp}"
+        "meta.list_abilities must include observe.health: got {resp}"
     );
 }
 
@@ -363,8 +408,7 @@ fn real_mission_run_validates_args_before_touching_the_runtime() {
     // produce a precise error message so an LLM-driven caller
     // sees what to fix.
     let (reg, _g) = registry_with_temp_home();
-    let result =
-        dispatcher_for(reg).execute_rpc(target("device.mission.run", json!({ "source": "" })));
+    let result = dispatcher_for(reg).execute_rpc(target("mission.run", json!({ "source": "" })));
     let err = result.expect_err("empty source must fail validation");
     let msg = format!("{err}");
     assert!(
@@ -384,7 +428,7 @@ fn real_mission_track_returns_an_error_for_an_unknown_run_id() {
     // is gone" as "the mission has nothing to report".
     let (reg, _g) = registry_with_temp_home();
     let result = dispatcher_for(reg).execute_rpc(target(
-        "device.mission.track",
+        "mission.track",
         json!({ "run_id": "no-such-run-id" }),
     ));
     assert!(
@@ -402,7 +446,7 @@ fn real_mission_cancel_returns_an_error_for_an_unknown_run_id() {
     // that id ever existed.
     let (reg, _g) = registry_with_temp_home();
     let result = dispatcher_for(reg).execute_rpc(target(
-        "device.mission.cancel",
+        "mission.cancel",
         json!({ "run_id": "no-such-run-id" }),
     ));
     assert!(
@@ -424,12 +468,12 @@ fn real_mission_cancel_returns_an_error_for_an_unknown_run_id() {
 fn real_device_node_list_returns_local_view_envelope() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.node.list", json!({})))
-        .expect("device.node.list");
+        .execute_rpc(target("node.list", json!({})))
+        .expect("node.list");
     let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
     assert!(
         nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
-        "device.node.list must include the local device entry: {resp}"
+        "node.list must include the local device entry: {resp}"
     );
 }
 
@@ -437,11 +481,8 @@ fn real_device_node_list_returns_local_view_envelope() {
 fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target(
-            "device.node.describe",
-            json!({ "node_id": "local" }),
-        ))
-        .expect("device.node.describe local");
+        .execute_rpc(target("node.describe", json!({ "node_id": "local" })))
+        .expect("node.describe local");
     assert_eq!(resp.get("is_self"), Some(&json!(true)));
 }
 
@@ -449,18 +490,18 @@ fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
 fn real_device_node_remove_refuses_to_remove_self() {
     let (reg, _g) = registry_with_temp_home();
     let err = dispatcher_for(reg)
-        .execute_rpc(target("device.node.remove", json!({ "node_id": "local" })))
-        .expect_err("device.node.remove must refuse to remove self");
+        .execute_rpc(target("node.remove", json!({ "node_id": "local" })))
+        .expect_err("node.remove must refuse to remove self");
     assert!(format!("{err}").contains("device reset"));
 }
 
 #[test]
-fn real_device_ability_deploy_validates_path_argument() {
+fn real_device_ability_deploy_validates_resource_ref_argument() {
     let (reg, _g) = registry_with_temp_home();
     let err = dispatcher_for(reg)
-        .execute_rpc(target("device.ability.deploy", json!({})))
-        .expect_err("device.ability.deploy must require `path`");
-    assert!(format!("{err}").contains("path"));
+        .execute_rpc(target("ability.deploy", json!({})))
+        .expect_err("ability.deploy must require `resource_ref`");
+    assert!(format!("{err}").contains("resource_ref"));
 }
 
 #[test]
@@ -468,11 +509,18 @@ fn real_device_ability_uninstall_acknowledges_local_intent() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.ability.uninstall",
-            json!({ "ability_name": "claude.weather", "node_id": "local" }),
+            "ability.uninstall",
+            json!({
+                "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
+                "node_id": "local"
+            }),
         ))
-        .expect("device.ability.uninstall local");
+        .expect("ability.uninstall local");
     assert_eq!(resp.get("state").and_then(Value::as_str), Some("REMOVED"));
+    assert_eq!(
+        resp.get("ability_ura").and_then(Value::as_str),
+        Some("easynet:///r/localhost/ability/alice.claude.weather")
+    );
 }
 
 #[test]
@@ -481,13 +529,13 @@ fn real_device_remote_exec_local_runs_argv() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.remote.exec",
+            "remote.exec",
             json!({
                 "node_id": "local",
                 "command": ["printf", "%s", "ok"],
             }),
         ))
-        .expect("device.remote.exec local");
+        .expect("remote.exec local");
     assert_eq!(resp.get("stdout").and_then(Value::as_str), Some("ok"));
     assert_eq!(resp.get("exit_code"), Some(&json!(0)));
 }
@@ -496,8 +544,8 @@ fn real_device_remote_exec_local_runs_argv() {
 fn real_device_node_register_acknowledges_intent() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.node.register", json!({})))
-        .expect("device.node.register");
+        .execute_rpc(target("node.register", json!({})))
+        .expect("node.register");
     assert!(resp.get("state").is_some());
 }
 
@@ -505,8 +553,8 @@ fn real_device_node_register_acknowledges_intent() {
 fn real_device_node_deregister_acknowledges_intent() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.node.deregister", json!({})))
-        .expect("device.node.deregister");
+        .execute_rpc(target("node.deregister", json!({})))
+        .expect("node.deregister");
     assert_eq!(
         resp.get("state").and_then(Value::as_str),
         Some("DEREGISTERED")
@@ -536,8 +584,8 @@ fn unique_call_id(label: &str) -> String {
 fn real_voice_create_call_returns_a_minted_id() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.voice.create_call", json!({})))
-        .expect("device.voice.create_call");
+        .execute_rpc(target("voice.create_call", json!({})))
+        .expect("voice.create_call");
     let cid = resp.get("call_id").and_then(Value::as_str).unwrap();
     assert!(cid.starts_with("call-"));
 }
@@ -546,7 +594,7 @@ fn real_voice_create_call_returns_a_minted_id() {
 fn real_voice_show_call_unknown_call_errors() {
     let (reg, _g) = registry_with_temp_home();
     let result = dispatcher_for(reg).execute_rpc(target(
-        "device.voice.show_call",
+        "voice.show_call",
         json!({"call_id": "no-such-call"}),
     ));
     assert!(
@@ -568,26 +616,24 @@ fn real_voice_join_call_transitions_call_to_active() {
     let dispatcher = dispatcher_for(reg);
     dispatcher
         .execute_rpc(target(
-            "device.voice.create_call",
+            "voice.create_call",
             json!({"call_id": cid.clone(), "participant_id": "creator"}),
         ))
         .expect("create");
     dispatcher
         .execute_rpc(target(
-            "device.voice.join_call",
+            "voice.join_call",
             json!({"call_id": cid.clone(), "participant_id": "alice"}),
         ))
         .expect("join");
     let show = dispatcher
-        .execute_rpc(target("device.voice.show_call", json!({"call_id": cid})))
+        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
         .expect("show");
-    // `state` carries the legacy label for back-compat; `state_proto`
-    // carries the Axon contract name.
-    assert_eq!(show.get("state").and_then(Value::as_str), Some("active"));
     assert_eq!(
-        show.get("state_proto").and_then(Value::as_str),
+        show.get("state").and_then(Value::as_str),
         Some("VOICE_CALL_STATE_ACTIVE")
     );
+    assert_eq!(show.get("state_code"), Some(&json!(2)));
 }
 
 #[test]
@@ -595,18 +641,15 @@ fn real_voice_leave_call_removes_participant() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("leave");
     let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
     d.execute_rpc(target(
-        "device.voice.create_call",
-        json!({"call_id": cid.clone()}),
-    ))
-    .expect("create");
-    d.execute_rpc(target(
-        "device.voice.join_call",
+        "voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
     ))
     .expect("join");
     d.execute_rpc(target(
-        "device.voice.leave_call",
+        "voice.leave_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
     ))
     .expect("leave");
@@ -614,7 +657,7 @@ fn real_voice_leave_call_removes_participant() {
     // semantics are pinned in the unit-test file. Real-invoke
     // coverage just proves the ability is registered + reachable.
     let _ = d
-        .execute_rpc(target("device.voice.show_call", json!({"call_id": cid})))
+        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
         .expect("show");
 }
 
@@ -623,18 +666,12 @@ fn real_voice_end_call_is_idempotent() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("end");
     let d = dispatcher_for(reg);
-    d.execute_rpc(target(
-        "device.voice.create_call",
-        json!({"call_id": cid.clone()}),
-    ))
-    .expect("create");
-    d.execute_rpc(target(
-        "device.voice.end_call",
-        json!({"call_id": cid.clone()}),
-    ))
-    .expect("first end");
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target("voice.end_call", json!({"call_id": cid.clone()})))
+        .expect("first end");
     let r2 = d
-        .execute_rpc(target("device.voice.end_call", json!({"call_id": cid})))
+        .execute_rpc(target("voice.end_call", json!({"call_id": cid})))
         .expect("second end");
     assert_eq!(r2.get("already_ended"), Some(&json!(true)));
 }
@@ -644,18 +681,15 @@ fn real_voice_watch_call_returns_event_snapshot() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("watch");
     let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
     d.execute_rpc(target(
-        "device.voice.create_call",
-        json!({"call_id": cid.clone()}),
-    ))
-    .expect("create");
-    d.execute_rpc(target(
-        "device.voice.join_call",
+        "voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
     ))
     .expect("join");
     let w = d
-        .execute_rpc(target("device.voice.watch_call", json!({"call_id": cid})))
+        .execute_rpc(target("voice.watch_call", json!({"call_id": cid})))
         .expect("watch");
     let events = w.get("events").and_then(Value::as_array).unwrap();
     assert!(events
@@ -668,19 +702,16 @@ fn real_voice_report_metrics_appends_event() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("metrics");
     let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
     d.execute_rpc(target(
-        "device.voice.create_call",
-        json!({"call_id": cid.clone()}),
-    ))
-    .expect("create");
-    d.execute_rpc(target(
-        "device.voice.join_call",
+        "voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
     ))
     .expect("join");
     let r = d
         .execute_rpc(target(
-            "device.voice.report_metrics",
+            "voice.report_metrics",
             json!({
                 "call_id": cid,
                 "participant_id": "alice",
@@ -714,7 +745,7 @@ fn real_discuss_list_turns_returns_empty_for_fresh_room() {
     // surfaces a precise error, same shape as every other CLI
     // surface.
     let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg).execute_rpc(target("device.discuss.list_turns", json!({})));
+    let result = dispatcher_for(reg).execute_rpc(target("discuss.list_turns", json!({})));
     let err = result.expect_err("discuss.list_turns must require room_id");
     assert!(format!("{err}").contains("room_id"));
 }
@@ -722,10 +753,8 @@ fn real_discuss_list_turns_returns_empty_for_fresh_room() {
 #[test]
 fn real_mission_discuss_round_rejects_missing_room_id() {
     let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg).execute_rpc(target(
-        "device.mission.discuss_round",
-        json!({"agents": ["a"]}),
-    ));
+    let result =
+        dispatcher_for(reg).execute_rpc(target("mission.discuss_round", json!({"agents": ["a"]})));
     let err = result.expect_err("missing room_id must fail");
     assert!(format!("{err}").contains("room_id"));
 }
@@ -734,7 +763,7 @@ fn real_mission_discuss_round_rejects_missing_room_id() {
 fn real_mission_discuss_round_rejects_empty_agents() {
     let (reg, _g) = registry_with_temp_home();
     let result = dispatcher_for(reg).execute_rpc(target(
-        "device.mission.discuss_round",
+        "mission.discuss_round",
         json!({"room_id": "room-x", "agents": []}),
     ));
     let err = result.expect_err("empty agents must fail");
@@ -745,7 +774,7 @@ fn real_mission_discuss_round_rejects_empty_agents() {
 fn real_mission_discuss_round_rejects_zero_max_cycles() {
     let (reg, _g) = registry_with_temp_home();
     let result = dispatcher_for(reg).execute_rpc(target(
-        "device.mission.discuss_round",
+        "mission.discuss_round",
         json!({
             "room_id":    "room-x",
             "agents":     ["a"],
@@ -763,15 +792,15 @@ fn real_policy_evaluate_admits_a_realistic_envelope() {
     let (reg, _g) = registry_with_temp_home();
     let envelope = json!({
         "subject": "test",
-        "ability": "device.observe.health",
+        "ability": "observe.health",
         "scope": "local",
     });
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.policy.evaluate",
+            "policy.evaluate",
             json!({"invocation_envelope": envelope}),
         ))
-        .expect("device.policy.evaluate");
+        .expect("policy.evaluate");
     assert!(resp.is_object());
     // v1 always allows; the response should reflect that somewhere.
     let s = resp.to_string().to_ascii_lowercase();
@@ -784,13 +813,13 @@ fn real_policy_evaluate_admits_a_realistic_envelope() {
 #[test]
 fn real_policy_simulate_returns_a_decision() {
     let (reg, _g) = registry_with_temp_home();
-    let envelope = json!({"subject":"x","ability":"device.observe.health","scope":"local"});
+    let envelope = json!({"subject":"x","ability":"observe.health","scope":"local"});
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.policy.simulate",
+            "policy.simulate",
             json!({"invocation_envelope": envelope}),
         ))
-        .expect("device.policy.simulate");
+        .expect("policy.simulate");
     assert!(resp.is_object());
 }
 
@@ -802,8 +831,8 @@ fn real_policy_simulate_returns_a_decision() {
 fn real_admin_status_reports_components_under_temp_home() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.admin.status", json!({})))
-        .expect("device.admin.status");
+        .execute_rpc(target("admin.status", json!({})))
+        .expect("admin.status");
     let body = resp.as_object().expect("object");
     assert!(body.contains_key("status"));
     assert!(body.contains_key("version"));
@@ -835,9 +864,9 @@ fn real_fs_write_round_trips_through_real_disk() {
 
     let payload = "Hello from a real fs.write call.\nLine 2 of the file.\n";
     let resp = invoke(
-        "device.fs.write",
+        "fs.write",
         json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
             "content": payload,
             "encoding": "utf8",
         }),
@@ -873,7 +902,7 @@ async fn real_process_exec_cats_etc_hosts() {
         let (reg, _g) = registry_with_temp_home();
         dispatcher_for(reg)
             .execute_rpc(target(
-                "device.process.exec",
+                "process.exec",
                 json!({"command": "/bin/cat", "args": ["/etc/hosts"]}),
             ))
             .expect("process.exec /bin/cat /etc/hosts")
@@ -921,7 +950,7 @@ async fn real_shell_run_executes_git_command_in_repo() {
         let (reg, _g) = registry_with_temp_home();
         dispatcher_for(reg)
             .execute_rpc(target(
-                "device.shell.run",
+                "shell.run",
                 json!({
                     "command": "git rev-parse --short HEAD",
                     "cwd": manifest,
@@ -952,7 +981,7 @@ async fn real_shell_run_executes_git_command_in_repo() {
 fn real_shell_run_destructive_rejection_visible_in_response() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.shell.run", json!({"command": "rm /tmp/x"})))
+        .execute_rpc(target("shell.run", json!({"command": "rm /tmp/x"})))
         .expect("shell.run handler must not error; rejection is in the body");
     assert_eq!(resp["ok"], json!(false));
     assert_eq!(resp["code"], json!("DESTRUCTIVE_REJECTED"));
@@ -980,9 +1009,9 @@ fn real_fs_read_reads_this_crates_cargo_toml() {
     assert!(cargo_toml.exists(), "Cargo.toml must exist for this test");
 
     let resp = invoke(
-        "device.fs.read",
+        "fs.read",
         json!({
-            "path": cargo_toml.to_str().unwrap(),
+            "resource_ref": fs_ref(&cargo_toml, crate::runtime::resources::filesystem::FilesystemResourceCapability::Read),
             "encoding": "utf8",
         }),
     );
@@ -1011,12 +1040,53 @@ fn real_fs_read_reads_an_actual_file() {
     std::fs::write(&path, "hello world").unwrap();
 
     let resp = invoke(
-        "device.fs.read",
-        json!({"path": path.to_str().unwrap(), "encoding":"utf8"}),
+        "fs.read",
+        json!({
+            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Read),
+            "encoding":"utf8"
+        }),
     );
     assert_eq!(resp["content"].as_str().unwrap(), "hello world");
     assert_eq!(resp["size"], json!(11));
     assert_eq!(resp["truncated"], json!(false));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn real_fs_stat_reports_file_metadata() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let dir = std::env::temp_dir().join(format!("real-invoke-fs-stat-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("metadata.txt");
+    std::fs::write(&path, "stat bytes").unwrap();
+
+    let resp = invoke(
+        "fs.stat",
+        json!({
+            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Stat),
+        }),
+    );
+
+    assert_eq!(resp["name"], json!("metadata.txt"));
+    assert_eq!(resp["kind"], json!("file"));
+    assert_eq!(resp["size"], json!(10));
+    assert_eq!(resp["resource_ref_revalidated"], json!(true));
+    assert!(
+        resp.get("path").is_none(),
+        "fs.stat must not expose daemon host paths: {resp:?}"
+    );
+    let display_path = resp["display_path"]
+        .as_str()
+        .expect("fs.stat reports display path");
+    assert!(
+        display_path.ends_with("/metadata.txt"),
+        "display path must identify the stat target: {display_path}"
+    );
+    let mtime = resp["mtime_unix_ms"]
+        .as_i64()
+        .expect("fs.stat reports file mtime");
+    assert!(mtime > 1_700_000_000_000, "mtime is post-2023: {mtime}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1029,9 +1099,9 @@ fn real_fs_write_creates_a_file_with_expected_content() {
     let path = dir.join("out.txt");
 
     let resp = invoke(
-        "device.fs.write",
+        "fs.write",
         json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
             "content": "real write",
             "encoding": "utf8",
         }),
@@ -1050,7 +1120,12 @@ fn real_fs_list_lists_directory_entries() {
     std::fs::write(dir.join("a.txt"), "a").unwrap();
     std::fs::write(dir.join("b.txt"), "b").unwrap();
 
-    let resp = invoke("device.fs.list", json!({"path": dir.to_str().unwrap()}));
+    let resp = invoke(
+        "fs.list",
+        json!({
+            "resource_ref": fs_ref(&dir, crate::runtime::resources::filesystem::FilesystemResourceCapability::List)
+        }),
+    );
     let body = resp.as_object().expect("object response");
     // Find an entries array. Field name is implementation-defined
     // but there must be one.
@@ -1076,6 +1151,18 @@ fn real_fs_list_lists_directory_entries() {
         names.iter().any(|n| n.ends_with("b.txt")),
         "fs.list missing b.txt: got {arr:?}"
     );
+    for entry in arr {
+        if let Some(obj) = entry.as_object() {
+            assert!(
+                !obj.contains_key("path"),
+                "fs.list must not expose daemon host paths: {entry:?}"
+            );
+            assert!(
+                obj.get("display_path").and_then(Value::as_str).is_some(),
+                "fs.list entry must expose display_path: {entry:?}"
+            );
+        }
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1089,9 +1176,9 @@ fn real_fs_edit_replaces_a_unique_match() {
     std::fs::write(&path, "key=old\nother=keep\n").unwrap();
 
     let resp = invoke(
-        "device.fs.edit",
+        "fs.edit",
         json!({
-            "path": path.to_str().unwrap(),
+            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
             "old_string": "old",
             "new_string": "new",
         }),
@@ -1118,7 +1205,7 @@ fn real_consent_decide_records_a_decision() {
     super::permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let result = d.execute_rpc(target(
-        "device.consent.decide",
+        "consent.decide",
         json!({"id": "no-such-request", "decision": "deny"}),
     ));
     // What we want to PROVE: the call routed to the handler.
@@ -1147,8 +1234,8 @@ fn real_consent_list_pending_returns_empty_on_fresh_service() {
     super::permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let resp = d
-        .execute_rpc(target("device.consent.list_pending", json!({})))
-        .expect("device.consent.list_pending");
+        .execute_rpc(target("consent.list_pending", json!({})))
+        .expect("consent.list_pending");
     assert!(resp.is_object());
     // Fresh service has no pending requests; whatever the array
     // field is named, it should be empty.
@@ -1171,10 +1258,10 @@ fn real_discuss_create_then_post_round_trips_through_the_service() {
     // Create a room.
     let create = d
         .execute_rpc(target(
-            "device.discuss.create",
+            "discuss.create",
             json!({"participants": ["alice", "bob"]}),
         ))
-        .expect("device.discuss.create");
+        .expect("discuss.create");
     let room_id = create
         .as_object()
         .and_then(|o| o.get("room_id").or_else(|| o.get("id")))
@@ -1185,7 +1272,7 @@ fn real_discuss_create_then_post_round_trips_through_the_service() {
 
     // Post a message into it.
     let post = d.execute_rpc(target(
-        "device.discuss.post",
+        "discuss.post",
         json!({"room_id": room_id, "from": "alice", "content": "hello"}),
     ));
     // Some implementations may require additional fields; assert
@@ -1215,7 +1302,7 @@ fn real_schedule_add_then_list_then_remove_round_trip() {
 
     // List on a fresh service.
     let list_empty = d
-        .execute_rpc(target("device.schedule.list", json!({})))
+        .execute_rpc(target("schedule.list", json!({})))
         .expect("schedule.list (fresh)");
     assert!(list_empty.is_object());
 
@@ -1223,10 +1310,10 @@ fn real_schedule_add_then_list_then_remove_round_trip() {
     // realistic-shape envelope. If the handler rejects, the
     // assertion below ensures we at least reached it.
     let add = d.execute_rpc(target(
-        "device.schedule.add",
+        "schedule.add",
         json!({
             "target_node": "self",
-            "ability": "device.observe.health",
+            "ability": "observe.health",
             "args": {},
             "cron": "0 * * * *",
         }),
@@ -1251,7 +1338,7 @@ fn real_schedule_enable_routes_to_handler() {
     super::schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target(
-        "device.schedule.enable",
+        "schedule.enable",
         json!({"schedule_id": "no-such-sched", "enabled": true}),
     ));
     match r {
@@ -1274,7 +1361,7 @@ fn real_schedule_remove_routes_to_handler() {
     super::schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target(
-        "device.schedule.remove",
+        "schedule.remove",
         json!({"schedule_id": "no-such-sched"}),
     ));
     match r {
@@ -1297,7 +1384,7 @@ fn real_loop_create_then_status_then_cancel() {
     // if it fails on missing args we assert the failure mode is
     // non-routing-related.
     let create = d.execute_rpc(target(
-        "device.loop.create",
+        "loop.create",
         json!({
             "worker_agent": "claude",
             "task": "echo test",
@@ -1311,10 +1398,10 @@ fn real_loop_create_then_status_then_cancel() {
             .map(String::from);
         if let Some(loop_id) = loop_id {
             let _status = d
-                .execute_rpc(target("device.loop.status", json!({"loop_id": loop_id})))
+                .execute_rpc(target("loop.status", json!({"loop_id": loop_id})))
                 .ok();
             let _cancel = d
-                .execute_rpc(target("device.loop.cancel", json!({"loop_id": loop_id})))
+                .execute_rpc(target("loop.cancel", json!({"loop_id": loop_id})))
                 .ok();
         }
     } else {
@@ -1330,7 +1417,7 @@ fn real_loop_status_routes_for_unknown_id() {
     let mut reg = AxonAbilityCatalog::new();
     super::loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
-    let r = d.execute_rpc(target("device.loop.status", json!({"loop_id": "none"})));
+    let r = d.execute_rpc(target("loop.status", json!({"loop_id": "none"})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(!format!("{e}")
@@ -1346,7 +1433,7 @@ fn real_loop_cancel_routes_for_unknown_id() {
     let mut reg = AxonAbilityCatalog::new();
     super::loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
-    let r = d.execute_rpc(target("device.loop.cancel", json!({"loop_id": "none"})));
+    let r = d.execute_rpc(target("loop.cancel", json!({"loop_id": "none"})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(!format!("{e}")
@@ -1359,8 +1446,8 @@ fn real_loop_cancel_routes_for_unknown_id() {
 fn real_device_agent_list_returns_a_list_under_temp_home() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.agent.list", json!({})))
-        .expect("device.agent.list");
+        .execute_rpc(target("agent.list", json!({})))
+        .expect("agent.list");
     assert!(resp.is_object());
 }
 
@@ -1368,45 +1455,60 @@ fn real_device_agent_list_returns_a_list_under_temp_home() {
 fn real_device_session_list_returns_empty_under_temp_home() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.session.list", json!({})))
-        .expect("device.session.list");
+        .execute_rpc(target("session.list", json!({})))
+        .expect("session.list");
     assert!(resp.is_object());
 }
 
 #[test]
 fn real_device_agent_start_then_stop_agent_round_trip() {
     let (reg, _g) = registry_with_temp_home();
+    crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
+        node_id: "dev-1".to_string(),
+        credential_token: "token".to_string(),
+        hub_endpoint: "axon://hub.test:50051".to_string(),
+        realm: "localhost".to_string(),
+        username: Some("dev".to_string()),
+        ..Default::default()
+    })
+    .expect("seed joined credentials");
     let d = dispatcher_for(reg);
     let start = d
         .execute_rpc(target(
-            "device.agent.start",
+            "agent.start",
             json!({
                 "name": "smoke-test-agent",
                 "agent_type": "claude-code",
             }),
         ))
-        .expect("device.agent.start");
+        .expect("agent.start");
     assert!(start.is_object());
     // Stop it.
-    let stop = d.execute_rpc(target(
-        "device.agent.stop",
-        json!({"name": "smoke-test-agent"}),
-    ));
+    let stop = d.execute_rpc(target("agent.stop", json!({"name": "smoke-test-agent"})));
     match stop {
         Ok(v) => {
             // Idempotent ack=true expected.
             assert!(v.is_object());
         }
-        Err(e) => panic!("device.agent.stop unexpected: {e}"),
+        Err(e) => panic!("agent.stop unexpected: {e}"),
     }
 }
 
 #[test]
 fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
     let (reg, _g) = registry_with_temp_home();
+    crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
+        node_id: "dev-1".to_string(),
+        credential_token: "token".to_string(),
+        hub_endpoint: "axon://hub.test:50051".to_string(),
+        realm: "localhost".to_string(),
+        username: Some("dev".to_string()),
+        ..Default::default()
+    })
+    .expect("seed joined credentials");
     let d = dispatcher_for(reg);
     d.execute_rpc(target(
-        "device.agent.start",
+        "agent.start",
         json!({
             "name": "refresh-smoke-agent",
             "agent_type": "claude-code",
@@ -1414,8 +1516,8 @@ fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
     ))
     .expect("seed agent before refresh");
     let resp = d
-        .execute_rpc(target("device.agent.refresh", json!({})))
-        .expect("device.agent.refresh");
+        .execute_rpc(target("agent.refresh", json!({})))
+        .expect("agent.refresh");
     assert_eq!(resp.get("ok"), Some(&json!(false)));
     assert_eq!(resp.get("runtime_not_ready"), Some(&json!(true)));
     assert!(
@@ -1431,7 +1533,7 @@ fn real_device_skill_install_routes_with_realistic_source() {
     // A non-existent path is a realistic invalid input — handler
     // should reject with a structured error, not panic.
     let r = d.execute_rpc(target(
-        "device.skill.install",
+        "skill.install",
         json!({"source": "/tmp/no-such-skill.tgz"}),
     ));
     match r {
@@ -1446,10 +1548,7 @@ fn real_device_skill_install_routes_with_realistic_source() {
 fn real_device_skill_remove_routes_for_unknown_name() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
-    let r = d.execute_rpc(target(
-        "device.skill.remove",
-        json!({"name": "no-such-skill"}),
-    ));
+    let r = d.execute_rpc(target("skill.remove", json!({"name": "no-such-skill"})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(!format!("{e}")
@@ -1462,10 +1561,7 @@ fn real_device_skill_remove_routes_for_unknown_name() {
 fn real_device_skill_upgrade_routes_for_unknown_name() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
-    let r = d.execute_rpc(target(
-        "device.skill.upgrade",
-        json!({"name": "no-such-skill"}),
-    ));
+    let r = d.execute_rpc(target("skill.upgrade", json!({"name": "no-such-skill"})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(!format!("{e}")
@@ -1488,7 +1584,7 @@ fn real_device_skill_upgrade_routes_for_unknown_name() {
 fn real_ability_publish_routes_with_missing_args() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
-    let r = d.execute_rpc(target("device.ability.publish", json!({})));
+    let r = d.execute_rpc(target("ability.publish", json!({})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(
@@ -1504,7 +1600,7 @@ fn real_ability_publish_routes_with_missing_args() {
 fn real_ability_unpublish_routes_with_missing_args() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
-    let r = d.execute_rpc(target("device.ability.unpublish", json!({})));
+    let r = d.execute_rpc(target("ability.unpublish", json!({})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(
@@ -1520,7 +1616,7 @@ fn real_ability_unpublish_routes_with_missing_args() {
 fn real_skill_publish_routes_with_missing_args() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
-    let r = d.execute_rpc(target("device.skill.publish", json!({})));
+    let r = d.execute_rpc(target("skill.publish", json!({})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(
@@ -1536,7 +1632,7 @@ fn real_skill_publish_routes_with_missing_args() {
 fn real_skill_unpublish_routes_with_missing_args() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
-    let r = d.execute_rpc(target("device.skill.unpublish", json!({})));
+    let r = d.execute_rpc(target("skill.unpublish", json!({})));
     match r {
         Ok(_) => {}
         Err(e) => assert!(
@@ -1558,7 +1654,7 @@ fn real_mission_think_routes_with_missing_args() {
     // could otherwise burn a token budget before failing.
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
-    let r = d.execute_rpc(target("device.mission.think", json!({})));
+    let r = d.execute_rpc(target("mission.think", json!({})));
     match r {
         Ok(_) => panic!("mission.think with empty args must error"),
         Err(e) => assert!(
@@ -1575,12 +1671,44 @@ fn real_skill_list_returns_items_array_under_temp_home() {
     // Empty under temp HOME but the field shape must hold.
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.skill.list", json!({})))
-        .expect("device.skill.list");
+        .execute_rpc(target("skill.list", json!({})))
+        .expect("skill.list");
     assert!(
         resp.get("items").and_then(Value::as_array).is_some(),
         "skill.list must return an `items` array; got {resp}"
     );
+}
+
+#[test]
+fn real_skill_list_accepts_agent_and_subject_ura_scope() {
+    let (reg, _g) = registry_with_temp_home();
+    let (owner, _skill_dir) = materialise_skill_fixture("scope", "scoped-skill", "# Scoped\nBody");
+    let agent_ura = crate::ura::agent_ura("localhost", "dev", &owner);
+    let mut local = crate::persistence::local_agents::LocalAgentsFile {
+        host_device_agent_ura: "easynet:///r/localhost/device/dev-1".to_string(),
+        ..Default::default()
+    };
+    crate::persistence::local_agents::upsert_hosted_agent(&mut local, "llm", &owner, &agent_ura);
+    crate::persistence::local_agents::save(&local).expect("save local agents fixture");
+    let subject_ura = crate::ura::resource_dot_ura(
+        "localhost",
+        &format!("agent.dev.{owner}"),
+        "skill/scoped-skill",
+    );
+
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "skill.list",
+            json!({
+                "agent_ura": agent_ura,
+                "subject_ura": subject_ura,
+            }),
+        ))
+        .expect("skill.list with URA scope");
+    let items = resp["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1, "skill.list must scope to one skill: {resp}");
+    assert_eq!(items[0]["agent_id"], owner);
+    assert_eq!(items[0]["name"], "scoped-skill");
 }
 
 #[test]
@@ -1595,14 +1723,14 @@ fn real_skill_tree_lists_files_for_registered_agent_skill() {
 
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.skill.tree",
+            "skill.tree",
             json!({
                 "owner_agent_id": owner,
                 "skill_name": "inspectable",
                 "resource_ura": "easynet:///r/localhost/resource/agent.dev.tree/skill/inspectable",
             }),
         ))
-        .expect("device.skill.tree");
+        .expect("skill.tree");
     assert_eq!(
         resp["resource_ura"],
         "easynet:///r/localhost/resource/agent.dev.tree/skill/inspectable"
@@ -1626,7 +1754,7 @@ fn real_skill_read_file_returns_utf8_content() {
 
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.skill.read_file",
+            "skill.read_file",
             json!({
                 "owner_agent_id": owner,
                 "skill_name": "readable",
@@ -1634,7 +1762,7 @@ fn real_skill_read_file_returns_utf8_content() {
                 "path": "SKILL.md",
             }),
         ))
-        .expect("device.skill.read_file");
+        .expect("skill.read_file");
     assert_eq!(resp["content"], "# Readable\nBody");
     assert_eq!(resp["encoding"], "utf-8");
     assert_eq!(
@@ -1650,7 +1778,7 @@ fn real_skill_write_file_updates_skill_source() {
 
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.skill.write_file",
+            "skill.write_file",
             json!({
                 "owner_agent_id": owner,
                 "skill_name": "editable",
@@ -1659,7 +1787,7 @@ fn real_skill_write_file_updates_skill_source() {
                 "content": "new body",
             }),
         ))
-        .expect("device.skill.write_file");
+        .expect("skill.write_file");
     assert_eq!(resp["ok"], true);
     assert_eq!(
         resp["resource_ura"],
@@ -1689,13 +1817,13 @@ async fn real_process_exec_runs_bin_echo() {
         let (reg, _g) = registry_with_temp_home();
         dispatcher_for(reg)
             .execute_rpc(target(
-                "device.process.exec",
+                "process.exec",
                 json!({
                     "command": "/bin/echo",
                     "args": ["hello world"],
                 }),
             ))
-            .expect("device.process.exec")
+            .expect("process.exec")
     })
     .await
     .expect("join");
@@ -1723,10 +1851,10 @@ async fn real_shell_run_executes_echo_via_bash() {
         let (reg, _g) = registry_with_temp_home();
         dispatcher_for(reg)
             .execute_rpc(target(
-                "device.shell.run",
+                "shell.run",
                 json!({"command": "echo hi-from-shell"}),
             ))
-            .expect("device.shell.run")
+            .expect("shell.run")
     })
     .await
     .expect("join");
@@ -1766,14 +1894,14 @@ fn real_http_request_hits_a_localhost_listener() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.http.request",
+            "http.request",
             json!({
                 "url": format!("http://127.0.0.1:{port}/"),
                 "method": "GET",
                 "timeout_ms": 5000,
             }),
         ))
-        .expect("device.http.request");
+        .expect("http.request");
     let _ = server.join();
     assert_eq!(resp["ok"], json!(true), "{resp}");
     assert_eq!(resp["status"], json!(200));
@@ -1791,7 +1919,7 @@ fn real_mcp_client_list_routes_with_no_upstream_configured() {
     // upstream set. Handler should return a structured "no
     // upstream configured" / empty-list response, NOT a panic.
     let (reg, _g) = registry_with_temp_home();
-    let r = dispatcher_for(reg).execute_rpc(target("device.mcp.client.list", json!({})));
+    let r = dispatcher_for(reg).execute_rpc(target("mcp.client.list", json!({})));
     match r {
         Ok(v) => assert!(v.is_object()),
         Err(e) => assert!(!format!("{e}")
@@ -1804,7 +1932,7 @@ fn real_mcp_client_list_routes_with_no_upstream_configured() {
 fn real_mcp_client_call_routes_with_realistic_args() {
     let (reg, _g) = registry_with_temp_home();
     let r = dispatcher_for(reg).execute_rpc(target(
-        "device.mcp.client.call",
+        "mcp.client.call",
         json!({"server": "no-such", "name": "no-such-tool", "arguments": {}}),
     ));
     match r {
@@ -1822,12 +1950,12 @@ fn real_mcp_client_call_routes_with_realistic_args() {
 fn real_mcp_bridge_list_tools_returns_local_catalog() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.mcp.bridge.list_tools", json!({})))
-        .expect("device.mcp.bridge.list_tools");
+        .execute_rpc(target("mcp.bridge.list_tools", json!({})))
+        .expect("mcp.bridge.list_tools");
     // Catalog must mention at least one well-known tool.
     let s = resp.to_string();
     assert!(
-        s.contains("device.observe.health") || s.contains("device.fs.read") || s.contains("tools"),
+        s.contains("observe.health") || s.contains("fs.read") || s.contains("tools"),
         "mcp.bridge.list_tools missing known abilities: {resp}"
     );
 }
@@ -1836,8 +1964,8 @@ fn real_mcp_bridge_list_tools_returns_local_catalog() {
 fn real_mcp_bridge_call_tool_routes_to_local_dispatch() {
     let (reg, _g) = registry_with_temp_home();
     let r = dispatcher_for(reg).execute_rpc(target(
-        "device.mcp.bridge.call_tool",
-        json!({"name": "device.observe.health", "arguments": {}}),
+        "mcp.bridge.call_tool",
+        json!({"name": "observe.health", "arguments": {}}),
     ));
     match r {
         Ok(v) => assert!(v.is_object()),
@@ -1851,8 +1979,8 @@ fn real_mcp_bridge_call_tool_routes_to_local_dispatch() {
 fn real_a2a_bridge_list_skills_returns_a_card() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.a2a.bridge.list_skills", json!({})))
-        .expect("device.a2a.bridge.list_skills");
+        .execute_rpc(target("a2a.bridge.list_skills", json!({})))
+        .expect("a2a.bridge.list_skills");
     assert!(resp.is_object());
 }
 
@@ -1860,7 +1988,7 @@ fn real_a2a_bridge_list_skills_returns_a_card() {
 fn real_a2a_bridge_send_task_routes_with_realistic_args() {
     let (reg, _g) = registry_with_temp_home();
     let r = dispatcher_for(reg).execute_rpc(target(
-        "device.a2a.bridge.send_task",
+        "a2a.bridge.send_task",
         json!({"target_agent":"none", "skill":"chat", "input":{"prompt":"hi"}}),
     ));
     match r {
@@ -1875,11 +2003,12 @@ fn real_a2a_bridge_send_task_routes_with_realistic_args() {
 fn real_a2a_client_send_task_routes_with_realistic_args() {
     let (reg, _g) = registry_with_temp_home();
     let r = dispatcher_for(reg).execute_rpc(target(
-        "device.a2a.client.send_task",
+        "a2a.client.send_task",
         json!({
-            "agent_card_url": "http://127.0.0.1:1/.well-known/agent.json",
-            "skill": "chat",
-            "input": {"prompt": "hi"},
+            "target_node_ura": "easynet:///r/acme/device/N1",
+            "agent_name": "claude",
+            "skill_name": "chat",
+            "args": {"prompt": "hi"},
         }),
     ));
     match r {
@@ -1971,12 +2100,12 @@ fn real_device_plugin_status_reports_runtime_surface() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let status = d
-        .execute_rpc(target("device.plugin.status", json!({})))
-        .expect("device.plugin.status must dispatch through plugin lifecycle ability");
+        .execute_rpc(target("plugin.status", json!({})))
+        .expect("plugin.status must dispatch through plugin lifecycle ability");
     assert_eq!(status["ok"], true);
     assert!(
         status["abilities"].is_array(),
-        "device.plugin.status must report runtime ability rows: {status}"
+        "plugin.status must report runtime ability rows: {status}"
     );
 }
 
@@ -1986,16 +2115,16 @@ fn real_device_plugin_reload_reports_registration_diff() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let report = d
-        .execute_rpc(target("device.plugin.reload", json!({})))
-        .expect("device.plugin.reload must dispatch through plugin lifecycle ability");
+        .execute_rpc(target("plugin.reload", json!({})))
+        .expect("plugin.reload must dispatch through plugin lifecycle ability");
     assert_eq!(report["ok"], true);
     assert!(
         report["registered_abilities"].is_array(),
-        "device.plugin.reload must include registered_abilities: {report}"
+        "plugin.reload must include registered_abilities: {report}"
     );
     assert!(
         report["unregistered_abilities"].is_array(),
-        "device.plugin.reload must include unregistered_abilities: {report}"
+        "plugin.reload must include unregistered_abilities: {report}"
     );
 }
 
@@ -2010,7 +2139,7 @@ fn real_consent_subscribe_returns_a_stream_source() {
     let mut reg = AxonAbilityCatalog::new();
     super::permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
-    let mut t = target("device.consent.subscribe", json!({}));
+    let mut t = target("consent.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
     let _src = d.execute_stream(t).expect("consent.subscribe stream");
     // Simply receiving a StreamSource without panic is the
@@ -2024,7 +2153,7 @@ fn real_discuss_subscribe_returns_a_stream_source() {
     let mut reg = AxonAbilityCatalog::new();
     super::discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
-    let mut t = target("device.discuss.subscribe", json!({"room_id": "any"}));
+    let mut t = target("discuss.subscribe", json!({"room_id": "any"}));
     t.call_mode = CallMode::Stream;
     let r = d.execute_stream(t);
     // Some implementations require an existing room; either an
@@ -2045,7 +2174,7 @@ fn real_loop_subscribe_returns_a_stream_source() {
     let mut reg = AxonAbilityCatalog::new();
     super::loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
-    let mut t = target("device.loop.subscribe", json!({"loop_id": "any"}));
+    let mut t = target("loop.subscribe", json!({"loop_id": "any"}));
     t.call_mode = CallMode::Stream;
     let r = d.execute_stream(t);
     match r {
@@ -2063,7 +2192,7 @@ fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
     let mut reg = AxonAbilityCatalog::new();
     super::session_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
-    let mut t = target("device.session.attach", json!({"session_id": "no-such"}));
+    let mut t = target("session.attach", json!({"session_id": "no-such"}));
     t.call_mode = CallMode::Stream;
     let r = d.execute_stream(t);
     match r {
@@ -2083,7 +2212,7 @@ fn real_device_terminal_create_then_close_round_trip() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.terminal.create", json!({})))
+        .execute_rpc(target("terminal.create", json!({})))
         .expect("pty_session_create");
     let session_id = create["session_id"]
         .as_str()
@@ -2092,26 +2221,23 @@ fn real_device_terminal_create_then_close_round_trip() {
     assert!(!session_id.is_empty());
 
     let listed = d
-        .execute_rpc(target("device.terminal.list", json!({})))
-        .expect("device.terminal.list");
+        .execute_rpc(target("terminal.list", json!({})))
+        .expect("terminal.list");
     let sessions = listed["sessions"].as_array().expect("sessions array");
     assert!(
         sessions
             .iter()
             .any(|session| session["session_id"].as_str() == Some(session_id.as_str())),
-        "device.terminal.list must include the created session: {listed}"
+        "terminal.list must include the created session: {listed}"
     );
 
     let close = d
-        .execute_rpc(target(
-            "device.terminal.close",
-            json!({"session_id": session_id}),
-        ))
+        .execute_rpc(target("terminal.close", json!({"session_id": session_id})))
         .expect("pty_session_close");
     assert_eq!(close["ack"], json!(true));
 }
 
-// device.terminal.input / _read / _resize are the unary-RPC
+// terminal.input / _read / _resize are the unary-RPC
 // data plane the EasyNet backend's PTYDriver invokes for the
 // production HTTP-session terminal flow. The structural guard
 // `every_published_ability_has_a_real_invoke_test` asserts each
@@ -2131,34 +2257,34 @@ fn real_device_terminal_input_read_resize_round_trip() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.terminal.create", json!({})))
+        .execute_rpc(target("terminal.create", json!({})))
         .expect("pty_session_create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
-    // device.terminal.resize — exercise it before any I/O so
+    // terminal.resize — exercise it before any I/O so
     // the shell starts at the requested geometry.
     let resize = d
         .execute_rpc(target(
-            "device.terminal.resize",
+            "terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
         ))
         .expect("pty_session_resize");
     assert_eq!(resize["ack"], json!(true));
 
-    // device.terminal.input — push a printf line that produces
+    // terminal.input — push a printf line that produces
     // a deterministic stdout marker.
     use base64::Engine;
     let input_b64 =
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_REAL_PTY_OK\\n'\n");
     let input = d
         .execute_rpc(target(
-            "device.terminal.input",
+            "terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
         ))
         .expect("pty_session_input");
     assert_eq!(input["ack"], json!(true));
 
-    // device.terminal.read — drain output up to a timeout
+    // terminal.read — drain output up to a timeout
     // until we see the marker. May take a couple of cycles
     // because the shell's prompt + echoed input land first.
     let mut accum = String::new();
@@ -2166,7 +2292,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_REAL_PTY_OK") {
         let resp = d
             .execute_rpc(target(
-                "device.terminal.read",
+                "terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
             ))
             .expect("pty_session_read");
@@ -2181,11 +2307,11 @@ fn real_device_terminal_input_read_resize_round_trip() {
     }
     assert!(
         accum.contains("EASYNET_REAL_PTY_OK"),
-        "expected printf marker via device.terminal.read; got {accum:?}"
+        "expected printf marker via terminal.read; got {accum:?}"
     );
 
     // Cleanup.
-    let _ = d.execute_rpc(target("device.terminal.close", json!({"session_id": sid})));
+    let _ = d.execute_rpc(target("terminal.close", json!({"session_id": sid})));
 }
 
 // pty_session_attach spawns three tokio tasks (reader / writer /
@@ -2201,19 +2327,19 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.terminal.create", json!({})))
+        .execute_rpc(target("terminal.create", json!({})))
         .expect("pty_session_create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
-    let mut t = target("device.terminal.attach", json!({"session_id": sid.clone()}));
+    let mut t = target("terminal.attach", json!({"session_id": sid.clone()}));
     t.call_mode = CallMode::Bidi;
     let _bidi = d.execute_bidi(t).expect("pty_session_attach bidi");
 
     // Cleanup.
-    let _ = d.execute_rpc(target("device.terminal.close", json!({"session_id": sid})));
+    let _ = d.execute_rpc(target("terminal.close", json!({"session_id": sid})));
 }
 
-// device.fs.transfer is a bidi ability — open it with mode=upload
+// fs.transfer is a bidi ability — open it with mode=upload
 // against a temp path, push a chunk + eof, drain the complete frame,
 // then verify the file landed with the right content. The
 // structural guard `every_published_ability_has_a_real_invoke_test`
@@ -2236,8 +2362,11 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     ));
 
     let mut t = target(
-        "device.fs.transfer",
-        json!({"mode": "upload", "path": path.to_string_lossy()}),
+        "fs.transfer",
+        json!({
+            "mode": "upload",
+            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
+        }),
     );
     t.call_mode = CallMode::Bidi;
     let bidi = d.execute_bidi(t).expect("file_transfer bidi");
@@ -2257,7 +2386,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     while std::time::Instant::now() < deadline {
         match tokio::time::timeout(std::time::Duration::from_millis(500), from.recv()).await {
             Ok(Some(f)) => {
-                let f = f.into_json_value().expect("device.fs.transfer emits JSON");
+                let f = f.into_json_value().expect("fs.transfer emits JSON");
                 if f["type"] == "complete" {
                     got_complete = true;
                     break;
@@ -2266,10 +2395,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
             _ => break,
         }
     }
-    assert!(
-        got_complete,
-        "expected `complete` frame from device.fs.transfer"
-    );
+    assert!(got_complete, "expected `complete` frame from fs.transfer");
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let _ = std::fs::remove_file(&path);
 }
@@ -2294,8 +2420,11 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     std::fs::write(&path, bytes).unwrap();
 
     let mut t = target(
-        "device.fs.transfer",
-        json!({"mode": "download", "path": path.to_string_lossy()}),
+        "fs.transfer",
+        json!({
+            "mode": "download",
+            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Read),
+        }),
     );
     t.call_mode = CallMode::Bidi;
     let bidi = d.execute_bidi(t).expect("file_transfer bidi");
@@ -2307,7 +2436,7 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     while std::time::Instant::now() < deadline {
         match tokio::time::timeout(std::time::Duration::from_millis(500), from.recv()).await {
             Ok(Some(f)) => {
-                let f = f.into_json_value().expect("device.fs.transfer emits JSON");
+                let f = f.into_json_value().expect("fs.transfer emits JSON");
                 match f["type"].as_str() {
                     Some("chunk") => {
                         let chunk = f["data"].as_str().expect("chunk carries base64 data");
@@ -2329,7 +2458,7 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     }
     assert!(
         got_complete,
-        "expected `complete` frame from device.fs.transfer download"
+        "expected `complete` frame from fs.transfer download"
     );
     assert_eq!(downloaded, bytes);
     let _ = std::fs::remove_file(&path);
@@ -2396,7 +2525,7 @@ fn real_mic_subscribe_routes_to_subject_gate() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
-    let mut t = target("device.mic.subscribe", json!({}))
+    let mut t = target("mic.subscribe", json!({}))
         .with_subject("easynet:///r/acme/resource/missing-real-invoke-mic");
     t.call_mode = CallMode::Stream;
     let err = d
@@ -2404,7 +2533,7 @@ fn real_mic_subscribe_routes_to_subject_gate() {
         .expect_err("missing mic subject must reject before opening hardware");
     assert!(
         err.to_string().contains("resource_not_found"),
-        "device.mic.subscribe must route to media subject gate; got {err}"
+        "mic.subscribe must route to media subject gate; got {err}"
     );
 }
 
@@ -2413,10 +2542,10 @@ fn real_camera_subscribe_routes_to_media_stub() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
-    let mut t = target("device.camera.subscribe", json!({}));
+    let mut t = target("camera.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
     let err = d.execute_stream(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("device.camera.subscribe", &err);
+    assert_routed_to_media_stub("camera.subscribe", &err);
 }
 
 #[test]
@@ -2428,7 +2557,7 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
-        .execute_rpc(target("device.camera.snapshot", json!({})))
+        .execute_rpc(target("camera.snapshot", json!({})))
         .expect_err("camera.snapshot without subject must reject");
     assert!(
         err.to_string().contains("subject_required"),
@@ -2441,7 +2570,7 @@ fn real_screen_subscribe_with_no_subject_returns_subject_required() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
-    let mut t = target("device.screen.subscribe", json!({}));
+    let mut t = target("screen.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
     let err = d
         .execute_stream(t)
@@ -2458,7 +2587,7 @@ fn real_screen_snapshot_with_no_subject_returns_subject_required() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
-        .execute_rpc(target("device.screen.snapshot", json!({})))
+        .execute_rpc(target("screen.snapshot", json!({})))
         .expect_err("screen.snapshot without subject must reject");
     assert!(
         err.to_string().contains("subject_required"),
@@ -2473,7 +2602,7 @@ fn real_remote_desktop_permission_status_reports_contract() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let status = d
-        .execute_rpc(target("device.remote_desktop.permission_status", json!({})))
+        .execute_rpc(target("remote_desktop.permission_status", json!({})))
         .expect("remote_desktop.permission_status must dispatch");
     assert_eq!(
         status["permission"], "screen_capture",
@@ -2488,10 +2617,7 @@ fn real_remote_desktop_request_permission_reports_contract() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let status = d
-        .execute_rpc(target(
-            "device.remote_desktop.request_permission",
-            json!({}),
-        ))
+        .execute_rpc(target("remote_desktop.request_permission", json!({})))
         .expect("remote_desktop.request_permission must dispatch");
     assert_eq!(
         status["permission"], "screen_capture",
@@ -2506,7 +2632,7 @@ fn real_remote_desktop_create_session_requires_envelope_subject() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
-        .execute_rpc(target("device.remote_desktop.create_session", json!({})))
+        .execute_rpc(target("remote_desktop.create_session", json!({})))
         .expect_err("remote_desktop.create_session without subject must reject");
     assert!(
         err.to_string().contains("subject_required"),
@@ -2525,7 +2651,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let created = d
         .execute_rpc(
             target(
-                "device.remote_desktop.create_session",
+                "remote_desktop.create_session",
                 json!({
                     "session_id": "rd-real-invoke",
                     "mode": "view_only",
@@ -2545,7 +2671,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let shown = d
         .execute_rpc(
             target(
-                "device.remote_desktop.show_session",
+                "remote_desktop.show_session",
                 json!({"session_id": "rd-real-invoke", "session_token": token}),
             )
             .with_subject(subject.clone())
@@ -2562,7 +2688,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let signaled = d
         .execute_rpc(
             target(
-                "device.remote_desktop.set_description",
+                "remote_desktop.set_description",
                 json!({
                     "session_id": "rd-real-invoke",
                     "session_token": token,
@@ -2580,7 +2706,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let candidate_view = d
         .execute_rpc(
             target(
-                "device.remote_desktop.add_ice_candidate",
+                "remote_desktop.add_ice_candidate",
                 json!({
                     "session_id": "rd-real-invoke",
                     "session_token": token,
@@ -2595,7 +2721,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let mut watch = target(
-        "device.remote_desktop.watch_events",
+        "remote_desktop.watch_events",
         json!({"session_id": "rd-real-invoke", "session_token": token}),
     )
     .with_subject(subject.clone())
@@ -2616,7 +2742,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let refreshed = d
         .execute_rpc(
             target(
-                "device.remote_desktop.refresh_lease",
+                "remote_desktop.refresh_lease",
                 json!({
                     "session_id": "rd-real-invoke",
                     "session_token": token,
@@ -2633,7 +2759,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let ended = d
         .execute_rpc(
             target(
-                "device.remote_desktop.end_session",
+                "remote_desktop.end_session",
                 json!({"session_id": "rd-real-invoke", "session_token": token}),
             )
             .with_subject(subject)
@@ -2650,7 +2776,7 @@ fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut attach = target(
-        "device.remote_desktop.attach",
+        "remote_desktop.attach",
         json!({"session_id": "missing-real-invoke-session"}),
     );
     attach.call_mode = CallMode::Bidi;
@@ -2668,10 +2794,10 @@ fn real_speaker_publish_routes_to_media_stub() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
-    let mut t = target("device.speaker.publish", json!({}));
+    let mut t = target("speaker.publish", json!({}));
     t.call_mode = CallMode::Bidi;
     let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("device.speaker.publish", &err);
+    assert_routed_to_media_stub("speaker.publish", &err);
 }
 
 #[test]
@@ -2679,10 +2805,10 @@ fn real_voice_subscribe_routes_to_media_stub() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
-    let mut t = target("device.voice.subscribe", json!({}));
+    let mut t = target("voice.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
     let err = d.execute_stream(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("device.voice.subscribe", &err);
+    assert_routed_to_media_stub("voice.subscribe", &err);
 }
 
 #[test]
@@ -2690,13 +2816,13 @@ fn real_voice_transcribe_routes_to_media_stub() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
-    let mut t = target("device.voice.transcribe", json!({}));
+    let mut t = target("voice.transcribe", json!({}));
     t.call_mode = CallMode::Bidi;
     let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("device.voice.transcribe", &err);
+    assert_routed_to_media_stub("voice.transcribe", &err);
 }
 
-// ── device.browser.* v0 mock surface (RFC-012 §RemoteWebSurface) ─
+// ── browser.* v0 mock surface (RFC-012 §RemoteWebSurface) ─
 //
 // v0 ships mock handlers that disclose `[V0 MOCK …]` in their
 // descriptions; RFC-013 W1+ replaces the bodies with real WebView
@@ -2708,7 +2834,7 @@ fn real_voice_transcribe_routes_to_media_stub() {
 #[test]
 fn real_browser_open_session_mints_resource_ura() {
     let resp = invoke(
-        "device.browser.open_session",
+        "browser.open_session",
         json!({"url": "https://example.com"}),
     );
     let ura = resp["session_ura"]
@@ -2734,7 +2860,7 @@ fn real_browser_send_input_requires_known_session() {
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target(
-            "device.browser.send_input",
+            "browser.send_input",
             json!({
                 "session_ura": "easynet:///r/local/resource/daemon.browser/bogus",
                 "event": {"kind": "click", "x": 1, "y": 2}
@@ -2753,15 +2879,12 @@ fn real_browser_capture_viewport_emits_one_placeholder_frame() {
     let d = dispatcher_for(reg);
     let open = d
         .execute_rpc(target(
-            "device.browser.open_session",
+            "browser.open_session",
             json!({"url": "https://example.com"}),
         ))
         .expect("open_session ok");
     let ura = open["session_ura"].as_str().unwrap().to_string();
-    let mut t = target(
-        "device.browser.capture_viewport",
-        json!({"session_ura": ura}),
-    );
+    let mut t = target("browser.capture_viewport", json!({"session_ura": ura}));
     t.call_mode = CallMode::Stream;
     let source = d.execute_stream(t).expect("capture_viewport must dispatch");
     let frames = source.into_snapshot();
@@ -2780,23 +2903,20 @@ fn real_browser_close_session_is_idempotent() {
     let d = dispatcher_for(reg);
     let open = d
         .execute_rpc(target(
-            "device.browser.open_session",
+            "browser.open_session",
             json!({"url": "https://example.com"}),
         ))
         .expect("open ok");
     let ura = open["session_ura"].as_str().unwrap().to_string();
     let first = d
         .execute_rpc(target(
-            "device.browser.close_session",
+            "browser.close_session",
             json!({"session_ura": ura.clone()}),
         ))
         .expect("first close ok");
     assert_eq!(first["status"], "closed");
     let second = d
-        .execute_rpc(target(
-            "device.browser.close_session",
-            json!({"session_ura": ura}),
-        ))
+        .execute_rpc(target("browser.close_session", json!({"session_ura": ura})))
         .expect("second close ok (idempotent)");
     assert_eq!(second["status"], "already_closed");
 }
@@ -2807,7 +2927,7 @@ fn real_meta_list_resources_returns_resources_array() {
     // `{"resources":[]}` (no failure). HomeGuard ensures we read
     // a fresh empty resources.json.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
-    let resp = invoke("device.meta.list_resources", json!({}));
+    let resp = invoke("meta.list_resources", json!({}));
     assert!(
         resp.get("resources").and_then(Value::as_array).is_some(),
         "meta.list_resources receipt must carry `resources` array; got {resp}"
@@ -2823,17 +2943,17 @@ fn real_meta_list_resources_returns_resources_array() {
 #[test]
 fn real_device_node_describe_local_returns_self_envelope() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
-    let resp = invoke("device.node.describe", json!({"node_id": "local"}));
+    let resp = invoke("node.describe", json!({"node_id": "local"}));
     assert!(
         resp.get("node_id").is_some(),
-        "device.node.describe receipt must carry `node_id`; got {resp}"
+        "node.describe receipt must carry `node_id`; got {resp}"
     );
     assert_eq!(resp.get("is_self"), Some(&json!(true)));
 }
 
 #[test]
 fn real_device_terminal_create_close_round_trip_via_v2_alias() {
-    // `device.terminal.create` / `device.terminal.close` are the v2
+    // `terminal.create` / `terminal.close` are the v2
     // canonical names. Coverage walker pins the current public
     // namespace so an accidental reintroduction of old names fails.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
@@ -2843,8 +2963,8 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.terminal.create", json!({})))
-        .expect("device.terminal.create");
+        .execute_rpc(target("terminal.create", json!({})))
+        .expect("terminal.create");
     let session_id = create["session_id"]
         .as_str()
         .expect("session_id in response")
@@ -2852,11 +2972,8 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     assert!(!session_id.is_empty());
 
     let close = d
-        .execute_rpc(target(
-            "device.terminal.close",
-            json!({"session_id": session_id}),
-        ))
-        .expect("device.terminal.close");
+        .execute_rpc(target("terminal.close", json!({"session_id": session_id})))
+        .expect("terminal.close");
     assert_eq!(close["ack"], json!(true));
 }
 
@@ -2874,16 +2991,16 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.terminal.create", json!({})))
-        .expect("device.terminal.create");
+        .execute_rpc(target("terminal.create", json!({})))
+        .expect("terminal.create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
     let resize = d
         .execute_rpc(target(
-            "device.terminal.resize",
+            "terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
         ))
-        .expect("device.terminal.resize");
+        .expect("terminal.resize");
     assert_eq!(resize["ack"], json!(true));
 
     use base64::Engine;
@@ -2891,10 +3008,10 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_V2_PTY_OK\\n'\n");
     let input = d
         .execute_rpc(target(
-            "device.terminal.input",
+            "terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
         ))
-        .expect("device.terminal.input");
+        .expect("terminal.input");
     assert_eq!(input["ack"], json!(true));
 
     let mut accum = String::new();
@@ -2902,10 +3019,10 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_V2_PTY_OK") {
         let resp = d
             .execute_rpc(target(
-                "device.terminal.read",
+                "terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
             ))
-            .expect("device.terminal.read");
+            .expect("terminal.read");
         if let Some(b64) = resp["output"].as_str() {
             if !b64.is_empty() {
                 let raw = base64::engine::general_purpose::STANDARD
@@ -2923,8 +3040,8 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
 
 #[test]
 fn real_device_terminal_attach_is_registered_as_bidi() {
-    // `device.terminal.attach` is the v2 alias of
-    // `device.terminal.attach` — bidi-shape ability the data
+    // `terminal.attach` is the v2 alias of
+    // `terminal.attach` — bidi-shape ability the data
     // plane uses. We just pin "the registry knows about it under
     // the v2 name" — full bidi round-trip coverage already lives
     // on the legacy alias's test.
@@ -2933,20 +3050,19 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     let mut reg = AxonAbilityCatalog::new();
     super::pty_attach_ability::register(&mut reg, pty);
     assert!(
-        reg.get_bidi("device.terminal.attach").is_some(),
-        "device.terminal.attach (v2 alias) must be registered as bidi"
+        reg.get_bidi("terminal.attach").is_some(),
+        "terminal.attach (v2 alias) must be registered as bidi"
     );
 }
 
 #[test]
 fn real_voice_list_calls_returns_items_array() {
-    // `voice.list_calls` projects the in-process call store as
-    // `{items: [...]}`. The store is a process-wide OnceLock so
-    // residue from sibling voice.* tests can land in the response;
-    // we only assert the wire contract (the `items` key exists and
-    // is an array), not that it's empty.
+    // `voice.list_calls` projects the registry-owned in-process call
+    // service as `{items: [...]}`. This integration test pins only
+    // the wire contract; behavior-level state semantics live in
+    // `voice_call_ability` unit tests.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
-    let resp = invoke("device.voice.list_calls", json!({}));
+    let resp = invoke("voice.list_calls", json!({}));
     assert!(
         resp.get("items").and_then(Value::as_array).is_some(),
         "voice.list_calls receipt must carry `items` array; got {resp}"
@@ -2957,7 +3073,7 @@ fn real_voice_list_calls_returns_items_array() {
 // Category C: device-local OpenAI shim (RFC-006-C v0.1)
 // ════════════════════════════════════════════════════════════════
 //
-// `device.openai.{chat_completions,list_models}` are device-owned
+// `openai.{chat_completions,list_models}` are device-owned
 // adapters that translate OpenAI HTTP shape ↔ host-local
 // chat-base abilities (`<agent>.chat`). The full handlers want a
 // real `<agent>.chat` peer; the smokes here pin only the
@@ -2970,7 +3086,7 @@ fn real_device_openai_list_models_returns_v1_models_envelope() {
     // /models envelope shape (`{object:"list", data:[...]}`)
     // must be intact.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
-    let resp = invoke("device.openai.list_models", json!({}));
+    let resp = invoke("openai.list_models", json!({}));
     assert_eq!(
         resp["object"], "list",
         "list_models must use v1 list envelope"
@@ -2990,7 +3106,7 @@ fn real_device_openai_chat_completions_rejects_missing_request_arg() {
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
-        .execute_rpc(target("device.openai.chat_completions", json!({})))
+        .execute_rpc(target("openai.chat_completions", json!({})))
         .unwrap_err();
     let msg = format!("{err}");
     assert!(
@@ -3062,4 +3178,136 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
         json!({"fingerprint": id, "id": id, "id_prefix": id, "token_id": id}),
     ));
     let _ = revoke; // dispatchability is the contract; outcome shape varies.
+}
+
+// ════════════════════════════════════════════════════════════════
+// Context surface (clipboard / folders / favorites / captures) and
+// chat history — pure device-local persistence under HomeGuard.
+// One round-trip test per family exercises every published name
+// with realistic operator payloads against a fresh ~/.easynet/.
+
+#[test]
+fn real_context_clipboard_and_favorites_round_trip() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+
+    // Tracking toggle: flip on, observe the flag in the list reply.
+    let tracked = invoke("context.clipboard.track", json!({"enabled": true}));
+    assert_eq!(tracked["tracking"], json!(true));
+
+    // Seed one clip directly through the store (the tracker thread
+    // is not running under test), then list + get it back.
+    crate::persistence::context_store::append_clip(&crate::persistence::context_store::ClipEntry {
+        id: "clip-1".into(),
+        timestamp: "2026-06-10T00:00:00Z".into(),
+        device: "easynet:///r/test/device/d1".into(),
+        kind: "text".into(),
+        text: Some("hello clipboard".into()),
+        image_file: None,
+        preview: "hello clipboard".into(),
+    })
+    .expect("seed clip");
+    let listed = invoke("context.clipboard.list", json!({"limit": 10}));
+    assert_eq!(listed["entries"][0]["id"], json!("clip-1"));
+    let got = invoke("context.clipboard.get", json!({"id": "clip-1"}));
+    assert_eq!(got["text"], json!("hello clipboard"));
+
+    // Favorites: star the clip, list it, unstar it.
+    let fav = invoke(
+        "context.favorites.add",
+        json!({"kind": "clipboard", "label": "hello", "reference": "clip-1"}),
+    );
+    let fav_id = fav["id"].as_str().expect("favorite id").to_string();
+    let favs = invoke("context.favorites.list", json!({}));
+    assert_eq!(favs["favorites"][0]["reference"], json!("clip-1"));
+    let removed = invoke("context.favorites.remove", json!({"id": fav_id}));
+    assert_eq!(removed["reference"], json!("clip-1"));
+}
+
+#[test]
+fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let dir = std::env::temp_dir().join(format!("real-invoke-ctx-fs-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("sub")).expect("fixture dir");
+    std::fs::write(dir.join("a.txt"), b"x").expect("fixture file");
+    crate::persistence::context_store::add_folder(dir.to_str().unwrap(), Some("proj"))
+        .expect("map folder");
+
+    let folders = invoke("context.folders.list", json!({}));
+    assert_eq!(folders["folders"][0]["name"], json!("proj"));
+
+    let listing = invoke("context.fs.list", json!({"folder": "proj", "path": ""}));
+    let names: Vec<&str> = listing["entries"]
+        .as_array()
+        .expect("entries array")
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(names.contains(&"sub") && names.contains(&"a.txt"), "got {names:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn real_context_captures_record_list_get() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    // Seed one artifact the way a media handler does, then read it
+    // back through both abilities.
+    let entry = crate::persistence::context_store::record_capture(
+        "easynet:///r/test/device/d1",
+        "screen.snapshot",
+        "jpg",
+        b"\xff\xd8jpegbytes",
+        "image/jpeg",
+        Some(100),
+        Some(50),
+        None,
+        "Screenshot 100x50".into(),
+    )
+    .expect("seed capture");
+
+    let listed = invoke(
+        "context.captures.list",
+        json!({"ability": "screen.snapshot", "limit": 10}),
+    );
+    assert_eq!(listed["abilities"], json!(["screen.snapshot"]));
+    assert_eq!(listed["entries"][0]["id"], json!(entry.id.clone()));
+
+    let got = invoke("context.captures.get", json!({"id": entry.id}));
+    assert_eq!(got["content_type"], json!("image/jpeg"));
+    assert!(
+        got["data_base64"].as_str().is_some_and(|s| !s.is_empty()),
+        "payload inlined as base64"
+    );
+}
+
+#[test]
+fn real_chat_history_list_and_get_read_persisted_transcripts() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    // Persist one session turn through the store, then read it back
+    // through both abilities.
+    crate::persistence::chat_sessions::write_turn_best_effort(
+        "demo",
+        "real-session-1",
+        "hello there",
+        "general kenobi",
+        &[],
+        &json!({}),
+    );
+
+    let listed = invoke("chat.history.list", json!({"agent": "demo"}));
+    let sessions = listed["sessions"].as_array().expect("sessions array");
+    assert!(
+        sessions.iter().any(|s| s["session_id"] == json!("real-session-1")),
+        "listed: {listed}"
+    );
+
+    let got = invoke(
+        "chat.history.get",
+        json!({"agent": "demo", "session_id": "real-session-1"}),
+    );
+    let turns = got["turns"].as_array().expect("turns array");
+    assert!(
+        turns.iter().any(|t| t["prompt"] == json!("hello there")),
+        "turns: {got}"
+    );
 }

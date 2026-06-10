@@ -34,7 +34,7 @@
 //     {
 //       "type": "request",
 //       "subject_device": "<canonical device URI>",
-//       "ability":        "<ability the remote device runs>",
+//       "ability_ura":    "<canonical Ability URA the remote owner runs>",
 //       "args":           <bytes — opaque to invoke_remote handler>
 //     }
 //   streams = [{stream_id: 0, content_type: "application/json", ordering: STRICT}]
@@ -44,7 +44,8 @@
 //     "type":     "result" | "chunk",
 //     "payload":  <bytes>,
 //     "terminal": <bool>,    // present on "result" only
-//     "error":    <string?>  // present on "result" only
+//     "error":    <string?>, // human-readable terminal reason
+//     "failure":  <SessionFailure?> // typed canonical projection
 //   }
 //
 // The MVP-style framing is preserved verbatim (per PR-3 sub-spec §2.3
@@ -63,6 +64,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::Status;
+
+use crate::services::session_failure::SessionFailure;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 #[cfg(test)]
@@ -149,8 +152,8 @@ pub enum InvokeRemoteUp {
         /// target falls back to `subject_device`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject_ura: Option<String>,
-        /// Ability name the remote device should run.
-        ability: String,
+        /// Canonical Ability URA the remote owner should run.
+        ability_ura: String,
         /// Opaque payload bytes the remote ability consumes. The
         /// invoke_remote initiator and handler do not interpret these.
         args: Vec<u8>,
@@ -161,6 +164,12 @@ pub enum InvokeRemoteUp {
         /// represented by a hub/backend caller.
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
+        /// Typed browser-signed user identity (DEC-EU user-caller
+        /// pass-through). First-class field per invocation-unity
+        /// §22.2; the legacy `x-easynet-origin-caller` metadata item
+        /// is its rolling-upgrade fallback.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     },
 }
 
@@ -180,6 +189,8 @@ pub enum InvokeRemoteDown {
     Result {
         payload: Vec<u8>,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<SessionFailure>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
     },
@@ -232,12 +243,18 @@ pub enum SessionDispatch {
         args_content_envelope: SessionContentEnvelope,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
+        /// Typed browser-signed user identity, forwarded verbatim from
+        /// `InvokeRemoteUp::Request.origin_caller`. The target device
+        /// verifies it and runs the ability with the real user as
+        /// Caller.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     },
     /// Hub → target device. Open one long-lived local bidi handler
     /// on the target and bind it to `call_id`. Used by the
-    /// same-hub `device.fs.transfer` bridge: the hub forwards the
+    /// same-hub `fs.transfer` bridge: the hub forwards the
     /// backend's InvokeBidi open to the device's local
-    /// `device.fs.transfer` ability, then streams caller input via
+    /// `fs.transfer` ability, then streams caller input via
     /// `BidiInput` and target output back via non-terminal
     /// `Result` frames.
     BidiOpen {
@@ -270,6 +287,8 @@ pub enum SessionDispatch {
         terminal: bool,
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<SessionFailure>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
     },
     /// Device → hub. A device-mode daemon emits this when its
@@ -289,13 +308,13 @@ pub enum SessionDispatch {
     /// typically have ≤1 concurrent CLI invoke in flight.
     Request {
         call_id: [u8; 16],
-        ability: String,
+        ability_ura: String,
         args: Vec<u8>,
         args_content_envelope: SessionContentEnvelope,
     },
     /// Hub → device. Reverse direction of `Request`. The hub
-    /// resolved the target via its PresenceRegistry (same-tenant
-    /// fast-path) or via cross-hub dial (target tenant differs)
+    /// resolved the target via its PresenceRegistry (same-realm
+    /// fast-path) or via cross-hub dial (target realm differs)
     /// and is returning the result bytes — or a typed error
     /// describing why resolution failed.
     RequestResult {
@@ -372,16 +391,17 @@ pub fn call_id_hex(call_id: &[u8; 16]) -> String {
 pub async fn invoke_remote(
     channel: Channel,
     subject_device: String,
-    ability: String,
+    ability_ura: String,
     args: Vec<u8>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<InvokeRemoteFrame, Status>> + Send>>, Status> {
     let request = InvokeRemoteUp::Request {
         subject_device,
         subject_ura: None,
-        ability,
+        ability_ura,
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: HashMap::new(),
+        origin_caller: None,
     };
     let initial_args = serde_json::to_vec(&request)
         .map_err(|err| Status::internal(format!("encode invoke_remote request: {err}")))?;
@@ -545,13 +565,20 @@ fn map_one_frame(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> FrameOut
         InvokeRemoteDown::Result {
             payload: _,
             error: Some(msg),
+            failure,
             request_id: _,
-        } => FrameOutcome::Terminal(Err(Status::aborted(format!(
-            "invoke_remote remote error: {msg}"
-        )))),
+        } => {
+            let detail = failure
+                .map(|failure| failure.status_detail())
+                .unwrap_or(msg);
+            FrameOutcome::Terminal(Err(Status::aborted(format!(
+                "invoke_remote remote error: {detail}"
+            ))))
+        }
         InvokeRemoteDown::Result {
             payload,
             error: None,
+            failure: _,
             request_id: _,
         } => FrameOutcome::Terminal(Ok(InvokeRemoteFrame::Done(payload))),
     }
@@ -579,10 +606,11 @@ mod tests {
         let request_json = serde_json::to_vec(&InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
             subject_ura: None,
-            ability: "echo".into(),
+            ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: HashMap::new(),
+            origin_caller: None,
         })
         .unwrap();
         let frame = build_envelope_open_frame(&request_json);
@@ -616,7 +644,7 @@ mod tests {
         let original = InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-X".into(),
             subject_ura: Some("easynet:///r/realm/resource/camera-1".into()),
-            ability: "fs.read".into(),
+            ability_ura: "easynet:///r/realm/ability/device.dev-X.fs.read".into(),
             args: vec![1, 2, 3, 255],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: {
@@ -624,6 +652,7 @@ mod tests {
                 metadata.insert("x-easynet-delegation".to_string(), "proof".to_string());
                 metadata
             },
+            origin_caller: None,
         };
         let bytes = serde_json::to_vec(&original).unwrap();
         let recovered: InvokeRemoteUp = serde_json::from_slice(&bytes).unwrap();
@@ -642,6 +671,7 @@ mod tests {
         let result_ok = InvokeRemoteDown::Result {
             payload: b"final-reply".to_vec(),
             error: None,
+            failure: None,
             request_id: None,
         };
         let bytes = serde_json::to_vec(&result_ok).unwrap();
@@ -651,11 +681,25 @@ mod tests {
         let result_err = InvokeRemoteDown::Result {
             payload: Vec::new(),
             error: Some("target offline".into()),
+            failure: Some(SessionFailure::from_reason(
+                "target offline",
+                "TARGET_NOT_IN_PRESENCE_REGISTRY",
+                true,
+            )),
             request_id: None,
         };
         let bytes = serde_json::to_vec(&result_err).unwrap();
         let recovered: InvokeRemoteDown = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(result_err, recovered);
+    }
+
+    #[test]
+    fn session_failure_status_detail_keeps_code_without_duplicate_parsing() {
+        let failure = SessionFailure::from_explicit("disk_full", "volume is full", true);
+        assert_eq!(failure.status_detail(), "DISK_FULL: volume is full");
+
+        let empty_message = SessionFailure::from_explicit("device_removed", "", false);
+        assert_eq!(empty_message.status_detail(), "DEVICE_REMOVED");
     }
 
     /// Build a synthetic down frame carrying `payload` as the
@@ -692,6 +736,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"the-reply".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),
@@ -732,6 +777,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"final".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),
@@ -764,6 +810,11 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: Vec::new(),
                     error: Some("device dropped before reply".into()),
+                    failure: Some(SessionFailure::from_reason(
+                        "device dropped before reply",
+                        "DEVICE_REMOVED",
+                        true,
+                    )),
                     request_id: None,
                 },
             )),
@@ -775,6 +826,7 @@ mod tests {
         let first = mapped.next().await.expect("one frame");
         let status = first.expect_err("must be Err for error result");
         assert_eq!(status.code(), tonic::Code::Aborted);
+        assert!(status.message().contains("DEVICE_REMOVED"));
         assert!(status.message().contains("device dropped before reply"));
         assert!(mapped.next().await.is_none());
     }
@@ -808,6 +860,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"reply-after-receipt".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),
@@ -853,6 +906,7 @@ mod tests {
                 InvokeRemoteDown::Result {
                     payload: b"reply".to_vec(),
                     error: None,
+                    failure: None,
                     request_id: None,
                 },
             )),
@@ -886,8 +940,8 @@ mod tests {
         // PR-N6 wire shape (C2): Request frame device → hub.
         let original = SessionDispatch::Request {
             call_id: [0xab; 16],
-            ability: "fs.read".into(),
-            args: br#"{"path":"/etc/hosts"}"#.to_vec(),
+            ability_ura: "easynet:///r/localhost/ability/hub.federation.forward_invoke".into(),
+            args: br#"{"resource_ref":{"resource_ura":"easynet:///r/localhost/resource/device.local-device/fs/tmp/hosts","owner_ura":"easynet:///r/localhost/device/local-device","namespace":"fs","display_path":"tmp/hosts","capability":"read","expires_unix_ms":4102444800000,"revision":"fs-local-mapping-v1"}}"#.to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };
         let bytes = serde_json::to_vec(&original).expect("encode");
@@ -941,7 +995,7 @@ mod tests {
     #[test]
     fn session_dispatch_request_carries_distinct_tag_in_serialised_form() {
         // The `Request` and `Dispatch` variants share the
-        // `(call_id, ability, args)` shape but flow on
+        // `(call_id, ability_ura, args)` shape but flow on
         // opposite directions. The wire-level discriminator
         // is the `type` tag; an existing peer that never
         // saw the new variants will see `{"type":"request",
@@ -951,7 +1005,7 @@ mod tests {
         // `#[serde(rename_all = "snake_case")]` shows up here.
         let req = SessionDispatch::Request {
             call_id: [0; 16],
-            ability: "x".into(),
+            ability_ura: "easynet:///r/realm/ability/hub.federation.forward_invoke".into(),
             args: vec![],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };

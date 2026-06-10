@@ -1,0 +1,24 @@
+schema_version = "1"
+name = "remote_desktop.refresh_lease"
+description = "Refresh a non-terminal remote desktop session lease."
+
+[input_schema]
+type = "object"
+required = ["session_id", "session_token"]
+additionalProperties = false
+
+[input_schema.properties.lease_ttl_ms]
+type = "integer"
+minimum = 1
+maximum = 300000
+
+[input_schema.properties.requested_ttl_seconds]
+type = "integer"
+minimum = 1
+maximum = 300
+
+[input_schema.properties.session_id]
+type = "string"
+
+[input_schema.properties.session_token]
+type = "string"

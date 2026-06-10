@@ -26,7 +26,7 @@
 #
 # Once this script finishes:
 #
-#   * Start the daemon:           easynet start --foreground
+#   * Start the daemon:           easynet runtime start --foreground
 #     The boot path calls McpClientService::from_path on
 #     mcp_clients.json + the reflective registry exposes every tool
 #     under each server as an EasyNet ability.
@@ -218,6 +218,6 @@ echo
 echo "Next steps:"
 echo "  1. Export any API keys mcp-bench upstreams need (see"
 echo "     $MCP_BENCH_DIR/config/api_key/ for the list)."
-echo "  2. easynet start --foreground"
+echo "  2. easynet runtime start --foreground"
 echo "  3. easynet abilities --format json | jq '[.[] | select(.source |"
 echo "       startswith(\"mcp_upstream:\"))] | length' # → should be ~250"

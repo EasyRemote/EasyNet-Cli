@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "context.folders.list"
+description = "List the project folders mapped via `easynet context add`."
+
+[input_schema]
+type = "object"
+additionalProperties = false

@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "context.fs.list"
+description = "Browse one directory level inside a mapped project folder."
+
+[input_schema]
+type = "object"
+required = ["folder"]
+additionalProperties = false
+
+[input_schema.properties.folder]
+type = "string"
+description = "Mapped folder name (or its path)."
+
+[input_schema.properties.path]
+type = "string"
+description = "Relative path inside the folder; empty = root."

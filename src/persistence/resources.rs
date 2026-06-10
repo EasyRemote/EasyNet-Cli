@@ -289,10 +289,7 @@ fn owner_device_id(realm: &str, owner_agent: &str) -> Option<String> {
     if parsed.kind != crate::ura::URAKind::Device || parsed.realm != realm {
         return None;
     }
-    if parsed.device_id.is_empty() {
-        return None;
-    }
-    Some(parsed.device_id)
+    parsed.device_id().map(str::to_string)
 }
 
 fn canonical_resource_ura_for_new(spec: &ResourceUpsert<'_>, resource_id: &str) -> String {
@@ -316,15 +313,17 @@ fn canonical_resource_ura_for_existing(
     }
 
     let expected_owner = format!("device.{device_id}");
-    if parsed.user_id == expected_owner && parsed.path.starts_with("streams/") {
+    let owner_id = parsed.resource_owner_id()?;
+    let resource_path = parsed.resource_path().unwrap_or_default();
+    if owner_id == expected_owner && resource_path.starts_with("streams/") {
         return None;
     }
 
-    let resource_id = if parsed.path.is_empty() {
-        parsed.user_id
+    let resource_id = if resource_path.is_empty() {
+        owner_id.to_string()
     } else {
         let prefix = format!("streams/{}.", kind.as_str());
-        parsed.path.strip_prefix(&prefix)?.to_string()
+        resource_path.strip_prefix(&prefix)?.to_string()
     };
     Some(build_device_stream_resource_ura(
         realm,
@@ -487,11 +486,14 @@ mod tests {
         assert_eq!(parsed.kind, crate::ura::URAKind::Resource);
         assert_eq!(parsed.realm, "acme");
         assert_eq!(
-            parsed.user_id, "device.01DEV",
+            parsed.resource_owner_id(),
+            Some("device.01DEV"),
             "device-local media resources must be bound to the callee device for hub subject authorization; got {ura}"
         );
         assert!(
-            parsed.path.starts_with("streams/mic."),
+            parsed
+                .resource_path()
+                .is_some_and(|path| path.starts_with("streams/mic.")),
             "device-local mic resources must use stream subject path; got {ura}"
         );
         assert_eq!(f.resources.len(), 1);

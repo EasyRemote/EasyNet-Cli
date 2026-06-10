@@ -18,6 +18,7 @@ pub(in crate::plugins::builtin::remote_desktop) struct RemoteDesktopMediaStats {
 }
 
 impl RemoteDesktopMediaStats {
+    #[cfg(target_os = "macos")]
     fn new(value: Value) -> Self {
         Self { value }
     }
@@ -83,6 +84,7 @@ impl RemoteDesktopTransportState {
         true
     }
 
+    #[cfg(target_os = "macos")]
     pub(in crate::plugins::builtin::remote_desktop) fn record_media_stats(&mut self, stats: Value) {
         self.media_stats = Some(RemoteDesktopMediaStats::new(stats));
     }
@@ -138,6 +140,7 @@ mod tests {
         assert!(!transport.media_transport_ready());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn remote_desktop_transport_records_latest_media_stats() {
         let mut transport = RemoteDesktopTransportState::new();

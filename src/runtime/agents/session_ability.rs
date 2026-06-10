@@ -1,14 +1,14 @@
-// EasyNet CLI — device.session.{list,attach} handlers
+// EasyNet CLI — session.{list,attach} handlers
 // =================================================================
 //
 // File: src/runtime/agents/session_ability.rs
 // Description: The two device-level abilities a Client uses to
 //              discover and observe agent runs:
 //
-//   * `device.session.list`   (RPC)    — return every session known
+//   * `session.list`   (RPC)    — return every session known
 //                                        to this daemon (active +
 //                                        recently terminated).
-//   * `device.session.attach` (Stream) — stream TimelineEvent frames
+//   * `session.attach` (Stream) — stream TimelineEvent frames
 //                                        from one session, optionally
 //                                        replaying from a `since_seq`
 //                                        offset before tailing live.
@@ -42,8 +42,8 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::domain::SessionId;
 use crate::runtime::execution::session::SessionService;
 
-pub const ABILITY_LIST: &str = "device.session.list";
-pub const ABILITY_ATTACH: &str = "device.session.attach";
+pub const ABILITY_LIST: &str = "session.list";
+pub const ABILITY_ATTACH: &str = "session.attach";
 
 /// Register the two session abilities on the registry. Called from
 /// `runtime::agents::build_registry`.
@@ -55,20 +55,20 @@ pub const ABILITY_ATTACH: &str = "device.session.attach";
 pub fn register(reg: &mut AxonAbilityCatalog, sessions: Arc<SessionService>) {
     let s_for_list = Arc::clone(&sessions);
     reg.register_rpc_with_owner(
-        "device.session.list",
+        "session.list",
         OwnerKind::Device,
         Arc::new(move |args: Value| list_handler(&s_for_list, args)),
     );
     // attach is registered as a stream handler — see
     // runtime::ability_dispatch for the LocalStreamRegistry surface.
     reg.register_stream_with_owner(
-        "device.session.attach",
+        "session.attach",
         OwnerKind::Device,
         Arc::new(move |args: Value| attach_handler(&sessions, args)),
     );
 }
 
-/// `device.session.list` RPC handler.
+/// `session.list` RPC handler.
 ///
 /// Args: `{ "include_terminated": bool? = true }`
 /// Returns: `{ "sessions": [Session, ...] }` where each Session
@@ -90,7 +90,7 @@ fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "sessions": json_sessions }))
 }
 
-/// `device.session.attach` stream handler.
+/// `session.attach` stream handler.
 ///
 /// Args: `{ "session_id": string, "since_seq": int? = 0 }`
 /// Returns a SnapshotThenLive stream:
@@ -108,7 +108,7 @@ fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSou
     let session_id = args
         .get("session_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("device.session.attach: `session_id` required"))?
+        .ok_or_else(|| anyhow::anyhow!("session.attach: `session_id` required"))?
         .to_string();
     let since_seq = args
         .get("since_seq")
@@ -124,7 +124,7 @@ fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSou
     Ok(StreamSource::SnapshotThenLive(snapshot, rx))
 }
 
-/// Discovery JSON for `device.session.list`. Mirrors the shape
+/// Discovery JSON for `session.list`. Mirrors the shape
 /// used inside `a2a.system_skills_json`.
 pub fn list_input_schema() -> Value {
     json!({
@@ -136,7 +136,7 @@ pub fn list_input_schema() -> Value {
     })
 }
 
-/// Discovery JSON for `device.session.attach`.
+/// Discovery JSON for `session.attach`.
 pub fn attach_input_schema() -> Value {
     json!({
         "type": "object",

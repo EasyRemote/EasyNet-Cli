@@ -10,7 +10,7 @@
 // Usage
 // -----
 //   cargo run --bin gen-ability-tomls
-//   cargo run --features remote-desktop --bin gen-ability-tomls
+//   cargo run --no-default-features --bin gen-ability-tomls
 //
 // Behaviour:
 //   1. Walk `published_system_abilities()` for system abilities only
@@ -19,8 +19,8 @@
 //   2. Walk the builtin `PluginPackageIndex` for repo-owned plugin abilities,
 //      without consulting env flags, platform gates, the runtime load plan, or
 //      user-local installed plugins. Builtin plugin bindings remain compile-
-//      feature gated: maintaining `plugins/remote-desktop/abilities/*.toml`
-//      requires the explicit `--features remote-desktop` invocation above.
+//      feature gated for specialist `--no-default-features` builds; ordinary
+//      daemon/product builds include the remote desktop package by default.
 //   3. For each, render the canonical TOML via
 //      `runtime::agents::ability_toml::render_ability_toml`.
 //   4. Write to the canonical descriptor path, overwriting any prior content.

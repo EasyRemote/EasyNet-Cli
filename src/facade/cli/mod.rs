@@ -82,7 +82,7 @@
 // walkthrough.
 //
 // No flat-command compatibility layer:
-//   Pre-layered aliases (`easynet start`, `easynet devices`, `easynet
+//   Pre-layered aliases (`easynet runtime start`, `easynet devices`, `easynet
 //   exec`, …) were removed before 1.0. The product never shipped under
 //   those spellings, so there is no installed base to pay the carrying
 //   cost of two parallel command surfaces. The individual modules
@@ -94,11 +94,13 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod abilities;
+pub(crate) mod ability_catalog_row;
 pub(crate) mod ability_scaffold;
 pub(crate) mod agent;
 pub(crate) mod agent_new_ability;
 pub(crate) mod agent_sessions;
 pub(crate) mod auth;
+pub(crate) mod bridge_lib;
 pub(crate) mod completion;
 pub(crate) mod config_cmd;
 pub(crate) mod connect;
@@ -106,6 +108,7 @@ pub(crate) mod daemon_agent_view;
 pub(crate) mod deploy;
 pub(crate) mod devices;
 pub(crate) mod discuss;
+pub(crate) mod docker;
 pub(crate) mod doctor;
 pub(crate) mod exec;
 #[cfg(feature = "axon-pb")]
@@ -135,6 +138,7 @@ pub(crate) mod mission_runs;
 /// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
 /// `<user>.pages.{publish,unpublish,list,get}` and the
 /// `<user>.<project_id>.page.fetch` family.
+pub(crate) mod context;
 pub(crate) mod pages;
 /// #185 — `easynet quota` owner verb to inspect/edit the per-consumer
 /// invocation quota policy (`[daemon.quota]`).
@@ -266,15 +270,11 @@ const HELP_TEMPLATE: &str = "\
 \x1b[1;36mUsage:\x1b[0m {usage}
 
 \x1b[1;36mCommands:\x1b[0m
-  \x1b[1;36m[Quickstart]\x1b[0m
-    \x1b[1mjoin\x1b[0m                 Pair this device with a hub (alias of 'device join')
-    \x1b[1mstart\x1b[0m                Start the local Axon runtime (alias of 'runtime start')
-    \x1b[1mstop\x1b[0m                 Stop the local Axon runtime (alias of 'runtime stop')
-
   \x1b[1;36m[Identity]\x1b[0m
     \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
 
   \x1b[1;36m[Network]\x1b[0m
+    \x1b[1mjoin\x1b[0m                 Pair THIS host with a Hub via a one-time token
     \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, exec, terminal
     \x1b[1magent\x1b[0m                Manage agents — network actors that expose abilities
     \x1b[1mability\x1b[0m              Manage abilities — deploy, invoke, list public endpoints
@@ -289,6 +289,8 @@ const HELP_TEMPLATE: &str = "\
 
   \x1b[1;36m[Runtime]\x1b[0m
     \x1b[1mruntime\x1b[0m              Manage the local Axon runtime (start, stop, status)
+    \x1b[1mstart\x1b[0m                Start the local Axon runtime as a background daemon
+    \x1b[1mstop\x1b[0m                 Stop the local Axon runtime
     \x1b[1mplugin\x1b[0m               Manage daemon ability-extension plugin packages
     \x1b[1mmcp\x1b[0m                  MCP server — expose device abilities to AI assistants
     \x1b[1mfederation\x1b[0m           Inspect cross-hub peers and trusted hubs
@@ -297,6 +299,7 @@ const HELP_TEMPLATE: &str = "\
   \x1b[1;36m[Maintenance]\x1b[0m
     \x1b[1mself\x1b[0m                 Update, check version, or uninstall EasyNet CLI
     \x1b[1mdoctor\x1b[0m               Health check — runtime, bridge, agents, MCP connectivity
+    \x1b[1mdocker\x1b[0m               Docker/container operator diagnostics
     \x1b[1mquota\x1b[0m                Inspect or edit the per-consumer invocation quota policy
     \x1b[1mcompletion\x1b[0m           Emit a shell completion script (bash/zsh/fish/powershell)
     \x1b[1mhelp\x1b[0m                 Print this message or the help of the given subcommand
@@ -308,79 +311,48 @@ const HELP_TEMPLATE: &str = "\
 ";
 
 // Subcommand ordering uses `display_order` to bucket commands by role
-// (Quickstart 0–9, Identity 10–19, Network 20–29, Content 30–39,
-// Runtime 40–49, Maintenance 50–59). Clap 4 derive does not support
-// per-variant help_heading on subcommands, so the visual section legend
-// is rendered via the App's `after_help` text below — clap prints the
-// command list (in display_order) followed by that legend, which lets
-// users map commands → groups without forcing each command to repeat
-// its bucket name.
+// (Identity 10–19, Network 20–29, Content 30–39, Runtime 40–49,
+// Maintenance 50–59). Clap 4 derive does not support per-variant
+// help_heading on subcommands, so `HELP_TEMPLATE` owns the grouped
+// command listing and the sync test below keeps it aligned with this enum.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    // ── Quickstart (0-9) ─────────────────────────────────────────────────
-    //
-    // The three most-frequent verbs (`join`, `start`, `stop`) get
-    // top-level shortcuts so a freshly-installed user can run
-    // `easynet join <token>` / `easynet start` / `easynet stop`
-    // without remembering the layered form. They are *not* renames or
-    // hidden aliases: the layered forms (`easynet device join`,
-    // `easynet runtime start`, `easynet runtime stop`) keep working
-    // unchanged. The shortcut variants forward to the same `JoinArgs`/
-    // `StartArgs`/`StopArgs` types and the same `run` functions, so
-    // there is no behavioural drift surface.
-    // The doc-comments below use backticks (markdown convention,
-    // readable in IDE hover); the explicit `about = "..."` strings
-    // are what `--help` actually renders. We split them because
-    // some terminals (iTerm2, Warp) auto-highlight backtick-fenced
-    // text with an inverted background, which produces a white
-    // banner across the about line in subcommand `--help` output.
-    // Single quotes render plain.
-    /// Pair this device with a hub. Shortcut for 'easynet device join'.
-    #[command(
-        display_order = 0,
-        about = "Pair this device with a hub. Shortcut for 'easynet device join'."
-    )]
-    Join(join::JoinArgs),
-
-    /// Start the local Axon runtime as a background daemon.
-    /// Shortcut for 'easynet runtime start'.
-    #[command(
-        display_order = 1,
-        about = "Start the local Axon runtime as a background daemon. Shortcut for 'easynet runtime start'."
-    )]
-    Start(start::StartArgs),
-
-    /// Stop the local Axon runtime. Shortcut for 'easynet runtime stop'.
-    #[command(
-        display_order = 2,
-        about = "Stop the local Axon runtime. Shortcut for 'easynet runtime stop'."
-    )]
-    Stop(stop::StopArgs),
-
     // ── Identity (10-19) ─────────────────────────────────────────────────
     /// Log in / out, mint device-pairing tokens.
     #[command(display_order = 10)]
     Auth(groups::auth::AuthArgs),
 
     // ── Network (20-29) ──────────────────────────────────────────────────
-    /// Manage remote devices — pair, list, exec, terminal.
+    // Top-level lifecycle shortcuts (join / start / stop). The layered
+    // forms (`device join`, `runtime start`, `runtime stop`) remain the
+    // canonical homes; these aliases forward to the same `JoinArgs` /
+    // `StartArgs` / `StopArgs` types and the same `run` functions, so
+    // there is no behavioural drift — clap parses one struct, the
+    // dispatcher hands off to the same impl regardless of spelling.
+    // `start` / `stop` live in the Runtime bucket below alongside
+    // `runtime`.
+    /// Pair THIS host with a Hub via a one-time token (alias of `device join`).
     #[command(display_order = 20)]
+    Join(join::JoinArgs),
+
+    /// Manage remote devices — pair, list, exec, terminal.
+    #[command(display_order = 21)]
     Device(groups::device::DeviceArgs),
 
     /// Manage agents — network actors that expose abilities.
-    #[command(display_order = 21)]
+    #[command(display_order = 22)]
     Agent(groups::agent::AgentArgs),
 
     /// Manage abilities — deploy, invoke, list public endpoints.
-    #[command(display_order = 22)]
+    #[command(display_order = 23)]
     Ability(groups::ability::AbilityArgs),
 
     /// Voice/video calls — create, join, leave multi-party conferences.
-    #[command(display_order = 23)]
+    #[command(display_order = 24)]
     Call(groups::call::CallArgs),
 
     /// Compile, run, and inspect EAL orchestration missions.
-    #[command(display_order = 24)]
+    #[command(display_order = 25)]
     Mission(groups::mission::MissionArgs),
 
     // ── Content (30-39) ──────────────────────────────────────────────────
@@ -391,6 +363,8 @@ pub enum Command {
     /// Publish a folder of static bytes as a website.
     #[command(display_order = 31)]
     Pages(pages::PagesArgs),
+    /// Context surface: clipboard tracking + mapped project folders.
+    Context(context::ContextArgs),
 
     /// Mint / list / revoke OpenAI-compat API keys.
     #[command(name = "api-key", display_order = 32)]
@@ -414,20 +388,28 @@ pub enum Command {
     #[command(display_order = 40)]
     Runtime(groups::runtime::RuntimeArgs),
 
-    /// Manage daemon ability-extension plugin packages.
+    /// Start the local Axon runtime as a background daemon (alias of `runtime start`).
     #[command(display_order = 41)]
+    Start(start::StartArgs),
+
+    /// Stop the local Axon runtime (alias of `runtime stop`).
+    #[command(display_order = 42)]
+    Stop(stop::StopArgs),
+
+    /// Manage daemon ability-extension plugin packages.
+    #[command(display_order = 43)]
     Plugin(groups::plugin::PluginArgs),
 
     /// MCP server — expose device abilities to AI assistants.
-    #[command(display_order = 42)]
+    #[command(display_order = 44)]
     Mcp(groups::mcp::McpArgs),
 
     /// Federation — inspect cross-hub peers and trusted hubs.
-    #[command(display_order = 43)]
+    #[command(display_order = 45)]
     Federation(groups::federation::FederationArgs),
 
     /// Invocation audit — list records, show one record, inspect traces.
-    #[command(display_order = 44)]
+    #[command(display_order = 46)]
     Invocation(groups::invocation::InvocationArgs),
 
     // ── Maintenance (50-59) ──────────────────────────────────────────────
@@ -439,12 +421,16 @@ pub enum Command {
     #[command(display_order = 51)]
     Doctor(doctor::DoctorArgs),
 
+    /// Docker/container operator diagnostics.
+    #[command(display_order = 52)]
+    Docker(docker::DockerArgs),
+
     /// Inspect or edit the per-consumer invocation quota policy.
     #[command(display_order = 53)]
     Quota(quota_cmd::QuotaArgs),
 
     /// Emit a shell completion script (bash/zsh/fish/powershell).
-    #[command(display_order = 52)]
+    #[command(display_order = 54)]
     Completion(completion::CompletionArgs),
 
     // ── Internal ─────────────────────────────────────────────────────────
@@ -455,6 +441,17 @@ pub enum Command {
 
 pub fn run(cmd: Command) -> anyhow::Result<()> {
     match cmd {
+        // Top-level lifecycle shortcuts — forward to the same impls the
+        // layered forms (`device join`, `runtime start`, `runtime stop`)
+        // call. `start` mirrors the runtime group's banner render so the
+        // two spellings produce identical output.
+        Command::Join(args) => join::run(args),
+        Command::Start(args) => {
+            eprint!("{}", presentation::banner::render_logo());
+            start::run(args)
+        }
+        Command::Stop(args) => stop::run(args),
+
         // Layered groups
         Command::Auth(args) => groups::auth::dispatch(args),
         Command::Agent(args) => groups::agent::run(args),
@@ -463,6 +460,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Mission(args) => groups::mission::run(args),
         Command::Skill(args) => skill::run(args),
         Command::Pages(args) => pages::run(args),
+        Command::Context(args) => context::run(args),
         Command::ApiKey(args) => api_key_cli::run(args),
         Command::LlmApi(args) => llm_api::run(args),
         Command::Runtime(args) => groups::runtime::run(args),
@@ -475,26 +473,9 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // Cross-cutting
         Command::SelfCmd(args) => groups::selfcmd::run(args),
         Command::Doctor(args) => doctor::run(args),
+        Command::Docker(args) => docker::run(args),
         Command::Quota(args) => quota_cmd::run(args),
         Command::Completion(args) => completion::run::<App>(args),
-
-        // Top-level shortcuts — forward to the same impl the layered
-        // forms call. No behaviour difference; only spelling.
-        //
-        // `join` and `start` both print the EasyNet wordmark before
-        // delegating, so a paired user sees the brand banner once
-        // per top-level invocation. `join`'s auto-start hop calls
-        // `start::run` directly (not through this dispatch), so the
-        // banner does NOT print twice in the pair-then-boot path.
-        Command::Join(args) => {
-            eprint!("{}", presentation::banner::render_logo());
-            join::run(args)
-        }
-        Command::Start(args) => {
-            eprint!("{}", presentation::banner::render_logo());
-            start::run(args)
-        }
-        Command::Stop(args) => stop::run(args),
 
         // Internal
         Command::HeartbeatDaemon => heartbeat::run_daemon(),

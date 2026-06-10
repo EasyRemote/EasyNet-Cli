@@ -38,9 +38,15 @@
 //
 // Filtering model
 // ---------------
-//   --agent <name>     Only abilities owned by `<name>` (i.e. names
-//                      with the prefix `<name>.`). Equivalent to
-//                      `easynet agent abilities <name>`.
+//   --agent <name>     Local hosted-agent selector. The CLI resolves
+//                      it to that agent's canonical URA and sends the
+//                      owner scope to meta.list_abilities.
+//   --agent-ura <URA>  Canonical owner URA scope; required for remote
+//                      owner filtering.
+//   --subject-ura <URA>
+//                      Owner URA or full Ability URA. Owner URAs
+//                      filter by publisher; Ability URAs filter to one
+//                      canonical ability.
 //   --pattern <glob>   Glob filter on the fully qualified name. `*`
 //                      matches anything but `.`; `**` matches across
 //                      `.` boundaries.
@@ -65,6 +71,12 @@ pub struct AbilitiesArgs {
     /// Filter to a single agent's owned abilities. Equivalent to 'easynet agent abilities <name>'.
     #[arg(long, value_name = "NAME")]
     pub agent: Option<String>,
+    /// Canonical owner URA. Filters the daemon catalogue by publisher.
+    #[arg(long = "agent-ura", value_name = "URA")]
+    pub agent_ura: Option<String>,
+    /// Owner URA or full Ability URA. Ability URAs filter to one canonical ability.
+    #[arg(long = "subject-ura", value_name = "URA")]
+    pub subject_ura: Option<String>,
     /// Reserved for federation routing — only the local node is accepted today; remote listing ships post-AXON-RFC-001 P1.5.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
@@ -77,21 +89,30 @@ pub struct AbilitiesArgs {
 }
 
 pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
+    let query = AbilityCatalogueQuery::from_args(&args)?;
     // Joint-plan unified path: `--node` is now wired through
     // `federation.forward_invoke` against the target device URA.
-    // Each daemon's `easynet.discover` ability returns its OWN
+    // Each daemon's `meta.list_abilities` ability returns its OWN
     // catalogue; cross-device discovery is the caller's job
     // (forward_invoke routes through the target's daemon).
     let abilities = match args.node.as_deref().map(str::trim) {
-        None | Some("local") => fetch_local_catalogue()?,
+        None | Some("local") => fetch_local_catalogue(&query)?,
         Some("") => bail!(
             "--node was given but empty; omit the flag to list local abilities, \
              or pass `easynet:///r/<realm>/device/<id>` to list a peer device's \
              catalogue."
         ),
-        Some(node) => fetch_remote_catalogue(node)?,
+        Some(node) => {
+            if args.agent.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+                bail!(
+                    "--agent is a local hosted-agent selector and cannot be used with remote \
+                     --node; pass --agent-ura instead."
+                );
+            }
+            fetch_remote_catalogue(node, &query)?
+        }
     };
-    let filtered = filter_abilities(abilities, args.agent.as_deref(), &args.pattern)?;
+    let filtered = filter_abilities(abilities, &args.pattern)?;
 
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&filtered)?);
@@ -99,7 +120,11 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
     }
 
     if filtered.is_empty() {
-        let scope = scope_label(args.agent.as_deref(), &args.pattern);
+        let scope = scope_label(
+            query.agent_ura.as_deref(),
+            query.subject_ura.as_deref(),
+            &args.pattern,
+        );
         output::warn(&format!(
             "no abilities matched {scope} on the local node. Use \
              `easynet ability list --format json` to see the full catalogue, \
@@ -118,6 +143,76 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
     // surfaces, then the device-local registry.
     render_grouped(&filtered);
     Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+struct AbilityCatalogueQuery {
+    agent_ura: Option<String>,
+    subject_ura: Option<String>,
+}
+
+impl AbilityCatalogueQuery {
+    fn from_args(args: &AbilitiesArgs) -> anyhow::Result<Self> {
+        let agent_ura = match (
+            args.agent
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+            args.agent_ura
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        ) {
+            (Some(agent), Some(explicit)) => {
+                let resolved = local_agent_ura(agent)?;
+                if resolved != explicit {
+                    bail!(
+                        "--agent {agent:?} resolves to {resolved:?}, which does not match \
+                         --agent-ura {explicit:?}"
+                    );
+                }
+                Some(explicit.to_string())
+            }
+            (Some(agent), None) => Some(local_agent_ura(agent)?),
+            (None, Some(explicit)) => Some(explicit.to_string()),
+            (None, None) => None,
+        };
+        let subject_ura = args
+            .subject_ura
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
+        Ok(Self {
+            agent_ura,
+            subject_ura,
+        })
+    }
+
+    fn to_request(&self) -> Value {
+        let mut body = serde_json::Map::new();
+        if let Some(agent_ura) = self.agent_ura.as_ref() {
+            body.insert("agent_ura".to_string(), Value::String(agent_ura.clone()));
+        }
+        if let Some(subject_ura) = self.subject_ura.as_ref() {
+            body.insert(
+                "subject_ura".to_string(),
+                Value::String(subject_ura.clone()),
+            );
+        }
+        Value::Object(body)
+    }
+}
+
+fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
+    let local = crate::persistence::local_agents::load()?;
+    crate::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent).ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent {agent:?} is not hosted in local-agents.json; use --agent-ura for a \
+             canonical remote owner scope"
+        )
+    })
 }
 
 /// Build owned (Device, Agent, User, Kind) cells for one ability
@@ -142,16 +237,13 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
 /// rows. That mixed two different facts — "who owns this verb"
 /// vs "which daemon's catalogue am I reading" — and produced
 /// self-contradictory rows like
-/// `01HUB.openai.chat_completions  device=99e59cc…  agent=hub`
+/// `openai.chat_completions  device=99e59cc…  owner=device`
 /// (says it's both on the device and on the hub). The owner URA
 /// is the only authority for the identity columns; the calling
 /// daemon's id, when relevant, belongs in a separate context
 /// line, not in the per-row identity columns.
 fn extract_columns(entry: &Value) -> (String, String, String, String) {
-    let owner_ura = entry
-        .get("owner_agent_ura")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let owner_ura = entry.get("owner_ura").and_then(Value::as_str).unwrap_or("");
     let parsed = parse_ura(owner_ura).ok();
 
     // KIND is read straight from the owner URA kind — that's the
@@ -177,9 +269,20 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
     let dash = || "-".to_string();
     let (device, agent, user) = match parsed {
         Some(p) => match p.kind {
-            URAKind::Device => (p.device_id, dash(), dash()),
-            URAKind::Agent => (dash(), p.agent_id, p.user_id),
-            URAKind::User => (dash(), dash(), p.user_id),
+            URAKind::Device => (
+                p.device_id().map(str::to_string).unwrap_or_else(dash),
+                dash(),
+                dash(),
+            ),
+            URAKind::Agent => {
+                let (user_id, agent_id) = p.agent_ids().unwrap_or(("-", "-"));
+                (dash(), agent_id.to_string(), user_id.to_string())
+            }
+            URAKind::User => (
+                dash(),
+                dash(),
+                p.user_id().map(str::to_string).unwrap_or_else(dash),
+            ),
             URAKind::Hub => (dash(), "hub".to_string(), dash()),
             _ => (dash(), dash(), dash()),
         },
@@ -245,20 +348,22 @@ impl GroupKey {
 }
 
 fn group_for(entry: &Value) -> GroupKey {
-    let owner_ura = entry
-        .get("owner_agent_ura")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let owner_ura = entry.get("owner_ura").and_then(Value::as_str).unwrap_or("");
     match parse_ura(owner_ura) {
         Ok(p) => match p.kind {
             URAKind::Hub => GroupKey::Hub(owner_ura.to_string()),
-            URAKind::Agent => GroupKey::Agent {
-                user: p.user_id,
-                agent: p.agent_id,
-                ura: owner_ura.to_string(),
-            },
+            URAKind::Agent => {
+                let Some((user_id, agent_id)) = p.agent_ids() else {
+                    return GroupKey::Other;
+                };
+                GroupKey::Agent {
+                    user: user_id.to_string(),
+                    agent: agent_id.to_string(),
+                    ura: owner_ura.to_string(),
+                }
+            }
             URAKind::User => GroupKey::User {
-                user: p.user_id,
+                user: p.user_id().unwrap_or("-").to_string(),
                 ura: owner_ura.to_string(),
             },
             URAKind::Device => GroupKey::Device(owner_ura.to_string()),
@@ -386,43 +491,53 @@ fn truncate_display(text: &str, max: usize) -> String {
     out
 }
 
-/// Invoke `easynet.discover` on the local daemon and return the
+/// Invoke `meta.list_abilities` on the local daemon and return the
 /// raw `abilities` array. Goes through the shared local-invoke
 /// helper so daemon-down / IPC-failure / daemon-error rendering
 /// stay byte-identical to every other CLI surface.
-fn fetch_local_catalogue() -> anyhow::Result<Vec<Value>> {
-    let value = invoke_local_ability("device.meta.list_abilities", serde_json::json!({}))?;
+fn fetch_local_catalogue(query: &AbilityCatalogueQuery) -> anyhow::Result<Vec<Value>> {
+    let value = invoke_local_ability("meta.list_abilities", query.to_request())?;
     extract_abilities(&value)
 }
 
 /// Joint-plan unified path: `easynet ability list --node <URA>`
-/// forwards `easynet.discover` to the target device through
+/// forwards `meta.list_abilities` to the target device through
 /// `federation.forward_invoke`. The peer daemon's local
-/// `easynet.discover` handler runs and returns its own catalogue;
+/// `meta.list_abilities` handler runs and returns its own catalogue;
 /// the forward bridge unwraps the response and we extract the
 /// abilities array the same way `fetch_local_catalogue` does.
 /// Bare UUID targets go through the shared cross-hub directory
 /// lookup helper before falling back to the caller's local realm.
-fn fetch_remote_catalogue(node: &str) -> anyhow::Result<Vec<Value>> {
-    let value = invoke_remote_easynet_discover(node)?;
+fn fetch_remote_catalogue(node: &str, query: &AbilityCatalogueQuery) -> anyhow::Result<Vec<Value>> {
+    let value = invoke_remote_list_abilities(node, query)?;
     extract_abilities(&value)
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+fn invoke_remote_list_abilities(
+    node: &str,
+    query: &AbilityCatalogueQuery,
+) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    crate::support::federation_invoke::invoke_via_federation_forward(
-        "device.meta.list_abilities",
-        serde_json::json!({}),
+    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        &target_ura,
+        "meta.list_abilities",
+    )?;
+    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+        ability_ura.as_str(),
+        query.to_request(),
         &target_ura,
         caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward easynet.discover to target={target_ura}"))
+    .with_context(|| format!("forward meta.list_abilities to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+fn invoke_remote_list_abilities(
+    node: &str,
+    _query: &AbilityCatalogueQuery,
+) -> anyhow::Result<Value> {
     Err(crate::support::local_invoke::federation_not_wired_error(
         &format!("listing abilities on remote node {node:?}"),
     ))
@@ -440,16 +555,10 @@ fn extract_abilities(value: &Value) -> anyhow::Result<Vec<Value>> {
         .unwrap_or_default())
 }
 
-/// Apply `--agent` + `--pattern` filtering. Both are AND-composed:
-/// `--agent claude --pattern '*.health'` keeps abilities owned by
-/// `claude` AND whose name matches `*.health`. An empty pattern
-/// matches everything (the default).
-fn filter_abilities(
-    abilities: Vec<Value>,
-    agent: Option<&str>,
-    pattern: &str,
-) -> anyhow::Result<Vec<Value>> {
-    let agent_prefix = agent.map(|name| format!("{name}."));
+/// Apply `--pattern` filtering. Owner/subject scope is sent to
+/// `meta.list_abilities` so catalogue ownership is decided by
+/// canonical URAs at the daemon, not by name-prefix conventions.
+fn filter_abilities(abilities: Vec<Value>, pattern: &str) -> anyhow::Result<Vec<Value>> {
     let pattern_owned = if pattern.is_empty() {
         None
     } else {
@@ -462,11 +571,6 @@ fn filter_abilities(
                 Some(n) => n,
                 None => return false,
             };
-            if let Some(prefix) = agent_prefix.as_deref() {
-                if !name.starts_with(prefix) {
-                    return false;
-                }
-            }
             if let Some(p) = pattern_owned.as_deref() {
                 if !glob_match(p, name) {
                     return false;
@@ -558,12 +662,18 @@ fn split_qualified(name: &str) -> (&str, &str) {
     }
 }
 
-fn scope_label(agent: Option<&str>, pattern: &str) -> String {
-    match (agent, pattern.is_empty()) {
-        (None, true) => "anything".to_string(),
-        (None, false) => format!("pattern {pattern:?}"),
-        (Some(a), true) => format!("agent {a:?}"),
-        (Some(a), false) => format!("agent {a:?} + pattern {pattern:?}"),
+fn scope_label(agent_ura: Option<&str>, subject_ura: Option<&str>, pattern: &str) -> String {
+    match (agent_ura, subject_ura, pattern.is_empty()) {
+        (None, None, true) => "anything".to_string(),
+        (None, None, false) => format!("pattern {pattern:?}"),
+        (Some(a), None, true) => format!("agent_ura {a:?}"),
+        (Some(a), None, false) => format!("agent_ura {a:?} + pattern {pattern:?}"),
+        (None, Some(s), true) => format!("subject_ura {s:?}"),
+        (None, Some(s), false) => format!("subject_ura {s:?} + pattern {pattern:?}"),
+        (Some(a), Some(s), true) => format!("agent_ura {a:?} + subject_ura {s:?}"),
+        (Some(a), Some(s), false) => {
+            format!("agent_ura {a:?} + subject_ura {s:?} + pattern {pattern:?}")
+        }
     }
 }
 
@@ -579,24 +689,24 @@ mod tests {
     #[test]
     fn filter_with_no_agent_no_pattern_passes_everything_through() {
         let xs = vec![entry("a.b"), entry("c.d"), entry("system.x")];
-        let out = filter_abilities(xs.clone(), None, "").unwrap();
+        let out = filter_abilities(xs.clone(), "").unwrap();
         assert_eq!(out.len(), 3);
     }
 
     #[test]
-    fn filter_by_agent_keeps_only_owned_abilities() {
+    fn filter_does_not_guess_owner_from_ability_name_prefix() {
         let xs = vec![
             entry("claude.weather"),
             entry("claude.chat"),
             entry("codex.summarise"),
             entry("system.fs.read"),
         ];
-        let out = filter_abilities(xs, Some("claude"), "").unwrap();
-        let names: Vec<_> = out
-            .iter()
-            .map(|v| v["name"].as_str().unwrap().to_string())
-            .collect();
-        assert_eq!(names, vec!["claude.weather", "claude.chat"]);
+        let out = filter_abilities(xs, "").unwrap();
+        assert_eq!(
+            out.len(),
+            4,
+            "owner scope belongs to meta.list_abilities agent_ura/subject_ura, not CLI name-prefix filtering"
+        );
     }
 
     #[test]
@@ -609,7 +719,7 @@ mod tests {
             entry("claude.weather.fancy"),
             entry("codex.weather"),
         ];
-        let out = filter_abilities(xs, None, "claude.*").unwrap();
+        let out = filter_abilities(xs, "claude.*").unwrap();
         let names: Vec<_> = out
             .iter()
             .map(|v| v["name"].as_str().unwrap().to_string())
@@ -620,7 +730,7 @@ mod tests {
     #[test]
     fn filter_by_double_star_glob_crosses_dot_boundaries() {
         let xs = vec![entry("claude.a.b.c"), entry("claude.x"), entry("codex.x")];
-        let out = filter_abilities(xs, None, "claude.**").unwrap();
+        let out = filter_abilities(xs, "claude.**").unwrap();
         let names: Vec<_> = out
             .iter()
             .map(|v| v["name"].as_str().unwrap().to_string())
@@ -629,18 +739,18 @@ mod tests {
     }
 
     #[test]
-    fn filter_combines_agent_and_pattern_with_and_semantics() {
+    fn filter_by_pattern_only_after_daemon_scope() {
         let xs = vec![
             entry("claude.weather"),
             entry("claude.chat"),
             entry("codex.weather"),
         ];
-        let out = filter_abilities(xs, Some("claude"), "*.weather").unwrap();
+        let out = filter_abilities(xs, "*.weather").unwrap();
         let names: Vec<_> = out
             .iter()
             .map(|v| v["name"].as_str().unwrap().to_string())
             .collect();
-        assert_eq!(names, vec!["claude.weather"]);
+        assert_eq!(names, vec!["claude.weather", "codex.weather"]);
     }
 
     #[test]
@@ -658,11 +768,58 @@ mod tests {
         assert_eq!(split_qualified("orphan-verb"), ("system", "orphan-verb"));
     }
 
+    #[test]
+    fn catalogue_query_sends_explicit_ura_scope_to_daemon() {
+        let query = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: Some("easynet:///r/test/agent/user-1.alice".into()),
+            subject_ura: Some("easynet:///r/test/ability/user-1.alice.chat".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let body = query.to_request();
+        assert_eq!(body["agent_ura"], "easynet:///r/test/agent/user-1.alice");
+        assert_eq!(
+            body["subject_ura"],
+            "easynet:///r/test/ability/user-1.alice.chat"
+        );
+    }
+
+    #[test]
+    fn catalogue_query_rejects_conflicting_local_agent_selector() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let mut local = crate::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/test/device/dev-1".to_string(),
+            hosted_agents: Vec::new(),
+        };
+        crate::persistence::local_agents::upsert_hosted_agent(
+            &mut local,
+            "llm",
+            "alice",
+            "easynet:///r/test/agent/user-1.alice",
+        );
+        crate::persistence::local_agents::save(&local).unwrap();
+
+        let err = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: Some("alice".into()),
+            agent_ura: Some("easynet:///r/test/agent/user-1.bob".into()),
+            subject_ura: None,
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("does not match"), "got {err}");
+    }
+
     /// Joint-plan phase 1.5: `--node <other>` no longer hard-bails;
-    /// it forwards `easynet.discover` to the target device URA
+    /// it forwards `meta.list_abilities` to the target device URA
     /// through `federation.forward_invoke`. The forward path only
     /// exists in builds with `--features axon-pb`; without the
-    /// feature `invoke_remote_easynet_discover` short-circuits to
+    /// feature `invoke_remote_list_abilities` short-circuits to
     /// `federation_not_wired_error`, which is asserted by
     /// `run_with_remote_node_short_circuits_when_axon_pb_off` below.
     /// Splitting the two cases lets `cargo test --lib` (default
@@ -673,13 +830,15 @@ mod tests {
         // In a unit-test environment the local daemon UDS is absent,
         // so the call surfaces as either "daemon not running" /
         // "cannot resolve node ... without local credentials" /
-        // "forward easynet.discover to target=...". The contract
+        // "forward meta.list_abilities to target=...". The contract
         // this test pins is "remote node attempts the forward path"
         // — error message MUST mention either the forward target or
         // one of the resolution-stage errors so a script can grep
         // for it.
         let err = run(AbilitiesArgs {
             agent: None,
+            agent_ura: None,
+            subject_ura: None,
             node: Some("some-remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
@@ -704,6 +863,8 @@ mod tests {
     fn run_with_remote_node_short_circuits_when_axon_pb_off() {
         let err = run(AbilitiesArgs {
             agent: None,
+            agent_ura: None,
+            subject_ura: None,
             node: Some("some-remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
@@ -720,6 +881,8 @@ mod tests {
     fn run_with_empty_node_string_is_caught_as_shell_expansion_accident() {
         let err = run(AbilitiesArgs {
             agent: None,
+            agent_ura: None,
+            subject_ura: None,
             node: Some("   ".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
@@ -735,19 +898,19 @@ mod tests {
         // change that loses or merges a bucket trips this test.
         let hub = json!({
             "name": "hub.openai.chat_completions",
-            "owner_agent_ura": "easynet:///r/easynet.run/hub",
+            "owner_ura": crate::ura::hub_ura("easynet.run"),
         });
         let agent = json!({
             "name": "alice.codex.chat",
-            "owner_agent_ura": "easynet:///r/easynet.run/agent/alice.codex",
+            "owner_ura": "easynet:///r/easynet.run/agent/alice.codex",
         });
         let user = json!({
             "name": "alice.api_key.create",
-            "owner_agent_ura": "easynet:///r/easynet.run/user/alice",
+            "owner_ura": "easynet:///r/easynet.run/user/alice",
         });
         let device = json!({
-            "name": "device.fs.read",
-            "owner_agent_ura":
+            "name": "fs.read",
+            "owner_ura":
                 "easynet:///r/easynet.run/device/00000000-0000-0000-0000-000000000001",
         });
         assert!(matches!(group_for(&hub), GroupKey::Hub(_)));
@@ -760,7 +923,7 @@ mod tests {
     fn group_for_emits_other_for_unparseable_owner_ura() {
         let bad = json!({
             "name": "stray.thing",
-            "owner_agent_ura": "not-a-ura",
+            "owner_ura": "not-a-ura",
         });
         assert!(matches!(group_for(&bad), GroupKey::Other));
     }

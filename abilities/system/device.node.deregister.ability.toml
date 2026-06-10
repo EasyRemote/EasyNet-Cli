@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "device.node.deregister"
-description = "Inverse of device.node.register at shutdown. v1 acknowledges intent; federation fan-out lands with the Invoke replacement."
-
-[input_schema]
-type = "object"
-additionalProperties = false

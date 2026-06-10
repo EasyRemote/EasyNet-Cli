@@ -50,7 +50,7 @@ impl RemoteDesktopTransportView {
             "preferred": session.transport_preferences(),
             "fallback_transports": [TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM],
             "endpoint_ura": self.endpoint_ura.clone(),
-            "preview_ability": "device.screen.subscribe",
+            "preview_ability": "screen.subscribe",
             "message": self.message,
             "unavailable_reason": self.unavailable_reason.clone(),
             "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
@@ -94,7 +94,7 @@ impl RemoteDesktopTransportView {
                 "transport": TRANSPORT_PREVIEW_STREAM,
                 "transport_proto": "REMOTE_DESKTOP_TRANSPORT_PREVIEW_STREAM",
                 "ready": false,
-                "endpoint_ura": "ability:device.screen.subscribe",
+                "endpoint_ura": "ability:screen.subscribe",
                 "metadata": {
                     "role": "debug_preview",
                     "diagnostic_only": "true",

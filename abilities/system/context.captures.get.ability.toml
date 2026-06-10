@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "context.captures.get"
+description = "Read one persisted media artifact inline (base64) with its content type."
+
+[input_schema]
+type = "object"
+required = ["id"]
+additionalProperties = false
+
+[input_schema.properties.id]
+type = "string"
+description = "Capture id from context.captures.list."

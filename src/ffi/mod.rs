@@ -30,12 +30,10 @@
 //   errors.rs  — i32 error codes + thread-local last-error message.
 //   strings.rs — UTF-8 C string ↔ Rust &str conversion helpers.
 //   invocation.rs — complete Axon Invocation ABI.
-//   ability.rs — retired ability+args symbols that hard-fail instead
-//                of constructing JSON control product frames.
 //
-// v2 status (daemon Invocation ABI)
+// v3 status (daemon Invocation ABI)
 // -------------------------------
-// - ABI version + handle registry + last-error TLS: shipped (Commit 1).
+// - ABI version + handle registry + last-error TLS.
 // - `easynet_init` / `easynet_shutdown`: daemon handle setup.
 // - `easynet_daemon_start/stop/status/invocation_endpoint`:
 //   product daemon lifecycle and endpoint discovery.
@@ -45,13 +43,12 @@
 //   Axon Invocation over daemon.sock.
 // - `easynet_invocation_bidi_open/send/close/cancel`: complete
 //   InvokeBidi session ABI over daemon.sock.
-// - `easynet_ability_*`: retired legacy symbols; no JSON control
-//   product path remains in the FFI surface.
+// - No `easynet_ability_*` exports. The ability+args ABI was removed
+//   instead of retained as hard-fail compatibility symbols.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod ability;
 pub mod client;
 pub mod daemon;
 pub mod errors;
@@ -76,9 +73,11 @@ use crate::services::control::discovery;
 /// forget to update the binding-facing contract.
 ///
 /// v1 = 1. Historical ability+args dispatch draft.
-/// v2 = 2. Complete Invocation + daemon lifecycle ABI; legacy
-/// ability+args symbols are hard-fail retirement points.
-pub const EASYNET_ABI_VERSION: u32 = 2;
+/// v2 = 2. Complete Invocation + daemon lifecycle ABI with hard-fail
+/// ability+args retirement symbols.
+/// v3 = 3. Complete Invocation-only ABI; `easynet_ability_*` symbols
+/// are removed from the exported C surface.
+pub const EASYNET_ABI_VERSION: u32 = 3;
 
 /// Report the ABI version of this library build. Client bindings
 /// call this first thing at dlopen time and refuse to proceed when

@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "context.clipboard.track"
+description = "Enable or disable clipboard history tracking on this device."
+
+[input_schema]
+type = "object"
+required = ["enabled"]
+additionalProperties = false
+
+[input_schema.properties.enabled]
+type = "boolean"
+description = "true to start capturing, false to stop."

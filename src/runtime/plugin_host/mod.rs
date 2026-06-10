@@ -151,19 +151,17 @@ mod tests {
         let raw = test_manifest(
             r#"
 [[ability_metadata]]
-name = "device.test.echo"
+name = "test.echo"
 layer = "control"
 
 [[ability_metadata]]
-name = "device.test.echo"
+name = "test.echo"
 layer = "observation"
 "#,
         );
         assert_eq!(
             PluginPackageManifest::parse("plugins/test/plugin.toml", &raw),
-            Err(PluginHostError::DuplicateAbility(
-                "device.test.echo".to_string()
-            ))
+            Err(PluginHostError::DuplicateAbility("test.echo".to_string()))
         );
     }
 
@@ -202,7 +200,7 @@ max_sessions = 0
 max_frame_queue = 1
 
 [[ability_metadata]]
-name = "device.test.echo"
+name = "test.echo"
 layer = "control"
 "#;
         assert_eq!(
@@ -219,7 +217,7 @@ layer = "control"
         let projected = PluginDescriptorProjector::project(&index).expect("descriptors project");
         assert!(projected
             .iter()
-            .any(|meta| meta.name == "device.remote_desktop.attach"));
+            .any(|meta| meta.name == "remote_desktop.attach"));
         let load_plan = PluginLoadPlanner::current().plan(&index);
         assert!(load_plan
             .entries()

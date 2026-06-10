@@ -12,7 +12,7 @@
 //!              loop.*, discuss.* (host-resident operational abilities)
 //!   consent  — consent.* (human-in-the-loop approval flow)
 //!   policy   — policy.* (admission policy evaluation)
-//!   mcp      — device.mcp.bridge.* + device.mcp.client.* (edge MCP adapter, single
+//!   mcp      — mcp.bridge.* + mcp.client.* (edge MCP adapter, single
 //!              Agent owns both inbound and outbound per RFC §1 [P6])
 //!   llm      — conversation.*, session.*, meta.* per LLM sub-agent
 //!              (claude / codex / etc.)
@@ -34,6 +34,33 @@ pub mod llm;
 pub mod mcp;
 pub mod policy;
 
+/// Hosted Agent id for the default consent profile.
+pub const DEFAULT_CONSENT_AGENT_ID: &str = "consent-default";
+/// Hosted Agent id for the default policy profile.
+pub const DEFAULT_POLICY_AGENT_ID: &str = "policy-default";
+/// Hosted Agent id for the default MCP profile.
+pub const DEFAULT_MCP_AGENT_ID: &str = "mcp-default";
+
+fn system_descriptors_for_owner(
+    owner_ura: &str,
+    owner: crate::runtime::ability_dispatch::OwnerKind,
+    visibility_for: impl Fn(&str) -> crate::runtime::ability_descriptor::Visibility,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    use crate::runtime::ability_descriptor::AbilityDescriptor;
+
+    crate::runtime::agents::published_system_abilities_for_owner(owner)
+        .into_iter()
+        .map(|m| {
+            AbilityDescriptor::new(m.name.clone(), owner_ura, visibility_for(&m.name))
+                .expect("registry-derived names satisfy descriptor invariants")
+                .with_input_schema(m.input_schema.clone())
+                .with_hints(m.hints.clone())
+                .with_source("kernel:built-in")
+                .with_description(m.description)
+        })
+        .collect()
+}
+
 /// Read `~/.easynet/local-agents.json` and project it into the full
 /// host descriptor catalog. Returns an empty catalog when the file is
 /// missing or malformed (pre-join state, brand-new install) — callers
@@ -45,7 +72,7 @@ pub mod policy;
 ///
 /// Single source of truth for the recipe used by both the MCP stdio
 /// server (advertised tool surface) and the in-process
-/// `device.mcp.bridge.list_tools` ability handler — keeping them on one
+/// `mcp.bridge.list_tools` ability handler — keeping them on one
 /// helper is what guarantees external and internal MCP callers see
 /// the same catalog.
 pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
@@ -118,9 +145,10 @@ mod tests {
         let all = all_descriptors_for_host(device_ura, None, None, None, &[]);
         assert!(!all.is_empty());
         for d in &all {
-            assert_eq!(d.owner_agent_ura, device_ura);
-            assert!(device::owns(&d.name));
+            assert_eq!(d.owner_ura, device_ura);
         }
+        assert!(all.iter().any(|d| d.name == "fs.read"));
+        assert!(all.iter().all(|d| d.name != "consent.subscribe"));
     }
 
     #[test]
@@ -138,7 +166,7 @@ mod tests {
         let consent_ura = "easynet:///r/acme/agent/00000000-0000-0000-0000-000000000001.consent";
         let all = all_descriptors_for_host(device_ura, Some(consent_ura), None, None, &[]);
         let owners: std::collections::HashSet<&str> =
-            all.iter().map(|d| d.owner_agent_ura.as_str()).collect();
+            all.iter().map(|d| d.owner_ura.as_str()).collect();
         assert!(owners.contains(device_ura));
         assert!(owners.contains(consent_ura));
     }

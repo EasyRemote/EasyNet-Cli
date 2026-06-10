@@ -1,0 +1,20 @@
+schema_version = "1"
+name = "meta.list_abilities"
+description = "Return the full local AbilityDescriptor catalogue. Canonical Invoke surface for ability discovery; the MCP-shaped projection lives at mcp.bridge.list_tools for external MCP clients."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "Canonical owner URA. Filters the catalogue to abilities published by that owner."
+
+[input_schema.properties.scope]
+type = "string"
+enum = ["local", "realm"]
+description = "`local` (default) returns device-owned abilities only. `realm` adds hub-published abilities the realm hub broadcast at join + heartbeat (RFC-001 v4.1.7)."
+
+[input_schema.properties.subject_ura]
+type = "string"
+description = "Owner URA or full Ability URA. Owner URAs filter by publisher; Ability URAs filter to one canonical ability."

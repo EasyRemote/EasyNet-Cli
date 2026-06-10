@@ -1,0 +1,28 @@
+schema_version = "1"
+name = "openai.chat_completions"
+description = "OpenAI-compatible /v1/chat/completions served by the device daemon. Requires `request.model` to be a canonical agent-owned chat Ability URA, forwards the request to that host-local chat-base ability (`<agent>.chat`), and then projects the streaming/non-streaming reply into OpenAI's response shape."
+
+[input_schema]
+type = "object"
+required = ["request"]
+
+[input_schema.properties.auth_token]
+type = "string"
+description = "Bearer token bound to a `<user>.api_key` entry on this host."
+
+[input_schema.properties.request]
+type = "object"
+required = ["model", "messages"]
+description = "OpenAI-compatible /v1/chat/completions request body. The `model` field must be a canonical agent-owned chat Ability URA."
+
+[input_schema.properties.request.properties.messages]
+type = "array"
+description = "OpenAI-compatible chat messages array."
+
+[input_schema.properties.request.properties.model]
+type = "string"
+description = "Canonical agent-owned chat Ability URA, e.g. easynet:///r/easynet.run/ability/alice.codex.chat."
+
+[input_schema.properties.request.properties.stream]
+type = "boolean"
+description = "When true, return OpenAI-compatible streaming chunks."

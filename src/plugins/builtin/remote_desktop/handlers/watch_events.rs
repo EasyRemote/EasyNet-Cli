@@ -11,7 +11,7 @@ use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::runtime::ability_dispatch::{EnvelopeContext, StreamSource};
 
-/// Handle `device.remote_desktop.watch_events`.
+/// Handle `remote_desktop.watch_events`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     plugin: Arc<RemoteDesktopPlugin>,
     env: EnvelopeContext,

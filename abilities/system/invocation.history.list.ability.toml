@@ -1,0 +1,79 @@
+schema_version = "1"
+name = "invocation.history.list"
+description = "List recent invocation ledger records for this device. Returns complete URAs from the persisted envelope plus digest/sealed payload metadata for audit and billing."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.compact]
+type = "boolean"
+
+[input_schema.properties.exclude_ability_uras]
+type = "array"
+items = { minLength = 1, type = "string" }
+
+[input_schema.properties.filter]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.filter.properties.ability_ura]
+type = "string"
+description = "Canonical Ability URA."
+
+[input_schema.properties.filter.properties.ability_uras]
+type = "array"
+items = { minLength = 1, type = "string" }
+description = "Canonical Ability URAs. Records match when ability_ura equals any value."
+minItems = 1
+uniqueItems = true
+
+[input_schema.properties.filter.properties.agent_ura]
+type = "string"
+description = "Ability owner/callee Agent URA. Equivalent to callee_ura for history scope."
+
+[input_schema.properties.filter.properties.callee_ura]
+type = "string"
+description = "Callee/owner Agent URA."
+
+[input_schema.properties.filter.properties.caller_ura]
+type = "string"
+description = "Caller Agent URA."
+
+[input_schema.properties.filter.properties.state]
+type = "string"
+
+[input_schema.properties.filter.properties.subject_ura]
+type = "string"
+description = "Single subject URA."
+
+[input_schema.properties.filter.properties.subject_uras]
+type = "array"
+items = { minLength = 1, type = "string" }
+description = "OR-scope over subject URAs."
+minItems = 1
+uniqueItems = true
+
+[input_schema.properties.filter.properties.trace_id]
+type = "string"
+
+[input_schema.properties.key]
+type = "object"
+additionalProperties = false
+maxProperties = 1
+minProperties = 1
+
+[input_schema.properties.key.properties.request_id]
+type = "string"
+
+[input_schema.properties.key.properties.trace_id]
+type = "string"
+
+[input_schema.properties.key.properties.ura]
+type = "string"
+description = "Invocation URA."
+
+[input_schema.properties.limit]
+type = "integer"
+minimum = 1
+maximum = 500

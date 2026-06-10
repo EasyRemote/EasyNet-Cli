@@ -212,8 +212,8 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
-    const DAEMON_B_URA: &str = "easynet:///r/realm-b/hub";
     const PEER_HUB_URA: &str = "in-process-A";
+    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
 
     // ── Mint device-A's signing key ─────────────────────────────
     let device_a_key = SigningKey::from_bytes(&[0xA1u8; 32]);
@@ -227,16 +227,14 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
             public_key_b64: device_a_pubkey_b64.clone(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         })
         .expect("append device-A");
     let daemon_a_anchor = Arc::new(daemon_a_anchor_inner);
-    let daemon_a_admission = AdmissionFacade::new(
-        daemon_a_anchor,
-        Some("easynet:///r/realm-a/hub".to_string()),
-    );
+    let daemon_a_admission =
+        AdmissionFacade::new(daemon_a_anchor, Some(easynet_cli::ura::hub_ura(REALM_A)));
     let daemon_a = Arc::new(
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
             .with_session_realm(REALM_A),
@@ -249,7 +247,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // any caller in realm-a.
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: "easynet:///r/realm-a/hub".to_string(),
+        peer_loopback_uri: easynet_cli::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
@@ -257,7 +255,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
 
     let daemon_b_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(DAEMON_B_URA.to_string()),
+        Some(daemon_b_ura.clone()),
     )
     .with_federation(Arc::clone(&federation_client), peers_cell.clone());
     let daemon_b = DaemonInvocationService::new(
@@ -280,7 +278,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // dispatch then fails for an unrelated reason).
     let signed = signed_request(
         DEVICE_A_URA,
-        DAEMON_B_URA,
+        &daemon_b_ura,
         "self.echo",
         b"{}",
         &device_a_key,
@@ -333,7 +331,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     // trusted").
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
-    const DAEMON_B_URA: &str = "easynet:///r/realm-b/hub";
+    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
 
     let device_a_key = SigningKey::from_bytes(&[0xB2u8; 32]);
 
@@ -358,7 +356,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
 
     let daemon_b_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(DAEMON_B_URA.to_string()),
+        Some(daemon_b_ura.clone()),
     )
     .with_federation(federation_client, peers_cell);
     let daemon_b =
@@ -367,7 +365,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
 
     let signed = signed_request(
         DEVICE_A_URA,
-        DAEMON_B_URA,
+        &daemon_b_ura,
         "self.echo",
         b"{}",
         &device_a_key,
@@ -383,4 +381,111 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     // when the URA is missing locally and the resolver collapses to
     // local-only. INV-4 fail-closed by construction.
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_realm_forged_signature_rejected_after_key_resolves() {
+    // The crypto-gate counter-test. Unlike the membership-gate test
+    // above, here EVERYTHING resolves: daemon A's trust set holds
+    // device-A's REAL public key, daemon B's federated_peers routes
+    // realm-a to daemon A, and the FederatedKeyResolver successfully
+    // fetches device-A's pubkey. The ONLY thing wrong is the
+    // signature: it was produced by an attacker's key, not device-A's.
+    //
+    // This isolates the Ed25519 verification step. A positive
+    // "valid signature admitted" test cannot prove the verifier
+    // works — a stub that always admits would pass it too. Proving
+    // the verifier REJECTS a forged signature (with the key present
+    // and resolvable) is what shows the crypto gate is load-bearing.
+    const REALM_A: &str = "realm-a";
+    const REALM_B: &str = "realm-b";
+    const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
+    const PEER_HUB_URA: &str = "in-process-A";
+    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
+
+    // device-A's REAL keypair — its public half goes into daemon A's
+    // trust set so the resolver returns a valid, parseable pubkey.
+    let device_a_key = SigningKey::from_bytes(&[0xA1u8; 32]);
+    let device_a_pubkey_b64 = BASE64_STANDARD.encode(device_a_key.verifying_key().to_bytes());
+
+    // The attacker's key. It is NEVER registered anywhere. The forged
+    // envelope claims caller = device-A but is signed with this key,
+    // so verification against device-A's real pubkey must fail.
+    let attacker_key = SigningKey::from_bytes(&[0xEEu8; 32]);
+
+    // ── Daemon A: trust set = [device-A real pubkey]; serves resolve_key ──
+    let mut daemon_a_anchor_inner = RealmTrustAnchor::default();
+    daemon_a_anchor_inner
+        .append_agent(TrustedAgent {
+            agent_ura: DEVICE_A_URA.to_string(),
+            public_key_b64: device_a_pubkey_b64.clone(),
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        })
+        .expect("append device-A");
+    let daemon_a = Arc::new(
+        DaemonInvocationService::new(
+            Arc::new(PresenceRegistry::new()),
+            AdmissionFacade::new(
+                Arc::new(daemon_a_anchor_inner),
+                Some(easynet_cli::ura::hub_ura(REALM_A)),
+            ),
+        )
+        .with_session_realm(REALM_A),
+    );
+
+    // ── Daemon B: empty trust + federated_peers → daemon A ──
+    let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
+        peer: Arc::clone(&daemon_a),
+        peer_loopback_uri: easynet_cli::ura::hub_ura(REALM_A),
+    });
+    let mut peers = std::collections::BTreeMap::new();
+    peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
+    let peers_cell = SharedFederatedPeers::new(peers);
+
+    let daemon_b_admission = AdmissionFacade::new(
+        Arc::new(RealmTrustAnchor::default()),
+        Some(daemon_b_ura.clone()),
+    )
+    .with_federation(Arc::clone(&federation_client), peers_cell);
+    let daemon_b =
+        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_b_admission)
+            .with_session_realm(REALM_B)
+            .with_local_runtime(LocalRuntime::new());
+
+    // Forge: caller = device-A, but signed with the attacker's key.
+    let forged = signed_request(
+        DEVICE_A_URA,
+        &daemon_b_ura,
+        "self.echo",
+        b"{}",
+        &attacker_key,
+        [0x55u8; 16],
+    );
+
+    let err = daemon_b
+        .invoke(tonic::Request::new(forged))
+        .await
+        .expect_err("a forged signature must be rejected, not admitted");
+    // It must fail at the §5.2 signature-verification step, NOT at
+    // dispatch. A `NotFound` here would mean admission wrongly passed
+    // a forged signature and fell through to the (unimplemented)
+    // ability — the exact failure this test guards against.
+    assert_ne!(
+        err.code(),
+        tonic::Code::NotFound,
+        "forged signature reached dispatch — the crypto gate did not verify it",
+    );
+    assert!(
+        matches!(
+            err.code(),
+            tonic::Code::PermissionDenied | tonic::Code::InvalidArgument
+        ),
+        "forged signature must reject with a §5.2 admission code, got code={:?} message={}",
+        err.code(),
+        err.message(),
+    );
 }

@@ -76,18 +76,18 @@ use crate::runtime::agents::ability_toml::Rfc006Metadata;
 // ── Ability names (exported so registration + descriptor sites
 //    pull from one place) ──────────────────────────────────────
 
-pub const ABILITY_MIC_SUBSCRIBE: &str = "device.mic.subscribe";
-pub const ABILITY_CAMERA_SUBSCRIBE: &str = "device.camera.subscribe";
-pub const ABILITY_CAMERA_SNAPSHOT: &str = "device.camera.snapshot";
-pub const ABILITY_SCREEN_SUBSCRIBE: &str = "device.screen.subscribe";
-pub const ABILITY_SCREEN_SNAPSHOT: &str = "device.screen.snapshot";
-pub const ABILITY_SPEAKER_PUBLISH: &str = "device.speaker.publish";
-pub const ABILITY_VOICE_SUBSCRIBE: &str = "device.voice.subscribe";
+pub const ABILITY_MIC_SUBSCRIBE: &str = "mic.subscribe";
+pub const ABILITY_CAMERA_SUBSCRIBE: &str = "camera.subscribe";
+pub const ABILITY_CAMERA_SNAPSHOT: &str = "camera.snapshot";
+pub const ABILITY_SCREEN_SUBSCRIBE: &str = "screen.subscribe";
+pub const ABILITY_SCREEN_SNAPSHOT: &str = "screen.snapshot";
+pub const ABILITY_SPEAKER_PUBLISH: &str = "speaker.publish";
+pub const ABILITY_VOICE_SUBSCRIBE: &str = "voice.subscribe";
 /// Wire name `voice.transcribe` (not bare `transcribe`) because
 /// `AbilityDescriptor::new` requires `<namespace>.<verb>` and the
 /// transcribe resource is the inverse of voice synthesis (audio →
 /// text vs text → audio); both live on the llm-profile.
-pub const ABILITY_VOICE_TRANSCRIBE: &str = "device.voice.transcribe";
+pub const ABILITY_VOICE_TRANSCRIBE: &str = "voice.transcribe";
 
 /// String literal used inside `reject_subject_in_args` errors and
 /// matched by the dispatcher's terminal-receipt path. Pinned as a
@@ -255,7 +255,7 @@ pub fn rfc006(name: &str) -> Option<Rfc006Metadata> {
 /// is faster than any hash-map setup cost; reorder freely.
 ///
 /// Post-M5 of the system-namespace migration: `row.name` values
-/// are canonical (`device.mic.subscribe` etc.) and the lookup
+/// are canonical (`mic.subscribe` etc.) and the lookup
 /// matches the catalogue exactly — no prefix gymnastics.
 fn row(name: &str) -> Option<&'static AbilityRow> {
     ABILITIES.iter().find(|row| row.name == name)
@@ -545,11 +545,7 @@ mod tests {
 
     #[test]
     fn projections_return_none_for_non_media_names() {
-        for non_media in [
-            "device.observe.health",
-            "device.agent.list",
-            "totally.unknown",
-        ] {
+        for non_media in ["observe.health", "agent.list", "totally.unknown"] {
             assert!(description(non_media).is_none());
             assert!(input_schema(non_media).is_none());
             assert!(rfc006(non_media).is_none());

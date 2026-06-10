@@ -42,6 +42,9 @@ use easynet_cli::runtime::agents::chat_ability::ContextLoader;
 use easynet_cli::runtime::agents::{build_registry_for_daemon, build_registry_with_runtime};
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
+use easynet_cli::runtime::resources::filesystem::{
+    resource_ref_for_local_path, FilesystemResourceCapability,
+};
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {
@@ -189,7 +192,10 @@ fn main() -> anyhow::Result<()> {
     let resp = d().execute_rpc(target(
         "fs.write",
         json!({
-            "path": out.to_str().unwrap(),
+            "resource_ref": resource_ref_for_local_path(
+                &out,
+                FilesystemResourceCapability::Write,
+            )?,
             "content": "Hello from a real fs.write call.\nLine 2 of the file.\n",
             "encoding": "utf8",
         }),
@@ -204,7 +210,13 @@ fn main() -> anyhow::Result<()> {
     println!("\n=== fs.read of the file we just wrote ===");
     let read_resp = d().execute_rpc(target(
         "fs.read",
-        json!({"path": out.to_str().unwrap(), "encoding": "utf8"}),
+        json!({
+            "resource_ref": resource_ref_for_local_path(
+                &out,
+                FilesystemResourceCapability::Read,
+            )?,
+            "encoding": "utf8"
+        }),
     ))?;
     println!(
         "fs.read content: {:?}",

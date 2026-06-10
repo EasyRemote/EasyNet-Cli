@@ -32,7 +32,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -40,14 +40,14 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_axon::{VoiceCallState, VoiceEndReason, VoiceEventType, VoiceNetworkMetrics};
 
-pub const ABILITY_CREATE_CALL: &str = "device.voice.create_call";
-pub const ABILITY_SHOW_CALL: &str = "device.voice.show_call";
-pub const ABILITY_JOIN_CALL: &str = "device.voice.join_call";
-pub const ABILITY_LEAVE_CALL: &str = "device.voice.leave_call";
-pub const ABILITY_END_CALL: &str = "device.voice.end_call";
-pub const ABILITY_WATCH_CALL: &str = "device.voice.watch_call";
-pub const ABILITY_REPORT_METRICS: &str = "device.voice.report_metrics";
-pub const ABILITY_LIST_CALLS: &str = "device.voice.list_calls";
+pub const ABILITY_CREATE_CALL: &str = "voice.create_call";
+pub const ABILITY_SHOW_CALL: &str = "voice.show_call";
+pub const ABILITY_JOIN_CALL: &str = "voice.join_call";
+pub const ABILITY_LEAVE_CALL: &str = "voice.leave_call";
+pub const ABILITY_END_CALL: &str = "voice.end_call";
+pub const ABILITY_WATCH_CALL: &str = "voice.watch_call";
+pub const ABILITY_REPORT_METRICS: &str = "voice.report_metrics";
+pub const ABILITY_LIST_CALLS: &str = "voice.list_calls";
 
 #[derive(Debug, Clone)]
 struct CallState {
@@ -70,9 +70,15 @@ struct ParticipantState {
     left_at_ms: Option<u64>,
 }
 
-fn store() -> &'static Mutex<HashMap<String, CallState>> {
-    static STORE: OnceLock<Mutex<HashMap<String, CallState>>> = OnceLock::new();
-    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+/// In-process executor for the daemon-hosted voice call signaling abilities.
+///
+/// This object owns only the local daemon's volatile signaling snapshot. It is
+/// not the Axon voice protocol contract, not a persistence layer, and not the
+/// media transport. The contract fields are imported from `easynet_axon`; this
+/// service only applies those fields to one daemon-local registry instance.
+#[derive(Debug, Default)]
+struct VoiceCallService {
+    calls: Mutex<HashMap<String, CallState>>,
 }
 
 fn now_ms() -> u64 {
@@ -95,45 +101,55 @@ fn now_ms() -> u64 {
 /// honest classification of where the handler runs today.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::runtime::ability_dispatch::OwnerKind;
+    let service = Arc::new(VoiceCallService::default());
+
+    let create = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.create_call",
+        ABILITY_CREATE_CALL,
         OwnerKind::Device,
-        Arc::new(create_call_handler),
+        Arc::new(move |args| create.create_call(args)),
     );
+    let show = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.show_call",
+        ABILITY_SHOW_CALL,
         OwnerKind::Device,
-        Arc::new(show_call_handler),
+        Arc::new(move |args| show.show_call(args)),
     );
+    let join = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.join_call",
+        ABILITY_JOIN_CALL,
         OwnerKind::Device,
-        Arc::new(join_call_handler),
+        Arc::new(move |args| join.join_call(args)),
     );
+    let leave = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.leave_call",
+        ABILITY_LEAVE_CALL,
         OwnerKind::Device,
-        Arc::new(leave_call_handler),
+        Arc::new(move |args| leave.leave_call(args)),
     );
+    let end = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.end_call",
+        ABILITY_END_CALL,
         OwnerKind::Device,
-        Arc::new(end_call_handler),
+        Arc::new(move |args| end.end_call(args)),
     );
+    let watch = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.watch_call",
+        ABILITY_WATCH_CALL,
         OwnerKind::Device,
-        Arc::new(watch_call_handler),
+        Arc::new(move |args| watch.watch_call(args)),
     );
+    let report = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.report_metrics",
+        ABILITY_REPORT_METRICS,
         OwnerKind::Device,
-        Arc::new(report_metrics_handler),
+        Arc::new(move |args| report.report_metrics(args)),
     );
+    let list = Arc::clone(&service);
     reg.register_rpc_with_owner(
-        "device.voice.list_calls",
+        ABILITY_LIST_CALLS,
         OwnerKind::Device,
-        Arc::new(list_calls_handler),
+        Arc::new(move |args| list.list_calls(args)),
     );
 }
 
@@ -145,261 +161,258 @@ fn require_str<'a>(args: &'a Value, key: &str, ability: &str) -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` is required"))
 }
 
-fn create_call_handler(args: Value) -> anyhow::Result<Value> {
-    let call_id = args
-        .get("call_id")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("call-{:x}", now_ms()));
-    let creator_participant_id = args
-        .get("participant_id")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let mut s = store().lock().unwrap();
-    if s.contains_key(&call_id) {
-        anyhow::bail!("voice.create_call: call_id {call_id:?} already exists");
+impl VoiceCallService {
+    fn create_call(&self, args: Value) -> anyhow::Result<Value> {
+        let call_id = args
+            .get("call_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("call-{:x}", now_ms()));
+        let creator_participant_id = args
+            .get("participant_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let mut calls = self.calls.lock().unwrap();
+        if calls.contains_key(&call_id) {
+            anyhow::bail!("voice.create_call: call_id {call_id:?} already exists");
+        }
+        let mut participants = HashMap::new();
+        if let Some(participant_id) = creator_participant_id.clone() {
+            participants.insert(
+                participant_id.clone(),
+                ParticipantState {
+                    participant_id,
+                    sdp_offer: None,
+                    ice_candidates: Vec::new(),
+                    last_metrics: None,
+                    joined_at_ms: now_ms(),
+                    left_at_ms: None,
+                },
+            );
+        }
+        let state = CallState {
+            call_id: call_id.clone(),
+            state: VoiceCallState::Ringing,
+            created_at_ms: now_ms(),
+            ended_at_ms: None,
+            end_reason: None,
+            participants,
+            events: Vec::new(),
+        };
+        calls.insert(call_id.clone(), state);
+        // Render `Option<String>` as a stable string so SRE pipelines
+        // grep `creator_participant_id=<value>` without seeing Rust's
+        // `Some("…")` / `None` Debug literal in the field value.
+        let creator = creator_participant_id.as_deref().unwrap_or("<none>");
+        crate::op_event!(
+            component = voice_call,
+            kind = call_created,
+            call_id = call_id,
+            creator_participant_id = creator,
+        );
+        Ok(json!({
+            "call_id": call_id,
+            "state": VoiceCallState::Ringing.as_proto_name(),
+            "state_code": VoiceCallState::Ringing.to_wire_i32(),
+            "created_at_ms": now_ms(),
+        }))
     }
-    let mut participants = HashMap::new();
-    if let Some(participant_id) = creator_participant_id.clone() {
-        participants.insert(
+
+    fn show_call(&self, args: Value) -> anyhow::Result<Value> {
+        let call_id = require_str(&args, "call_id", "voice.show_call")?;
+        let calls = self.calls.lock().unwrap();
+        let call = calls
+            .get(call_id)
+            .ok_or_else(|| anyhow::anyhow!("voice.show_call: call {call_id:?} not found"))?;
+        Ok(serialize_call(call))
+    }
+
+    fn join_call(&self, args: Value) -> anyhow::Result<Value> {
+        let call_id = require_str(&args, "call_id", "voice.join_call")?.to_string();
+        let participant_id = require_str(&args, "participant_id", "voice.join_call")?.to_string();
+        let sdp_offer = args
+            .get("sdp_offer")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let mut calls = self.calls.lock().unwrap();
+        let call = calls
+            .get_mut(&call_id)
+            .ok_or_else(|| anyhow::anyhow!("voice.join_call: call {call_id:?} not found"))?;
+        if call.state.is_terminal() {
+            anyhow::bail!("voice.join_call: call {call_id:?} has already ended");
+        }
+        call.participants.insert(
             participant_id.clone(),
             ParticipantState {
-                participant_id,
-                sdp_offer: None,
+                participant_id: participant_id.clone(),
+                sdp_offer: sdp_offer.clone(),
                 ice_candidates: Vec::new(),
                 last_metrics: None,
                 joined_at_ms: now_ms(),
                 left_at_ms: None,
             },
         );
-    }
-    let state = CallState {
-        call_id: call_id.clone(),
-        state: VoiceCallState::Ringing,
-        created_at_ms: now_ms(),
-        ended_at_ms: None,
-        end_reason: None,
-        participants,
-        events: Vec::new(),
-    };
-    s.insert(call_id.clone(), state);
-    // Render `Option<String>` as a stable string so SRE pipelines
-    // grep `creator_participant_id=<value>` without seeing Rust's
-    // `Some("…")` / `None` Debug literal in the field value.
-    let creator = creator_participant_id.as_deref().unwrap_or("<none>");
-    crate::op_event!(
-        component = voice_call,
-        kind = call_created,
-        call_id = call_id,
-        creator_participant_id = creator,
-    );
-    Ok(json!({
-        "call_id": call_id,
-        // `state` keeps the legacy label for wire compatibility with
-        // existing consumers; `state_proto` carries the Axon contract
-        // name. Mirrors the additive convention in `ping.rs`.
-        "state": VoiceCallState::Ringing.legacy_label(),
-        "state_proto": VoiceCallState::Ringing.as_proto_name(),
-        "created_at_ms": now_ms(),
-    }))
-}
-
-fn show_call_handler(args: Value) -> anyhow::Result<Value> {
-    let call_id = require_str(&args, "call_id", "voice.show_call")?;
-    let s = store().lock().unwrap();
-    let call = s
-        .get(call_id)
-        .ok_or_else(|| anyhow::anyhow!("voice.show_call: call {call_id:?} not found"))?;
-    Ok(serialize_call(call))
-}
-
-fn join_call_handler(args: Value) -> anyhow::Result<Value> {
-    let call_id = require_str(&args, "call_id", "voice.join_call")?.to_string();
-    let participant_id = require_str(&args, "participant_id", "voice.join_call")?.to_string();
-    let sdp_offer = args
-        .get("sdp_offer")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let mut s = store().lock().unwrap();
-    let call = s
-        .get_mut(&call_id)
-        .ok_or_else(|| anyhow::anyhow!("voice.join_call: call {call_id:?} not found"))?;
-    if call.state.is_terminal() {
-        anyhow::bail!("voice.join_call: call {call_id:?} has already ended");
-    }
-    call.participants.insert(
-        participant_id.clone(),
-        ParticipantState {
-            participant_id: participant_id.clone(),
-            sdp_offer: sdp_offer.clone(),
-            ice_candidates: Vec::new(),
-            last_metrics: None,
-            joined_at_ms: now_ms(),
-            left_at_ms: None,
-        },
-    );
-    // A call becomes active once at least two participants are present:
-    // the creator/caller plus the first remote joiner.
-    if call.participants.len() >= 2 {
-        call.state = VoiceCallState::Active;
-    }
-    call.events.push(json!({
-        "event_type": VoiceEventType::ParticipantJoin.as_proto_name(),
-        "type": "joined",
-        "participant_id": participant_id,
-        "state": call.state.legacy_label(),
-        "state_proto": call.state.as_proto_name(),
-        "at_ms": now_ms(),
-    }));
-    let participant_count = call.participants.len();
-    let state = call.state.as_proto_name();
-    crate::op_event!(
-        component = voice_call,
-        kind = participant_joined,
-        call_id = call_id,
-        participant_id = participant_id,
-        participant_count = participant_count,
-        state = state,
-    );
-    Ok(json!({
-        "call_id": call_id,
-        "participant_id": participant_id,
-        "state": call.state.legacy_label(),
-        "state_proto": call.state.as_proto_name(),
-    }))
-}
-
-fn leave_call_handler(args: Value) -> anyhow::Result<Value> {
-    let call_id = require_str(&args, "call_id", "voice.leave_call")?.to_string();
-    let participant_id = require_str(&args, "participant_id", "voice.leave_call")?.to_string();
-    let reason = args
-        .get("reason")
-        .and_then(Value::as_str)
-        .unwrap_or("normal")
-        .to_string();
-    let mut s = store().lock().unwrap();
-    let call = s
-        .get_mut(&call_id)
-        .ok_or_else(|| anyhow::anyhow!("voice.leave_call: call {call_id:?} not found"))?;
-    let p = call.participants.get_mut(&participant_id).ok_or_else(|| {
-        anyhow::anyhow!("voice.leave_call: participant {participant_id:?} not in call {call_id:?}")
-    })?;
-    p.left_at_ms = Some(now_ms());
-    call.events.push(json!({
-        "event_type": VoiceEventType::ParticipantLeave.as_proto_name(),
-        "type": "left",
-        "participant_id": participant_id,
-        "reason": reason,
-        "state": call.state.legacy_label(),
-        "state_proto": call.state.as_proto_name(),
-        "at_ms": now_ms(),
-    }));
-    Ok(json!({"call_id": call_id, "participant_id": participant_id}))
-}
-
-fn end_call_handler(args: Value) -> anyhow::Result<Value> {
-    let call_id = require_str(&args, "call_id", "voice.end_call")?.to_string();
-    let end_reason = args
-        .get("end_reason")
-        .and_then(Value::as_i64)
-        .map(VoiceEndReason::from_wire)
-        .transpose()?
-        .unwrap_or(VoiceEndReason::CallerHangup);
-    let mut s = store().lock().unwrap();
-    let call = s
-        .get_mut(&call_id)
-        .ok_or_else(|| anyhow::anyhow!("voice.end_call: call {call_id:?} not found"))?;
-    if call.state.is_terminal() {
-        return Ok(json!({
-            "call_id": call_id,
-            "state": call.state.legacy_label(),
-            "state_proto": call.state.as_proto_name(),
-            "already_ended": true,
+        // A call becomes active once at least two participants are present:
+        // the creator/caller plus the first remote joiner.
+        if call.participants.len() >= 2 {
+            call.state = VoiceCallState::Active;
+        }
+        call.events.push(json!({
+            "event_type": VoiceEventType::ParticipantJoin.as_proto_name(),
+            "type": "joined",
+            "participant_id": participant_id,
+            "state": call.state.as_proto_name(),
+            "state_code": call.state.to_wire_i32(),
+            "at_ms": now_ms(),
         }));
+        let participant_count = call.participants.len();
+        let state = call.state.as_proto_name();
+        crate::op_event!(
+            component = voice_call,
+            kind = participant_joined,
+            call_id = call_id,
+            participant_id = participant_id,
+            participant_count = participant_count,
+            state = state,
+        );
+        Ok(json!({
+            "call_id": call_id,
+            "participant_id": participant_id,
+            "state": call.state.as_proto_name(),
+            "state_code": call.state.to_wire_i32(),
+        }))
     }
-    call.state = VoiceCallState::Ended;
-    call.ended_at_ms = Some(now_ms());
-    call.end_reason = Some(end_reason);
-    call.events.push(json!({
-        "event_type": VoiceEventType::CallEnded.as_proto_name(),
-        "type": "ended",
-        // `reason_code` is the legacy numeric event field; the proto
-        // name rides the additive `end_reason_proto`.
-        "reason_code": end_reason.to_wire_i32(),
-        "end_reason_proto": end_reason.as_proto_name(),
-        "state": call.state.legacy_label(),
-        "state_proto": call.state.as_proto_name(),
-        "at_ms": now_ms(),
-    }));
-    Ok(json!({
-        "call_id": call_id,
-        "state": call.state.legacy_label(),
-        "state_proto": call.state.as_proto_name(),
-        // `end_reason` keeps its legacy numeric code for wire
-        // compatibility (it was a `u32` pre-#contract); the proto name
-        // rides the additive `end_reason_proto` field.
-        "end_reason": end_reason.to_wire_i32(),
-        "end_reason_proto": end_reason.as_proto_name(),
-    }))
-}
 
-fn watch_call_handler(args: Value) -> anyhow::Result<Value> {
-    let call_id = require_str(&args, "call_id", "voice.watch_call")?;
-    let s = store().lock().unwrap();
-    let call = s
-        .get(call_id)
-        .ok_or_else(|| anyhow::anyhow!("voice.watch_call: call {call_id:?} not found"))?;
-    // v1 returns a snapshot of accumulated events. Streaming is a
-    // follow-up: register through `register_stream` once the
-    // subscription protocol is wired.
-    Ok(json!({
-        "call_id": call_id,
-        "events": call.events.clone(),
-        "view": "snapshot",
-    }))
-}
+    fn leave_call(&self, args: Value) -> anyhow::Result<Value> {
+        let call_id = require_str(&args, "call_id", "voice.leave_call")?.to_string();
+        let participant_id = require_str(&args, "participant_id", "voice.leave_call")?.to_string();
+        let reason = args
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("normal")
+            .to_string();
+        let mut calls = self.calls.lock().unwrap();
+        let call = calls
+            .get_mut(&call_id)
+            .ok_or_else(|| anyhow::anyhow!("voice.leave_call: call {call_id:?} not found"))?;
+        let p = call.participants.get_mut(&participant_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "voice.leave_call: participant {participant_id:?} not in call {call_id:?}"
+            )
+        })?;
+        p.left_at_ms = Some(now_ms());
+        call.events.push(json!({
+            "event_type": VoiceEventType::ParticipantLeave.as_proto_name(),
+            "type": "left",
+            "participant_id": participant_id,
+            "reason": reason,
+            "state": call.state.as_proto_name(),
+            "state_code": call.state.to_wire_i32(),
+            "at_ms": now_ms(),
+        }));
+        Ok(json!({"call_id": call_id, "participant_id": participant_id}))
+    }
 
-fn report_metrics_handler(args: Value) -> anyhow::Result<Value> {
-    let call_id = require_str(&args, "call_id", "voice.report_metrics")?.to_string();
-    let participant_id = require_str(&args, "participant_id", "voice.report_metrics")?.to_string();
-    let metrics = args
-        .get("metrics")
-        .map(VoiceNetworkMetrics::from_json)
-        .transpose()?
-        .unwrap_or_default();
-    let mut s = store().lock().unwrap();
-    let call = s
-        .get_mut(&call_id)
-        .ok_or_else(|| anyhow::anyhow!("voice.report_metrics: call {call_id:?} not found"))?;
-    let p = call.participants.get_mut(&participant_id).ok_or_else(|| {
-        anyhow::anyhow!(
-            "voice.report_metrics: participant {participant_id:?} not in call {call_id:?}"
-        )
-    })?;
-    p.last_metrics = Some(metrics.clone());
-    call.events.push(json!({
-        "event_type": VoiceEventType::MetricsReported.as_proto_name(),
-        "type": "metrics",
-        "participant_id": participant_id,
-        "metrics": metrics.to_json(),
-        "state": call.state.legacy_label(),
-        "state_proto": call.state.as_proto_name(),
-        "at_ms": now_ms(),
-    }));
-    Ok(json!({"call_id": call_id, "participant_id": participant_id, "ack": true}))
-}
+    fn end_call(&self, args: Value) -> anyhow::Result<Value> {
+        let call_id = require_str(&args, "call_id", "voice.end_call")?.to_string();
+        let end_reason = args
+            .get("end_reason")
+            .and_then(Value::as_i64)
+            .map(VoiceEndReason::from_wire)
+            .transpose()?
+            .unwrap_or(VoiceEndReason::CallerHangup);
+        let mut calls = self.calls.lock().unwrap();
+        let call = calls
+            .get_mut(&call_id)
+            .ok_or_else(|| anyhow::anyhow!("voice.end_call: call {call_id:?} not found"))?;
+        if call.state.is_terminal() {
+            return Ok(json!({
+                "call_id": call_id,
+                "state": call.state.as_proto_name(),
+                "state_code": call.state.to_wire_i32(),
+                "already_ended": true,
+            }));
+        }
+        call.state = VoiceCallState::Ended;
+        call.ended_at_ms = Some(now_ms());
+        call.end_reason = Some(end_reason);
+        call.events.push(json!({
+            "event_type": VoiceEventType::CallEnded.as_proto_name(),
+            "type": "ended",
+            "end_reason": end_reason.as_proto_name(),
+            "end_reason_code": end_reason.to_wire_i32(),
+            "state": call.state.as_proto_name(),
+            "state_code": call.state.to_wire_i32(),
+            "at_ms": now_ms(),
+        }));
+        Ok(json!({
+            "call_id": call_id,
+            "state": call.state.as_proto_name(),
+            "state_code": call.state.to_wire_i32(),
+            "end_reason": end_reason.as_proto_name(),
+            "end_reason_code": end_reason.to_wire_i32(),
+        }))
+    }
 
-fn list_calls_handler(_args: Value) -> anyhow::Result<Value> {
-    let s = store().lock().unwrap();
-    let mut items: Vec<_> = s.values().map(serialize_call).collect();
-    items.sort_by(|a, b| {
-        let lhs = a.get("call_id").and_then(Value::as_str).unwrap_or("");
-        let rhs = b.get("call_id").and_then(Value::as_str).unwrap_or("");
-        lhs.cmp(rhs)
-    });
-    Ok(json!({ "items": items }))
+    fn watch_call(&self, args: Value) -> anyhow::Result<Value> {
+        let call_id = require_str(&args, "call_id", "voice.watch_call")?;
+        let calls = self.calls.lock().unwrap();
+        let call = calls
+            .get(call_id)
+            .ok_or_else(|| anyhow::anyhow!("voice.watch_call: call {call_id:?} not found"))?;
+        // v1 returns a snapshot of accumulated events. Streaming is a
+        // follow-up: register through `register_stream` once the
+        // subscription protocol is wired.
+        Ok(json!({
+            "call_id": call_id,
+            "events": call.events.clone(),
+            "view": "snapshot",
+        }))
+    }
+
+    fn report_metrics(&self, args: Value) -> anyhow::Result<Value> {
+        let call_id = require_str(&args, "call_id", "voice.report_metrics")?.to_string();
+        let participant_id =
+            require_str(&args, "participant_id", "voice.report_metrics")?.to_string();
+        let metrics = args
+            .get("metrics")
+            .map(VoiceNetworkMetrics::from_json)
+            .transpose()?
+            .unwrap_or_default();
+        let mut calls = self.calls.lock().unwrap();
+        let call = calls
+            .get_mut(&call_id)
+            .ok_or_else(|| anyhow::anyhow!("voice.report_metrics: call {call_id:?} not found"))?;
+        let p = call.participants.get_mut(&participant_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "voice.report_metrics: participant {participant_id:?} not in call {call_id:?}"
+            )
+        })?;
+        p.last_metrics = Some(metrics.clone());
+        call.events.push(json!({
+            "event_type": VoiceEventType::MetricsReported.as_proto_name(),
+            "type": "metrics",
+            "participant_id": participant_id,
+            "metrics": metrics.to_json(),
+            "state": call.state.as_proto_name(),
+            "state_code": call.state.to_wire_i32(),
+            "at_ms": now_ms(),
+        }));
+        Ok(json!({"call_id": call_id, "participant_id": participant_id, "ack": true}))
+    }
+
+    fn list_calls(&self, _args: Value) -> anyhow::Result<Value> {
+        let calls = self.calls.lock().unwrap();
+        let mut items: Vec<_> = calls.values().map(serialize_call).collect();
+        items.sort_by(|a, b| {
+            let lhs = a.get("call_id").and_then(Value::as_str).unwrap_or("");
+            let rhs = b.get("call_id").and_then(Value::as_str).unwrap_or("");
+            lhs.cmp(rhs)
+        });
+        Ok(json!({ "items": items }))
+    }
 }
 
 fn serialize_call(call: &CallState) -> Value {
@@ -419,17 +432,12 @@ fn serialize_call(call: &CallState) -> Value {
         .collect();
     json!({
         "call_id": call.call_id,
-        // `state` / `end_reason` keep their legacy values (string label
-        // and numeric code respectively) for wire compatibility; the
-        // Axon proto names ride additive `*_proto` fields, and the
-        // numeric state code rides `state_code`.
-        "state": call.state.legacy_label(),
-        "state_proto": call.state.as_proto_name(),
+        "state": call.state.as_proto_name(),
         "state_code": call.state.to_wire_i32(),
         "created_at_ms": call.created_at_ms,
         "ended_at_ms": call.ended_at_ms,
-        "end_reason": call.end_reason.map(VoiceEndReason::to_wire_i32),
-        "end_reason_proto": call.end_reason.map(VoiceEndReason::as_proto_name),
+        "end_reason": call.end_reason.map(VoiceEndReason::as_proto_name),
+        "end_reason_code": call.end_reason.map(VoiceEndReason::to_wire_i32),
         "participants": participants,
     })
 }
@@ -467,10 +475,11 @@ pub fn show_call_input_schema() -> Value {
 
 pub fn join_call_description() -> &'static str {
     "Add a participant to an existing call. The first participant \
-     transitions the call from `ringing` to `active` (response `state` \
-     carries the legacy label; `state_proto` carries the Axon contract \
-     name). Optional `sdp_offer` carries the participant's SDP; ICE \
-     candidates stream in via subsequent `voice.report_metrics`-style updates."
+     transitions the call from `VOICE_CALL_STATE_RINGING` to \
+     `VOICE_CALL_STATE_ACTIVE`. Response `state` carries the Axon \
+     contract enum name and `state_code` carries the numeric wire value. \
+     Optional `sdp_offer` carries the participant's SDP; ICE candidates \
+     stream in via subsequent `voice.report_metrics`-style updates."
 }
 
 pub fn join_call_input_schema() -> Value {
@@ -581,46 +590,52 @@ mod tests {
         format!("{prefix}-{:x}", now_ms())
     }
 
+    fn service() -> VoiceCallService {
+        VoiceCallService::default()
+    }
+
     #[test]
     fn create_show_join_metrics_end_round_trip() {
         // Full happy path — covers every handler in one test so a
         // regression in any handler trips this.
+        let service = service();
         let cid = fresh_call_id("rt");
-        let _ = create_call_handler(json!({
-            "call_id": cid,
-            "participant_id": "alice",
-        }))
-        .expect("create");
-        let s1 = show_call_handler(json!({"call_id": cid})).unwrap();
-        // `state` carries the legacy label (back-compat); `state_proto`
-        // carries the Axon contract name.
-        assert_eq!(s1.get("state").and_then(Value::as_str), Some("ringing"));
+        let _ = service
+            .create_call(json!({
+                "call_id": cid,
+                "participant_id": "alice",
+            }))
+            .expect("create");
+        let s1 = service.show_call(json!({"call_id": cid})).unwrap();
         assert_eq!(
-            s1.get("state_proto").and_then(Value::as_str),
+            s1.get("state").and_then(Value::as_str),
             Some("VOICE_CALL_STATE_RINGING")
         );
+        assert_eq!(s1.get("state_code"), Some(&json!(1)));
 
-        join_call_handler(json!({
-            "call_id": cid,
-            "participant_id": "bob",
-            "sdp_offer": "v=0",
-        }))
-        .expect("join");
-        let s2 = show_call_handler(json!({"call_id": cid})).unwrap();
-        assert_eq!(s2.get("state").and_then(Value::as_str), Some("active"));
+        service
+            .join_call(json!({
+                "call_id": cid,
+                "participant_id": "bob",
+                "sdp_offer": "v=0",
+            }))
+            .expect("join");
+        let s2 = service.show_call(json!({"call_id": cid})).unwrap();
         assert_eq!(
-            s2.get("state_proto").and_then(Value::as_str),
+            s2.get("state").and_then(Value::as_str),
             Some("VOICE_CALL_STATE_ACTIVE")
         );
+        assert_eq!(s2.get("state_code"), Some(&json!(2)));
 
-        report_metrics_handler(json!({
-            "call_id": cid,
-            "participant_id": "bob",
-            "metrics": { "rtt_ms": 42 },
-        }))
-        .expect("metrics");
+        service
+            .report_metrics(json!({
+                "call_id": cid,
+                "participant_id": "bob",
+                "metrics": { "rtt_ms": 42 },
+            }))
+            .expect("metrics");
 
-        let watch = watch_call_handler(json!({"call_id": cid})).unwrap();
+        let watch = service.watch_call(json!({"call_id": cid})).unwrap();
         let events = watch.get("events").and_then(Value::as_array).unwrap();
         assert!(
             events
@@ -629,55 +644,61 @@ mod tests {
             "watch must surface join event: {watch}"
         );
 
-        end_call_handler(json!({"call_id": cid})).expect("end");
-        let s3 = show_call_handler(json!({"call_id": cid})).unwrap();
-        assert_eq!(s3.get("state").and_then(Value::as_str), Some("ended"));
+        service.end_call(json!({"call_id": cid})).expect("end");
+        let s3 = service.show_call(json!({"call_id": cid})).unwrap();
         assert_eq!(
-            s3.get("state_proto").and_then(Value::as_str),
+            s3.get("state").and_then(Value::as_str),
             Some("VOICE_CALL_STATE_ENDED")
         );
+        assert_eq!(s3.get("state_code"), Some(&json!(5)));
     }
 
     #[test]
     fn show_unknown_call_errors_clearly() {
-        let err = show_call_handler(json!({"call_id": "no-such-call"})).unwrap_err();
+        let err = service()
+            .show_call(json!({"call_id": "no-such-call"}))
+            .unwrap_err();
         assert!(format!("{err}").contains("not found"));
     }
 
     #[test]
     fn end_call_is_idempotent() {
+        let service = service();
         let cid = fresh_call_id("idempotent");
-        create_call_handler(json!({"call_id": cid})).unwrap();
-        end_call_handler(json!({"call_id": cid})).unwrap();
-        let r = end_call_handler(json!({"call_id": cid})).unwrap();
+        service.create_call(json!({"call_id": cid})).unwrap();
+        service.end_call(json!({"call_id": cid})).unwrap();
+        let r = service.end_call(json!({"call_id": cid})).unwrap();
         assert_eq!(r.get("already_ended"), Some(&json!(true)));
     }
 
     #[test]
     fn join_after_end_is_rejected() {
+        let service = service();
         let cid = fresh_call_id("after-end");
-        create_call_handler(json!({"call_id": cid})).unwrap();
-        end_call_handler(json!({"call_id": cid})).unwrap();
-        let err = join_call_handler(json!({
-            "call_id": cid,
-            "participant_id": "late",
-        }))
-        .unwrap_err();
+        service.create_call(json!({"call_id": cid})).unwrap();
+        service.end_call(json!({"call_id": cid})).unwrap();
+        let err = service
+            .join_call(json!({
+                "call_id": cid,
+                "participant_id": "late",
+            }))
+            .unwrap_err();
         assert!(format!("{err}").contains("already ended"));
     }
 
     #[test]
     fn create_without_call_id_auto_mints_one() {
-        let resp = create_call_handler(json!({})).unwrap();
+        let resp = service().create_call(json!({})).unwrap();
         let cid = resp.get("call_id").and_then(Value::as_str).unwrap();
         assert!(cid.starts_with("call-"));
     }
 
     #[test]
     fn list_calls_returns_created_call() {
+        let service = service();
         let cid = fresh_call_id("list");
-        create_call_handler(json!({"call_id": cid})).unwrap();
-        let listed = list_calls_handler(json!({})).unwrap();
+        service.create_call(json!({"call_id": cid})).unwrap();
+        let listed = service.list_calls(json!({})).unwrap();
         assert!(
             listed
                 .get("items")

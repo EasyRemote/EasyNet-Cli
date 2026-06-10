@@ -61,6 +61,24 @@ const MAX_HEARTBEAT_FAILURES: u32 = 10;
 const ENV_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
 const ENV_INTERVAL_MS: &str = "_EASYNET_HB_INTERVAL_MS";
 
+fn select_heartbeat_endpoint(
+    env_endpoint: Option<&str>,
+    credential_endpoint: &str,
+) -> Option<String> {
+    env_endpoint
+        .map(str::trim)
+        .filter(|endpoint| !endpoint.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            let endpoint = credential_endpoint.trim();
+            if endpoint.is_empty() {
+                None
+            } else {
+                Some(endpoint.to_string())
+            }
+        })
+}
+
 /// Outcome of the heartbeat loop — signals why it exited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeartbeatOutcome {
@@ -395,16 +413,16 @@ fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> 
 /// cleans up credentials on eviction — reconnect does not mask admin
 /// rejection.
 pub fn run_daemon() -> anyhow::Result<()> {
-    let endpoint =
-        std::env::var(ENV_ENDPOINT).map_err(|_| anyhow::anyhow!("missing {ENV_ENDPOINT}"))?;
-    let interval_ms: u64 = std::env::var(ENV_INTERVAL_MS)
-        .unwrap_or_else(|_| DEFAULT_HEARTBEAT_MS.to_string())
-        .parse()?;
-
     // Read tenant/node_id from credentials file (not env vars) to avoid
     // exposing identity in `ps auxe` output.
     let creds = config::load_credentials().context("heartbeat daemon: cannot load credentials")?;
-    let tenant = creds.tenant_id.clone();
+    let env_endpoint = std::env::var(ENV_ENDPOINT).ok();
+    let endpoint = select_heartbeat_endpoint(env_endpoint.as_deref(), &creds.hub_endpoint)
+        .ok_or_else(|| anyhow::anyhow!("missing {ENV_ENDPOINT} and credentials hub_endpoint"))?;
+    let interval_ms: u64 = std::env::var(ENV_INTERVAL_MS)
+        .unwrap_or_else(|_| DEFAULT_HEARTBEAT_MS.to_string())
+        .parse()?;
+    let tenant = creds.realm.clone();
     let node_id = creds.node_id.clone();
     let hostname = gethostname::gethostname().to_string_lossy().into_owned();
 
@@ -506,6 +524,20 @@ mod tests {
 
     fn healthy_response() -> FederationHeartbeatResponse {
         heartbeat_response(None, Vec::new())
+    }
+
+    #[test]
+    fn select_heartbeat_endpoint_falls_back_to_credentials() {
+        assert_eq!(
+            select_heartbeat_endpoint(None, "https://127.0.0.1:50443").as_deref(),
+            Some("https://127.0.0.1:50443")
+        );
+        assert_eq!(
+            select_heartbeat_endpoint(Some("  https://override:50443  "), "https://creds:50443")
+                .as_deref(),
+            Some("https://override:50443")
+        );
+        assert!(select_heartbeat_endpoint(Some("  "), "  ").is_none());
     }
 
     fn permanent_response(status: &str) -> FederationHeartbeatResponse {

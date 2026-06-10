@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "plugin.status"
+description = "Report plugin package load planning and actual daemon runtime registration status."
+
+[input_schema]
+type = "object"
+additionalProperties = false

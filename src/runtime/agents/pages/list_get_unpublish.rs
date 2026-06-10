@@ -5,9 +5,9 @@
 // Description: three remaining ability handlers for the Pages
 //              reference system.
 //
-//                <user>.pages.list       (operational, read)
-//                <user>.pages.get        (operational, read)
-//                <user>.pages.unpublish  (canonical,    delete)
+//                pages.list       (operational, read)
+//                pages.get        (operational, read)
+//                pages.unpublish  (canonical,    delete)
 //
 // Conformance: RFC-006-B v0.6 §4.3 (unpublish = delete);
 //              list/get are introspection abilities not formally
@@ -25,11 +25,16 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use super::state::{persist_registry_for_user, PUBLISHED_PROJECTS};
 
-/// `<user>.pages.list` — return every project the daemon
+/// `pages.list` — return every project the daemon
 /// currently hosts under this user. `url_root` is the production
-/// Hub URL; the dev-only daemon listener URL is intentionally
-/// **not** included here (use `<user>.pages.get` if you want it).
-pub fn handle_list(user: &str, realm: &str, _args: Value) -> anyhow::Result<Value> {
+/// Hub URL; `dev_listener_url_root` is the daemon's local listener
+/// URL, which is the one that actually opens during local dev.
+pub fn handle_list(
+    user: &str,
+    listener_port: u16,
+    realm: &str,
+    _args: Value,
+) -> anyhow::Result<Value> {
     let mut entries = Vec::new();
     for entry in PUBLISHED_PROJECTS.iter() {
         let (k_user, project_id) = entry.key();
@@ -43,18 +48,19 @@ pub fn handle_list(user: &str, realm: &str, _args: Value) -> anyhow::Result<Valu
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         entries.push(json!({
-            "user":           k_user,
-            "project_id":     project_id,
-            "folder":         h.canonical_root.display().to_string(),
-            "visibility":     h.visibility.as_str(),
-            "started_at_ms":  started_at_ms,
-            "url_root":       super::pages_public_url_root(realm, k_user, project_id),
+            "user":                  k_user,
+            "project_id":            project_id,
+            "folder":                h.canonical_root.display().to_string(),
+            "visibility":            h.visibility.as_str(),
+            "started_at_ms":         started_at_ms,
+            "url_root":              super::pages_public_url_root(realm, k_user, project_id),
+            "dev_listener_url_root": super::pages_dev_listener_url_root(k_user, project_id, listener_port),
         }));
     }
     Ok(json!({ "projects": entries }))
 }
 
-/// `<user>.pages.get` — return one project's detail.
+/// `pages.get` — return one project's detail.
 pub fn handle_get(
     user: &str,
     listener_port: u16,
@@ -99,7 +105,7 @@ pub fn handle_get(
     }))
 }
 
-/// `<user>.pages.unpublish` — remove the project. Drops the
+/// `pages.unpublish` — remove the project. Drops the
 /// `ProjectHandle` (releasing the folder fd) and removes the
 /// entry from `PUBLISHED_PROJECTS`, then rewrites the user's
 /// restart snapshot. Ability-path unpublish also removes the

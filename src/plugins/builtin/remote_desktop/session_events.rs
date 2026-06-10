@@ -23,7 +23,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn session_created() -> RemoteDe
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
             "media_transport_ready": false,
-            "preview_ability": "device.screen.subscribe",
+            "preview_ability": "screen.subscribe",
         }),
     )
 }
@@ -194,6 +194,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn input_channel_diagnostic(
 }
 
 /// Build a media-pipeline stats payload.
+#[cfg(target_os = "macos")]
 pub(in crate::plugins::builtin::remote_desktop) fn media_pipeline_stats(
     media_transport_ready: bool,
     stats: Value,

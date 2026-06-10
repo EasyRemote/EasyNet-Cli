@@ -28,7 +28,7 @@ use super::context::{self, DispatchContext};
 use super::drivers::adapter_for;
 use super::run_store::{RunDir, RunMeta};
 use super::session::Session;
-use super::workspace;
+use super::{directory::AgentDirectory, workspace};
 
 /// Maximum recursion depth for agent dispatch (prevents infinite loops).
 const MAX_AGENT_DEPTH: u32 = 2;
@@ -366,10 +366,10 @@ pub fn send_to_agent_with_depth_and_progress(
         check_mission_context_invariant()?;
     }
 
-    // Resolve the active dispatch context. The new typed channel
-    // (`runtime::context`) is consulted first; the env-var fallback inside
-    // `context::current()` keeps backwards compatibility with subprocess
-    // children that inherit only the env vars from their parent.
+    // Resolve the active dispatch context. The typed channel
+    // (`runtime::context`) is consulted first; the env-var reader inside
+    // `context::current()` is the explicit subprocess boundary for children
+    // that inherit their parent context through env vars.
     //
     // `depth_override` remains the test escape hatch — it bypasses both
     // the typed context and the env vars so the dispatch tests can
@@ -385,7 +385,8 @@ pub fn send_to_agent_with_depth_and_progress(
         })
         .or_else(context::current);
 
-    let current_depth = active.as_ref().map(|c| c.depth).unwrap_or(0);
+    let active = active.ok_or_else(|| anyhow::anyhow!("agent dispatch missing mission context"))?;
+    let current_depth = active.depth;
 
     if current_depth >= MAX_AGENT_DEPTH {
         anyhow::bail!(
@@ -397,48 +398,27 @@ pub fn send_to_agent_with_depth_and_progress(
     // Build full prompt with context.
     let full_prompt = compose_prompt(prompt, context);
 
-    // ── Provision workspace + resolve the AgentDirectory ──
+    // ── Project the registered AgentDirectory ──
     //
-    // Workspace provisioning is the step that either opens or
-    // creates the agent's on-disk root (via
-    // `ensure_workspace`'s shim) and materialises the
-    // runtime-native files (`.mcp.json`, `.codex/`, CLAUDE.md,
-    // AGENTS.md). We then open the `AgentDirectory` explicitly
-    // so the rest of this function reads configuration from
-    // `dir.spec()` — the v2 source of truth — rather than from
-    // the fat `AgentEntry` fields. The shim inside
-    // `ensure_workspace` already writes an `agent.toml`
-    // reconstructed from the entry when none exists, so the
-    // subsequent `AgentDirectory::open` always succeeds in the
-    // happy path.
-    //
-    // Provisioning failures are logged, not propagated. In
-    // that degraded mode we fall back to the `AgentEntry`'s
-    // fat fields (legacy behaviour) so an operator with a
-    // corrupt root directory still gets *some* dispatch —
-    // useful for diagnostics.
+    // The registry row must point at an on-disk AgentDirectory whose
+    // `agent.toml` is the source of truth. Dispatch no longer
+    // reconstructs specs from fat `AgentEntry` fields. A bad root is a
+    // product-state error and must stop before spawning the runtime.
     let start = Instant::now();
-    let (cwd, spec_source): (Option<PathBuf>, Option<crate::core::agent_spec::AgentSpec>) =
-        match workspace::ensure_workspace(agent_name, entry) {
-            Ok(p) => {
-                let spec = crate::runtime::directory::AgentDirectory::open(&p)
-                    .ok()
-                    .map(|d| d.spec().clone());
-                (Some(p), spec)
-            }
-            Err(e) => {
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = dispatch,
-                    kind = workspace_provisioning_failed,
-                    level = "warn",
-                    agent = agent_name,
-                    error = err_msg,
-                    fallback = "no_project_level_mcp_or_context",
-                );
-                (None, None)
-            }
-        };
+    let root = entry
+        .root_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("agent {agent_name:?} registry row is missing root_path"))?;
+    let directory = AgentDirectory::open(root)?;
+    if directory.spec().name != agent_name {
+        anyhow::bail!(
+            "agent {agent_name:?} registry row points at {}, whose agent.toml names {:?}",
+            root.display(),
+            directory.spec().name
+        );
+    }
+    let cwd = workspace::ensure_from_directory(&directory)?;
+    let spec_source = directory.spec().clone();
     // ── Resolve dispatch knobs from spec (falling back to entry) ──
     //
     // Precedence per field:
@@ -476,10 +456,7 @@ pub fn send_to_agent_with_depth_and_progress(
     // and tests bound to the same code path: a refactor that
     // inverts the order must touch the function, and the test
     // calling that function breaks.
-    let timeout = resolve_timeout(
-        spec_source.as_ref().and_then(|s| s.timeout_secs),
-        entry.timeout_secs,
-    );
+    let timeout = resolve_timeout(spec_source.timeout_secs, entry.timeout_secs);
     let max_output = entry.max_output_bytes;
     // Per-call overrides win over spec / entry defaults. The chat
     // ability handler threads its `driver.model` arg through here so
@@ -487,7 +464,7 @@ pub fn send_to_agent_with_depth_and_progress(
     // agent.toml carries, without touching the manifest.
     let effective_model = resolve_model_with_overrides(
         overrides.and_then(|o| o.model.clone()),
-        spec_source.as_ref().and_then(|s| s.model.clone()),
+        spec_source.model.clone(),
         entry.model.clone(),
     );
 
@@ -514,23 +491,7 @@ pub fn send_to_agent_with_depth_and_progress(
     // runtime driver reads on its own via the child's cwd). The typed
     // context keys are layered on top.
     let mut env = entry.env.clone();
-    // The `active.is_none()` branch is reachable only in release builds
-    // when `check_mission_context_invariant` observed a missing mission
-    // context and chose to log rather than fail (a backcompat shim for
-    // legacy callers — see that function's rustdoc). In that degraded
-    // mode we still propagate the depth so the child's recursion guard
-    // works, but we have no mission id or origin to emit. The typed
-    // `DispatchContext` is deliberately not constructed with a synthetic
-    // mission_id here: silently fabricating one would make the audit
-    // trail lie about which mission a run belonged to.
-    if let Some(parent) = active.as_ref() {
-        parent.child(agent_name).serialize_to_env(&mut env);
-    } else {
-        env.insert(
-            "EASYNET_AGENT_DEPTH".to_string(),
-            current_depth.saturating_add(1).to_string(),
-        );
-    }
+    active.child(agent_name).serialize_to_env(&mut env);
 
     // Create a per-run directory. If creation fails (e.g. workspace dir is
     // unwritable), skip persistence — the agent call still runs, but we
@@ -592,11 +553,12 @@ pub fn send_to_agent_with_depth_and_progress(
         // when one is active; absent otherwise. "local" for a
         // CLI-direct invocation (`agent send`) with no mission
         // context, or the root agent name inside a mission.
-        "origin_agent": active.as_ref().and_then(|c| c.origin_agent.clone()),
-        "mission_id": active.as_ref().map(|c| c.mission_id.clone()),
+        "origin_agent": active.origin_agent.clone(),
+        "mission_id": active.mission_id.clone(),
         "parent_invocation": active
+            .parent_invocation
             .as_ref()
-            .and_then(|c| c.parent_invocation.as_ref().map(|ctx| ctx.to_json_value())),
+            .map(|ctx| ctx.to_json_value()),
         "context_present": context.is_some(),
     });
     if let Err(e) = session.writer().emit("admitted", Some(admitted_payload)) {
@@ -630,11 +592,6 @@ pub fn send_to_agent_with_depth_and_progress(
     // because the adapter signature takes `cwd: PathBuf` (no
     // `Option`) to reflect "dispatch always picks a cwd".
     let adapter = adapter_for(entry.agent_type);
-    // If workspace provisioning failed above, we still try to invoke
-    // the agent; fall back to an empty `PathBuf` so the adapter runs
-    // in the caller's cwd. The warn printed earlier already surfaced
-    // the provisioning failure to the operator.
-    let cwd_for_adapter = cwd.clone().unwrap_or_default();
     // Hand the adapter a synthetic entry whose `model` reflects
     // the spec-resolved choice. We don't mutate the caller's
     // entry (it's an `&AgentEntry`) — cloning into a local is
@@ -651,7 +608,7 @@ pub fn send_to_agent_with_depth_and_progress(
             timeout,
             max_output_bytes: max_output,
             env,
-            cwd: cwd_for_adapter,
+            cwd: cwd.clone(),
             // Commit 2: the driver emits mid-stream progress
             // events through the Timeline instead of (previously)
             // through run_dir/trace.jsonl. The writer_arc is the
@@ -768,10 +725,7 @@ pub fn send_to_agent_with_depth_and_progress(
         ),
         Err(e) => (
             "failed",
-            serde_json::json!({
-                "error": e.to_string(),
-                "duration_ms": duration_ms,
-            }),
+            dispatch_terminal_failure_payload(&e.to_string(), duration_ms),
         ),
     };
     if let Err(e) = session.writer().emit(terminal_type, Some(terminal_payload)) {
@@ -801,6 +755,40 @@ pub fn send_to_agent_with_depth_and_progress(
         tool_calls: output.tool_calls,
         thread_id: output.thread_id,
     })
+}
+
+fn dispatch_terminal_failure_payload(message: &str, duration_ms: u64) -> serde_json::Value {
+    let code = crate::runtime::failure_codes::FailureCodeClassifier::classify_or(
+        message,
+        "INVOCATION_FAILED",
+    );
+    let class = crate::runtime::failure_codes::FailureCodeClassifier::classify_error_class(&code);
+    let retryable = dispatch_failure_retryable(&code);
+    let stage = class.stage.as_str_name();
+    let security_class = class.security_class.as_str_name();
+    serde_json::json!({
+        "error": message,
+        "duration_ms": duration_ms,
+        "failure": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "stage": stage,
+            "security_class": security_class,
+        },
+    })
+}
+
+fn dispatch_failure_retryable(code: &str) -> bool {
+    let code = code.trim().to_ascii_uppercase();
+    code.starts_with("TARGET_")
+        || code.starts_with("PRESENCE_")
+        || code.starts_with("DEVICE_")
+        || code.starts_with("RESOLVE_")
+        || matches!(
+            code.as_str(),
+            "INVOCATION_TIMED_OUT" | "DENDRITE_BRIDGE_LIBRARY_NOT_FOUND"
+        )
 }
 
 /// Delimiters for injected context. HTML comments survive verbatim in
@@ -881,35 +869,18 @@ mod compose_prompt_tests {
 /// Stage 2 — anti-forgery: the context's mission id must correspond to
 /// an existing mission run directory under `~/.easynet/missions/runs/`.
 ///
-/// In **debug** builds the function panics on failure, making the
-/// invariant impossible to silently violate during development. In
-/// **release** builds it logs a warning and (for stage 2) returns an
-/// error so the dispatch fails loudly without taking the process down.
+/// The function returns an error on failure so dispatch fails before
+/// subprocess spawn. Missing or forged mission context is product-state
+/// corruption, not a recoverable degraded mode.
 fn check_mission_context_invariant() -> anyhow::Result<()> {
     let mission_id = match context::current() {
         Some(ctx) if !ctx.mission_id.is_empty() => ctx.mission_id,
         _ => {
-            // Stage 1 failure: no context active and env-var fallback
-            // also empty.
-            #[cfg(debug_assertions)]
-            panic!(
+            anyhow::bail!(
                 "dispatch::send_to_agent called without a mission context. \
                  All agent dispatches must originate from a mission runtime. \
                  See docs/easynet_ontology.tex §6.2."
             );
-            #[cfg(not(debug_assertions))]
-            {
-                crate::op_event!(
-                    component = dispatch,
-                    kind = send_to_agent_missing_mission_context,
-                    level = "warn",
-                    spec_ref = "docs/easynet_ontology.tex §6.2",
-                    message = "ontology violation; continuing in release for back-compat",
-                );
-                // Continue execution in release mode for backwards compat
-                // with any caller that hasn't been migrated yet.
-                return Ok(());
-            }
         }
     };
 
@@ -926,8 +897,7 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
     // mistake".
     let mission_run_dir = crate::facade::cli::mission_runs::root_dir().join(&mission_id);
     if !mission_run_dir.exists() {
-        #[cfg(debug_assertions)]
-        panic!(
+        anyhow::bail!(
             "mission_id={} does not correspond to an existing \
              mission run dir at {}. Either the env var was forged or \
              the run dir has been cleaned up mid-execution. Refusing \
@@ -935,17 +905,6 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
             mission_id,
             mission_run_dir.display()
         );
-        #[cfg(not(debug_assertions))]
-        {
-            crate::op_event!(
-                component = dispatch,
-                kind = mission_id_unknown_run_dir,
-                level = "warn",
-                mission_id = mission_id,
-                message = "possible env var forgery",
-            );
-            anyhow::bail!("invalid mission context: run dir not found");
-        }
     }
 
     Ok(())
@@ -1005,30 +964,16 @@ mod tests {
         );
     }
 
-    /// Recursion guard at depth=1 must not fire. The dispatch layer
-    /// reaches `adapter.invoke()`, which in turn spawns the binary
-    /// named by `entry.command`. `dummy_entry()` sets that to a
-    /// bogus name and `timeout_secs = 1`, so the spawn fails with
-    /// ENOENT in milliseconds — well inside the test budget — and
-    /// the downstream error surfaces as whatever the driver
-    /// reports for a missing binary, never a "depth limit"
-    /// message. This test proves the guard isn't over-triggering.
-    ///
-    /// Without the driver honouring `entry.command` (the pre-fix
-    /// behaviour) this test would hang on a developer machine
-    /// with Claude Code installed, because the real `claude`
-    /// binary would run and wait on stdin for up to
-    /// `entry.timeout_secs`.
+    /// Recursion guard at depth=1 must not fire. With the clean
+    /// AgentDirectory boundary a dummy entry without `root_path`
+    /// fails during registry-root validation before any subprocess
+    /// spawn, but it must not be reported as a depth-limit failure.
     #[test]
     fn recursion_guard_allows_depth_1() {
         let entry = dummy_entry();
-        // Use a HomeGuard so workspace creation lands in a temp dir
-        // and doesn't pollute the developer's real ~/.easynet/.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let res =
             send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1), None);
-        // We expect an error (no real claude binary), but it must
-        // NOT be the depth-limit error. Anything else is acceptable.
         match res {
             Ok(_) => panic!("expected an error from missing claude binary"),
             Err(e) => {
@@ -1041,6 +986,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dispatch_rejects_registry_row_without_root_path() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = dummy_entry();
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None)
+            .expect_err("missing root_path must stop dispatch");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("missing root_path"),
+            "expected missing-root error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn dispatch_rejects_registry_root_whose_spec_names_another_agent() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let root = crate::persistence::config::agents_root().join("alice");
+        let spec = crate::core::agent_spec::AgentSpec::new(
+            "bob",
+            crate::core::agent_spec::RuntimeKind::ClaudeCode,
+        );
+        crate::runtime::directory::AgentDirectory::create(
+            &crate::runtime::directory::Location::Local { root: root.clone() },
+            spec,
+        )
+        .unwrap();
+
+        let mut entry = dummy_entry();
+        entry.root_path = Some(root);
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None)
+            .expect_err("spec name mismatch must stop dispatch");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("agent.toml names \"bob\""),
+            "expected spec-name mismatch, got: {msg}"
+        );
+    }
+
     /// `send_to_agent_with_depth` with a real `depth_override` must
     /// also bypass the mission-context invariant. This is the test
     /// escape hatch — without it, the unit tests above would have to
@@ -1049,8 +1032,8 @@ mod tests {
     #[test]
     fn depth_override_bypasses_mission_context_check() {
         // Even with no EASYNET_MISSION_ID set, depth_override=Some(2)
-        // should still cleanly hit the depth-limit check (not panic on
-        // a missing mission context).
+        // should still cleanly hit the depth-limit check, not the
+        // mission-context check.
         std::env::remove_var("EASYNET_MISSION_ID");
         let entry = dummy_entry();
         let res =
@@ -1058,6 +1041,46 @@ mod tests {
         assert!(res.is_err());
         let msg = format!("{}", res.unwrap_err());
         assert!(msg.contains("depth limit reached"));
+    }
+
+    #[test]
+    fn send_to_agent_rejects_missing_mission_context_before_registry_root() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        std::env::remove_var("EASYNET_MISSION_ID");
+        std::env::remove_var("EASYNET_AGENT_DEPTH");
+        let entry = dummy_entry();
+        let err = send_to_agent("alice", &entry, "prompt", None, None)
+            .expect_err("missing mission context must stop dispatch");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("without a mission context"),
+            "expected mission-context error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("missing root_path"),
+            "mission-context check must run before registry root validation: {msg}"
+        );
+    }
+
+    #[test]
+    fn send_to_agent_rejects_forged_mission_id_without_run_dir() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        std::env::set_var("EASYNET_MISSION_ID", "forged-mission");
+        std::env::set_var("EASYNET_AGENT_DEPTH", "0");
+        let entry = dummy_entry();
+        let err = send_to_agent("alice", &entry, "prompt", None, None)
+            .expect_err("unknown mission id must stop dispatch");
+        std::env::remove_var("EASYNET_MISSION_ID");
+        std::env::remove_var("EASYNET_AGENT_DEPTH");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("does not correspond to an existing"),
+            "expected unknown mission run dir error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("missing root_path"),
+            "anti-forgery check must run before registry root validation: {msg}"
+        );
     }
 
     // ── send_external — external-origin entry point ─────────────────────────
@@ -1509,8 +1532,8 @@ mod tests {
     //      entry.model / entry.timeout_secs values.
     //   3. Call `send_to_agent_with_depth` with
     //      `depth_override = Some(1)` so the real dispatch
-    //      flows: `ensure_workspace` reopens the directory,
-    //      `effective_model` / `effective_timeout` resolve
+    //      flows: `AgentDirectory::open` validates the registered
+    //      root, `effective_model` / `effective_timeout` resolve
     //      from spec, and the adapter invoke fails fast
     //      (dummy_entry's bogus `command` → ENOENT in ms).
     //   4. Inspect `<run-dir>/meta.json` — the authoritative
@@ -1863,6 +1886,39 @@ mod tests {
             "failed event must carry non-empty error string, got {:?}",
             events[1]["payload"]
         );
+        assert_eq!(
+            events[1]["payload"]["failure"]["code"], "INVOCATION_FAILED",
+            "failed event must carry canonical typed failure, got {:?}",
+            events[1]["payload"]
+        );
+        assert_eq!(
+            events[1]["payload"]["failure"]["stage"],
+            "ERROR_STAGE_EXECUTION"
+        );
+        assert_eq!(
+            events[1]["payload"]["failure"]["security_class"],
+            "SECURITY_CLASS_UNSPECIFIED"
+        );
+        assert_eq!(events[1]["payload"]["failure"]["retryable"], false);
+    }
+
+    #[test]
+    fn dispatch_terminal_failure_payload_preserves_specific_runtime_code() {
+        let payload =
+            dispatch_terminal_failure_payload("target device is not in PresenceRegistry", 42);
+
+        assert_eq!(payload["error"], "target device is not in PresenceRegistry");
+        assert_eq!(payload["duration_ms"], 42);
+        assert_eq!(
+            payload["failure"]["code"],
+            "TARGET_NOT_IN_PRESENCE_REGISTRY"
+        );
+        assert_eq!(payload["failure"]["stage"], "ERROR_STAGE_TRANSPORT");
+        assert_eq!(
+            payload["failure"]["security_class"],
+            "SECURITY_CLASS_TRANSPORT"
+        );
+        assert_eq!(payload["failure"]["retryable"], true);
     }
 
     #[test]

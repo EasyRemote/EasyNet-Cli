@@ -372,10 +372,11 @@ mod tests {
 
     #[test]
     fn invocation_builder_keeps_complete_tuple_inspectable() {
+        let hub = crate::ura::hub_ura("acme");
         let invocation = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
-            "easynet:///r/acme/hub",
-            "device.observe.health",
+            &hub,
+            "observe.health",
             "easynet:///r/acme/device/dev-a",
         )
         .unwrap()
@@ -385,8 +386,8 @@ mod tests {
         .build();
 
         assert_eq!(invocation.caller_ura(), "easynet:///r/acme/device/dev-a");
-        assert_eq!(invocation.callee_ura(), "easynet:///r/acme/hub");
-        assert_eq!(invocation.ability(), "device.observe.health");
+        assert_eq!(invocation.callee_ura(), hub.as_str());
+        assert_eq!(invocation.ability(), "observe.health");
         assert_eq!(invocation.subject_ura(), "easynet:///r/acme/device/dev-a");
         assert_eq!(invocation.nonce(), [0x42; 16]);
         assert_eq!(invocation.content_type(), "application/json");
@@ -395,9 +396,10 @@ mod tests {
 
     #[test]
     fn invocation_builder_emits_complete_stream_request() {
+        let hub = crate::ura::hub_ura("acme");
         let request = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
-            "easynet:///r/acme/hub",
+            &hub,
             "device.watch.health",
             "easynet:///r/acme/device/dev-a",
         )
@@ -420,10 +422,7 @@ mod tests {
             envelope.caller.expect("caller required").ura,
             "easynet:///r/acme/device/dev-a"
         );
-        assert_eq!(
-            envelope.callee.expect("callee required").ura,
-            "easynet:///r/acme/hub"
-        );
+        assert_eq!(envelope.callee.expect("callee required").ura, hub.as_str());
         assert_eq!(
             envelope.subject.expect("subject required").ura,
             "easynet:///r/acme/device/dev-a"
@@ -439,10 +438,11 @@ mod tests {
         use easynet_axon::pb::axon::v1::{invoke_bidi_up, CallerSignature, StreamDescriptor};
         let mut metadata = HashMap::new();
         metadata.insert("x-easynet-delegation".to_string(), "producer".to_string());
+        let hub = crate::ura::hub_ura("acme");
 
         let frame = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
-            "easynet:///r/acme/hub",
+            &hub,
             "device.pty.attach",
             "easynet:///r/acme/device/dev-a",
         )
@@ -497,9 +497,10 @@ mod tests {
     #[test]
     fn invocation_builder_rejects_ambiguous_bidi_stream_zero() {
         use easynet_axon::pb::axon::v1::StreamDescriptor;
+        let hub = crate::ura::hub_ura("acme");
         let err = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
-            "easynet:///r/acme/hub",
+            &hub,
             "device.pty.attach",
             "easynet:///r/acme/device/dev-a",
         )
@@ -526,13 +527,8 @@ mod tests {
 
     #[test]
     fn invocation_builder_rejects_invalid_ura() {
-        let err = DaemonInvocation::builder(
-            "not-a-ura",
-            "easynet:///r/acme/hub",
-            "x",
-            "easynet:///r/acme/hub",
-        )
-        .unwrap_err();
+        let hub = crate::ura::hub_ura("acme");
+        let err = DaemonInvocation::builder("not-a-ura", &hub, "x", &hub).unwrap_err();
         assert!(format!("{err}").contains("caller_ura"));
     }
 }

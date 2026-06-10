@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "chat.history.list"
+description = "List an agent's persisted chat sessions (id, started_at, last_turn_at, turn_count, prompt_preview), most-recent-first."
+
+[input_schema]
+type = "object"
+required = ["agent"]
+additionalProperties = false
+
+[input_schema.properties.agent]
+type = "string"
+description = "Agent name whose chat sessions to list."

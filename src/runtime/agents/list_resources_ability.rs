@@ -50,7 +50,7 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::ability_toml::Rfc006Metadata;
 
-pub const ABILITY_META_LIST_RESOURCES: &str = "device.meta.list_resources";
+pub const ABILITY_META_LIST_RESOURCES: &str = "meta.list_resources";
 
 /// Register `meta.list_resources` on the registry.
 pub fn register(reg: &mut AxonAbilityCatalog) {

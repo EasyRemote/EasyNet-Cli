@@ -711,7 +711,7 @@ mod tests {
         // it as no-op padding) so we use a guaranteed-invalid char.
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
-            r#"{"tool_name":"device.observe.health","arguments_b64":"!!!"}"#,
+            r#"{"tool_name":"observe.health","arguments_b64":"!!!"}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -735,7 +735,7 @@ mod tests {
         // treated as {} not as a bad-request.
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
-            r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
+            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -763,7 +763,7 @@ mod tests {
         // verify the result_b64 decodes to JSON and isn't empty.
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
-            r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
+            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -782,8 +782,7 @@ mod tests {
         let adapter = fresh_adapter();
         let args = serde_json::json!({"client_marker":"e2e-step3"}).to_string();
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
-        let req =
-            format!(r#"{{"tool_name":"device.observe.health","arguments_b64":"{args_b64}"}}"#);
+        let req = format!(r#"{{"tool_name":"observe.health","arguments_b64":"{args_b64}"}}"#);
         let resp = build_response_line_from_str(&req, &adapter);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
@@ -818,7 +817,7 @@ mod tests {
 
         // Client side: open, send request, read response, close.
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
-        let req = "{\"tool_name\":\"device.observe.health\",\"arguments_b64\":\"\"}\n".as_bytes();
+        let req = "{\"tool_name\":\"observe.health\",\"arguments_b64\":\"\"}\n".as_bytes();
         client.write_all(req).await.unwrap();
         client.flush().await.unwrap();
         let (read_half, _) = client.into_split();
@@ -834,7 +833,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
-    /// Stream-mode round-trip against `device.session.attach` with an
+    /// Stream-mode round-trip against `session.attach` with an
     /// unknown session id. The handler returns a `Snapshot::Snapshot`
     /// with zero history frames; the daemon side must (a) emit a
     /// snapshot envelope (frames=[]) — actually skipped because we
@@ -863,7 +862,7 @@ mod tests {
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
         let req_value = json!({
             "mode": "stream",
-            "tool_name": "device.session.attach",
+            "tool_name": "session.attach",
             "function_name": "",
             "arguments_b64": base64::engine::general_purpose::STANDARD
                 .encode(b"{\"session_id\":\"nonexistent\"}"),
@@ -943,13 +942,12 @@ mod tests {
     #[test]
     fn mode_omitted_defaults_to_rpc() {
         let req: DispatchRequest =
-            serde_json::from_str(r#"{"tool_name":"device.observe.health","arguments_b64":""}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"tool_name":"observe.health","arguments_b64":""}"#).unwrap();
         assert_eq!(req.mode, "rpc");
 
         // Sanity: explicit "rpc" parses too.
         let req2: DispatchRequest = serde_json::from_str(
-            r#"{"mode":"rpc","tool_name":"device.observe.health","arguments_b64":""}"#,
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
         )
         .unwrap();
         assert_eq!(req2.mode, "rpc");
@@ -980,12 +978,11 @@ mod tests {
     #[test]
     fn subject_ura_is_optional_and_trimmed() {
         let req: DispatchRequest =
-            serde_json::from_str(r#"{"tool_name":"device.observe.health","arguments_b64":""}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"tool_name":"observe.health","arguments_b64":""}"#).unwrap();
         assert_eq!(subject_from_request(&req), None);
 
         let req: DispatchRequest = serde_json::from_str(
-            r#"{"tool_name":"device.observe.health","arguments_b64":"","subject_ura":"  easynet:///r/test/resource/device  "}"#,
+            r#"{"tool_name":"observe.health","arguments_b64":"","subject_ura":"  easynet:///r/test/resource/device  "}"#,
         )
         .unwrap();
         assert_eq!(
@@ -994,7 +991,7 @@ mod tests {
         );
 
         let req: DispatchRequest = serde_json::from_str(
-            r#"{"tool_name":"device.observe.health","arguments_b64":"","subject_ura":"   "}"#,
+            r#"{"tool_name":"observe.health","arguments_b64":"","subject_ura":"   "}"#,
         )
         .unwrap();
         assert_eq!(subject_from_request(&req), None);

@@ -14,7 +14,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -260,18 +260,6 @@ pub type LocalBidiHandler = Arc<dyn Fn(Value) -> anyhow::Result<BidiSource> + Se
 /// Envelope-aware bidi handler. Mirrors `LocalRpcHandlerWithEnvelope`.
 pub type LocalBidiHandlerWithEnvelope =
     Arc<dyn Fn(EnvelopeContext, Value) -> anyhow::Result<BidiSource> + Send + Sync>;
-
-/// Resolver consulted on a registry miss. Returns `Some(handler)`
-/// when the resolver can synthesize one for the queried ability
-/// (e.g. a `<agent>.<verb>` whose TOML was added to the workspace
-/// after daemon boot — the dynamic per-agent fallback uses this
-/// to discover newly-authored abilities at invoke time without
-/// daemon restart). `None` keeps the legacy "not found" semantics.
-///
-/// One resolver per registry — the daemon owns this slot and uses
-/// it for the agent-workspace path. Returning `Send + Sync` so the
-/// registry stays clone-friendly on the Arc share.
-pub type LocalFallbackResolver = Arc<dyn Fn(&str) -> Option<LocalRpcHandler> + Send + Sync>;
 
 #[derive(Clone, Default)]
 struct RuntimeHandlerSet {
@@ -622,7 +610,7 @@ fn runtime_handler_set_to_ability_fn(name: String, handlers: RuntimeHandlerSet) 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnerKind {
     /// Hosted by THIS device's daemon directly. Examples (terminal
-    /// state): `device.fs.read`, `device.node.list`,
+    /// state): `fs.read`, `node.list`,
     /// `device.keyring.sign`, `device.session`, `device.invoke_remote`.
     Device,
     /// Hosted by the realm hub (federation-tier). Examples (terminal
@@ -675,7 +663,6 @@ pub struct AxonAbilityCatalog {
     rpc: BTreeMap<String, LocalRpcHandler>,
     stream: BTreeMap<String, LocalStreamHandler>,
     bidi: BTreeMap<String, LocalBidiHandler>,
-    rpc_fallback: Option<LocalFallbackResolver>,
     // ── Envelope-aware variants (PR-DISPATCHER-SUBJECT) ──────
     // Separate maps so legacy `register_*` callers stay on the
     // args-only signature (zero churn) and only abilities that
@@ -807,7 +794,6 @@ impl std::fmt::Debug for AxonAbilityCatalog {
             .field("owner_count", &self.owner.len())
             .field("manifest_count", &self.manifests.len())
             .field("dynamic_ext_count", &dynamic_count)
-            .field("has_rpc_fallback", &self.rpc_fallback.is_some())
             .finish()
     }
 }
@@ -1345,8 +1331,8 @@ impl AxonAbilityCatalog {
     /// MCP server's tool name happens to collide with a boot-
     /// registered system ability, the static owner is canonical.
     /// Returns `Some(OwnerKind)` by value (rather than `&OwnerKind`)
-    /// because the dynamic-side fallback requires reading through
-    /// an RwLock — `&` would tie the borrow to the lock guard.
+    /// because the dynamic side table is guarded by an RwLock — `&`
+    /// would tie the borrow to the lock guard.
     pub fn lookup_owner(&self, ability: &str) -> Option<OwnerKind> {
         if let Some(o) = self.owner.get(ability) {
             return Some(o.clone());
@@ -1758,52 +1744,29 @@ impl AxonAbilityCatalog {
     /// under one call mode, but the union here keeps the list
     /// honest if a future ability legitimately exposes both shapes).
     pub fn list_abilities(&self) -> Vec<String> {
+        let mut names = BTreeSet::new();
         if let Some(runtime) = self.runtime() {
-            let mut names: Vec<String> = block_on_runtime_sync(runtime.list_abilities())
-                .into_iter()
-                .map(|descriptor| descriptor.name)
-                .collect();
-            names.sort();
-            return names;
+            names.extend(
+                block_on_runtime_sync(runtime.list_abilities())
+                    .into_iter()
+                    .map(|descriptor| descriptor.name),
+            );
+        } else {
+            names.extend(self.rpc.keys().cloned());
+            // Envelope-aware variants are part of the same discovery
+            // surface — meta.list_abilities should not care which
+            // signature an ability registered under.
+            names.extend(self.rpc_with_env.keys().cloned());
+            names.extend(self.stream.keys().cloned());
+            names.extend(self.stream_with_env.keys().cloned());
+            names.extend(self.bidi.keys().cloned());
+            names.extend(self.bidi_with_env.keys().cloned());
         }
-        let mut names: Vec<String> = self.rpc.keys().cloned().collect();
-        // Envelope-aware variants are part of the same discovery
-        // surface — meta.list_abilities should not care which
-        // signature an ability registered under.
-        for k in self.rpc_with_env.keys() {
-            if !names.iter().any(|n| n == k) {
-                names.push(k.clone());
-            }
-        }
-        for k in self.stream.keys() {
-            if !names.iter().any(|n| n == k) {
-                names.push(k.clone());
-            }
-        }
-        for k in self.stream_with_env.keys() {
-            if !names.iter().any(|n| n == k) {
-                names.push(k.clone());
-            }
-        }
-        for k in self.bidi.keys() {
-            if !names.iter().any(|n| n == k) {
-                names.push(k.clone());
-            }
-        }
-        for k in self.bidi_with_env.keys() {
-            if !names.iter().any(|n| n == k) {
-                names.push(k.clone());
-            }
-        }
-        // Hot-reload side: union dynamic names so a freshly reflected
-        // MCP tool shows up in `meta.list_abilities` immediately.
-        for k in self.list_dynamic_abilities() {
-            if !names.contains(&k) {
-                names.push(k);
-            }
-        }
-        names.sort();
-        names
+        // Hot-reload side: union dynamic names even when LocalRuntime
+        // is attached. Runtime metadata covers boot-registered
+        // abilities; `dynamic_ext` is the post-boot extension plane.
+        names.extend(self.list_dynamic_abilities());
+        names.into_iter().collect()
     }
 
     /// Returns Some when an RPC handler is registered for `ability`.
@@ -1817,9 +1780,12 @@ impl AxonAbilityCatalog {
     /// as registered.
     pub fn has_rpc(&self, ability: &str) -> bool {
         if let Some(runtime) = self.runtime() {
-            return block_on_runtime_sync(runtime.ability_options(ability))
+            if block_on_runtime_sync(runtime.ability_options(ability))
                 .map(|options| options.modes.rpc)
-                .unwrap_or(false);
+                .unwrap_or(false)
+            {
+                return true;
+            }
         }
         if self.rpc.contains_key(ability) || self.rpc_with_env.contains_key(ability) {
             return true;
@@ -1831,35 +1797,38 @@ impl AxonAbilityCatalog {
         dyn_ext.rpc.contains_key(ability) || dyn_ext.rpc_with_env.contains_key(ability)
     }
 
-    /// List all statically-registered RPC ability names. Does NOT
-    /// include names that only resolve through the fallback chain
-    /// (those are synthesised at lookup time and have no static
-    /// listing). Used by RFC-006-C `01HUB.openai.list_models` to
-    /// project chat-base abilities into the /v1/models response.
+    /// List all registered RPC ability names. Dynamic names must
+    /// already be materialised in the runtime or `dynamic_ext`; the
+    /// catalogue no longer synthesises fallback handlers on lookup
+    /// miss.
     pub fn list_rpc_names(&self) -> Vec<String> {
+        let mut names = BTreeSet::new();
         if let Some(runtime) = self.runtime() {
-            let mut names: Vec<String> = block_on_runtime_sync(runtime.list_abilities())
-                .into_iter()
-                .filter(|descriptor| descriptor.options.modes.rpc)
-                .map(|descriptor| descriptor.name)
-                .collect();
-            names.sort();
-            return names;
+            names.extend(
+                block_on_runtime_sync(runtime.list_abilities())
+                    .into_iter()
+                    .filter(|descriptor| descriptor.options.modes.rpc)
+                    .map(|descriptor| descriptor.name),
+            );
+        } else {
+            names.extend(self.rpc.keys().cloned());
+            names.extend(self.rpc_with_env.keys().cloned());
         }
-        self.rpc.keys().cloned().collect()
+        {
+            let dyn_ext = self
+                .dynamic_ext
+                .read()
+                .expect("dynamic_ext RwLock poisoned");
+            names.extend(dyn_ext.rpc.keys().cloned());
+            names.extend(dyn_ext.rpc_with_env.keys().cloned());
+        }
+        names.into_iter().collect()
     }
 
-    /// Owned-clone counterpart that consults the fallback resolver
-    /// on a registry miss. Existing call sites that take `&Arc<...>`
-    /// keep using `get_rpc`; the runtime adapter and test-only invoke
-    /// probes use this so a `<agent>.<verb>` written to disk post-boot
-    /// is found via the fallback without forcing the registry to be
-    /// mutable.
-    ///
-    /// Lookup order: static map → dynamic side table → fallback
-    /// resolver. The hot-reload sink writes only the dynamic side,
-    /// so the runtime lookup path stays lock-free for everything
-    /// registered at boot.
+    /// Owned-clone counterpart that consults the static map and
+    /// dynamic side table. Misses stay misses; post-boot abilities
+    /// must be explicitly registered into `LocalRuntime` or
+    /// `dynamic_ext`.
     pub fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
         if let Some(h) = self.rpc.get(ability) {
             return Some(Arc::clone(h));
@@ -1872,9 +1841,6 @@ impl AxonAbilityCatalog {
             if let Some(h) = dyn_ext.rpc.get(ability) {
                 return Some(Arc::clone(h));
             }
-        }
-        if let Some(resolver) = self.rpc_fallback.as_ref() {
-            return resolver(ability);
         }
         None
     }
@@ -1949,37 +1915,6 @@ impl AxonAbilityCatalog {
         dyn_ext.rpc_with_env.get(ability).map(Arc::clone)
     }
 
-    /// Install the RPC fallback resolver. Called once by the daemon
-    /// boot path after every static handler is in place. Replaces
-    /// any prior resolver — single-writer registry semantics still
-    /// hold; only the daemon installs this.
-    pub fn set_rpc_fallback(&mut self, resolver: LocalFallbackResolver) {
-        self.rpc_fallback = Some(resolver);
-    }
-
-    /// Chain a new fallback resolver in front of any existing one.
-    /// The new resolver is consulted first; on its `None`, the
-    /// previously-installed resolver (if any) is consulted. Order
-    /// of registration therefore matters at boot — the LAST chained
-    /// resolver wins on competing patterns. Used by reference
-    /// systems (e.g. RFC-006-B Pages) that synthesise per-instance
-    /// abilities at lookup time and must coexist with the
-    /// chat-style `<agent>.<verb>` resolver.
-    pub fn chain_rpc_fallback(&mut self, resolver: LocalFallbackResolver) {
-        match self.rpc_fallback.take() {
-            None => self.rpc_fallback = Some(resolver),
-            Some(prior) => {
-                let chained: LocalFallbackResolver = Arc::new(move |name: &str| {
-                    if let Some(h) = resolver(name) {
-                        return Some(h);
-                    }
-                    prior(name)
-                });
-                self.rpc_fallback = Some(chained);
-            }
-        }
-    }
-
     /// Returns Some when a stream handler is registered for `ability`.
     pub fn get_stream(&self, ability: &str) -> Option<&LocalStreamHandler> {
         self.stream.get(ability)
@@ -1990,9 +1925,12 @@ impl AxonAbilityCatalog {
     /// side table on static-map miss.
     pub fn has_stream(&self, ability: &str) -> bool {
         if let Some(runtime) = self.runtime() {
-            return block_on_runtime_sync(runtime.ability_options(ability))
+            if block_on_runtime_sync(runtime.ability_options(ability))
                 .map(|options| options.modes.stream)
-                .unwrap_or(false);
+                .unwrap_or(false)
+            {
+                return true;
+            }
         }
         if self.stream.contains_key(ability) || self.stream_with_env.contains_key(ability) {
             return true;
@@ -2014,9 +1952,12 @@ impl AxonAbilityCatalog {
     /// the dynamic side table on static-map miss.
     pub fn has_bidi(&self, ability: &str) -> bool {
         if let Some(runtime) = self.runtime() {
-            return block_on_runtime_sync(runtime.ability_options(ability))
+            if block_on_runtime_sync(runtime.ability_options(ability))
                 .map(|options| options.modes.bidi)
-                .unwrap_or(false);
+                .unwrap_or(false)
+            {
+                return true;
+            }
         }
         if self.bidi.contains_key(ability) || self.bidi_with_env.contains_key(ability) {
             return true;
@@ -2655,12 +2596,12 @@ mod tests {
         // Pin the round-trip so a typo (e.g. inserting into
         // `self.stream` instead of `self.bidi`) trips a test.
         let mut reg = AxonAbilityCatalog::new();
-        assert!(reg.get_bidi("device.terminal.attach").is_none());
-        reg.register_bidi("device.terminal.attach", trivial_bidi_handler());
-        assert!(reg.get_bidi("device.terminal.attach").is_some());
+        assert!(reg.get_bidi("terminal.attach").is_none());
+        reg.register_bidi("terminal.attach", trivial_bidi_handler());
+        assert!(reg.get_bidi("terminal.attach").is_some());
         // Negative: not visible on the other call modes.
-        assert!(reg.get_rpc("device.terminal.attach").is_none());
-        assert!(reg.get_stream("device.terminal.attach").is_none());
+        assert!(reg.get_rpc("terminal.attach").is_none());
+        assert!(reg.get_stream("terminal.attach").is_none());
     }
 
     #[test]
@@ -2675,14 +2616,10 @@ mod tests {
             "permission.subscribe",
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
-        reg.register_bidi("device.terminal.attach", trivial_bidi_handler());
+        reg.register_bidi("terminal.attach", trivial_bidi_handler());
         assert_eq!(
             reg.list_abilities(),
-            vec![
-                "device.terminal.attach",
-                "observe.health",
-                "permission.subscribe",
-            ],
+            vec!["observe.health", "permission.subscribe", "terminal.attach",],
         );
     }
 
@@ -2772,7 +2709,7 @@ mod tests {
         let dispatcher = empty_registry();
         let target = InvocationTarget {
             scope: TargetScope::Local,
-            ability: "device.terminal.attach".into(),
+            ability: "terminal.attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
@@ -2780,10 +2717,7 @@ mod tests {
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         let msg = format!("{err}");
-        assert!(
-            msg.contains("device.terminal.attach"),
-            "names ability: {msg}"
-        );
+        assert!(msg.contains("terminal.attach"), "names ability: {msg}");
         assert!(msg.contains("bidi"), "indicates bidi mode: {msg}");
     }
 
@@ -2825,7 +2759,7 @@ mod tests {
             scope: TargetScope::Remote {
                 node: NodeId::new("01PEER"),
             },
-            ability: "device.terminal.attach".into(),
+            ability: "terminal.attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
@@ -2869,7 +2803,7 @@ mod tests {
         // No name-string sniffing — the registry is the source of
         // truth for owner kind. M0 of the system-namespace migration.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner("device.fs.read", OwnerKind::Device, ok_handler());
+        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
         reg.register_rpc_with_owner("hub.openai.chat_completions", OwnerKind::Hub, ok_handler());
         reg.register_rpc_with_owner(
             "consent.decide",
@@ -2882,7 +2816,7 @@ mod tests {
             ok_handler(),
         );
 
-        assert_eq!(reg.lookup_owner("device.fs.read"), Some(OwnerKind::Device));
+        assert_eq!(reg.lookup_owner("fs.read"), Some(OwnerKind::Device));
         assert_eq!(
             reg.lookup_owner("hub.openai.chat_completions"),
             Some(OwnerKind::Hub)
@@ -2985,15 +2919,13 @@ mod tests {
     // ── M1: dual-name (aliased) registration ────────────────────────
 
     #[test]
-    fn legacy_names_rejected_post_m3() {
-        // M3 contract: legacy names are no longer registered. A
-        // dispatcher invocation against a legacy name surfaces
-        // `AbilityNotFound`. Pin so a future revert that re-adds
-        // dual-aliasing has to argue with this test rather than
-        // silently re-introducing the legacy half.
+    fn device_owner_prefix_names_rejected_from_public_dispatch_surface() {
+        // RFC-005 cleanup: device-owned system ability names are owner-local
+        // names such as `fs.read`. Owner-prefixed names are not a public
+        // catalogue or dispatch surface.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
-            "device.fs.read",
+            "fs.read",
             OwnerKind::Device,
             Arc::new(|_args: Value| Ok(json!({"ok": true}))),
         );
@@ -3001,18 +2933,18 @@ mod tests {
 
         // Canonical works.
         let mut t_can = ping_target_local();
-        t_can.ability = "device.fs.read".into();
+        t_can.ability = "fs.read".into();
         let r = dispatcher.execute_rpc(t_can).unwrap();
         assert_eq!(r, json!({"ok": true}));
 
-        // Legacy is gone.
+        // Owner-prefixed public alias is gone.
         let mut t_leg = ping_target_local();
-        t_leg.ability = "fs.read".into();
+        t_leg.ability = "device.fs.read".into();
         let err = dispatcher.execute_rpc(t_leg).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("fs.read"),
-            "AbilityNotFound message must name the legacy ability; got: {msg}"
+            msg.contains("device.fs.read"),
+            "AbilityNotFound message must name the rejected ability; got: {msg}"
         );
     }
 
@@ -3041,23 +2973,20 @@ mod tests {
     }
 
     #[test]
-    fn canonical_only_lists_in_catalogue() {
-        // Post-M3: `list_abilities()` returns canonical names
-        // only — the legacy alias has been removed from the
-        // registry. Pin so a future revert that re-introduces
-        // dual-aliasing has to argue with this test rather than
-        // silently re-doubling the catalogue.
+    fn catalogue_lists_owner_local_names_only() {
+        // RFC-005: `list_abilities()` returns public owner-local names. It must
+        // not synthesize a duplicated `device.*` owner prefix.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
-            "device.shell.run",
+            "shell.run",
             OwnerKind::Device,
             Arc::new(|_args: Value| Ok(json!({}))),
         );
         let names = reg.list_abilities();
-        assert!(names.iter().any(|n| n == "device.shell.run"));
+        assert!(names.iter().any(|n| n == "shell.run"));
         assert!(
-            !names.iter().any(|n| n == "shell.run"),
-            "post-M3 legacy name must not appear in list_abilities()"
+            !names.iter().any(|n| n == "device.shell.run"),
+            "device owner prefix must not appear in list_abilities()"
         );
     }
 
@@ -3288,12 +3217,12 @@ mod tests {
     fn hot_register_replaces_prior_dynamic_call_mode() {
         let reg = Arc::new(AxonAbilityCatalog::new());
         reg.hot_register_rpc(
-            "device.plugin.mode_shift",
+            "plugin.mode_shift",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"mode": "rpc"}))),
         );
-        assert!(reg.has_rpc("device.plugin.mode_shift"));
-        assert!(!reg.has_stream("device.plugin.mode_shift"));
+        assert!(reg.has_rpc("plugin.mode_shift"));
+        assert!(!reg.has_stream("plugin.mode_shift"));
 
         let manifest = crate::core::ability_spec::AbilityManifest::new(
             "mode_shift",
@@ -3302,20 +3231,20 @@ mod tests {
         )
         .unwrap();
         reg.hot_register_stream_with_spec(
-            "device.plugin.mode_shift",
+            "plugin.mode_shift",
             OwnerKind::Device,
             manifest,
             Arc::new(|_args| Ok(StreamSource::Snapshot(Vec::new()))),
         );
 
         assert!(
-            !reg.has_rpc("device.plugin.mode_shift"),
+            !reg.has_rpc("plugin.mode_shift"),
             "hot-registering a stream handler must drain the stale dynamic RPC mode"
         );
-        assert!(reg.has_stream("device.plugin.mode_shift"));
+        assert!(reg.has_stream("plugin.mode_shift"));
         assert_eq!(
             reg.list_dynamic_abilities(),
-            vec!["device.plugin.mode_shift".to_string()]
+            vec!["plugin.mode_shift".to_string()]
         );
     }
 
@@ -3328,7 +3257,7 @@ mod tests {
         // through `hot_unregister`, the static entry survives.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
-            "device.fs.read",
+            "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
@@ -3340,22 +3269,22 @@ mod tests {
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
         assert!(reg.has_rpc("mcp_wikipedia__search"));
-        assert!(reg.has_rpc("device.fs.read"));
+        assert!(reg.has_rpc("fs.read"));
 
         let removed = reg.hot_unregister("mcp_wikipedia__search");
         assert!(removed, "hot_unregister reports the entry was present");
         assert!(!reg.has_rpc("mcp_wikipedia__search"));
         // Static entry untouched.
-        assert!(reg.has_rpc("device.fs.read"));
+        assert!(reg.has_rpc("fs.read"));
 
         // Calling hot_unregister on a static name is a silent no-op
         // (returns false) — the static side is the boot-time truth.
-        let static_removed = reg.hot_unregister("device.fs.read");
+        let static_removed = reg.hot_unregister("fs.read");
         assert!(
             !static_removed,
             "hot_unregister does not touch the static map"
         );
-        assert!(reg.has_rpc("device.fs.read"));
+        assert!(reg.has_rpc("fs.read"));
     }
 
     #[test]
@@ -3367,7 +3296,7 @@ mod tests {
         // + dynamic side combined.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
-            "device.fs.read",
+            "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
@@ -3378,7 +3307,7 @@ mod tests {
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
         let names = reg.list_abilities();
-        assert!(names.contains(&"device.fs.read".to_string()));
+        assert!(names.contains(&"fs.read".to_string()));
         assert!(names.contains(&"mcp_wikipedia__search".to_string()));
         // Sorted so the catalogue surface is stable across calls.
         let mut sorted = names.clone();
@@ -3389,27 +3318,27 @@ mod tests {
     #[test]
     fn static_lookup_wins_over_dynamic_on_name_collision() {
         // If an upstream MCP server happens to emit a tool named
-        // `device.fs.read`, the boot-registered system ability must
+        // `fs.read`, the boot-registered system ability must
         // remain canonical. This is a defensive invariant: an
         // operator who deliberately wires such an upstream still
         // gets the system handler, not a 3rd-party reimplementation.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
-            "device.fs.read",
+            "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"from": "static"}))),
         );
         let reg = Arc::new(reg);
         reg.hot_register_rpc(
-            "device.fs.read",
+            "fs.read",
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic"}))),
         );
         assert!(
-            !reg.has_dynamic("device.fs.read"),
+            !reg.has_dynamic("fs.read"),
             "dynamic side must reject attempts to shadow static abilities"
         );
-        let handler = reg.resolve_rpc("device.fs.read").unwrap();
+        let handler = reg.resolve_rpc("fs.read").unwrap();
         let out = handler(serde_json::json!({})).unwrap();
         assert_eq!(
             out,
@@ -3418,7 +3347,7 @@ mod tests {
         );
         // Owner table reflects the static entry too — synth paths
         // that read `lookup_owner` see Device, not Agent.
-        assert_eq!(reg.lookup_owner("device.fs.read"), Some(OwnerKind::Device));
+        assert_eq!(reg.lookup_owner("fs.read"), Some(OwnerKind::Device));
     }
 
     #[test]

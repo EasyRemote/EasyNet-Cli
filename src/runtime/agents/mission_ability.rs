@@ -44,20 +44,20 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_RUN: &str = "device.mission.run";
+pub const ABILITY_RUN: &str = "mission.run";
 /// `mission.track(run_id)` — read the persisted state of a prior
 /// `mission.run` invocation. Returns the same shape `mission.run`
 /// surfaces (run_id, run_dir, outputs, meta, ok), reconstructed
 /// off the on-disk run dir. Use case: an LLM kicks off a long
 /// mission (multi-agent fan-out), polls track until status leaves
 /// `running`, then composes a final answer.
-pub const ABILITY_TRACK: &str = "device.mission.track";
+pub const ABILITY_TRACK: &str = "mission.track";
 /// `mission.cancel(run_id)` — flip an in-flight mission to
 /// `cancelled`. No-op (with informative result) on a run that is
 /// already terminal. Best-effort: removes the pid file and rewrites
 /// meta.json; long-running step processes are not killed today,
 /// they just stop being expected.
-pub const ABILITY_CANCEL: &str = "device.mission.cancel";
+pub const ABILITY_CANCEL: &str = "mission.cancel";
 
 /// Register every mission ability on the registry. Called once at
 /// boot from `runtime::agents::build_registry_with_services`.
@@ -72,17 +72,17 @@ pub const ABILITY_CANCEL: &str = "device.mission.cancel";
 /// names doubled the meta-discovery surface for no win.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
-        "device.mission.run",
+        "mission.run",
         OwnerKind::Device,
         Arc::new(move |args: Value| run_handler(args)),
     );
     reg.register_rpc_with_owner(
-        "device.mission.track",
+        "mission.track",
         OwnerKind::Device,
         Arc::new(move |args: Value| track_handler(args)),
     );
     reg.register_rpc_with_owner(
-        "device.mission.cancel",
+        "mission.cancel",
         OwnerKind::Device,
         Arc::new(move |args: Value| cancel_handler(args)),
     );

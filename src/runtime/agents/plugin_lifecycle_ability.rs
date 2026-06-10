@@ -13,10 +13,10 @@ use crate::runtime::plugin_host::PluginRuntimeManager;
 
 /// Daemon-local ability used by `easynet plugin install/update/remove` after
 /// the filesystem transaction commits.
-pub const RELOAD_ABILITY: &str = "device.plugin.reload";
+pub const RELOAD_ABILITY: &str = "plugin.reload";
 /// Daemon-local ability used by `easynet plugin list` to report actual runtime
 /// plugin status instead of an offline load-plan approximation.
-pub const STATUS_ABILITY: &str = "device.plugin.status";
+pub const STATUS_ABILITY: &str = "plugin.status";
 
 pub type SharedPluginRegistryCell = OnceLock<Arc<AxonAbilityCatalog>>;
 

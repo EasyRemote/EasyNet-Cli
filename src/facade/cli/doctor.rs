@@ -23,6 +23,7 @@ use console::style;
 
 use crate::persistence::config;
 use crate::runtime::drivers::{claude_code, codex};
+use crate::runtime::join_connection_state;
 use crate::support::net;
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -47,7 +48,9 @@ struct Check {
 
 pub fn run(args: DoctorArgs) -> anyhow::Result<()> {
     let mut checks: Vec<Check> = Vec::new();
+    let connection = join_connection_state::latest_snapshot();
 
+    checks.push(check_connection_state(&connection));
     checks.push(check_pairing());
     checks.push(check_runtime());
     checks.push(check_federation());
@@ -70,11 +73,26 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<()> {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&payload)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "connection": connection,
+                "checks": payload,
+            }))?
+        );
     } else {
         eprintln!();
         eprintln!("  {}", style("EasyNet doctor").cyan().bold());
         eprintln!();
+        eprintln!(
+            "  {} {:<22} {}",
+            style("●").cyan(),
+            style("connection state").bold(),
+            style(connection.to_string()).dim()
+        );
+        if let Some(failure) = &connection.failure {
+            eprintln!("      {}", style(&failure.message).dim());
+        }
         for c in &checks {
             let mark = match c.status {
                 CheckStatus::Ok => style("●").green(),
@@ -103,6 +121,40 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn check_connection_state(snapshot: &join_connection_state::JoinConnectionSnapshot) -> Check {
+    let transition = snapshot
+        .interrupted_transition
+        .as_deref()
+        .or(snapshot.transition_id.as_deref())
+        .unwrap_or("-");
+    let detail = match snapshot.failure.as_ref() {
+        Some(failure) => format!(
+            "{} [{}] at {transition}: {}",
+            snapshot.state, snapshot.state_code, failure.code
+        ),
+        None => format!(
+            "{} [{}] at {transition}",
+            snapshot.state, snapshot.state_code
+        ),
+    };
+    let status = if snapshot.state_code.starts_with('F') && snapshot.state_code != "F560" {
+        CheckStatus::Fail
+    } else if snapshot.state_code == "F560" || snapshot.state_code == "C440" {
+        CheckStatus::Warn
+    } else {
+        CheckStatus::Ok
+    };
+    Check {
+        name: "connection state".to_string(),
+        status,
+        detail,
+        hint: Some(
+            "Run 'easynet runtime status --json' or 'easynet docker status --json' \
+             for the full state snapshot.",
+        ),
+    }
+}
+
 fn check_pairing() -> Check {
     match config::load_credentials() {
         Ok(creds) => Check {
@@ -124,7 +176,7 @@ fn check_runtime() -> Check {
     match config::load() {
         Ok(state) => match state.runtime_kind {
             config::RuntimeKind::DaemonOnly => match crate::support::local_invoke::invoke_local_ability(
-                "device.observe.health",
+                "observe.health",
                 serde_json::json!({"source": "doctor"}),
             ) {
                 Ok(_) => Check {
@@ -280,7 +332,7 @@ fn check_agents() -> Vec<Check> {
             out.push(Check {
                 name: "agents".to_string(),
                 status: CheckStatus::Warn,
-                detail: format!("device.agent.list unavailable: {err}"),
+                detail: format!("agent.list unavailable: {err}"),
                 hint: Some("Start the daemon before checking registered agent rows."),
             });
             Vec::new()

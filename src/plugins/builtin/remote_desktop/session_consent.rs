@@ -10,6 +10,32 @@ use crate::plugins::remote_desktop::errors::{RemoteDesktopError, RemoteDesktopRe
 use crate::runtime::ability_dispatch::EnvelopeContext;
 
 const POLICY_LOCAL_USER_CONSENT: &str = "local_user_consent";
+const POLICY_OWNER_SELF_CONSENT: &str = "owner_self_consent";
+
+/// Whether `caller` is this device's owner: the user this device is
+/// paired to (console invokes sign as the user URA) or the device
+/// identity itself (daemon-local CLI invokes). Realm must match the
+/// pairing realm. Unpaired devices (no credentials) own nothing —
+/// fail-closed.
+fn caller_is_device_owner(caller: Option<&str>) -> bool {
+    let Some(caller) = caller else { return false };
+    let Ok(parsed) = crate::ura::parse_ura(caller) else {
+        return false;
+    };
+    let Ok(creds) = crate::persistence::config::load_credentials() else {
+        return false;
+    };
+    if parsed.realm != creds.realm.trim() {
+        return false;
+    }
+    match parsed.kind {
+        crate::ura::URAKind::Device => parsed.device_id() == Some(creds.node_id.trim()),
+        crate::ura::URAKind::User => {
+            creds.username.as_deref().map(str::trim) == parsed.user_id()
+        }
+        _ => false,
+    }
+}
 
 /// Receipt reference that authorized a remote desktop session.
 ///
@@ -60,26 +86,47 @@ impl RemoteDesktopConsentGrant {
     /// invocation envelope.
     ///
     /// Remote desktop is a local-user-consent ability. Session creation is
-    /// fail-closed: callers must present an Axon causal receipt that represents
-    /// the local approval event. The plugin stores and compares that receipt,
-    /// but does not verify its signature; Axon admission owns verification.
+    /// fail-closed with one carve-out:
+    ///
+    ///   1. A causal receipt in the envelope (the local approval event)
+    ///      grants under `local_user_consent`. The plugin stores and
+    ///      compares that receipt, but does not verify its signature;
+    ///      Axon admission owns verification.
+    ///   2. No receipt, but the caller IS this device's owner (the
+    ///      paired user, or the device identity itself): the signed,
+    ///      admission-verified invocation is itself the owner's
+    ///      approval act — viewing your own screen needs no second
+    ///      approval artefact. Grants under `owner_self_consent`.
+    ///
+    /// Any other caller without a receipt is refused
+    /// (`consent_receipt_required`), so cross-user and cross-realm
+    /// session creation stays fail-closed.
     pub(in crate::plugins::builtin::remote_desktop) fn required_from_envelope(
         ability: &'static str,
         session_id: &str,
         env: &EnvelopeContext,
     ) -> RemoteDesktopResult<Self> {
-        let approval_receipt = env
+        if let Some(approval_receipt) = env
             .causal_context
             .as_ref()
             .and_then(first_receipt_from_causal_context)
-            .ok_or_else(|| RemoteDesktopError::ConsentReceiptRequired {
-                ability,
-                session_id: session_id.to_string(),
-            })?;
-        Ok(Self {
-            policy: POLICY_LOCAL_USER_CONSENT,
-            approval_actor_ura: env.caller.clone(),
-            approval_receipt: Some(approval_receipt),
+        {
+            return Ok(Self {
+                policy: POLICY_LOCAL_USER_CONSENT,
+                approval_actor_ura: env.caller.clone(),
+                approval_receipt: Some(approval_receipt),
+            });
+        }
+        if caller_is_device_owner(env.caller.as_deref()) {
+            return Ok(Self {
+                policy: POLICY_OWNER_SELF_CONSENT,
+                approval_actor_ura: env.caller.clone(),
+                approval_receipt: None,
+            });
+        }
+        Err(RemoteDesktopError::ConsentReceiptRequired {
+            ability,
+            session_id: session_id.to_string(),
         })
     }
 
@@ -170,5 +217,86 @@ mod tests {
             ],
         });
         assert!(causal_context_contains_receipt(Some(&list), &expected));
+    }
+
+    fn pair_device(realm: &str, node_id: &str, username: &str) {
+        crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
+            node_id: node_id.to_string(),
+            credential_token: "tok".into(),
+            hub_endpoint: "https://127.0.0.1:50443".into(),
+            realm: realm.to_string(),
+            username: Some(username.to_string()),
+            ..Default::default()
+        })
+        .expect("save credentials");
+    }
+
+    #[test]
+    fn owner_user_caller_grants_self_consent_without_receipt() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        pair_device("acme", "dev-1", "alice");
+        let env = EnvelopeContext {
+            caller: Some("easynet:///r/acme/user/alice".into()),
+            ..EnvelopeContext::default()
+        };
+        let grant =
+            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s1", &env).unwrap();
+        assert_eq!(grant.policy, POLICY_OWNER_SELF_CONSENT);
+        assert!(grant.approval_receipt().is_none());
+    }
+
+    #[test]
+    fn owner_device_caller_grants_self_consent_without_receipt() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        pair_device("acme", "dev-1", "alice");
+        let env = EnvelopeContext {
+            caller: Some("easynet:///r/acme/device/dev-1".into()),
+            ..EnvelopeContext::default()
+        };
+        let grant =
+            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s2", &env).unwrap();
+        assert_eq!(grant.policy, POLICY_OWNER_SELF_CONSENT);
+    }
+
+    #[test]
+    fn foreign_or_mismatched_callers_stay_fail_closed_without_receipt() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        pair_device("acme", "dev-1", "alice");
+        for caller in [
+            "easynet:///r/acme/user/mallory",        // different user
+            "easynet:///r/other/user/alice",         // different realm
+            "easynet:///r/acme/device/dev-2",        // different device
+            "easynet:///r/acme/agent/alice.helper",  // agents never self-consent
+        ] {
+            let env = EnvelopeContext {
+                caller: Some(caller.into()),
+                ..EnvelopeContext::default()
+            };
+            let err = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s3", &env)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("consent_receipt_required"),
+                "caller {caller} must stay fail-closed; got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn receipt_still_wins_over_owner_self_consent() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        pair_device("acme", "dev-1", "alice");
+        let env = EnvelopeContext {
+            caller: Some("easynet:///r/acme/user/alice".into()),
+            causal_context: Some(json!({
+                "kind": "scalar",
+                "receipt_ura": "easynet:///r/acme/invocation/1/receipt/1",
+                "receipt_hash": "ab",
+            })),
+            ..EnvelopeContext::default()
+        };
+        let grant =
+            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s4", &env).unwrap();
+        assert_eq!(grant.policy, POLICY_LOCAL_USER_CONSENT);
+        assert!(grant.approval_receipt().is_some());
     }
 }

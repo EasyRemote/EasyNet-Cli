@@ -4,16 +4,16 @@
 // File: src/plugins/builtin/remote_desktop/constants.rs
 // Description: Stable ability names, reason codes, and runtime defaults.
 
-pub const ABILITY_CREATE_SESSION: &str = "device.remote_desktop.create_session";
-pub const ABILITY_SHOW_SESSION: &str = "device.remote_desktop.show_session";
-pub const ABILITY_SET_DESCRIPTION: &str = "device.remote_desktop.set_description";
-pub const ABILITY_ADD_ICE_CANDIDATE: &str = "device.remote_desktop.add_ice_candidate";
-pub const ABILITY_WATCH_EVENTS: &str = "device.remote_desktop.watch_events";
-pub const ABILITY_REFRESH_LEASE: &str = "device.remote_desktop.refresh_lease";
-pub const ABILITY_END_SESSION: &str = "device.remote_desktop.end_session";
-pub const ABILITY_ATTACH_SESSION: &str = "device.remote_desktop.attach";
-pub const ABILITY_PERMISSION_STATUS: &str = "device.remote_desktop.permission_status";
-pub const ABILITY_REQUEST_PERMISSION: &str = "device.remote_desktop.request_permission";
+pub const ABILITY_CREATE_SESSION: &str = "remote_desktop.create_session";
+pub const ABILITY_SHOW_SESSION: &str = "remote_desktop.show_session";
+pub const ABILITY_SET_DESCRIPTION: &str = "remote_desktop.set_description";
+pub const ABILITY_ADD_ICE_CANDIDATE: &str = "remote_desktop.add_ice_candidate";
+pub const ABILITY_WATCH_EVENTS: &str = "remote_desktop.watch_events";
+pub const ABILITY_REFRESH_LEASE: &str = "remote_desktop.refresh_lease";
+pub const ABILITY_END_SESSION: &str = "remote_desktop.end_session";
+pub const ABILITY_ATTACH_SESSION: &str = "remote_desktop.attach";
+pub const ABILITY_PERMISSION_STATUS: &str = "remote_desktop.permission_status";
+pub const ABILITY_REQUEST_PERMISSION: &str = "remote_desktop.request_permission";
 
 pub const REASON_RESOURCE_TYPE_MISMATCH: &str = "resource_type_mismatch";
 pub const REASON_SESSION_NOT_FOUND: &str = "session_not_found";

@@ -3,9 +3,9 @@
 # ==============================================================
 #
 # Boots `easynet-daemon`, waits for the daemon-hosted Axon
-# Invocation socket, and invokes `device.observe.health` through the
-# CLI's ability surface. This deliberately avoids control.sock and
-# does not construct legacy control-plane frames.
+# Invocation socket, and invokes a canonical observe.health
+# Ability URA through the CLI's ability surface. This deliberately
+# avoids control.sock and does not construct legacy control-plane frames.
 
 set -euo pipefail
 
@@ -23,8 +23,8 @@ for arg in "$@"; do
 done
 
 if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
-  echo "[smoke] building easynet + easynet-daemon (debug, axon-pb)..."
-  (cd "$REPO_ROOT" && cargo build --features axon-pb --bin easynet --bin easynet-daemon)
+  echo "[smoke] building easynet + easynet-daemon (debug, product defaults)..."
+  (cd "$REPO_ROOT" && cargo build --bin easynet --bin easynet-daemon)
 fi
 
 pkill -f "$DAEMON_BIN" 2>/dev/null || true
@@ -44,8 +44,9 @@ if [ ! -S "$DAEMON_SOCK" ]; then
   exit 1
 fi
 
-echo "[smoke] invoking device.observe.health through daemon-hosted Axon..."
-RESP="$("$CLI_BIN" ability invoke device.observe.health --args '{"smoke":"ok"}' --raw)"
+ABILITY_URA="easynet:///r/cli/ability/device.local.observe.health"
+echo "[smoke] invoking $ABILITY_URA through daemon-hosted Axon..."
+RESP="$("$CLI_BIN" ability invoke "$ABILITY_URA" --args '{"smoke":"ok"}' --raw)"
 echo "[smoke] response: $RESP"
 
 RESP="$RESP" python3 - <<'PY'

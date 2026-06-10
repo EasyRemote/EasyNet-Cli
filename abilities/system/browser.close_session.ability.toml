@@ -1,0 +1,13 @@
+schema_version = "1"
+name = "browser.close_session"
+description = "[V0 MOCK — NOT YET FUNCTIONAL; replaced by real WebView in RFC-013 W1] Close a WebView session created by browser.open_session. Idempotent: closing an already-closed (or never-opened) session returns success with status='already_closed'. Forces the session's frame stream to terminate and removes the session row from the device-local store."
+
+[input_schema]
+type = "object"
+required = ["session_ura"]
+additionalProperties = false
+
+[input_schema.properties.session_ura]
+type = "string"
+description = "Session URA returned by browser.open_session."
+minLength = 1

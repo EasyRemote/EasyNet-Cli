@@ -62,7 +62,7 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "timeout_ms": timeout_ms,
     });
     let result = if is_local_exec_target(&args.node) {
-        invoke_local_ability("device.process.exec", payload).context("invoke process.exec")?
+        invoke_local_ability("process.exec", payload).context("invoke process.exec")?
     } else {
         invoke_remote_process_exec(&args.node, payload)?
     };
@@ -116,8 +116,12 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    crate::support::federation_invoke::invoke_via_federation_forward(
+    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        &target_ura,
         "process.exec",
+    )?;
+    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+        ability_ura.as_str(),
         payload,
         &target_ura,
         caller_ura.as_deref(),

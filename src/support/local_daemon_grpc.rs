@@ -432,6 +432,246 @@ fn invoke_local_daemon_ability_with_caller_and_subject(
     })
 }
 
+/// Invoke a daemon-hosted ability AND return the invocation record
+/// alongside the result. Transport-level entry; CLI surfaces MUST go
+/// through [`crate::support::local_invoke::invoke_local_ability_with_invocation_meta`].
+///
+/// This differs from [`invoke_local_daemon_ability_with_subject`] in
+/// two protocol-visible ways:
+///
+///   1. The envelope's `causal_context` is set explicitly from the
+///      caller-provided parent receipt anchors: `Empty` for a root
+///      invocation, a scalar `ReceiptRef` for one parent, an ordered
+///      `ReceiptList` for a fan-in join. The default path leaves the
+///      field unset; this path makes causal placement a first-class
+///      input so receipt-DAG reconstruction has real edges to read.
+///   2. After the invoke completes, the daemon's invocation ledger is
+///      polled (`invocation.history.get` by `request_id`) for the
+///      persisted record, so the returned metadata carries the
+///      ledger-assigned `invocation_ura`, `trace_id`, and receipt
+///      anchors — the material a downstream step needs to reference
+///      THIS invocation as its causal parent.
+///
+/// A parent entry missing a usable `(receipt_ura, receipt_hash)` pair
+/// is skipped at the wire level (fabricating a receipt hash would be
+/// worse than omitting the edge) but remains visible in the returned
+/// metadata's `causal_context.parents` echo for audit.
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    subject: Option<String>,
+    causal_parents: &[serde_json::Value],
+    step_timeout: Option<Duration>,
+    trace_id: Option<&str>,
+) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
+    use anyhow::{anyhow, bail, Context};
+    use easynet_axon::pb::axon::v1 as pb;
+    use serde_json::Value;
+
+    let function_name = function_name.trim().to_string();
+    if function_name.is_empty() {
+        bail!("function_name must not be empty");
+    }
+
+    let socket_path = resolve_socket_path();
+    if !probe_accepting(&socket_path) {
+        bail!(
+            "daemon not running (local Axon gRPC listener unreachable at {}). \
+             Start it with `easynet runtime start`.",
+            socket_path.display()
+        );
+    }
+
+    let caller_ura = local_daemon_loopback_caller_ura();
+    let subject_ura = subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(caller_ura.as_str())
+        .to_string();
+    let arguments = serde_json::to_vec(&payload_json)
+        .with_context(|| format!("encode {function_name} args"))?;
+    let mut request = crate::services::invocation_transport::ProtoEnvelope::targeted(
+        caller_ura.clone(),
+        caller_ura.clone(),
+        subject_ura.clone(),
+    )
+    .and_then(|env| env.invoke_request(&function_name, arguments))
+    .with_context(|| format!("build {function_name} Axon InvokeRequest"))?;
+
+    let receipt_refs: Vec<pb::ReceiptRef> = causal_parents
+        .iter()
+        .filter_map(|parent| {
+            let receipt_ura = parent.get("receipt_ura").and_then(Value::as_str)?;
+            let hash_hex = parent.get("receipt_hash").and_then(Value::as_str)?;
+            let receipt_hash = hex::decode(hash_hex.trim()).ok()?;
+            (!receipt_ura.trim().is_empty() && !receipt_hash.is_empty()).then(|| {
+                pb::ReceiptRef {
+                    receipt_hash,
+                    receipt_ura: receipt_ura.trim().to_string(),
+                }
+            })
+        })
+        .collect();
+    let mut refs = receipt_refs;
+    let causal_form = match refs.len() {
+        0 => pb::causal_context::Form::None(pb::Empty {}),
+        1 => pb::causal_context::Form::Scalar(refs.remove(0)),
+        _ => pb::causal_context::Form::List(pb::ReceiptList { prior: refs }),
+    };
+    let nonce_hex = request
+        .envelope
+        .as_ref()
+        .map(|env| hex::encode(&env.invocation_nonce))
+        .unwrap_or_default();
+    if let Some(envelope) = request.envelope.as_mut() {
+        envelope.causal_context = Some(pb::CausalContext {
+            form: Some(causal_form),
+        });
+        // `trace_id` is Envelope operational metadata (outside the
+        // caller-signature region), so stamping it post-build is safe.
+        if let Some(trace_id) = trace_id.map(str::trim).filter(|t| !t.is_empty()) {
+            envelope.trace_id = trace_id.to_string();
+        }
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for local Axon daemon invoke")?;
+
+    // The channel timeout is per-request: it must cover the step's own
+    // execution budget (the daemon-side executor enforces the manifest
+    // timeout) plus admission/ledger overhead, or a slow-but-legitimate
+    // step gets cut off at the transport layer instead of by its
+    // declared deadline.
+    let request_timeout = step_timeout
+        .map(|t| t + Duration::from_secs(30))
+        .unwrap_or_else(|| Duration::from_secs(60));
+    let invoke_socket = socket_path.clone();
+    let invoke_fn = function_name.clone();
+    let (result_value, request_id) = runtime.block_on(async move {
+        let channel = connect_channel(
+            invoke_socket.clone(),
+            request_timeout,
+            Duration::from_secs(10),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "connect to local Axon daemon gRPC endpoint at {}",
+                invoke_socket.display()
+            )
+        })?;
+        let mut client =
+            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let response = client.invoke(request).await.map_err(|status| {
+            anyhow!(
+                "daemon error invoking {invoke_fn} through Axon \
+                 (code={:?}): {}",
+                status.code(),
+                status.message()
+            )
+        })?;
+        let body = response.into_inner();
+        let request_id = body
+            .header
+            .as_ref()
+            .map(|header| header.request_id.clone())
+            .unwrap_or_default();
+        let value = if body.result.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&body.result)
+                .with_context(|| format!("decode {invoke_fn} Axon response"))?
+        };
+        Ok::<_, anyhow::Error>((value, request_id))
+    })?;
+
+    // The unary invoke returns at terminal state, but the ledger sink
+    // persists asynchronously — poll briefly rather than racing it.
+    let mut ledger_record = Value::Null;
+    if !request_id.is_empty() {
+        for _ in 0..10 {
+            if let Ok(found) = invoke_local_daemon_ability_with_subject(
+                "invocation.history.get",
+                serde_json::json!({ "key": { "request_id": request_id } }),
+                None,
+            ) {
+                let record = found.get("record").cloned().unwrap_or(Value::Null);
+                if !record.is_null() {
+                    ledger_record = record;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    let terminal_receipt = ledger_record.get("receipt_chain").map(|chain| {
+        let head_hash = chain
+            .get("head_receipt_hash")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let anchors = chain
+            .get("anchors")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let head_anchor = anchors
+            .iter()
+            .find(|anchor| {
+                anchor.get("receipt_hash").and_then(Value::as_str) == Some(head_hash.as_str())
+                    && !head_hash.is_empty()
+            })
+            .or_else(|| anchors.last())
+            .cloned()
+            .unwrap_or(Value::Null);
+        serde_json::json!({
+            "head_receipt_hash": head_hash,
+            "anchor": head_anchor,
+            "anchor_count": anchors.len(),
+        })
+    });
+
+    let meta = serde_json::json!({
+        "request_id": request_id,
+        // Deliberately the LEDGER's trace_id, not the submitted one:
+        // the record must report what the daemon persisted, so a
+        // daemon that drops trace_id is visible instead of masked.
+        "trace_id": ledger_record.get("trace_id").cloned().unwrap_or(Value::Null),
+        "invocation_ura": ledger_record.get("invocation_ura").cloned().unwrap_or(Value::Null),
+        "caller_ura": caller_ura.clone(),
+        "callee_ura": caller_ura,
+        "ability": function_name,
+        "subject_ura": subject_ura,
+        "nonce": nonce_hex,
+        "causal_context": { "parents": causal_parents },
+        "receipt": terminal_receipt.unwrap_or(Value::Null),
+        "ledger_state": ledger_record.get("state").cloned().unwrap_or(Value::Null),
+    });
+
+    Ok((result_value, meta))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _subject: Option<String>,
+    _causal_parents: &[serde_json::Value],
+    _step_timeout: Option<std::time::Duration>,
+    _trace_id: Option<&str>,
+) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
+    anyhow::bail!(
+        "invoking `{}` with invocation metadata requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`",
+        function_name
+    )
+}
+
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_ability(
     function_name: &str,
@@ -439,7 +679,7 @@ pub(crate) fn invoke_local_daemon_ability(
 ) -> anyhow::Result<serde_json::Value> {
     #[cfg(test)]
     {
-        if function_name.starts_with("device.agent.") {
+        if function_name.starts_with("agent.") {
             return invoke_agent_management_in_process(function_name, _payload_json);
         }
         anyhow::bail!(
@@ -468,6 +708,6 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
 fn local_daemon_loopback_caller_ura() -> String {
     crate::persistence::config::load_credentials()
         .ok()
-        .map(|creds| crate::ura::device_ura(&creds.tenant_id, &creds.node_id))
+        .map(|creds| crate::ura::device_ura(&creds.realm, &creds.node_id))
         .unwrap_or_else(|| crate::ura::device_ura("cli", "local"))
 }

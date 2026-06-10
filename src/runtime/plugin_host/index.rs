@@ -322,8 +322,8 @@ mod tests {
         let root = tempfile::tempdir().expect("root");
         let first = root.path().join("installed/test.plugin/0.1.0");
         let second = root.path().join("installed/test.plugin2/0.1.0");
-        write_test_package_with_id(&first, "test.plugin", "0.1.0", "device.test.echo");
-        write_test_package_with_id(&second, "test.plugin2", "0.1.0", "device.test.echo");
+        write_test_package_with_id(&first, "test.plugin", "0.1.0", "test.echo");
+        write_test_package_with_id(&second, "test.plugin2", "0.1.0", "test.echo");
         let first_pkg = PluginPackage::from_installed(&first, None).expect("first package");
         let second_pkg = PluginPackage::from_installed(&second, None).expect("second package");
         write_lock(
@@ -356,8 +356,8 @@ mod tests {
         let root = tempfile::tempdir().expect("root");
         let first = root.path().join("installed/test.plugin/0.1.0");
         let second = root.path().join("installed/test.plugin/0.2.0");
-        write_test_package_with_id(&first, "test.plugin", "0.1.0", "device.test.echo");
-        write_test_package_with_id(&second, "test.plugin", "0.2.0", "device.test.echo2");
+        write_test_package_with_id(&first, "test.plugin", "0.1.0", "test.echo");
+        write_test_package_with_id(&second, "test.plugin", "0.2.0", "test.echo2");
         let first_pkg = PluginPackage::from_installed(&first, None).expect("first package");
         let second_pkg = PluginPackage::from_installed(&second, None).expect("second package");
         write_lock(

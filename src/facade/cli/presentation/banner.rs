@@ -42,8 +42,8 @@ const LABEL_WIDTH: usize = 16;
 
 /// Outer left margin for the whole banner. Empty — logo, tagline,
 /// signature, and status rows all sit flush at column 0 so the
-/// banner reads as a header rather than as a child of the indented
-/// `  [Quickstart]` block clap renders below.
+/// banner reads as a header rather than as a child of the grouped
+/// command list clap renders below.
 const MARGIN: &str = "";
 
 /// Top-level "decoration" block printed before clap's `--help` text.
@@ -128,9 +128,9 @@ mod sgr {
 // ── Logo ─────────────────────────────────────────────────────────────
 
 /// Standalone logo render — six-line ASCII wordmark only, no
-/// tagline / signature / status rows. Used by `easynet start` and
-/// `easynet join` to brand their command output without dragging
-/// in the navigation furniture that belongs above `--help`.
+/// tagline / signature / status rows. Used by `easynet runtime start`
+/// and `easynet device join` to brand their command output without
+/// dragging in the navigation furniture that belongs above `--help`.
 pub fn render_logo() -> String {
     let mut buf = String::new();
     write_logo(&mut buf, ColourMode::detect());
@@ -139,9 +139,8 @@ pub fn render_logo() -> String {
 
 /// Six-line ASCII wordmark, painted in one shade of bold cyan.
 /// silan's spec, character-for-character. The lines are 2-space
-/// indented to match `MARGIN`, lining up with the rest of the
-/// banner and with the `  [Quickstart]` group rows clap renders
-/// below.
+/// indented to match `MARGIN`, lining up with the rest of the banner
+/// and with the grouped command rows clap renders below.
 ///
 /// Why a single colour: a CLI banner is a navigation surface, not
 /// fireworks. The earlier 256-colour gradient pulled the eye away
@@ -219,7 +218,11 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
         // No daemon, no metadata — render as plain dim text rather
         // than a coloured warning. Not-paired is the default state
         // for a fresh install, not an error.
-        (sgr::DIM, "○", "not running  ·  start with 'easynet start'")
+        (
+            sgr::DIM,
+            "○",
+            "not running  ·  start with 'easynet runtime start'",
+        )
     };
     write_row(
         buf,
@@ -287,7 +290,7 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
                 buf,
                 style,
                 "Hub:",
-                &style.paint(sgr::DIM, "not paired  ·  run 'easynet join <token>'"),
+                &style.paint(sgr::DIM, "not paired  ·  run 'easynet device join <token>'"),
             );
         }
     }

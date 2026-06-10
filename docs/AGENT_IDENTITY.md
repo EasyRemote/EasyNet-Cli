@@ -20,7 +20,7 @@ The forms are intentionally **not** byte-equivalent.
 |---|---|---|---|
 | **L1 Surface** | `silan/claude.chat(...)` | EAL users, CLI users | sugar, stable |
 | **L2 Runtime** | `AgentId { tenant, name }` | Rust code, IR, dispatcher | this document |
-| **L3 URA** | `easynet:///r/org/reg/agent.claude/abilities/chat` + envelope | wire protocol, conformance | future, see `../URA/README.md` |
+| **L3 URA** | `easynet:///r/demo/ability/alice.claude.chat` + envelope | wire protocol, conformance | future, see `../URA/README.md` |
 
 L1 and L3 are parallel representations of the same logical agent.
 L2 is the resolution layer between them. L1 is what humans write,
@@ -256,7 +256,7 @@ IrStep {
 will map to L3 wire form:
 
 ```
-URI:      easynet:///r/org/reg/agent.claude/abilities/chat
+URI:      easynet:///r/demo/ability/alice.claude.chat
 envelope: { tenant_id: "silan", ... }
 ```
 

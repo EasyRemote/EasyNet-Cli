@@ -16,7 +16,7 @@ use super::constants::{
     MIN_ATTACH_FPS,
 };
 
-/// Human-readable contract for `device.remote_desktop.create_session`.
+/// Human-readable contract for `remote_desktop.create_session`.
 pub fn create_session_description() -> &'static str {
     "Create a remote desktop control session for a display/window/application \
      resource. Subject MUST be the resource_ura in the invocation envelope. \
@@ -24,7 +24,7 @@ pub fn create_session_description() -> &'static str {
      exposes quality targets; diagnostic preview paths stay marked fallback."
 }
 
-/// JSON input schema for `device.remote_desktop.create_session`.
+/// JSON input schema for `remote_desktop.create_session`.
 pub fn create_session_input_schema() -> Value {
     json!({
         "type": "object",
@@ -45,18 +45,18 @@ pub fn create_session_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.show_session`.
+/// Human-readable contract for `remote_desktop.show_session`.
 pub fn show_session_description() -> &'static str {
     "Read one remote desktop session state. Subject MUST match the bound \
      resource_ura and session_token MUST match the create_session response."
 }
 
-/// JSON input schema for `device.remote_desktop.show_session`.
+/// JSON input schema for `remote_desktop.show_session`.
 pub fn show_session_input_schema() -> Value {
     session_identity_schema()
 }
 
-/// Human-readable contract for `device.remote_desktop.set_description`.
+/// Human-readable contract for `remote_desktop.set_description`.
 pub fn set_description_description() -> &'static str {
     "Attach a WebRTC-style local or remote session description to a remote \
      desktop session. A remote SDP offer starts the device-side direct WebRTC \
@@ -64,7 +64,7 @@ pub fn set_description_description() -> &'static str {
      not routed through unary Invoke."
 }
 
-/// JSON input schema for `device.remote_desktop.set_description`.
+/// JSON input schema for `remote_desktop.set_description`.
 pub fn set_description_input_schema() -> Value {
     json!({
         "type": "object",
@@ -79,12 +79,12 @@ pub fn set_description_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.add_ice_candidate`.
+/// Human-readable contract for `remote_desktop.add_ice_candidate`.
 pub fn add_ice_candidate_description() -> &'static str {
     "Append one ICE candidate to a remote desktop session's signaling log."
 }
 
-/// JSON input schema for `device.remote_desktop.add_ice_candidate`.
+/// JSON input schema for `remote_desktop.add_ice_candidate`.
 pub fn add_ice_candidate_input_schema() -> Value {
     json!({
         "type": "object",
@@ -98,13 +98,13 @@ pub fn add_ice_candidate_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.watch_events`.
+/// Human-readable contract for `remote_desktop.watch_events`.
 pub fn watch_events_description() -> &'static str {
     "Watch remote desktop control events. v1 returns the bounded current \
      snapshot through InvokeStream; live fan-out follows the Axon contract."
 }
 
-/// JSON input schema for `device.remote_desktop.watch_events`.
+/// JSON input schema for `remote_desktop.watch_events`.
 pub fn watch_events_input_schema() -> Value {
     json!({
         "type": "object",
@@ -118,12 +118,12 @@ pub fn watch_events_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.refresh_lease`.
+/// Human-readable contract for `remote_desktop.refresh_lease`.
 pub fn refresh_lease_description() -> &'static str {
     "Refresh a non-terminal remote desktop session lease."
 }
 
-/// JSON input schema for `device.remote_desktop.refresh_lease`.
+/// JSON input schema for `remote_desktop.refresh_lease`.
 pub fn refresh_lease_input_schema() -> Value {
     json!({
         "type": "object",
@@ -138,12 +138,12 @@ pub fn refresh_lease_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.end_session`.
+/// Human-readable contract for `remote_desktop.end_session`.
 pub fn end_session_description() -> &'static str {
     "Close a remote desktop session. Idempotent after the first terminal close."
 }
 
-/// JSON input schema for `device.remote_desktop.end_session`.
+/// JSON input schema for `remote_desktop.end_session`.
 pub fn end_session_input_schema() -> Value {
     json!({
         "type": "object",
@@ -157,7 +157,7 @@ pub fn end_session_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.attach`.
+/// Human-readable contract for `remote_desktop.attach`.
 pub fn attach_description() -> &'static str {
     "Attach a bounded Axon InvokeBidi media plane to an existing remote desktop \
      session. Subject MUST match the resource_ura bound when the session was \
@@ -166,7 +166,7 @@ pub fn attach_description() -> &'static str {
      remains the preferred direct transport when negotiation succeeds."
 }
 
-/// JSON input schema for `device.remote_desktop.attach`.
+/// JSON input schema for `remote_desktop.attach`.
 pub fn attach_input_schema() -> Value {
     json!({
         "type": "object",
@@ -191,13 +191,13 @@ pub fn attach_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.permission_status`.
+/// Human-readable contract for `remote_desktop.permission_status`.
 pub fn permission_status_description() -> &'static str {
     "Report whether this host process has the OS screen-capture permission \
      required by the native remote desktop media pipeline."
 }
 
-/// JSON input schema for `device.remote_desktop.permission_status`.
+/// JSON input schema for `remote_desktop.permission_status`.
 pub fn permission_status_input_schema() -> Value {
     json!({
         "type": "object",
@@ -206,14 +206,14 @@ pub fn permission_status_input_schema() -> Value {
     })
 }
 
-/// Human-readable contract for `device.remote_desktop.request_permission`.
+/// Human-readable contract for `remote_desktop.request_permission`.
 pub fn request_permission_description() -> &'static str {
     "Ask the operating system for the screen-capture permission required by \
      native remote desktop. On macOS this calls CoreGraphics' Screen Recording \
      TCC request API from the daemon-side ability process."
 }
 
-/// JSON input schema for `device.remote_desktop.request_permission`.
+/// JSON input schema for `remote_desktop.request_permission`.
 pub fn request_permission_input_schema() -> Value {
     json!({
         "type": "object",

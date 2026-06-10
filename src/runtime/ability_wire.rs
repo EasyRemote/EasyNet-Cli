@@ -62,6 +62,13 @@ impl AbilityWireRegistry {
         }
     }
 
+    #[cfg(all(test, feature = "remote-desktop"))]
+    pub(crate) fn for_test_plugin_bidi(
+        entries: impl IntoIterator<Item = (String, AbilityBidiWireKind)>,
+    ) -> Self {
+        Self::from_plugin_bidi(entries.into_iter().collect())
+    }
+
     /// Replace plugin-derived wire profiles in place while keeping the shared
     /// registry handle stable for already-booted services.
     pub fn replace_from_plugin_runtime_state(&self, state: &PluginRuntimeState) {

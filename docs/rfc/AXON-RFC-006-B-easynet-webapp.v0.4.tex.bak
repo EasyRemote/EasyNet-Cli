@@ -425,8 +425,7 @@ host distinct actions per app without collision.
 the resulting envelope is built as follows:
 
 \begin{itemize}[leftmargin=2em,itemsep=0.15em]
-    \item \texttt{caller\_uri} = the Hub's own URA
-    \texttt{easynet:///r/<realm>/hub/01HUB} (singleton, v4.1.5).
+    \item \texttt{caller\_uri} = the Hub's own URA    \texttt{easynet:///r/<realm>/hub} (singleton).
     \item \texttt{caller\_context} carries the request-side
     metadata that v0.3 had wanted to encode in the URA itself
     --- IP-hash, ephemeral session id, user agent. Per main

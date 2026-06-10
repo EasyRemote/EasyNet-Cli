@@ -141,9 +141,9 @@ async fn reflective_ability_ura_is_clean_canonical_shape() {
             "URA literal must not contain `{forbidden}`: {expected_ability_ura}"
         );
         assert!(
-            !rec.descriptor.owner_agent_ura.contains(forbidden),
+            !rec.descriptor.owner_ura.contains(forbidden),
             "owner URA must not contain `{forbidden}`: {}",
-            rec.descriptor.owner_agent_ura
+            rec.descriptor.owner_ura
         );
         assert!(
             !rec.ability_name.contains(forbidden),

@@ -607,9 +607,9 @@ mod tests {
         let added = handle_peer_add(
             &h,
             json!({
-                "peer_ura": "easynet:///r/org/reg/agent.alice",
+                "peer_ura": "easynet:///r/alice.localhost/agent/alice.node",
                 "public_key": pk,
-                "via_hub": "easynet:///r/org/reg/agent.alice-hub"
+                "via_hub": "easynet:///r/alice.localhost/hub"
             }),
         )
         .unwrap();
@@ -619,7 +619,7 @@ mod tests {
         assert_eq!(peers.len(), 1);
         assert_eq!(
             peers[0]["peer_ura"],
-            json!("easynet:///r/org/reg/agent.alice")
+            json!("easynet:///r/alice.localhost/agent/alice.node")
         );
         assert_eq!(peers[0]["status"], json!("trusted"));
     }
@@ -647,13 +647,13 @@ mod tests {
         .unwrap();
         handle_bind_subject(
             &h,
-            json!({"key_id": key_id, "subject_id": "easynet:///r/prv/reg/agent.foo"}),
+            json!({"key_id": key_id, "subject_id": "easynet:///r/acme/agent/foo.sdk"}),
         )
         .unwrap();
         let listed = handle_list(&h, json!({})).unwrap();
         let e = &listed["entries"][0];
         assert_eq!(e["expires_unix_ms"], json!(9_999_999_999i64));
-        assert_eq!(e["bound_subject"], json!("easynet:///r/prv/reg/agent.foo"));
+        assert_eq!(e["bound_subject"], json!("easynet:///r/acme/agent/foo.sdk"));
     }
 
     // ── PR-N4 commit 2/N — federate_user_identity_token ──────

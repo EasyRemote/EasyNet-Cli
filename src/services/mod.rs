@@ -85,7 +85,9 @@
 // deletion. Until that lands, the operator log is the audit
 // source for non-terminal calls.
 
+pub mod clipboard_tracker;
 pub mod control;
+pub mod session_failure;
 
 /// Daemon-owned Axon `Invocation` transport hosted by
 /// `easynet-daemon`.
@@ -125,12 +127,11 @@ pub mod pending_dispatch;
 /// restart. Pure data; no feature gate.
 pub mod federated_peers_cell;
 
-/// Per-agent ability catalog the daemon stores when devices land
-/// `federation.advertise_abilities`. Read by `federation.resolve`
-/// when the caller sets `include_abilities = true` so the backend's
-/// `/api/v1/abilities` page projects every device's published
-/// catalog. Without this store the wrapper acked + dropped, and
-/// the catalog page rendered empty despite advertised data.
+/// Owner projection read model updated by `federation.advertise_abilities`.
+/// Read by `federation.resolve` when the caller sets `include_abilities =
+/// true` so backend pages see bounded RFC-005 ability summaries, not raw
+/// implementation descriptors.
+#[cfg(feature = "axon-pb")]
 pub mod ability_catalog_store;
 
 /// Hosted-agent directory rows published through
@@ -233,7 +234,7 @@ mod tests {
         let meters =
             crate::services::invocation_transport::daemon_invocation_service::quota_meters_function;
 
-        assert!(meters("device.observe.health"));
+        assert!(meters("observe.health"));
         assert!(meters("agent.todo.run"));
 
         assert!(!meters("federation.heartbeat"));

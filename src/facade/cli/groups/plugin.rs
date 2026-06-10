@@ -247,7 +247,7 @@ fn invoke_plugin_control_ability_via_daemon(
 fn plugin_control_subject_ura() -> anyhow::Result<Option<String>> {
     match crate::persistence::config::load_credentials() {
         Ok(creds) => Ok(Some(crate::ura::device_ura(
-            creds.tenant_id.trim(),
+            creds.realm.trim(),
             creds.node_id.trim(),
         ))),
         Err(err) => {
@@ -283,8 +283,9 @@ mod tests {
         crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
             node_id: "dev-a".to_string(),
             credential_token: "token".to_string(),
-            tenant_id: "acme".to_string(),
+            realm: "acme".to_string(),
             hub_endpoint: "axon://hub.example:50051".to_string(),
+            username: Some("alice".to_string()),
             ..Default::default()
         })
         .expect("write test credentials");

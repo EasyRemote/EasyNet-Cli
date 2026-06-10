@@ -75,7 +75,7 @@ pub const ESCALATION_QUEUE_CAPACITY: usize = 256;
 /// minted a `call_id` and is awaiting the hub's `RequestResult`.
 pub struct EscalationRequest {
     pub call_id: [u8; 16],
-    pub ability: String,
+    pub ability_ura: String,
     pub args: Vec<u8>,
     pub reply: oneshot::Sender<RequestOutcome>,
 }
@@ -87,13 +87,15 @@ pub struct EscalationRequest {
 pub struct SessionEscalationHandle {
     submit: mpsc::Sender<EscalationRequest>,
     correlation: Arc<EscalationCorrelation>,
+    session_realm: String,
 }
 
 impl SessionEscalationHandle {
-    /// Submit a Request with the given `(ability, args)` and await
-    /// the matching `RequestResult`. Mints a fresh 16-byte
-    /// `OsRng` nonce per call so concurrent dispatches never
-    /// collide on `call_id`.
+    /// Submit a Request for a hub-owned public wrapper ability and
+    /// await the matching `RequestResult`. The wire frame carries
+    /// the derived `ability_ura`, not this internal public-name
+    /// parameter. Mints a fresh 16-byte `OsRng` nonce per call so
+    /// concurrent dispatches never collide on `call_id`.
     ///
     /// Returns the typed `RequestOutcome` per PR-N6 spec
     /// §"Wire shape" — same shape the wire frame carries, no
@@ -115,6 +117,7 @@ impl SessionEscalationHandle {
         let mut call_id = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut call_id);
         let id_hex = call_id_hex(&call_id);
+        let ability_ura = crate::ura::hub_ability_ura(&self.session_realm, ability.trim());
 
         // Operator log marker for the device-mode forward_invoke
         // escalation up the `<self>.session` bidi. SRE pipelines
@@ -134,7 +137,7 @@ impl SessionEscalationHandle {
         let (reply_tx, reply_rx) = oneshot::channel();
         let request = EscalationRequest {
             call_id,
-            ability,
+            ability_ura,
             args,
             reply: reply_tx,
         };
@@ -318,18 +321,20 @@ impl SharedSessionOutbox {
 pub fn spawn_escalation_consumer_with_outbox(
     correlation: Arc<EscalationCorrelation>,
     outbox: SharedSessionOutbox,
+    session_realm: impl Into<String>,
 ) -> SessionEscalationHandle {
     let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
     let handle = SessionEscalationHandle {
         submit: submit_tx,
         correlation: Arc::clone(&correlation),
+        session_realm: session_realm.into(),
     };
 
     tokio::spawn(async move {
         while let Some(request) = submit_rx.recv().await {
             let EscalationRequest {
                 call_id,
-                ability,
+                ability_ura,
                 args,
                 reply,
             } = request;
@@ -351,7 +356,7 @@ pub fn spawn_escalation_consumer_with_outbox(
 
             correlation.register(call_id, reply);
 
-            let frame = build_session_request_up_chunk(call_id, &ability, &args);
+            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
             if let Err(err) = up_tx.send_binary_chunk(frame).await {
                 let mut guard = match correlation.inner.lock() {
                     Ok(g) => g,
@@ -386,24 +391,26 @@ pub fn spawn_escalation_consumer_with_outbox(
 pub fn spawn_escalation_consumer(
     correlation: Arc<EscalationCorrelation>,
     up_tx: SessionUpSender,
+    session_realm: impl Into<String>,
 ) -> SessionEscalationHandle {
     let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
     let handle = SessionEscalationHandle {
         submit: submit_tx,
         correlation: Arc::clone(&correlation),
+        session_realm: session_realm.into(),
     };
 
     tokio::spawn(async move {
         while let Some(request) = submit_rx.recv().await {
             let EscalationRequest {
                 call_id,
-                ability,
+                ability_ura,
                 args,
                 reply,
             } = request;
             correlation.register(call_id, reply);
 
-            let frame = build_session_request_up_chunk(call_id, &ability, &args);
+            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
             if let Err(err) = up_tx.send_binary_chunk(frame).await {
                 // Up-channel closed — the bidi went away mid-flight.
                 // Pull the entry back out and surface upstream
@@ -434,7 +441,7 @@ pub fn spawn_escalation_consumer(
 /// frames + matches the wire shape PR-N6 §"Wire shape" locks.
 fn build_session_request_up_chunk(
     call_id: [u8; 16],
-    ability: &str,
+    ability_ura: &str,
     args: &[u8],
 ) -> easynet_axon::pb::axon::v1::BinaryChunk {
     use crate::services::invocation_transport::invoke_remote_initiator::{
@@ -444,7 +451,7 @@ fn build_session_request_up_chunk(
 
     let dispatch = SessionDispatch::Request {
         call_id,
-        ability: ability.to_string(),
+        ability_ura: ability_ura.to_string(),
         args: args.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
     };
@@ -471,8 +478,11 @@ mod tests {
         // matching RequestResult back into the correlation table.
         let correlation = EscalationCorrelation::new();
         let (up_tx, mut up_rx) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
-        let handle =
-            spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
+        let handle = spawn_escalation_consumer(
+            Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+            "test-realm",
+        );
 
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
@@ -516,8 +526,11 @@ mod tests {
         // `UpstreamTimeout` rather than hanging forever.
         let correlation = EscalationCorrelation::new();
         let (up_tx, _up_rx_held) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
-        let handle =
-            spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
+        let handle = spawn_escalation_consumer(
+            Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+            "test-realm",
+        );
 
         let outcome = handle
             .escalate_with_timeout(
@@ -542,8 +555,11 @@ mod tests {
         // Drop the receiver immediately so the consumer's send
         // fails on the very first item.
         drop(up_rx);
-        let handle =
-            spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
+        let handle = spawn_escalation_consumer(
+            Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+            "test-realm",
+        );
 
         let outcome = handle
             .escalate_with_timeout(
@@ -610,7 +626,8 @@ mod tests {
         // bidi" }` rather than hanging waiting for a sender.
         let correlation = EscalationCorrelation::new();
         let outbox = SharedSessionOutbox::new();
-        let handle = spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox);
+        let handle =
+            spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox, "test-realm");
 
         let outcome = handle
             .escalate_with_timeout(
@@ -644,8 +661,11 @@ mod tests {
         // than capturing one up_tx at construction time.
         let correlation = EscalationCorrelation::new();
         let outbox = SharedSessionOutbox::new();
-        let handle =
-            spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox.clone());
+        let handle = spawn_escalation_consumer_with_outbox(
+            Arc::clone(&correlation),
+            outbox.clone(),
+            "test-realm",
+        );
 
         let (up_tx, mut up_rx) = mpsc::channel::<InvokeBidiUp>(8);
         outbox.set(SessionUpSender::new(up_tx));
@@ -693,8 +713,11 @@ mod tests {
         //   3. Subsequent escalate hits the empty-outbox branch
         let correlation = EscalationCorrelation::new();
         let outbox = SharedSessionOutbox::new();
-        let handle =
-            spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox.clone());
+        let handle = spawn_escalation_consumer_with_outbox(
+            Arc::clone(&correlation),
+            outbox.clone(),
+            "test-realm",
+        );
 
         let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(8);
         outbox.set(SessionUpSender::new(up_tx));

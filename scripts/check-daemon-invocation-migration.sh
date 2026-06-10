@@ -137,6 +137,16 @@ Keep RuntimeInvocation as an adapter over easynet_axon::invocation::canonical_in
     fi
 fi
 
+bad_remote_bidi_alias_language="$(
+    grep -RniE 'remote bidi.*legacy alias|legacy alias.*remote bidi|preserve legacy aliases|repair_bare_device_agent_alias' \
+        src/services/invocation_transport 2>/dev/null || true
+)"
+if [[ -n "$bad_remote_bidi_alias_language" ]]; then
+    record_violation "active remote-bidi code still references retired alias semantics" \
+        "$bad_remote_bidi_alias_language
+Remote-bidi target extraction must preserve explicit callee URAs and let current self-target/presence rules accept or reject them; do not describe non-device callees as compatibility aliases."
+fi
+
 if [[ "$violations" -eq 0 ]]; then
     echo "ok (daemon Invocation migration guard is clean)"
     exit 0

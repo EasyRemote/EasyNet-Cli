@@ -37,6 +37,7 @@ use crate::services::invocation_transport::invoke_remote_initiator::{
 use crate::services::invocation_transport::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
+use crate::services::session_failure::SessionFailure;
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
@@ -112,6 +113,33 @@ struct RemoteBidiOpenRequest {
 }
 
 impl LocalAxonSessionDispatcher {
+    fn session_failure(reason: &str) -> SessionFailure {
+        SessionFailure::from_reason(reason, "INVOCATION_FAILED", false)
+    }
+
+    fn session_failure_from_handler_code(
+        explicit_code: Option<&str>,
+        reason: &str,
+    ) -> SessionFailure {
+        explicit_code
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(|code| SessionFailure::from_explicit(code, reason, false))
+            .unwrap_or_else(|| Self::session_failure(reason))
+    }
+
+    fn session_error_result(call_id: u64, message: impl Into<String>) -> SessionDispatch {
+        let message = message.into();
+        SessionDispatch::Result {
+            call_id,
+            payload: Vec::new(),
+            terminal: true,
+            failure: Some(Self::session_failure(&message)),
+            error: Some(message),
+            request_id: None,
+        }
+    }
+
     fn is_json_frame_bidi(&self, ability: &str) -> bool {
         Self::is_json_frame_bidi_with(&self.ability_wire, ability)
     }
@@ -200,6 +228,8 @@ impl LocalAxonSessionDispatcher {
         subject_ura: Option<&str>,
         ability: &str,
         args: &[u8],
+        metadata: &std::collections::HashMap<String, String>,
+        origin_claim: Option<&crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     ) -> Option<SessionDispatch> {
         let runtime = self.local_runtime.as_ref()?;
         if !runtime.has_ability(ability).await {
@@ -211,33 +241,87 @@ impl LocalAxonSessionDispatcher {
             call_id = call_id,
             ability = ability,
         );
-        let outcome = match (callee_ura, subject_ura) {
-            (Some(callee), Some(subject)) if !subject.trim().is_empty() => {
-                crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
-                    runtime,
-                    callee,
-                    subject,
-                    ability,
-                    args.to_vec(),
-                )
-                .await
+
+        // Inner user-caller pass-through: when the hub/backend attached a
+        // browser-signed user claim (typed `origin_caller` field, legacy
+        // metadata item as rolling-upgrade fallback), dispatch with the
+        // REAL user as caller via `invoke_externally_signed_*`
+        // (cryptographic admission) instead of the `_system`
+        // trust-domain default. This is what lets fail-closed abilities
+        // (remote desktop consent) see the user. Absent → existing
+        // path. Malformed → fail closed.
+        let origin_caller = match crate::services::invocation_transport::origin_caller::OriginCaller::resolve(origin_claim, metadata) {
+            Ok(oc) => oc,
+            Err(err) => {
+                return Some(Self::session_error_result(
+                    call_id,
+                    format!("<self>.session: invalid origin caller claim: {err}"),
+                ));
             }
-            _ => {
-                crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
-                    runtime,
-                    ability,
-                    args.to_vec(),
-                )
-                .await
+        };
+
+        let outcome = if let Some(origin) = origin_caller {
+            crate::op_event!(
+                component = local_session_dispatcher,
+                kind = dispatch_via_axon_user_caller,
+                call_id = call_id,
+                caller_ura = origin.caller_ura.as_str(),
+                ability = ability,
+            );
+            let inner_subject = subject_ura
+                .filter(|s| !s.trim().is_empty())
+                .or(callee_ura)
+                .unwrap_or(ability);
+            let inner_callee = callee_ura.unwrap_or(ability);
+            // The browser signed the PUBLIC ability name (origin.ability,
+            // e.g. `chat`); the hub addressed the owner-scoped dispatch
+            // KEY (`ability`, e.g. `demo.chat`) which is what's actually
+            // in the local registry. Verify against the signed name, but
+            // resolve + launch the handler under the dispatch key — else
+            // agent-owned abilities fail `unknown_ability:<public>`.
+            let dispatch_key = if ability == origin.public_ability() {
+                None
+            } else {
+                Some(ability.to_string())
+            };
+            let wire = origin.into_wire_dispatch(inner_callee, inner_subject, args.to_vec());
+            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_with_dispatch_key(
+                runtime,
+                wire,
+                dispatch_key,
+            )
+            .await
+        } else {
+            match (callee_ura, subject_ura) {
+                (Some(callee), Some(subject)) if !subject.trim().is_empty() => {
+                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
+                        runtime,
+                        callee,
+                        subject,
+                        ability,
+                        args.to_vec(),
+                    )
+                    .await
+                }
+                _ => {
+                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
+                        runtime,
+                        ability,
+                        args.to_vec(),
+                    )
+                    .await
+                }
             }
         };
         let request_id = outcome.invocation_id.clone();
         let (payload, error) =
             crate::runtime::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
+        let failure = error.as_ref().map(|reason| Self::session_failure(reason));
         Some(SessionDispatch::Result {
             call_id,
             payload,
             terminal: true,
+            failure,
             error,
             request_id,
         })
@@ -321,6 +405,7 @@ impl LocalAxonSessionDispatcher {
                                 call_id,
                                 payload: Vec::new(),
                                 terminal: true,
+                                failure: None,
                                 error: None,
                                 request_id: None,
                             }
@@ -338,6 +423,7 @@ impl LocalAxonSessionDispatcher {
                                 call_id,
                                 payload: frame.payload,
                                 terminal,
+                                failure: None,
                                 error: None,
                                 request_id: None,
                             }
@@ -345,13 +431,10 @@ impl LocalAxonSessionDispatcher {
                     }
                     Err(err) => {
                         sent_terminal = true;
-                        SessionDispatch::Result {
+                        Self::session_error_result(
                             call_id,
-                            payload: Vec::new(),
-                            terminal: true,
-                            error: Some(format!("<self>.session: stream frame failed: {err}")),
-                            request_id: None,
-                        }
+                            format!("<self>.session: stream frame failed: {err}"),
+                        )
                     }
                 };
                 let terminal = matches!(dispatch, SessionDispatch::Result { terminal: true, .. });
@@ -364,10 +447,29 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: Vec::new(),
                     terminal: true,
+                    failure: None,
                     error: None,
                     request_id: None,
                 };
                 let _ = Self::send_dispatch_up(&outbound, &dispatch).await;
+            }
+            // Cancellation must reach the RUNTIME task, not just this
+            // forwarder. Dropping the handle alone leaves the ability's
+            // emit loop alive holding its stream source — post-cancel
+            // the mic.subscribe pipeline kept the cpal capture thread
+            // (and the microphone) hot indefinitely, and the
+            // context-capture tee never saw its consumer leave
+            // (2026-06-10). cancel() is idempotent and a no-op on
+            // already-terminal invocations, so the clean-EOS path and
+            // the error path are both safe to route through here.
+            if let Err(err) = handle.cancel("session stream closed").await {
+                let err_msg = err.to_string();
+                crate::op_event!(
+                    component = local_session_dispatcher,
+                    kind = stream_runtime_cancel_failed,
+                    call_id = call_id,
+                    error = err_msg,
+                );
             }
             let mut guard = match sessions.lock() {
                 Ok(g) => g,
@@ -395,13 +497,7 @@ impl LocalAxonSessionDispatcher {
     }
 
     fn file_transfer_terminal_error(call_id: u64, message: impl Into<String>) -> SessionDispatch {
-        SessionDispatch::Result {
-            call_id,
-            payload: Vec::new(),
-            terminal: true,
-            error: Some(message.into()),
-            request_id: None,
-        }
+        Self::session_error_result(call_id, message)
     }
 
     fn validate_session_args_content(
@@ -450,6 +546,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: raw,
                     terminal: false,
+                    failure: None,
                     error: None,
                     request_id: None,
                 }))
@@ -464,15 +561,14 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload,
                     terminal: true,
+                    failure: None,
                     error: None,
                     request_id: None,
                 }))
             }
             Some("error") => {
-                let reason = match (
-                    value.get("code").and_then(Value::as_str),
-                    value.get("message").and_then(Value::as_str),
-                ) {
+                let code = value.get("code").and_then(Value::as_str);
+                let reason = match (code, value.get("message").and_then(Value::as_str)) {
                     (Some(code), Some(message))
                         if !code.trim().is_empty() && !message.trim().is_empty() =>
                     {
@@ -491,6 +587,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload,
                     terminal: true,
+                    failure: Some(Self::session_failure_from_handler_code(code, &reason)),
                     error: Some(reason),
                     request_id: None,
                 }))
@@ -519,6 +616,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: raw,
                     terminal: false,
+                    failure: None,
                     error: None,
                     request_id: None,
                 }))
@@ -527,6 +625,7 @@ impl LocalAxonSessionDispatcher {
                 call_id,
                 payload: Vec::new(),
                 terminal: true,
+                failure: None,
                 error: None,
                 request_id: None,
             })),
@@ -558,18 +657,27 @@ impl LocalAxonSessionDispatcher {
             return Self::map_remote_pty_output(call_id, value);
         }
         if Self::is_json_frame_bidi_with(registry, ability) {
-            let terminal = matches!(
-                value.get("type").and_then(Value::as_str),
-                Some("closed") | Some("error")
-            );
+            let frame_type = value.get("type").and_then(Value::as_str);
+            let terminal = matches!(frame_type, Some("closed") | Some("error"));
             let payload = serde_json::to_vec(value).map_err(|err| {
                 SessionDispatchError::Other(format!("plugin JSON-frame bidi encode failed: {err}"))
             })?;
+            let (failure, error) = if frame_type == Some("error") {
+                let reason = json_frame_error_reason(value);
+                let code = value.get("code").and_then(Value::as_str);
+                (
+                    Some(Self::session_failure_from_handler_code(code, &reason)),
+                    Some(reason),
+                )
+            } else {
+                (None, None)
+            };
             return Ok(Some(SessionDispatch::Result {
                 call_id,
                 payload,
                 terminal,
-                error: None,
+                failure,
+                error,
                 request_id: None,
             }));
         }
@@ -689,6 +797,7 @@ impl LocalAxonSessionDispatcher {
                         call_id,
                         payload: frame.payload,
                         terminal: frame.terminal,
+                        failure: None,
                         error: None,
                         request_id: None,
                     })
@@ -834,6 +943,20 @@ impl LocalAxonSessionDispatcher {
     }
 }
 
+fn json_frame_error_reason(value: &Value) -> String {
+    match (
+        value.get("code").and_then(Value::as_str),
+        value.get("message").and_then(Value::as_str),
+    ) {
+        (Some(code), Some(message)) if !code.trim().is_empty() && !message.trim().is_empty() => {
+            format!("{code}: {message}")
+        }
+        (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
+        (Some(code), _) if !code.trim().is_empty() => code.to_string(),
+        _ => "JSON-frame bidi handler returned error".to_string(),
+    }
+}
+
 impl Default for LocalAxonSessionDispatcher {
     fn default() -> Self {
         Self::new()
@@ -891,34 +1014,45 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
         // so a down-stream Result is meaningless; ignore
         // (matches prior staging behaviour). `Request` frames
         // are device → hub and never appear here.
-        let (call_id, callee_ura, subject_ura, ability, args, args_content_envelope) =
-            match dispatch {
-                SessionDispatch::Dispatch {
+        let (
+            call_id,
+            callee_ura,
+            subject_ura,
+            ability,
+            args,
+            args_content_envelope,
+            metadata,
+            origin_caller,
+        ) = match dispatch {
+            SessionDispatch::Dispatch {
+                call_id,
+                callee_ura,
+                subject_ura,
+                ability,
+                args,
+                args_content_envelope,
+                metadata,
+                origin_caller,
+            } => {
+                let args_bytes = args.len();
+                crate::op_event!(
+                    component = local_session_dispatcher,
+                    kind = received_dispatch_frame,
+                    call_id = call_id,
+                    ability = ability,
+                    args_bytes = args_bytes,
+                );
+                (
                     call_id,
                     callee_ura,
                     subject_ura,
                     ability,
                     args,
                     args_content_envelope,
-                    metadata: _metadata,
-                } => {
-                    let args_bytes = args.len();
-                    crate::op_event!(
-                        component = local_session_dispatcher,
-                        kind = received_dispatch_frame,
-                        call_id = call_id,
-                        ability = ability,
-                        args_bytes = args_bytes,
-                    );
-                    (
-                        call_id,
-                        callee_ura,
-                        subject_ura,
-                        ability,
-                        args,
-                        args_content_envelope,
-                    )
-                }
+                    metadata,
+                    origin_caller,
+                )
+            }
                 SessionDispatch::BidiOpen {
                     call_id,
                     callee_ura,
@@ -996,13 +1130,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
         let result = if let Err(reason) =
             Self::validate_session_args_content(&ability, &args_content_envelope)
         {
-            Ok(SessionDispatch::Result {
-                call_id,
-                payload: Vec::new(),
-                terminal: true,
-                error: Some(reason),
-                request_id: None,
-            })
+            Ok(Self::session_error_result(call_id, reason))
         } else if let Some(stream_open) = self
             .open_stream_via_axon(
                 callee_ura.as_deref(),
@@ -1022,13 +1150,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                     );
                     return Ok(());
                 }
-                Err(reason) => Ok(SessionDispatch::Result {
-                    call_id,
-                    payload: Vec::new(),
-                    terminal: true,
-                    error: Some(reason),
-                    request_id: None,
-                }),
+                Err(reason) => Ok(Self::session_error_result(call_id, reason)),
             }
         } else if let Some(axon_result) = self
             .try_dispatch_via_axon(
@@ -1037,6 +1159,8 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 subject_ura.as_deref(),
                 &ability,
                 &args,
+                &metadata,
+                origin_caller.as_ref(),
             )
             .await
         {
@@ -1049,21 +1173,19 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
             // there is no legacy RPC fallback from session frames.
             Ok(axon_result)
         } else {
-            Ok(SessionDispatch::Result {
+            Ok(Self::session_error_result(
                 call_id,
-                payload: Vec::new(),
-                terminal: true,
-                error: Some(format!(
+                format!(
                     "<self>.session: ability `{ability}` is not registered in Axon LocalRuntime"
-                )),
-                request_id: None,
-            })
+                ),
+            ))
         }?;
 
         let result = match result {
             SessionDispatch::Result {
                 payload,
                 terminal,
+                failure,
                 error,
                 request_id,
                 ..
@@ -1071,6 +1193,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 call_id,
                 payload,
                 terminal,
+                failure,
                 error,
                 request_id,
             },
@@ -1149,6 +1272,7 @@ mod tests {
             args,
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata: HashMap::new(),
+            origin_caller: None,
         };
         let payload = serde_json::to_vec(&dispatch).expect("encode dispatch");
         InvokeBidiDown {
@@ -1208,12 +1332,15 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 1);
                 assert!(terminal, "RPC reply is terminal");
                 assert_eq!(error, None, "test.echo must succeed");
+                assert!(failure.is_none(), "successful RPC must not carry failure");
                 let value: serde_json::Value =
                     serde_json::from_slice(&payload).expect("payload decodes as JSON");
                 assert_eq!(value, json!({"echo": "args-from-A"}));
@@ -1228,7 +1355,7 @@ mod tests {
 
         let rt = easynet_axon::invocation::LocalRuntime::new();
         rt.register_ability(
-            "device.camera.snapshot",
+            "camera.snapshot",
             make_ability(|ctx| async move {
                 let subject = ctx
                     .runtime
@@ -1252,10 +1379,11 @@ mod tests {
                 call_id: 7,
                 callee_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
                 subject_ura: Some(subject.to_string()),
-                ability: "device.camera.snapshot".to_string(),
+                ability: "camera.snapshot".to_string(),
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
                 metadata: HashMap::new(),
+                origin_caller: None,
             }),
             &session_tx,
         )
@@ -1284,7 +1412,7 @@ mod tests {
 
         let rt = easynet_axon::invocation::LocalRuntime::new();
         rt.register_ability_with_options(
-            "device.screen.subscribe",
+            "screen.subscribe",
             make_ability(|ctx| async move {
                 ctx.emit_progress(
                     serde_json::to_vec(&json!({"seq": 1, "width": 640, "height": 360})).unwrap(),
@@ -1314,10 +1442,11 @@ mod tests {
                 call_id: 8,
                 callee_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
                 subject_ura: Some("easynet:///r/acme/resource/display-1".to_string()),
-                ability: "device.screen.subscribe".to_string(),
+                ability: "screen.subscribe".to_string(),
                 args: b"{}".to_vec(),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
                 metadata: HashMap::new(),
+                origin_caller: None,
             }),
             &session_tx,
         )
@@ -1449,6 +1578,7 @@ mod tests {
                 error,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 42);
                 assert!(terminal, "Axon-routed reply still terminal");
@@ -1509,11 +1639,20 @@ mod tests {
         };
         let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).unwrap();
         match parsed {
-            SessionDispatch::Result { error, payload, .. } => {
+            SessionDispatch::Result {
+                error,
+                failure,
+                payload,
+                ..
+            } => {
                 assert!(payload.is_empty(), "runtime miss carries no payload");
                 let err = error.expect("runtime miss must surface an error");
                 assert!(err.contains("test.echo"));
                 assert!(err.contains("LocalRuntime"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected Result, got {other:?}"),
         }
@@ -1543,14 +1682,20 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 7);
                 assert!(terminal, "error reply must be terminal");
                 assert!(payload.is_empty(), "failed dispatch carries no payload");
                 let err = error.expect("missing ability must surface error");
                 assert!(err.contains("missing.ability"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -1587,8 +1732,10 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 11);
                 assert!(terminal, "rejection reply must be terminal");
@@ -1599,6 +1746,10 @@ mod tests {
                     "error must name the rejected ability; got: {err}"
                 );
                 assert!(err.contains("LocalRuntime"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -1670,14 +1821,20 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 9);
                 assert!(terminal, "malformed args error must be terminal");
                 assert!(payload.is_empty());
                 let err = error.expect("error message required");
                 assert!(err.contains("payload not JSON"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -1704,6 +1861,7 @@ mod tests {
                     key_id: "session-key-1".to_string(),
                 },
                 metadata: HashMap::new(),
+                origin_caller: None,
             }),
             &session_tx,
         )
@@ -1721,14 +1879,20 @@ mod tests {
                 call_id,
                 terminal,
                 error,
+                failure,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 19);
                 assert!(terminal);
                 assert!(payload.is_empty());
                 let err = error.expect("encrypted dispatch must fail closed");
                 assert!(err.contains("encrypted args"));
+                assert_eq!(
+                    failure.as_ref().map(|failure| failure.code.as_str()),
+                    Some("INVOCATION_FAILED")
+                );
                 assert!(
                     !err.contains("non-JSON"),
                     "encrypted bytes must not be parsed as plaintext JSON"
@@ -1753,6 +1917,7 @@ mod tests {
             payload: Vec::new(),
             terminal: true,
             error: None,
+            failure: None,
             request_id: None,
         };
         let bogus_bytes = serde_json::to_vec(&bogus).expect("encode bogus");
@@ -1866,12 +2031,16 @@ mod tests {
         let session_tx = SessionUpSender::new(tx);
 
         let args = serde_json::json!({
-            "path": target.to_string_lossy(),
+            "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                &target,
+                crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+            )
+            .expect("local fs ResourceRef"),
             "encoding": "utf8",
         });
         let frame = dispatch_frame(
             42,
-            "device.fs.read",
+            "fs.read",
             serde_json::to_vec(&args).expect("encode args"),
         );
 
@@ -1892,6 +2061,7 @@ mod tests {
                 error,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 42);
                 assert!(terminal, "fs.read RPC reply is terminal");
@@ -1934,7 +2104,11 @@ mod tests {
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "upload",
-                    "path": target.to_string_lossy(),
+                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                        &target,
+                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Write,
+                    )
+                    .expect("local fs ResourceRef"),
                 }))
                 .expect("encode args"),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1983,6 +2157,7 @@ mod tests {
                 error,
                 payload,
                 request_id: _,
+                ..
             } => {
                 assert_eq!(call_id, 77);
                 assert!(terminal, "upload completion must be terminal");
@@ -2005,7 +2180,7 @@ mod tests {
         let mapped = dispatcher
             .map_remote_bidi_output(
                 91,
-                "device.remote_desktop.attach",
+                "remote_desktop.attach",
                 &json!({
                     "type": "frame",
                     "seq": 3,
@@ -2021,11 +2196,13 @@ mod tests {
                 payload,
                 terminal,
                 error,
+                failure,
                 request_id: _,
             } => {
                 assert_eq!(call_id, 91);
                 assert!(!terminal);
                 assert_eq!(error, None);
+                assert!(failure.is_none());
                 let payload: Value = serde_json::from_slice(&payload).expect("json payload");
                 assert_eq!(payload["type"], "frame");
                 assert_eq!(payload["seq"], 3);
@@ -2042,7 +2219,7 @@ mod tests {
         let mapped = dispatcher
             .map_remote_bidi_output(
                 92,
-                "device.remote_desktop.attach",
+                "remote_desktop.attach",
                 &json!({
                     "type": "closed",
                     "reason": "client_closed",
@@ -2052,7 +2229,59 @@ mod tests {
             .expect("closed forwards");
 
         match mapped {
-            SessionDispatch::Result { terminal, .. } => assert!(terminal),
+            SessionDispatch::Result {
+                terminal,
+                error,
+                failure,
+                ..
+            } => {
+                assert!(terminal);
+                assert!(error.is_none());
+                assert!(failure.is_none());
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_bidi_error_frame_is_typed_terminal_failure() {
+        let dispatcher = remote_desktop_wire_dispatcher();
+        let mapped = dispatcher
+            .map_remote_bidi_output(
+                93,
+                "remote_desktop.attach",
+                &json!({
+                    "type": "error",
+                    "code": "permission_denied",
+                    "message": "screen capture permission denied",
+                }),
+            )
+            .expect("map succeeds")
+            .expect("error forwards");
+
+        match mapped {
+            SessionDispatch::Result {
+                terminal,
+                error,
+                failure,
+                payload,
+                ..
+            } => {
+                assert!(terminal);
+                assert_eq!(
+                    error.as_deref(),
+                    Some("permission_denied: screen capture permission denied")
+                );
+                let failure = failure.expect("typed failure");
+                assert_eq!(failure.code, "PERMISSION_DENIED");
+                assert_eq!(
+                    failure.message,
+                    "permission_denied: screen capture permission denied"
+                );
+                let payload: Value = serde_json::from_slice(&payload).expect("json payload");
+                assert_eq!(payload["type"], "error");
+            }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
     }
@@ -2060,8 +2289,10 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     fn remote_desktop_wire_dispatcher() -> LocalAxonSessionDispatcher {
         LocalAxonSessionDispatcher::new().with_ability_wire_registry(Arc::new(
-            crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile()
-                .expect("remote desktop plugin wire profile loads"),
+            crate::runtime::ability_wire::AbilityWireRegistry::for_test_plugin_bidi([(
+                "remote_desktop.attach".to_string(),
+                crate::runtime::ability_wire::AbilityBidiWireKind::JsonFrames,
+            )]),
         ))
     }
 
@@ -2087,7 +2318,11 @@ mod tests {
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "download",
-                    "path": target.to_string_lossy(),
+                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                        &target,
+                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+                    )
+                    .expect("local fs ResourceRef"),
                 }))
                 .expect("encode args"),
                 args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -2129,6 +2364,7 @@ mod tests {
                     error,
                     payload,
                     request_id: _,
+                    ..
                 } => {
                     assert_eq!(call_id, 88);
                     assert!(error.is_none(), "download must succeed, got {error:?}");
@@ -2147,5 +2383,76 @@ mod tests {
 
         assert_eq!(streamed, bytes);
         assert!(saw_terminal, "download must emit terminal completion frame");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_file_transfer_download_missing_file_returns_typed_terminal_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("missing-download.bin");
+
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let session_tx = SessionUpSender::new(tx);
+
+        disp.handle_down(
+            session_frame(SessionDispatch::BidiOpen {
+                call_id: 89,
+                callee_ura: None,
+                subject_ura: None,
+                ability: crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                    .to_string(),
+                args: serde_json::to_vec(&json!({
+                    "mode": "download",
+                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                        &target,
+                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+                    )
+                    .expect("local fs ResourceRef"),
+                }))
+                .expect("encode args"),
+                args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                metadata: HashMap::new(),
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("bidi open succeeds");
+
+        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("terminal failure within 3s")
+            .expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                failure,
+                payload,
+                request_id: _,
+            } => {
+                assert_eq!(call_id, 89);
+                assert!(terminal, "download failure must be terminal");
+                let error = error.expect("terminal error string");
+                assert!(
+                    error.contains("not_found"),
+                    "download failure must preserve handler code, got: {error}"
+                );
+                let failure = failure.expect("typed terminal failure");
+                assert_eq!(failure.code, "NOT_FOUND");
+                assert_eq!(failure.message, error);
+                let payload: Value = serde_json::from_slice(&payload).expect("json payload");
+                assert_eq!(payload["type"], "error");
+                assert_eq!(payload["code"], "not_found");
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
     }
 }

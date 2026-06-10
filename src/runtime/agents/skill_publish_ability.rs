@@ -1,4 +1,4 @@
-// EasyNet CLI — device.skill.* root meta-abilities
+// EasyNet CLI — skill.* root meta-abilities
 // =====================================================================================
 //
 // File: src/runtime/agents/skill_publish_ability.rs
@@ -13,10 +13,10 @@
 //
 // Skill inventory
 // ---------------
-// `device.skill.list` is the canonical installed-skill inventory
+// `skill.list` is the canonical installed-skill inventory
 // surface. Public/network-visible ability descriptors live under
-// `device.meta.list_abilities`; private skill packages live under
-// `device.skill.*`.
+// `meta.list_abilities`; private skill packages live under
+// `skill.*`.
 //
 // Skill on-disk layout (mirrors `easynet skill install`)
 // ------------------------------------------------------
@@ -63,48 +63,40 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
-pub const ABILITY_PUBLISH: &str = "device.skill.publish";
+pub const ABILITY_PUBLISH: &str = "skill.publish";
 /// Wire name: `skill.unpublish`. Curator + operator both call it.
-pub const ABILITY_UNPUBLISH: &str = "device.skill.unpublish";
+pub const ABILITY_UNPUBLISH: &str = "skill.unpublish";
 /// Wire name: `skill.list`.
-pub const ABILITY_LIST: &str = "device.skill.list";
+pub const ABILITY_LIST: &str = "skill.list";
 /// Wire name: `skill.tree`. Returns a bounded file tree for a skill package.
-pub const ABILITY_TREE: &str = "device.skill.tree";
+pub const ABILITY_TREE: &str = "skill.tree";
 /// Wire name: `skill.read_file`. Reads one UTF-8 file inside a skill package.
-pub const ABILITY_READ_FILE: &str = "device.skill.read_file";
+pub const ABILITY_READ_FILE: &str = "skill.read_file";
 /// Wire name: `skill.write_file`. Writes one UTF-8 file inside a skill package.
-pub const ABILITY_WRITE_FILE: &str = "device.skill.write_file";
+pub const ABILITY_WRITE_FILE: &str = "skill.write_file";
 
 const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
-        "device.skill.publish",
+        "skill.publish",
         OwnerKind::Device,
         Arc::new(publish_handler),
     );
     reg.register_rpc_with_owner(
-        "device.skill.unpublish",
+        "skill.unpublish",
         OwnerKind::Device,
         Arc::new(unpublish_handler),
     );
+    reg.register_rpc_with_owner("skill.list", OwnerKind::Device, Arc::new(list_handler));
+    reg.register_rpc_with_owner("skill.tree", OwnerKind::Device, Arc::new(tree_handler));
     reg.register_rpc_with_owner(
-        "device.skill.list",
-        OwnerKind::Device,
-        Arc::new(list_handler),
-    );
-    reg.register_rpc_with_owner(
-        "device.skill.tree",
-        OwnerKind::Device,
-        Arc::new(tree_handler),
-    );
-    reg.register_rpc_with_owner(
-        "device.skill.read_file",
+        "skill.read_file",
         OwnerKind::Device,
         Arc::new(read_file_handler),
     );
     reg.register_rpc_with_owner(
-        "device.skill.write_file",
+        "skill.write_file",
         OwnerKind::Device,
         Arc::new(write_file_handler),
     );
@@ -487,14 +479,18 @@ fn package_resource_ura_from_args(
             parsed.kind
         );
     }
-    if parsed.namespace.is_some() || !parsed.user_id.starts_with("agent.") {
+    let owner_id = parsed
+        .resource_owner_id()
+        .ok_or_else(|| anyhow::anyhow!("{verb}: resource_ura is missing resource owner"))?;
+    if !owner_id.starts_with("agent.") {
         anyhow::bail!("{verb}: resource_ura must identify an agent skill package, got {ura:?}");
     }
     let expected_path = format!("skill/{skill_name}");
-    if parsed.path.trim_end_matches('/') != expected_path {
+    let resource_path = parsed.resource_path().unwrap_or_default();
+    if resource_path.trim_end_matches('/') != expected_path {
         anyhow::bail!(
             "{verb}: resource_ura path must be {expected_path:?}, got {:?}",
-            parsed.path
+            resource_path
         );
     }
     Ok(ura.trim_end_matches('/').to_string())
@@ -512,12 +508,16 @@ fn skill_file_resource_ura(package_ura: &str, rel_path: &str) -> String {
     if parsed.kind != crate::ura::URAKind::Resource {
         return base.to_string();
     }
-    let child_path = if parsed.path.is_empty() {
+    let resource_path = parsed.resource_path().unwrap_or_default();
+    let child_path = if resource_path.is_empty() {
         format!("file/{clean}")
     } else {
-        format!("{}/file/{clean}", parsed.path.trim_end_matches('/'))
+        format!("{}/file/{clean}", resource_path.trim_end_matches('/'))
     };
-    crate::ura::resource_dot_ura(&parsed.realm, &parsed.user_id, &child_path)
+    let Some(owner_id) = parsed.resource_owner_id() else {
+        return base.to_string();
+    };
+    crate::ura::resource_dot_ura(&parsed.realm, owner_id, &child_path)
 }
 
 fn annotate_skill_file_resource_uras(package_ura: &str, entries: &mut [Value]) {
@@ -948,7 +948,11 @@ pub fn list_input_schema() -> Value {
             },
             "agent_ura": {
                 "type": "string",
-                "description": "Canonical owner agent URA used by the daemon to return authoritative skill resource_ura values."
+                "description": "Canonical owner Agent URA. Filters to that hosted agent and derives authoritative skill resource_ura values."
+            },
+            "subject_ura": {
+                "type": "string",
+                "description": "Owner Agent URA or skill package Resource URA. A skill Resource URA filters to that single skill."
             }
         },
         "additionalProperties": false
@@ -964,7 +968,7 @@ pub fn tree_input_schema() -> Value {
             "skill_name": {"type": "string"},
             "resource_ura": {
                 "type": "string",
-                "description": "Canonical skill package resource URA returned by device.skill.list."
+                "description": "Canonical skill package resource URA returned by skill.list."
             }
         },
         "additionalProperties": false
@@ -980,7 +984,7 @@ pub fn read_file_input_schema() -> Value {
             "skill_name": {"type": "string"},
             "resource_ura": {
                 "type": "string",
-                "description": "Canonical skill package resource URA returned by device.skill.list."
+                "description": "Canonical skill package resource URA returned by skill.list."
             },
             "path": {
                 "type": "string",
@@ -1000,7 +1004,7 @@ pub fn write_file_input_schema() -> Value {
             "skill_name": {"type": "string"},
             "resource_ura": {
                 "type": "string",
-                "description": "Canonical skill package resource URA returned by device.skill.list."
+                "description": "Canonical skill package resource URA returned by skill.list."
             },
             "path": {
                 "type": "string",
@@ -1076,6 +1080,16 @@ mod tests {
         registry.agents.insert(name.clone(), entry);
         agents::save_agents(&registry).unwrap();
         name
+    }
+
+    fn persist_hosted_agent_ura(name: &str) -> String {
+        let agent_ura = crate::ura::agent_ura("localhost", "dev", name);
+        let mut local = crate::persistence::local_agents::load()
+            .unwrap_or_else(|_| crate::persistence::local_agents::LocalAgentsFile::default());
+        local.host_device_agent_ura = "easynet:///r/localhost/device/dev-1".to_string();
+        crate::persistence::local_agents::upsert_hosted_agent(&mut local, "llm", name, &agent_ura);
+        crate::persistence::local_agents::save(&local).unwrap();
+        agent_ura
     }
 
     #[test]
@@ -1188,6 +1202,72 @@ mod tests {
             .find(|item| item["name"] == "found-me")
             .unwrap();
         assert_eq!(row["description"], "content");
+    }
+
+    #[test]
+    fn list_handler_filters_by_agent_ura_and_subject_resource() {
+        let g = HomeGuard::new();
+        let first = materialise_agent("list-scope-a", &g);
+        let second = materialise_agent("list-scope-b", &g);
+        let first_ura = persist_hosted_agent_ura(&first);
+        let second_ura = persist_hosted_agent_ura(&second);
+        publish_handler(json!({
+            "owner_agent_id": first,
+            "skill_name": "first-skill",
+            "skill_md": "first",
+        }))
+        .unwrap();
+        publish_handler(json!({
+            "owner_agent_id": second,
+            "skill_name": "second-skill",
+            "skill_md": "second",
+        }))
+        .unwrap();
+
+        let by_agent = list_handler(json!({ "agent_ura": first_ura })).expect("list by agent_ura");
+        let items = by_agent["items"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "agent_ura must scope to one owner: {by_agent}"
+        );
+        assert_eq!(items[0]["agent_id"], first);
+        assert_eq!(items[0]["name"], "first-skill");
+        assert_eq!(
+            items[0]["resource_ura"],
+            crate::ura::resource_dot_ura(
+                "localhost",
+                &format!("agent.dev.{first}"),
+                "skill/first-skill"
+            )
+        );
+
+        let skill_subject = crate::ura::resource_dot_ura(
+            "localhost",
+            &format!("agent.dev.{first}"),
+            "skill/first-skill",
+        );
+        let by_subject =
+            list_handler(json!({ "subject_ura": skill_subject })).expect("list by subject_ura");
+        let items = by_subject["items"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "skill resource subject must scope to one skill"
+        );
+        assert_eq!(items[0]["name"], "first-skill");
+
+        let err = list_handler(json!({
+            "agent_ura": second_ura,
+            "subject_ura": crate::ura::resource_dot_ura(
+                "localhost",
+                &format!("agent.dev.{first}"),
+                "skill/first-skill",
+            )
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("must match"), "got {err}");
     }
 
     #[test]

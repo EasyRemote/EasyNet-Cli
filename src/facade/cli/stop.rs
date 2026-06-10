@@ -2,8 +2,8 @@
 // ===========
 //
 // File: src/facade/cli/stop.rs
-// Description: `easynet stop` — orderly shutdown of every process and
-//              state file `easynet start` left behind.
+// Description: `easynet runtime stop` — orderly shutdown of every process and
+//              state file `easynet runtime start` left behind.
 //
 // Shape — what changed and why
 // -----------------------------
@@ -144,7 +144,7 @@ impl StopPlan {
                     return;
                 }
             };
-            let caller_ura = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
+            let caller_ura = crate::ura::device_ura(&creds.realm, &creds.node_id);
             match crate::support::federation_invoke::invoke_federation_revoke(
                 &caller_ura,
                 "device shutdown",
@@ -211,7 +211,7 @@ impl StopPlan {
     /// `pgrep -f easynet-daemon` belt-and-suspenders pass. Catches
     /// the "pidfile lost" case where an earlier stop crashed
     /// mid-write, or where an operator spawned `easynet-daemon`
-    /// manually without going through `easynet start`.
+    /// manually without going through `easynet runtime start`.
     fn stage_sweep_daemons(&mut self) {
         self.renderer.set_active("sweep-daemons");
         let swept = sweep_stray_easynet_daemons();
@@ -296,7 +296,7 @@ enum PidfileStopOutcome {
 /// Pidfile -> liveness check -> easynet-process check -> SIGTERM
 /// with a 3-second wait. Removes the pidfile after the attempt
 /// regardless of outcome so a stale file from a crashed daemon
-/// does not block the next `easynet start`.
+/// does not block the next `easynet runtime start`.
 ///
 /// The pidfile race window between `read` and `kill` is narrow but
 /// not zero; the `is_easynet_process` check after liveness mitigates

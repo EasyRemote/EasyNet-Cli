@@ -27,32 +27,32 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::domain::{AgentId, LoopId};
 use crate::runtime::execution::loop_instance::LoopService;
 
-pub const ABILITY_CREATE: &str = "device.loop.create";
-pub const ABILITY_STATUS: &str = "device.loop.status";
-pub const ABILITY_SUBSCRIBE: &str = "device.loop.subscribe";
-pub const ABILITY_CANCEL: &str = "device.loop.cancel";
+pub const ABILITY_CREATE: &str = "loop.create";
+pub const ABILITY_STATUS: &str = "loop.status";
+pub const ABILITY_SUBSCRIBE: &str = "loop.subscribe";
+pub const ABILITY_CANCEL: &str = "loop.cancel";
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<LoopService>) {
     let a = Arc::clone(&svc);
     reg.register_rpc_with_owner(
-        "device.loop.create",
+        "loop.create",
         OwnerKind::Device,
         Arc::new(move |args| create_handler(&a, args)),
     );
     let b = Arc::clone(&svc);
     reg.register_rpc_with_owner(
-        "device.loop.status",
+        "loop.status",
         OwnerKind::Device,
         Arc::new(move |args| status_handler(&b, args)),
     );
     let c = Arc::clone(&svc);
     reg.register_stream_with_owner(
-        "device.loop.subscribe",
+        "loop.subscribe",
         OwnerKind::Device,
         Arc::new(move |args| subscribe_handler(&c, args)),
     );
     reg.register_rpc_with_owner(
-        "device.loop.cancel",
+        "loop.cancel",
         OwnerKind::Device,
         Arc::new(move |args| cancel_handler(&svc, args)),
     );

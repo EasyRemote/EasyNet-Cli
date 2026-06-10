@@ -94,7 +94,7 @@ else
 fi
 native_dir="$real_home/.easynet/dendrite-bridge/native"
 
-cargo_args_cli=(--bin easynet --bin easynet-daemon --features axon-pb)
+cargo_args_cli=(--bin easynet --bin easynet-daemon)
 cargo_args_bridge=(--lib)
 if [ "$build_profile" = "release" ]; then
     cargo_args_cli+=(--release)

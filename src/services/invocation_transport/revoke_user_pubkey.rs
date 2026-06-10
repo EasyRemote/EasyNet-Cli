@@ -199,7 +199,7 @@ mod tests {
                 public_key_b64: pubkey.clone(),
                 role: TrustedAgentRole::User,
                 added_at_unix_ms: 1_714_000_000_000,
-                origin_tenant_id: None,
+                origin_realm: None,
                 hub_endpoint: None,
                 tls_ca_pem_path: None,
             })

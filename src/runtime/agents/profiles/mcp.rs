@@ -1,8 +1,8 @@
 //! mcp profile — RFC-001 §1 [P6].
 //!
 //! Per restatement-mapping decision P6: a single mcp-profile Agent
-//! owns BOTH inbound and outbound MCP — `device.mcp.bridge.*` (incoming MCP
-//! tools/list + tools/call) and `device.mcp.client.*` (outgoing MCP calls
+//! owns BOTH inbound and outbound MCP — `mcp.bridge.*` (incoming MCP
+//! tools/list + tools/call) and `mcp.client.*` (outgoing MCP calls
 //! to external servers). They share one Agent identity rather than
 //! splitting into two profiles.
 //!
@@ -10,16 +10,14 @@
 //! RFC-001 §A3 (MCP only at edge adapters; everywhere else is
 //! Invocation-only). The conformance script enforces this.
 //!
-//! Owned ability namespaces
-//! ------------------------
-//!   device.mcp.bridge.list_tools  (inbound MCP server: tools/list)
-//!   device.mcp.bridge.call_tool   (inbound MCP server: tools/call)
-//!   device.mcp.client.list        (outbound: list configured external MCP servers)
-//!   device.mcp.client.call        (outbound: dispatch to external MCP server)
+//! Descriptor ownership
+//! --------------------
+//! MCP descriptors are generated from the dispatch registry entries whose owner
+//! is `OwnerKind::Agent(DEFAULT_MCP_AGENT_ID)`. This file does not infer
+//! ownership from ability name prefixes.
 //!
 //! What this file provides today
 //! -----------------------------
-//!   - `owns(ability_name)`            : prefix check
 //!   - `descriptors_for(owner_ura)`    : §1.6 descriptors emitter
 //!   - `InvokeMcpProvider`             : the McpToolProvider impl that
 //!     translates every `tools/list` and `tools/call` into a local
@@ -41,34 +39,21 @@
 //! is the stdio MCP server scaffolding (provider trait wiring,
 //! bound-node patching), which P4.9 absorbs into this file.
 
-pub const MCP_PROFILE_ABILITY_PREFIXES: &[&str] = &["device.mcp.bridge.", "device.mcp.client."];
-
-pub fn owns(ability_name: &str) -> bool {
-    MCP_PROFILE_ABILITY_PREFIXES
-        .iter()
-        .any(|p| ability_name.starts_with(p))
-}
-
-/// AbilityDescriptors for every device.mcp.bridge.* + device.mcp.client.* in the
+/// AbilityDescriptors for every mcp.bridge.* + mcp.client.* in the
 /// live registry, anchored to the mcp-profile's canonical URA. All
 /// SCOPED per §18 — local MCP clients only for bridge.*; the daemon
 /// itself + selected internal callers for client.*. P4.7 narrows.
 pub fn descriptors_for(
-    owner_agent_ura: &str,
+    owner_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-    crate::runtime::agents::published_abilities()
-        .into_iter()
-        .filter(|m| owns(&m.name))
-        .map(|m| {
-            AbilityDescriptor::new(m.name.clone(), owner_agent_ura, Visibility::Scoped)
-                .expect("registry-derived names satisfy descriptor invariants")
-                .with_input_schema(m.input_schema.clone())
-                .with_hints(m.hints.clone())
-                .with_source("kernel:built-in")
-                .with_description(m.description)
-        })
-        .collect()
+    use crate::runtime::ability_descriptor::Visibility;
+    use crate::runtime::ability_dispatch::OwnerKind;
+
+    super::system_descriptors_for_owner(
+        owner_ura,
+        OwnerKind::Agent(super::DEFAULT_MCP_AGENT_ID.to_string()),
+        |_| Visibility::Scoped,
+    )
 }
 
 /// Project an AbilityDescriptor into the JSON-Schema shape MCP
@@ -85,7 +70,7 @@ pub fn descriptors_for(
 ///                  the LLM had to infer purpose from the name
 ///                  alone. Surfaced in the audit conversation when
 ///                  the MCP probe showed every tool's description as
-///                  `"device.fs.read (source: kernel:built-in)"`.
+///                  `"fs.read (source: kernel:built-in)"`.
 ///   inputSchema  ← descriptor.schema_summary.input (JSON Schema)
 pub fn tool_spec_from_descriptor(
     descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
@@ -114,7 +99,7 @@ fn tool_spec_from_descriptor_with_name(
         "inputSchema": input_schema,
         "x-easynet": {
             "ability": descriptor.name,
-            "owner_agent_ura": descriptor.owner_agent_ura,
+            "owner_ura": descriptor.owner_ura,
             "source": descriptor.source,
             "owner_user": descriptor.metadata.get("owner_user").cloned().unwrap_or_default(),
             "owner_agent": descriptor.metadata.get("owner_agent").cloned().unwrap_or_default(),
@@ -158,22 +143,28 @@ fn owner_label_for_descriptor(
             format!("user/{user} agent/{agent}")
         }
         (_, Some(agent)) if !agent.is_empty() => format!("agent/{agent}"),
-        _ => parsed_owner_label(&descriptor.owner_agent_ura)
-            .unwrap_or_else(|| descriptor.owner_agent_ura.clone()),
+        _ => parsed_owner_label(&descriptor.owner_ura)
+            .unwrap_or_else(|| descriptor.owner_ura.clone()),
     }
 }
 
-fn parsed_owner_label(owner_agent_ura: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(owner_agent_ura).ok()?;
+fn parsed_owner_label(owner_ura: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(owner_ura).ok()?;
     match parsed.kind {
-        crate::ura::URAKind::Agent => {
-            Some(format!("user/{} agent/{}", parsed.user_id, parsed.agent_id))
-        }
-        crate::ura::URAKind::Ability => {
-            Some(format!("user/{} agent/{}", parsed.user_id, parsed.agent_id))
-        }
-        crate::ura::URAKind::User => Some(format!("user/{}", parsed.user_id)),
-        crate::ura::URAKind::Device => Some(format!("device/{}", parsed.device_id)),
+        crate::ura::URAKind::Agent => parsed
+            .agent_ids()
+            .map(|(user_id, agent_id)| format!("user/{user_id} agent/{agent_id}")),
+        crate::ura::URAKind::Ability => match parsed.ability()?.owner {
+            crate::ura::AbilityOwner::Agent { user_id, agent_id } => {
+                Some(format!("user/{user_id} agent/{agent_id}"))
+            }
+            crate::ura::AbilityOwner::Device { device_id } => Some(format!("device/{device_id}")),
+            crate::ura::AbilityOwner::Hub => Some("hub".to_string()),
+        },
+        crate::ura::URAKind::User => parsed.user_id().map(|user_id| format!("user/{user_id}")),
+        crate::ura::URAKind::Device => parsed
+            .device_id()
+            .map(|device_id| format!("device/{device_id}")),
         crate::ura::URAKind::Hub => Some("hub".to_string()),
         _ => None,
     }
@@ -277,7 +268,7 @@ struct ToolRoute {
 /// MCP clients (Codex, Claude Code) expect.
 ///
 /// **Why this is an object, not three free functions.** Three call
-/// sites — the unary `device.mcp.bridge.call_tool` handler, the
+/// sites — the unary `mcp.bridge.call_tool` handler, the
 /// inbound MCP server's `tools/list` projection, and
 /// `InvokeMcpProvider` — all need the same forward+reverse views
 /// of the same descriptor slice. The pre-refactor code recomputed
@@ -288,20 +279,15 @@ struct ToolRoute {
 /// invited "forgot to keep in sync" bugs. `McpToolRouteTable`
 /// captures both directions once and exposes O(log N) lookups.
 ///
-/// Construction is deterministic in the descriptor order; reverse
-/// lookups also accept canonical dotted names as a legacy alias so
-/// pre-projection clients keep working.
+/// Construction is deterministic in the descriptor order. Reverse
+/// lookup accepts only the advertised MCP tool name; canonical dotted
+/// ability names stay internal to `x-easynet.ability` and dispatch.
 #[derive(Debug, Clone, Default)]
 pub struct McpToolRouteTable {
     routes: Vec<ToolRoute>,
     /// MCP tool name → canonical ability name. Hot path for
     /// `call_tool` dispatch.
     reverse: std::collections::BTreeMap<String, String>,
-    /// Set of canonical ability names known to this table. Used by
-    /// the legacy-alias accept path so we can quickly answer
-    /// "this dotted name is one of ours" without a linear scan over
-    /// `routes`.
-    canonical: std::collections::BTreeSet<String>,
 }
 
 impl McpToolRouteTable {
@@ -345,31 +331,17 @@ impl McpToolRouteTable {
         }
 
         let mut reverse = std::collections::BTreeMap::new();
-        let mut canonical = std::collections::BTreeSet::new();
         for r in &routes {
             reverse.insert(r.tool_name.clone(), r.ability_name.clone());
-            canonical.insert(r.ability_name.clone());
         }
 
-        Self {
-            routes,
-            reverse,
-            canonical,
-        }
+        Self { routes, reverse }
     }
 
     /// Resolve `tool_name` (an MCP-facing name) back to the canonical
-    /// dotted EasyNet ability name. Accepts canonical dotted names
-    /// directly as a legacy alias so pre-projection clients that
-    /// learned the old wire shape continue to work.
+    /// dotted EasyNet ability name.
     pub fn canonical_for_tool<'a>(&'a self, tool_name: &str) -> Option<&'a str> {
-        if let Some(ability) = self.reverse.get(tool_name) {
-            return Some(ability.as_str());
-        }
-        if self.canonical.contains(tool_name) {
-            return self.canonical.get(tool_name).map(String::as_str);
-        }
-        None
+        self.reverse.get(tool_name).map(String::as_str)
     }
 
     /// Iterate every row in projection order. Yields `(tool_name,
@@ -381,10 +353,10 @@ impl McpToolRouteTable {
     }
 }
 
-/// Backwards-compatible convenience that resolves a tool name
-/// against a freshly-built table. Existing call sites that have a
-/// short-lived `&[AbilityDescriptor]` can keep their shape; longer-
-/// lived call sites should hold an `McpToolRouteTable` instead.
+/// Resolve an advertised MCP tool name against a freshly-built table.
+/// Existing call sites that have a short-lived `&[AbilityDescriptor]`
+/// can keep their shape; longer-lived call sites should hold an
+/// `McpToolRouteTable` instead.
 pub fn canonical_ability_name_for_mcp_tool<'a>(
     descriptors: &'a [crate::runtime::ability_descriptor::AbilityDescriptor],
     tool_name: &str,
@@ -750,9 +722,8 @@ fn per_agent_workspace_descriptors(
     // the cross-agent surface — when agent A is the active LLM and
     // the user asks for something only agent B has the skill for,
     // agent A's tool list now includes `<B>.<verb>` so the LLM can
-    // route to it. Calling those tools dispatches through the
-    // daemon's per-agent fallback resolver, which then runs B's
-    // own chat-translation handler with B's own skills exposed.
+    // route to it. Calling those tools dispatches through B's
+    // materialized per-agent handler with B's own skills exposed.
     //
     // `<other_name>.chat` is excluded for the same reason: chat is
     // the agent's outgoing surface, not a callable tool. Calling
@@ -866,18 +837,19 @@ mod tests {
     use std::cell::RefCell;
 
     #[test]
-    fn owns_recognizes_both_mcp_namespaces() {
-        assert!(owns("device.mcp.bridge.list_tools"));
-        assert!(owns("device.mcp.bridge.call_tool"));
-        assert!(owns("device.mcp.client.list"));
-        assert!(owns("device.mcp.client.call"));
-    }
-
-    #[test]
-    fn owns_rejects_other_profiles_and_bare_mcp() {
-        assert!(!owns("device.mcp.evaluate")); // not in either bridge/client subset
-        assert!(!owns("device.skill.list"));
-        assert!(!owns("device.consent.subscribe"));
+    fn descriptors_follow_registry_owner() {
+        let descriptors = descriptors_for("easynet:///r/acme/agent/u1.01MCP");
+        let names = descriptors
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(names.contains("mcp.bridge.list_tools"));
+        assert!(names.contains("mcp.bridge.call_tool"));
+        assert!(names.contains("mcp.client.list"));
+        assert!(names.contains("mcp.client.call"));
+        assert!(!names.contains("mcp.evaluate"));
+        assert!(!names.contains("skill.list"));
+        assert!(!names.contains("consent.subscribe"));
     }
 
     fn d(name: &str) -> AbilityDescriptor {
@@ -888,11 +860,33 @@ mod tests {
             .with_description("List every registered agent on this host.")
     }
 
+    fn create_manifest_backed_agent_entry(
+        agent: &str,
+    ) -> (std::path::PathBuf, crate::registry::agents::AgentEntry) {
+        use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+        use crate::registry::agents::{AgentEntry, AgentType};
+        use crate::runtime::directory::{AgentDirectory, Location};
+
+        let workspace_root = crate::persistence::config::agents_root().join(agent);
+        let _ = std::fs::remove_dir_all(&workspace_root);
+        AgentDirectory::create(
+            &Location::Local {
+                root: workspace_root.clone(),
+            },
+            AgentSpec::new(agent.to_string(), RuntimeKind::ClaudeCode),
+        )
+        .expect("create manifest-backed test agent directory");
+
+        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        entry.root_path = Some(workspace_root.clone());
+        (workspace_root, entry)
+    }
+
     #[test]
     fn tool_spec_from_descriptor_emits_mcp_shape() {
-        let spec = tool_spec_from_descriptor(&d("device.agent.list"));
-        assert_eq!(spec["name"], "device_agent_list");
-        assert_eq!(spec["x-easynet"]["ability"], "device.agent.list");
+        let spec = tool_spec_from_descriptor(&d("agent.list"));
+        assert_eq!(spec["name"], "agent_list");
+        assert_eq!(spec["x-easynet"]["ability"], "agent.list");
         // The MCP description is the human blurb from the registry,
         // NOT the provenance string. Pre-fix this asserted the
         // opposite — bug pinned upside-down. Updated when the
@@ -903,7 +897,7 @@ mod tests {
         // agent-chat surface, including billed upstream MCP tools.
         // See `inferred_cost_kind` doc for the honesty rationale.
         assert!(spec["description"].as_str().unwrap().starts_with(
-            "[EasyNet ability: device.agent.list | owner: device/01DEV | cost: unknown (cost not declared)] "
+            "[EasyNet ability: agent.list | owner: device/01DEV | cost: unknown (cost not declared)] "
         ));
         assert!(spec["description"]
             .as_str()
@@ -947,8 +941,8 @@ mod tests {
             "openai_mcp_unit_converter__convert_length"
         );
         assert_eq!(
-            mcp_tool_name_for_ability("device.ability.publish"),
-            "device_ability_publish"
+            mcp_tool_name_for_ability("ability.publish"),
+            "ability_publish"
         );
         assert_eq!(mcp_tool_name_for_ability("..."), "ability");
     }
@@ -1014,19 +1008,19 @@ mod tests {
 
     #[test]
     fn tool_specs_lists_every_descriptor_passed_at_construction() {
-        let descs = vec![d("device.observe.health"), d("device.agent.list")];
+        let descs = vec![d("observe.health"), d("agent.list")];
         let p = InvokeMcpProvider::new(RecordingInvoker::new(Ok(serde_json::json!({}))), descs);
         let specs = p.tool_specs();
         assert_eq!(specs.len(), 2);
         let names: Vec<&str> = specs.iter().map(|s| s["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"device_observe_health"));
-        assert!(names.contains(&"device_agent_list"));
+        assert!(names.contains(&"observe_health"));
+        assert!(names.contains(&"agent_list"));
     }
 
     #[test]
     fn unknown_tool_call_returns_error_result_without_invoking() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health")]);
+        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
         let result = p.handle_tool_call("totally.unknown", &serde_json::Map::new());
         assert!(
             result.is_error,
@@ -1039,15 +1033,15 @@ mod tests {
     #[test]
     fn client_safe_tool_call_is_dispatched_to_canonical_ability() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({"status": "healthy"})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health")]);
+        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
         let mut args = serde_json::Map::new();
         args.insert("foo".into(), serde_json::Value::Bool(true));
-        let result = p.handle_tool_call("device_observe_health", &args);
+        let result = p.handle_tool_call("observe_health", &args);
         assert!(!result.is_error);
         assert_eq!(result.payload["status"], "healthy");
         assert_eq!(
             p.invoker.last_ability.borrow().as_deref(),
-            Some("device.observe.health")
+            Some("observe.health")
         );
         assert_eq!(
             p.invoker.last_args.borrow().as_ref().unwrap()["foo"],
@@ -1085,15 +1079,12 @@ mod tests {
     }
 
     #[test]
-    fn canonical_dotted_tool_call_remains_supported_as_legacy_alias() {
+    fn canonical_dotted_tool_call_is_rejected() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({"status": "healthy"})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health")]);
-        let result = p.handle_tool_call("device.observe.health", &serde_json::Map::new());
-        assert!(!result.is_error);
-        assert_eq!(
-            p.invoker.last_ability.borrow().as_deref(),
-            Some("device.observe.health")
-        );
+        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
+        let result = p.handle_tool_call("observe.health", &serde_json::Map::new());
+        assert!(result.is_error);
+        assert!(p.invoker.last_ability.borrow().is_none());
     }
 
     #[test]
@@ -1120,8 +1111,8 @@ mod tests {
     #[test]
     fn invoker_error_surfaces_as_error_payload() {
         let invoker = RecordingInvoker::new(Err("policy denied".into()));
-        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health")]);
-        let result = p.handle_tool_call("device.observe.health", &serde_json::Map::new());
+        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
+        let result = p.handle_tool_call("observe_health", &serde_json::Map::new());
         assert!(result.is_error);
         assert!(result.payload["error"]
             .as_str()
@@ -1132,10 +1123,7 @@ mod tests {
     #[test]
     fn descriptor_count_matches_input() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
-        let p = InvokeMcpProvider::new(
-            invoker,
-            vec![d("device.observe.health"), d("device.agent.list")],
-        );
+        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health"), d("agent.list")]);
         assert_eq!(p.descriptor_count(), 2);
     }
 
@@ -1143,7 +1131,7 @@ mod tests {
     fn daemon_local_invoker_surfaces_daemon_not_running() {
         let _h = crate::facade::cli::test_support::HomeGuard::new();
         let err = DaemonLocalInvoker
-            .invoke_sync("device.observe.health", serde_json::json!({}))
+            .invoke_sync("observe.health", serde_json::json!({}))
             .expect_err("daemon-backed invoker must fail when no daemon is running");
         assert!(
             err.contains("daemon not running"),
@@ -1177,7 +1165,7 @@ mod tests {
             .provider
             .descriptors
             .iter()
-            .map(|d| d.owner_agent_ura.clone())
+            .map(|d| d.owner_ura.clone())
             .collect();
         assert!(
             owners.contains("self"),
@@ -1206,7 +1194,7 @@ mod tests {
             .provider
             .descriptors
             .iter()
-            .map(|d| d.owner_agent_ura.clone())
+            .map(|d| d.owner_ura.clone())
             .collect();
         assert!(
             owners.contains("easynet:///r/acme/device/01DEV"),
@@ -1230,7 +1218,6 @@ mod tests {
         // promise: agents could declare abilities but the LLM
         // they wrap couldn't call them.
         use crate::facade::cli::test_support::HomeGuard;
-        use crate::registry::agents::{AgentEntry, AgentType};
 
         let _g = HomeGuard::new();
 
@@ -1243,17 +1230,10 @@ mod tests {
         let agent = "g1-test-agent";
 
         let mut registry = crate::registry::agents::AgentRegistry::default();
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
         registry.agents.insert(agent.into(), entry);
         crate::registry::agents::save_agents(&registry).unwrap();
 
-        let workspace_root = crate::persistence::config::agents_root().join(agent);
-        std::fs::create_dir_all(workspace_root.join("abilities")).unwrap();
-        std::fs::write(
-            workspace_root.join("agent.toml"),
-            format!("name = \"{agent}\"\nruntime = \"claude-code\"\n"),
-        )
-        .unwrap();
         std::fs::write(
             workspace_root.join("abilities/code-review.ability.toml"),
             "schema_version = \"1\"\n\
@@ -1365,24 +1345,15 @@ mod tests {
         // upstream" without the system burying that under the
         // fallback `cost: unknown`.
         use crate::facade::cli::test_support::HomeGuard;
-        use crate::registry::agents::{AgentEntry, AgentType};
 
         let _g = HomeGuard::new();
         let agent = "day1-cost-test-agent";
 
         let mut registry = crate::registry::agents::AgentRegistry::default();
-        registry
-            .agents
-            .insert(agent.into(), AgentEntry::new(AgentType::ClaudeCode, None));
+        let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
+        registry.agents.insert(agent.into(), entry);
         crate::registry::agents::save_agents(&registry).unwrap();
 
-        let workspace_root = crate::persistence::config::agents_root().join(agent);
-        std::fs::create_dir_all(workspace_root.join("abilities")).unwrap();
-        std::fs::write(
-            workspace_root.join("agent.toml"),
-            format!("name = \"{agent}\"\nruntime = \"claude-code\"\n"),
-        )
-        .unwrap();
         // MCP-backed ability whose [exec] kind = "mcp" would normally
         // resolve to `cost_kind = unknown` via the heuristic. The
         // [cost] table here overrides that to the declared bucket +
@@ -1454,7 +1425,7 @@ mod tests {
         };
 
         let descs = vec![AbilityDescriptor::new(
-            "device.observe.health",
+            "observe.health",
             "easynet:///r/acme/device/01DEV",
             Visibility::Public,
         )
@@ -1464,14 +1435,14 @@ mod tests {
         // tools/list mirrors the descriptor.
         let specs = provider.tool_specs();
         assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0]["name"], "device_observe_health");
-        assert_eq!(specs[0]["x-easynet"]["ability"], "device.observe.health");
+        assert_eq!(specs[0]["name"], "observe_health");
+        assert_eq!(specs[0]["x-easynet"]["ability"], "observe.health");
 
         // tools/call dispatches through the provider's local invoker.
-        let result = provider.handle_tool_call("device_observe_health", &serde_json::Map::new());
+        let result = provider.handle_tool_call("observe_health", &serde_json::Map::new());
         assert!(
             !result.is_error,
-            "device.observe.health must succeed end-to-end through MCP shim"
+            "observe.health must succeed end-to-end through MCP shim"
         );
     }
 
@@ -1521,7 +1492,7 @@ mod tests {
                 value: serde_json::json!({"ok": true}),
             },
             vec![AbilityDescriptor::new(
-                "device.observe.health",
+                "observe.health",
                 "easynet:///r/acme/device/01DEV",
                 Visibility::Public,
             )
@@ -1532,7 +1503,7 @@ mod tests {
             reports: std::sync::Arc::clone(&reports),
         };
         let out = provider.handle_tool_call_with_progress(
-            "device.observe.health",
+            "observe_health",
             &serde_json::Map::new(),
             &mut sink,
         );
@@ -1566,7 +1537,7 @@ mod tests {
                 value: serde_json::Value::Null,
             },
             vec![AbilityDescriptor::new(
-                "device.observe.health",
+                "observe.health",
                 "easynet:///r/acme/device/01DEV",
                 Visibility::Public,
             )

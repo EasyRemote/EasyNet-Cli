@@ -29,9 +29,9 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::domain::{AgentId, RoomId};
 use crate::runtime::execution::discuss::DiscussService;
 
-pub const ABILITY_CREATE: &str = "device.discuss.create";
-pub const ABILITY_POST: &str = "device.discuss.post";
-pub const ABILITY_SUBSCRIBE: &str = "device.discuss.subscribe";
+pub const ABILITY_CREATE: &str = "discuss.create";
+pub const ABILITY_POST: &str = "discuss.post";
+pub const ABILITY_SUBSCRIBE: &str = "discuss.subscribe";
 /// `discuss.list_turns` — snapshot of every turn in a room as an
 /// RPC. Sibling of `discuss.subscribe` (the streaming variant);
 /// callers that only need the current state without holding a
@@ -40,29 +40,29 @@ pub const ABILITY_SUBSCRIBE: &str = "device.discuss.subscribe";
 /// schema mirrors subscribe's snapshot half — same `turns` array
 /// shape, same field names — so a future caller upgrading from
 /// list_turns to subscribe gets the same data layout.
-pub const ABILITY_LIST_TURNS: &str = "device.discuss.list_turns";
+pub const ABILITY_LIST_TURNS: &str = "discuss.list_turns";
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<DiscussService>) {
     let a = Arc::clone(&svc);
     reg.register_rpc_with_owner(
-        "device.discuss.create",
+        "discuss.create",
         OwnerKind::Device,
         Arc::new(move |args: Value| create_handler(&a, args)),
     );
     let b = Arc::clone(&svc);
     reg.register_rpc_with_owner(
-        "device.discuss.post",
+        "discuss.post",
         OwnerKind::Device,
         Arc::new(move |args: Value| post_handler(&b, args)),
     );
     let c = Arc::clone(&svc);
     reg.register_rpc_with_owner(
-        "device.discuss.list_turns",
+        "discuss.list_turns",
         OwnerKind::Device,
         Arc::new(move |args: Value| list_turns_handler(&c, args)),
     );
     reg.register_stream_with_owner(
-        "device.discuss.subscribe",
+        "discuss.subscribe",
         OwnerKind::Device,
         Arc::new(move |args: Value| subscribe_handler(&svc, args)),
     );

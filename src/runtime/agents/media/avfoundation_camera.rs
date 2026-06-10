@@ -160,6 +160,18 @@ pub fn capture_jpeg(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
     unsafe {
         let _: () = msg_send![&*session, beginConfiguration];
 
+        // AVCaptureSession defaults to PresetHigh — 720p VIDEO on
+        // FaceTime HD cameras. camera.snapshot is a STILL: ask for
+        // the photo preset, which delivers the sensor's full still
+        // resolution (1080p+ on MacBook cameras). Guarded fall-back
+        // to the default for devices that can't do photo (some
+        // external UVC cams).
+        let photo_preset = NSString::from_str("AVCaptureSessionPresetPhoto");
+        let can_set_preset: bool = msg_send![&*session, canSetSessionPreset: &*photo_preset];
+        if can_set_preset {
+            let _: () = msg_send![&*session, setSessionPreset: &*photo_preset];
+        }
+
         let can_add_input: bool = msg_send![&*session, canAddInput: &*input];
         if !can_add_input {
             anyhow::bail!(

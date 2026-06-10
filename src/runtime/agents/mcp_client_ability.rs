@@ -50,16 +50,17 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::agents::profiles::DEFAULT_MCP_AGENT_ID;
 use crate::runtime::execution::mcp_client::McpClientService;
 
-pub const ABILITY_LIST: &str = "device.mcp.client.list";
-pub const ABILITY_CALL: &str = "device.mcp.client.call";
+pub const ABILITY_LIST: &str = "mcp.client.list";
+pub const ABILITY_CALL: &str = "mcp.client.call";
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<McpClientService>) {
     let svc_for_list = Arc::clone(&svc);
     reg.register_rpc_with_owner(
-        "device.mcp.client.list",
-        OwnerKind::Device,
+        "mcp.client.list",
+        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
         Arc::new(move |args: Value| {
             let svc = Arc::clone(&svc_for_list);
             // The ability-dispatch path is sync but McpClientService
@@ -71,8 +72,8 @@ pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<McpClientService>) {
         }),
     );
     reg.register_rpc_with_owner(
-        "device.mcp.client.call",
-        OwnerKind::Device,
+        "mcp.client.call",
+        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
         Arc::new(move |args: Value| {
             let svc = Arc::clone(&svc);
             block_on_async(async move { call_handler(&svc, args).await })

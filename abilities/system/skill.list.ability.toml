@@ -1,0 +1,19 @@
+schema_version = "1"
+name = "skill.list"
+description = "List skills installed for an agent (or all agents). Canonical skill inventory surface; returns InstalledSkill rows."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "Canonical owner Agent URA. Filters to that hosted agent and derives authoritative skill resource_ura values."
+
+[input_schema.properties.owner_agent_id]
+type = "string"
+description = "Optional. Filter to skills owned by this agent. Absent = all agents."
+
+[input_schema.properties.subject_ura]
+type = "string"
+description = "Owner Agent URA or skill package Resource URA. A skill Resource URA filters to that single skill."

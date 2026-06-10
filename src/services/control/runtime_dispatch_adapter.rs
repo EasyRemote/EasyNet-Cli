@@ -74,7 +74,7 @@ impl RuntimeDispatchAdapter {
     ///
     /// This is not used by daemon boot. It exists for runtime-dispatch
     /// wire tests that need an always-available local ability such as
-    /// `device.observe.health` without constructing the whole daemon.
+    /// `observe.health` without constructing the whole daemon.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         let agents = crate::registry::agents::load_agents().unwrap_or_default();
@@ -180,7 +180,7 @@ mod tests {
     fn runtime_dispatch_rpc_observe_health_returns_json_object() {
         let adapter = RuntimeDispatchAdapter::new_for_test();
         let value = adapter
-            .execute_runtime_dispatch("device.observe.health", serde_json::json!({}), None)
+            .execute_runtime_dispatch("observe.health", serde_json::json!({}), None)
             .expect("observe.health dispatch should succeed");
         assert!(value.is_object(), "observe.health returns a JSON object");
     }
@@ -235,7 +235,7 @@ mod tests {
             RuntimeDispatchAdapter::new_with_runtime(LocalRuntime::new(), Arc::new(EchoResolver));
         let target = adapter
             .resolve(
-                "device.observe.health",
+                "observe.health",
                 serde_json::json!({}),
                 CallMode::Rpc,
                 Some("easynet:///r/test/resource/device".to_string()),

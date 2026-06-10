@@ -104,7 +104,6 @@ pub enum PeerStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerEntry {
-    #[serde(alias = "peer_uri")]
     pub peer_ura: String,
     pub fingerprint_b64: String, // sha256(public_key)
     pub public_key_b64: String,
@@ -167,7 +166,12 @@ pub fn save_keyring(path: &Path, kr: &KeyRing) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create keyring parent {}", parent.display()))?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let mut tmp_name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from(KEYRING_FILE_NAME));
+    tmp_name.push(format!(".{}.tmp", ulid_like()));
+    let tmp = path.with_file_name(tmp_name);
     let bytes = serde_json::to_vec_pretty(kr)?;
     std::fs::write(&tmp, &bytes).with_context(|| format!("write tmp {}", tmp.display()))?;
     // Best-effort restrictive permissions (0o600) before publishing.
@@ -355,6 +359,29 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_saves_do_not_share_the_same_tmp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::sync::Arc::new(dir.path().join("keyring.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+
+        for _ in 0..2 {
+            let path = std::sync::Arc::clone(&path);
+            let barrier = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let kr = fresh_keyring(MasterKeyKind::Passphrase);
+                barrier.wait();
+                save_keyring(&path, &kr)
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        load_keyring(&path).unwrap();
+    }
+
+    #[test]
     fn entry_signs_and_round_trips() {
         let kr = fresh_keyring(MasterKeyKind::Passphrase);
         let master = unlock_test(&kr);
@@ -392,6 +419,26 @@ mod tests {
         // Tampering fingerprint fails.
         let bad = b64_encode(&[0u8; 32]);
         assert!(validate_fingerprint(&entry.public_key_b64, &bad).is_err());
+    }
+
+    #[test]
+    fn peer_entry_rejects_retired_peer_uri_alias() {
+        let value = serde_json::json!({
+            "peer_uri": "easynet:///r/realm/device/dev-1",
+            "fingerprint_b64": b64_encode(&[0_u8; 32]),
+            "public_key_b64": b64_encode(&[1_u8; 32]),
+            "status": "trusted",
+            "via_hub": null,
+            "added_unix_ms": 1,
+            "last_seen_unix_ms": 1
+        });
+        let err = serde_json::from_value::<PeerEntry>(value)
+            .expect_err("peer_uri must not deserialize as peer_ura")
+            .to_string();
+        assert!(
+            err.contains("peer_ura"),
+            "error should name the canonical keyring peer field: {err}"
+        );
     }
 
     #[test]

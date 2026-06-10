@@ -147,7 +147,7 @@ shapes below. Other "URA-shaped" tokens that have appeared in practice
   \code{device}   & \codew{easynet:///r/<realm>/device/<device-uuid>}                       & device-uuid is bare \\
   \code{agent}    & \codew{easynet:///r/<realm>/agent/<user-uuid>.<agent-id>}               & exactly one \code{.} in tail; both segments non-empty; agent-id has no \code{.} \\
   \code{ability}  & \codew{easynet:///r/<realm>/ability/<user-uuid>.<agent-id>.<ability-id>} & exactly two leading \code{.}s; ability-id may itself contain \code{.}s (e.g.\ \code{fs.read}) \\
-  \code{hub}      & \codew{easynet:///r/<realm>/hub}                                        & realm-singleton; no tail; no sub-id (the legacy \code{/hub/01HUB} tail is retired) \\
+  \code{hub}      & \codew{easynet:///r/<realm>/hub}                                        & realm-singleton; no tail; no sub-id; extra tail segments are invalid \\
   \code{resource} & \codew{easynet:///r/<realm>/resource/<user-uuid>/<ns>/<path>}           & \code{<ns>}~$\in$~\{\code{fs}, \code{process}, \code{pty}, \code{shell}, \code{http}\}; v4.1.5 also accepts \codew{resource/<user>.<owner-tail>/<path>} for content-addressed owners \\
   \bottomrule
 \end{tabularx}
@@ -194,7 +194,7 @@ reproduced here.
   \code{caller}   & \code{hub} / \code{device} / \code{agent} & Who initiates the call. Required by Invariant~1. \\
   \code{callee}   & \code{hub} / \code{device} / \code{agent} & Which actor runs the handler. \emph{Never} \code{ability} or \code{user}. \\
   \code{subject}  & any URA kind, may equal \code{callee} & Resource the call acts on. \code{None} is allowed only for meta-style abilities (\textsc{INV-META-SUBJECT-EXEMPT}); resource handlers must reject \code{None}. \\
-  \code{function\_name} & string, not a URA & The ability name (\codew{device.fs.read}, \codew{<owner>.chat}, \codew{hub.openai.chat_completions}, \dots). \\
+  \code{function\_name} & string, not a URA & The ability name (\codew{fs.read}, \codew{<owner>.chat}, \codew{hub.openai.chat_completions}, \dots). \\
   \bottomrule
 \end{tabularx}
 
@@ -374,21 +374,21 @@ without bypassing audit". Removing any of them collapses the audit
 contract.
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.fs.edit}, \codew{device.fs.list}, \codew{device.fs.read}, \codew{device.fs.write}]
-  Filesystem locomotion. \codew{device.fs.edit} is the surgical
+  \item[\codew{fs.edit}, \codew{fs.list}, \codew{fs.read}, \codew{fs.write}]
+  Filesystem locomotion. \codew{fs.edit} is the surgical
   string-replace primitive that lets agents diff-apply rather than
   full-rewrite (audit-trail compactness).
-  \item[\codew{device.http.request}] One outbound HTTP request per
+  \item[\codew{http.request}] One outbound HTTP request per
   invocation. The receipt captures status, headers, body bytes for
   the audit pipeline; without this primitive every web-fetching
   agent has to escape into shell and the audit trail is forfeit.
-  \item[\codew{device.shell.run}] Bash command string with the full
+  \item[\codew{shell.run}] Bash command string with the full
   AXIOM Tier-2.5 8-stage security pipeline. The destructive-intent
   classifier and shell tokeniser live here.
-  \item[\codew{device.process.exec}] OS-level argv (no shell interpretation)
+  \item[\codew{process.exec}] OS-level argv (no shell interpretation)
   --- the surface for tools that need predictable argument passing
   without the shell metacharacter risk surface. Pairs with
-  \codew{device.shell.run} as the safe-default counterpart.
+  \codew{shell.run} as the safe-default counterpart.
 \end{description}
 
 \subsection{Device-owned --- media resources (under \texttt{\small device.*}, subject required)}
@@ -401,14 +401,14 @@ return \code{resource\_not\_found} on \code{None} per
 \textsc{INV-SUBJECT-ENVELOPE}.
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.camera.snapshot}, \codew{device.camera.subscribe}] Single
+  \item[\codew{camera.snapshot}, \codew{camera.subscribe}] Single
   still vs.\ pushed video stream from a camera resource.
-  \item[\codew{device.mic.subscribe}] Pushed audio stream from a microphone
+  \item[\codew{mic.subscribe}] Pushed audio stream from a microphone
   resource.
-  \item[\codew{device.screen.snapshot}, \codew{device.screen.subscribe}] Single
+  \item[\codew{screen.snapshot}, \codew{screen.subscribe}] Single
   still vs.\ pushed video stream of a display target.
-  \item[\codew{device.speaker.publish}] Outbound audio frames to a speaker
-  resource. Companion to \codew{device.voice.subscribe} (TTS).
+  \item[\codew{speaker.publish}] Outbound audio frames to a speaker
+  resource. Companion to \codew{voice.subscribe} (TTS).
 \end{description}
 
 \subsection{Device-owned --- fleet operational surface (under \texttt{\small device.fleet.*})}
@@ -463,23 +463,23 @@ Per RFC §18 the device profile owns these.
 \subsection{Device-owned --- observability, admin, discovery aliases (under \texttt{\small device.*})}
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.admin.status}] Operator-facing component snapshot
+  \item[\codew{admin.status}] Operator-facing component snapshot
   (build version, membership state, ability-registry size). Pairs
   with the two \code{observe.*} verbs as the daemon's three-tier
   health surface.
   \item[\codew{device.describe}] Device-profile self-description.
   Cross-device addressing helper (lets a peer ask "are you who I
   think you are" without pulling the full ability catalogue).
-  \item[\codew{device.observe.health}] Round-trip smoke ability. Returns
+  \item[\codew{observe.health}] Round-trip smoke ability. Returns
   the caller's args plus a daemon timestamp. The minimal proof of
   liveness; every CI sanity check uses this.
-  \item[\codew{device.observe.network_health}] Live network posture: local
+  \item[\codew{observe.network_health}] Live network posture: local
   reachability, realm-directory reachability, peer-hub status. The
   diagnostic that distinguishes "daemon down" from "daemon up but
   hub unreachable".
-  \item[\codew{device.mission.track}, \codew{device.mission.cancel}]
+  \item[\codew{mission.track}, \codew{mission.cancel}]
   Mission lifecycle introspection + termination. \code{track}
-  reads the persisted run dir of a prior \codew{device.mission.run}
+  reads the persisted run dir of a prior \codew{mission.run}
   invocation; \code{cancel} flips an in-flight mission to
   \texttt{cancelled}. RFC-001 v4.1.7 M2 retired the parallel
   \codew{device.easynet.*} alias surface that previously mirrored
@@ -492,63 +492,63 @@ Per RFC §18 the device profile owns these.
 \subsection{Device-owned --- mission, scheduling, loops, discuss (under \texttt{\small device.*})}
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.mission.run}, \codew{device.mission.think},
-  \codew{device.mission.discuss_round}]
+  \item[\codew{mission.run}, \codew{mission.think},
+  \codew{mission.discuss_round}]
   EAL mission execution exposed as Invoke. Without these an LLM
   inside an agent has no first-class way to compose multi-step /
   multi-agent workflows --- it would have to shell out to the
   \code{easynet mission run} CLI, which forfeits in-process state.
-  \codew{device.mission.discuss_round} drives one round of multi-agent
+  \codew{mission.discuss_round} drives one round of multi-agent
   conversation; the underlying state shares the
   \code{discuss.*} room model.
 
-  \item[\codew{device.schedule.add}, \codew{device.schedule.list},
-  \codew{device.schedule.enable}, \codew{device.schedule.remove}]
+  \item[\codew{schedule.add}, \codew{schedule.list},
+  \codew{schedule.enable}, \codew{schedule.remove}]
   Cron-style schedule registry over Invoke. The daemon's tick
   runner reads from the same store. Without scheduling-as-an-ability
   every recurring task would need an external cron and would skip
   the AXIOM receipt trail.
 
-  \item[\codew{device.loop.create}, \codew{device.loop.status},
-  \codew{device.loop.subscribe}, \codew{device.loop.cancel}]
+  \item[\codew{loop.create}, \codew{loop.status},
+  \codew{loop.subscribe}, \codew{loop.cancel}]
   Worker+verify loop primitive. The \code{Live} stream variant
   surfaces per-iteration frames; this is what powers
   ``run-until-passes-verifier'' compositions without polling.
 
-  \item[\codew{device.discuss.create}, \codew{device.discuss.post},
-  \codew{device.discuss.list_turns}, \codew{device.discuss.subscribe}]
+  \item[\codew{discuss.create}, \codew{discuss.post},
+  \codew{discuss.list_turns}, \codew{discuss.subscribe}]
   Multi-agent discussion room. The append-only turn log + the
   \code{SnapshotThenLive} stream pattern are how a UI joining
   mid-conversation gets past turns + new ones in one call.
-  \codew{device.mission.discuss_round} writes into this same store.
+  \codew{mission.discuss_round} writes into this same store.
 \end{description}
 
 \subsection{Device-owned --- edge adapters and policy (under \texttt{\small device.*})}
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.a2a.bridge.list_skills}, \codew{device.a2a.bridge.send_task}]
+  \item[\codew{a2a.bridge.list_skills}, \codew{a2a.bridge.send_task}]
   Inbound A2A: surface this device's local A2A agent cards to
   external A2A clients. Without the bridge, the realm's A2A
   catalogue is invisible to A2A-native clients.
 
-  \item[\codew{device.a2a.client.send_task}] Outbound A2A: dispatch an
+  \item[\codew{a2a.client.send_task}] Outbound A2A: dispatch an
   RPC against a remote A2A agent. The other half of the
   agent-to-agent protocol bridge.
 
-  \item[\codew{device.mcp.bridge.list_tools}, \codew{device.mcp.bridge.call_tool}]
+  \item[\codew{mcp.bridge.list_tools}, \codew{mcp.bridge.call_tool}]
   Inbound MCP: project the local ability registry as MCP tools
   for an MCP-native client at the edge. Per ``MCP at the edge,
   not node-to-node'' (RFC §A3) this lives on the device, not
   inside the federation.
 
-  \item[\codew{device.mcp.client.call}, \codew{device.mcp.client.list}]
+  \item[\codew{mcp.client.call}, \codew{mcp.client.list}]
   Outbound MCP: dial a remote MCP server, list and call its
   tools. Pairs with the bridge.
 
-  \item[\codew{device.policy.evaluate}, \codew{device.policy.simulate}]
+  \item[\codew{policy.evaluate}, \codew{policy.simulate}]
   RFC §A6 admission policy. The kernel admission gate calls
-  \codew{device.policy.evaluate} as an in-process sub-invocation
-  carrying the original envelope; \codew{device.policy.simulate} is
+  \codew{policy.evaluate} as an in-process sub-invocation
+  carrying the original envelope; \codew{policy.simulate} is
   the operator-facing dry-run. Without these the daemon has no
   policy hooks at all and every Invoke is admitted unchecked.
 \end{description}
@@ -556,7 +556,7 @@ Per RFC §18 the device profile owns these.
 \subsection{Device-owned --- ability publishing primitives (under \texttt{\small device.ability.*})}
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.ability.publish}, \codew{device.ability.unpublish}]
+  \item[\codew{ability.publish}, \codew{ability.unpublish}]
   Publish-layer verbs that push a descriptor through the
   federation advertise pipeline. Without them the only way to
   add a new ability is to redeploy the daemon, which forfeits
@@ -642,8 +642,8 @@ These verbs live under \code{web-builder}'s sub-agent in this
 fixture --- they are re-exported per agent, not device-wide.
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.meta.describe}, \codew{device.meta.list_abilities},
-        \codew{device.meta.list_resources}]
+  \item[\codew{meta.describe}, \codew{meta.list_abilities},
+        \codew{meta.list_resources}]
   Self-introspection over the seven-tuple. \code{describe} is the
   cheap identity+summary surface (federation peer hits this for
   cache checks); \code{list\_abilities} returns the full
@@ -651,22 +651,22 @@ fixture --- they are re-exported per agent, not device-wide.
   /~logical resources (mics, cameras, files) the agent can name as
   subjects. Without these the LLM cannot know its own capabilities.
 
-  \item[\codew{device.skill.list}, \codew{device.skill.publish}, \codew{device.skill.unpublish}]
+  \item[\codew{skill.list}, \codew{skill.publish}, \codew{skill.unpublish}]
   Skill (curator-authored ability bundle) lifecycle. Publishing a
   skill mounts a new ability under the agent's namespace at runtime;
   this is how the \code{alive-video}, \code{macos}, etc. skills land
   on a device without redeploying.
 
-  \item[\codew{device.voice.create_call}, \codew{device.voice.join_call},
-        \codew{device.voice.leave_call}, \codew{device.voice.end_call},
-        \codew{device.voice.list_calls}, \codew{device.voice.show_call},
-        \codew{device.voice.watch_call}, \codew{device.voice.report_metrics}]
+  \item[\codew{voice.create_call}, \codew{voice.join_call},
+        \codew{voice.leave_call}, \codew{voice.end_call},
+        \codew{voice.list_calls}, \codew{voice.show_call},
+        \codew{voice.watch_call}, \codew{voice.report_metrics}]
   Voice/video call signaling. SDP, ICE, participant book-keeping.
   Without the signaling surface there is no protocol path for an
   agent to start or join a call --- WebRTC needs an out-of-band
   rendezvous and these abilities provide it through Invoke.
 
-  \item[\codew{device.voice.subscribe}, \codew{device.voice.transcribe}]
+  \item[\codew{voice.subscribe}, \codew{voice.transcribe}]
   Media planes: \code{subscribe} pushes TTS audio frames out;
   \code{transcribe} accepts streamed audio in and returns text.
   Together they make the agent voice-bidirectional.
@@ -678,13 +678,13 @@ fixture --- they are re-exported per agent, not device-wide.
 Owner URA: \codew{easynet:///r/easynet.run/agent/test.consent-default-0}.
 
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
-  \item[\codew{device.consent.subscribe}] Subscribe to the
+  \item[\codew{consent.subscribe}] Subscribe to the
   approval-broker pending queue. \code{SnapshotThenLive} stream;
   a UI joining mid-flight gets currently-pending requests + new
   ones.
-  \item[\codew{device.consent.list_pending}] One-shot snapshot of the
+  \item[\codew{consent.list_pending}] One-shot snapshot of the
   same queue (the unary sibling).
-  \item[\codew{device.consent.decide}] Resolve a pending permission
+  \item[\codew{consent.decide}] Resolve a pending permission
   request by id; decision $\in$~\{\code{allow}, \code{deny},
   \code{deny\_with\_reason}\}.
 \end{description}

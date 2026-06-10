@@ -13,7 +13,7 @@ use crate::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::plugins::remote_desktop::view::serialize_session;
 use crate::runtime::ability_dispatch::EnvelopeContext;
 
-/// Handle `device.remote_desktop.end_session`.
+/// Handle `remote_desktop.end_session`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
     plugin: Arc<RemoteDesktopPlugin>,
     env: EnvelopeContext,

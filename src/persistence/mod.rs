@@ -47,12 +47,14 @@
 // itself is already `pub`.
 pub mod chat_sessions;
 pub mod config;
+pub mod context_store;
 /// Daemon-side configuration for the gRPC InvocationServer
 /// (`~/.easynet/daemon-config.toml`). Authored by RFC-003 PR-1; see
 /// `pr-drafts/PR-0-spec-daemon-invocation-server.md §1` for the
 /// listener invariants this module enforces at load time.
 pub mod daemon_config;
 pub(crate) mod local_agents;
+pub(crate) mod owner_projections;
 /// Local resources registry — `~/.easynet/resources.json`. Maps a
 /// stable hardware identifier (CoreAudio/PulseAudio device UID, USB
 /// serial, EDID, camera device-path, …) to the canonical resource

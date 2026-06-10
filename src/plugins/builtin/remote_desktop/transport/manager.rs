@@ -38,16 +38,22 @@ pub(in crate::plugins::builtin::remote_desktop) struct RemoteDesktopTransportMan
 }
 
 impl RemoteDesktopTransportManager {
+    /// Construct WITHOUT building the Tokio runtime.
+    ///
+    /// Invariant (load-bearing): registration must not start the media
+    /// engine. Reflection/snapshot surfaces (`published_abilities()`,
+    /// MCP reflective refresh, descriptor generation) rebuild the full
+    /// plugin registry — each rebuild constructs a manager whose
+    /// registered closures keep it alive. When `new()` eagerly built a
+    /// 2-worker runtime, every such rebuild leaked one runtime: 120
+    /// `easynet-webrtc-runtime` threads + 183 kqueues exhausted the
+    /// daemon's RLIMIT_NOFILE (os error 24) and took down sockets,
+    /// spawns, and manifest reads fleet-wide (2026-06-10). The runtime
+    /// is now built on first real media use (`runtime_handle`).
     pub(in crate::plugins::builtin::remote_desktop) fn new() -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .thread_name("easynet-webrtc-runtime")
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("create EasyNet WebRTC runtime");
         Self {
             endpoints: Mutex::new(HashMap::new()),
-            runtime: Mutex::new(Some(runtime)),
+            runtime: Mutex::new(None),
         }
     }
 
@@ -120,8 +126,14 @@ impl RemoteDesktopTransportManager {
 
     fn runtime_handle(&self) -> Handle {
         self.runtime()
-            .as_ref()
-            .expect("EasyNet WebRTC runtime is available")
+            .get_or_insert_with(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .thread_name("easynet-webrtc-runtime")
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("create EasyNet WebRTC runtime")
+            })
             .handle()
             .clone()
     }
@@ -156,6 +168,18 @@ mod tests {
     use super::*;
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn new_does_not_build_the_runtime() {
+        // Regression (2026-06-10 fd exhaustion): reflection paths
+        // construct managers they never use for media; construction
+        // must stay thread/fd-free.
+        let manager = RemoteDesktopTransportManager::new();
+        assert!(
+            manager.runtime().is_none(),
+            "runtime must be lazy — built on first media use, not at registration"
+        );
+    }
 
     #[test]
     fn long_block_on_does_not_serialize_later_runtime_calls() {

@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "node.describe"
+description = "Describe one node by id from the same live federation-backed view used by node.list. Accepts `local`, this device's actual node id, or any resolved peer node id."
+
+[input_schema]
+type = "object"
+required = ["node_id"]
+additionalProperties = false
+
+[input_schema.properties.node_id]
+type = "string"

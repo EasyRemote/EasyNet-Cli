@@ -54,7 +54,8 @@ use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
     bidi_control, AgentIdentity, BidiControl, BinaryChunk, Envelope, EnvelopeOpen,
-    InvocationTarget, InvokeBidiDown, InvokeBidiUp, InvokeServerStreamRequest, StreamDescriptor,
+    InvocationTarget, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeServerStreamRequest,
+    StreamDescriptor,
 };
 use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
 use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
@@ -80,6 +81,10 @@ use tonic::Request;
 
 const DEVICE_A_URI: &str = "easynet:///r/test-realm/device/device-a";
 const DEVICE_B_URI: &str = "easynet:///r/test-realm/device/device-b";
+const DEVICE_B_ECHO_ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-b.test.echo";
+const DEVICE_B_ECHO_PUBLIC_NAME: &str = "test.echo";
+const DEVICE_B_ECHO_REGISTRY_ABILITY: &str = DEVICE_B_ECHO_PUBLIC_NAME;
+const ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
 
 /// 5-second bound on every blocking await in the test. Real
 /// transport plane round-trips finish in milliseconds; any test
@@ -298,13 +303,94 @@ fn subscribe_directory_request(caller_ura: &str) -> Request<InvokeServerStreamRe
     })
 }
 
+fn unary_invoke(
+    caller_ura: &str,
+    callee_ura: &str,
+    function_name: &str,
+    args: serde_json::Value,
+) -> Request<InvokeRequest> {
+    Request::new(InvokeRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                ura: caller_ura.to_string(),
+                ..AgentIdentity::default()
+            }),
+            callee: Some(AgentIdentity {
+                ura: callee_ura.to_string(),
+                ..AgentIdentity::default()
+            }),
+            invocation_nonce: vec![0x22; 16],
+            ..Envelope::default()
+        }),
+        function_name: function_name.to_string(),
+        arguments: args.to_string().into_bytes(),
+        ..InvokeRequest::default()
+    })
+}
+
+/// Publish device B's echo ability through the same
+/// `federation.advertise_abilities` wire path a real device uses.
+/// The cross-device invoke path is intentionally strict after
+/// RFC-005: presence alone proves owner liveness, not callable
+/// ability publication.
+async fn publish_device_b_echo_projection(socket_path: &std::path::Path) {
+    let mut client = InvocationClient::new(connect_to_hub(socket_path).await);
+    let request = unary_invoke(
+        DEVICE_B_URI,
+        DEVICE_B_URI,
+        ADVERTISE_ABILITIES,
+        json!({
+            "owner_ura": DEVICE_B_URI,
+            "host_device_ura": DEVICE_B_URI,
+            "projection_revision": 1,
+            "projection_digest": "sha256:test-device-b-echo",
+            "lease_expires_unix_ms": 4_102_444_800_000_i64,
+            "ability_summaries": [{
+                "ability_ura": DEVICE_B_ECHO_ABILITY_URA,
+                "owner_ura": DEVICE_B_URI,
+                "namespace": "test",
+                "local_name": "echo",
+                "descriptor_revision": "sha256:descriptor-device-b-echo",
+                "policy_ref": "visibility:PUBLIC",
+                "route_summary_ref": format!("route-ref::{DEVICE_B_ECHO_ABILITY_URA}"),
+                "tags": ["class:unary"],
+                "callable_summary": {
+                    "public_name": DEVICE_B_ECHO_PUBLIC_NAME,
+                    "description": "echo back the request payload",
+                    "ability_class": "unary",
+                    "input_fields": [],
+                    "flags": {
+                        "read_only": true,
+                        "destructive": false,
+                        "idempotent": true,
+                        "streaming_only": false,
+                        "bidi_only": false
+                    }
+                }
+            }]
+        }),
+    );
+    let resp = tokio::time::timeout(STEP_TIMEOUT, client.invoke(request))
+        .await
+        .expect("advertise_abilities did not time out")
+        .expect("advertise_abilities returns Ok")
+        .into_inner();
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.result).expect("advertise response is JSON");
+    assert_eq!(
+        body["ack"], true,
+        "device B projection publication must be acked"
+    );
+    assert_eq!(body["count"], 1, "exactly one ability published");
+}
+
 fn build_test_echo_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
     let runtime = easynet_axon::invocation::LocalRuntime::new();
     futures::executor::block_on(runtime.register_ability(
-        "test.echo",
+        DEVICE_B_ECHO_REGISTRY_ABILITY,
         easynet_axon::invocation::make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
     ))
-    .expect("register test.echo in LocalRuntime");
+    .expect("register device-owned echo ability in LocalRuntime");
     runtime
 }
 
@@ -766,7 +852,11 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
 
         let args = serde_json::to_vec(&json!({
             "mode": "download",
-            "path": path.to_string_lossy(),
+            "resource_ref": easynet_cli::runtime::agents::fs_ability::resource_ref_for_local_path(
+                &path,
+                easynet_cli::runtime::agents::fs_ability::FilesystemResourceCapability::Read,
+            )
+            .expect("local fs ResourceRef"),
         }))
         .unwrap();
         let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(8);
@@ -887,6 +977,8 @@ async fn run_round_trip() {
     let (device_b, mut device_b_down) =
         open_device_session_with_drain(channel_b, DEVICE_B_URI).await;
 
+    publish_device_b_echo_projection(socket_path).await;
+
     // Brief settle so PresenceRegistry sees both inserts before
     // step 3's invoke_remote tries to look up B.
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -924,6 +1016,7 @@ async fn run_round_trip() {
             payload: REPLY_MARKER.to_vec(),
             terminal: true,
             error: None,
+            failure: None,
             request_id: None,
         };
         let payload = serde_json::to_vec(&result).expect("encode Result");
@@ -940,14 +1033,14 @@ async fn run_round_trip() {
     });
 
     // Step 4: device A invokes <self>.invoke_remote(target=B,
-    // ability=test.echo, args=...). Open a per-call bidi.
+    // ability_ura=device-B test.echo, args=...). Open a per-call bidi.
     let channel_caller = connect_to_hub(socket_path).await;
     let mut caller_client = InvocationClient::new(channel_caller);
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
         subject_ura: None,
-        ability: "test.echo".to_string(),
+        ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: Default::default(),
@@ -1034,8 +1127,8 @@ async fn run_round_trip() {
         .expect("reply task completes within bound")
         .expect("reply task did not panic");
     assert_eq!(
-        ability, "test.echo",
-        "device B must see the ability name device A invoked"
+        ability, DEVICE_B_ECHO_REGISTRY_ABILITY,
+        "device B must see the resolver-selected local dispatch ability derived from the Ability URA"
     );
 }
 
@@ -1049,6 +1142,7 @@ async fn run_round_trip_via_local_dispatcher() {
     let channel_b = connect_to_hub(socket_path).await;
     let (device_b, mut device_b_down) =
         open_device_session_with_drain(channel_b, DEVICE_B_URI).await;
+    publish_device_b_echo_projection(socket_path).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let device_b_up_for_reply = SessionUpSender::new(device_b.up().clone());
@@ -1069,7 +1163,7 @@ async fn run_round_trip_via_local_dispatcher() {
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
         subject_ura: None,
-        ability: "test.echo".to_string(),
+        ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: Default::default(),

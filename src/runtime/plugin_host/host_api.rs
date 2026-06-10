@@ -538,19 +538,19 @@ mod tests {
             .register(&plan, &mut catalog)
             .expect("register declarative exec");
 
-        assert!(catalog.has_rpc("device.test.declarative_echo"));
+        assert!(catalog.has_rpc("test.declarative_echo"));
         let manifest = catalog
-            .manifest_for_dynamic("device.test.declarative_echo")
+            .manifest_for_dynamic("test.declarative_echo")
             .expect("registered plugin ability manifest");
         assert_eq!(
             manifest.description(),
-            "test descriptor for device.test.declarative_echo"
+            "test descriptor for test.declarative_echo"
         );
         assert_eq!(manifest.input_schema()["type"], "object");
         let result = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
-                ability: "device.test.declarative_echo".to_string(),
+                ability: "test.declarative_echo".to_string(),
                 normalized_args: json!({"message": "hello"}),
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
@@ -573,19 +573,19 @@ mod tests {
             .hot_register(&plan, &catalog)
             .expect("hot register declarative exec");
 
-        assert!(catalog.has_dynamic("device.test.declarative_echo"));
+        assert!(catalog.has_dynamic("test.declarative_echo"));
         let manifest = catalog
-            .manifest_for_dynamic("device.test.declarative_echo")
+            .manifest_for_dynamic("test.declarative_echo")
             .expect("hot registered plugin ability manifest");
         assert_eq!(
             manifest.description(),
-            "test descriptor for device.test.declarative_echo"
+            "test descriptor for test.declarative_echo"
         );
         assert_eq!(manifest.input_schema()["type"], "object");
         let result = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
-                ability: "device.test.declarative_echo".to_string(),
+                ability: "test.declarative_echo".to_string(),
                 normalized_args: json!({"message": "hot"}),
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
@@ -594,13 +594,13 @@ mod tests {
             .expect("hot declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hot"}));
 
-        assert!(catalog.hot_unregister("device.test.declarative_echo"));
-        assert!(!catalog.has_dynamic("device.test.declarative_echo"));
-        assert!(!catalog.has_rpc("device.test.declarative_echo"));
+        assert!(catalog.hot_unregister("test.declarative_echo"));
+        assert!(!catalog.has_dynamic("test.declarative_echo"));
+        assert!(!catalog.has_rpc("test.declarative_echo"));
         catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
-                ability: "device.test.declarative_echo".to_string(),
+                ability: "test.declarative_echo".to_string(),
                 normalized_args: json!({"message": "after"}),
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
@@ -612,13 +612,13 @@ mod tests {
     #[test]
     fn plugin_runtime_host_hot_reload_rejects_static_ability_collision() {
         let root = tempfile::tempdir().expect("root");
-        write_sidecar_package(root.path(), "device.fs.read");
+        write_sidecar_package(root.path(), "fs.read");
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
         let plan = PluginLoadPlanner::new("macos").plan(&index);
         let mut catalog = AxonAbilityCatalog::new();
         catalog.register_rpc_with_owner(
-            "device.fs.read",
+            "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(json!({"from": "static-system"}))),
         );
@@ -633,16 +633,16 @@ mod tests {
                     ref ability,
                     ref first,
                     ..
-                } if ability == "device.fs.read" && first == "daemon-static-catalog"
+                } if ability == "fs.read" && first == "daemon-static-catalog"
             ),
             "wrong hot reload error: {err}"
         );
         assert!(
-            !catalog.has_dynamic("device.fs.read"),
+            !catalog.has_dynamic("fs.read"),
             "rejected plugin must not leave a dynamic handler behind"
         );
         let out = catalog
-            .invoke_rpc_json("device.fs.read", json!({}))
+            .invoke_rpc_json("fs.read", json!({}))
             .expect("static system handler remains invokable after rejected reload");
         assert_eq!(out, json!({"from": "static-system"}));
     }
@@ -660,11 +660,11 @@ mod tests {
             .register(&plan, &mut catalog)
             .expect("register declarative eal");
 
-        assert!(catalog.has_rpc("device.test.declarative_eal"));
+        assert!(catalog.has_rpc("test.declarative_eal"));
         let err = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
-                ability: "device.test.declarative_eal".to_string(),
+                ability: "test.declarative_eal".to_string(),
                 normalized_args: json!({}),
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
@@ -689,19 +689,19 @@ mod tests {
             .hot_register(&plan, &catalog)
             .expect("hot register declarative mcp");
 
-        assert!(catalog.has_dynamic("device.test.declarative_mcp"));
+        assert!(catalog.has_dynamic("test.declarative_mcp"));
         let manifest = catalog
-            .manifest_for_dynamic("device.test.declarative_mcp")
+            .manifest_for_dynamic("test.declarative_mcp")
             .expect("hot registered MCP plugin ability manifest");
         assert_eq!(
             manifest.description(),
-            "test descriptor for device.test.declarative_mcp"
+            "test descriptor for test.declarative_mcp"
         );
         assert_eq!(manifest.input_schema()["type"], "object");
         let err = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
-                ability: "device.test.declarative_mcp".to_string(),
+                ability: "test.declarative_mcp".to_string(),
                 normalized_args: json!([1, 2]),
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
@@ -770,14 +770,14 @@ kind = "exec"
 argv = ["bin/exec-plugin"]
 
 [[ability_metadata]]
-name = "device.test.declarative_echo"
+name = "test.declarative_echo"
 layer = "control"
 "#,
         )
         .expect("manifest");
         fs::write(
-            root.join("abilities/device.test.declarative_echo.ability.toml"),
-            test_descriptor("device.test.declarative_echo"),
+            root.join("abilities/test.declarative_echo.ability.toml"),
+            test_descriptor("test.declarative_echo"),
         )
         .expect("descriptor");
         let script = root.join("bin/exec-plugin");
@@ -820,14 +820,14 @@ kind = "eal"
 program = "mission \"{{ name }}\" {}"
 
 [[ability_metadata]]
-name = "device.test.declarative_eal"
+name = "test.declarative_eal"
 layer = "control"
 "#,
         )
         .expect("manifest");
         fs::write(
-            root.join("abilities/device.test.declarative_eal.ability.toml"),
-            test_descriptor("device.test.declarative_eal"),
+            root.join("abilities/test.declarative_eal.ability.toml"),
+            test_descriptor("test.declarative_eal"),
         )
         .expect("descriptor");
     }
@@ -857,14 +857,14 @@ server = "test-server"
 tool = "test-tool"
 
 [[ability_metadata]]
-name = "device.test.declarative_mcp"
+name = "test.declarative_mcp"
 layer = "control"
 "#,
         )
         .expect("manifest");
         fs::write(
-            root.join("abilities/device.test.declarative_mcp.ability.toml"),
-            test_descriptor("device.test.declarative_mcp"),
+            root.join("abilities/test.declarative_mcp.ability.toml"),
+            test_descriptor("test.declarative_mcp"),
         )
         .expect("descriptor");
     }

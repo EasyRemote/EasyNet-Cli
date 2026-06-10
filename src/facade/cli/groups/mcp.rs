@@ -71,7 +71,7 @@ pub fn run(args: McpArgs) -> anyhow::Result<()> {
 
 fn run_status() -> anyhow::Result<()> {
     let state = config::load().ok();
-    match invoke_local_ability("device.observe.health", json!({"source": "mcp.status"})) {
+    match invoke_local_ability("observe.health", json!({"source": "mcp.status"})) {
         Ok(_) => {
             output::success("local daemon MCP surface reachable");
             if let Some(state) = state {

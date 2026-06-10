@@ -1,0 +1,19 @@
+# api/products.toml — backend endpoint: GET api/products
+#
+# kind = "static_json" returns a constant JSON value as the HTTP body.
+# The browser's `fetch("api/products").then(r => r.json())` receives the
+# `response` value below verbatim. This is the "data is part of the
+# deploy" case — no database, no separate server.
+kind = "static_json"
+
+[[response.products]]
+name = "Axon Runtime"
+price = "$0"
+
+[[response.products]]
+name = "EasyNet Hub"
+price = "$0"
+
+[[response.products]]
+name = "Pages (this demo)"
+price = "$0"

@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "agent.list"
+description = "List the LLM sub-agents this device hosts (name, runtime, optional model + label). Operational view; for the protocol A2A view see a2a.bridge.list_skills."
+
+[input_schema]
+type = "object"
+additionalProperties = false

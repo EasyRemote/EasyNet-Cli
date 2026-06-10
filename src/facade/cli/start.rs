@@ -2,26 +2,32 @@
 // ===========
 //
 // File: src/cli/start.rs
-// Description: `easynet start` — starts the EasyNet product daemon,
+// Description: `easynet runtime start` — starts the EasyNet product daemon,
 //              joins Hub, registers node, and maintains heartbeat.
 //              Supports both foreground and background modes.
 //
 // Lifecycle:
 // - Ensures no runtime is already running (checks ~/.easynet/runtime.json).
 // - Both device and hub modes start `easynet-daemon` (mode=device / mode=hub) — the single product policy owner — not a raw Axon runtime.
-// - If credentials exist (from `easynet join`), registers the node and starts heartbeat.
+// - If credentials exist (from `easynet device join`), registers the node and starts heartbeat.
 // - In foreground mode: blocks on Ctrl-C, then gracefully deregisters + shuts down.
 // - In background mode: forks a heartbeat daemon process, detaches the runtime.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
 
 use crate::persistence::config;
+use crate::runtime::join_connection_state::{
+    classify_boot_failure, record_snapshot, JoinConnectionSnapshot, JoinConnectionState,
+    JoinFailureCode, JoinTransition,
+};
 use crate::support::{net, output, shutdown::ShutdownSignal};
 
 /// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple
@@ -113,7 +119,7 @@ impl StartArgs {
     }
 
     /// Construct args for the auto-start hop at the tail of
-    /// `easynet join`. Background mode so the join command returns
+    /// `easynet device join`. Background mode so the join command returns
     /// the user to their shell once the daemon is `Ready`, matching
     /// the historical "join then exit" UX. Hub/tenant are
     /// placeholders — `run_device_mode()` overrides them from the
@@ -135,7 +141,8 @@ impl StartArgs {
     }
 }
 
-/// Result of `verify_credential` — tracks whether the Hub was reachable.
+/// Result of `verify_credential` — tracks whether the Hub explicitly
+/// accepted the paired credential before daemon startup.
 #[derive(Debug, PartialEq, Eq)]
 enum CredentialCheck {
     Valid,
@@ -143,11 +150,23 @@ enum CredentialCheck {
     Revoked(String),
 }
 
+/// Device-mode preflight budget for the Hub session socket.
+///
+/// This is intentionally a plain TCP reachability probe, not an Axon
+/// `DendriteBridge` connect. `runtime start` is about to spawn
+/// `easynet-daemon`, and the daemon owns the real Axon Invocation /
+/// session handshake. The CLI only needs to reject a clearly absent
+/// listener before forking a background process; requiring the
+/// optional dendrite bridge dynamic library here makes successful
+/// pairing depend on a local SDK artifact that device mode does not
+/// need.
+const HUB_SESSION_ENDPOINT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+
 pub fn run(args: StartArgs) -> anyhow::Result<()> {
     if let Ok(state) = config::load() {
         if state.pid.is_some_and(net::is_pid_alive) {
             anyhow::bail!(
-                "runtime already running (run 'easynet stop' first, or remove ~/.easynet/runtime.json)"
+                "runtime already running (run 'easynet runtime stop' first, or remove ~/.easynet/runtime.json)"
             );
         }
         output::info("Detected stale runtime state (process not running). Cleaning up...");
@@ -164,12 +183,35 @@ pub fn run(args: StartArgs) -> anyhow::Result<()> {
 // ── Device mode ─────────────────────────────────────────────────────────────
 
 fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
-    // Load and verify credentials (from `easynet join`).
+    // Load and verify credentials (from `easynet device join`).
     let (creds, credential_verified) = load_and_verify_credentials()?;
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::HubCredentialVerified,
+        Some(JoinTransition::VerifyCredential),
+        &creds,
+        "cli.start",
+    ));
+    if let Err(err) = verify_hub_session_endpoint(&creds) {
+        record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
+            JoinFailureCode::StartFailedSessionEndpoint,
+            JoinTransition::ConnectSessionEndpoint,
+            &creds,
+            err.to_string(),
+            true,
+            "cli.start",
+        ));
+        return Err(err);
+    }
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::HubSessionEndpointReachable,
+        Some(JoinTransition::ConnectSessionEndpoint),
+        &creds,
+        "cli.start",
+    ));
 
     // Credentials take precedence over CLI args for hub/tenant.
     let hub = creds.hub_endpoint.clone();
-    let tenant = creds.tenant_id.clone();
+    let tenant = creds.realm.clone();
     if args.hub != config::DEFAULT_HUB && args.hub != hub {
         output::warn(&format!(
             "--hub {} ignored; using {} from credentials. Run 'easynet reset' to un-pair first.",
@@ -190,19 +232,62 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     crate::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
     let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
+    bootstrap_local_agent_projection(&creds).context("sync local agent owner projection")?;
 
-    let mut daemon_handle = crate::daemon::DaemonStartConfig::device(&creds.node_id)
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::RuntimeStarting,
+        Some(JoinTransition::BootDaemon),
+        &creds,
+        "cli.start",
+    ));
+    let mut daemon_handle = match crate::daemon::DaemonStartConfig::device(&creds.node_id)
         .map(|cfg| cfg.with_realm(creds.realm_str()))
+        .map(with_keyring_passphrase_env)
+        .map(with_bridge_lib_env)
         .and_then(|cfg| cfg.start())
-        .context("start easynet-daemon")?;
+    {
+        Ok(handle) => handle,
+        Err(err) => {
+            record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
+                JoinFailureCode::StartFailedBootStage,
+                JoinTransition::BootDaemon,
+                &creds,
+                err.to_string(),
+                true,
+                "cli.start",
+            ));
+            return Err(err).context("start easynet-daemon");
+        }
+    };
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::DaemonBooting,
+        Some(JoinTransition::BootDaemon),
+        &creds,
+        "cli.start",
+    ));
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
-    let boot = super::start_boot_watcher::wait_for_daemon_boot(
+    let boot = match super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
         daemon_handle.child_mut(),
         super::start_boot_watcher::BootContext {
             pages_start_port: pages_start_hint,
         },
-    )?;
+    ) {
+        Ok(boot) => boot,
+        Err(err) => {
+            let message = err.to_string();
+            let (failure, transition, retryable) = classify_boot_failure(&message);
+            record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
+                failure,
+                transition,
+                &creds,
+                message,
+                retryable,
+                "cli.start",
+            ));
+            return Err(err);
+        }
+    };
     // The daemon is the authoritative source for the bound port: it
     // either reported it via PortChosen, or wrote it to control.json
     // when the listener bound. The CLI never has a meaningful
@@ -226,17 +311,19 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         credential_verified: Some(credential_verified),
     };
     config::save(&state)?;
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::ConnectedOnline,
+        Some(JoinTransition::AdmitPresence),
+        &creds,
+        "cli.start",
+    ));
 
     output::success("EasyNet daemon started");
     let control_socket = daemon_handle.control_endpoint().display().to_string();
     let hub_api = creds.api_base();
     let pages_url_root = format!(
         "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
-        user = creds
-            .username
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("<user>")
+        user = creds.username_slug()?
     );
     let pid_display = pid.map(|pid| pid.to_string());
     let mut rows = vec![
@@ -253,45 +340,81 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     output::kv_section(&rows);
 
     // Welcome line — surface the human identity the daemon is now
-    // operating under. `username` is optional pre-v4.1.4 so this
-    // block only renders when we actually have a slug to address
-    // the user by; otherwise the kv_section above already covers
-    // the device-level info.
-    if let Some(username) = creds.username.as_deref().filter(|s| !s.is_empty()) {
-        let user_ura = crate::ura::user_ura(&tenant, username);
-        eprintln!();
-        eprintln!(
-            "{} {}",
-            console::style("Welcome,").cyan().bold(),
-            console::style(username).cyan().bold(),
-        );
-        eprintln!("  {}", console::style(user_ura).dim());
-    }
-
-    if !credential_verified {
-        output::warn(&format!(
-            "credential not verified: Hub API unreachable at {hub_api}"
-        ));
-        output::step(
-            "Pairing is still present, but startup could not confirm it with the Hub API.",
-        );
-        output::step(
-            "For Docker/local hubs, re-pair with --hub http://127.0.0.1:8080 or pass --hub-api.",
-        );
-    }
+    // operating under. Joined credentials are required to carry the
+    // stable username slug because hosted-agent URAs are user-rooted.
+    let username = creds.username_slug()?;
+    let user_ura = crate::ura::user_ura(&tenant, username);
+    eprintln!();
+    eprintln!(
+        "{} {}",
+        console::style("Welcome,").cyan().bold(),
+        console::style(username).cyan().bold(),
+    );
+    eprintln!("  {}", console::style(user_ura).dim());
 
     if args.foreground {
         run_foreground_with_daemon(&creds, args.no_mcp)
     } else {
-        output::info("Daemon running in background. Use 'easynet stop' to stop.");
+        output::info("Daemon running in background. Use 'easynet runtime stop' to stop.");
         Ok(())
+    }
+}
+
+/// Inject `EASYNET_KEYRING_PASSPHRASE` into the daemon's environment
+/// when a passphrase is available (operator env or the file `easynet
+/// join` provisioned). This is what lets the booting daemon decrypt
+/// the keyring vault — `boot.rs::load_daemon_identity` reads the
+/// passphrase from its own environment via `MasterKeySource::from_env`.
+///
+/// No passphrase available → return the config untouched; the daemon
+/// falls through to the deterministic-derive path exactly as before.
+/// We never *mint* a passphrase here — only `join` provisions one, so
+/// that a bare `runtime start` on an unkeyed host stays unkeyed.
+fn with_keyring_passphrase_env(
+    cfg: crate::daemon::DaemonStartConfig,
+) -> crate::daemon::DaemonStartConfig {
+    if std::env::var("EASYNET_KEYRING_PASSPHRASE").is_ok_and(|v| !v.is_empty()) {
+        // Already in this process's environment; the daemon inherits
+        // it through the normal env propagation, so do not duplicate.
+        return cfg;
+    }
+    match std::fs::read_to_string(crate::services::keyring::default_passphrase_path()) {
+        Ok(pass) if !pass.trim().is_empty() => {
+            cfg.with_env("EASYNET_KEYRING_PASSPHRASE", pass.trim())
+        }
+        _ => cfg,
+    }
+}
+
+/// Inject `EASYNET_DENDRITE_BRIDGE_LIB` into the daemon's environment.
+///
+/// `easynet join` stages the native bridge lib into
+/// `~/.easynet/dendrite-bridge/native/`, but the Axon SDK loader the
+/// daemon links against does not search that path — it only honours the
+/// env var (plus a gated local-source build and a crate-relative
+/// embedded copy). Without this, a fresh `join` → `runtime start`
+/// fails with "dendrite bridge library not found" even though the lib
+/// is on disk. `bridge_lib::resolve_bridge_lib` is the same chain the
+/// MCP-install flow uses, so the daemon and the MCP server resolve the
+/// lib identically.
+///
+/// Best-effort: if the var is already in this process's environment the
+/// daemon inherits it (no override), and if resolution finds nothing we
+/// leave the env untouched so the SDK loader's own tiers still apply.
+fn with_bridge_lib_env(cfg: crate::daemon::DaemonStartConfig) -> crate::daemon::DaemonStartConfig {
+    if std::env::var("EASYNET_DENDRITE_BRIDGE_LIB").is_ok_and(|v| !v.trim().is_empty()) {
+        return cfg;
+    }
+    match super::bridge_lib::resolve_bridge_lib(None) {
+        Ok(Some(lib)) => cfg.with_env("EASYNET_DENDRITE_BRIDGE_LIB", lib),
+        _ => cfg,
     }
 }
 
 fn start_stdio_mcp_server(creds: &config::Credentials) {
     let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
         server_name: "easynet-device".into(),
-        tenant_id: creds.tenant_id.clone(),
+        tenant_id: creds.realm.clone(),
         agent_name: None,
     };
     let configured = crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
@@ -357,7 +480,7 @@ pub(crate) fn republish_via_federation_best_effort(
     if !plan.realm.is_empty() {
         let identity_outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
             &invoker,
-            &creds.tenant_id,
+            &creds.realm,
             &plan.realm,
             &creds.node_id,
         );
@@ -374,11 +497,8 @@ pub(crate) fn republish_via_federation_best_effort(
         }
     }
 
-    let outcomes = crate::runtime::publish::republish_abilities_via_advertise(
-        &invoker,
-        &creds.tenant_id,
-        &plan,
-    );
+    let outcomes =
+        crate::runtime::publish::republish_abilities_via_advertise(&invoker, &creds.realm, &plan);
 
     let mut ok = 0usize;
     let mut total = 0usize;
@@ -399,7 +519,7 @@ pub(crate) fn republish_via_federation_best_effort(
     if skipped {
         output::detail(
             "directory",
-            "advertise deferred — daemon has no realm yet (run easynet join)",
+            "advertise deferred — daemon has no realm yet (run easynet device join)",
         );
     } else if total > 0 {
         output::detail(
@@ -421,7 +541,7 @@ pub(crate) fn republish_via_federation_best_effort(
         let dispatch_endpoint = crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
         let reg_outcomes = crate::runtime::publish::register_local_tools_via_runtime(
             &invoker,
-            &creds.tenant_id,
+            &creds.realm,
             &plan.realm,
             &creds.node_id,
             &dispatch_endpoint,
@@ -458,57 +578,36 @@ pub(crate) fn republish_via_federation_best_effort(
 fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
-    let username = bootstrap_username_for(creds);
-    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id, &username)
-}
-
-/// Resolve the hosted-agent owner slug used in canonical
-/// `agent/<user>.<id>` URAs.
-///
-/// Primary source is `credentials.json.username`, which the pairing
-/// flow persists once the backend returns the stable username slug.
-/// During the migration window older credentials files may still miss
-/// it even though the operator has a valid auth session; in that case
-/// fall back to `auth.json.username`. We deliberately do NOT fall back
-/// to JWT `user_id` because backend visibility filters anchor on the
-/// stable username slug, and swapping in the UUID would mint another
-/// invisible-but-plausible URA instead of surfacing the missing data.
-pub(crate) fn bootstrap_username_for(creds: &config::Credentials) -> String {
-    if let Some(username) = creds
-        .username
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        return username.to_string();
-    }
-    match crate::facade::cli::auth::load_session() {
-        Ok(Some(session)) => session
-            .username
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or("")
-            .to_string(),
-        Ok(None) | Err(_) => String::new(),
-    }
+    let username = creds.username_slug()?;
+    build_bootstrap_plan_from(&creds.realm, &creds.node_id, username)
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
-/// publish path can construct the plan from a `(tenant_id,
+/// publish path can construct the plan from a `(realm,
 /// node_id, username)` triple already in scope without re-loading
 /// credentials. The third argument is the stable username slug the
 /// backend resolves for this user and anchors under `user/` / `agent/`
-/// URAs; pass empty when the device is not yet joined or the slug is
-/// genuinely unavailable.
+/// URAs.
 pub(crate) fn build_bootstrap_plan_from(
-    tenant_id: &str,
+    realm: &str,
     node_id: &str,
     username: &str,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
-    crate::runtime::agents::profiles::bootstrap::build_plan_from_registry(
-        tenant_id, node_id, username,
-    )
+    crate::runtime::agents::profiles::bootstrap::build_plan_from_registry(realm, node_id, username)
+}
+
+fn bootstrap_local_agent_projection(
+    creds: &config::Credentials,
+) -> anyhow::Result<Vec<crate::runtime::agents::profiles::bootstrap::BootstrapOutcome>> {
+    let plan = build_bootstrap_plan(creds)?;
+    let mut file = crate::persistence::local_agents::load()?;
+    let outcomes = crate::runtime::agents::profiles::bootstrap::bootstrap_local_agents(
+        &plan,
+        &mut file,
+        &crate::runtime::agents::profiles::bootstrap::UuidMinter,
+    );
+    crate::persistence::local_agents::save(&file)?;
+    Ok(outcomes)
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.
@@ -523,15 +622,49 @@ where
     let Ok(creds) = config::load_credentials() else {
         output::info("No credentials found.");
         output::info("Visit https://easynet.run or your Hub to create a pairing token,");
-        output::info("then run 'easynet join <token>' to pair this device.");
-        output::info("If you're running a Hub, use 'easynet start --as-hub' instead.");
+        output::info("then run 'easynet device join <token>' to pair this device.");
+        output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
         anyhow::bail!("no credentials — cannot start device agent");
     };
 
     match verify(&creds) {
         CredentialCheck::Valid => Ok((creds, true)),
-        CredentialCheck::NetworkUnavailable => Ok((creds, false)),
+        CredentialCheck::NetworkUnavailable => {
+            record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
+                JoinFailureCode::StartFailedCredentialVerify,
+                JoinTransition::VerifyCredential,
+                &creds,
+                "Hub credential verification is unavailable",
+                true,
+                "cli.start",
+            ));
+            eprintln!(
+                "{} Hub credential verification is unavailable.",
+                console::style("✗").red().bold()
+            );
+            eprintln!("  node_id:     {}", creds.node_id);
+            eprintln!("  hub_session: {}", creds.hub_endpoint);
+            eprintln!("  hub_api:     {}", creds.api_base());
+            eprintln!();
+            eprintln!(
+                "  Refusing to start the device daemon because Hub reachability is required \
+                 before PresenceRegistry/session state can be trusted."
+            );
+            eprintln!(
+                "  For Docker/local hubs, re-pair with --hub http://127.0.0.1:8080 \
+                 or pass --hub-api so verification hits the correct backend."
+            );
+            anyhow::bail!("hub credential verification unavailable")
+        }
         CredentialCheck::Revoked(msg) => {
+            record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
+                JoinFailureCode::StartFailedCredentialVerify,
+                JoinTransition::VerifyCredential,
+                &creds,
+                msg.clone(),
+                false,
+                "cli.start",
+            ));
             eprintln!("{} {msg}", console::style("✗").red().bold());
             eprintln!("  node_id:     {}", creds.node_id);
             eprintln!("  hub_session: {}", creds.hub_endpoint);
@@ -541,10 +674,127 @@ where
             config::delete_credentials().ok();
             eprintln!("  Stale credentials cleaned up.");
             eprintln!("  Visit https://easynet.run or your Hub to create a new pairing token,");
-            eprintln!("  then run 'easynet join <token>'.");
+            eprintln!("  then run 'easynet device join <token>'.");
             anyhow::bail!("credential revoked");
         }
     }
+}
+
+fn verify_hub_session_endpoint(creds: &config::Credentials) -> anyhow::Result<()> {
+    verify_hub_session_endpoint_with(creds, tcp_connect_hub_session_endpoint)
+}
+
+fn verify_hub_session_endpoint_with<F>(
+    creds: &config::Credentials,
+    connect: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(&str) -> anyhow::Result<()>,
+{
+    let endpoint = creds.hub_endpoint.trim();
+    if endpoint.is_empty() {
+        anyhow::bail!("credentials missing hub_endpoint");
+    }
+    connect(endpoint).with_context(|| {
+        format!(
+            "connect Hub session endpoint {endpoint}; refusing to start daemon until the Hub session endpoint is reachable"
+        )
+    })
+}
+
+fn tcp_connect_hub_session_endpoint(endpoint: &str) -> anyhow::Result<()> {
+    let addrs = endpoint_socket_addrs(endpoint)?;
+    let mut last_err = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(
+            &addr,
+            Duration::from_millis(HUB_SESSION_ENDPOINT_CONNECT_TIMEOUT_MS),
+        ) {
+            Ok(_) => return Ok(()),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    match last_err {
+        Some(err) => Err(err).context("tcp connect to Hub session endpoint"),
+        None => anyhow::bail!("Hub session endpoint resolved to no socket addresses"),
+    }
+}
+
+fn endpoint_socket_addrs(endpoint: &str) -> anyhow::Result<Vec<std::net::SocketAddr>> {
+    let (host, port) = parse_endpoint_host_port(endpoint)?;
+    let addrs: Vec<_> = (host.as_str(), port)
+        .to_socket_addrs()
+        .with_context(|| format!("resolve Hub session endpoint host {host}:{port}"))?
+        .collect();
+    Ok(addrs)
+}
+
+fn parse_endpoint_host_port(endpoint: &str) -> anyhow::Result<(String, u16)> {
+    let trimmed = endpoint.trim();
+    anyhow::ensure!(!trimmed.is_empty(), "Hub session endpoint is empty");
+
+    let (scheme, rest) = trimmed
+        .split_once("://")
+        .map(|(scheme, rest)| (Some(scheme), rest))
+        .unwrap_or((None, trimmed));
+    let default_port = match scheme {
+        Some("axon") => Some(50051),
+        Some("https") => Some(443),
+        Some("http") => Some(80),
+        _ => None,
+    };
+    let authority_with_userinfo = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let authority = authority_with_userinfo
+        .rsplit_once('@')
+        .map(|(_, authority)| authority)
+        .unwrap_or(authority_with_userinfo);
+    anyhow::ensure!(
+        !authority.is_empty(),
+        "Hub session endpoint missing authority: {endpoint}"
+    );
+
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, rest) = bracketed
+            .split_once(']')
+            .with_context(|| format!("invalid bracketed Hub endpoint host: {endpoint}"))?;
+        anyhow::ensure!(
+            !host.is_empty(),
+            "Hub session endpoint missing host: {endpoint}"
+        );
+        anyhow::ensure!(
+            rest.is_empty() || rest.starts_with(':'),
+            "invalid bracketed Hub endpoint authority: {endpoint}"
+        );
+        let port = match rest.strip_prefix(':') {
+            Some(raw) => raw
+                .parse::<u16>()
+                .with_context(|| format!("invalid Hub session endpoint port: {endpoint}"))?,
+            None => default_port
+                .with_context(|| format!("Hub session endpoint missing port: {endpoint}"))?,
+        };
+        return Ok((host.to_string(), port));
+    }
+
+    let (host, port_raw) = match authority.rsplit_once(':') {
+        Some((host, port_raw)) => (host, Some(port_raw)),
+        None => (authority, None),
+    };
+    anyhow::ensure!(
+        !host.is_empty(),
+        "Hub session endpoint missing host: {endpoint}"
+    );
+    anyhow::ensure!(
+        !host.contains(':'),
+        "IPv6 Hub session endpoint host must be bracketed: {endpoint}"
+    );
+    let port = match port_raw {
+        Some(raw) => raw
+            .parse::<u16>()
+            .with_context(|| format!("invalid Hub session endpoint port: {endpoint}"))?,
+        None => default_port
+            .with_context(|| format!("Hub session endpoint missing port: {endpoint}"))?,
+    };
+    Ok((host.to_string(), port))
 }
 
 // ── Hub mode ────────────────────────────────────────────────────────────────
@@ -603,10 +853,8 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     let cfg = resolve_hub_config(args)?;
     let realm = cfg.realm().to_string();
 
-    let mut daemon_handle = crate::daemon::DaemonStartConfig::hub()
-        .with_realm(&realm)
-        .start()
-        .context("start hub easynet-daemon")?;
+    let start_cfg = with_bridge_lib_env(crate::daemon::DaemonStartConfig::hub().with_realm(&realm));
+    let mut daemon_handle = start_cfg.start().context("start hub easynet-daemon")?;
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
     super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
@@ -648,27 +896,27 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     }
     output::kv_section(&rows);
     output::step(&format!(
-        "Devices can join with: easynet start --hub axon://<this-ip>:{}",
+        "Devices can join with: easynet runtime start --hub axon://<this-ip>:{}",
         listen_tcp.rsplit(':').next().unwrap_or("50051"),
     ));
 
     if args.foreground {
         run_foreground_with_daemon_hub()
     } else {
-        output::info("Hub running in background. Use 'easynet stop' to stop.");
+        output::info("Hub running in background. Use 'easynet runtime stop' to stop.");
         Ok(())
     }
 }
 
 /// Foreground hub: block until Ctrl-C, then leave the daemon running
-/// (the same lifecycle contract as background — `easynet stop` owns
+/// (the same lifecycle contract as background — `easynet runtime stop` owns
 /// teardown). The daemon is a detached child; we only hold the console.
 fn run_foreground_with_daemon_hub() -> anyhow::Result<()> {
     let shutdown = ShutdownSignal::new();
     install_ctrlc_handler(&shutdown);
     output::info("Running in foreground (Ctrl-C to detach)...");
     shutdown.wait();
-    output::info("Detached. Hub still running — use 'easynet stop' to stop it.");
+    output::info("Detached. Hub still running — use 'easynet runtime stop' to stop it.");
     Ok(())
 }
 
@@ -679,7 +927,7 @@ fn classify_credential_status_code(code: u16) -> CredentialCheck {
         match code {
             // 404 = endpoint not found (Hub version mismatch), 429 = rate limited — transient.
             404 | 429 => {
-                output::warn(&format!("Hub returned HTTP {code}, continuing anyway"));
+                output::warn(&format!("Hub returned HTTP {code}; refusing to start"));
                 CredentialCheck::NetworkUnavailable
             }
             // 401/403 = credential explicitly rejected.
@@ -688,12 +936,12 @@ fn classify_credential_status_code(code: u16) -> CredentialCheck {
         }
     } else if code >= 500 {
         output::warn(&format!(
-            "Hub returned server error (HTTP {code}), continuing anyway"
+            "Hub returned server error (HTTP {code}); refusing to start"
         ));
         CredentialCheck::NetworkUnavailable
     } else {
         output::warn(&format!(
-            "unexpected Hub response (HTTP {code}) during credential check, continuing anyway"
+            "unexpected Hub response (HTTP {code}) during credential check; refusing to start"
         ));
         CredentialCheck::NetworkUnavailable
     }
@@ -720,7 +968,7 @@ fn verify_credential(creds: &config::Credentials) -> CredentialCheck {
         Err(ureq::Error::Status(code, _)) => classify_credential_status_code(code),
         Err(e) => {
             output::warn(&format!(
-                "could not verify credential via {base} (session endpoint: {}): {e}; continuing anyway",
+                "could not verify credential via {base} (session endpoint: {}): {e}; refusing to start",
                 creds.hub_endpoint
             ));
             CredentialCheck::NetworkUnavailable
@@ -738,10 +986,10 @@ mod tests {
             node_id: "node-test".into(),
             credential_token: "token-test".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
-            tenant_id: "tenant-test".into(),
+            realm: "tenant-test".into(),
             deploy_signature: "sig".into(),
             hub_api_base: Some("https://api.example.com".into()),
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         }
@@ -840,20 +1088,78 @@ mod tests {
     }
 
     #[test]
-    fn load_and_verify_credentials_keeps_unverified_credentials_when_hub_unavailable() {
+    fn load_and_verify_credentials_fails_but_keeps_credentials_when_hub_unavailable() {
         let _g = HomeGuard::new();
         let creds = test_creds();
         config::save_credentials(&creds).expect("save test credentials");
 
-        let (loaded, verified) =
-            load_and_verify_credentials_with(|_| CredentialCheck::NetworkUnavailable)
-                .expect("must continue on transient outage");
-        assert!(!verified);
-        assert_eq!(loaded.node_id, "node-test");
-        assert_eq!(loaded.api_base(), "https://api.example.com");
+        let err = load_and_verify_credentials_with(|_| CredentialCheck::NetworkUnavailable)
+            .expect_err("unreachable Hub must stop daemon startup");
+        assert!(
+            err.to_string()
+                .contains("hub credential verification unavailable"),
+            "got: {err}"
+        );
         assert!(
             config::load_credentials().is_ok(),
-            "credentials should remain on transient outage"
+            "credentials should remain on transient outage; only revocation deletes them"
+        );
+    }
+
+    #[test]
+    fn verify_hub_session_endpoint_fails_before_daemon_start_when_unreachable() {
+        let creds = test_creds();
+        let err = verify_hub_session_endpoint_with(&creds, |endpoint| {
+            anyhow::bail!("dial refused at {endpoint}")
+        })
+        .expect_err("unreachable Hub session endpoint must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("connect Hub session endpoint axon://easynet.run:50051"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("refusing to start daemon"),
+            "operator needs explicit no-start reason: {msg}"
+        );
+    }
+
+    #[test]
+    fn verify_hub_session_endpoint_uses_plain_tcp_probe() {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind local Hub session stand-in");
+        let endpoint = format!("https://{}", listener.local_addr().unwrap());
+        let mut creds = test_creds();
+        creds.hub_endpoint = endpoint;
+
+        verify_hub_session_endpoint(&creds).expect("plain TCP listener should pass preflight");
+    }
+
+    #[test]
+    fn parse_endpoint_host_port_accepts_runtime_endpoint_forms() {
+        assert_eq!(
+            parse_endpoint_host_port("https://127.0.0.1:50443").unwrap(),
+            ("127.0.0.1".into(), 50443)
+        );
+        assert_eq!(
+            parse_endpoint_host_port("axon://easynet.run:50051").unwrap(),
+            ("easynet.run".into(), 50051)
+        );
+        assert_eq!(
+            parse_endpoint_host_port("axon://easynet.run").unwrap(),
+            ("easynet.run".into(), 50051)
+        );
+        assert_eq!(
+            parse_endpoint_host_port("https://hub.example").unwrap(),
+            ("hub.example".into(), 443)
+        );
+        assert_eq!(
+            parse_endpoint_host_port("https://[::1]:50443/path").unwrap(),
+            ("::1".into(), 50443)
+        );
+        assert_eq!(
+            parse_endpoint_host_port("https://[::1]/path").unwrap(),
+            ("::1".into(), 443)
         );
     }
 
@@ -900,28 +1206,14 @@ mod tests {
     }
 
     #[test]
-    fn build_bootstrap_plan_falls_back_to_auth_session_username() {
-        let _g = HomeGuard::new();
-        let state_dir = crate::persistence::config::state_dir();
-        std::fs::create_dir_all(&state_dir).expect("create state dir");
-        let session = crate::facade::cli::auth::AuthSession {
-            token: "token".into(),
-            hub_url: "http://127.0.0.1:8080".into(),
-            email: "alice@example.com".into(),
-            user_id: Some("user-uuid".into()),
-            nickname: Some("Alice".into()),
-            username: Some("alice".into()),
-        };
-        std::fs::write(
-            state_dir.join("auth.json"),
-            serde_json::to_vec(&session).expect("serialize session"),
-        )
-        .expect("write auth.json");
-
+    fn build_bootstrap_plan_rejects_credentials_without_username() {
         let mut creds = test_creds();
         creds.username = None;
-        let plan = build_bootstrap_plan(&creds).expect("plan must build");
-        assert_eq!(plan.user_id, "alice");
+        let err = build_bootstrap_plan(&creds).expect_err("username is required");
+        assert!(
+            err.to_string().contains("missing username"),
+            "error should surface the credential contract: {err}"
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-release-flow.sh — drive `easynet device join` + `easynet start`
+# e2e-release-flow.sh — drive `easynet device join` + `easynet runtime start`
 # + `agent add` + advertise verification against a release-shape
 # install.
 #
@@ -18,7 +18,7 @@
 #
 #   1. `easynet device join <token>` against a local dev-backend
 #      succeeds and writes credentials.json + daemon-config.toml.
-#   2. `easynet start` brings the daemon online.
+#   2. `easynet runtime start` brings the daemon online.
 #   3. **No `axon-runtime` process is alive** at any point. The
 #      device-mode daemon is the only long-running process; the
 #      release tarball does not ship axon-runtime, so a code path
@@ -38,7 +38,7 @@
 # Expected outcome
 # ----------------
 # This harness should pass on daemon-first code. A failure in
-# `easynet start`, a changed axon-runtime process set, or missing
+# `easynet runtime start`, a changed axon-runtime process set, or missing
 # daemon/control sockets is a release-blocking regression.
 #
 # Hub topology
@@ -265,17 +265,17 @@ if [ ! -f "$HOME/.easynet/credentials.json" ]; then
 fi
 
 # ── 5. Start daemon — THIS IS THE LOAD-BEARING ASSERTION ─────────
-# `easynet start` must bring up easynet-daemon without spawning a
+# `easynet runtime start` must bring up easynet-daemon without spawning a
 # product-path standalone axon-runtime. The release tarball does not
 # ship axon-runtime, by design.
-echo "==> [5/7] easynet start (load-bearing assertion)"
+echo "==> [5/7] easynet runtime start (load-bearing assertion)"
 start_log="$prefix/easynet-start.log"
-if start_out="$(easynet start 2>&1)"; then
+if start_out="$(easynet runtime start 2>&1)"; then
     printf '%s\n' "$start_out" | sed 's/^/    /'
     echo "$start_out" > "$start_log"
 else
     rc=$?
-    echo "[FAIL] easynet start exited with code $rc" >&2
+    echo "[FAIL] easynet runtime start exited with code $rc" >&2
     printf '%s\n' "$start_out" | sed 's/^/    /' >&2
     echo "$start_out" > "$start_log"
     exit 1
@@ -285,7 +285,7 @@ fi
 # beyond the backend-owned hub process that may already be alive.
 current_axon_pids="$(pgrep -f "$workspace_root/EasyNet-Axon/core/runtime-rs/target/release/axon-runtime" | sort | tr '\n' ' ' || true)"
 if [ "$current_axon_pids" != "$baseline_axon_pids" ]; then
-    echo "[FAIL] easynet start changed the axon-runtime process set:" >&2
+    echo "[FAIL] easynet runtime start changed the axon-runtime process set:" >&2
     echo "       before: ${baseline_axon_pids:-<none>}" >&2
     echo "       after : ${current_axon_pids:-<none>}" >&2
     pgrep -af "axon-runtime" >&2 || true
@@ -355,9 +355,9 @@ echo "    hosted agents minted with friendly URAs"
 # The daemon will only re-emit advertise on session reconnect. Bounce
 # the daemon so the new agents land in this run's window.
 echo "==> [7/7] bounce daemon, observe advertise prelude"
-easynet stop >/dev/null 2>&1 || true
+easynet runtime stop >/dev/null 2>&1 || true
 sleep 2
-easynet start >/dev/null 2>&1
+easynet runtime start >/dev/null 2>&1
 daemon_log="$HOME/.easynet/logs/easynet-daemon.log"
 for _ in $(seq 1 30); do
     if grep -q "advertise_agent prelude done" "$daemon_log" 2>/dev/null; then

@@ -176,14 +176,11 @@ fn run_builtin_h264_stream(
 
 fn h264_failure(
     to_client: &mpsc::Sender<BidiOutputFrame>,
+    terminal_guard: &BidiTerminalGuard,
     message: impl Into<String>,
 ) -> BuiltinH264StreamTerminal {
     let message = message.into();
-    let _ = to_client.blocking_send(BidiOutputFrame::json(json!({
-        "type": "error",
-        "code": REASON_RESOURCE_UNAVAILABLE,
-        "message": message.clone(),
-    })));
+    terminal_guard.send_blocking_error(to_client, REASON_RESOURCE_UNAVAILABLE, message.clone());
     BuiltinH264StreamTerminal::Failed {
         reason: REASON_PREVIEW_CAPTURE_FAILED,
         message,
@@ -204,17 +201,20 @@ fn run_builtin_h264_recorder_stream(
     let mut encoder = match build_openh264_encoder(config) {
         Ok(encoder) => encoder,
         Err(err) => {
-            let terminal = h264_failure(&to_client, format!("OpenH264 encoder unavailable: {err}"));
-            terminal_guard.send_blocking_closed(&to_client, terminal.close_reason());
+            let terminal = h264_failure(
+                &to_client,
+                &terminal_guard,
+                format!("OpenH264 encoder unavailable: {err}"),
+            );
             return Some(terminal);
         }
     };
     if let Err(err) = recorder.start() {
         let terminal = h264_failure(
             &to_client,
+            &terminal_guard,
             format!("xcap video recorder start failed: {err}"),
         );
-        terminal_guard.send_blocking_closed(&to_client, terminal.close_reason());
         return Some(terminal);
     }
     let mut seq = 0_u64;
@@ -235,7 +235,7 @@ fn run_builtin_h264_recorder_stream(
                     {
                         Ok(frame) => frame,
                         Err(err) => {
-                            terminal = h264_failure(&to_client, err.to_string());
+                            terminal = h264_failure(&to_client, &terminal_guard, err.to_string());
                             break;
                         }
                     };
@@ -264,7 +264,7 @@ fn run_builtin_h264_recorder_stream(
                         seq = seq.saturating_add(1);
                     }
                     Err(err) => {
-                        terminal = h264_failure(&to_client, err.to_string());
+                        terminal = h264_failure(&to_client, &terminal_guard, err.to_string());
                         break;
                     }
                 }
@@ -280,7 +280,11 @@ fn run_builtin_h264_recorder_stream(
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
-                terminal = h264_failure(&to_client, "xcap video recorder disconnected");
+                terminal = h264_failure(
+                    &to_client,
+                    &terminal_guard,
+                    "xcap video recorder disconnected",
+                );
                 break;
             }
         }
@@ -317,8 +321,11 @@ fn run_builtin_h264_polling_stream(
     let mut encoder = match build_openh264_encoder(&config) {
         Ok(encoder) => encoder,
         Err(err) => {
-            let terminal = h264_failure(&to_client, format!("OpenH264 encoder unavailable: {err}"));
-            terminal_guard.send_blocking_closed(&to_client, terminal.close_reason());
+            let terminal = h264_failure(
+                &to_client,
+                &terminal_guard,
+                format!("OpenH264 encoder unavailable: {err}"),
+            );
             return terminal;
         }
     };
@@ -361,7 +368,7 @@ fn run_builtin_h264_polling_stream(
                 seq = seq.saturating_add(1);
             }
             Err(err) => {
-                terminal = h264_failure(&to_client, err.to_string());
+                terminal = h264_failure(&to_client, &terminal_guard, err.to_string());
                 break;
             }
         }

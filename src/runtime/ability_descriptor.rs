@@ -10,7 +10,7 @@
 //   * `runtime::abilities::AgentAbilitySpec` — per-agent on-disk
 //     manifest shape, used for chat / skill manifests.
 //   * `runtime::agents::SystemAbilityMetadata` — in-memory shape
-//     for built-in abilities (device.observe.*, device.agent.*, …).
+//     for built-in abilities (observe.*, agent.*, …).
 //
 // Both pre-date RFC-001 and lack visibility/scope. AbilityDescriptor
 // supersedes them at the protocol-facing edge: anything that goes to
@@ -32,7 +32,7 @@
 // Per the plan §1.6 schema:
 //
 //   AbilityDescriptor {
-//     name, owner_agent_ura, visibility, scope_subjects[],
+//     name, owner_ura, visibility, scope_subjects[],
 //     scope_agents[], source, schema_summary{input,
 //     output_receipt_body}, hints{read_only, destructive,
 //     idempotent, streaming_only, bidi_only}
@@ -242,7 +242,7 @@ impl AbilityIdentity {
     /// a hub, so the static catalogue is still anchored on the
     /// literal `"self"` marker).
     pub fn from_descriptor(descriptor: &AbilityDescriptor) -> Option<Self> {
-        let owner = descriptor.owner_agent_ura.trim();
+        let owner = descriptor.owner_ura.trim();
         let name = descriptor.name.trim();
         if owner.is_empty() || name.is_empty() {
             return None;
@@ -285,18 +285,19 @@ pub struct AbilitySchemaSummary {
 /// hosting profile module (P4.2); never mutated after construction.
 ///
 /// **Serialization is hand-written** ([`AbilityDescriptor`] impls
-/// `Serialize` / `Deserialize` below) so two derived fields can
+/// `Serialize` / `Deserialize` below) so derived wire fields can
 /// project from canonical state without becoming `pub` writeable
-/// caches: `ability_ura` is always recomputed from `owner_agent_ura`
-/// + public verb at serialize time and ignored on deserialize, and
+/// caches: wire `name` is the owner-local public verb,
+/// `ability_ura` is always recomputed from `owner_ura` +
+/// public verb at serialize time and ignored on deserialize, and
 /// `class` always emits an effective value even when no explicit
 /// override was set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AbilityDescriptor {
-    /// Callable ability name. Device and hub abilities use a
-    /// namespaced name such as `device.agent.list`; agent-owned
-    /// abilities use the local verb that is scoped by
-    /// `owner_agent_ura`, such as `chat`.
+    /// Callable owner-local public ability name. Device and hub abilities
+    /// use a namespaced public name such as `agent.list` or
+    /// `federation.resolve`; agent-owned abilities use the local verb scoped
+    /// by `owner_ura`, such as `chat`.
     pub name: String,
     /// Canonical URA of the entity that publishes this ability — the
     /// `callee` in any Invoke targeting this name. Per AXON-RFC-001
@@ -306,17 +307,17 @@ pub struct AbilityDescriptor {
     ///   * `agent/<user-uuid>.<agent-id>` — hosted user agent
     ///     (consent / policy / mcp / llm sub-agent abilities).
     ///   * `device/<device-uuid>`         — device-built-ins
-    ///     (`shell.run`, `fs.read`, `device.agent.list`, …).
+    ///     (`shell.run`, `fs.read`, `agent.list`, …).
     ///   * `hub`                          — hub-published abilities
     ///     (`federation.advertise_*`, `voice.list_calls`, …).
     ///
-    /// Field name kept as `owner_agent_ura` for wire-compat with
+    /// Field name kept as `owner_ura` for wire-compat with
     /// every existing daemon. §A.URA-5's "agent owns the ability"
     /// rule applies to ABILITY URAs (`/ability/<...>`-shaped) — it
     /// does not constrain who may publish a descriptor for a
     /// device-built-in or hub-built-in verb. A device publishing
     /// `shell.run` is the canonical pattern, not a violation.
-    pub owner_agent_ura: String,
+    pub owner_ura: String,
     /// Explicit execution-class override. `None` means "derive from
     /// transport hints"; `Some(_)` means a builder called
     /// `with_class(...)` and the descriptor must honor that even if
@@ -369,12 +370,14 @@ impl<'de> Deserialize<'de> for AbilityDescriptor {
 /// fields.
 #[derive(Serialize, Deserialize)]
 struct AbilityDescriptorWire {
+    /// Owner-local public ability name. Local registry prefixes
+    /// such as `device.` or `<agent-id>.` are not serialized.
     name: String,
     /// Always populated by the projection layer; ignored on parse —
     /// the canonical value is recomputed from owner + public verb.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     ability_ura: String,
-    owner_agent_ura: String,
+    owner_ura: String,
     /// Always emitted at serialize time with the descriptor's
     /// effective class, so consumers always see a concrete value.
     /// On parse, an absent field becomes `None` (the descriptor's
@@ -400,16 +403,19 @@ struct AbilityDescriptorWire {
 
 impl AbilityDescriptorWire {
     fn from_descriptor(d: &AbilityDescriptor) -> Self {
-        let ability_ura = d.canonical_ability_ura().unwrap_or_default();
+        let name = d.public_name();
+        let ability_ura = crate::ura::owner_ability_ura(&d.owner_ura, &name)
+            .or_else(|| d.canonical_ability_ura())
+            .unwrap_or_default();
         // Wire always carries a concrete class. Pinned overrides
         // pass through; unpinned descriptors emit the derived value
         // so a remote consumer (or a re-deserialize round-trip) sees
         // what we would have computed locally.
         let class = Some(d.ability_class());
         Self {
-            name: d.name.clone(),
+            name,
             ability_ura,
-            owner_agent_ura: d.owner_agent_ura.clone(),
+            owner_ura: d.owner_ura.clone(),
             class,
             visibility: d.visibility,
             scope_subjects: d.scope_subjects.clone(),
@@ -424,12 +430,12 @@ impl AbilityDescriptorWire {
 
     fn into_descriptor(self) -> AbilityDescriptor {
         // Wire `ability_ura` is intentionally discarded; the
-        // canonical URA is rebuilt from `owner_agent_ura` + name at
+        // canonical URA is rebuilt from `owner_ura` + name at
         // every read via `canonical_ability_ura()`. Wire `class`,
         // when present, becomes the explicit override.
         AbilityDescriptor {
             name: self.name,
-            owner_agent_ura: self.owner_agent_ura,
+            owner_ura: self.owner_ura,
             class_override: self.class,
             visibility: self.visibility,
             scope_subjects: self.scope_subjects,
@@ -461,7 +467,7 @@ impl std::fmt::Display for DescriptorError {
                 write!(f, "ability name must use the `<namespace>.<verb>` shape")
             }
             DescriptorError::EmptyOwner => {
-                write!(f, "owner_agent_ura must not be empty")
+                write!(f, "owner_ura must not be empty")
             }
         }
     }
@@ -477,19 +483,19 @@ impl AbilityDescriptor {
     /// call site cannot ship a malformed descriptor.
     pub fn new(
         name: impl Into<String>,
-        owner_agent_ura: impl Into<String>,
+        owner_ura: impl Into<String>,
         visibility: Visibility,
     ) -> Result<Self, DescriptorError> {
         let name = name.into();
-        let owner_agent_ura = owner_agent_ura.into();
+        let owner_ura = owner_ura.into();
         if name.trim().is_empty() {
             return Err(DescriptorError::EmptyName);
         }
-        if owner_agent_ura.trim().is_empty() {
+        if owner_ura.trim().is_empty() {
             return Err(DescriptorError::EmptyOwner);
         }
         if !name.contains('.') {
-            let agent_owned = crate::ura::parse_ura(&owner_agent_ura)
+            let agent_owned = crate::ura::parse_ura(&owner_ura)
                 .map(|parsed| parsed.kind == crate::ura::URAKind::Agent)
                 .unwrap_or(false);
             if !agent_owned {
@@ -498,7 +504,7 @@ impl AbilityDescriptor {
         }
         Ok(Self {
             name,
-            owner_agent_ura,
+            owner_ura,
             class_override: None,
             visibility,
             // Sensible defaults for SCOPED's two axes: any caller
@@ -574,15 +580,15 @@ impl AbilityDescriptor {
     /// registry entries may arrive as `<agent-id>.<verb>` internally;
     /// this method is the only place that projection is applied.
     pub fn public_name(&self) -> String {
-        crate::ura::public_ability_name_for_owner(&self.owner_agent_ura, &self.name)
+        crate::ura::owner_local_ability_name(&self.owner_ura, &self.name)
     }
 
     /// Canonical ability URA for this descriptor. Always recomputed
-    /// from `owner_agent_ura` + `public_name()`; the `ability_ura`
+    /// from `owner_ura` + `public_name()`; the `ability_ura`
     /// wire field is a one-way serialize-time projection of this
     /// method, not a separate source of truth.
     pub fn canonical_ability_ura(&self) -> Option<String> {
-        canonical_ability_ura_for_owner(&self.owner_agent_ura, &self.public_name())
+        crate::ura::owner_ability_ura(&self.owner_ura, &self.public_name())
     }
 
     pub fn identity(&self) -> Option<AbilityIdentity> {
@@ -623,37 +629,9 @@ impl AbilityDescriptor {
                 // wires hosted vs self-signed signaling, we accept
                 // exact owner match, which is the conservative case
                 // (host=owner for self-signed Agents).
-                caller_ura == self.owner_agent_ura || subject_ura == self.owner_agent_ura
+                caller_ura == self.owner_ura || subject_ura == self.owner_ura
             }
         }
-    }
-}
-
-fn canonical_ability_ura_for_owner(owner_ura: &str, public_name: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(owner_ura).ok()?;
-    match parsed.kind {
-        crate::ura::URAKind::Agent => Some(crate::ura::ability_ura(
-            &parsed.realm,
-            &parsed.user_id,
-            &parsed.agent_id,
-            public_name,
-        )),
-        crate::ura::URAKind::Hub if public_name.contains('.') => {
-            Some(crate::ura::hub_ability_ura(&parsed.realm, public_name))
-        }
-        crate::ura::URAKind::Device => Some(crate::ura::ability_ura(
-            &parsed.realm,
-            "device",
-            &parsed.device_id,
-            public_name,
-        )),
-        crate::ura::URAKind::User => Some(crate::ura::ability_ura(
-            &parsed.realm,
-            "user",
-            &parsed.user_id,
-            public_name,
-        )),
-        _ => None,
     }
 }
 
@@ -738,20 +716,20 @@ mod tests {
 
     #[test]
     fn scoped_both_axes_filtered_requires_both_matches() {
-        let backend = "easynet:///r/acme/hub";
+        let backend = crate::ura::hub_ura("acme");
         let operator = "easynet:///r/acme/user/alice";
         let d = must(
-            "device.agent.list",
+            "agent.list",
             "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::OnlyMatching(vec![operator.into()]))
-        .with_scope_agents(ScopeRule::OnlyMatching(vec![backend.into()]));
-        assert!(d.is_visible_to(backend, operator));
+        .with_scope_agents(ScopeRule::OnlyMatching(vec![backend.clone()]));
+        assert!(d.is_visible_to(&backend, operator));
         // Right subject, wrong caller — denied.
         assert!(!d.is_visible_to("rogue-caller", operator));
         // Right caller, wrong subject — denied.
-        assert!(!d.is_visible_to(backend, "rogue-subject"));
+        assert!(!d.is_visible_to(&backend, "rogue-subject"));
     }
 
     #[test]
@@ -776,8 +754,8 @@ mod tests {
         // let attacker URAs masquerade as authorised ones by
         // sharing a prefix.
         let d = must(
-            "device.agent.list",
-            "easynet:///r/acme/hub",
+            "agent.list",
+            &crate::ura::hub_ura("acme"),
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::OnlyMatching(vec![
@@ -799,7 +777,7 @@ mod tests {
         // `(owner, public verb)` uniqueness invariant — either being
         // blank means there is nothing to identify.
         let mut blank_name = must(
-            "device.agent.list",
+            "agent.list",
             "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         );
@@ -807,18 +785,18 @@ mod tests {
         assert!(blank_name.identity().is_none());
 
         let mut blank_owner = must(
-            "device.agent.list",
+            "agent.list",
             "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         );
-        blank_owner.owner_agent_ura = "  ".into();
+        blank_owner.owner_ura = "  ".into();
         assert!(blank_owner.identity().is_none());
     }
 
     #[test]
     fn descriptor_exposes_canonical_agent_ability_identity() {
         let d = must(
-            "backend-engineer.chat",
+            "chat",
             "easynet:///r/acme/agent/alice.backend-engineer",
             Visibility::Scoped,
         );
@@ -830,6 +808,51 @@ mod tests {
         assert_eq!(
             d.identity().map(|id| id.into_string()),
             Some("easynet:///r/acme/ability/alice.backend-engineer.chat".to_string())
+        );
+    }
+
+    #[test]
+    fn descriptor_exposes_canonical_device_owned_ability_identity() {
+        let d = must(
+            "fs.read",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        );
+        assert_eq!(d.public_name(), "fs.read");
+        assert_eq!(
+            d.canonical_ability_ura().as_deref(),
+            Some("easynet:///r/acme/ability/device.dev-1.fs.read")
+        );
+        assert_eq!(
+            d.identity().map(|id| id.into_string()),
+            Some("easynet:///r/acme/ability/device.dev-1.fs.read".to_string())
+        );
+    }
+
+    #[test]
+    fn descriptor_wire_name_is_owner_local_public_name() {
+        let device = must(
+            "fs.read",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        );
+        let device_json = serde_json::to_value(&device).unwrap();
+        assert_eq!(device_json["name"], "fs.read");
+        assert_eq!(
+            device_json["ability_ura"],
+            "easynet:///r/acme/ability/device.dev-1.fs.read"
+        );
+
+        let agent = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.backend-engineer",
+            Visibility::Scoped,
+        );
+        let agent_json = serde_json::to_value(&agent).unwrap();
+        assert_eq!(agent_json["name"], "chat");
+        assert_eq!(
+            agent_json["ability_ura"],
+            "easynet:///r/acme/ability/alice.backend-engineer.chat"
         );
     }
 
@@ -853,7 +876,7 @@ mod tests {
     #[test]
     fn ability_class_is_derived_from_transport_hints() {
         let query = must(
-            "device.agent.list",
+            "agent.list",
             "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         );
@@ -913,7 +936,7 @@ mod tests {
         let second = serde_json::to_string(&back).unwrap();
         assert_eq!(first, second, "wire form must be stable under round-trip");
         assert_eq!(back.name, d.name);
-        assert_eq!(back.owner_agent_ura, d.owner_agent_ura);
+        assert_eq!(back.owner_ura, d.owner_ura);
         assert_eq!(back.visibility, d.visibility);
         assert_eq!(back.scope_subjects, d.scope_subjects);
         assert_eq!(back.scope_agents, d.scope_agents);
@@ -974,14 +997,14 @@ mod tests {
     fn with_class_and_with_hints_are_commutative() {
         let owner = "easynet:///r/acme/device/dev-1";
         // Order A: pin class, then add streaming hints.
-        let a = must("device.agent.list", owner, Visibility::Scoped)
+        let a = must("agent.list", owner, Visibility::Scoped)
             .with_class(AbilityClass::Query)
             .with_hints(AbilityHints {
                 streaming_only: true,
                 ..Default::default()
             });
         // Order B: same calls reversed.
-        let b = must("device.agent.list", owner, Visibility::Scoped)
+        let b = must("agent.list", owner, Visibility::Scoped)
             .with_hints(AbilityHints {
                 streaming_only: true,
                 ..Default::default()

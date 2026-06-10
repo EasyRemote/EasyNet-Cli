@@ -479,7 +479,7 @@ mod tests {
         handle_request(
             IncomingFrame::Subscribe {
                 subscription_id: "unknown-sub".into(),
-                ability: "device.observe.health".into(),
+                ability: "observe.health".into(),
                 args: serde_json::json!({}),
             },
             out_tx,

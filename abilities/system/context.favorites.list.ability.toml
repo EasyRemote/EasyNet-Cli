@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "context.favorites.list"
+description = "List favorites (starred clips, files, folders)."
+
+[input_schema]
+type = "object"
+additionalProperties = false

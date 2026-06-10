@@ -34,30 +34,31 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
+use crate::runtime::agents::profiles::DEFAULT_CONSENT_AGENT_ID;
 use crate::runtime::domain::{PermissionDecision, PermissionId};
 use crate::runtime::execution::permission::PermissionService;
 
-pub const ABILITY_SUBSCRIBE: &str = "device.consent.subscribe";
-pub const ABILITY_DECIDE: &str = "device.consent.decide";
-pub const ABILITY_LIST_PENDING: &str = "device.consent.list_pending";
+pub const ABILITY_SUBSCRIBE: &str = "consent.subscribe";
+pub const ABILITY_DECIDE: &str = "consent.decide";
+pub const ABILITY_LIST_PENDING: &str = "consent.list_pending";
 
 /// Register the three permission abilities on the registry.
 pub fn register(reg: &mut AxonAbilityCatalog, perms: Arc<PermissionService>) {
     let p_for_sub = Arc::clone(&perms);
     reg.register_stream_with_owner(
-        "device.consent.subscribe",
-        OwnerKind::Device,
+        "consent.subscribe",
+        OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID.to_string()),
         Arc::new(move |args: Value| subscribe_handler(&p_for_sub, args)),
     );
     let p_for_list = Arc::clone(&perms);
     reg.register_rpc_with_owner(
-        "device.consent.list_pending",
-        OwnerKind::Device,
+        "consent.list_pending",
+        OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID.to_string()),
         Arc::new(move |_args: Value| list_pending_handler(&p_for_list)),
     );
     reg.register_rpc_with_owner(
-        "device.consent.decide",
-        OwnerKind::Device,
+        "consent.decide",
+        OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID.to_string()),
         Arc::new(move |args: Value| decide_handler(&perms, args)),
     );
 }

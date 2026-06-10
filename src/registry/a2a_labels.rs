@@ -46,6 +46,8 @@
 
 #[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::json;
 
@@ -214,12 +216,48 @@ fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String, Str
 }
 
 #[cfg(test)]
+fn test_entry_with_agent_directory(
+    name: &str,
+    agent_type: super::agents::AgentType,
+    model: Option<&str>,
+) -> super::agents::AgentEntry {
+    use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+    use crate::runtime::directory::{AgentDirectory, Location};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let root = std::env::temp_dir()
+        .join("easynet-a2a-labels-test")
+        .join(format!("{name}-{n}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+
+    let runtime = match agent_type {
+        super::agents::AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
+        super::agents::AgentType::Codex => RuntimeKind::Codex,
+        super::agents::AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
+    };
+    AgentDirectory::create(
+        &Location::Local { root: root.clone() },
+        AgentSpec::new(name.to_string(), runtime),
+    )
+    .expect("create manifest-backed agent directory");
+
+    let mut entry = super::agents::AgentEntry::new(agent_type, model.map(String::from));
+    entry.root_path = Some(root);
+    entry
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::agents::{AgentEntry, AgentType};
+    use crate::registry::agents::AgentType;
 
-    fn entry(agent_type: AgentType, model: Option<&str>) -> AgentEntry {
-        AgentEntry::new(agent_type, model.map(String::from))
+    fn entry(
+        name: &str,
+        agent_type: AgentType,
+        model: Option<&str>,
+    ) -> crate::registry::agents::AgentEntry {
+        test_entry_with_agent_directory(name, agent_type, model)
     }
 
     #[test]
@@ -234,9 +272,10 @@ mod tests {
     #[test]
     fn single_agent_registry_emits_core_keys() {
         let mut registry = AgentRegistry::default();
-        registry
-            .agents
-            .insert("claude".into(), entry(AgentType::ClaudeCode, Some("opus")));
+        registry.agents.insert(
+            "claude".into(),
+            entry("claude", AgentType::ClaudeCode, Some("opus")),
+        );
         let labels = build(&registry, "alpha").expect("non-empty registry must yield Some");
 
         // The v1 label-level `a2a.version` is gone. Version lives
@@ -259,12 +298,14 @@ mod tests {
     #[test]
     fn agents_json_is_v2_envelope_shape() {
         let mut registry = AgentRegistry::default();
-        registry
-            .agents
-            .insert("codex".into(), entry(AgentType::Codex, Some("gpt-5")));
-        registry
-            .agents
-            .insert("claude".into(), entry(AgentType::ClaudeCode, None));
+        registry.agents.insert(
+            "codex".into(),
+            entry("codex", AgentType::Codex, Some("gpt-5")),
+        );
+        registry.agents.insert(
+            "claude".into(),
+            entry("claude", AgentType::ClaudeCode, None),
+        );
 
         let labels = build(&registry, "host").expect("non-empty registry must yield Some");
         let raw = labels.get("a2a.agents_json").expect("a2a.agents_json");
@@ -305,7 +346,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "evil".into(),
-            entry(AgentType::Codex, Some(r#"" breakJSON"#)),
+            entry("evil", AgentType::Codex, Some(r#"" breakJSON"#)),
         );
         let labels = build(&registry, "host").expect("non-empty registry must yield Some");
         let raw = labels.get("a2a.agents_json").expect("a2a.agents_json");
@@ -335,12 +376,13 @@ mod tests {
         // share one. A broken "clone the same skills array into every
         // entry" refactor would fail here.
         let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "claude".into(),
+            entry("claude", AgentType::ClaudeCode, None),
+        );
         registry
             .agents
-            .insert("claude".into(), entry(AgentType::ClaudeCode, None));
-        registry
-            .agents
-            .insert("codex".into(), entry(AgentType::Codex, None));
+            .insert("codex".into(), entry("codex", AgentType::Codex, None));
 
         let labels = build(&registry, "host").expect("non-empty registry must yield Some");
         let raw = labels.get("a2a.agents_json").unwrap();
@@ -379,9 +421,10 @@ mod tests {
         // `<agent-root>/abilities/<verb>.ability.toml`. Discovery
         // labels carry only the fingerprint.
         let mut registry = AgentRegistry::default();
-        registry
-            .agents
-            .insert("claude".into(), entry(AgentType::ClaudeCode, Some("opus")));
+        registry.agents.insert(
+            "claude".into(),
+            entry("claude", AgentType::ClaudeCode, Some("opus")),
+        );
         let labels = build(&registry, "host").unwrap();
         let raw = labels.get("a2a.agents_json").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
@@ -420,23 +463,19 @@ mod tests {
         // flaky Hub-side registrations when the daemon's re-register
         // hook fires.
         //
-        // HomeGuard isolates this test from the developer's real
-        // ~/.easynet/. Without it, abilities_for's slice-25
-        // fallback can pick up real on-disk manifests under
-        // ~/.easynet/workspaces/{claude,codex}, and a parallel
-        // test that mutates those workspaces (e.g. the new G1
-        // build_stdio_server_with_agent_name test) would race
-        // and produce different bytes between the two build()
-        // calls. The HomeGuard pins the test to a fresh tempdir.
+        // HomeGuard isolates config lookups that may happen below
+        // this registry layer. Ability discovery itself is now driven
+        // only by the explicit root_path on each test AgentEntry.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
 
         let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "claude".into(),
+            entry("claude", AgentType::ClaudeCode, None),
+        );
         registry
             .agents
-            .insert("claude".into(), entry(AgentType::ClaudeCode, None));
-        registry
-            .agents
-            .insert("codex".into(), entry(AgentType::Codex, None));
+            .insert("codex".into(), entry("codex", AgentType::Codex, None));
         let a = build(&registry, "host").unwrap();
         let b = build(&registry, "host").unwrap();
         assert_eq!(a.get("a2a.agents_json"), b.get("a2a.agents_json"));
@@ -452,26 +491,19 @@ mod tests {
         // same release window (spec §"Contract test (golden
         // fixture)").
         //
-        // HomeGuard isolates this test from the developer's real
-        // ~/.easynet/. abilities_from_manifests falls back to
-        // agents_root().join(name) when an entry has no root_path —
-        // on a developer's machine that already has
-        // ~/.easynet/workspaces/alice (left over from a previous
-        // session), the fallback would return THAT workspace's
-        // real manifests, drifting from the canonical synth-fallback
-        // description this fixture was authored against. The guard
-        // ensures the test sees a freshly-empty home so the fallback
-        // hits the synth path every time, restoring cross-host
-        // stability.
+        // Every fixture agent is backed by an authored AgentDirectory
+        // manifest. The writer no longer synthesizes skills from a
+        // registry row, so this golden pins the current wire shape
+        // without relying on compatibility fallback state.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
 
         let mut registry = AgentRegistry::default();
-        let mut alice = entry(AgentType::ClaudeCode, Some("claude-opus-4-7"));
+        let mut alice = entry("alice", AgentType::ClaudeCode, Some("claude-opus-4-7"));
         alice.label = Some("code-review assistant".into());
         registry.agents.insert("alice".into(), alice);
         registry
             .agents
-            .insert("bob".into(), entry(AgentType::Codex, None));
+            .insert("bob".into(), entry("bob", AgentType::Codex, None));
 
         let labels = build(&registry, "host").expect("non-empty registry must yield Some");
         let produced = labels.get("a2a.agents_json").expect("a2a.agents_json");
@@ -547,7 +579,7 @@ mod label_size_guard {
     //! move just because we want it to.
 
     use super::*;
-    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
+    use crate::registry::agents::{AgentRegistry, AgentType};
 
     /// Self-imposed budget. Stays under the Hub's 4 KiB cap with
     /// headroom for one or two more agents / system abilities.
@@ -564,11 +596,11 @@ mod label_size_guard {
         let mut r = AgentRegistry::default();
         r.agents.insert(
             "claude".into(),
-            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".into())),
+            test_entry_with_agent_directory("claude", AgentType::ClaudeCode, Some("sonnet")),
         );
         r.agents.insert(
             "codex".into(),
-            AgentEntry::new(AgentType::Codex, Some("gpt-5.2".into())),
+            test_entry_with_agent_directory("codex", AgentType::Codex, Some("gpt-5.2")),
         );
         r
     }

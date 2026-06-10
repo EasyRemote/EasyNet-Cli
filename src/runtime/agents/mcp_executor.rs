@@ -44,7 +44,7 @@
 // (`Mode::Once` — production write-once) that
 // `build_registry_with_services` populates at boot via
 // `set_process_client(...)`. The same `Arc` instance backs both
-// `device.mcp.client.*`, the reflective MCP registry, and
+// `mcp.client.*`, the reflective MCP registry, and
 // `[exec] kind="mcp"` ability dispatch — one config load, one
 // connection pool, no divergence between surfaces.
 //

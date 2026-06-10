@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "observe.health"
+description = "Local health probe. Returns Axon observe.health status fields plus smoke diagnostics."
+
+[input_schema]
+type = "object"
+additionalProperties = true

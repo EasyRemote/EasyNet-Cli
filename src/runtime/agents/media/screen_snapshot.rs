@@ -768,14 +768,14 @@ pub fn register_with_backend(
 ) {
     let snapshot_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_owner(
-        "device.screen.snapshot",
+        "screen.snapshot",
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| {
             snapshot_handler(&snapshot_backend, env, args)
         }),
     );
     reg.register_stream_with_envelope_and_owner(
-        "device.screen.subscribe",
+        "screen.subscribe",
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| subscribe_handler(&backend, env, args)),
     );
@@ -814,6 +814,31 @@ fn snapshot_handler(
              cap {MAX_INLINE_BYTES}; payloadstore path not yet wired; \
              reason={REASON_IMAGE_TOO_LARGE}",
             jpeg_bytes.len()
+        );
+    }
+
+    // Context-surface persistence: the device daemon keeps every
+    // snapshot under `context/captures/screen.snapshot/` so the
+    // Context page can browse it as <device>/<ability>/<artifact>.
+    // Best-effort by design — a full disk must not fail the snapshot
+    // the caller is waiting on.
+    if let Err(err) = crate::persistence::context_store::record_capture(
+        env.callee.as_deref().unwrap_or_default(),
+        ABILITY_SCREEN_SNAPSHOT,
+        "jpg",
+        &jpeg_bytes,
+        "image/jpeg",
+        Some(width),
+        Some(height),
+        None,
+        format!("Screenshot {width}x{height}"),
+    ) {
+        crate::op_event!(
+            component = context,
+            kind = capture_persist_failed,
+            level = "warn",
+            ability = ABILITY_SCREEN_SNAPSHOT,
+            error = err,
         );
     }
 

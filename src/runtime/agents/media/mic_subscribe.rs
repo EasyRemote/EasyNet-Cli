@@ -305,7 +305,7 @@ impl MicBackend for SyntheticMicBackend {
 
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn MicBackend>) {
     reg.register_stream_with_envelope_and_owner(
-        "device.mic.subscribe",
+        "mic.subscribe",
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );
@@ -357,7 +357,124 @@ fn handler(
         );
     }
     let rx = backend.open(entry)?;
-    Ok(StreamSource::Live(rx))
+    Ok(StreamSource::Live(tee_recording(rx, env.callee.unwrap_or_default())))
+}
+
+// ── Context-surface recording tee ────────────────────────────
+//
+// The cpal worker never closes its broadcast channel, so "the
+// subscriber left" is only observable as a relay `send` returning
+// Err (zero receivers). The tee therefore interposes its own relay
+// channel: a thread pumps upstream frames through while
+// accumulating the S16LE payloads; when the consumer drops the
+// relay receiver, the pump's send fails, and the accumulated PCM is
+// finalized as a WAV under `context/captures/mic.subscribe/`.
+// Best-effort end to end — recording failures never break the live
+// stream.
+
+/// Stop accumulating (but keep relaying) past this many PCM bytes —
+/// 10 minutes of 48 kHz mono S16LE. Bounds disk + memory for a
+/// subscriber that listens forever.
+const RECORDING_MAX_PCM_BYTES: usize = 48_000 * 2 * 60 * 10;
+
+fn tee_recording(
+    mut upstream: broadcast::Receiver<Value>,
+    device_ura: String,
+) -> broadcast::Receiver<Value> {
+    let (relay_tx, relay_rx) = broadcast::channel::<Value>(BROADCAST_CAPACITY);
+    let spawned = std::thread::Builder::new()
+        .name("easynet-mic-tee".into())
+        .spawn(move || {
+            let mut pcm: Vec<u8> = Vec::new();
+            let mut sample_rate: u32 = 48_000;
+            let mut channels: u16 = 1;
+            loop {
+                match upstream.blocking_recv() {
+                    Ok(frame) => {
+                        if pcm.len() < RECORDING_MAX_PCM_BYTES {
+                            if let Some(rate) = frame.get("sample_rate").and_then(Value::as_u64) {
+                                sample_rate = rate as u32;
+                            }
+                            if let Some(ch) = frame.get("channels").and_then(Value::as_u64) {
+                                channels = ch as u16;
+                            }
+                            if let Some(b64) = frame.get("samples_b64").and_then(Value::as_str) {
+                                if let Ok(bytes) = BASE64_STANDARD.decode(b64) {
+                                    pcm.extend_from_slice(&bytes);
+                                }
+                            }
+                        }
+                        if relay_tx.send(frame).is_err() {
+                            break; // consumer dropped the stream
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            finalize_recording(&device_ura, &pcm, sample_rate, channels);
+        });
+    if spawned.is_err() {
+        // Thread spawn failed — no tee, no recording, but the caller
+        // still must get a live stream. Fall back by re-wiring the
+        // relay receiver is impossible here (upstream moved), so we
+        // surface the rare failure as an empty relay: the spawn error
+        // path is effectively OOM territory.
+        return relay_rx;
+    }
+    relay_rx
+}
+
+fn finalize_recording(device_ura: &str, pcm: &[u8], sample_rate: u32, channels: u16) {
+    if pcm.is_empty() {
+        return;
+    }
+    let wav = wav_from_s16le(pcm, sample_rate, channels);
+    let bytes_per_second = u64::from(sample_rate) * u64::from(channels) * 2;
+    let duration_ms = (pcm.len() as u64).saturating_mul(1000) / bytes_per_second.max(1);
+    if let Err(err) = crate::persistence::context_store::record_capture(
+        device_ura,
+        ABILITY_MIC_SUBSCRIBE,
+        "wav",
+        &wav,
+        "audio/wav",
+        None,
+        None,
+        Some(duration_ms),
+        format!("Recording {:.1}s", duration_ms as f64 / 1000.0),
+    ) {
+        crate::op_event!(
+            component = context,
+            kind = capture_persist_failed,
+            level = "warn",
+            ability = ABILITY_MIC_SUBSCRIBE,
+            error = err,
+        );
+    }
+}
+
+/// Minimal RIFF/WAVE wrapper around raw S16LE PCM. 44-byte canonical
+/// header; no dependency needed for fixed-format PCM.
+fn wav_from_s16le(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
+    let byte_rate = sample_rate * u32::from(channels) * 2;
+    let block_align = channels * 2;
+    let data_len = pcm.len() as u32;
+    let mut out = Vec::with_capacity(44 + pcm.len());
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&byte_rate.to_le_bytes());
+    out.extend_from_slice(&block_align.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(pcm);
+    out
 }
 
 #[cfg(test)]

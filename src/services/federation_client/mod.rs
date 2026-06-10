@@ -38,7 +38,7 @@
 // - No real outbound I/O. `forward_invoke` returns the typed
 //   "not implemented yet" error; tests assert the trait shape and
 //   the dialer's constructor, not real TCP dial.
-// - No `realm_trust_anchor.rs` schema-B `origin_tenant_id` field
+// - No `realm_trust_anchor.rs` schema-B `origin_realm` field
 //   yet. Per PR-N1 spec §commit 2/N the field lands alongside TLS
 //   pinning. PR-N1 commit 1/N treats `realm_trust_anchor` as
 //   read-only and reserves the schema bump for commit 2/N.

@@ -2,7 +2,7 @@
 // ===========
 //
 // File: src/cli/connect.rs
-// Description: `easynet connect` — convenience alias for `easynet start --foreground`.
+// Description: `easynet runtime connect` — foreground paired-device runtime.
 //
 // Protocol Responsibility:
 // - Delegates entirely to `start::run()` with foreground=true.

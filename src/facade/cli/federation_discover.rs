@@ -115,7 +115,7 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
     // reject if its trust set hasn't been wired for that URA.
     let caller_ura = crate::persistence::config::load_credentials()
         .ok()
-        .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id))
+        .map(|c| crate::ura::device_ura(&c.realm, &c.node_id))
         .unwrap_or_else(|| crate::ura::device_ura("cli", "local"));
 
     let request =

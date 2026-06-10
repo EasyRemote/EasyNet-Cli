@@ -441,11 +441,11 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
 #[cfg(feature = "axon-pb")]
 fn resolve_local_daemon_caller_ura() -> Option<String> {
     let creds = crate::persistence::config::load_credentials().ok()?;
-    let username = crate::facade::cli::start::bootstrap_username_for(&creds);
+    let username = creds.username_slug().ok()?;
     let plan = crate::facade::cli::start::build_bootstrap_plan_from(
-        &creds.tenant_id,
+        &creds.realm,
         &creds.node_id,
-        &username,
+        username,
     )
     .ok()?;
     Some(plan.host_device_ura)
@@ -487,25 +487,21 @@ fn invoke_daemon_agent_start_required(
     client: &LocalDaemonAbilityClient,
     payload: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_daemon_ability_required(client, "device.agent.start", payload)
+    invoke_daemon_ability_required(client, "agent.start", payload)
 }
 
 fn invoke_daemon_agent_stop_required(
     client: &LocalDaemonAbilityClient,
     name: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_daemon_ability_required(
-        client,
-        "device.agent.stop",
-        serde_json::json!({ "name": name }),
-    )
+    invoke_daemon_ability_required(client, "agent.stop", serde_json::json!({ "name": name }))
 }
 
 fn invoke_daemon_agent_refresh_required(
     client: &LocalDaemonAbilityClient,
     payload: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_daemon_ability_required(client, "device.agent.refresh", payload)
+    invoke_daemon_ability_required(client, "agent.refresh", payload)
 }
 
 fn render_agent_start_runtime_outcome(name: &str, resp: &serde_json::Value) {
@@ -528,7 +524,7 @@ fn render_agent_start_runtime_outcome(name: &str, resp: &serde_json::Value) {
     } else {
         output::detail(
             "runtime",
-            "daemon accepted device.agent.start but registered 0 rows \
+            "daemon accepted agent.start but registered 0 rows \
              (already present or registrar pending)",
         );
     }
@@ -662,7 +658,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
             .cloned()
             .unwrap_or(serde_json::Value::Null),
     )
-    .map_err(|err| anyhow::anyhow!("device.agent.stop returned invalid removed_entry: {err}"))?;
+    .map_err(|err| anyhow::anyhow!("agent.stop returned invalid removed_entry: {err}"))?;
     output::success(&format!("Removed agent '{}'", args.name));
     render_agent_stop_runtime_outcome(&args.name, &daemon_response);
 
@@ -1202,25 +1198,13 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         },
     };
     // Server-minted session id (when caller passed none) or echoed-back
-    // (when the caller pinned one via --follow / --session-id). Used by
-    // the persistence write below AND echoed to the user so they can
-    // copy it for a later --session-id call.
+    // (when the caller pinned one via --follow / --session-id). Echoed
+    // to the user so they can copy it for a later --session-id call.
     let response_session_id: Option<String> = reply_obj
         .as_ref()
         .and_then(|obj| obj.get("session_id"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let tool_calls: Vec<Value> = reply_obj
-        .as_ref()
-        .and_then(|obj| obj.get("tool_calls"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let usage_value: Value = reply_obj
-        .as_ref()
-        .and_then(|obj| obj.get("usage"))
-        .cloned()
-        .unwrap_or(Value::Null);
 
     eprintln!();
     eprintln!(
@@ -1275,20 +1259,12 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     }
     eprintln!();
 
-    // Persist the turn to the agent's per-session JSONL log so
-    // future `--follow` / `--resume` / `agent sessions show` calls
-    // can find it. Best-effort by contract — a disk-full or
-    // permission failure must NOT abort the in-flight chat reply.
-    if let Some(sid) = response_session_id.as_deref() {
-        crate::persistence::chat_sessions::write_turn_best_effort(
-            &args.name,
-            sid,
-            &prompt,
-            &reply_text,
-            &tool_calls,
-            &usage_value,
-        );
-    }
+    // Turn persistence happens inside the chat ability handler
+    // (`chat_ability::invoke_direct_with_progress` →
+    // `write_turn_best_effort`) so hub-routed and CLI-routed chats
+    // share one transcript writer. Writing here too would record the
+    // same turn twice — this path reaches the handler via the
+    // `{agent}.chat(...)` mission above.
 
     // Render the agent's final reply as markdown when stdout is a TTY;
     // otherwise print raw text so piping into other tools stays clean.
@@ -2328,7 +2304,7 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
 ///
 /// The CLI deliberately does not connect to daemon storage, Axon runtime,
 /// or hub transport here. Runtime sync is daemon-owned and exposed as
-/// `device.agent.refresh`.
+/// `agent.refresh`.
 fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
     let daemon_client = required_local_daemon_agent_client()?;
     let payload = match args
@@ -2353,6 +2329,10 @@ fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
         .get("runtime_failed")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    let removed = response
+        .get("runtime_removed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
     if let Some(rows) = response.get("agents").and_then(serde_json::Value::as_array) {
         for row in rows {
             let name = row
@@ -2367,14 +2347,22 @@ fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
                 .get("runtime_failed")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
+            let row_removed = row
+                .get("runtime_removed")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             output::detail(
                 "refreshed",
-                &format!("{name}: registered {row_registered}, failed {row_failed}"),
+                &format!(
+                    "{name}: registered {row_registered}, failed {row_failed}, \
+                     removed {row_removed}"
+                ),
             );
         }
     }
     output::success(&format!(
-        "daemon refreshed {scanned} agent(s): registered {registered}, failed {failed}"
+        "daemon refreshed {scanned} agent(s): registered {registered}, \
+         failed {failed}, removed {removed}"
     ));
     Ok(())
 }
@@ -2551,6 +2539,24 @@ mod tests {
         }
     }
 
+    fn seed_joined_credentials() {
+        crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            realm: "localhost".to_string(),
+            username: Some("dev".to_string()),
+            ..Default::default()
+        })
+        .expect("seed joined credentials");
+    }
+
+    fn joined_home() -> HomeGuard {
+        let guard = HomeGuard::new();
+        seed_joined_credentials();
+        guard
+    }
+
     #[cfg(unix)]
     fn write_cli_mcp_echo_server(dir: &std::path::Path) -> std::path::PathBuf {
         let script = dir.join("echo_mcp.sh");
@@ -2603,7 +2609,7 @@ while True:
     #[cfg(unix)]
     #[test]
     fn run_mcp_add_writes_mcp_exec_manifest_for_agent() {
-        let _home = HomeGuard::new();
+        let _home = joined_home();
         run_add(add_args("codex", "codex", None)).expect("agent add");
         let tmp = tempfile::tempdir().expect("tempdir");
         let server = write_cli_mcp_echo_server(tmp.path());
@@ -2688,7 +2694,7 @@ while True:
         // omit on serialize — the whole point of the CLI
         // rewrite is that v2 rows do not carry vestigial v1
         // data.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", Some("claude-opus-4-7"))).unwrap();
 
         let registry = agents::load_agents().unwrap();
@@ -2718,7 +2724,7 @@ while True:
         // `description` in agent.toml. The contract: CLI
         // flags update the registry-visible subset; operator
         // edits to agent.toml survive.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", Some("old-model"))).unwrap();
 
         let registry = agents::load_agents().unwrap();
@@ -2750,7 +2756,7 @@ while True:
         // is "default to non-destructive"; credentials are at
         // stake and a second `agent add` on the same name can
         // legitimately want the old history back.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -2777,7 +2783,7 @@ while True:
     fn run_remove_with_purge_deletes_the_on_disk_root() {
         // `agent remove --purge` deletes the directory too.
         // This is the explicit destructive path.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -2811,7 +2817,7 @@ while True:
         // updated one; the discrepancy showed up later as
         // "claude reports sonnet, but `agent list` shows opus" —
         // the contract here pins both.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
 
         run_set(set_args("alice", Some("opus"))).unwrap();
@@ -2833,7 +2839,7 @@ while True:
         // still preserve an existing registry row's custom root_path;
         // otherwise project-local agents get silently rewritten into
         // the global agents root during a model update.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
 
         let custom_root = crate::persistence::config::home_dir()
@@ -2871,7 +2877,7 @@ while True:
         // default model. This is the load-bearing distinction
         // between "no flag passed" (no change) and "flag with
         // empty value" (clear).
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
 
         run_set(set_args("alice", Some(""))).unwrap();
@@ -2897,7 +2903,7 @@ while True:
         // must fail with a clear message pointing at `agent list`,
         // not silently create a row (which would be a footgun:
         // operator typos a name and gets a phantom agent).
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         let err = run_set(set_args("nonexistent", Some("sonnet"))).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("not registered"), "msg: {msg}");
@@ -2910,7 +2916,7 @@ while True:
         // We could silently no-op, but that risks operators
         // believing they changed something when they didn't.
         // Explicit error is friendlier.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
         let err = run_set(set_args("alice", None)).unwrap_err();
         assert!(format!("{err}").contains("nothing to change"));
@@ -2923,7 +2929,7 @@ while True:
         // a deliberately-wrong-looking name must round-trip — the
         // validation belongs at invocation time, not at
         // configuration time. This pins the no-allow-list policy.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         run_set(set_args("alice", Some("definitely-not-a-real-model-xyz"))).unwrap();
         let entry = agents::load_agents().unwrap().agents["alice"].clone();
@@ -2939,7 +2945,7 @@ while True:
         // root has been deleted — `prune` must remove only
         // the orphan. The surviving one must stay, and both
         // its directory and its row must be intact.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         run_add(add_args("bob", "codex", None)).unwrap();
 
@@ -2962,7 +2968,7 @@ while True:
         // The `--dry-run` contract is "no mutations". Rows
         // reported as "would prune" must still be present in
         // the registry after the command returns.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -2986,7 +2992,7 @@ while True:
         // Fresh `agent add` always ships a default chat manifest.
         // `agent abilities` must surface it exactly once with its
         // fully-qualified `<agent>.chat` name.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         // Happy path is "no error"; we leave the eprintln-based
         // output un-asserted (tested at helper level via
@@ -3001,7 +3007,7 @@ while True:
     fn run_abilities_reports_the_unknown_agent_as_an_error() {
         // `agent abilities <unknown>` must fail loud — we do not
         // want the empty-list path to mask a typo'd agent name.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         let err = run_abilities(AbilitiesArgs {
             name: "nobody".into(),
         })
@@ -3022,7 +3028,7 @@ while True:
         // A row whose root was `rm -rf`d must not silently fall
         // through to "empty abilities list" — the operator needs
         // to see the true cause.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -3041,7 +3047,7 @@ while True:
         // An operator can legitimately remove every manifest to
         // hide the agent from discovery. That must succeed with
         // no panic, no error — just an empty-list signal.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -3061,7 +3067,7 @@ while True:
         // A malformed manifest must surface as an error — silent
         // skip would hide it from the operator reviewing their
         // ability set before a publish.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -3085,7 +3091,7 @@ while True:
         // publish would register without calling Axon. It must
         // succeed on a freshly-added agent (which has exactly
         // one seeded chat manifest).
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         run_publish(PublishArgs {
             name: "alice".into(),
@@ -3100,7 +3106,7 @@ while True:
         // call `agent publish <name>` without `--dry-run`. This
         // prevents a silent behaviour change when the live path
         // arrives.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let err = run_publish(PublishArgs {
             name: "alice".into(),
@@ -3117,7 +3123,7 @@ while True:
         // "flag not set". The unknown-agent check happens even
         // when --dry-run is passed, so the operator sees the
         // most-specific error first.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         let err = run_publish(PublishArgs {
             name: "nobody".into(),
             dry_run: true,
@@ -3134,7 +3140,7 @@ while True:
         // a read-only diagnostic; forcing it to fail on an
         // empty set would make it unusable as a preflight check
         // during partial setup.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -3155,7 +3161,7 @@ while True:
         // refactor accidentally made dry-run touch state, this
         // test would catch it — compare registry bytes and the
         // abilities directory modtime before/after.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         run_add(add_args("alice", "claude-code", None)).unwrap();
         let root = agents::load_agents().unwrap().agents["alice"]
             .root_path
@@ -3223,7 +3229,7 @@ while True:
         // it — the operator should import it explicitly so
         // they see what runtime / model / description
         // travelled with the file.
-        let _g = HomeGuard::new();
+        let _g = joined_home();
         // Materialize the directory by hand.
         let root = config::agents_root().join("alice");
         let spec = AgentSpec::new("alice", RuntimeKind::ClaudeCode);

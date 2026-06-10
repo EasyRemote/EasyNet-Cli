@@ -31,6 +31,11 @@ any order, and observe one of two things:
 | `a2a.bridge.list_skills`   | live AgentRegistry (A2A v2 envelope)  |
 | `fleet.list_agents`        | live AgentRegistry (operational view) |
 | `consent.list_pending`     | PermissionService::pending() snapshot |
+| `chat.history.list` / `.get` | persisted chat-session JSONL (pure read) |
+| `context.clipboard.list` / `.get` | persisted clipboard history (pure read) |
+| `context.folders.list` / `context.fs.list` | mapped-folder table + contained dir listing |
+| `context.favorites.list`   | persisted favorites file              |
+| `context.captures.list` / `.get` | persisted media-capture index + payloads |
 
 ### 2. Control / decision (`policy.*`, `consent.decide`)
 
@@ -43,6 +48,13 @@ permission ID) and return Allowed / Denied / Pending. Calling
 within the decision's TTL. They MAY consult persisted policy state,
 but they MUST NOT mutate it (`policy.publish` is a separate verb,
 intentionally absent from v1).
+
+Device-context configuration writes also live here:
+`context.clipboard.track` (flip history capture on/off) and
+`context.favorites.add` / `context.favorites.remove` (curate the
+starred set). They mutate small operator-owned preference state, not
+the ability catalog — the same decision-surface class as
+`consent.decide`.
 
 `consent.decide` is the borderline case: it does mutate the broker's
 pending queue. That is allowed because the mutation IS the decision

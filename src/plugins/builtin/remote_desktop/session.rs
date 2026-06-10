@@ -411,6 +411,7 @@ impl RemoteDesktopSession {
     }
 
     /// Store latest media stats and emit a bounded event-log row.
+    #[cfg(target_os = "macos")]
     pub(in crate::plugins::builtin::remote_desktop) fn record_media_stats(&mut self, stats: Value) {
         if self.lifecycle.is_terminal() {
             return;

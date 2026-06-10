@@ -18,7 +18,8 @@
 //
 // Usage Contract:
 // - Irreversible locally: re-pairing requires a new token from the Hub dashboard.
-// - Safe to run while disconnected. Should NOT be run while `easynet start` is active
+// - Safe to run while disconnected. Should NOT be run while
+//   `easynet runtime start` is active.
 //   (the running heartbeat will fail on next cycle since credentials are gone).
 //
 // Architectural Position:
@@ -35,7 +36,8 @@ use crate::support::{net, output};
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {
-    /// Proceed even when a runtime is still active ('easynet start' would
+    /// Proceed even when a runtime is still active ('easynet runtime start'
+    /// would
     /// otherwise need to stop first). This does NOT skip the confirmation
     /// prompt — see '--yes'.
     #[arg(long)]
@@ -57,7 +59,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
         if let Some(ref state) = runtime_state {
             if state.pid.is_some_and(net::is_pid_alive) {
                 anyhow::bail!(
-                    "runtime is currently running — run 'easynet stop' first, or use 'easynet reset --force'"
+                    "runtime is currently running — run 'easynet runtime stop' first, or use 'easynet reset --force'"
                 );
             }
         }
@@ -99,7 +101,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // Joint-plan unified path (phase 1.4): when the daemon is still
     // alive (the `--force` path bypasses guard 1, so this is the only
     // condition that lands here) call `federation.revoke` against
-    // this device's URA. The legacy `device.node.deregister` ability
+    // this device's URA. The legacy `node.deregister` ability
     // was an ack-only no-op — the hub never learned the device went
     // away, so directory entries lingered until the keepalive sweep.
     // The new path reaches `PresenceRegistry::force_revoke` and the
@@ -109,7 +111,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     if let Ok(creds) = config::load_credentials() {
         if let Some(ref state) = runtime_state {
             if state.pid.is_some_and(net::is_pid_alive) {
-                let device_ura = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
+                let device_ura = crate::ura::device_ura(&creds.realm, &creds.node_id);
                 match invoke_federation_revoke_for_reset(&device_ura) {
                     Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
                     Err(e) => output::warn(&format!(
@@ -118,7 +120,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
                 }
             } else {
                 // Daemon already torn down (typical normal-path reset
-                // post `easynet stop`): the heartbeat sidecar already
+                // post `easynet runtime stop`): the heartbeat sidecar already
                 // ran its SIGTERM `federation.revoke` hook, so this
                 // arm is a no-op by design.
                 let _ = state;

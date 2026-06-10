@@ -41,6 +41,7 @@ use crate::runtime::federation_client::{
     args_to_bytes, parse_receipt_value, AdvertiseAgentArgs, AdvertiseAgentReceipt,
     AdvertisedSigningAuthority, ResolveArgs, ResolveFilter, ResolveReceipt, ResolvedAgent,
 };
+use crate::runtime::owner_projection::AbilityProjectionSummary;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -103,13 +104,18 @@ pub fn heartbeat_resource_ura(realm: &str, _tenant_id: &str) -> String {
 }
 
 /// Wire shape for `federation.advertise_abilities` arguments. Not in
-/// federation_client.rs because it embeds AbilityDescriptor — keeping
-/// the dependency direction one-way (advertise.rs → federation_client,
-/// never the reverse) preserves federation_client as a pure-data crate.
+/// federation_client.rs because this is CLI owner-projection publication:
+/// descriptors are local input, while the wire carries bounded summaries and
+/// projection metadata only.
 #[derive(Debug, Serialize)]
 struct AdvertiseAbilitiesArgs<'a> {
     agent_ura: &'a str,
-    abilities: &'a [AbilityDescriptor],
+    owner_ura: &'a str,
+    host_device_ura: &'a str,
+    projection_revision: u64,
+    projection_digest: &'a str,
+    lease_expires_unix_ms: i64,
+    ability_summaries: &'a [AbilityProjectionSummary],
 }
 
 /// Bridge handle abstraction. Sized to what advertise.rs needs;
@@ -267,7 +273,11 @@ pub(crate) fn subject_id_from_resource_ura(resource_ura: &str) -> Option<String>
     if let Ok(parsed) = crate::ura::parse_ura(resource_ura) {
         match parsed.kind {
             crate::ura::URAKind::Hub => return Some(format!("easynet:prv:hub:{}", parsed.realm)),
-            crate::ura::URAKind::Ability if parsed.user_id == "hub" => {
+            crate::ura::URAKind::Ability
+                if parsed.ability().is_some_and(|ability| {
+                    matches!(ability.owner, crate::ura::AbilityOwner::Hub)
+                }) =>
+            {
                 return Some(format!("easynet:prv:hub:{}", parsed.realm));
             }
             _ => {}
@@ -343,16 +353,38 @@ pub fn advertise_abilities<I: AbilityInvoker>(
     tenant_id: &str,
     realm: &str,
     agent_ura: &str,
+    host_device_ura: &str,
     abilities: &[AbilityDescriptor],
 ) -> Result<Value, String> {
     let resource_ura = advertise_abilities_resource_ura(realm, tenant_id);
+    let projection = crate::runtime::owner_projection::prepare_and_persist(
+        agent_ura,
+        host_device_ura,
+        abilities,
+    )?;
+    let payload = advertise_abilities_payload(agent_ura, &projection)?;
+    invoker.invoke_ability(tenant_id, &resource_ura, payload)
+}
+
+/// Build the `federation.advertise_abilities` wire payload from an
+/// already-persisted owner projection. Single source of the wire shape
+/// so the boot-time `advertise_abilities` path and the event-driven
+/// hot-add advertiser (see `agent_lifecycle_ability` / the
+/// `<self>.session` advertiser) cannot drift. ISS-002.
+pub(crate) fn advertise_abilities_payload(
+    agent_ura: &str,
+    projection: &crate::runtime::owner_projection::OwnerProjectionPublication,
+) -> Result<Value, String> {
     let args = AdvertiseAbilitiesArgs {
         agent_ura,
-        abilities,
+        owner_ura: &projection.owner_ura,
+        host_device_ura: &projection.host_device_ura,
+        projection_revision: projection.projection_revision,
+        projection_digest: &projection.projection_digest,
+        lease_expires_unix_ms: projection.lease_expires_unix_ms,
+        ability_summaries: &projection.ability_summaries,
     };
-    let payload =
-        serde_json::to_value(&args).map_err(|e| format!("encode advertise_abilities args: {e}"))?;
-    invoker.invoke_ability(tenant_id, &resource_ura, payload)
+    serde_json::to_value(&args).map_err(|e| format!("encode advertise_abilities args: {e}"))
 }
 
 /// Inbound counterpart to the advertise pair above:
@@ -446,9 +478,10 @@ pub fn revoke_agent<I: AbilityInvoker>(
 }
 
 /// `federation.heartbeat` invocation. Refreshes the daemon's
-/// `last_heartbeat_unix_ms` in the directory so the sweep doesn't
-/// evict the entry. Replaces the deprecated `bridge.NodeHeartbeat`
-/// keepalive RPC.
+/// `last_heartbeat_unix_ms` in the directory and carries the
+/// RFC-005 owner-projection lease refresh batch for projections
+/// this daemon has already advertised. Replaces the deprecated
+/// `bridge.NodeHeartbeat` keepalive RPC.
 ///
 /// Best-effort: a transient hub-side failure surfaces as Err and
 /// the caller's loop logs + retries on the next tick. Persistent
@@ -469,8 +502,10 @@ pub fn heartbeat<I: AbilityInvoker>(
     // below treats absent diff as "no change".
     let store = crate::services::hub_published_ability_store::global();
     let since = store.revision();
+    let refresh_owner_uras = crate::runtime::owner_projection::heartbeat_refresh_owner_uras()?;
     let payload = serde_json::json!({
         "since_abilities_revision": since,
+        "refresh_owner_uras": refresh_owner_uras,
     });
     let response = invoker.invoke_ability(tenant_id, &resource_ura, payload)?;
     // Best-effort diff application: a malformed body or a hub
@@ -525,9 +560,12 @@ pub fn forward_invoke<I: AbilityInvoker>(
     let arguments_bytes =
         serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
     let arguments_b64 = STANDARD.encode(&arguments_bytes);
+    let public_ability = crate::ura::owner_local_ability_name(target_ura, ability_name);
+    let ability_ura = crate::ura::owner_ability_ura(target_ura, &public_ability)
+        .ok_or_else(|| format!("derive forward ability URA for {target_ura} {public_ability}"))?;
     let payload = serde_json::json!({
         "target_ura": target_ura,
-        "ability_name": ability_name,
+        "ability_ura": ability_ura,
         "arguments_b64": arguments_b64,
     });
     let response = invoker.invoke_ability(tenant_id, &resource_ura, payload)?;
@@ -770,18 +808,19 @@ mod tests {
     }
 
     #[test]
-    fn advertise_abilities_serializes_descriptors_in_payload() {
+    fn advertise_abilities_serializes_owner_projection_without_raw_descriptors() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let descriptors = vec![
             AbilityDescriptor::new(
-                "observe.health",
+                "fs.read",
                 "easynet:///r/acme/device/01DEV",
                 Visibility::Public,
             )
             .unwrap()
             .with_source("kernel:built-in"),
             AbilityDescriptor::new(
-                "device.agent.list",
+                "skill.list",
                 "easynet:///r/acme/device/01DEV",
                 Visibility::Scoped,
             )
@@ -792,29 +831,104 @@ mod tests {
             "tenant",
             "acme",
             "easynet:///r/acme/device/01DEV",
+            "easynet:///r/acme/device/01DEV",
             &descriptors,
         )
         .expect("must succeed");
 
         let payload = invoker.last_payload.borrow().clone().unwrap();
         assert_eq!(payload["agent_ura"], "easynet:///r/acme/device/01DEV");
-        let abilities = payload["abilities"]
+        assert_eq!(payload["owner_ura"], "easynet:///r/acme/device/01DEV");
+        assert_eq!(payload["host_device_ura"], "easynet:///r/acme/device/01DEV");
+        assert_eq!(payload["projection_revision"], 1);
+        assert!(payload["projection_digest"].as_str().unwrap().len() >= 64);
+        // C4: lease cancelled (ISS-002) — projection publishes lease=0.
+        assert_eq!(payload["lease_expires_unix_ms"].as_i64().unwrap(), 0);
+        assert!(
+            payload.get("abilities").is_none(),
+            "owner projection publication must not send raw AbilityDescriptor payloads"
+        );
+
+        let summaries = payload["ability_summaries"]
             .as_array()
-            .expect("abilities must be array");
-        assert_eq!(abilities.len(), 2);
-        assert_eq!(abilities[0]["name"], "observe.health");
-        assert_eq!(abilities[0]["visibility"], "PUBLIC");
-        assert_eq!(abilities[1]["visibility"], "SCOPED");
+            .expect("ability_summaries must be array");
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(
+            summaries[0]["ability_ura"],
+            "easynet:///r/acme/ability/device.01DEV.fs.read"
+        );
+        assert_eq!(summaries[0]["namespace"], "fs");
+        assert_eq!(summaries[0]["local_name"], "read");
+        assert_eq!(summaries[0]["policy_ref"], "visibility:PUBLIC");
     }
 
     #[test]
     fn advertise_abilities_targets_correct_resource_ura() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         // Fake invokers observe the canonical business-layer URA.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
-        let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
+        let _ = advertise_abilities(
+            &invoker,
+            "tenant",
+            "acme",
+            "easynet:///r/acme/device/01DEV",
+            "easynet:///r/acme/device/01DEV",
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             invoker.last_resource_ura.borrow().as_deref().unwrap(),
             "easynet:///r/acme/ability/hub.federation.advertise_abilities"
         );
+    }
+
+    #[test]
+    fn heartbeat_includes_owner_projection_refresh_batch() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let mut file = crate::persistence::owner_projections::OwnerProjectionCursorFile::default();
+        file.upsert(owner_projection_cursor(
+            "easynet:///r/acme/agent/u1.01AGENT",
+            "easynet:///r/acme/device/01DEV",
+        ));
+        file.upsert(owner_projection_cursor(
+            "easynet:///r/acme/device/01DEV",
+            "easynet:///r/acme/device/01DEV",
+        ));
+        crate::persistence::owner_projections::save(&file).expect("save projection cursor");
+
+        let invoker = RecordingInvoker::new(serde_json::json!({
+            "membership_status": "active",
+            "realm_directory_size": 1
+        }));
+        let _receipt = heartbeat(&invoker, "tenant", "acme").expect("heartbeat succeeds");
+
+        let payload = invoker.last_payload.borrow().clone().unwrap();
+        assert_eq!(payload["since_abilities_revision"].as_u64(), Some(0));
+        assert_eq!(
+            payload["refresh_owner_uras"],
+            serde_json::json!([
+                "easynet:///r/acme/agent/u1.01AGENT",
+                "easynet:///r/acme/device/01DEV"
+            ])
+        );
+        assert_eq!(
+            invoker.last_resource_ura.borrow().as_deref().unwrap(),
+            "easynet:///r/acme/ability/hub.federation.heartbeat"
+        );
+    }
+
+    fn owner_projection_cursor(
+        owner_ura: &str,
+        host_device_ura: &str,
+    ) -> crate::persistence::owner_projections::OwnerProjectionCursor {
+        crate::persistence::owner_projections::OwnerProjectionCursor {
+            owner_ura: owner_ura.into(),
+            host_device_ura: host_device_ura.into(),
+            projection_revision: 1,
+            projection_digest: format!("digest-{owner_ura}"),
+            content_fingerprint: format!("fingerprint-{owner_ura}"),
+            lease_expires_unix_ms: 61_000,
+            updated_at: "1970-01-01T00:00:01.000Z".into(),
+        }
     }
 }

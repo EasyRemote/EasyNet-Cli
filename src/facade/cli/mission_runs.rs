@@ -505,6 +505,9 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
             meta.duration_ms = report.total_elapsed_ms;
             meta.steps_completed = report.steps_completed;
             meta.steps_failed = report.steps_failed;
+            if !report.trace.ability_graph.is_empty() {
+                meta.ability_graph_traces = Some(report.trace.ability_graph.clone());
+            }
             // The interpreter returns Ok even when individual steps fail
             // — surface that as "partial" so the listing doesn't lie about
             // a run with broken steps.

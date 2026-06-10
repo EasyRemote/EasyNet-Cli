@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn retired_product_incoming_variant_fails_to_parse() {
-        let raw = r#"{"type":"invoke","request_id":"x","ability":"device.observe.health"}"#;
+        let raw = r#"{"type":"invoke","request_id":"x","ability":"observe.health"}"#;
         let r: Result<IncomingFrame, _> = serde_json::from_str(raw);
         assert!(r.is_err(), "retired product frames must not parse");
     }

@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "terminal.list"
+description = "List live PTY sessions owned by this device daemon. Returns daemon-minted session_id values suitable for terminal.attach, input/read/resize, and close. Equivalent to the PTY-internal list used by the lifecycle subsystem; the `terminal` namespace is the stable operator-facing alias."
+
+[input_schema]
+type = "object"
+additionalProperties = false

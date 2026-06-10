@@ -148,7 +148,7 @@ impl Kernel {
     /// Permission admission gate. Asks the broker; emits a
     /// `permission_pending` event before the call and a
     /// `permission_decided` event after, so a Client subscribed to
-    /// device.session.attach for this invocation_id sees admission
+    /// session.attach for this invocation_id sees admission
     /// was gated even when the broker auto-allows.
     ///
     /// AllowAllBroker returns immediately. SubscriberBroker
@@ -359,23 +359,43 @@ where
 fn should_gate(ability: &str) -> bool {
     const NON_GATING_PREFIXES: &[&str] = &[
         "federation.",
-        "device.",
-        "observe.",
+        "a2a.",
+        "ability.",
         "admin.",
-        "meta.",
+        "agent.",
+        "browser.",
+        "camera.",
         "consent.",
-        "policy.",
-        "schedule.",
-        "loop.",
         "discuss.",
-        "identity.",
-        "capability.",
-        "mission.",
-        "state.",
-        "stream.",
-        "voice.",
+        "fs.",
+        "http.",
+        "invocation.",
+        "loop.",
         "mcp.bridge.",
         "mcp.client.",
+        "meta.",
+        "mic.",
+        "mission.",
+        "node.",
+        "observe.",
+        "openai.",
+        "plugin.",
+        "policy.",
+        "process.",
+        "remote.",
+        "schedule.",
+        "screen.",
+        "session.",
+        "shell.",
+        "skill.",
+        "speaker.",
+        "terminal.",
+        "voice.",
+        "device.keyring.",
+        "identity.",
+        "capability.",
+        "state.",
+        "stream.",
         "bridge.",
         "transport.relay.",
     ];
@@ -632,7 +652,7 @@ mod tests {
         // rather than discovering it via a permission-prompt incident.
         assert!(should_gate("alice.exec"));
         // system.* must never gate.
-        assert!(!should_gate("device.session.attach"));
+        assert!(!should_gate("session.attach"));
         assert!(!should_gate("observe.health"));
         assert!(!should_gate("consent.subscribe"));
     }

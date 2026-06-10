@@ -39,6 +39,7 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::{json, Value};
 
+use crate::facade::cli::ability_catalog_row::AbilityCatalogueRow;
 use crate::facade::cli::{config_cmd, devices, join, reset};
 use crate::support::output::{self, OutputFormat};
 
@@ -105,7 +106,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // Joint-plan unified path (海峰 + 凉冰, 2026-05-03): every
     // cross-device dispatch flows through
     // `federation.forward_invoke`; each daemon describes ITSELF via
-    // `device.node.describe {node_id:"local"}`. The CLI is the
+    // `node.describe {node_id:"local"}`. The CLI is the
     // routing-decision site:
     //   * `args.node_id` looks like a canonical URA  → forward to it
     //   * bare uuid that matches this device's node id → describe self
@@ -122,7 +123,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let node = describe_target(&args.node_id)
         .with_context(|| format!("describe node {}", args.node_id))?;
 
-    // Hosted-ability list is `easynet.discover` filtered to entries
+    // Hosted-ability list is `meta.list_abilities` filtered to entries
     // whose owner matches the target node id. v1 only knows about
     // the local node — once federation Invoke ships the daemon-side
     // handler will return per-node ability lists.
@@ -132,7 +133,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .cloned()
         .unwrap_or_else(|| {
             match crate::support::local_invoke::invoke_local_ability(
-                "device.meta.list_abilities",
+                "meta.list_abilities",
                 json!({}),
             ) {
                 Ok(catalogue) => catalogue
@@ -158,7 +159,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or(&args.node_id);
 
-    // `device.node.describe` returns a string `state` (HEALTHY /
+    // `node.describe` returns a string `state` (HEALTHY /
     // STANDALONE / REMOVED / etc) and a boolean `paired`. Fall
     // back to integer-indexed `state` for compatibility with any
     // future federation-tier handler that still serialises the
@@ -237,25 +238,14 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         style("hosted on this substrate").dim(),
     );
     for a in &abilities {
-        // `easynet.discover` returns each ability as `{name, …}`
-        // (no `tool_name` / `ability_version` fields). Fall back
-        // through the historical aliases for forward-compat with
-        // the day a federation-tier `list_mcp_tools` ability ships.
-        let name = a
-            .get("name")
-            .or_else(|| a.get("tool_name"))
-            .or_else(|| a.get("ability_name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("-");
-        let owner = a
-            .get("owner_agent_ura")
-            .and_then(|v| v.as_str())
-            .or_else(|| name.split_once('.').map(|(o, _)| o))
-            .unwrap_or("-");
+        let row = AbilityCatalogueRow::from_value(a);
+        let owner = row.owner_ura().unwrap_or("-");
+        let ability_ura = row.ability_ura().unwrap_or("-");
         eprintln!(
-            "    {} {}  {}",
+            "    {} {}  {}  {}",
             style("·").dim(),
-            style(name).cyan(),
+            style(row.label()).cyan(),
+            style(ability_ura).dim(),
             style(owner).dim(),
         );
     }
@@ -278,7 +268,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     // `federation.revoke` directly through the daemon's gRPC
     // InvocationServer (the same surface
     // `runtime/advertise.rs::revoke_agent` and the heartbeat
-    // sidecar's shutdown hook use). The legacy `device.node.remove`
+    // sidecar's shutdown hook use). The legacy `node.remove`
     // ability was a P1.5 placeholder — local-arm refused with
     // "use device reset", remote-arm raised `federation_not_wired`
     // — so it never moved real federation state. The new path
@@ -294,10 +284,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         .as_ref()
         .map(|c| c.node_id.clone())
         .unwrap_or_default();
-    let local_tenant = creds
-        .as_ref()
-        .map(|c| c.tenant_id.clone())
-        .unwrap_or_default();
+    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
 
     let trimmed = args.node_id.trim();
     let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
@@ -372,15 +359,15 @@ fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::
 /// Joint-plan unified-path dispatch for `easynet device show`.
 ///
 /// Resolves `node_id` (either a canonical URA or a bare uuid /
-/// the literal `local`) into the right `device.node.describe` call:
+/// the literal `local`) into the right `node.describe` call:
 ///
 ///   * `local` or matches this daemon's own node id → invoke
-///     `device.node.describe` locally over the control socket.
+///     `node.describe` locally over the control socket.
 ///   * canonical URA pointing at a remote device → forward_invoke
-///     `device.node.describe` against that URA.
+///     `node.describe` against that URA.
 ///   * bare uuid that does not match local → wrap in this device's
 ///     realm and forward_invoke (matches the legacy
-///     `device.node.describe` same-realm fallback).
+///     `node.describe` same-realm fallback).
 fn describe_target(node_id: &str) -> anyhow::Result<Value> {
     let trimmed = node_id.trim();
     let creds = crate::persistence::config::load_credentials().ok();
@@ -388,10 +375,7 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
         .as_ref()
         .map(|c| c.node_id.clone())
         .unwrap_or_default();
-    let local_tenant = creds
-        .as_ref()
-        .map(|c| c.tenant_id.clone())
-        .unwrap_or_default();
+    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
 
     let is_local = trimmed.is_empty()
         || trimmed.eq_ignore_ascii_case("local")
@@ -399,10 +383,10 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
 
     if is_local {
         return crate::support::local_invoke::invoke_local_ability(
-            "device.node.describe",
+            "node.describe",
             serde_json::json!({"node_id": "local"}),
         )
-        .context("invoke device.node.describe (local)");
+        .context("invoke node.describe (local)");
     }
 
     invoke_remote_describe(trimmed, &local_tenant)
@@ -414,13 +398,17 @@ fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Valu
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
 
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    crate::support::federation_invoke::invoke_via_federation_forward(
-        "device.node.describe",
+    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        &target_ura,
+        "node.describe",
+    )?;
+    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+        ability_ura.as_str(),
         serde_json::json!({"node_id": "local"}),
         &target_ura,
         caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward device.node.describe to target={target_ura}"))
+    .with_context(|| format!("forward node.describe to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]

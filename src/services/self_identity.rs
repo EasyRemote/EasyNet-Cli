@@ -399,15 +399,14 @@ impl SelfIdentity for InMemoryVault {
 
 // ── Join helper ─────────────────────────────────────────────────
 //
-// Phase 3C bridge for `easynet device join`. The pairing flow
-// receives a fresh `(node_id, realm)` from the hub; this helper
-// mints a random Ed25519 seed locally and pushes it into the
-// keyring under the canonical device URA plus a hub-role overlay
-// so the same keypair signs both. Best-effort: if the keyring
-// daemon is offline, log + continue. v4.1.5 deterministic
-// derivation in `boot.rs::load_daemon_identity` keeps the daemon
-// signing as a fallback so the join itself never fails on
-// keyring offline.
+// Phase 3C bridge for `easynet device join`. The pairing flow receives
+// `(node_id, realm)` from the hub; join stores the deterministic
+// Ed25519 seed for that identity in the keyring under the canonical
+// device URA plus a hub-role overlay so the same keypair signs both.
+// Best-effort: if the keyring daemon is offline, log + continue.
+// v4.1.5 deterministic derivation in `boot.rs::load_daemon_identity`
+// keeps the daemon signing as a fallback so the join itself never fails
+// on keyring offline.
 
 /// Build the canonical self URAs for this device. Returns
 /// `(primary_self, role_overlays)`. v4.1.4 shape:
@@ -420,17 +419,6 @@ pub fn canonical_self_uras(realm: &str, node_id: &str) -> (String, Vec<String>) 
     let primary = crate::ura::device_ura(realm, node_id);
     let hub_overlay = crate::ura::hub_ura(realm);
     (primary, vec![hub_overlay])
-}
-
-/// Mint a fresh ed25519 seed (32 random bytes) hex-encoded so it
-/// fits the keyring's `seed_hex` field. Each call returns a new
-/// keypair; callers persist the result via `KeyringClient::put`.
-pub fn fresh_seed_hex() -> String {
-    use rand::rngs::OsRng;
-    use rand::RngCore;
-    let mut seed = [0u8; 32];
-    OsRng.fill_bytes(&mut seed);
-    hex::encode(seed)
 }
 
 /// Probe whether a keyring daemon is reachable at the default
@@ -477,13 +465,13 @@ mod tests {
     #[test]
     fn in_memory_role_overlay_signs_with_same_keypair() {
         let device = "easynet:///r/r/device/u";
-        let hub = "easynet:///r/r/hub";
-        let id = make_in_memory_vault(device, vec![hub.into()]);
+        let hub = crate::ura::hub_ura("r");
+        let id = make_in_memory_vault(device, vec![hub.clone()]);
         let pk_a = id.public_key(device).unwrap();
-        let pk_b = id.public_key(hub).unwrap();
+        let pk_b = id.public_key(&hub).unwrap();
         assert_eq!(pk_a.to_bytes(), pk_b.to_bytes(), "overlay shares keypair");
         let sig_a = id.sign(device, b"x").unwrap();
-        let sig_b = id.sign(hub, b"x").unwrap();
+        let sig_b = id.sign(&hub, b"x").unwrap();
         assert_eq!(sig_a.to_bytes(), sig_b.to_bytes());
     }
 

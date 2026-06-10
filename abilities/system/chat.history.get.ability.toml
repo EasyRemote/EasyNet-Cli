@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "chat.history.get"
+description = "Read one chat session's transcript turns (the session_meta line plus every recorded turn: prompt, reply, tool_calls, usage), verbatim."
+
+[input_schema]
+type = "object"
+required = ["agent", "session_id"]
+additionalProperties = false
+
+[input_schema.properties.agent]
+type = "string"
+description = "Agent name that owns the session."
+
+[input_schema.properties.session_id]
+type = "string"
+description = "Session id to read (from chat.history.list)."

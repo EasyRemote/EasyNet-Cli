@@ -480,7 +480,7 @@ impl AdmissionFacade {
     /// which means a cross-realm caller whose URA is missing
     /// from the local trust anchor falls through to a
     /// `federation.resolve_key` ability call against the peer
-    /// hub mapped by `federated_peers[caller_tenant]`.
+    /// hub mapped by `federated_peers[caller_realm]`.
     ///
     /// Production daemons call this in
     /// `start_daemon_invocation_transport` after wiring the dialer; test
@@ -601,7 +601,7 @@ impl AdmissionFacade {
         // and never has its (possibly malformed) nonce considered.
         //
         // **PR-N2 commit 1/N — cross-realm extension**. When the
-        // caller is in a *federated* realm (its tenant is mapped in
+        // caller is in a *federated* realm (its realm is mapped in
         // `federated_peers` AND differs from `self_realm`), the
         // local trust anchor will NOT have an entry: the caller's
         // identity is gated by the peer hub, not by us. In that
@@ -610,7 +610,7 @@ impl AdmissionFacade {
         // `federation.resolve_key` to fetch the verifying key and
         // runs the same RFC 001 §5.2 4-step verify. This preserves
         // INV-1 (federated trust gate is *operator-explicit*: only
-        // tenants the operator listed in `federated_peers` can
+        // realms the operator listed in `federated_peers` can
         // bypass the local-membership reject) while opening the
         // cross-realm signed-admission door.
         let trusted = match snapshot.lookup(caller_ura) {
@@ -766,11 +766,11 @@ impl AdmissionFacade {
     /// **PR-N2 commit 1/N**. Decide whether `caller_ura` belongs to
     /// a federated peer realm — i.e. a realm the operator has
     /// explicitly opted into by adding a `[daemon.federated_peers]`
-    /// map entry mapping `tenant → hub_endpoint`.
+    /// map entry mapping `realm → hub_endpoint`.
     ///
     /// Returns `true` iff:
-    ///   - the URA parses to a non-self tenant
-    ///   - the federated_peers cell holds an entry for that tenant
+    ///   - the URA parses to a non-self realm
+    ///   - the federated_peers cell holds an entry for that realm
     ///   - a federation client is wired (without one, the strict
     ///     path's FederatedKeyResolver has no way to dial the peer
     ///     and would just fail closed — short-circuit here)
@@ -779,16 +779,16 @@ impl AdmissionFacade {
             return false;
         };
         let _ = client; // presence-only check; resolver does the dial
-        let Some(caller_tenant) = parse_realm_from_ura(caller_ura) else {
+        let Some(caller_realm) = parse_realm_from_ura(caller_ura) else {
             return false;
         };
         if let Some(self_realm) = self.self_realm.as_deref() {
-            if caller_tenant == self_realm {
+            if caller_realm == self_realm {
                 return false;
             }
         }
         let peers = self.federated_peers.snapshot();
-        peers.contains_key(&caller_tenant)
+        peers.contains_key(&caller_realm)
     }
 }
 
@@ -797,11 +797,11 @@ impl AdmissionFacade {
 /// when the shape matches, `None` otherwise. Shared by
 /// `is_federated_caller` and the cross-realm gate.
 ///
-/// Important: federated callers in v4.1.4 are no longer uniformly
-/// `.../agent/...`; peer hubs use the singleton `.../hub` shape and
-/// device sessions register under `.../device/<id>`. Reuse the same
-/// realm parser as `<self>.register_device_pubkey` so all canonical
-/// role tails stay accepted.
+/// Important: federated callers are not uniformly `.../agent/...`;
+/// peer hubs use Axon's canonical hub identity shape and device sessions
+/// register under `.../device/<id>`. Reuse the same realm parser as
+/// `<self>.register_device_pubkey` so all canonical role tails stay
+/// accepted and retired aliases stay rejected.
 fn parse_realm_from_ura(ura: &str) -> Option<String> {
     crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura(ura)
 }
@@ -1529,11 +1529,16 @@ mod tests {
         }
     }
 
+    fn hub_ura(realm: &str) -> String {
+        crate::ura::hub_ura(realm)
+    }
+
     fn envelope_with_caller(ura: &str) -> Envelope {
+        let daemon_ura = hub_ura("realm");
         Envelope {
             caller: Some(agent(ura)),
-            callee: Some(agent("easynet:///r/realm/hub")),
-            subject: Some(subject("easynet:///r/realm/hub")),
+            callee: Some(agent(&daemon_ura)),
+            subject: Some(subject(&daemon_ura)),
             invocation_nonce: vec![0x11u8; 16],
             ..Envelope::default()
         }
@@ -1554,7 +1559,7 @@ mod tests {
             public_key_b64,
             role,
             added_at_unix_ms: 1_714_492_800_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         }
@@ -1714,9 +1719,10 @@ mod tests {
     fn daemon_ura_loopback_bypasses_anchor_and_replay() {
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some("easynet:///r/realm/hub".to_string()),
+            Some(hub_ura("realm")),
         );
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/hub")));
+        let daemon_ura = hub_ura("realm");
+        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
         facade
             .verify_invoke(&req)
             .expect("daemon loopback admitted without crypto");
@@ -1731,9 +1737,10 @@ mod tests {
         // never trigger the replay path.
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some("easynet:///r/realm/hub".to_string()),
+            Some(hub_ura("realm")),
         );
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/hub")));
+        let daemon_ura = hub_ura("realm");
+        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
         for _ in 0..3 {
             facade.verify_invoke(&req).expect("every loopback admitted");
         }
@@ -1749,22 +1756,20 @@ mod tests {
         // admitted by the former and rejected (forced through the
         // strict pipeline) by the latter — with no replay pollution on
         // either path.
-        let daemon_ura = "easynet:///r/realm/hub";
-        let req = invoke_request(Some(envelope_with_caller(daemon_ura)));
+        let daemon_ura = hub_ura("realm");
+        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
 
         let uds_facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some(daemon_ura.to_string()),
+            Some(daemon_ura.clone()),
         );
         uds_facade
             .verify_invoke(&req)
             .expect("UDS-origin loopback bypass still admits the daemon's own URA");
 
-        let tcp_facade = AdmissionFacade::new(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(daemon_ura.to_string()),
-        )
-        .with_loopback_trusted(false);
+        let tcp_facade =
+            AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura))
+                .with_loopback_trusted(false);
         let err = tcp_facade
             .verify_invoke(&req)
             .expect_err("TCP-origin facade must not honour the loopback bypass");
@@ -1825,17 +1830,17 @@ mod tests {
         use crate::persistence::daemon_config::QuotaConfig;
         use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
-        let daemon_ura = "easynet:///r/realm/hub";
+        let daemon_ura = hub_ura("realm");
         // A cap of 1, but the daemon calling itself must never be
         // metered — it would otherwise self-throttle its own `<self>.*`
         // abilities.
         let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some(daemon_ura.to_string()),
+            Some(daemon_ura.clone()),
         )
         .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
-        let req = invoke_request(Some(envelope_with_caller(daemon_ura)));
+        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
 
         for _ in 0..5 {
             assert_eq!(
@@ -1886,11 +1891,10 @@ mod tests {
         // a peer-realm hub so the URA shape is contract-valid while
         // the realm distinction keeps it outside the daemon's
         // loopback bypass.
-        let facade = AdmissionFacade::new(
-            backend_anchor(&["easynet:///r/peer-realm/hub"]),
-            Some("easynet:///r/realm/hub".to_string()),
-        );
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/peer-realm/hub")));
+        let peer_hub = hub_ura("peer-realm");
+        let facade =
+            AdmissionFacade::new(backend_anchor(&[peer_hub.as_str()]), Some(hub_ura("realm")));
+        let req = invoke_request(Some(envelope_with_caller(&peer_hub)));
         let err = facade.verify_invoke(&req).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(
@@ -1910,17 +1914,18 @@ mod tests {
         // `canonical_ura_for_role`. We use distinct peer-realm hub
         // URAs across tests so the daemon-shared replay store sees
         // distinct (caller, nonce) pairs even when tests interleave.
-        let caller_ura = "easynet:///r/peer-signer-a/hub";
+        let caller_ura = hub_ura("peer-signer-a");
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
 
-        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura.clone()));
 
         let (req, _digest) = signed_request_with_nonce(
-            caller_ura,
-            "easynet:///r/realm/hub",
+            &caller_ura,
+            &daemon_ura,
             "self.echo",
             b"{}",
             &signing_key,
@@ -1954,16 +1959,17 @@ mod tests {
         let pub_key = signing_key.verifying_key();
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let caller_ura = "easynet:///r/peer-replay/hub";
+        let caller_ura = hub_ura("peer-replay");
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura.clone()));
 
         let (req, _) = signed_request_with_nonce(
-            caller_ura,
-            "easynet:///r/realm/hub",
+            &caller_ura,
+            &daemon_ura,
             "self.echo",
             b"{}",
             &signing_key,
@@ -1988,16 +1994,17 @@ mod tests {
         let other_key = SigningKey::from_bytes(&[0x66u8; 32]);
         let other_pub_b64 = BASE64_STANDARD.encode(other_key.verifying_key().to_bytes());
 
-        let caller_ura = "easynet:///r/peer-wrong-key/hub";
+        let caller_ura = hub_ura("peer-wrong-key");
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, other_pub_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, other_pub_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura.clone()));
 
         let (req, _) = signed_request_with_nonce(
-            caller_ura,
-            "easynet:///r/realm/hub",
+            &caller_ura,
+            &daemon_ura,
             "self.echo",
             b"{}",
             &signing_key,
@@ -2021,11 +2028,12 @@ mod tests {
         // the gating check.
         let signing_key = SigningKey::from_bytes(&[0x77u8; 32]);
         let trust = Arc::new(RealmTrustAnchor::default());
-        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura.clone()));
 
         let (req, _) = signed_request_with_nonce(
             "easynet:///r/realm/agent/test.uninvited",
-            "easynet:///r/realm/hub",
+            &daemon_ura,
             "self.echo",
             b"{}",
             &signing_key,
@@ -2042,16 +2050,17 @@ mod tests {
     fn invoke_stream_uses_same_pipeline() {
         let signing_key = SigningKey::from_bytes(&[0x88u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = "easynet:///r/peer-streamer/hub";
+        let caller_ura = hub_ura("peer-streamer");
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura.clone()));
 
         let (req, _) = signed_request_with_nonce(
-            caller_ura,
-            "easynet:///r/realm/hub",
+            &caller_ura,
+            &daemon_ura,
             "federation.subscribe_directory",
             b"{}",
             &signing_key,
@@ -2075,27 +2084,28 @@ mod tests {
         // listener split that PR-10 might introduce.
         let signing_key = SigningKey::from_bytes(&[0xAAu8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = "easynet:///r/peer-shared/hub";
+        let caller_ura = hub_ura("peer-shared");
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
 
         let store = SharedNonceReplayStore::new();
+        let daemon_ura = hub_ura("realm");
         let facade_a = AdmissionFacade::with_replay_store(
             Arc::clone(&trust),
-            Some("easynet:///r/realm/hub".to_string()),
+            Some(daemon_ura.clone()),
             store.clone(),
         );
         let facade_b = AdmissionFacade::with_replay_store(
             Arc::clone(&trust),
-            Some("easynet:///r/realm/hub".to_string()),
+            Some(daemon_ura.clone()),
             store.clone(),
         );
 
         let (req, _) = signed_request_with_nonce(
-            caller_ura,
-            "easynet:///r/realm/hub",
+            &caller_ura,
+            &daemon_ura,
             "self.echo",
             b"{}",
             &signing_key,
@@ -2146,22 +2156,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_realm_from_ura_accepts_hub_and_device_shapes() {
+    fn parse_realm_from_ura_accepts_canonical_hub_and_device_shapes() {
         assert_eq!(
-            parse_realm_from_ura("easynet:///r/peer-realm/hub"),
+            parse_realm_from_ura(&hub_ura("peer-realm")),
             Some("peer-realm".to_string())
         );
         assert_eq!(
             parse_realm_from_ura("easynet:///r/peer-realm/device/device-123"),
             Some("peer-realm".to_string())
         );
+        assert_eq!(
+            parse_realm_from_ura("easynet:///r/peer-realm/hub"),
+            Some("peer-realm".to_string())
+        );
+        assert_eq!(
+            parse_realm_from_ura("easynet:///r/peer-realm/hub/extra"),
+            None
+        );
     }
 
     #[test]
-    fn is_federated_caller_accepts_v414_hub_ura() {
+    fn is_federated_caller_accepts_canonical_hub_ura() {
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some("easynet:///r/local-realm/hub".to_string()),
+            Some(hub_ura("local-realm")),
         )
         .with_federation(
             Arc::new(NoopFederationClient),
@@ -2170,7 +2188,9 @@ mod tests {
                 "https://peer.example:50443".to_string(),
             )])),
         );
+        assert!(facade.is_federated_caller(&hub_ura("peer-realm")));
         assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"));
+        assert!(!facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));
     }
 
     #[test]
@@ -2181,10 +2201,7 @@ mod tests {
         // PR-7 ship, it preserves URA-only PR-1 semantics for
         // already-deployed devices.
         let caller_ura = "easynet:///r/realm/device/device-A";
-        let facade = AdmissionFacade::new(
-            device_anchor(caller_ura),
-            Some("easynet:///r/realm/hub".to_string()),
-        );
+        let facade = AdmissionFacade::new(device_anchor(caller_ura), Some(hub_ura("realm")));
         // Bare envelope, no signature — the kind kernel.rs emits today.
         let req = invoke_request(Some(envelope_with_caller(caller_ura)));
         facade
@@ -2203,10 +2220,7 @@ mod tests {
         // every time. Once PR-8 lands and devices sign, this test
         // flips its assertion (call 2 must reject as replay).
         let caller_ura = "easynet:///r/realm/device/device-B";
-        let facade = AdmissionFacade::new(
-            device_anchor(caller_ura),
-            Some("easynet:///r/realm/hub".to_string()),
-        );
+        let facade = AdmissionFacade::new(device_anchor(caller_ura), Some(hub_ura("realm")));
         let req = invoke_request(Some(envelope_with_caller(caller_ura)));
         for _ in 0..3 {
             facade.verify_invoke(&req).expect("each device call admits");
@@ -2223,7 +2237,7 @@ mod tests {
             RealmTrustAnchor::from_entries(vec![device_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
+        let facade = AdmissionFacade::new(trust, Some(hub_ura("realm")));
 
         let (req, _) = signed_request_with_nonce(
             caller_ura,
@@ -2260,12 +2274,12 @@ mod tests {
         // peer-realm hub URA. The daemon's self URA (set below as
         // the second `AdmissionFacade::new` arg) stays in the local
         // `realm` so caller_ura != self_ura and the strict path runs.
-        let backend_uri = "easynet:///r/peer-role-dispatch/hub";
+        let backend_ura = hub_ura("peer-role-dispatch");
         let device_ura = "easynet:///r/realm/device/device-C";
 
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![
-                backend_entry(backend_uri, backend_pub_b64),
+                backend_entry(&backend_ura, backend_pub_b64),
                 device_entry(
                     device_ura,
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
@@ -2273,7 +2287,8 @@ mod tests {
             ])
             .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura.clone()));
 
         // Device caller: unsigned, admitted.
         let device_req = invoke_request(Some(envelope_with_caller(device_ura)));
@@ -2282,7 +2297,7 @@ mod tests {
             .expect("device arm admits unsigned");
 
         // Backend caller, unsigned: rejects strict.
-        let backend_unsigned = invoke_request(Some(envelope_with_caller(backend_uri)));
+        let backend_unsigned = invoke_request(Some(envelope_with_caller(&backend_ura)));
         let err = facade
             .verify_invoke(&backend_unsigned)
             .expect_err("backend arm rejects unsigned");
@@ -2291,8 +2306,8 @@ mod tests {
         // Backend caller, properly signed: admits strict and records
         // the nonce in the replay store.
         let (backend_signed, _) = signed_request_with_nonce(
-            backend_uri,
-            "easynet:///r/realm/hub",
+            &backend_ura,
+            &daemon_ura,
             "self.echo",
             b"{}",
             &backend_signing,

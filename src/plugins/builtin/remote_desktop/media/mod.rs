@@ -6,7 +6,7 @@
 //
 // Protocol Responsibility:
 // - Defines the media backend contract exposed by
-//   device.remote_desktop.* ability receipts.
+//   remote_desktop.* ability receipts.
 // - Does not own Axon session/signaling semantics; those remain in
 //   the ability and Axon invocation layers.
 //
@@ -283,7 +283,7 @@ pub fn sdk_contract_view() -> Value {
     json!({
         "sdk_id": REMOTE_DESKTOP_MEDIA_SDK_ID,
         "owned_by": "EasyNet-Cli device runtime",
-        "selected_by": "device.remote_desktop.attach",
+        "selected_by": "remote_desktop.attach",
         "control_plane": "Axon signed invocation",
         "stream_plane": "Axon InvokeBidi for diagnostic relay; WebRTC RTP/SRTP for production plugins",
         "extension_points": ["capture", "encoder", "carrier", "input"],

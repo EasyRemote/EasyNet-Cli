@@ -1,0 +1,45 @@
+schema_version = "1"
+name = "http.request"
+description = "Issue one outbound HTTP request (http/https only). Captures status, response headers, and body up to body_max_bytes. Auth-bearing headers (Authorization, Cookie, X-API-Key, …) are REDACTED from receipts: the name appears, the value never does. Part of the baseline-locomotion-v1 profile."
+
+[input_schema]
+type = "object"
+required = ["url"]
+additionalProperties = false
+
+[input_schema.properties.body]
+oneOf = [{ type = "string" }, { items = { maximum = 255, minimum = 0, type = "integer" }, type = "array" }, { type = "null" }]
+
+[input_schema.properties.body_encoding]
+type = "string"
+enum = ["base64", "utf8"]
+
+[input_schema.properties.body_max_bytes]
+type = "integer"
+minimum = 0
+maximum = 104857600
+
+[input_schema.properties.follow_redirects]
+type = "boolean"
+
+[input_schema.properties.headers]
+type = "object"
+additionalProperties = { type = "string" }
+
+[input_schema.properties.method]
+type = "string"
+enum = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+
+[input_schema.properties.redirect_max]
+type = "integer"
+minimum = 0
+maximum = 10
+
+[input_schema.properties.timeout_ms]
+type = "integer"
+minimum = 0
+maximum = 600000
+
+[input_schema.properties.url]
+type = "string"
+minLength = 1

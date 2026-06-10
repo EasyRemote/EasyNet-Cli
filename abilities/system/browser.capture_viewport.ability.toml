@@ -1,0 +1,24 @@
+schema_version = "1"
+name = "browser.capture_viewport"
+description = "[V0 MOCK — RETURNS A 1x1 PLACEHOLDER FRAME, NOT REAL VIEWPORT CONTENT; replaced by real capture in RFC-013 W2] Stream webp/png/jpeg viewport frames from an open WebView session. Streaming ability — each emitted frame carries `bytes_base64` + `encoding` + viewport dimensions + monotonic `sequence`. v0 emits a single placeholder webp frame so the frontend canvas pipeline can be exercised end-to-end; RFC-013 swaps the mock for real per-platform capture."
+
+[input_schema]
+type = "object"
+required = ["session_ura"]
+additionalProperties = false
+
+[input_schema.properties.encoding]
+type = "string"
+enum = ["png", "webp", "jpeg"]
+description = "Output image encoding. Default 'webp'."
+
+[input_schema.properties.quality]
+type = "integer"
+description = "Encoder quality for lossy formats. Default 75."
+minimum = 1
+maximum = 100
+
+[input_schema.properties.session_ura]
+type = "string"
+description = "Session URA returned by browser.open_session."
+minLength = 1

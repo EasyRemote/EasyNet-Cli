@@ -2,13 +2,13 @@
 // ===========
 //
 // File: src/cli/join.rs
-// Description: `easynet join <token>` — pair this device with EasyNet Hub via a one-time
+// Description: `easynet device join <token>` — pair this device with EasyNet Hub via a one-time
 //              pairing token, establishing a persistent trust relationship.
 //
 // Protocol Responsibility:
 // - Validates a one-time pairing token (32-64 hex chars) against the Hub REST API.
 // - POST /api/v1/devices/pairing/{token}/validate with device sysinfo (hostname, OS, arch).
-// - Receives and persists: node_id, credential_token, hub_endpoint, tenant_id, deploy_signature.
+// - Receives and persists: node_id, credential_token, hub_endpoint, realm, deploy_signature.
 // - This is the ONLY command that creates ~/.easynet/credentials.json; all other commands consume it.
 //
 // Implementation Approach:
@@ -32,21 +32,16 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 
 use crate::persistence::config;
+use crate::runtime::join_connection_state::{
+    record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode, JoinTransition,
+};
 use crate::support::{output, sysinfo};
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PairingPreflight {
-    // URA v4.1.4 backend renamed the wire field `tenant_id` → `realm`
-    // (PairingPreflightResp in backend/internal/types/types.go:314).
-    // We deserialize from `realm`, fall back to the legacy
-    // `tenant_id` for compat with pre-v4.1.4 hubs, and expose the
-    // value through the existing `tenant_id` accessor so the rest
-    // of join.rs (assertions, validate-pairing payload) keeps the
-    // same shape — the v1 alias is the carrier on disk in
-    // `credentials.json::tenant_id` until that schema is also
-    // promoted (RFC follow-up).
-    #[serde(rename = "realm", alias = "tenant_id")]
-    tenant_id: String,
+    /// Realm reserved by the Hub for this one-shot pairing token.
+    realm: String,
     node_id: String,
     /// Realm hub's Ed25519 pubkey (base64). The cold-start
     /// cross-machine fix: backend surfaces this here so the
@@ -64,7 +59,7 @@ struct PairingPreflight {
     /// falls back to native roots.
     #[serde(default)]
     hub_tls_ca_pem_b64: String,
-    #[serde(default)]
+    #[serde(default, rename = "hub_agent_ura")]
     _hub_agent_ura: String,
 }
 
@@ -141,15 +136,26 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         }
     }
 
-    let token = args.token.trim().to_string();
-    validate_token_format(&token)?;
-
     let hub_api_override = args
         .hub_api
         .as_ref()
         .map(|s| s.trim_end_matches('/').to_string());
     let has_explicit_hub_api_override = hub_api_override.is_some();
     let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
+    let token = args.token.trim().to_string();
+    if let Err(err) = validate_token_format(&token) {
+        record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+            JoinFailureCode::JoinFailedPreflight,
+            JoinTransition::PreflightToken,
+            "",
+            "",
+            Some(validate_base.clone()),
+            err.to_string(),
+            false,
+            "cli.join",
+        ));
+        return Err(err);
+    }
 
     let creds = run_join_stages(
         &token,
@@ -158,33 +164,45 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         args.peer_hub.as_deref(),
     )?;
 
+    match args.boot {
+        JoinBoot::No => {
+            render_pairing_summary("Paired successfully", &creds, args.peer_hub.as_deref());
+            output::info("Run 'easynet runtime start' to start the device agent.");
+            Ok(())
+        }
+        JoinBoot::Yes => {
+            output::info("Pairing accepted. Starting daemon (pass '--boot no' to skip)...");
+            super::start::run(super::start::StartArgs::for_join_autostart())
+                .map(|()| {
+                    render_pairing_summary("Join complete", &creds, args.peer_hub.as_deref());
+                })
+                .map_err(|err| {
+                    err.context(
+                        "pairing credentials were saved, but daemon startup failed; \
+                         fix Hub reachability and rerun `easynet runtime start`",
+                    )
+                })
+        }
+    }
+}
+
+fn render_pairing_summary(title: &str, creds: &config::Credentials, peer_hub: Option<&str>) {
     // Final summary block — same `kv_section` styling as `start`
     // so the two commands look like siblings, not strangers.
-    output::success("Paired successfully");
-    let realm = creds.tenant_id.clone();
+    output::success(title);
+    let realm = creds.realm.clone();
     let mut rows = vec![
         ("node_id", creds.node_id.as_str()),
         ("hub_endpoint", creds.hub_endpoint.as_str()),
         ("realm", realm.as_str()),
     ];
     let peer_hub_value;
-    if let Some(peer) = args.peer_hub.as_deref() {
+    if let Some(peer) = peer_hub {
         peer_hub_value = peer.to_string();
         rows.push(("peer_hub", peer_hub_value.as_str()));
     }
     output::kv_section(&rows);
     eprintln!();
-
-    match args.boot {
-        JoinBoot::No => {
-            output::info("Run 'easynet start' to start the device agent.");
-            Ok(())
-        }
-        JoinBoot::Yes => {
-            output::info("Starting daemon (pass '--boot no' to skip)...");
-            super::start::run(super::start::StartArgs::for_join_autostart())
-        }
-    }
 }
 
 /// Walk through the eight join-time side effects under a live
@@ -207,9 +225,27 @@ fn run_join_stages(
     let preflight = match preflight_pairing_token(token, validate_base) {
         Ok(p) => {
             renderer.stage_ok("preflight");
+            record_snapshot(JoinConnectionSnapshot::from_parts(
+                JoinConnectionState::PairingTokenPreflighted,
+                Some(JoinTransition::PreflightToken),
+                p.realm.clone(),
+                p.node_id.clone(),
+                Some(validate_base.to_string()),
+                "cli.join",
+            ));
             p
         }
         Err(e) => {
+            record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+                JoinFailureCode::JoinFailedPreflight,
+                JoinTransition::PreflightToken,
+                "",
+                "",
+                Some(validate_base.to_string()),
+                e.to_string(),
+                false,
+                "cli.join",
+            ));
             renderer.stage_failed("preflight", &format!("{e}"));
             renderer.finish();
             return Err(e);
@@ -220,26 +256,55 @@ fn run_join_stages(
     let mut creds = match validate_pairing_token(token, validate_base, &preflight) {
         Ok(c) => {
             renderer.stage_ok("validate-token");
+            record_snapshot(JoinConnectionSnapshot::from_credentials(
+                JoinConnectionState::DeviceValidatedJoining,
+                Some(JoinTransition::ValidateToken),
+                &c,
+                "cli.join",
+            ));
             c
         }
         Err(e) => {
+            record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+                JoinFailureCode::JoinFailedValidate,
+                JoinTransition::ValidateToken,
+                preflight.realm.clone(),
+                preflight.node_id.clone(),
+                Some(validate_base.to_string()),
+                e.to_string(),
+                false,
+                "cli.join",
+            ));
             renderer.stage_failed("validate-token", &format!("{e}"));
             renderer.finish();
             return Err(e);
         }
     };
-    backfill_credentials_username_from_auth_session(&mut creds);
     let _ = rewrite_local_docker_session_endpoint(&mut creds, validate_base);
     creds.hub_api_base =
         persisted_hub_api_base_for_pairing(&creds, validate_base, has_explicit_hub_api_override);
 
     renderer.set_active("save-credentials");
     if let Err(e) = config::save_credentials(&creds) {
+        record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
+            JoinFailureCode::JoinFailedValidate,
+            JoinTransition::SaveCredentials,
+            &creds,
+            e.to_string(),
+            false,
+            "cli.join",
+        ));
         renderer.stage_failed("save-credentials", &format!("{e}"));
         renderer.finish();
         return Err(e);
     }
     renderer.stage_ok("save-credentials");
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::CredentialsSaved,
+        Some(JoinTransition::SaveCredentials),
+        &creds,
+        "cli.join",
+    ));
 
     // Best-effort steps below: a failure does NOT abort the join.
     // They each render as `stage_ok` on success or
@@ -262,14 +327,16 @@ fn run_join_stages(
 
     // If this device is also running a hub-mode daemon (i.e. a
     // `~/.easynet/daemon-config.toml` with `[daemon]` exists),
-    // seed `[daemon.federated_peers]` with the tenant→hub
+    // seed `[daemon.federated_peers]` with the realm→hub
     // mapping. `--peer-hub` overrides the canonical-port guess.
     // SIGHUPs the running daemon so the new entry activates
-    // without a restart. Failures here would abort cross-tenant
+    // without a restart. Failures here would abort cross-realm
     // routing only; the join itself has already succeeded.
     renderer.set_active("federated-peers");
-    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub);
-    renderer.stage_ok("federated-peers");
+    match super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub) {
+        Ok(()) => renderer.stage_ok("federated-peers"),
+        Err(e) => renderer.stage_skipped("federated-peers", &format!("({e})")),
+    }
 
     // URA v4.1.5 Phase 3C — push a fresh device keypair into the
     // local easynet-keyring vault. The vault is the load-bearing
@@ -300,8 +367,16 @@ fn run_join_stages(
     // overwrite this entry or no-op against the matching pubkey
     // (idempotent).
     renderer.set_active("realm-trust");
-    let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
-    renderer.stage_ok("realm-trust");
+    match super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds) {
+        Ok(()) => renderer.stage_ok("realm-trust"),
+        Err(e) => renderer.stage_skipped("realm-trust", &format!("({e})")),
+    }
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::LocalTrustWired,
+        Some(JoinTransition::WireLocalTrust),
+        &creds,
+        "cli.join",
+    ));
 
     renderer.set_active("refresh-runtime");
     refresh_running_runtime_after_join(&creds);
@@ -366,11 +441,9 @@ fn refresh_running_runtime_after_join(creds: &config::Credentials) {
 /// pre-existing entry stays). Errors only on transport faults
 /// the operator should see.
 fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
-    use crate::services::self_identity::{
-        canonical_self_uras, fresh_seed_hex, KeyringClient, SelfIdentityError,
-    };
+    use crate::services::self_identity::{canonical_self_uras, KeyringClient, SelfIdentityError};
 
-    let realm = creds.tenant_id.trim();
+    let realm = creds.realm.trim();
     let node_id = creds.node_id.trim();
     if realm.is_empty() || node_id.is_empty() {
         anyhow::bail!("credentials missing realm or node_id");
@@ -378,21 +451,123 @@ fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<
     let (primary_self, role_overlays) = canonical_self_uras(realm, node_id);
 
     let client = KeyringClient::default_path();
-    // Probe reachability with a lightweight `list` first so the
-    // operator-facing error is "keyring daemon offline" not
-    // "keyring rejected put". Avoids confusing log lines when the
-    // daemon is just not running.
-    client
-        .list()
-        .map_err(|e| anyhow::anyhow!("keyring daemon ping: {e}"))?;
+    // Probe reachability with a lightweight `list` first. When the
+    // daemon is already up (operator started it, or a prior join
+    // spawned it) we go straight to `put`. When it is down we
+    // auto-provision it below so the encrypted vault is the default
+    // posture rather than something only `dev-backend.sh` sets up.
+    if client.list().is_err() {
+        ensure_keyring_daemon_running()?;
+    }
 
-    match client.put(&primary_self, role_overlays, fresh_seed_hex()) {
+    let seed_hex = derive_device_seed_hex(realm, node_id)?;
+    match client.put(&primary_self, role_overlays, seed_hex) {
         Ok(()) => Ok(()),
         // already_exists is benign — re-pairing the same device
         // keeps the existing keypair. Any other error is real.
         Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => Ok(()),
         Err(e) => Err(anyhow::anyhow!("keyring put: {e}")),
     }
+}
+
+/// Spawn the `easynet-keyring` daemon and wait until its socket
+/// answers, auto-provisioning a passphrase if the operator has not
+/// supplied one.
+///
+/// Mirrors the daemon-spawn shape in `daemon::process`: locate the
+/// sibling binary next to the running `easynet` executable, run it
+/// detached (`setsid`, stdio to a log), and poll the socket until it
+/// accepts a `list` RPC. The passphrase comes from
+/// `keyring::load_or_create_passphrase`, which is also what `start`
+/// injects into the `easynet-daemon` environment so the daemon can
+/// read the same vault across restarts.
+fn ensure_keyring_daemon_running() -> anyhow::Result<()> {
+    use crate::services::keyring::{default_socket_path, load_or_create_passphrase};
+    use crate::services::self_identity::KeyringClient;
+    use anyhow::Context as _;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let (passphrase, _generated) =
+        load_or_create_passphrase().context("provision keyring passphrase")?;
+
+    // A stale socket file (previous daemon crashed without unlinking)
+    // makes `easynet-keyring` refuse to bind. Remove it iff nothing is
+    // listening — the `list` ping above already failed, so a leftover
+    // file here is dead.
+    let socket_path = default_socket_path();
+    #[cfg(unix)]
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    let binary = resolve_keyring_bin();
+    let log_path = config::state_dir().join("logs").join("easynet-keyring.log");
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("open keyring log at {}", log_path.display()))?;
+
+    let mut cmd = Command::new(&binary);
+    cmd.env("EASYNET_KEYRING_PASSPHRASE", &passphrase);
+    cmd.stdin(Stdio::null());
+    if let Ok(out) = log.try_clone() {
+        cmd.stdout(Stdio::from(out));
+    }
+    cmd.stderr(Stdio::from(log));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    cmd.spawn()
+        .with_context(|| format!("spawn easynet-keyring at {}", binary.display()))?;
+
+    // Poll the socket until the daemon answers. The keyring binds and
+    // serves in well under a second on a warm disk; 5s covers a cold
+    // Argon2id KDF on the first vault init.
+    let client = KeyringClient::default_path().with_timeout(Duration::from_secs(2));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if client.list().is_ok() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "easynet-keyring did not become ready within 5s (see {})",
+                log_path.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Locate the `easynet-keyring` binary. Prefers an explicit
+/// `EASYNET_KEYRING_BIN` override, then the sibling of the running
+/// executable (the install layout ships all three binaries in one
+/// dir), then bare `easynet-keyring` on `PATH`.
+fn resolve_keyring_bin() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    const KEYRING_BIN: &str = "easynet-keyring";
+    std::env::var_os("EASYNET_KEYRING_BIN")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join(KEYRING_BIN)))
+        })
+        .unwrap_or_else(|| PathBuf::from(KEYRING_BIN))
 }
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {
@@ -442,6 +617,15 @@ fn validate_pairing_response(
     if envelope.realm.is_empty() {
         anyhow::bail!("pairing response missing realm");
     }
+    if envelope
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
+        anyhow::bail!("pairing response missing username");
+    }
     Ok(envelope)
 }
 
@@ -452,40 +636,13 @@ fn credentials_from_join_envelope(
         node_id: envelope.node_id,
         credential_token: envelope.credential_token,
         hub_endpoint: envelope.hub_endpoint,
-        tenant_id: envelope.realm,
+        realm: envelope.realm,
         deploy_signature: envelope.deploy_signature,
         hub_api_base: None,
-        username: envelope.username.filter(|v| !v.trim().is_empty()),
+        username: envelope.username.map(|v| v.trim().to_string()),
         hub_pubkey_b64: None,
         hub_tls_ca_pem_b64: None,
     }
-}
-
-/// Bridge the migration window where the backend may not yet return
-/// `username` from validate-pairing but the operator already holds a
-/// logged-in auth session that does know it. This keeps
-/// `credentials.json` rich enough for hosted-agent bootstrap on the
-/// first post-join runtime boot, instead of persisting `<unjoined>`
-/// placeholder URAs until a later manual repair.
-fn backfill_credentials_username_from_auth_session(creds: &mut config::Credentials) {
-    if creds
-        .username
-        .as_deref()
-        .is_some_and(|v| !v.trim().is_empty())
-    {
-        return;
-    }
-    let Ok(Some(session)) = crate::facade::cli::auth::load_session() else {
-        return;
-    };
-    let Some(username) = session.username else {
-        return;
-    };
-    let username = username.trim();
-    if username.is_empty() {
-        return;
-    }
-    creds.username = Some(username.to_string());
 }
 
 /// Pick the REST-API base URL the pairing-token validation call
@@ -642,8 +799,8 @@ fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<Pairin
              that CLI + Hub versions match; re-run with a fresh pairing token if so.",
         )
     })?;
-    if preflight.tenant_id.is_empty() {
-        anyhow::bail!("pairing preflight response missing tenant_id");
+    if preflight.realm.is_empty() {
+        anyhow::bail!("pairing preflight response missing realm");
     }
     if preflight.node_id.is_empty() {
         anyhow::bail!("pairing preflight response missing node_id");
@@ -703,15 +860,12 @@ fn validate_pairing_token(
             preflight.node_id
         );
     }
-    // URA v4.1.4: realm_str() picks `realm` first, falls back to
-    // legacy `tenant_id`. Both v4.1.4 and pre-v4.1.4 hubs round-trip.
-    let creds_realm = envelope.realm_str();
-    if creds_realm != preflight.tenant_id {
+    if envelope.realm != preflight.realm {
         anyhow::bail!(
             "Hub returned realm {} but pairing preflight reserved {}; aborting to avoid \
              deriving credentials under the wrong realm",
-            creds_realm,
-            preflight.tenant_id
+            envelope.realm,
+            preflight.realm
         );
     }
     // Cross-machine cold-start fix: stash the hub's signing and
@@ -735,21 +889,29 @@ fn build_validate_pairing_payload(
     Ok(ValidatePairingPayload {
         info: sysinfo::collect_system_info(),
         node_id: preflight.node_id.clone(),
-        device_public_key: derive_device_public_key_hex(&preflight.tenant_id, &preflight.node_id)?,
+        device_public_key: derive_device_public_key_hex(&preflight.realm, &preflight.node_id)?,
     })
 }
 
-fn derive_device_public_key_hex(tenant_id: &str, node_id: &str) -> anyhow::Result<String> {
+fn derive_device_public_key_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
     use anyhow::Context as _;
     use base64::Engine as _;
 
-    let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
-    let (_seed, public_key_b64) =
-        crate::runtime::publish::derive_subject_keypair(tenant_id, &subject_id);
+    let (_seed, public_key_b64) = derive_device_keypair(realm, node_id);
     let public_key = base64::engine::general_purpose::STANDARD
         .decode(public_key_b64.as_bytes())
         .context("decode derived device public key")?;
     Ok(hex::encode(public_key))
+}
+
+fn derive_device_seed_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
+    let (seed, _public_key_b64) = derive_device_keypair(realm, node_id);
+    Ok(hex::encode(seed))
+}
+
+fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
+    let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
+    crate::runtime::publish::derive_subject_keypair(realm, &subject_id)
 }
 
 #[cfg(test)]
@@ -813,42 +975,23 @@ mod tests {
         };
         let creds = credentials_from_join_envelope(envelope);
         assert_eq!(creds.node_id, "node");
-        assert_eq!(creds.tenant_id, "tenant");
+        assert_eq!(creds.realm, "tenant");
         assert_eq!(creds.username.as_deref(), Some("alice"));
     }
 
     #[test]
-    fn backfill_credentials_username_uses_auth_session_when_pairing_response_omits_it() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let state_dir = config::state_dir();
-        std::fs::create_dir_all(&state_dir).expect("create state dir");
-        let session = crate::facade::cli::auth::AuthSession {
-            token: "token".into(),
-            hub_url: "http://127.0.0.1:8080".into(),
-            email: "alice@example.com".into(),
-            user_id: Some("user-uuid".into()),
-            nickname: Some("Alice".into()),
-            username: Some("alice".into()),
-        };
-        std::fs::write(
-            state_dir.join("auth.json"),
-            serde_json::to_vec(&session).expect("serialize session"),
-        )
-        .expect("write auth.json");
-
-        let mut creds = config::Credentials {
+    fn validate_pairing_response_rejects_missing_username() {
+        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "axon://hub.example:50051".into(),
-            tenant_id: "tenant".into(),
+            hub_endpoint: "axon://easynet.run:50051".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
-            hub_api_base: None,
             username: None,
-            hub_pubkey_b64: None,
-            hub_tls_ca_pem_b64: None,
+            ..Default::default()
         };
-        backfill_credentials_username_from_auth_session(&mut creds);
-        assert_eq!(creds.username.as_deref(), Some("alice"));
+        let err = validate_pairing_response(envelope).expect_err("missing username must fail");
+        assert!(err.to_string().contains("missing username"));
     }
 
     #[test]
@@ -869,10 +1012,10 @@ mod tests {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "https://hub:50443".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -886,10 +1029,10 @@ mod tests {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "https://hub:50443".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -903,10 +1046,10 @@ mod tests {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "https://easynet.run:50443".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -920,10 +1063,10 @@ mod tests {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "https://hub:50443".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -940,10 +1083,10 @@ mod tests {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "https://hub:50443".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -960,10 +1103,10 @@ mod tests {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "https://easynet.run:50443".into(),
-            tenant_id: "tenant".into(),
+            realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            username: None,
+            username: Some("alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
         };
@@ -976,10 +1119,10 @@ mod tests {
 
     #[test]
     fn derive_device_public_key_hex_matches_runtime_derivation() {
-        let tenant_id = "tenant-a";
+        let realm = "tenant-a";
         let node_id = "en-test-node";
-        let got = derive_device_public_key_hex(tenant_id, node_id).expect("derive hex");
-        let want_b64 = crate::runtime::publish::derive_owner_public_key_b64(tenant_id, node_id);
+        let got = derive_device_public_key_hex(realm, node_id).expect("derive hex");
+        let want_b64 = crate::runtime::publish::derive_owner_public_key_b64(realm, node_id);
         let want = hex::encode(
             base64::engine::general_purpose::STANDARD
                 .decode(want_b64.as_bytes())
@@ -989,9 +1132,54 @@ mod tests {
     }
 
     #[test]
+    fn derive_device_seed_hex_matches_pairing_public_key() {
+        let realm = "tenant-a";
+        let node_id = "en-test-node";
+        let seed_hex = derive_device_seed_hex(realm, node_id).expect("derive seed");
+        let seed_bytes = hex::decode(seed_hex).expect("decode seed hex");
+        let seed: [u8; 32] = seed_bytes.as_slice().try_into().expect("seed length");
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+
+        assert_eq!(
+            hex::encode(signing_key.verifying_key().to_bytes()),
+            derive_device_public_key_hex(realm, node_id).expect("derive public key")
+        );
+    }
+
+    #[test]
+    fn pairing_preflight_accepts_current_realm_schema() {
+        let preflight: PairingPreflight = serde_json::from_value(serde_json::json!({
+            "realm": "tenant-a",
+            "node_id": "en-test-node",
+            "hub_public_key_b64": "",
+            "hub_tls_ca_pem_b64": "",
+            "hub_agent_ura": crate::ura::hub_ura("tenant-a")
+        }))
+        .expect("current preflight schema");
+
+        assert_eq!(preflight.realm, "tenant-a");
+        assert_eq!(preflight.node_id, "en-test-node");
+    }
+
+    #[test]
+    fn pairing_preflight_rejects_retired_tenant_id_alias() {
+        let err = serde_json::from_value::<PairingPreflight>(serde_json::json!({
+            "realm": "tenant-a",
+            "tenant_id": "tenant-a",
+            "node_id": "en-test-node"
+        }))
+        .expect_err("retired tenant_id must not be accepted");
+
+        assert!(
+            err.to_string().contains("tenant_id"),
+            "error should name the retired field: {err}"
+        );
+    }
+
+    #[test]
     fn build_validate_pairing_payload_carries_reserved_identity() {
         let preflight = PairingPreflight {
-            tenant_id: "tenant-a".into(),
+            realm: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
             hub_tls_ca_pem_b64: String::new(),
@@ -1020,7 +1208,7 @@ mod tests {
         drop(listener);
         let base = format!("http://{}", addr);
         let preflight = PairingPreflight {
-            tenant_id: "tenant-a".into(),
+            realm: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
             hub_tls_ca_pem_b64: String::new(),

@@ -6,10 +6,10 @@
 //              system's abilities (RFC-006-B v0.6). Each
 //              subcommand:
 //
-//                  create  → <user>.pages.publish
-//                  list    → <user>.pages.list
-//                  show    → <user>.pages.get
-//                  delete  → <user>.pages.unpublish
+//                  create  → PagesAbility::Publish
+//                  list    → PagesAbility::List
+//                  show    → PagesAbility::Get
+//                  delete  → PagesAbility::Unpublish
 //                  url     → local lookup, no ability call
 //
 // CLI shape mirrors `easynet device` / `easynet ability`:
@@ -23,6 +23,64 @@ use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::support::local_invoke::invoke_local_ability;
+
+/// User-owned Pages ability verbs exposed by the local daemon.
+///
+/// What this is: the one CLI-side projection from the human `pages`
+/// commands to daemon-local Pages ability keys.
+///
+/// What this is not: it is not an Axon `/ability/` URA builder. Axon
+/// currently treats User URAs as owners of resources and agents, not
+/// direct Ability publishers, so the Pages runtime still registers
+/// user-owned abilities as local daemon registry keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PagesAbilityVerb {
+    Publish,
+    List,
+    Get,
+    Unpublish,
+}
+
+impl PagesAbilityVerb {
+    fn public_name(self) -> &'static str {
+        match self {
+            Self::Publish => "pages.publish",
+            Self::List => "pages.list",
+            Self::Get => "pages.get",
+            Self::Unpublish => "pages.unpublish",
+        }
+    }
+}
+
+/// Typed local selector for user-owned Pages abilities.
+///
+/// Invariant 1: `user` is non-empty and comes from the daemon's
+/// paired identity or `EASYNET_PAGES_USER` dev override.
+///
+/// Invariant 2: `local_registry_ability` is the only place in the CLI
+/// facade that selects the owner-local `pages.<verb>` registry key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PagesAbility {
+    user: String,
+    verb: PagesAbilityVerb,
+}
+
+impl PagesAbility {
+    fn for_user(user: &str, verb: PagesAbilityVerb) -> anyhow::Result<Self> {
+        let user = user.trim();
+        if user.is_empty() {
+            anyhow::bail!("pages ability selector requires a non-empty user identity");
+        }
+        Ok(Self {
+            user: user.to_string(),
+            verb,
+        })
+    }
+
+    fn local_registry_ability(&self) -> String {
+        self.verb.public_name().to_string()
+    }
+}
 
 #[derive(Debug, Args)]
 pub struct PagesArgs {
@@ -142,13 +200,13 @@ fn current_user() -> anyhow::Result<String> {
 
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
     let user = current_user()?;
-    let ability = format!("{user}.pages.publish");
+    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Publish)?;
     let args_v = json!({
         "folder":     a.folder,
         "project_id": a.project_id,
         "visibility": a.visibility,
     });
-    let result = invoke_local_ability(&ability, args_v)
+    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
         .map_err(|e| anyhow::anyhow!("pages create failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -170,8 +228,8 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
     let user = current_user()?;
-    let ability = format!("{user}.pages.list");
-    let result = invoke_local_ability(&ability, json!({}))
+    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::List)?;
+    let result = invoke_local_ability(&ability.local_registry_ability(), json!({}))
         .map_err(|e| anyhow::anyhow!("pages list failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -186,21 +244,31 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
         println!("No published projects.");
         return Ok(());
     }
-    println!("{:<24} {:<10} URL", "PROJECT", "VISIBILITY");
+    // Two URL columns: LOCAL is the daemon's dev listener (the URL
+    // that actually opens during local dev); PUBLIC is the Hub
+    // production URL (resolves once the realm is publicly served).
+    println!(
+        "{:<22} {:<8} {:<46} {}",
+        "PROJECT", "VIS", "LOCAL", "PUBLIC"
+    );
     for p in projects {
         let id = p.get("project_id").and_then(Value::as_str).unwrap_or("?");
         let vis = p.get("visibility").and_then(Value::as_str).unwrap_or("?");
-        let url = p.get("url_root").and_then(Value::as_str).unwrap_or("?");
-        println!("{id:<24} {vis:<10} {url}");
+        let local = p
+            .get("dev_listener_url_root")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let public = p.get("url_root").and_then(Value::as_str).unwrap_or("?");
+        println!("{id:<22} {vis:<8} {local:<46} {public}");
     }
     Ok(())
 }
 
 fn run_show(a: ShowArgs) -> anyhow::Result<()> {
     let user = current_user()?;
-    let ability = format!("{user}.pages.get");
+    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_local_ability(&ability, args_v)
+    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
         .map_err(|e| anyhow::anyhow!("pages show failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -272,9 +340,9 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
         );
     }
     let user = current_user()?;
-    let ability = format!("{user}.pages.unpublish");
+    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Unpublish)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_local_ability(&ability, args_v)
+    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
         .map_err(|e| anyhow::anyhow!("pages delete failed: {e}"))?;
     let removed = result
         .get("removed")
@@ -290,9 +358,9 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
 
 fn run_url(a: UrlArgs) -> anyhow::Result<()> {
     let user = current_user()?;
-    let ability = format!("{user}.pages.get");
+    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_local_ability(&ability, args_v)
+    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
         .map_err(|e| anyhow::anyhow!("pages url failed: {e}"))?;
     let url = result
         .get("url_root")
@@ -300,4 +368,23 @@ fn run_url(a: UrlArgs) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("daemon returned no url_root"))?;
     println!("{url}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_ability_projects_to_local_registry_key() {
+        let ability =
+            PagesAbility::for_user("alice", PagesAbilityVerb::Publish).expect("pages ability");
+        assert_eq!(ability.local_registry_ability(), "pages.publish");
+    }
+
+    #[test]
+    fn pages_ability_rejects_empty_user() {
+        let err = PagesAbility::for_user("   ", PagesAbilityVerb::List)
+            .expect_err("empty user must fail");
+        assert!(format!("{err}").contains("non-empty user"));
+    }
 }

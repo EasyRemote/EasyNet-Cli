@@ -1,0 +1,14 @@
+schema_version = "1"
+name = "remote_desktop.show_session"
+description = "Read one remote desktop session state. Subject MUST match the bound resource_ura and session_token MUST match the create_session response."
+
+[input_schema]
+type = "object"
+required = ["session_id", "session_token"]
+additionalProperties = false
+
+[input_schema.properties.session_id]
+type = "string"
+
+[input_schema.properties.session_token]
+type = "string"

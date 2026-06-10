@@ -167,8 +167,12 @@ fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
         if !realm.is_empty() && !node_id.is_empty() {
             let hub_ura = crate::ura::hub_ura(realm);
             let caller_ura = crate::ura::device_ura(realm, node_id);
-            return crate::support::federation_invoke::invoke_via_federation_forward(
-                ability,
+            let ability_ura =
+                crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+                    &hub_ura, ability,
+                )?;
+            return crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+                ability_ura.as_str(),
                 args,
                 &hub_ura,
                 Some(&caller_ura),
@@ -196,7 +200,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
         .filter(|node_id| !node_id.trim().is_empty())
         .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
     body["participant_id"] = json!(participant_id);
-    let result = invoke_call_signaling("device.voice.create_call", body)?;
+    let result = invoke_call_signaling("voice.create_call", body)?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -215,7 +219,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling("device.voice.show_call", json!({"call_id": args.call_id}))?;
+    let result = invoke_call_signaling("voice.show_call", json!({"call_id": args.call_id}))?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -241,7 +245,7 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
         .participant_id
         .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
     let result = invoke_call_signaling(
-        "device.voice.join_call",
+        "voice.join_call",
         json!({"call_id": args.call_id, "participant_id": pid}),
     )?;
     output::success(&format!("Joined call {} as {pid}", args.call_id));
@@ -253,7 +257,7 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
 
 fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
     invoke_call_signaling(
-        "device.voice.leave_call",
+        "voice.leave_call",
         json!({
             "call_id": args.call_id,
             "participant_id": args.participant_id,
@@ -269,7 +273,7 @@ fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
 
 fn run_end(args: EndArgs) -> anyhow::Result<()> {
     let result = invoke_call_signaling(
-        "device.voice.end_call",
+        "voice.end_call",
         json!({"call_id": args.call_id, "end_reason": 1}),
     )?;
     output::success(&format!("Call {} ended", args.call_id));
@@ -281,8 +285,7 @@ fn run_end(args: EndArgs) -> anyhow::Result<()> {
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let result =
-        invoke_call_signaling("device.voice.watch_call", json!({"call_id": args.call_id}))?;
+    let result = invoke_call_signaling("voice.watch_call", json!({"call_id": args.call_id}))?;
     let events = result.get("events").and_then(Value::as_array);
     let mut count = 0;
     if let Some(events) = events {
@@ -308,7 +311,7 @@ fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
         "packet_loss_ratio": args.loss,
     });
     let _ = invoke_call_signaling(
-        "device.voice.report_metrics",
+        "voice.report_metrics",
         json!({
             "call_id":        args.call_id,
             "participant_id": args.participant_id,

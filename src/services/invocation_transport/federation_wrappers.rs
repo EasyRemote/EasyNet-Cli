@@ -67,12 +67,15 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::services::advertised_agent_store::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
 use crate::services::presence_registry::PresenceRegistry;
+#[cfg(test)]
+use easynet_axon::pb::axon::v1 as axon_pb;
 pub use easynet_axon::{
     DiscoverRequest, DiscoverResponse, ForwardInvokeRequest, ForwardInvokeResponse,
     ListUserDevicesRequest, ListUserDevicesResponse, ResolveAgentSummary, ResolveFilterRequest,
@@ -97,6 +100,20 @@ pub const ABILITY_FEDERATION_HEARTBEAT: &str = "federation.heartbeat";
 /// `federation.resolve` — projects both live PresenceRegistry URAs
 /// and hosted-agent rows whose host device is presently online.
 pub const ABILITY_FEDERATION_RESOLVE: &str = "federation.resolve";
+
+/// `namespace.resolve` — RFC-005 typed namespace resolver surface.
+/// This is a daemon ability reached through `axon.v1.Invocation`; it
+/// returns an Axon `ResolveAnswer` proto-JSON projection, not legacy
+/// directory rows.
+pub const ABILITY_NAMESPACE_RESOLVE: &str = "namespace.resolve";
+
+/// `namespace.proxy_resolve` — daemon-local typed namespace proxy.
+/// The backend supplies the peer hub set, but the daemon owns trust
+/// filtering, peer dialling, envelope signing, and typed
+/// `ResolveAnswer` aggregation. This is the clean replacement for
+/// backend product paths that previously consumed
+/// legacy federation directory rows.
+pub const ABILITY_NAMESPACE_PROXY_RESOLVE: &str = "namespace.proxy_resolve";
 
 /// `federation.subscribe_directory` — the only federation.* ability
 /// served via `InvokeStream` (server-stream); the others go through
@@ -148,12 +165,12 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscrib
 
 /// `federation.list_user_devices` — peer-hub user-device
 /// projection (PR-N3 N3-5). Backend on hub A invokes this on
-/// hub B to merge B's view of `tenant_id`'s devices into the
+/// hub B to merge B's view of the user's realm devices into the
 /// `listDevices` response. Caller must authenticate as a
 /// trusted hub-role peer (admission filter rejects backends
 /// dialled directly from outside the federation). Hub-side
 /// projects the local `PresenceRegistry` entries whose URA
-/// matches the supplied tenant prefix into `DirectoryEntry`s
+/// matches the supplied realm prefix into `DirectoryEntry`s
 /// with `origin_realm = None` (this hub speaks for its own
 /// realm; the calling backend stamps the merge boundary's
 /// realm at its end).
@@ -167,13 +184,6 @@ pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_dev
 /// the daemon owns the cross-hub dial + signing path so the Go
 /// backend never grows a second transport stack.
 pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str = "federation.proxy_list_user_devices";
-
-/// `federation.proxy_resolve` — daemon-local proxy wrapper that
-/// fans `federation.resolve` out across the specific peer hubs
-/// the backend selected. Used for user-owned agent listings and
-/// peer-device / peer-agent ability catalog reads without
-/// teaching the Go backend how to dial peers itself.
-pub const ABILITY_FEDERATION_PROXY_RESOLVE: &str = "federation.proxy_resolve";
 
 /// `federation.advertise_abilities` — backend self-registration
 /// path. Backend on boot publishes its own ability descriptors
@@ -207,7 +217,6 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
-    ABILITY_FEDERATION_PROXY_RESOLVE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
@@ -359,23 +368,19 @@ pub fn handle_advertise_agent(
 
 // ─── federation.advertise_abilities ────────────────────────────────
 
-/// Request payload for `federation.advertise_abilities`. Used by the
-/// backend at boot to publish its own ability catalog (and by every
-/// hosted-agent advertise sweep). The wrapper accepts the request
-/// shape verbatim — the daemon does not persist the abilities; they
-/// surface naturally via `<self>.session` membership during
-/// `federation.resolve(prefix)` fan-outs.
+/// Request payload for `federation.advertise_abilities`.
+///
+/// The current wire shape is RFC-005 owner projection publication:
+/// the caller sends projection metadata plus bounded ability summaries.
 #[derive(Debug, Clone, Deserialize)]
-pub struct AdvertiseAbilitiesRequest {
-    /// Caller-claimed agent URA publishing the abilities. Captured
-    /// for log context only; admission verifies caller equality
-    /// against the envelope before this wrapper runs.
-    pub agent_ura: String,
-    /// Catalog of ability descriptors. We accept any shape so a
-    /// future descriptor evolution does not require a daemon recompile;
-    /// only the count is reported back.
+pub(crate) struct AdvertiseAbilitiesRequest {
+    pub owner_ura: String,
+    pub host_device_ura: String,
+    pub projection_revision: u64,
+    pub projection_digest: String,
+    pub lease_expires_unix_ms: i64,
     #[serde(default)]
-    pub abilities: Vec<serde_json::Value>,
+    pub ability_summaries: Vec<crate::runtime::owner_projection::AbilityProjectionSummary>,
 }
 
 /// Response payload for `federation.advertise_abilities`. Matches
@@ -388,21 +393,34 @@ pub struct AdvertiseAbilitiesResponse {
     pub count: usize,
 }
 
-/// Handle a `federation.advertise_abilities` invocation. PR-1
-/// staging took this as a no-op stub; PR-fix-N stores the
-/// descriptor list in the daemon's `AbilityCatalogStore` so
-/// `federation.resolve(include_abilities=true)` can project them
-/// back to the backend's `/api/v1/abilities` page.
+/// Handle a `federation.advertise_abilities` invocation by updating the
+/// hub-side owner projection read model.
 #[must_use]
-pub fn handle_advertise_abilities(
+pub(crate) fn handle_advertise_abilities(
     request: &AdvertiseAbilitiesRequest,
     catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
 ) -> AdvertiseAbilitiesResponse {
-    let count = request.abilities.len();
-    if let Some(store) = catalog {
-        store.upsert(request.agent_ura.clone(), request.abilities.clone());
+    let count = request.ability_summaries.len();
+    let stored = if let Some(store) = catalog {
+        store
+            .upsert_projection(
+                crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+                    request.owner_ura.clone(),
+                    request.host_device_ura.clone(),
+                    request.projection_revision,
+                    request.projection_digest.clone(),
+                    request.lease_expires_unix_ms,
+                    request.ability_summaries.clone(),
+                ),
+            )
+            .is_stored()
+    } else {
+        true
+    };
+    AdvertiseAbilitiesResponse {
+        ack: stored,
+        count: if stored { count } else { 0 },
     }
-    AdvertiseAbilitiesResponse { ack: true, count }
 }
 
 // ─── federation.heartbeat ──────────────────────────────────────────
@@ -411,8 +429,17 @@ pub fn handle_advertise_abilities(
 #[derive(Debug, Clone, Deserialize)]
 pub struct HeartbeatRequest {
     /// URA of the agent reporting in. Used only for log context now;
-    /// liveness comes from the registry's stream membership.
+    /// liveness comes from the registry's stream membership. The device's
+    /// heartbeat payload (see `runtime/advertise.rs`) does not send this
+    /// field, so it must deserialize as optional — a missing `agent_ura`
+    /// is a valid heartbeat, not a wire error.
+    #[serde(default)]
     pub agent_ura: String,
+    /// Owner URAs whose ability projection leases this heartbeat renews.
+    /// The device batches its own owners (device + hosted agents) here so
+    /// the hub keeps their projections live without a full re-advertise.
+    #[serde(default)]
+    pub refresh_owner_uras: Vec<String>,
 }
 
 /// Response payload for `federation.heartbeat`.
@@ -424,6 +451,11 @@ pub struct HeartbeatResponse {
     /// for byte-identical state, MAY-differ field per spec §4.2
     /// (registry may have churned between identical-looking calls).
     pub realm_directory_size: usize,
+    /// Number of `refresh_owner_uras` whose projection lease this
+    /// heartbeat actually renewed (owners without a stored projection are
+    /// skipped). Lets the device detect when it must re-advertise.
+    #[serde(default)]
+    pub refreshed_owner_count: usize,
 }
 
 /// Handle a `federation.heartbeat` invocation.
@@ -434,13 +466,32 @@ pub struct HeartbeatResponse {
 /// `realm_directory_size` field is read from the registry snapshot
 /// for transparency to operators reading audit logs.
 #[must_use]
-pub fn handle_heartbeat(
-    _request: &HeartbeatRequest,
+pub(crate) fn handle_heartbeat(
+    request: &HeartbeatRequest,
     registry: &PresenceRegistry,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    now_unix_ms: i64,
 ) -> HeartbeatResponse {
+    // RFC-005: heartbeat renews the owner projection lease only; it must
+    // not mutate projection contents, revision, or digest. Extend the
+    // lease for every owner the device batched into `refresh_owner_uras`
+    // so its device/hosted-agent abilities stay resolvable between full
+    // re-advertise cycles. Unknown owners are skipped (the device must
+    // `advertise_abilities` before its first projection exists).
+    let mut refreshed_owner_count = 0_usize;
+    if let Some(catalog) = catalog {
+        let new_expiry = crate::runtime::owner_projection::lease_expiry_from_now(now_unix_ms);
+        for owner_ura in &request.refresh_owner_uras {
+            let owner_ura = owner_ura.trim();
+            if !owner_ura.is_empty() && catalog.refresh_lease(owner_ura, new_expiry) {
+                refreshed_owner_count += 1;
+            }
+        }
+    }
     HeartbeatResponse {
         membership_status: "active".to_string(),
         realm_directory_size: registry.snapshot().len(),
+        refreshed_owner_count,
     }
 }
 
@@ -459,19 +510,42 @@ pub struct AgentSummary {
 
 /// Handle a `federation.resolve` invocation.
 ///
-/// `catalog` is the optional `AbilityCatalogStore` the daemon
-/// constructs at boot. When `request.include_abilities` is true
-/// AND the store has a row for an in-presence URA, the response
-/// carries that agent's published `abilities[]` verbatim. Hub-mode
-/// daemons in production always wire a catalog; the smoke-test
-/// build-without-catalog path passes `None` and the abilities slot
-/// stays empty (matching pre-PR behaviour).
+/// `catalog` is the optional owner projection read model the daemon
+/// constructs at boot. When `request.include_abilities` is true and
+/// the store has a row for an in-presence owner URA, the response
+/// carries namespace-safe projection summaries in the historical
+/// `abilities` output field. Hub-mode daemons in production always
+/// wire a catalog; build-without-catalog paths pass `None` and the
+/// abilities slot stays empty.
 #[must_use]
 pub fn handle_resolve(
     request: &ResolveRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
     catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    self_device_ura: Option<&str>,
+) -> ResolveResponse {
+    handle_resolve_at(
+        request,
+        registry,
+        advertised_agents,
+        catalog,
+        self_device_ura,
+        crate::services::federation_directory::now_unix_ms(),
+    )
+}
+
+/// Deterministic variant of `handle_resolve` for tests and replay checks.
+/// `now_unix_ms` is used only to filter expired owner projection read-model
+/// rows; liveness still comes from `PresenceRegistry`.
+#[must_use]
+pub(crate) fn handle_resolve_at(
+    request: &ResolveRequest,
+    registry: &PresenceRegistry,
+    advertised_agents: Option<&AdvertisedAgentStore>,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    self_device_ura: Option<&str>,
+    now_unix_ms: i64,
 ) -> ResolveResponse {
     let prefix = request.effective_ura_prefix();
     let want_abilities = request.wants_abilities();
@@ -482,7 +556,7 @@ pub fn handle_resolve(
             continue;
         }
         let abilities = if want_abilities {
-            catalog.and_then(|c| c.get(&ura)).unwrap_or_default()
+            resolved_owner_projection_values(catalog, &ura, self_device_ura, now_unix_ms)
         } else {
             Vec::new()
         };
@@ -511,7 +585,7 @@ pub fn handle_resolve(
             }
             let abilities = if want_abilities {
                 catalog
-                    .and_then(|c| c.get(&record.agent_ura))
+                    .and_then(|c| c.get_at(&record.agent_ura, now_unix_ms))
                     .unwrap_or_default()
             } else {
                 Vec::new()
@@ -540,9 +614,126 @@ pub fn handle_resolve(
     }
 }
 
+/// Handle RFC-005 `namespace.resolve` using daemon-owned runtime state.
+///
+/// The returned value follows Axon proto-JSON field names and enum strings.
+/// CLI owns the read model and route feasibility decision here; Axon owns the
+/// generated enum/message vocabulary used to serialize the answer.
+#[must_use]
+pub fn handle_namespace_resolve(
+    query: &Value,
+    registry: &PresenceRegistry,
+    advertised_agents: Option<&AdvertisedAgentStore>,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+) -> Value {
+    handle_namespace_resolve_at(
+        query,
+        registry,
+        advertised_agents,
+        catalog,
+        crate::services::federation_directory::now_unix_ms(),
+    )
+}
+
+#[must_use]
+pub(crate) fn handle_namespace_resolve_at(
+    query: &Value,
+    registry: &PresenceRegistry,
+    advertised_agents: Option<&AdvertisedAgentStore>,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    now_unix_ms: i64,
+) -> Value {
+    crate::services::invocation_transport::route_resolver::DaemonRouteResolver::new(
+        registry,
+        advertised_agents,
+        catalog,
+    )
+    .at(now_unix_ms)
+    .resolve_query_json(query)
+}
+
+/// Namespace-safe ability summaries for one in-presence owner, merging
+/// two authorities:
+///
+/// 1. The owner's **static device profile** (RFC-005 §4 / D105): a
+///    device is the authority for its own control-plane surface
+///    (`terminal.*`, `agent.*`, `skill.*`, `fs.*`, `meta.*`). This is
+///    derived from the live registry and **never expires**, so a device's
+///    own abilities stay resolvable on its own daemon even though the
+///    daemon never receives its projection back into its local catalog
+///    (it advertises that projection up to the hub, not to itself), and
+///    regardless of any hub-side lease.
+/// 2. The **hub projection catalog** (lease-filtered): dynamic projection
+///    summaries for hosted agents and any owner this daemon is the hub
+///    for. These overlay the static profile by public name.
+///
+/// The static device profile is included only when `owner_ura` is THIS
+/// daemon's own device URA (`self_device_ura`): a daemon is the authority
+/// for its own device surface, but a hub resolving a *remote* device must
+/// not fabricate that device's profile — it only knows what the remote
+/// device advertised into the catalog.
+///
+/// Without (1), the device daemon's own catalog is empty and every
+/// device-owned ability lists as NODATA — the production bug behind the
+/// empty Abilities page and `terminal.list`/`agent.list`/`skill.list`
+/// "owner is online but does not publish" failures.
+fn resolved_owner_projection_values(
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    owner_ura: &str,
+    self_device_ura: Option<&str>,
+    now_unix_ms: i64,
+) -> Vec<serde_json::Value> {
+    let mut by_public_name = std::collections::BTreeMap::<String, serde_json::Value>::new();
+    let mut order = Vec::new();
+    let mut push = |summary: serde_json::Value| {
+        let Some(key) = crate::runtime::owner_projection::summary_from_value(&summary)
+            .and_then(|parsed| crate::runtime::owner_projection::summary_public_name(&parsed))
+        else {
+            return;
+        };
+        if by_public_name.insert(key.clone(), summary).is_none() {
+            order.push(key);
+        }
+    };
+
+    if self_device_ura.is_some_and(|self_ura| self_ura == owner_ura) {
+        for summary in device_owner_projection_values(owner_ura) {
+            push(summary);
+        }
+    }
+    if let Some(catalog) = catalog {
+        for summary in catalog.get_at(owner_ura, now_unix_ms).unwrap_or_default() {
+            push(summary);
+        }
+    }
+
+    order
+        .into_iter()
+        .filter_map(|key| by_public_name.remove(&key))
+        .collect()
+}
+
+/// Static device-profile ability summaries for a device-owned URA. Empty
+/// for non-device owners (agents/hubs publish through the catalog).
+fn device_owner_projection_values(owner_ura: &str) -> Vec<serde_json::Value> {
+    if !crate::ura::parse_ura(owner_ura)
+        .map(|parsed| parsed.kind == crate::ura::URAKind::Device)
+        .unwrap_or(false)
+    {
+        return Vec::new();
+    }
+    crate::runtime::agents::profiles::device::descriptors_for(owner_ura)
+        .iter()
+        .filter_map(|descriptor| {
+            crate::runtime::owner_projection::summary_from_descriptor(descriptor).ok()
+        })
+        .filter_map(|summary| serde_json::to_value(summary).ok())
+        .collect()
+}
+
 // ─── federation.resolve_key ────────────────────────────────────────
 
-fn resolve_key_response(public_key_b64: &str) -> ResolveKeyResponse {
+fn resolve_key_response(public_key_b64: &str, all_keys_b64: Vec<String>) -> ResolveKeyResponse {
     let public_key_hex = BASE64_STANDARD
         .decode(public_key_b64.as_bytes())
         .map(hex::encode)
@@ -550,7 +741,26 @@ fn resolve_key_response(public_key_b64: &str) -> ResolveKeyResponse {
     ResolveKeyResponse {
         public_key_b64: public_key_b64.to_string(),
         public_key_hex,
+        public_keys_b64: if all_keys_b64.is_empty() {
+            vec![public_key_b64.to_string()]
+        } else {
+            all_keys_b64
+        },
     }
+}
+
+/// Every key registered under `agent_ura` when it is a multi-key user
+/// URA; empty for single-key roles (device/backend/hub), letting
+/// `resolve_key_response` fall back to the primary key.
+fn all_user_keys_b64(
+    trust_anchor: &crate::services::realm_trust_anchor::RealmTrustAnchor,
+    agent_ura: &str,
+) -> Vec<String> {
+    trust_anchor
+        .lookup_user_all(agent_ura)
+        .iter()
+        .map(|e| e.public_key_b64.clone())
+        .collect()
 }
 
 /// Handle a `federation.resolve_key` invocation.
@@ -586,7 +796,10 @@ pub fn handle_resolve_key(
         });
     if let Some(pk) = presented_pubkey_b64.as_deref() {
         if let Some(entry) = trust_anchor.lookup_user_by_pubkey(&request.agent_ura, pk) {
-            return Some(resolve_key_response(&entry.public_key_b64));
+            return Some(resolve_key_response(
+                &entry.public_key_b64,
+                all_user_keys_b64(trust_anchor, &request.agent_ura),
+            ));
         }
         if matches!(
             crate::ura::parse_ura(&request.agent_ura).map(|parsed| parsed.kind),
@@ -595,9 +808,12 @@ pub fn handle_resolve_key(
             return None;
         }
     }
-    trust_anchor
-        .lookup(&request.agent_ura)
-        .map(|entry| resolve_key_response(&entry.public_key_b64))
+    trust_anchor.lookup(&request.agent_ura).map(|entry| {
+        resolve_key_response(
+            &entry.public_key_b64,
+            all_user_keys_b64(trust_anchor, &request.agent_ura),
+        )
+    })
 }
 
 // ─── federation.discover (PR-N3 N3-4) ──────────────────────────────
@@ -660,12 +876,13 @@ pub fn handle_discover_with_user_filter(
 // ─── federation.list_user_devices (PR-N3 N3-5) ────────────────────
 
 /// Request payload for `federation.proxy_list_user_devices`.
-/// `tenant_id` is the user-owned device realm to enumerate on
-/// each peer; `peer_hub_urls` are the exact peer TLS listener
+/// `realm` is the user-owned device realm to enumerate on each
+/// peer; `peer_hub_urls` are the exact peer TLS listener
 /// URLs the backend selected from its `user_peer_hubs` table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxyListUserDevicesRequest {
-    pub tenant_id: String,
+    pub realm: String,
     #[serde(default)]
     pub peer_hub_urls: Vec<String>,
 }
@@ -679,20 +896,32 @@ pub struct ProxyListUserDevicesResponse {
     pub devices: Vec<crate::services::federation_directory::DirectoryEntry>,
 }
 
-/// Request payload for `federation.proxy_resolve`.
+/// Request payload for `namespace.proxy_resolve`.
+///
+/// `peer_hub_urls` is product-selected fanout scope. The remaining fields are
+/// forwarded verbatim to each peer's daemon-local `namespace.resolve` surface;
+/// the proxy does not reinterpret resolver semantics.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ProxyResolveRequest {
+pub struct NamespaceProxyResolveRequest {
     #[serde(default)]
     pub peer_hub_urls: Vec<String>,
-    #[serde(default)]
-    pub ura_prefix: Option<String>,
-    #[serde(default)]
-    pub include_abilities: bool,
+    #[serde(default, rename = "queryName", alias = "query_name")]
+    pub query_name: String,
+    #[serde(default, rename = "qtype", alias = "qType")]
+    pub qtype: String,
+    #[serde(default, rename = "callerUra", alias = "caller_ura")]
+    pub caller_ura: String,
+    #[serde(default, rename = "subjectUra", alias = "subject_ura")]
+    pub subject_ura: String,
+    #[serde(default, rename = "realmHint", alias = "realm_hint")]
+    pub realm_hint: String,
+    #[serde(default, rename = "abilityName", alias = "ability_name")]
+    pub ability_name: String,
 }
 
 /// Handle a `federation.list_user_devices` invocation. Reads
 /// the supplied `PresenceRegistry` snapshot, filters URAs
-/// whose realm component matches `request.tenant_id`, and
+/// whose realm component matches `request.realm`, and
 /// projects each into a `DirectoryEntry`. PR-N3 spec §3.5: the
 /// admission filter (caller must be a trusted hub-role peer)
 /// is enforced by the dispatcher *before* this handler runs;
@@ -706,7 +935,7 @@ pub struct ProxyResolveRequest {
 ///
 /// URA compatibility:
 /// - Canonical v4.1.4 device sessions live under
-///   `easynet:///r/<tenant>/device/<node>`.
+///   `easynet:///r/<realm>/device/<node>`.
 /// - Only canonical device-session URAs (`.../device/<node>`) are
 ///   surfaced here.
 /// - Real agent-profile URAs (`.../agent/<user>.<agent>`) are not
@@ -716,16 +945,18 @@ pub fn handle_list_user_devices(
     request: &ListUserDevicesRequest,
     registry: &PresenceRegistry,
 ) -> ListUserDevicesResponse {
-    let tenant_device_prefix = crate::ura::realm_device_prefix(&request.tenant_id);
+    let realm_device_prefix = crate::ura::realm_device_prefix(&request.realm);
     let snapshot = registry.snapshot();
     let devices = snapshot
         .into_iter()
-        .filter(|ura| ura.starts_with(&tenant_device_prefix))
+        .filter(|ura| ura.starts_with(&realm_device_prefix))
         .map(|ura| {
             // Canonical v4.1.4 device URAs are the only input
             // that should survive the prefix filter above.
             let node_id = match crate::ura::parse_ura(&ura) {
-                Ok(parsed) if parsed.kind == crate::ura::URAKind::Device => parsed.device_id,
+                Ok(parsed) if parsed.kind == crate::ura::URAKind::Device => {
+                    parsed.device_id().map(str::to_string).unwrap_or_default()
+                }
                 _ => String::new(),
             };
             crate::services::federation_directory::DirectoryEntry {
@@ -808,11 +1039,11 @@ pub fn handle_revoke(
 // ─── federation.forward_invoke ─────────────────────────────────────
 
 /// Reason text emitted on `Status::failed_precondition` when the
-/// target presence-registry lookup misses on the local-tenant
+/// target presence-registry lookup misses on the local-realm
 /// fast-path. Wire-stable per DEC-N4 §2.1.
 pub const FORWARD_INVOKE_TARGET_OFFLINE_REASON: &str = "target_offline";
 
-/// Handle a local-tenant `federation.forward_invoke` invocation.
+/// Handle a local-realm `federation.forward_invoke` invocation.
 ///
 /// Pure constructor for the DEC-N4 §2.1 `ForwardInvokeResponse`
 /// shape. Threads the caller's `correlation_call_id` and the
@@ -894,6 +1125,47 @@ mod tests {
         tx
     }
 
+    fn projection_summary(
+        owner_ura: &str,
+        ability_ura: &str,
+        namespace: &str,
+        local_name: &str,
+    ) -> crate::runtime::owner_projection::AbilityProjectionSummary {
+        crate::runtime::owner_projection::AbilityProjectionSummary {
+            ability_ura: ability_ura.to_string(),
+            owner_ura: owner_ura.to_string(),
+            namespace: namespace.to_string(),
+            local_name: local_name.to_string(),
+            descriptor_revision: "sha256:descriptor".to_string(),
+            schema_ref: None,
+            schema_hash: None,
+            policy_ref: "visibility:SCOPED".to_string(),
+            route_summary_ref: Some(format!("route-ref::{ability_ura}")),
+            tags: vec!["class:unary".to_string()],
+            callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                if namespace.is_empty() {
+                    local_name.to_string()
+                } else {
+                    format!("{namespace}.{local_name}")
+                },
+            ),
+        }
+    }
+
+    fn projection_row_for(
+        owner_ura: &str,
+        summaries: Vec<crate::runtime::owner_projection::AbilityProjectionSummary>,
+    ) -> crate::services::ability_catalog_store::OwnerAbilityProjectionRow {
+        crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+            owner_ura.to_string(),
+            "easynet:///r/realm/device/dev-1".to_string(),
+            7,
+            "sha256:projection".to_string(),
+            4_102_444_800_000,
+            summaries,
+        )
+    }
+
     #[test]
     fn ability_name_constants_match_spec_section_4() {
         // These constants flow into PR-4's baseline capture file
@@ -906,6 +1178,8 @@ mod tests {
         );
         assert_eq!(ABILITY_FEDERATION_HEARTBEAT, "federation.heartbeat");
         assert_eq!(ABILITY_FEDERATION_RESOLVE, "federation.resolve");
+        assert_eq!(ABILITY_NAMESPACE_RESOLVE, "namespace.resolve");
+        assert_eq!(ABILITY_NAMESPACE_PROXY_RESOLVE, "namespace.proxy_resolve");
         assert_eq!(
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
             "federation.subscribe_directory"
@@ -925,7 +1199,6 @@ mod tests {
             ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
             "federation.proxy_list_user_devices"
         );
-        assert_eq!(ABILITY_FEDERATION_PROXY_RESOLVE, "federation.proxy_resolve");
         assert_eq!(
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
             "federation.subscribe_directory_v2"
@@ -938,10 +1211,10 @@ mod tests {
             ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
             "runtime.bootstrap_self_identity"
         );
-        // 14 federation.* abilities now wired (added advertise_abilities
-        // for backend self-publish; bootstrap_self_identity is namespaced
-        // under `runtime.*` so it lives outside this set).
-        assert_eq!(FEDERATION_ABILITIES.len(), 14);
+        // `namespace.*` resolver surfaces live outside the federation ability
+        // set. `runtime.bootstrap_self_identity` is namespaced under
+        // `runtime.*`, so it also stays outside this list.
+        assert_eq!(FEDERATION_ABILITIES.len(), 13);
     }
 
     #[test]
@@ -1008,6 +1281,91 @@ mod tests {
     }
 
     #[test]
+    fn handle_advertise_abilities_stores_owner_projection_row() {
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let owner_ura = "easynet:///r/realm/device/dev-1";
+        let req = AdvertiseAbilitiesRequest {
+            owner_ura: owner_ura.to_string(),
+            host_device_ura: owner_ura.to_string(),
+            projection_revision: 7,
+            projection_digest: "sha256:projection".to_string(),
+            lease_expires_unix_ms: 1_714_493_100_000,
+            ability_summaries: vec![projection_summary(
+                owner_ura,
+                "easynet:///r/realm/ability/device.dev-1.fs.read",
+                "fs",
+                "read",
+            )],
+        };
+
+        let resp = handle_advertise_abilities(&req, Some(&catalog));
+
+        assert!(resp.ack);
+        assert_eq!(resp.count, 1);
+        let stored = catalog
+            .projection_for_owner(owner_ura)
+            .expect("owner projection row must be stored");
+        assert_eq!(stored.owner_ura(), owner_ura);
+        assert_eq!(stored.host_device_ura(), owner_ura);
+        assert_eq!(stored.projection_revision(), 7);
+        assert_eq!(stored.projection_digest(), "sha256:projection");
+        assert_eq!(stored.lease_expires_unix_ms(), 1_714_493_100_000);
+        assert_eq!(stored.ability_count(), 1);
+        assert_eq!(stored.summaries_as_json()[0]["local_name"], "read");
+    }
+
+    #[test]
+    fn handle_advertise_abilities_rejects_stale_projection_for_read_model() {
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let owner_ura = "easynet:///r/realm/device/dev-1";
+        let newer = AdvertiseAbilitiesRequest {
+            owner_ura: owner_ura.to_string(),
+            host_device_ura: owner_ura.to_string(),
+            projection_revision: 7,
+            projection_digest: "sha256:newer".to_string(),
+            lease_expires_unix_ms: 4_102_444_800_000,
+            ability_summaries: vec![projection_summary(
+                owner_ura,
+                "easynet:///r/realm/ability/device.dev-1.fs.write",
+                "fs",
+                "write",
+            )],
+        };
+        let stale = AdvertiseAbilitiesRequest {
+            owner_ura: owner_ura.to_string(),
+            host_device_ura: owner_ura.to_string(),
+            projection_revision: 6,
+            projection_digest: "sha256:stale".to_string(),
+            lease_expires_unix_ms: 4_102_444_800_000,
+            ability_summaries: vec![projection_summary(
+                owner_ura,
+                "easynet:///r/realm/ability/device.dev-1.fs.read",
+                "fs",
+                "read",
+            )],
+        };
+
+        assert_eq!(
+            handle_advertise_abilities(&newer, Some(&catalog)),
+            AdvertiseAbilitiesResponse {
+                ack: true,
+                count: 1
+            }
+        );
+        assert_eq!(
+            handle_advertise_abilities(&stale, Some(&catalog)),
+            AdvertiseAbilitiesResponse {
+                ack: false,
+                count: 0
+            }
+        );
+
+        let got = catalog.get_at(owner_ura, 1_714_493_100_000).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["local_name"], "write");
+    }
+
+    #[test]
     fn handle_heartbeat_reports_registry_size() {
         let registry = PresenceRegistry::new();
         registry.insert(
@@ -1020,10 +1378,106 @@ mod tests {
         );
         let req = HeartbeatRequest {
             agent_ura: "easynet:///r/realm/device/a".to_string(),
+            refresh_owner_uras: Vec::new(),
         };
-        let resp = handle_heartbeat(&req, &registry);
+        let resp = handle_heartbeat(&req, &registry, None, 1_000);
         assert_eq!(resp.membership_status, "active");
         assert_eq!(resp.realm_directory_size, 2);
+        assert_eq!(resp.refreshed_owner_count, 0);
+    }
+
+    #[test]
+    fn handle_heartbeat_renews_owner_projection_lease() {
+        // The exact production bug: a device's projection is published with
+        // a lease, the lease expires, and `terminal.list` (and every other
+        // device-owned ability) silently drops out of `namespace.resolve`
+        // with NODATA. Heartbeat must renew the lease so the projection
+        // stays resolvable without a full re-advertise.
+        let registry = PresenceRegistry::new();
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let owner_ura = "easynet:///r/realm/device/a";
+        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+
+        let ability_ura =
+            crate::ura::owner_ability_ura(owner_ura, "terminal.list").expect("ability ura");
+        let publish_at = 1_000_i64;
+        let lease = crate::runtime::owner_projection::lease_expiry_from_now(publish_at);
+        catalog.upsert_projection(
+            crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+                owner_ura.to_string(),
+                owner_ura.to_string(),
+                1,
+                "sha256:digest".to_string(),
+                lease,
+                vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+                    ability_ura: ability_ura.clone(),
+                    owner_ura: owner_ura.to_string(),
+                    namespace: "terminal".to_string(),
+                    local_name: "list".to_string(),
+                    descriptor_revision: "sha256:desc".to_string(),
+                    schema_ref: None,
+                    schema_hash: None,
+                    policy_ref: "visibility:PUBLIC".to_string(),
+                    route_summary_ref: Some(format!("route-ref::{ability_ura}")),
+                    tags: Vec::new(),
+                    callable_summary:
+                        crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                            "terminal.list",
+                        ),
+                }],
+            ),
+        );
+
+        // After the lease expires, the projection is filtered out.
+        let after_expiry = lease + 1;
+        assert!(catalog.get_at(owner_ura, after_expiry).is_none());
+
+        // A heartbeat at that moment renews the lease...
+        let req = HeartbeatRequest {
+            agent_ura: owner_ura.to_string(),
+            refresh_owner_uras: vec![owner_ura.to_string()],
+        };
+        let resp = handle_heartbeat(&req, &registry, Some(&catalog), after_expiry);
+        assert_eq!(resp.refreshed_owner_count, 1);
+
+        // ...and the device-owned ability is resolvable again, with its
+        // contents and revision unchanged (lease-only refresh).
+        let got = catalog
+            .get_at(owner_ura, after_expiry)
+            .expect("lease renewed");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["local_name"], "list");
+        let row = catalog.projection_for_owner(owner_ura).unwrap();
+        assert_eq!(row.projection_revision(), 1);
+        assert_eq!(row.projection_digest(), "sha256:digest");
+    }
+
+    #[test]
+    fn handle_heartbeat_skips_unknown_owner() {
+        let registry = PresenceRegistry::new();
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let req = HeartbeatRequest {
+            agent_ura: "easynet:///r/realm/device/a".to_string(),
+            refresh_owner_uras: vec!["easynet:///r/realm/device/never-published".to_string()],
+        };
+        let resp = handle_heartbeat(&req, &registry, Some(&catalog), 5_000);
+        assert_eq!(resp.refreshed_owner_count, 0);
+    }
+
+    #[test]
+    fn heartbeat_request_deserializes_device_payload_without_agent_ura() {
+        // The device's actual heartbeat payload (runtime/advertise.rs) sends
+        // `since_abilities_revision` + `refresh_owner_uras` and NO
+        // `agent_ura`. The wrapper request must accept it — a missing
+        // `agent_ura` is a valid heartbeat, not a deserialization error.
+        let payload = serde_json::json!({
+            "since_abilities_revision": 7,
+            "refresh_owner_uras": ["easynet:///r/realm/device/a"],
+        });
+        let req: HeartbeatRequest =
+            serde_json::from_value(payload).expect("device heartbeat payload must deserialize");
+        assert!(req.agent_ura.is_empty());
+        assert_eq!(req.refresh_owner_uras, vec!["easynet:///r/realm/device/a"]);
     }
 
     #[test]
@@ -1049,6 +1503,7 @@ mod tests {
                 filter: None,
             },
             &registry,
+            None,
             None,
             None,
         );
@@ -1087,9 +1542,80 @@ mod tests {
             &registry,
             None,
             None,
+            None,
         );
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].ura, "easynet:///r/realm-a/device/x");
+    }
+
+    #[test]
+    fn handle_resolve_includes_device_owned_ability_routes_for_live_devices() {
+        let registry = PresenceRegistry::new();
+        let self_device_ura = "easynet:///r/realm/device/dev-1";
+        registry.insert(self_device_ura.to_string(), make_dispatch_sender());
+
+        // This daemon IS dev-1: its own device profile is the authority for
+        // its control-plane surface, included even with an empty catalog.
+        let resp = handle_resolve(
+            &ResolveRequest {
+                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
+                include_abilities: true,
+                filter: None,
+            },
+            &registry,
+            None,
+            None,
+            Some(self_device_ura),
+        );
+
+        assert_eq!(resp.agents.len(), 1);
+        let names: std::collections::BTreeSet<_> = resp.agents[0]
+            .abilities
+            .iter()
+            .filter_map(|ability| {
+                let namespace = ability.get("namespace")?.as_str()?;
+                let local_name = ability.get("local_name")?.as_str()?;
+                Some(format!("{namespace}.{local_name}"))
+            })
+            .collect();
+        assert!(
+            names.contains("agent.list"),
+            "device route summary must include agent.list; got {names:?}"
+        );
+        assert!(
+            names.contains("skill.list"),
+            "device route summary must include skill.list; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn handle_resolve_does_not_fabricate_profile_for_remote_device() {
+        // A hub resolving a DIFFERENT device must not synthesize that
+        // device's profile from descriptors_for — it only knows what the
+        // remote device advertised (here: nothing). Self gate is another
+        // device's URA, so the static profile must not leak in.
+        let registry = PresenceRegistry::new();
+        let remote_device = "easynet:///r/realm/device/dev-remote";
+        registry.insert(remote_device.to_string(), make_dispatch_sender());
+
+        let resp = handle_resolve(
+            &ResolveRequest {
+                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
+                include_abilities: true,
+                filter: None,
+            },
+            &registry,
+            None,
+            None,
+            Some("easynet:///r/realm/device/dev-self"),
+        );
+
+        assert_eq!(resp.agents.len(), 1);
+        assert!(
+            resp.agents[0].abilities.is_empty(),
+            "remote device profile must not be fabricated; got {:?}",
+            resp.agents[0].abilities
+        );
     }
 
     #[test]
@@ -1100,10 +1626,15 @@ mod tests {
             make_dispatch_sender(),
         );
         let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
-        catalog.upsert(
-            "easynet:///r/realm/agent/user.alice".into(),
-            vec![serde_json::json!({"name":"alice.chat"})],
-        );
+        catalog.upsert_projection(projection_row_for(
+            "easynet:///r/realm/agent/user.alice",
+            vec![projection_summary(
+                "easynet:///r/realm/agent/user.alice",
+                "easynet:///r/realm/ability/user.alice.chat",
+                "",
+                "chat",
+            )],
+        ));
         let advertised = AdvertisedAgentStore::new();
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: "easynet:///r/realm/agent/user.alice".into(),
@@ -1123,10 +1654,188 @@ mod tests {
             &registry,
             Some(&advertised),
             Some(&catalog),
+            None,
         );
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].ura, "easynet:///r/realm/agent/user.alice");
         assert_eq!(resp.agents[0].abilities.len(), 1);
+        assert_eq!(resp.agents[0].abilities[0]["local_name"], "chat");
+        assert_eq!(
+            resp.agents[0].abilities[0]["ability_ura"],
+            "easynet:///r/realm/ability/user.alice.chat"
+        );
+    }
+
+    #[test]
+    fn handle_resolve_does_not_surface_expired_owner_projection() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/realm/device/dev-1".to_string(),
+            make_dispatch_sender(),
+        );
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        catalog.upsert_projection(
+            crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+                "easynet:///r/realm/device/dev-1".to_string(),
+                "easynet:///r/realm/device/dev-1".to_string(),
+                7,
+                "sha256:projection".to_string(),
+                1_000,
+                vec![projection_summary(
+                    "easynet:///r/realm/device/dev-1",
+                    "easynet:///r/realm/ability/device.dev-1.fs.read",
+                    "fs",
+                    "read",
+                )],
+            ),
+        );
+
+        let live = handle_resolve_at(
+            &ResolveRequest {
+                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
+                include_abilities: true,
+                filter: None,
+            },
+            &registry,
+            None,
+            Some(&catalog),
+            None,
+            999,
+        );
+        assert_eq!(live.agents.len(), 1);
+        assert_eq!(live.agents[0].abilities.len(), 1);
+
+        let expired = handle_resolve_at(
+            &ResolveRequest {
+                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
+                include_abilities: true,
+                filter: None,
+            },
+            &registry,
+            None,
+            Some(&catalog),
+            None,
+            1_000,
+        );
+        assert_eq!(expired.agents.len(), 1);
+        assert!(expired.agents[0].abilities.is_empty());
+    }
+
+    #[test]
+    fn namespace_resolve_returns_typed_final_route_for_device_ability() {
+        let registry = PresenceRegistry::new();
+        let owner_ura = "easynet:///r/realm/device/dev-1";
+        let ability_ura =
+            crate::ura::owner_ability_ura(owner_ura, "agent.list").expect("device ability ura");
+        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        catalog.upsert_projection(projection_row_for(
+            owner_ura,
+            vec![projection_summary(owner_ura, &ability_ura, "agent", "list")],
+        ));
+
+        let answer = handle_namespace_resolve_at(
+            &serde_json::json!({
+                "queryName": owner_ura,
+                "qtype": "RESOLVE_TYPE_ROUTE",
+                "abilityName": "agent.list",
+            }),
+            &registry,
+            None,
+            Some(&catalog),
+            1_714_493_100_000,
+        );
+
+        assert_eq!(
+            answer["answerKind"],
+            axon_pb::ResolveAnswerKind::FinalRoute.as_str_name()
+        );
+        assert_eq!(answer["ownerUra"], owner_ura);
+        assert_eq!(answer["abilityUra"], ability_ura);
+        assert_eq!(
+            answer["releaseProfile"],
+            axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
+        );
+        assert_eq!(
+            answer["nextHop"]["localDeviceAbility"]["dispatchName"],
+            "agent.list"
+        );
+        assert_eq!(
+            answer["selectedRoute"]["gates"]["ability"],
+            axon_pb::GateResult::Pass.as_str_name()
+        );
+        assert!(answer.get("negative").is_none());
+    }
+
+    #[test]
+    fn namespace_resolve_returns_typed_negative_when_ability_absent() {
+        let registry = PresenceRegistry::new();
+        let owner_ura = "easynet:///r/realm/device/dev-1";
+        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+
+        let answer = handle_namespace_resolve_at(
+            &serde_json::json!({
+                "queryName": owner_ura,
+                "qtype": "ROUTE",
+                "abilityName": "agent.list",
+            }),
+            &registry,
+            None,
+            Some(&catalog),
+            1_714_493_100_000,
+        );
+
+        assert_eq!(
+            answer["answerKind"],
+            axon_pb::ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert_eq!(
+            answer["negative"]["reason"],
+            axon_pb::NegativeReason::Nodata.as_str_name()
+        );
+        assert_eq!(answer["nextHop"]["noRoute"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn namespace_resolve_directory_includes_hosted_by_for_hosted_agents() {
+        let registry = PresenceRegistry::new();
+        let host_ura = "easynet:///r/realm/device/dev-1";
+        let agent_ura = "easynet:///r/realm/agent/alice.remote";
+        registry.insert(host_ura.to_string(), make_dispatch_sender());
+        let advertised = AdvertisedAgentStore::new();
+        advertised.upsert(AdvertisedAgentRecord {
+            agent_ura: agent_ura.to_string(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".to_string()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: host_ura.to_string(),
+            },
+        });
+
+        let answer = handle_namespace_resolve_at(
+            &serde_json::json!({
+                "queryName": "easynet:///r/realm/agent/alice.",
+                "qtype": "RESOLVE_TYPE_DIRECTORY_LISTING",
+            }),
+            &registry,
+            Some(&advertised),
+            None,
+            1_714_493_100_000,
+        );
+
+        let records = answer["records"]
+            .as_array()
+            .expect("typed answer must carry records");
+        assert!(
+            records.iter().any(|record| {
+                record["recordType"] == axon_pb::RecordType::HostedBy.as_str_name()
+                    && record["value"]["hostedBy"]["hostedUra"] == agent_ura
+                    && record["value"]["hostedBy"]["hostUra"] == host_ura
+                    && record["value"]["hostedBy"]["hostNodeId"] == "dev-1"
+            }),
+            "hosted agent namespace directory must include hosted_by placement; got {records:#?}"
+        );
     }
 
     #[test]
@@ -1139,7 +1848,7 @@ mod tests {
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         };
@@ -1195,7 +1904,7 @@ mod tests {
             public_key_b64: pk.to_string(),
             role: TrustedAgentRole::User,
             added_at_unix_ms: 1_714_000_000_000,
-            origin_tenant_id: None,
+            origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
         });
@@ -1394,32 +2103,32 @@ mod tests {
     }
 
     #[test]
-    fn handle_list_user_devices_returns_only_matching_tenant() {
-        // PR-N3 N3-5. Registry holds entries for two tenants;
-        // the handler must surface only the requested tenant's
+    fn handle_list_user_devices_returns_only_matching_realm() {
+        // PR-N3 N3-5. Registry holds entries for two realms;
+        // the handler must surface only the requested realm's
         // entries.
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/device/device-1".to_string(),
+            "easynet:///r/realm-a/device/device-1".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/tenant-a/device/device-2".to_string(),
+            "easynet:///r/realm-a/device/device-2".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/tenant-b/device/device-3".to_string(),
+            "easynet:///r/realm-b/device/device-3".to_string(),
             make_dispatch_sender(),
         );
 
         let resp = handle_list_user_devices(
             &ListUserDevicesRequest {
-                tenant_id: "tenant-a".to_string(),
+                realm: "realm-a".to_string(),
             },
             &registry,
         );
         assert_eq!(resp.devices.len(), 2);
-        let expected_prefix = crate::ura::realm_device_prefix("tenant-a");
+        let expected_prefix = crate::ura::realm_device_prefix("realm-a");
         for entry in &resp.devices {
             assert!(entry.agent_ura.starts_with(&expected_prefix));
             assert_eq!(entry.origin_realm, None, "speaks for own realm — None");
@@ -1431,13 +2140,13 @@ mod tests {
     fn handle_list_user_devices_extracts_node_id_from_ura() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/device/node-xyz".to_string(),
+            "easynet:///r/realm-a/device/node-xyz".to_string(),
             make_dispatch_sender(),
         );
 
         let resp = handle_list_user_devices(
             &ListUserDevicesRequest {
-                tenant_id: "tenant-a".to_string(),
+                realm: "realm-a".to_string(),
             },
             &registry,
         );
@@ -1449,17 +2158,17 @@ mod tests {
     fn handle_list_user_devices_ignores_legacy_agent_device_shape() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/agent/node-legacy".to_string(),
+            "easynet:///r/realm-a/agent/node-legacy".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/tenant-a/agent/alice.claude".to_string(),
+            "easynet:///r/realm-a/agent/alice.claude".to_string(),
             make_dispatch_sender(),
         );
 
         let resp = handle_list_user_devices(
             &ListUserDevicesRequest {
-                tenant_id: "tenant-a".to_string(),
+                realm: "realm-a".to_string(),
             },
             &registry,
         );
@@ -1473,17 +2182,31 @@ mod tests {
     fn handle_list_user_devices_returns_empty_when_no_match() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/device/device".to_string(),
+            "easynet:///r/realm-a/device/device".to_string(),
             make_dispatch_sender(),
         );
 
         let resp = handle_list_user_devices(
             &ListUserDevicesRequest {
-                tenant_id: "tenant-missing".to_string(),
+                realm: "realm-missing".to_string(),
             },
             &registry,
         );
         assert!(resp.devices.is_empty());
+    }
+
+    #[test]
+    fn list_user_devices_requests_reject_retired_tenant_id_field() {
+        let list = serde_json::from_value::<ListUserDevicesRequest>(serde_json::json!({
+            "tenant_id": "tenant-a",
+        }));
+        assert!(list.is_err(), "peer request must require `realm`");
+
+        let proxy = serde_json::from_value::<ProxyListUserDevicesRequest>(serde_json::json!({
+            "tenant_id": "tenant-a",
+            "peer_hub_urls": ["https://peer.example:50443"],
+        }));
+        assert!(proxy.is_err(), "proxy request must require `realm`");
     }
 
     #[test]
@@ -1590,14 +2313,31 @@ mod tests {
         // surfaces these to the target's session frame so PR-N5's
         // InvocationReceipt can stamp `causal_context.list` and
         // DEC-N5 §3 can derive the inner deadline.
+        //
+        // `causal_context_bytes` rides the wire as a base64 STRING,
+        // not a JSON byte-array — the Axon deserializer rejects a
+        // sequence with `invalid type: sequence, expected a
+        // base64-encoded string`. Serialise the canonical struct (the
+        // exact shape a producer emits) so this test exercises the
+        // real wire contract rather than a hand-rolled object that can
+        // drift from it.
         let audit_bytes: Vec<u8> = vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0xFF];
-        let original = serde_json::json!({
-            "target_ura": "easynet:///r/realm/device/n1",
-            "inner_envelope_b64": "",
-            "causal_context_bytes": audit_bytes,
-            "forward_deadline_ms": 12_345_u64,
-        });
+        let original = ForwardInvokeRequest {
+            target_ura: "easynet:///r/realm/device/n1".to_string(),
+            inner_envelope_b64: String::new(),
+            causal_context_bytes: audit_bytes.clone(),
+            forward_deadline_ms: 12_345,
+        };
         let bytes = serde_json::to_vec(&original).unwrap();
+
+        // Pin the wire shape: the audit field must be a base64 string.
+        let wire: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            wire["causal_context_bytes"].as_str(),
+            Some(BASE64_STANDARD.encode(&audit_bytes).as_str()),
+            "causal_context_bytes must serialise as a base64 string, not a JSON array"
+        );
+
         let parsed: ForwardInvokeRequest = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.causal_context_bytes, audit_bytes);
         assert_eq!(parsed.forward_deadline_ms, 12_345);

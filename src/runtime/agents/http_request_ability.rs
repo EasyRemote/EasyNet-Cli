@@ -70,7 +70,7 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name. Pinned by AXIOM Tier 2.5.
-pub const ABILITY_NAME: &str = "device.http.request";
+pub const ABILITY_NAME: &str = "http.request";
 
 /// Profile version echoed in every receipt.
 pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
@@ -116,7 +116,7 @@ const REDACTED_HEADER_NAMES: &[&str] = &[
 const ALLOWED_SCHEMES: &[&str] = &["http", "https"];
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("device.http.request", OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner("http.request", OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {

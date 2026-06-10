@@ -3,8 +3,8 @@
 //
 // File: src/runtime/execution/session/mod.rs
 // Description: Session sub-service. Tracks the live-agent-run
-//              registry that `device.session.list` /
-//              `device.session.attach` abilities query and
+//              registry that `session.list` /
+//              `session.attach` abilities query and
 //              subscribe to.
 //
 // What this owns

@@ -1,0 +1,21 @@
+schema_version = "1"
+name = "remote_desktop.set_description"
+description = "Attach a WebRTC-style local or remote session description to a remote desktop session. A remote SDP offer starts the device-side direct WebRTC media endpoint and returns the SDP answer in local_description; media is not routed through unary Invoke."
+
+[input_schema]
+type = "object"
+required = ["session_id", "session_token", "side", "description"]
+additionalProperties = false
+
+[input_schema.properties.description]
+type = "object"
+
+[input_schema.properties.session_id]
+type = "string"
+
+[input_schema.properties.session_token]
+type = "string"
+
+[input_schema.properties.side]
+type = "string"
+enum = ["local", "remote"]

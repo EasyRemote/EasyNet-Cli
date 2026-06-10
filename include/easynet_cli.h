@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * EasyNet CLI C ABI v2.
+ * EasyNet CLI C ABI v3.
  *
  * This header is the binding-facing contract for libeasynet_cli.
  * The Rust sources in src/ffi own the implementation; repository
@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define EASYNET_ABI_VERSION 2u
+#define EASYNET_ABI_VERSION 3u
 
 #define EASYNET_OK 0
 #define ERR_GENERIC 1
@@ -39,7 +39,6 @@ typedef uint64_t EasynetHandle;
 typedef uint64_t EasynetDaemonHandle;
 typedef uint64_t EasynetInvocationStreamId;
 typedef uint64_t EasynetInvocationBidiId;
-typedef uint64_t EasynetSubscriptionId;
 
 /*
  * Stream and bidi callbacks are invoked on libeasynet_cli-owned
@@ -67,11 +66,6 @@ typedef void (*EasynetInvocationStreamCallback)(
 );
 
 typedef void (*EasynetInvocationBidiCallback)(
-    void *user_data,
-    const char *frame_json
-);
-
-typedef void (*EasynetFrameCallback)(
     void *user_data,
     const char *frame_json
 );
@@ -150,32 +144,6 @@ int32_t easynet_invocation_bidi_close(
 int32_t easynet_invocation_bidi_cancel(
     EasynetHandle handle,
     EasynetInvocationBidiId bidi_id
-);
-
-/*
- * Retired v1 ability+args symbols. They remain exported only as
- * explicit rejection points and return ERR_NOT_IMPLEMENTED after
- * basic pointer/handle validation.
- */
-int32_t easynet_ability_invoke(
-    EasynetHandle handle,
-    const char *ability,
-    const char *args_json,
-    char **out_result
-);
-
-int32_t easynet_ability_subscribe(
-    EasynetHandle handle,
-    const char *ability,
-    const char *args_json,
-    EasynetFrameCallback on_frame,
-    void *user_data,
-    EasynetSubscriptionId *out_subscription_id
-);
-
-int32_t easynet_subscription_cancel(
-    EasynetHandle handle,
-    EasynetSubscriptionId subscription_id
 );
 
 #ifdef __cplusplus

@@ -69,10 +69,10 @@ fn creds(tenant: &str, node: &str) -> Credentials {
         node_id: node.into(),
         credential_token: "tok".into(),
         hub_endpoint: "axon://hub.example:7700".into(),
-        tenant_id: tenant.into(),
+        realm: tenant.into(),
         deploy_signature: String::new(),
         hub_api_base: None,
-        username: None,
+        username: Some("alice".into()),
         hub_pubkey_b64: None,
         hub_tls_ca_pem_b64: None,
     }
@@ -119,14 +119,14 @@ impl HubFake {
 impl AbilityInvoker for HubFake {
     fn invoke_ability(
         &self,
-        tenant_id: &str,
+        realm: &str,
         resource_ura: &str,
         payload_json: Value,
     ) -> Result<Value, String> {
         // Pin the invariants the CLI's `forward_invoke` depends on.
         assert!(
-            !tenant_id.is_empty(),
-            "tenant_id must be set for forward_invoke calls"
+            !realm.is_empty(),
+            "realm must be set for forward_invoke calls"
         );
         assert!(
             resource_ura.contains("federation.forward_invoke"),
@@ -204,8 +204,8 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
     assert_eq!(result["echoed"], "noitaredef olleh");
     assert_eq!(result["from"], "pi");
 
-    // Verify the wire payload the CLI sent the hub matches what the
-    // axon side expects (ForwardInvokeArgs schema).
+    // Verify the wire payload the CLI sent the hub uses the RFC-005
+    // ability URA selector, not the pre-RFC-005 ability_name fallback.
     let captures = hub.into_captures();
     assert_eq!(captures.len(), 1, "exactly one forward call");
     let (ura, payload) = &captures[0];
@@ -214,17 +214,12 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
         "URA shape: {ura}"
     );
     assert_eq!(payload["target_ura"], target_ura);
-    assert_eq!(payload["ability_name"], "chat.echo");
-    // `function_name` is `skip_serializing_if = String::is_empty` in
-    // ForwardInvokeArgs, so an empty value is omitted from the JSON
-    // entirely rather than emitted as "". The hub-side parser
-    // tolerates both via `#[serde(default)]`. Pin both invariants
-    // (omitted on the wire AND wire shape parses on the receiving
-    // side without explicit value).
-    assert!(
-        payload.get("function_name").is_none() || payload["function_name"] == "",
-        "function_name shape: {payload}"
+    assert_eq!(
+        payload["ability_ura"],
+        "easynet:///r/silan.localhost/ability/device.pi-rasp.chat.echo"
     );
+    assert!(payload.get("ability_name").is_none(), "shape: {payload}");
+    assert!(payload.get("function_name").is_none(), "shape: {payload}");
     let sent_args_bytes = B64
         .decode(payload["arguments_b64"].as_str().unwrap())
         .unwrap();

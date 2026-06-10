@@ -42,8 +42,8 @@ use serde_json::Value;
 pub(crate) fn caller_device_ura_from_credentials() -> Option<String> {
     crate::persistence::config::load_credentials()
         .ok()
-        .filter(|creds| !creds.tenant_id.trim().is_empty() && !creds.node_id.trim().is_empty())
-        .map(|creds| crate::ura::device_ura(creds.tenant_id.trim(), creds.node_id.trim()))
+        .filter(|creds| !creds.realm.trim().is_empty() && !creds.node_id.trim().is_empty())
+        .map(|creds| crate::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
 }
 
 /// Resolve a CLI `node` argument into a canonical device URA.
@@ -58,7 +58,7 @@ pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
     let local_tenant = crate::persistence::config::load_credentials()
         .ok()
         .and_then(|creds| {
-            let tenant = creds.tenant_id.trim();
+            let tenant = creds.realm.trim();
             if tenant.is_empty() {
                 None
             } else {
