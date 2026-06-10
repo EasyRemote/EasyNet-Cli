@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use clap::{error::ErrorKind, Args, Parser, Subcommand};
 use serde_json::{json, Value};
 
-use crate::core::ability_spec::{AbilityExec, AbilityManifest, CostMeta, HttpExec};
+use crate::core::ability_spec::{AbilityExec, AbilityManifest, CostMeta, HttpExec, ShellExec};
 use crate::facade::cli::agent::{CostKindArg, McpAddArgs};
 use crate::persistence::config;
 use crate::registry::agents;
@@ -85,6 +85,59 @@ enum NewAbilitySource {
     FromOpenapi(FromOpenApiArgs),
     /// Bind configured upstream MCP tools into this agent.
     Mcp(McpArgs),
+    /// Create one shell-backed ability from a local command.
+    Script(ScriptArgs),
+}
+
+#[derive(Debug, Args)]
+struct ScriptArgs {
+    #[command(subcommand)]
+    action: ScriptAction,
+}
+
+#[derive(Debug, Subcommand)]
+enum ScriptAction {
+    /// Add one local command as an ability.
+    Add(ScriptAddArgs),
+}
+
+#[derive(Debug, Args)]
+struct ScriptAddArgs {
+    /// Ability verb to create under the selected agent.
+    pub name: String,
+    /// Command argv after `--`. argv[0] is the program; `{{ arg }}`
+    /// placeholders become input-schema properties and are rendered
+    /// per-element (no `sh -c`, no word splitting).
+    #[arg(last = true, required = true)]
+    pub argv: Vec<String>,
+    /// Human-readable ability description.
+    #[arg(long)]
+    pub description: Option<String>,
+    /// Optional JSON schema file for ability input. When omitted,
+    /// schema is inferred from `{{ arg }}` placeholders.
+    #[arg(long)]
+    pub input_schema: Option<PathBuf>,
+    /// Stdout decoder. Today the runtime supports `utf8_trim`.
+    #[arg(long)]
+    pub stdout: Option<String>,
+    /// OS-level sandbox profile: none | net_only | pure_compute.
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    /// Per-invocation timeout in seconds.
+    #[arg(long)]
+    pub timeout: Option<u64>,
+    /// Print the manifest without writing it.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Replace an existing manifest of the same name.
+    #[arg(long)]
+    pub overwrite: bool,
+    /// Optional explicit cost bucket.
+    #[arg(long, value_enum)]
+    pub cost_kind: Option<CostKindArg>,
+    /// Free-form human label accompanying `--cost-kind`.
+    #[arg(long, requires = "cost_kind")]
+    pub cost_label: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -230,6 +283,9 @@ fn run_new_ability(agent_name: &str, args: NewAbilityArgs) -> anyhow::Result<()>
             ApiAction::Add(add) => run_api_add(agent_name, add),
         },
         NewAbilitySource::FromOpenapi(args) => run_from_openapi(agent_name, args),
+        NewAbilitySource::Script(script) => match script.action {
+            ScriptAction::Add(add) => run_script_add(agent_name, add),
+        },
         NewAbilitySource::Mcp(mcp) => match mcp.action {
             McpAction::Add(add) => crate::facade::cli::agent::run_mcp_add(McpAddArgs {
                 name: agent_name.to_string(),
@@ -250,6 +306,12 @@ fn run_new_ability(agent_name: &str, args: NewAbilityArgs) -> anyhow::Result<()>
 fn run_api_add(agent_name: &str, args: ApiAddArgs) -> anyhow::Result<()> {
     let dir = open_registered_agent(agent_name)?;
     let manifest = api_manifest_for(&args)?;
+    write_manifest(agent_name, &dir, &manifest, args.overwrite, args.dry_run)
+}
+
+fn run_script_add(agent_name: &str, args: ScriptAddArgs) -> anyhow::Result<()> {
+    let dir = open_registered_agent(agent_name)?;
+    let manifest = script_manifest_for(&args)?;
     write_manifest(agent_name, &dir, &manifest, args.overwrite, args.dry_run)
 }
 
@@ -328,6 +390,31 @@ fn api_manifest_for(args: &ApiAddArgs) -> anyhow::Result<AbilityManifest> {
             response: Some(args.response.clone()),
         }))?
         .with_output_schema(http_output_schema())?;
+    if let Some(timeout) = args.timeout {
+        manifest = manifest.with_timeout_seconds(timeout)?;
+    }
+    if let Some(cost) = build_cost_meta(args.cost_kind, args.cost_label.as_deref())? {
+        manifest = manifest.with_cost(cost)?;
+    }
+    Ok(manifest)
+}
+
+fn script_manifest_for(args: &ScriptAddArgs) -> anyhow::Result<AbilityManifest> {
+    let input_schema = match &args.input_schema {
+        Some(path) => read_json_schema(path)?,
+        None => infer_input_schema(args.argv.iter().map(String::as_str)),
+    };
+    let description = args
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Run local command `{}`", args.argv.join(" ")));
+    let mut manifest = AbilityManifest::new(args.name.clone(), description, input_schema)?
+        .with_exec(AbilityExec::Shell(ShellExec {
+            argv: args.argv.clone(),
+            stdout: args.stdout.clone(),
+            sandbox: args.sandbox.clone(),
+        }))?
+        .with_output_schema(shell_output_schema())?;
     if let Some(timeout) = args.timeout {
         manifest = manifest.with_timeout_seconds(timeout)?;
     }
@@ -776,6 +863,20 @@ fn http_output_schema() -> Value {
     })
 }
 
+fn shell_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "result": {},
+            "fulfilled_by": { "type": "string" },
+            "exit_code": { "type": "integer" },
+            "elapsed_ms": { "type": "integer" }
+        },
+        "required": ["result", "fulfilled_by", "exit_code", "elapsed_ms"],
+        "additionalProperties": true
+    })
+}
+
 fn toml_safe_json_value(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
@@ -879,6 +980,68 @@ mod tests {
             }
             other => panic!("expected http exec, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn script_add_builds_shell_manifest_with_inferred_schema() {
+        let args = ScriptAddArgs {
+            name: "weather".to_string(),
+            argv: vec![
+                "curl".to_string(),
+                "-s".to_string(),
+                "https://wttr.in/{{ city }}?format=j1".to_string(),
+            ],
+            description: None,
+            input_schema: None,
+            stdout: None,
+            sandbox: Some("net_only".to_string()),
+            timeout: Some(30),
+            dry_run: false,
+            overwrite: false,
+            cost_kind: None,
+            cost_label: None,
+        };
+
+        let manifest = script_manifest_for(&args).expect("manifest");
+
+        assert_eq!(manifest.name(), "weather");
+        assert_eq!(manifest.timeout_seconds(), Some(30));
+        assert_eq!(
+            manifest.input_schema()["properties"]["city"]["type"],
+            json!("string")
+        );
+        assert_eq!(manifest.input_schema()["required"], json!(["city"]));
+        match manifest.exec().expect("exec") {
+            AbilityExec::Shell(exec) => {
+                assert_eq!(exec.argv[0], "curl");
+                assert!(exec.argv[2].contains("{{ city }}"));
+                assert_eq!(exec.sandbox.as_deref(), Some("net_only"));
+            }
+            other => panic!("expected shell exec, got {other:?}"),
+        }
+        let toml = manifest.to_toml_string().expect("toml");
+        let reparsed = AbilityManifest::from_toml_str(&toml).expect("round-trip");
+        assert_eq!(&reparsed, &manifest);
+    }
+
+    #[test]
+    fn script_add_rejects_unknown_sandbox_profile() {
+        let args = ScriptAddArgs {
+            name: "bad".to_string(),
+            argv: vec!["echo".to_string(), "hi".to_string()],
+            description: None,
+            input_schema: None,
+            stdout: None,
+            sandbox: Some("full_isolation".to_string()),
+            timeout: None,
+            dry_run: false,
+            overwrite: false,
+            cost_kind: None,
+            cost_label: None,
+        };
+
+        let err = script_manifest_for(&args).expect_err("unknown sandbox must fail");
+        assert!(err.to_string().contains("sandbox"), "got: {err}");
     }
 
     #[test]
