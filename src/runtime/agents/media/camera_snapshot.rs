@@ -463,6 +463,29 @@ fn handler(
 
     let captured_at = chrono::Utc::now().to_rfc3339();
     let local_path = persist_camera_snapshot(&entry, &captured_at, &jpeg_bytes)?;
+    // Context-surface persistence (best-effort): browsable in the
+    // Context page as <device>/camera.snapshot/<artifact>. The
+    // legacy captures/camera tree above stays — it is keyed by
+    // resource and consumed by the CLI; this one feeds the UI index.
+    if let Err(err) = crate::persistence::context_store::record_capture(
+        env.callee.as_deref().unwrap_or_default(),
+        ABILITY_CAMERA_SNAPSHOT,
+        "jpg",
+        &jpeg_bytes,
+        "image/jpeg",
+        Some(width),
+        Some(height),
+        None,
+        format!("Photo {width}x{height}"),
+    ) {
+        crate::op_event!(
+            component = context,
+            kind = capture_persist_failed,
+            level = "warn",
+            ability = ABILITY_CAMERA_SNAPSHOT,
+            error = err,
+        );
+    }
     let image_bytes_b64 = BASE64_STANDARD.encode(&jpeg_bytes);
 
     Ok(json!({

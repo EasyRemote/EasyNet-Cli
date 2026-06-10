@@ -43,6 +43,8 @@ pub const ABILITY_FS_LIST: &str = "context.fs.list";
 pub const ABILITY_FAVORITES_LIST: &str = "context.favorites.list";
 pub const ABILITY_FAVORITES_ADD: &str = "context.favorites.add";
 pub const ABILITY_FAVORITES_REMOVE: &str = "context.favorites.remove";
+pub const ABILITY_CAPTURES_LIST: &str = "context.captures.list";
+pub const ABILITY_CAPTURES_GET: &str = "context.captures.get";
 
 /// Register every context ability. Called from
 /// `runtime::agents::build_registry`.
@@ -87,6 +89,49 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         OwnerKind::Device,
         std::sync::Arc::new(favorites_remove_handler),
     );
+    reg.register_rpc_with_owner(
+        ABILITY_CAPTURES_LIST,
+        OwnerKind::Device,
+        std::sync::Arc::new(captures_list_handler),
+    );
+    reg.register_rpc_with_owner(
+        ABILITY_CAPTURES_GET,
+        OwnerKind::Device,
+        std::sync::Arc::new(captures_get_handler),
+    );
+}
+
+/// List persisted media artifacts, newest first. Optional `ability`
+/// filter narrows to one folder; the response always carries the
+/// distinct folder list so the Context page can render the per-device
+/// directory level from one call.
+fn captures_list_handler(args: Value) -> anyhow::Result<Value> {
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(100)
+        .max(1) as usize;
+    let ability = args.get("ability").and_then(Value::as_str);
+    let entries: Vec<Value> = context_store::list_captures(ability, limit)
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
+        .collect();
+    Ok(json!({
+        "abilities": context_store::list_capture_abilities(),
+        "entries": entries,
+    }))
+}
+
+/// Fetch one artifact's bytes inline (base64). Mirrors the
+/// clipboard.get shape so the frontend's lazy-loader pattern reuses.
+fn captures_get_handler(args: Value) -> anyhow::Result<Value> {
+    let id = require_str(&args, "id", "context.captures.get")?;
+    let (path, entry) = context_store::capture_abs_path(&id)
+        .ok_or_else(|| anyhow::anyhow!("context.captures.get: no capture {id}"))?;
+    let bytes = std::fs::read(path)?;
+    let mut out = serde_json::to_value(&entry)?;
+    out["data_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
+    Ok(out)
 }
 
 fn clipboard_list_handler(args: Value) -> anyhow::Result<Value> {
@@ -202,6 +247,13 @@ pub fn description_for(name: &str) -> Option<&'static str> {
         ABILITY_FAVORITES_LIST => "List favorites (starred clips, files, folders).",
         ABILITY_FAVORITES_ADD => "Star a clipboard entry, file, or folder.",
         ABILITY_FAVORITES_REMOVE => "Remove a favorite by id.",
+        ABILITY_CAPTURES_LIST => {
+            "List media artifacts persisted by abilities (screenshots, photos, recordings), \
+             newest first, with the distinct ability folder names."
+        }
+        ABILITY_CAPTURES_GET => {
+            "Read one persisted media artifact inline (base64) with its content type."
+        }
         _ => return None,
     })
 }
@@ -229,6 +281,22 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
                 "enabled": {"type": "boolean", "description": "true to start capturing, false to stop."}
             },
             "required": ["enabled"],
+            "additionalProperties": false,
+        }),
+        ABILITY_CAPTURES_LIST => json!({
+            "type": "object",
+            "properties": {
+                "ability": {"type": "string", "description": "Filter to one producing ability (folder name, e.g. screen.snapshot)."},
+                "limit": {"type": "integer", "description": "Max entries to return (default 100, cap 200)."}
+            },
+            "additionalProperties": false,
+        }),
+        ABILITY_CAPTURES_GET => json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Capture id from context.captures.list."}
+            },
+            "required": ["id"],
             "additionalProperties": false,
         }),
         ABILITY_FOLDERS_LIST => json!({

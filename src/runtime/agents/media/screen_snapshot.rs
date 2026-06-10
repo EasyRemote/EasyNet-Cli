@@ -817,6 +817,31 @@ fn snapshot_handler(
         );
     }
 
+    // Context-surface persistence: the device daemon keeps every
+    // snapshot under `context/captures/screen.snapshot/` so the
+    // Context page can browse it as <device>/<ability>/<artifact>.
+    // Best-effort by design — a full disk must not fail the snapshot
+    // the caller is waiting on.
+    if let Err(err) = crate::persistence::context_store::record_capture(
+        env.callee.as_deref().unwrap_or_default(),
+        ABILITY_SCREEN_SNAPSHOT,
+        "jpg",
+        &jpeg_bytes,
+        "image/jpeg",
+        Some(width),
+        Some(height),
+        None,
+        format!("Screenshot {width}x{height}"),
+    ) {
+        crate::op_event!(
+            component = context,
+            kind = capture_persist_failed,
+            level = "warn",
+            ability = ABILITY_SCREEN_SNAPSHOT,
+            error = err,
+        );
+    }
+
     let image_bytes_b64 = BASE64_STANDARD.encode(&jpeg_bytes);
     let captured_at = chrono::Utc::now().to_rfc3339();
     Ok(json!({

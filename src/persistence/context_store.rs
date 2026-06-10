@@ -366,6 +366,166 @@ pub fn remove_favorite(id: &str) -> anyhow::Result<Favorite> {
     Ok(removed)
 }
 
+// ── ability capture artifacts ───────────────────────────────────────
+//
+// Media abilities (screen.snapshot / camera.snapshot / mic.subscribe)
+// persist their products here so the Context page can browse them as
+// `<device>/<ability>/<artifact>`. Same durability shape as the
+// clipboard: an append-only `captures.jsonl` index plus payload files
+// under `captures/<ability>/`. The ability name doubles as the folder
+// name on disk and in the UI.
+
+/// Hard cap on entries returned by `list_captures` — the JSONL is
+/// unbounded, responses must not be.
+const LIST_CAPTURES_MAX: usize = 200;
+
+pub fn captures_dir() -> PathBuf {
+    context_dir().join("captures")
+}
+
+fn captures_log_path() -> PathBuf {
+    context_dir().join("captures.jsonl")
+}
+
+/// One persisted media artifact. `file` is a file name inside
+/// `captures/<ability>/` (never a path) so the state dir can move.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureEntry {
+    pub id: String,
+    /// RFC3339 capture time.
+    pub timestamp: String,
+    /// Canonical device agent URA of the producing device.
+    pub device: String,
+    /// Producing ability — also the on-disk folder name
+    /// ("screen.snapshot" | "camera.snapshot" | "mic.subscribe").
+    pub ability: String,
+    /// File name under captures/<ability>/.
+    pub file: String,
+    pub content_type: String,
+    pub byte_size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Short human preview ("Screenshot 2940x1912", "Recording 12s").
+    pub preview: String,
+}
+
+/// Ability names come from our own registries, but they become path
+/// segments — refuse anything that isn't a bare `[a-z0-9._-]` token.
+fn safe_path_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+        && !segment.contains("..")
+}
+
+/// Persist one media artifact: payload to `captures/<ability>/`,
+/// index row appended to `captures.jsonl`. Returns the entry.
+#[allow(clippy::too_many_arguments)]
+pub fn record_capture(
+    device: &str,
+    ability: &str,
+    ext: &str,
+    bytes: &[u8],
+    content_type: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+    duration_ms: Option<u64>,
+    preview: String,
+) -> anyhow::Result<CaptureEntry> {
+    if !safe_path_segment(ability) {
+        anyhow::bail!("record_capture: ability {ability:?} is not a safe folder name");
+    }
+    if !safe_path_segment(ext) {
+        anyhow::bail!("record_capture: extension {ext:?} is not a safe file suffix");
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    // Timestamp prefix keeps `ls` of the folder chronologically sorted
+    // — the folder itself is a user-facing surface (Context page).
+    let file = format!("{}-{}.{}", now.format("%Y%m%dT%H%M%S"), &id[..8], ext);
+    let dir = captures_dir().join(ability);
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join(&file), bytes)?;
+    let entry = CaptureEntry {
+        id,
+        timestamp: now.to_rfc3339(),
+        device: device.to_string(),
+        ability: ability.to_string(),
+        file,
+        content_type: content_type.to_string(),
+        byte_size: bytes.len() as u64,
+        width,
+        height,
+        duration_ms,
+        preview,
+    };
+    let mut line = serde_json::to_string(&entry)?;
+    line.push('\n');
+    use std::io::Write;
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(captures_log_path())?;
+    f.write_all(line.as_bytes())?;
+    Ok(entry)
+}
+
+/// Newest-first capture entries, optionally filtered to one ability,
+/// capped at `min(limit, LIST_CAPTURES_MAX)`.
+pub fn list_captures(ability: Option<&str>, limit: usize) -> Vec<CaptureEntry> {
+    let cap = limit.clamp(1, LIST_CAPTURES_MAX);
+    let Ok(content) = fs::read_to_string(captures_log_path()) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<CaptureEntry> = content
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .filter(|e: &CaptureEntry| ability.is_none_or(|a| e.ability == a))
+        .collect();
+    entries.reverse();
+    entries.truncate(cap);
+    entries
+}
+
+/// Distinct ability folder names present in the captures index,
+/// alphabetical. Drives the Context page's per-device folder list.
+pub fn list_capture_abilities() -> Vec<String> {
+    let Ok(content) = fs::read_to_string(captures_log_path()) else {
+        return Vec::new();
+    };
+    let mut abilities: Vec<String> = content
+        .lines()
+        .filter_map(|l| serde_json::from_str::<CaptureEntry>(l).ok())
+        .map(|e| e.ability)
+        .collect();
+    abilities.sort();
+    abilities.dedup();
+    abilities
+}
+
+/// Absolute path + entry for a stored capture. Same traversal posture
+/// as `clip_image_abs_path`: ids are ours, but the lookup still
+/// refuses separators so a crafted id can't escape.
+pub fn capture_abs_path(id: &str) -> Option<(PathBuf, CaptureEntry)> {
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return None;
+    }
+    let entry = list_captures(None, LIST_CAPTURES_MAX)
+        .into_iter()
+        .find(|e| e.id == id)?;
+    if !safe_path_segment(&entry.ability) || entry.file.contains('/') || entry.file.contains("..")
+    {
+        return None;
+    }
+    let p = captures_dir().join(&entry.ability).join(&entry.file);
+    p.is_file().then_some((p, entry))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +592,58 @@ mod tests {
 
         remove_folder("proj").unwrap();
         assert!(list_folders().is_empty());
+    }
+
+    #[test]
+    fn captures_record_list_get_round_trip() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = record_capture(
+            "easynet:///r/localhost/device/d1",
+            "screen.snapshot",
+            "jpg",
+            b"\xff\xd8fakejpeg",
+            "image/jpeg",
+            Some(2940),
+            Some(1912),
+            None,
+            "Screenshot 2940x1912".into(),
+        )
+        .unwrap();
+        record_capture(
+            "easynet:///r/localhost/device/d1",
+            "mic.subscribe",
+            "wav",
+            b"RIFFfakewav",
+            "audio/wav",
+            None,
+            None,
+            Some(1500),
+            "Recording 1.5s".into(),
+        )
+        .unwrap();
+
+        // newest-first, ability filter works
+        let all = list_captures(None, 10);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].ability, "mic.subscribe", "newest first");
+        let screens = list_captures(Some("screen.snapshot"), 10);
+        assert_eq!(screens.len(), 1);
+        assert_eq!(screens[0].id, entry.id);
+
+        // distinct folder names, alphabetical
+        assert_eq!(
+            list_capture_abilities(),
+            vec!["mic.subscribe".to_string(), "screen.snapshot".to_string()]
+        );
+
+        // payload resolvable, traversal refused
+        let (path, got) = capture_abs_path(&entry.id).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"\xff\xd8fakejpeg");
+        assert_eq!(got.content_type, "image/jpeg");
+        assert!(capture_abs_path("../evil").is_none());
+
+        // unsafe ability folder refused
+        assert!(record_capture("d", "../escape", "jpg", b"x", "image/jpeg", None, None, None, "p".into()).is_err());
     }
 
     #[test]

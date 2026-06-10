@@ -3179,3 +3179,135 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
     ));
     let _ = revoke; // dispatchability is the contract; outcome shape varies.
 }
+
+// ════════════════════════════════════════════════════════════════
+// Context surface (clipboard / folders / favorites / captures) and
+// chat history — pure device-local persistence under HomeGuard.
+// One round-trip test per family exercises every published name
+// with realistic operator payloads against a fresh ~/.easynet/.
+
+#[test]
+fn real_context_clipboard_and_favorites_round_trip() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+
+    // Tracking toggle: flip on, observe the flag in the list reply.
+    let tracked = invoke("context.clipboard.track", json!({"enabled": true}));
+    assert_eq!(tracked["tracking"], json!(true));
+
+    // Seed one clip directly through the store (the tracker thread
+    // is not running under test), then list + get it back.
+    crate::persistence::context_store::append_clip(&crate::persistence::context_store::ClipEntry {
+        id: "clip-1".into(),
+        timestamp: "2026-06-10T00:00:00Z".into(),
+        device: "easynet:///r/test/device/d1".into(),
+        kind: "text".into(),
+        text: Some("hello clipboard".into()),
+        image_file: None,
+        preview: "hello clipboard".into(),
+    })
+    .expect("seed clip");
+    let listed = invoke("context.clipboard.list", json!({"limit": 10}));
+    assert_eq!(listed["entries"][0]["id"], json!("clip-1"));
+    let got = invoke("context.clipboard.get", json!({"id": "clip-1"}));
+    assert_eq!(got["text"], json!("hello clipboard"));
+
+    // Favorites: star the clip, list it, unstar it.
+    let fav = invoke(
+        "context.favorites.add",
+        json!({"kind": "clipboard", "label": "hello", "reference": "clip-1"}),
+    );
+    let fav_id = fav["id"].as_str().expect("favorite id").to_string();
+    let favs = invoke("context.favorites.list", json!({}));
+    assert_eq!(favs["favorites"][0]["reference"], json!("clip-1"));
+    let removed = invoke("context.favorites.remove", json!({"id": fav_id}));
+    assert_eq!(removed["reference"], json!("clip-1"));
+}
+
+#[test]
+fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let dir = std::env::temp_dir().join(format!("real-invoke-ctx-fs-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("sub")).expect("fixture dir");
+    std::fs::write(dir.join("a.txt"), b"x").expect("fixture file");
+    crate::persistence::context_store::add_folder(dir.to_str().unwrap(), Some("proj"))
+        .expect("map folder");
+
+    let folders = invoke("context.folders.list", json!({}));
+    assert_eq!(folders["folders"][0]["name"], json!("proj"));
+
+    let listing = invoke("context.fs.list", json!({"folder": "proj", "path": ""}));
+    let names: Vec<&str> = listing["entries"]
+        .as_array()
+        .expect("entries array")
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(names.contains(&"sub") && names.contains(&"a.txt"), "got {names:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn real_context_captures_record_list_get() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    // Seed one artifact the way a media handler does, then read it
+    // back through both abilities.
+    let entry = crate::persistence::context_store::record_capture(
+        "easynet:///r/test/device/d1",
+        "screen.snapshot",
+        "jpg",
+        b"\xff\xd8jpegbytes",
+        "image/jpeg",
+        Some(100),
+        Some(50),
+        None,
+        "Screenshot 100x50".into(),
+    )
+    .expect("seed capture");
+
+    let listed = invoke(
+        "context.captures.list",
+        json!({"ability": "screen.snapshot", "limit": 10}),
+    );
+    assert_eq!(listed["abilities"], json!(["screen.snapshot"]));
+    assert_eq!(listed["entries"][0]["id"], json!(entry.id.clone()));
+
+    let got = invoke("context.captures.get", json!({"id": entry.id}));
+    assert_eq!(got["content_type"], json!("image/jpeg"));
+    assert!(
+        got["data_base64"].as_str().is_some_and(|s| !s.is_empty()),
+        "payload inlined as base64"
+    );
+}
+
+#[test]
+fn real_chat_history_list_and_get_read_persisted_transcripts() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    // Persist one session turn through the store, then read it back
+    // through both abilities.
+    crate::persistence::chat_sessions::write_turn_best_effort(
+        "demo",
+        "real-session-1",
+        "hello there",
+        "general kenobi",
+        &[],
+        &json!({}),
+    );
+
+    let listed = invoke("chat.history.list", json!({"agent": "demo"}));
+    let sessions = listed["sessions"].as_array().expect("sessions array");
+    assert!(
+        sessions.iter().any(|s| s["session_id"] == json!("real-session-1")),
+        "listed: {listed}"
+    );
+
+    let got = invoke(
+        "chat.history.get",
+        json!({"agent": "demo", "session_id": "real-session-1"}),
+    );
+    let turns = got["turns"].as_array().expect("turns array");
+    assert!(
+        turns.iter().any(|t| t["prompt"] == json!("hello there")),
+        "turns: {got}"
+    );
+}
