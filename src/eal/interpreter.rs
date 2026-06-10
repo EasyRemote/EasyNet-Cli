@@ -664,6 +664,9 @@ fn dispatch_to_agent(
             // emitted with an empty causal_context while the argument
             // still reaches the adapter.
             let qualified = format!("{}.{}", agent_id.name, bare_ability);
+            let timeout = manifest
+                .timeout_seconds()
+                .map(std::time::Duration::from_secs);
             let effective_parents: &[Value] = if arguments
                 .get("adapter_fault")
                 .and_then(Value::as_str)
@@ -678,6 +681,7 @@ fn dispatch_to_agent(
                 arguments.clone(),
                 None,
                 effective_parents,
+                timeout,
             ) {
                 Ok((value, meta)) => {
                     return Ok(StepDispatchOutcome {
@@ -704,9 +708,6 @@ fn dispatch_to_agent(
                     }
                 }
             }
-            let timeout = manifest
-                .timeout_seconds()
-                .map(std::time::Duration::from_secs);
             return (match exec {
                 crate::core::ability_spec::AbilityExec::Shell(spec) => {
                     crate::runtime::agents::shell_executor::run_shell_exec(spec, arguments, timeout)

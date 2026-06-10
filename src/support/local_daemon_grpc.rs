@@ -462,6 +462,7 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     payload_json: serde_json::Value,
     subject: Option<String>,
     causal_parents: &[serde_json::Value],
+    step_timeout: Option<Duration>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     use anyhow::{anyhow, bail, Context};
     use easynet_axon::pb::axon::v1 as pb;
@@ -534,12 +535,20 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
         .build()
         .context("build tokio runtime for local Axon daemon invoke")?;
 
+    // The channel timeout is per-request: it must cover the step's own
+    // execution budget (the daemon-side executor enforces the manifest
+    // timeout) plus admission/ledger overhead, or a slow-but-legitimate
+    // step gets cut off at the transport layer instead of by its
+    // declared deadline.
+    let request_timeout = step_timeout
+        .map(|t| t + Duration::from_secs(30))
+        .unwrap_or_else(|| Duration::from_secs(60));
     let invoke_socket = socket_path.clone();
     let invoke_fn = function_name.clone();
     let (result_value, request_id) = runtime.block_on(async move {
         let channel = connect_channel(
             invoke_socket.clone(),
-            Duration::from_secs(30),
+            request_timeout,
             Duration::from_secs(10),
         )
         .await
@@ -644,6 +653,7 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     _payload_json: serde_json::Value,
     _subject: Option<String>,
     _causal_parents: &[serde_json::Value],
+    _step_timeout: Option<std::time::Duration>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     anyhow::bail!(
         "invoking `{}` with invocation metadata requires the `axon-pb` feature; \

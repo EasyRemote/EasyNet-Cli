@@ -100,12 +100,14 @@ pub fn invoke_local_ability_with_invocation_meta(
     args: Value,
     subject: Option<String>,
     causal_parents: &[Value],
+    step_timeout: Option<std::time::Duration>,
 ) -> anyhow::Result<(Value, Value)> {
     crate::support::local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta(
         ability,
         args,
         subject,
         causal_parents,
+        step_timeout,
     )
 }
 
