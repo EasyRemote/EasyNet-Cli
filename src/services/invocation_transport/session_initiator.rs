@@ -85,7 +85,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use easynet_axon::invocation::axiom::{
     canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
@@ -241,7 +241,59 @@ pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// the device-side `SESSION_IDLE_TIMEOUT`. Together they make the
 /// bidi liveness story symmetric in both directions.
 pub const SESSION_UP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Minimum uptime for a cleanly-closed `<self>.session` to count as
+/// healthy and earn a backoff reset.
+///
+/// A clean down-stream EOF is NOT sufficient evidence of a healthy
+/// session: hub-side presence displacement (a second claimant of the
+/// same caller URA), contract-skew teardown by an older hub build,
+/// and rolling hub restarts all end the stream cleanly moments after
+/// admission. Resetting to `SESSION_BACKOFF_INITIAL` on every clean
+/// close therefore locks the supervisor into a fixed-cadence
+/// reconnect hammer — incident 2026-06-11 sustained 5428
+/// open → admission → clean-close cycles at the 250 ms floor because
+/// the exponential curve never engaged.
+///
+/// 30 s sits one order above the hub's 5 s down-keepalive cadence
+/// (`daemon_invocation_service::SESSION_DOWN_HEARTBEAT_INTERVAL`):
+/// a session that exchanged several keepalives was genuinely live,
+/// while displacement ping-pong (sub-second) and first-heartbeat
+/// teardowns (~5 s) stay on the escalating schedule toward
+/// `SESSION_BACKOFF_MAX`.
+pub const SESSION_HEALTHY_MIN_UPTIME: Duration = Duration::from_secs(30);
 const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
+
+/// Device-side fingerprint of a cleanly-closed `<self>.session`,
+/// reported by `dial_and_run_session*` on `Ok`.
+///
+/// This is the evidence record for diagnosing hub-side close causes
+/// when hub logs are unavailable (incident 2026-06-11: the hub
+/// container's logs were lost with the process; only device-side
+/// correlation survived). The two fields discriminate the known
+/// close classes:
+///
+/// * `uptime` sub-second + `frames_received == 1` (admission receipt
+///   only) — presence displacement by a second claimant of the same
+///   caller URA.
+/// * `frames_received == 0` — hub accepted the RPC but never sent
+///   the RFC-003 §1.1 admission receipt (pre-2026-05-02 hub build).
+/// * `uptime` ≈ 5 s, low frame count — hub tore the session down on
+///   the device's first up-heartbeat (up-frame contract skew).
+/// * `uptime` ≥ `SESSION_HEALTHY_MIN_UPTIME` — ordinary close of a
+///   healthy session (hub shutdown, deploy).
+///
+/// It is NOT an error type: error exits keep returning
+/// `SessionError`, which carries its own diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionCloseStats {
+    /// Wall-clock from bidi acceptance (`invoke_bidi` returned the
+    /// down stream) to down-stream EOF.
+    pub uptime: Duration,
+    /// Down frames received after acceptance: admission receipt,
+    /// keepalives, and business dispatches all count.
+    pub frames_received: u64,
+}
 
 /// Default URA profile used when the session frame carries a signed
 /// envelope. Empty profile fields canonicalise to the same value, but
@@ -418,7 +470,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         &crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
     >,
     ability_descriptors: &[AbilityDescriptor],
-) -> Result<(), SessionError> {
+) -> Result<SessionCloseStats, SessionError> {
     dial_and_run_session_with_idle_timeout(
         hub_endpoint,
         caller_ura,
@@ -448,7 +500,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     idle_timeout: Duration,
     initial_admission: Option<InitialSessionAdmissionProbe>,
     user_trust_sync: Option<&UserTrustSync>,
-) -> Result<(), SessionError> {
+) -> Result<SessionCloseStats, SessionError> {
     warm_device_credential_for_session(&caller_ura).await;
 
     let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
@@ -977,6 +1029,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             })?;
 
     let mut down_stream = response.into_inner();
+    let opened_at = Instant::now();
     let dispatcher = dispatcher;
     crate::op_event!(
         component = session,
@@ -1047,9 +1100,16 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         }
     }
 
-    // Hub closed the down stream cleanly. The supervisor will
-    // reconnect.
-    Ok(())
+    // Hub closed the down stream cleanly. The supervisor decides
+    // from these stats whether the session was healthy (reset the
+    // backoff) or part of a rapid open/close loop (keep escalating);
+    // `expected_down_sequence` doubles as the received-frame count
+    // because the sequence contract starts at 0 and increments once
+    // per accepted frame.
+    Ok(SessionCloseStats {
+        uptime: opened_at.elapsed(),
+        frames_received: expected_down_sequence,
+    })
 }
 
 /// RAII guard that clears the escalation outbox on Drop, ensuring
@@ -1129,21 +1189,26 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 user_trust_sync.as_ref(),
             ) => {
                 match result {
-                    Ok(()) => {
-                        // Render Duration as integer milliseconds —
+                    Ok(stats) => {
+                        backoff = backoff_after_clean_close(&stats, backoff);
+                        // Render Durations as integer milliseconds —
                         // `Duration` has no `Display` impl, and the
                         // Debug form (`250ms` / `1.5s`) mixes unit
                         // suffixes that complicate SRE arithmetic on
                         // the field. Milliseconds is the unit operators
                         // already see in `*_ms` fields elsewhere.
-                        let next_backoff_ms =
-                            SESSION_BACKOFF_INITIAL.as_millis() as u64;
+                        let uptime_ms = stats.uptime.as_millis() as u64;
+                        let frames_received = stats.frames_received;
+                        let healthy = stats.uptime >= SESSION_HEALTHY_MIN_UPTIME;
+                        let next_backoff_ms = backoff.as_millis() as u64;
                         crate::op_event!(
                             component = session,
                             kind = bidi_closed_cleanly,
+                            uptime_ms = uptime_ms,
+                            frames_received = frames_received,
+                            healthy = healthy,
                             next_backoff_ms = next_backoff_ms,
                         );
-                        backoff = SESSION_BACKOFF_INITIAL;
                     }
                     Err(err) => {
                         // `{err:#}` walks the std::error::Error source
@@ -1184,6 +1249,22 @@ fn next_backoff(current: Duration) -> Duration {
         SESSION_BACKOFF_MAX
     } else {
         doubled
+    }
+}
+
+/// Backoff policy for a session that ended with a clean hub-side
+/// close (`Ok` from `dial_and_run_session*`). Only a session that
+/// stayed up at least `SESSION_HEALTHY_MIN_UPTIME` earns the reset
+/// to `SESSION_BACKOFF_INITIAL`; a shorter-lived clean close keeps
+/// the current backoff, which the supervisor then doubles after the
+/// sleep exactly as it does for error exits. See
+/// `SESSION_HEALTHY_MIN_UPTIME` for why a clean close alone must
+/// not reset the curve (incident 2026-06-11, 5428-cycle loop).
+fn backoff_after_clean_close(stats: &SessionCloseStats, current: Duration) -> Duration {
+    if stats.uptime >= SESSION_HEALTHY_MIN_UPTIME {
+        SESSION_BACKOFF_INITIAL
+    } else {
+        current
     }
 }
 
@@ -2084,6 +2165,55 @@ mod tests {
         }
     }
 
+    /// Hub that admits the bidi and immediately ends the down stream
+    /// with a clean EOF — the device-observable shape of hub-side
+    /// presence displacement (registered `DispatchSender` dropped
+    /// right after accept) and of incident 2026-06-11's repeated
+    /// closes.
+    struct CleanCloseSessionHub;
+
+    #[tonic::async_trait]
+    impl Invocation for CleanCloseSessionHub {
+        type InvokeStreamStream = TestInvokeStream;
+        type InvokeBidiStream = TestInvokeBidiStream;
+
+        async fn invoke(
+            &self,
+            _request: Request<InvokeRequest>,
+        ) -> Result<Response<InvokeResponse>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_stream(
+            &self,
+            _request: Request<InvokeServerStreamRequest>,
+        ) -> Result<Response<Self::InvokeStreamStream>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_bidi(
+            &self,
+            request: Request<tonic::Streaming<InvokeBidiUp>>,
+        ) -> Result<Response<Self::InvokeBidiStream>, Status> {
+            let mut up = request.into_inner();
+            let frame0 = up
+                .next()
+                .await
+                .ok_or_else(|| Status::invalid_argument("expected frame 0"))?
+                .map_err(|status| Status::internal(format!("frame 0 recv: {status}")))?;
+            let UpPayload::EnvelopeOpen(_) = frame0.payload.ok_or_else(|| {
+                Status::invalid_argument("frame 0 must carry EnvelopeOpen payload")
+            })?
+            else {
+                return Err(Status::invalid_argument("frame 0 must be EnvelopeOpen"));
+            };
+
+            Ok(Response::new(
+                Box::pin(stream::empty()) as Self::InvokeBidiStream
+            ))
+        }
+    }
+
     #[derive(Default)]
     struct OutOfSequenceSessionHub;
 
@@ -2220,6 +2350,22 @@ mod tests {
                 .serve_with_incoming(incoming)
                 .await
                 .expect("silent session hub server");
+        });
+        (addr, handle)
+    }
+
+    async fn spawn_clean_close_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind clean-close session hub");
+        let addr = listener.local_addr().expect("clean-close hub local addr");
+        let incoming = TcpListenerStream::new(listener);
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(InvocationServer::new(CleanCloseSessionHub))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("clean-close session hub server");
         });
         (addr, handle)
     }
@@ -2361,6 +2507,73 @@ mod tests {
         assert_eq!(next_backoff(Duration::from_secs(20)), SESSION_BACKOFF_MAX);
         // Past the cap stays at the cap.
         assert_eq!(next_backoff(SESSION_BACKOFF_MAX), SESSION_BACKOFF_MAX);
+    }
+
+    #[test]
+    fn clean_close_backoff_resets_only_after_healthy_uptime() {
+        // A session that outlived SESSION_HEALTHY_MIN_UPTIME earns
+        // the reset back to the 250 ms floor.
+        let healthy = SessionCloseStats {
+            uptime: SESSION_HEALTHY_MIN_UPTIME,
+            frames_received: 7,
+        };
+        assert_eq!(
+            backoff_after_clean_close(&healthy, Duration::from_secs(8)),
+            SESSION_BACKOFF_INITIAL
+        );
+
+        // A sub-second clean close (hub-side displacement / contract
+        // skew) must NOT reset the curve — incident 2026-06-11 held
+        // 5428 cycles at the 250 ms floor because it did.
+        let displaced = SessionCloseStats {
+            uptime: Duration::from_millis(120),
+            frames_received: 1,
+        };
+        assert_eq!(
+            backoff_after_clean_close(&displaced, Duration::from_secs(8)),
+            Duration::from_secs(8),
+            "short-lived clean close must keep the escalating backoff"
+        );
+        // At the floor the policy is a no-op; the supervisor's
+        // post-sleep next_backoff() doubling does the escalation.
+        assert_eq!(
+            backoff_after_clean_close(&displaced, SESSION_BACKOFF_INITIAL),
+            SESSION_BACKOFF_INITIAL
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_close_reports_uptime_and_frame_count_stats() {
+        // Device-side fingerprint contract for hub-side close
+        // diagnosis (incident 2026-06-11: hub logs lost, device
+        // stats are the only surviving evidence). A hub that admits
+        // and immediately EOFs the down stream must yield Ok with
+        // zero frames and an uptime below the healthy threshold.
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, _server) = spawn_clean_close_session_hub().await;
+
+        let stats = tokio::time::timeout(
+            Duration::from_secs(5),
+            dial_and_run_session(
+                format!("http://{addr}"),
+                "easynet:///r/realm/device/n1".to_string(),
+                None,
+                None,
+                dispatcher,
+                None,
+                &[],
+            ),
+        )
+        .await
+        .expect("clean-close dial bounded to 5 s")
+        .expect("clean hub close must surface as Ok(stats), not an error");
+
+        assert_eq!(stats.frames_received, 0, "empty down stream sent no frames");
+        assert!(
+            stats.uptime < SESSION_HEALTHY_MIN_UPTIME,
+            "immediate close cannot count as healthy uptime, got {:?}",
+            stats.uptime
+        );
     }
 
     #[test]
