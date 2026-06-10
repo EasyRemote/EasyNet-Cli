@@ -5074,13 +5074,31 @@ impl DaemonInvocationService {
                     Err(status) => map_status_to_session_request_error(status),
                 }
             }
+            // Device-pulled trust sync (paired-user keys at session
+            // attach, peer-device keys on origin-claim miss): the hub
+            // is the realm's key registrar, and the session bidi is
+            // the device's authenticated channel to ask it. Routes to
+            // the same handler the unary Invoke path uses.
+            federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY => {
+                match self.dispatch_federation_resolve_key(args) {
+                    Ok(response) => {
+                        let body = response.into_inner();
+                        RequestOutcome::Ok {
+                            result_bytes: body.result,
+                        }
+                    }
+                    Err(status) => map_status_to_session_request_error(status),
+                }
+            }
             other => RequestOutcome::Err {
                 error: SessionRequestError::PermissionDenied {
                     reason: format!(
                         "session_request: ability `{other}` is not yet routed; \
                          only `{ABILITY_FEDERATION_FORWARD_INVOKE}`, \
-                         `{ABILITY_FEDERATION_ADVERTISE_AGENT}`, and \
-                         `{ABILITY_FEDERATION_ADVERTISE_ABILITIES}` are wired"
+                         `{ABILITY_FEDERATION_ADVERTISE_AGENT}`, \
+                         `{ABILITY_FEDERATION_ADVERTISE_ABILITIES}`, and \
+                         `{}` are wired",
+                        federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY
                     ),
                 },
             },

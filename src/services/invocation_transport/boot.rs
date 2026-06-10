@@ -637,7 +637,7 @@ pub fn start_daemon_invocation_transport(
             )));
         }
         service = service.with_session_escalation(Arc::clone(&handle));
-        Some((correlation, outbox))
+        Some((correlation, outbox, handle))
     } else {
         None
     };
@@ -958,6 +958,7 @@ fn spawn_session_supervisor(
     escalation_state: Option<(
         Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
         crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
+        Arc<crate::services::invocation_transport::session_escalation::SessionEscalationHandle>,
     )>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
@@ -1009,9 +1010,9 @@ fn spawn_session_supervisor(
     // RequestResult frames complete the matching pending entry,
     // and forward the SharedSessionOutbox to the supervisor so it
     // publishes the active up_tx on every successful dial.
-    let (correlation, outbox) = match escalation_state {
-        Some((c, o)) => (Some(c), Some(o)),
-        None => (None, None),
+    let (correlation, outbox, escalation_handle) = match escalation_state {
+        Some((c, o, h)) => (Some(c), Some(o), Some(h)),
+        None => (None, None, None),
     };
     let mut local_dispatcher = LocalAxonSessionDispatcher::new();
     if let Some(correlation) = correlation {
@@ -1021,15 +1022,20 @@ fn spawn_session_supervisor(
     local_dispatcher =
         local_dispatcher.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
     // Cross-device origin-caller claims: warm the anchor from the hub
-    // on a miss (same authority direction and write policy as the
-    // paired-user sync the supervisor carries below).
-    local_dispatcher = local_dispatcher.with_device_trust_sync(Arc::new(
-        crate::services::invocation_transport::device_trust_sync::DeviceTrustSync::new(
-            user_trust_sync.daemon_realm.clone(),
-            user_trust_sync.trust_anchor_path.clone(),
-            user_trust_sync.cell.clone(),
-        ),
-    ));
+    // on a miss, over the SAME authenticated session channel the
+    // paired-user sync and hot-agent advertising use (a device-local
+    // resolve_key invoke would be answered from this daemon's own
+    // anchor and can never learn a new key).
+    if let Some(handle) = escalation_handle {
+        local_dispatcher = local_dispatcher.with_device_trust_sync(Arc::new(
+            crate::services::invocation_transport::device_trust_sync::DeviceTrustSync::new(
+                user_trust_sync.daemon_realm.clone(),
+                user_trust_sync.trust_anchor_path.clone(),
+                user_trust_sync.cell.clone(),
+                handle,
+            ),
+        ));
+    }
     let dispatcher = Arc::new(local_dispatcher);
     let hub_endpoint_for_wait = hub_endpoint.clone();
     let caller_ura_for_wait = identity.caller_ura.clone();

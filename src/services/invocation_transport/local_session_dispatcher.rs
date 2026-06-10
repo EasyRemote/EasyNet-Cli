@@ -182,6 +182,88 @@ impl LocalAxonSessionDispatcher {
         self
     }
 
+    /// Normalize a local execution outcome onto `call_id` and push it
+    /// up the session bidi. Shared by the inline dispatch path and the
+    /// spawned claim-dispatch task.
+    async fn send_result_frame(
+        outbound: &SessionUpSender,
+        call_id: u64,
+        result: SessionDispatch,
+    ) -> Result<(), SessionDispatchError> {
+        let result = match result {
+            SessionDispatch::Result {
+                payload,
+                terminal,
+                failure,
+                error,
+                request_id,
+                ..
+            } => SessionDispatch::Result {
+                call_id,
+                payload,
+                terminal,
+                failure,
+                error,
+                request_id,
+            },
+            SessionDispatch::Dispatch { .. } | SessionDispatch::BidiOpen { .. } => {
+                unreachable!("local execution never returns Dispatch")
+            }
+            SessionDispatch::BidiInput { .. }
+            | SessionDispatch::Request { .. }
+            | SessionDispatch::RequestResult { .. } => {
+                // PR-N6 wire shape (C2) added these for the
+                // device → hub forward_invoke escalation path.
+                // LocalAxonSessionDispatcher only handles
+                // hub-pushed Dispatch frames + their Result
+                // replies; Request/RequestResult never reach
+                // this code path by construction.
+                unreachable!(
+                    "local execution never returns Request / RequestResult \
+                     (those flow on the device → hub direction handled by C3/C4)"
+                )
+            }
+        };
+
+        let payload = serde_json::to_vec(&result).map_err(|err| {
+            SessionDispatchError::Other(format!("encode SessionDispatch::Result: {err}"))
+        })?;
+
+        let payload_len = payload.len();
+        crate::op_event!(
+            component = local_session_dispatcher,
+            kind = sending_result_frame_up_bidi,
+            call_id = call_id,
+            payload_bytes = payload_len,
+        );
+
+        let send_result = outbound
+            .send_binary_chunk(BinaryChunk {
+                stream_id: SESSION_STREAM_ID,
+                data: payload,
+                ..BinaryChunk::default()
+            })
+            .await
+            .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()));
+
+        if send_result.is_err() {
+            crate::op_event!(
+                component = local_session_dispatcher,
+                kind = result_frame_send_failed,
+                call_id = call_id,
+                reason = "outbound_channel_closed",
+            );
+        } else {
+            crate::op_event!(
+                component = local_session_dispatcher,
+                kind = result_frame_sent_up_bidi,
+                call_id = call_id,
+            );
+        }
+
+        send_result
+    }
+
     #[must_use]
     pub fn with_device_trust_sync(
         mut self,
@@ -1173,6 +1255,40 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 }
                 Err(reason) => Ok(Self::session_error_result(call_id, reason)),
             }
+        } else if origin_caller.is_some() {
+            // Origin-caller dispatches may need the session channel
+            // themselves (resolve_key trust sync escalates up the
+            // SAME bidi this loop consumes) — awaiting them inline
+            // would deadlock the reply until the escalation times
+            // out. Run them as their own task and reply through the
+            // cloned outbound, the spawn_stream_forwarder pattern.
+            let this = self.clone();
+            let outbound_task = outbound.clone();
+            tokio::spawn(async move {
+                let result = match this
+                    .try_dispatch_via_axon(
+                        call_id,
+                        callee_ura.as_deref(),
+                        subject_ura.as_deref(),
+                        &ability,
+                        &args,
+                        &metadata,
+                        origin_caller.as_ref(),
+                    )
+                    .await
+                {
+                    Some(result) => result,
+                    None => Self::session_error_result(
+                        call_id,
+                        format!(
+                            "<self>.session: ability `{ability}` is not registered \
+                             in Axon LocalRuntime"
+                        ),
+                    ),
+                };
+                let _ = Self::send_result_frame(&outbound_task, call_id, result).await;
+            });
+            return Ok(());
         } else if let Some(axon_result) = self
             .try_dispatch_via_axon(
                 call_id,
@@ -1202,79 +1318,9 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
             ))
         }?;
 
-        let result = match result {
-            SessionDispatch::Result {
-                payload,
-                terminal,
-                failure,
-                error,
-                request_id,
-                ..
-            } => SessionDispatch::Result {
-                call_id,
-                payload,
-                terminal,
-                failure,
-                error,
-                request_id,
-            },
-            SessionDispatch::Dispatch { .. } | SessionDispatch::BidiOpen { .. } => {
-                unreachable!("local execution never returns Dispatch")
-            }
-            SessionDispatch::BidiInput { .. }
-            | SessionDispatch::Request { .. }
-            | SessionDispatch::RequestResult { .. } => {
-                // PR-N6 wire shape (C2) added these for the
-                // device → hub forward_invoke escalation path.
-                // LocalAxonSessionDispatcher only handles
-                // hub-pushed Dispatch frames + their Result
-                // replies; Request/RequestResult never reach
-                // this code path by construction.
-                unreachable!(
-                    "local execution never returns Request / RequestResult \
-                     (those flow on the device → hub direction handled by C3/C4)"
-                )
-            }
-        };
-
-        let payload = serde_json::to_vec(&result).map_err(|err| {
-            SessionDispatchError::Other(format!("encode SessionDispatch::Result: {err}"))
-        })?;
-
-        let payload_len = payload.len();
-        crate::op_event!(
-            component = local_session_dispatcher,
-            kind = sending_result_frame_up_bidi,
-            call_id = call_id,
-            payload_bytes = payload_len,
-        );
-
-        let send_result = outbound
-            .send_binary_chunk(BinaryChunk {
-                stream_id: SESSION_STREAM_ID,
-                data: payload,
-                ..BinaryChunk::default()
-            })
-            .await
-            .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()));
-
-        if send_result.is_err() {
-            crate::op_event!(
-                component = local_session_dispatcher,
-                kind = result_frame_send_failed,
-                call_id = call_id,
-                reason = "outbound_channel_closed",
-            );
-        } else {
-            crate::op_event!(
-                component = local_session_dispatcher,
-                kind = result_frame_sent_up_bidi,
-                call_id = call_id,
-            );
-        }
-
-        send_result
+        Self::send_result_frame(outbound, call_id, result).await
     }
+
 }
 
 #[cfg(test)]

@@ -22,8 +22,11 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::services::invocation_transport::invoke_remote_initiator::RequestOutcome;
+use crate::services::invocation_transport::session_escalation::SessionEscalationHandle;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// How long a hub "unknown caller" answer suppresses re-resolving the
@@ -39,34 +42,67 @@ pub struct DeviceTrustSync {
     /// resolve serializes concurrent misses; entries record the last
     /// failed resolve per caller URA.
     state: tokio::sync::Mutex<HashMap<String, Instant>>,
-    /// Resolver indirection so the import pipeline is unit-testable
-    /// without a hub: production wires `resolve_key_via_local_daemon`.
-    resolver: fn(&str) -> anyhow::Result<Vec<String>>,
+    /// Where hub-attested keys come from. Production uses the
+    /// `<self>.session` escalation channel — the SAME authenticated
+    /// hub channel the paired-user sync and hot-agent advertising
+    /// use. A device-local `federation.resolve_key` invoke would be
+    /// answered from THIS daemon's own anchor (the local ability
+    /// shadows hub routing) and can never learn a new key.
+    source: KeySource,
+}
+
+enum KeySource {
+    Session(Arc<SessionEscalationHandle>),
+    /// Test seam: a pure function standing in for the hub.
+    #[allow(dead_code)]
+    Static(fn(&str) -> anyhow::Result<Vec<String>>),
 }
 
 impl DeviceTrustSync {
     #[must_use]
-    pub fn new(daemon_realm: String, trust_anchor_path: PathBuf, cell: SharedTrustAnchor) -> Self {
-        Self::with_resolver(
-            daemon_realm,
-            trust_anchor_path,
-            cell,
-            resolve_key_via_local_daemon,
-        )
-    }
-
-    fn with_resolver(
+    pub fn new(
         daemon_realm: String,
         trust_anchor_path: PathBuf,
         cell: SharedTrustAnchor,
-        resolver: fn(&str) -> anyhow::Result<Vec<String>>,
+        escalation: Arc<SessionEscalationHandle>,
+    ) -> Self {
+        Self::with_source(
+            daemon_realm,
+            trust_anchor_path,
+            cell,
+            KeySource::Session(escalation),
+        )
+    }
+
+    fn with_source(
+        daemon_realm: String,
+        trust_anchor_path: PathBuf,
+        cell: SharedTrustAnchor,
+        source: KeySource,
     ) -> Self {
         Self {
             daemon_realm,
             trust_anchor_path,
             cell,
             state: tokio::sync::Mutex::new(HashMap::new()),
-            resolver,
+            source,
+        }
+    }
+
+    async fn resolve_from_hub(&self, agent_ura: &str) -> anyhow::Result<Vec<String>> {
+        match &self.source {
+            KeySource::Session(handle) => {
+                let args =
+                    serde_json::to_vec(&serde_json::json!({ "agent_ura": agent_ura }))?;
+                let ability = crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY;
+                match handle.escalate(ability.to_string(), args).await {
+                    RequestOutcome::Ok { result_bytes } => parse_resolved_keys(&result_bytes),
+                    RequestOutcome::Err { error } => {
+                        anyhow::bail!("hub resolve_key failed: {error:?}")
+                    }
+                }
+            }
+            KeySource::Static(resolver) => resolver(agent_ura),
         }
     }
 
@@ -99,21 +135,19 @@ impl DeviceTrustSync {
             }
         }
 
-        let resolver = self.resolver;
-        let ura = caller_ura.to_string();
-        let resolved =
-            tokio::task::spawn_blocking(move || resolver(&ura)).await;
-        let keys = match resolved {
-            Ok(Ok(keys)) if !keys.is_empty() => keys,
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
-                if let Ok(Err(err)) = resolved {
-                    crate::op_event!(
-                        component = device_trust_sync,
-                        kind = resolve_failed,
-                        caller_ura = caller_ura,
-                        error = err.to_string(),
-                    );
-                }
+        let keys = match self.resolve_from_hub(caller_ura).await {
+            Ok(keys) if !keys.is_empty() => keys,
+            Ok(_) => {
+                state.insert(caller_ura.to_string(), Instant::now());
+                return false;
+            }
+            Err(err) => {
+                crate::op_event!(
+                    component = device_trust_sync,
+                    kind = resolve_failed,
+                    caller_ura = caller_ura,
+                    error = err.to_string(),
+                );
                 state.insert(caller_ura.to_string(), Instant::now());
                 return false;
             }
@@ -168,15 +202,11 @@ impl DeviceTrustSync {
     }
 }
 
-/// Resolve a device key from the realm hub through this daemon's own
-/// Axon Invocation surface (the canonical client seam — same routing
-/// the CLI uses, so hub escalation, TLS, and admission are uniform).
-/// Blocking: call from `spawn_blocking`.
-fn resolve_key_via_local_daemon(agent_ura: &str) -> anyhow::Result<Vec<String>> {
-    let response = crate::support::local_invoke::invoke_local_ability(
-        crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
-        serde_json::json!({ "agent_ura": agent_ura }),
-    )?;
+/// Parse the hub's resolve_key reply: prefer the multi-key field
+/// (DEC-EU), fall back to the single-key field of older hubs — the
+/// same tolerance the paired-user sync applies.
+fn parse_resolved_keys(result_bytes: &[u8]) -> anyhow::Result<Vec<String>> {
+    let response: serde_json::Value = serde_json::from_slice(result_bytes)?;
     let mut keys: Vec<String> = response
         .get("public_keys_b64")
         .and_then(|v| v.as_array())
@@ -214,11 +244,11 @@ mod tests {
         resolver: fn(&str) -> anyhow::Result<Vec<String>>,
         dir: &tempfile::TempDir,
     ) -> DeviceTrustSync {
-        DeviceTrustSync::with_resolver(
+        DeviceTrustSync::with_source(
             "test-realm".into(),
             dir.path().join("realm-trust.toml"),
             empty_cell(),
-            resolver,
+            KeySource::Static(resolver),
         )
     }
 
