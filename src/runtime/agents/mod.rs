@@ -327,7 +327,30 @@ impl PagesIdentity {
 /// **No env-var or user plugin-store read**: builtin plugin shape is
 /// determined by the compile-time feature set and current target
 /// platform only. Installed plugin packages remain daemon-only state.
+///
+/// **Process-cached (CQRS read model).** This function is
+/// deterministic by construction (fixed services, empty agent
+/// registry, env-gate-free plugin mode), yet runtime reflection
+/// surfaces — `published_abilities()`, MCP reflective refresh,
+/// discovery hints, descriptor generation — were calling it per
+/// tick, re-running a BOOT-grade construction each time (fresh
+/// McpClientService → process-singleton noise, fresh plugin
+/// registration → one leaked WebRTC runtime per call until that was
+/// made lazy, 2026-06-10 fd exhaustion). Reads of a pure snapshot
+/// must not rebuild the system: the snapshot is computed once per
+/// process. Tests keep fresh instances (`cfg(test)`) because some
+/// suites mutate the catalog via hot-register.
 pub fn build_registry() -> Arc<AxonAbilityCatalog> {
+    #[cfg(not(test))]
+    {
+        static SNAPSHOT: std::sync::OnceLock<Arc<AxonAbilityCatalog>> = std::sync::OnceLock::new();
+        return Arc::clone(SNAPSHOT.get_or_init(build_registry_uncached));
+    }
+    #[cfg(test)]
+    build_registry_uncached()
+}
+
+fn build_registry_uncached() -> Arc<AxonAbilityCatalog> {
     build_registry_with_services_result_inner(
         Arc::new(SessionService::new()),
         Arc::new(PermissionService::new()),
@@ -1959,11 +1982,32 @@ mod tests {
             // inventory and source inspection. Pure reads.
             | "skill.list"
             | "skill.tree"
-            | "skill.read_file" => Some(AbilityLayer::Introspection),
+            | "skill.read_file"
+            // chat.history.* — pure reads of persisted chat
+            // transcripts (JSONL under the agent workspace). Same
+            // Introspection class as invocation.history.*.
+            | "chat.history.list"
+            | "chat.history.get"
+            // context.* reads — clipboard history, mapped-folder
+            // browse, favorites, and persisted media captures are
+            // all pure reads of device-local context state.
+            | "context.clipboard.list"
+            | "context.clipboard.get"
+            | "context.folders.list"
+            | "context.fs.list"
+            | "context.favorites.list"
+            | "context.captures.list"
+            | "context.captures.get" => Some(AbilityLayer::Introspection),
             // ── Control / decision ──────────────────────────────
             "policy.evaluate"
             | "policy.simulate"
             | "consent.decide"
+            // context mutations — flip clipboard tracking, add /
+            // remove favorites: device-context configuration writes,
+            // same decision class as consent.decide.
+            | "context.clipboard.track"
+            | "context.favorites.add"
+            | "context.favorites.remove"
             | "consent.subscribe" => Some(AbilityLayer::Control),
             // ── Observation ─────────────────────────────────────
             "observe.health"

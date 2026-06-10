@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "context.captures.list"
+description = "List media artifacts persisted by abilities (screenshots, photos, recordings), newest first, with the distinct ability folder names."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.ability]
+type = "string"
+description = "Filter to one producing ability (folder name, e.g. screen.snapshot)."
+
+[input_schema.properties.limit]
+type = "integer"
+description = "Max entries to return (default 100, cap 200)."

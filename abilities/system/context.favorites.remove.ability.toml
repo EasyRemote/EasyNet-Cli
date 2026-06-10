@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "context.favorites.remove"
+description = "Remove a favorite by id."
+
+[input_schema]
+type = "object"
+required = ["id"]
+additionalProperties = false
+
+[input_schema.properties.id]
+type = "string"
+description = "Favorite id from context.favorites.list."

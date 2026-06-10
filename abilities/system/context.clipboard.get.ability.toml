@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "context.clipboard.get"
+description = "Read one clipboard entry; image entries include base64 PNG data."
+
+[input_schema]
+type = "object"
+required = ["id"]
+additionalProperties = false
+
+[input_schema.properties.id]
+type = "string"
+description = "Clip id from context.clipboard.list."
