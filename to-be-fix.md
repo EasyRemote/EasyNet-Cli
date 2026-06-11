@@ -7,7 +7,7 @@
 ---
 
 ## EasyNet-Cli
-### F-023 RFC-001 conformance baseline 严重落后(888 vs 实际 917)【已核验,2026-06-12】
+### F-036 RFC-001 conformance baseline 严重落后(888 vs 实际 917)【已核验,2026-06-12】
 - 落点:docs/rfc/AXON-RFC-001-baseline-counts.txt(=888)vs `check-rfc-001-conformance.sh`(实际 917) · 规范 · 中
 - 证据:`check-rfc-001-baseline-lock.sh` FAIL,regression +29。二分定位:
   · +28 先于本会话工作(387a645 已 916,baseline 888 更早 —— 历史累积未更新,非本次引入);
@@ -17,6 +17,10 @@
 - 方向:**不擅自一次性吞 baseline**(会掩盖那 28 条未审违规)。需 CTO 决定:逐条审 916→917
   的违规归属(大头是 MCP keyword 743 = facade/mcp P4.8d 移除待办,Rule 1),按真值更新 baseline
   或修违规;本会话的 +1 MCP 修复是必要 bug fix,可随 MCP 移除一并清。
+- 本会话 +1 精确性质(2026-06-12 复核):该 keyword 是 mcp_executor.rs 里 worker-spawn 修复的
+  错误文案("mcp executor: upstream call did not complete...")。mcp_executor.rs 整文件不在规则
+  白名单 = P4.8d facade/mcp 移除范围内的先存状态;我的 +1 是该文件已有违规的延续,非新类型。
+  **拒绝为消这 1 条改错误文案迁就过宽的 grep**(诊断措辞失真本末倒置)——随 P4.8d 移除一并清。
 
 ### F-001 daemon_invocation_service.rs 是 13,142 行 god-file 【已核验】
 - 落点:src/services/invocation_transport/daemon_invocation_service.rs · 重量/架构 · **高**
