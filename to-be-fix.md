@@ -7,6 +7,17 @@
 ---
 
 ## EasyNet-Cli
+### F-039 retired 顶层 CLI 别名 join/start/stop 未移除,边界检查失败 【已核验,2026-06-12,非本会话引入】
+- 落点:src/facade/cli/mod.rs Join/Start/Stop variants + run arms;
+  scripts/check-cli-flat-command-boundary.sh(规则:retired top-level aliases 应已删) · 规范/产品 · 中
+- 证据:`cargo test --test script_checks` → cli_flat_command_boundary_script_holds FAILED;直接跑
+  check-cli-flat-command-boundary.sh → "retired top-level CLI aliases still exist: Join/Start/Stop"。
+  边界规则要求这些顶层别名(= device join / runtime start/stop 的快捷方式)退役,但仍在 enum。
+- 归属:**非本会话引入** —— 别名来自早期 `7abd78b feat(cli): top-level join/start/stop shortcuts`;
+  边界检查后来加了退役规则,别名未随之删除。我整夜未碰 join/start/stop。
+- 方向:删 Join/Start/Stop 顶层 variants(产品决策 —— 这是面向用户的破坏性 CLI 变更,移除快捷
+  命令影响现有用户脚本,需 CTO 拍板时机)。**不擅自删顶层命令**:破坏性、面向用户、需产品决定。
+- 发现途径:`cargo test --test script_checks`(运行本体)—— 第八个真问题。
 ### F-038 session_dispatch_fixture 跨仓基线漂移:Federation-MVP 基线缺 ability_ura 【已核验,2026-06-12】
 - 落点:tests/session_dispatch_fixture.rs 读 `../EasyNet-Federation-MVP/tests/schema_compat/
   baselines/rust/transport/session_dispatch.json`(**第五个兄弟仓**,不在 A/B/Cli/Axon 四仓内) · 测试/跨仓 · 中
