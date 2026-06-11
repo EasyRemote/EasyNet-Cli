@@ -685,7 +685,11 @@ pub fn start_daemon_invocation_transport(
             ),
         );
         service = service.with_device_trust_sync(Arc::clone(&device_trust_sync));
-        Some((correlation, outbox, device_trust_sync))
+        Some(DeviceEscalationState {
+            correlation,
+            outbox,
+            device_trust_sync,
+        })
     } else {
         None
     };
@@ -1000,15 +1004,21 @@ fn render_session_request_error(error: &SessionRequestError) -> String {
 /// Runs forever on the daemon's tokio runtime; cancelled implicitly
 /// when the runtime shuts down (the `cancel` oneshot we hand it is
 /// dropped, which the supervisor treats the same as a cancel signal).
+/// Device-mode session escalation wiring, grouped so it travels as one
+/// named value instead of an `Option<(Arc<...>, ..., Arc<...>)>` tuple
+/// through the boot path. Built once in device mode; `None` in
+/// hub/both modes.
+struct DeviceEscalationState {
+    correlation: Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
+    outbox: crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
+    device_trust_sync: Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
+}
+
 fn spawn_session_supervisor(
     hub_endpoint: String,
     identity: DaemonIdentity,
     hub_ca_pem_path: Option<std::path::PathBuf>,
-    escalation_state: Option<(
-        Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
-        crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
-        Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
-    )>,
+    escalation_state: Option<DeviceEscalationState>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
@@ -1060,7 +1070,11 @@ fn spawn_session_supervisor(
     // and forward the SharedSessionOutbox to the supervisor so it
     // publishes the active up_tx on every successful dial.
     let (correlation, outbox, device_trust_sync) = match escalation_state {
-        Some((c, o, s)) => (Some(c), Some(o), Some(s)),
+        Some(state) => (
+            Some(state.correlation),
+            Some(state.outbox),
+            Some(state.device_trust_sync),
+        ),
         None => (None, None, None),
     };
     let mut local_dispatcher = LocalAxonSessionDispatcher::new();
