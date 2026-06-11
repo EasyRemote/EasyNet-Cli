@@ -40,6 +40,19 @@
     clippy::doc_overindented_list_items,
     clippy::module_name_repetitions
 )]
+// Ratchet (F-005): categories cleared to zero are DENIED so they
+// cannot creep back; the two still-open categories
+// (`result_large_err` — needs AxonError boxing/SDK slim, and
+// `too_many_arguments` — the F-002 transport arg-struct refactor)
+// stay at warn until their tracked fixes land. Lower the warn set,
+// never raise it.
+#![deny(
+    clippy::needless_borrow,
+    clippy::needless_return,
+    clippy::redundant_closure,
+    clippy::useless_format,
+    clippy::missing_safety_doc
+)]
 
 pub mod core;
 pub mod daemon;
