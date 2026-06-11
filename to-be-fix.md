@@ -7,6 +7,19 @@
 ---
 
 ## EasyNet-Cli
+### F-037 pages u14 测试运行时失败:has_rpc(<user>.pages.list) 断言失败 【已核验,2026-06-12,非本会话引入】
+- 落点:tests/pages_unit.rs:477 `assert!(reg.has_rpc(&ability))`,ability = `<user>.pages.list` · 测试/规范 · 中
+- 证据:`cargo test --test pages_unit` → u14_pages_management_abilities_are_in_local_runtime FAILED
+  (14 passed / 1 failed)。pages::register 用 `register_rpc_with_spec("pages.list", …)` + `OwnerKind::User`,
+  测试期望 owner 限定名 `alice-runtime.pages.list` 在 has_rpc 命中,但断言失败 → owner→name 组合
+  与测试期望不符。
+- 归属:**非本会话引入**——我整夜未碰 pages;mod.rs 最近改动是他人的
+  `4aa2412 refactor(pages): single source of truth for management ability specs`,u14 很可能在该
+  重构后破损(注册名/owner 限定逻辑变了,测试未同步)。
+- 方向:pages 作者定——要么测试期望随重构更新(若注册名故意变),要么 register 的 owner→name
+  组合修回 `<user>.pages.list`。**不擅自改**:这是他人在树的 pages 子系统,修它可能冲突。
+- 发现途径:`cargo test --test pages_unit`(运行本体,非仅编译)—— 编译过不代表逻辑过,这是
+  本会话"全套测试找盲点"方向的第六个真问题,且是首个 RUNTIME(非编译)失败。
 ### F-036 RFC-001 conformance baseline 严重落后(888 vs 实际 917)【已核验,2026-06-12】
 - 落点:docs/rfc/AXON-RFC-001-baseline-counts.txt(=888)vs `check-rfc-001-conformance.sh`(实际 917) · 规范 · 中
 - 证据:`check-rfc-001-baseline-lock.sh` FAIL,regression +29。二分定位:
