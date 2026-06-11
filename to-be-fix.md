@@ -68,6 +68,12 @@
     3 调用点改字面量、无 #[allow] 消音(真重构);local_session_dispatcher.rs:320 try_dispatch_via_axon
     (7 dispatch 字段,热路径、caller 多,收拢风险>收益)随 F-002 一并清。即:剩 8 条 = 6 large_err
     + boot.rs(F-002) + dispatcher(F-002)。
+- dispatcher too_many_args 具体评估(2026-06-12,验是否隔离小修):**否**。
+  try_dispatch_via_axon 的 7 参全是借用(`&str`/`&[u8]`/`&HashMap`/`Option<&...>`),提 struct 需
+  生命周期参数,且一调用点(local_session_dispatcher.rs:1269)在 `tokio::spawn(async move)` 内调用
+  —— 借用 struct 跨 async 边界引入生命周期复杂度,风险>收益。与 DeviceEscalationState(owned Arc
+  元组,干净提取 da5dd0e)和 JoinFailureParts(owned String,fcb5296)不同:那两个 owned,这个借用+
+  async。随 F-002 统一设计(借用 vs owned 边界一并定)处理,不单独强提。
 - 方向:箱化 + F-002 收拢后清零;CI 加 `-D warnings` 防回潮。
 
 ### F-006 OnceLock 全局单例 HubPublishedAbilityStore::global() 【已核验,2026-06-11 评估:中型非小修】
