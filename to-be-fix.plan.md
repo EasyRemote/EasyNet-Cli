@@ -282,3 +282,22 @@ lastErr 错误隔离);ICE 轮询实有间隔休眠(:933),有界轮询达标。
   第 8 轮为预期终轮:收口残余 ✗ → 完整性终审 → 跳出 loop。
 - **2026-06-11 第 8 轮(终轮)**:§4 表收口无 ✗(conformance/Dialog 内部声明边界);
   §3.6 排序终稿。**审计收敛:状态机全落档、清单 29 活跃条全核验、修复计划全排序。loop 退出。**
+- **2026-06-12 边界镜头 + 第 9 轮(loop 重启)**:新维度「所有权边界」依 runtime-boundary/
+  ura-discipline 两 skill 铺满:F-040(backend 包 daemon-internal ability + 手抄帧)、
+  F-004 升格载体债、F-041(守卫不对称)、F-042(receipt URA 第 4 野生形状/AXIOM 22.2 反例);
+  正面:Cli ura 门面+9 守卫、FFI 七元组必填、Frontend 构造集中化。
+  下一轮:T2.0 caller 盘点(审计执行)、ability.json/control.sock 所有权、URAChip 渲染纪律。
+- **2026-06-12 第 10 轮**:T2.0 首批——backend JSON 控制路径**已退役**(好消息,余 2 注释
+  F-044);Cli control.sock 自标 Legacy,8 内部文件待 op 级分类(重点 interpreter.rs);
+  F-043(URAChip 失守 6+)。下一轮:T2.0 收尾 + ability.json 所有权 + 收敛重估。
+- **2026-06-12 第 11 轮(第二次收敛)**:T2.0 关闭全绿(interpreter 澄清;control.sock
+  降级不变量已书面存在;载体债收窄至 SessionDispatch 唯一面);ability manifest 合规正面。
+  **五维(质量/重量/规范/状态机/边界)全扫毕,无未审残留,loop 退出。**
+- **2026-06-12 第 12 轮(增量模式)**:§1 形状索引注意——Axon 已批准 device-owned agent/ability
+  双新形状(64190a6b/35efe641,`device.` 保留 owner token,`device_agent_ids()` 分立访问器),
+  本文件 §1 与 ura-discipline skill 的形状表**均待补**(skill 更新需 CTO 授权)。
+  F-047 入册(Cli 管理面 8 消费点对新变体隐式 bail)。CI 棘轮 + tests 工作流落地(正面)。
+- **第 13-15 轮(实际日期 2026-06-11;「06-12」系跨夜误标,勘误见清单文件)**:
+  F-047 判定 8/8、None 嫌疑清除、e2e 通过、skill 形状表经授权更新;
+  三仓零新提交 + 连续两轮零新债 → **第三次收敛,loop 退出**。
+  增量审计的再启动条件:新提交批量落地后由 CTO 重启 loop,或并入常规 review 流程。

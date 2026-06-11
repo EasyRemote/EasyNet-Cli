@@ -101,6 +101,14 @@ terminal-store 接入即收口。
 | T0.3 | **F-038**:确认 SessionDispatch::Request 增 ability_ura 是有意 wire 演进 → Federation-MVP 重生 session_dispatch.json 基线 | Fed-MVP | S | `cargo test --test session_dispatch_fixture` 绿 |
 | T0.4 | **基准 harness**:会话帧路径(帧率/P99/分配)+ LocalRuntime admission 吞吐两个基准,作为 T2.1/T3.1 的 gate | Cli+Axon | M | 基准可重复运行,数字落档 |
 
+### Phase 0.5 — DEC-F048 本体执行闸(2026-06-11 决议落地,优先级同 P0)
+| # | 内容 | 仓 | 规模 | 验收 |
+|---|---|---|---|---|
+| T0.5a | delegation 验证拒绝 device-owned 受托方(System Agent MUST NOT accept delegated authority) | Axon | S | 拒绝路径单测 + 错误文案引用 RFC-005 §3.1.2 |
+| T0.5b | hosted-agent 注册路径断言 owner 非 `device.`(hosted user agent ≠ device-owned) | Cli | S | 注册面双形状测试(user-owned 过 / device-owned 拒) |
+| T0.5c | F-047 八点按 sponsor 语义复核后施工;mcp_reflective owner_kind 点重判(疑应归 User Agent) | Cli | M | 判定表 v2 + 8 点实现 + 双形状测试 |
+| T0.5d | RFC-005 §3.1.2 提交入库(现在 Axon 工作树) | Axon | S | CTO 过目后提交 |
+
 ### Phase 1 — 事故级架构(P1)
 | # | 内容 | 仓 | 规模 | 验收 |
 |---|---|---|---|---|
@@ -112,7 +120,7 @@ terminal-store 接入即收口。
 ### Phase 2 — 协议形状(P0 长线,T0.4 之后)
 | # | 内容 | 仓 | 规模 | 验收 |
 |---|---|---|---|---|
-| T2.0 | **载体归一前置:caller 盘点**(skill 迁移纪律):Invoke/Subscribe/OpenBidi 的 JSON 控制帧逐调用方分类(backend/绑定/CLI/boot/内部/测试) | Cli+BE | S | 盘点表落档,每调用方有去向(Invocation 替代 or 留诊断面) |
+| T2.0 | **✅ 已完成(2026-06-12 第 10-11 轮,审计期执行)**:caller 盘点结论——backend JSON 路径已退役(仅余 F-044 两注释);Cli control.sock 自标 Legacy 且有书面不变量「Nothing on control.sock dispatches product abilities」(easynet-daemon.rs:32),即 skill 迁移第 4 步(JSON 降级 boot/status/诊断)**已满足**;EAL interpreter 不触 control.sock。**载体债收窄到唯一面:gRPC bidi 内的 SessionDispatch 帧** → T2.1 范围即全部剩余工作 | — | 完成 | 见 to-be-fix.md 第 10-11 轮日志 |
 | T2.1 | **F-004 载体归一**:dispatch 帧承载 canonical Invocation/proto 形状(JSON 降级诊断面);滚动升级(双读单写一版)。性能基准做对照而非 gate(边界违例本身已构成改造理由) | Cli(+Axon proto) | L → T2.0 | 基准对比落档;新旧帧互通一个版本;352+ transport 测试迁移;F-038 类漂移不再可能(单一形状源) |
 | T2.1b | **F-040 收口**:backend 改为向 daemon Invocation 提交完整七元组,退役 `<self>.invoke_remote` 包装与手抄 struct(过渡:共享形状入生成代码) | EasyNet BE | M → T2.1 | invoke_remote.go 手抄 struct 删除;contract test 改打 Invocation 面 |
 | T2.2a | **F-015 A 批**:urns.go(557)→ Axon Go SDK URA builders,删 fork 文件 | EasyNet BE | M | 编译零 fork 引用;URA 单测迁移;e2e 配对流程绿 |

@@ -223,6 +223,10 @@
 - 缓和因素:设计是有意为之(setter 同步化对齐多语言 SDK 人体工学),且当前规模未测出瓶颈。
 - 方向:abilities 注册表读多写少 → ArcSwap/RwLock 读路径;nonce 窗口与 key resolver 分锁;
   验签移出互斥段(先取快照再验);**改前必须基准**(与 F-004 同一条纪律)。
+- 附注(2026-06-12 第 13 轮,增量):新 API `ability_names_with_prefix`(:1063-1073)是
+  全局 inner 锁内 O(registry) 全键扫描 + 排序 + 克隆;消费方 hot_agent_registrar.rs:294
+  (agent refresh,低频)今天无害——但它是「全局锁内线性扫」家族的又一成员,锁拓扑改造时一并出锁
+  (快照后过滤)。
 
 ### F-012 receipt.state 以字符串在链上往返 【已核验,2026-06-11 第 2 轮】
 - 落点:sdk/rust/src/invocation/audit.rs:139(`pub state: String`)、:350(`state: impl Into<String>`) · 规范 · 中
@@ -333,10 +337,159 @@
   设计本身达标且优于状态写入式);死常量误导读者以为 expired 是存储态。
 - 方向:删除,或注释「视图态,勿写入」;随 §2.4 文档批次。
 
-### F-033 facade/cli 面 20,858 行;agent.rs 单文件 3,556 行 【已核验,第 5 轮】
+### F-041 URA 防裸构造守卫只覆盖 Cli 一仓 【已核验,第 9 轮(边界维度)】
+- 落点:Cli 有 9 个 URA 边界守卫脚本(test_no_raw_ura_construction.sh 等家族);
+  backend/scripts 与 Frontend 均无等价阀 · 规范/制度 · 中低
+- 现状澄清(亲核):两仓当前**无活跃违例**——backend 28 处字面量中 12 处在 urns.go(fork 内
+  构造,F-015 A批将换 SDK),其余全是注释;Frontend 模板插值构造全部集中在钦定的
+  easynet-ura.ts(:393/:415/:419),api 文件字面量为注释/校验前缀/MOCK 夹具。
+- 风险:合规靠约定,无防回潮阀——下一个 PR 在 handler 里 `fmt.Sprintf("easynet:///r/%s/...")`
+  不会被任何东西拦住。
+- 方向:把 Cli 守卫模式移植两仓各一脚本(backend:internal/ 禁 URA 拼接、白名单 urns.go→SDK;
+  Frontend:`easynet:///r/${` 仅限 easynet-ura.ts)。小改,随 F-015 A 批同车。
+
+### F-042 receipt URA 第四种野生形状:非法顶层 role 钉进测试夹具 【已核验,第 9 轮(边界维度)】
+- 落点:src/plugins/builtin/remote_desktop/session_consent.rs:206/:292、handlers/show_session.rs:156/:171
+  (`easynet:///r/acme/invocation/1/receipt/1`,#[cfg(test)] 夹具);
+  Frontend gallery demo 6× `resource/<owner>.invocations/<id>`(借用形状,未标注 borrowed) · 规范/本体 · 低中
+- 证据:`invocation/` 作顶层 role **不在封闭 role 集**(user/device/agent/ability/hub/resource),
+  parse_ura 必拒;它能存在是因为 receipt_ura 字段值是 raw string 不经 round-trip——AXIOM 22.2
+  「字符串冒充身份」的反例模式被钉进测试,会被后人当 shape 范本抄。
+  这使 receipt body URA 的野生变体达 **4 种**(ura-discipline skill 原记录 3 种)。
+- 方向:① 夹具改用 ledger.rs 测试约定形状(`resource/<owner>.invocations/<id>`)+ borrowed 标注;
+  ② 根治在 RFC-007/008 收口 receipt body URA 正式 builder(spec 缺口,排 RFC 议程);
+  ③ 长线:receipt_ura 字段在反序列化处过 parse_ura(round-trip 强制)。
+
+### F-043 URA 渲染纪律失守:裸 font-mono 渲染绕开 URAChip 【已核验,第 10 轮】
+- 落点:InvokeAbilityDialog.tsx:1453/:1850/:2000/:2073/:2075(target_ura/ability_ura)、
+  InstalledSkillCard.tsx:276(resource_ura)等 6+ 处 · 规范/UI · 低中
+- 违反:ura-discipline skill 明文「never render URAs as plain mono strings; URAChip is the
+  canonical visual」,checklist 直接点名 `<span className="font-mono">{ura}</span>` 形态。
+  URAChip 已在 12 个文件正确使用——又是「约定已立、个别绕开、无阀拦截」模式(同 F-041)。
+- 方向:5 处集中在 Dialog,随 F-018 三分时顺手换 URAChip;可加 eslint 自定义规则防回潮。
+
+### F-044 backend 两处陈旧注释引用已退役的 cliipc JSON 路径 【已核验,第 10 轮】
+- 落点:backend/internal/daemon_grpc/client.go:12、svc/servicecontext.go:165
+  (引用 `internal/cliipc/` —— 该目录已不存在) · 卫生 · 低
+- 价值:这是**好消息的残渣**——backend 的 JSON 控制路径已实际退役(T2.0 盘点确认 backend
+  非 JSON 控制帧调用方),注释清掉即闭环。随 F-040 批顺手清。
+
+### F-045 FFI invocation_json 不读 per-call timeout 【已核验,2026-06-12 灰区核实】
+- 落点:src/ffi/invocation.rs("timeout" 全文件零命中)vs invoke.proto:111
+  (`timeout_seconds = 6 // per-call timeout (capped by envelope.deadline)`) · 规范/缺口 · 低
+- 影响:SDK facade 经 FFI 无法表达单调用超时,只能吃 envelope.deadline 全局值。
+- 方向:解析器加 `timeout_seconds` 字段透传 InvokeRequest——几行 + 一测,非架构;
+  可与 F-005 的 ffi 触碰合车。
+
+### F-046 SDK 签名密钥访问契约缺失(keyring 归 daemon,facade 无合法取签面) 【已核验,2026-06-12 灰区核实】
+- 落点:FFI 已支持 `caller_signature` 预签透传(invocation.rs:1191/:1214/:1243),
+  但「sign=True 由谁拿钥匙签」无契约——keyring 归 daemon 所有(boundary 规则,
+  boot.rs try_load_daemon_seed_from_keyring 是 daemon 内部面) · 架构/边界 · 中
+- 裁决:facade 直读 keyring.enc 否决(跨边界 + 密文格式私有)。两条合规路线待 DEC:
+  (a) **签名服务 ability/FFI 入口**——facade 交 canonical bytes,daemon 持钥签名,
+  私钥不出 daemon(最小暴露,倾向此路);(b) 导出契约(keyring 派生只读种子给本机 SDK)。
+- 过渡可用:既有 caller_signature 透传 = 「调用方自备种子」模式今天就通,零 Cli 改动。
+
+### F-047 device-owned agent 新语法:Cli 管理面 8 消费点行为未声明(隐式 bail) 【已核验,第 12 轮(增量)】
+- 落点:Axon 64190a6b/35efe641(2026-06-11 批准 `agent/device.<device-id>.<agent-id>`,
+  `agent_ids()` 对 DeviceAgent 变体返回 None——分流本身规范 ✓);Cli 8 处 `agent_ids()`
+  消费点对 None 一律 bail:src/ura.rs:149/:181(AbilitySelector owner)、owner_projection.rs:566、
+  mcp_reflective_registry.rs:1327、agent_lifecycle_ability.rs:969、ability_publish_ability.rs:397、
+  invocation_history_ability.rs:395、profiles/bootstrap.rs:313 · 架构/契约 · 中
+- 问题:dispatch 主路径已支持 hosted-agent(0b6c7ad),但管理面(lifecycle/publish/projection/
+  history/MCP/选择器)对 device-owned 输入的行为是**未声明的隐式拒绝**——错误文案按两段尾措辞,
+  对三段尾输入产生误导;每个点「支持还是显式拒绝」无人拍板,是语法演进的漂移温床。
+- 方向:逐点声明——要么接 `device_agent_ids()` 支持,要么显式 typed 拒绝
+  (「device-owned agents not supported on this surface」级错误);8 点一批,加双形状测试。
+- 前提确认(第 14 轮):URAKind **无** DeviceAgent 变体——device-owned 报 `kind=Agent` +
+  `body=DeviceAgent`,故所有 `URAKind::Agent` 臂都会进臂后在 `agent_ids()` 处 None-bail;
+  修复者不能靠 kind 区分,必须双访问器。
+- **逐点判定(第 13-14 轮,8/8 完整)**:
+  | 点位 | 面 | 判定 |
+  |---|---|---|
+  | ura.rs:149(前缀剥离 helper) | 展示名 | **支持**:补 DeviceAgent 臂剥 `{agent_id}.`(今日仅误展示,低害) |
+  | owner_projection.rs:566(skill_resource_ura) | skill 资源 URA | **显式拒绝 + RFC 注记**:device-agent 的 resource_dot owner 形状(`agent.device.<id>.<agent>`?)未定义,属本体缺口,不许就地发明 |
+  | agent_lifecycle_ability.rs:969 | agent 名解析 | **支持(简单)**:`device_agent_ids()` 回退取 agent_id;现错误文案「missing agent_id」对三段尾是误导 |
+  | ability_publish_ability.rs:397 | 发布面 | **显式拒绝**:publish 是用户-agent 开发流,device-owned 不属此面;换准确错误文案 |
+  | ura.rs:181(qualified-name helper) | 展示名 | **支持**:补 DeviceAgent 分支用 `device_agent_ids().1` 做前缀(同 :149 一批) |
+  | mcp_reflective_registry.rs:1327(owner_kind) | MCP 描述符 owner | **支持(简单)**:OwnerKind::Agent 语义不变,agent_id 取 `device_agent_ids().1`;hosted agent 拥有反射描述符是合理场景 |
+  | invocation_history_ability.rs:395(ledger owner) | 账本资源 owner | **显式拒绝(None)+ RFC 注记**:device-agent 的 resource_dot owner 未定义——与 owner_projection 点同一本体缺口,禁止就地发明 |
+  | profiles/bootstrap.rs:313(is_current_agent_ura) | 当前用户 agent 匹配 | **现状即正确**:device-owned 永不属于「当前用户」,None→false 语义恰好对;补一行注释声明意图防回归 |
 - 落点:src/facade/cli/(agent.rs 3,556;federation_wire 1,383 / start 1,267 / join 1,221 /
   auth 1,120 / agent_new_ability 1,118 各为千行级命令文件) · 重量 · 中高
 - 方向:agent.rs 优先拆(子命令各自成模块);其余千行级命令文件观察,不强拆。
+
+### F-048 device-owned agent 语法的本体地位未决:device 从「宿主基底」被隐式升格为「拥有 principal」 【已核验,CTO 质询触发,2026-06-11】
+- 落点:Axon 64190a6b(`agent/device.<device-id>.<agent-id>`,自称 Ratified 2026-06-11)
+  vs 本体正文(boundary skill:device 是 hosting substrate、callee 身份须与 device 分离;
+  AXIOM:问责系于 principal) · **本体/架构** · **高**
+- 语义澄清(亲核两提交):① 35efe641(hosted-agent 路由)是**对的**——hosted 用户 agent
+  身份保持 user-owned,宿主关系留在 resolver(「Whether the device hosts the agent is the
+  RESOLVER's to confirm」原话),「宿主烧进身份」并未发生;② 64190a6b 的语义是「device
+  **拥有** agent」(动机:9a84a98 同日批的 agent 粒度 callee 要求 device.* 系统能力有 owner
+  agent)——这是一次**未经显式辩论的本体修正**(substrate → principal),语法已批、本体正文未改,
+  文实不符(F-003 同类但在本体层)。
+- 佐证(语法前已有的身份糊化):`host_device_agent_ura` 字段,doc 注释写 agent URA
+  (local_agents.rs:24)而夹具存裸 device URA(profiles/mcp.rs:1182、discover_ability.rs:921)。
+- 爆炸半径:小(一日龄;Cli 管理面未采用 = F-047;前端镜像已跟;铸造点在 EAL callee 下放)。
+  **趁早决策成本最低。**
+- 选项(决策权在 CTO,走 DEC/RFC 修订):
+  A 维持 device-owned,本体正文显式接受 device=principal(问责链到设备,需写清到人的归属规则);
+  B 撤销语法,device.* 能力 owner 改挂配对用户的 steward agent(principal 保持人本;
+    代价:ability/device.<id>.* 的 owner 段与 owner-agent 不再字节对齐 + 未配对期 owner 空悬);
+  C 收窄保留:语法只准发给**设备内生系统 agent**,RFC 明文禁止 hosted user agent 取得
+    device-owned URA(35efe641 已是此方向),并补记「device 可作受限 owner」的本体决议。
+- 审计建议:C 为最小一致修正;若 CTO 判「device 不应为 owner」则 B;无论哪个,
+  **本体正文与语法必须同一提交对齐;F-047 的 8 点修复在决议前冻结**(避免向错误语义施工)。
+- **✅ 已决(2026-06-11,CTO):C 案正式本体化** —— DEC-F048(Develop-Plan/Cooperation/decisions/)。
+  device 是 **sponsor** 非 principal:device → sponsors system agent → agent owns ability →
+  receipt records agent → **accountability resolves through paired principal**。
+  Agent 分类 User/Service/System;硬约束:hosted user agent ≠ device-owned agent;
+  System Agent 不可迁移/不可承载用户身份/不可接受 delegated authority。
+  RFC-005 §3.1.2 已落 normative 句(Axon 工作树,待提交)。
+  **F-047 解冻**,但 8 点判定按 sponsor 语义复核——重点:mcp_reflective owner_kind 点
+  原判「支持」存疑(MCP 反射是用户配置的工具面,挂 System Agent 违「不承载用户身份」,
+  可能应归 User Agent);实现层新增两道执行闸(delegation 拒绝 device-owned 受托方、
+  hosted-agent 注册断言 owner 非 device.*)已入 spec。
+
+### F-049 设备目录心跳链路断裂:presence 双平面失耦,健康设备 15s 后必显示掉线 【已核验,2026-06-11 线上 debug】
+- 落点:src/bin/easynet-daemon.rs:302(心跳 boot 阶段被 `_EASYNET_HB_ENDPOINT` 门控,
+  全仓无人设置该变量 → 63k 行 daemon 日志零次 `federation.heartbeat`)·
+  facade/cli/heartbeat.rs(legacy sidecar,实测对 TLS hub `bridge call failed`——
+  dendrite FFI bridge 无 pinned-CA 支持,即使放开门控也死)· 运行时/可用性 · **高**
+- 机理:hub 有两个 presence 平面——流成员资格(PresenceRegistry,bidi 活着就在)与联邦目录
+  (`AgentRecord.last_heartbeat_unix_ms`,Web UI/`federation.discover` 读的是它)。
+  目录平面要求设备每 5s 调 `federation.heartbeat`,Axon sweeper 15s 无刷新即降级
+  (core/runtime-rs/src/runtime/federation.rs `stale_ms=15_000`);心跳从未发出 →
+  设备上线 15s 后 UI 必显示掉线,而 bidi 上的调用全程正常(「看着掉线其实在干活」)。
+  连带:backend device_state.go:43-54 把「目录无条目」default 映射成 REMOVED(墓碑语义),
+  误导为设备已被撤销。
+- **✅ 已修(2026-06-11,工作树):session_initiator.rs 新增会话级心跳循环**——
+  5s 一拍 `federation.heartbeat` unary 复用会话 channel(与 user-trust resync 同模式:
+  tokio::spawn + AbortOnDrop,随 bidi 生死,重拨自动重启);附带 v4.1.7 hub-abilities diff
+  应用 + RFC-005 owner-projection lease 批刷新(truncate 至 hub 上限 64);失败仅去重记日志,
+  会话健康权威仍归 bidi 重连机。实测:设备跨 3 个 15s 清扫窗口保持 ONLINE,零失败日志。
+- 残留(不阻塞,后续批):① legacy `_EASYNET_HB_ENDPOINT` sidecar 应退役或补 TLS
+  (现状对 TLS hub 必死,是死代码);② device_state.go default→REMOVED 应改 OFFLINE/UNKNOWN
+  (REMOVED 只留给操作员撤销);③ hub 可考虑 bidi 流活跃时顺带刷新目录记录(双平面兜底)。
+
+### F-050 目录类接口 3.7s:每个 ability 描述符查询全量重建+重哈希内置插件包索引 【已核验,2026-06-11 线上 debug】
+- 落点:plugin_host/mod.rs `default_state()`(每次 `load_default()` 全量加载)→
+  index.rs `builtin()` → package.rs `from_builtin`/`hash_installable_surface`
+  (逐文件 fs::canonicalize + 重哈希);meta.list_abilities 每 ability 触发一次,
+  ~190 abilities × 全量包扫描 = 单调用 3.4s · 性能 · **高**
+- 证据:设备账本 `meta.list_abilities` 3343/3346/3613ms vs 其他 ability 1-60ms;
+  daemon 采样 98% 落在 `list_abilities_handler → … → hash_installable_surface`;
+  hub 侧 GET /abilities slowcall 3.6-7.5s(7.4s = backend listAllAbilitiesLogic.go
+  对 2 个 target 串行 fan-out ×2);burst 期间同批 history 等请求排队连坐,整页骨架屏卡死,
+  即用户感知的「加载慢/像锁」。已排除:非锁(6.5s chat 占道时 history 全程 80ms)、
+  非网络风暴(当次运行 0 重连)、非带宽(0.6MB)。
+- **✅ 已修(c03df45):builtin 索引 OnceLock 进程缓存(输入全为编译期常量,仅缓存成功值)
+  + default_state 快照缓存(plugin root 为键,register/hot_reload 经 publish_default_state
+  主动刷新,插件安装实时性保留)**。实测:meta.list_abilities 3.41s → 0.15s(22×)。
+- 残留(不阻塞,后续批):backend listAbilityCatalogViaMetaList 串行 per-target fan-out
+  无并行无 TTL 缓存(hub 侧放大器,2 target 即 7.4s);discover/skill.list 同属
+  「目录读 = 快照读」纪律的待迁移面。
 
 ---
 
@@ -403,3 +556,65 @@
   **新债与升格**:F-040 入册(backend 包 `<self>.invoke_remote` + 帧形状逐字节手抄);
   F-004 升格为「第二 invocation 载体」边界债,与 F-038/F-040 同病归批;
   F-015 定性升格:从「未用 SDK」到「协议真源二元化」(Rule 1 拒绝类)。
+- **2026-06-12 第 9 轮**(loop 重启,cron 0d1d80b5;边界维度铺满):
+  Frontend URA 构造**集中化合规**(插值仅 easynet-ura.ts 三处,api 文件均注释/校验/MOCK);
+  backend 非 fork 字面量全为注释,零活跃构造违例。新增 F-041(守卫不对称:Cli 9 脚本 vs
+  两仓零阀,合规靠约定无防回潮)、F-042(receipt URA 第四种野生形状——非法顶层 role
+  `invocation/` 钉进 RD 插件测试夹具,raw string 不经 parse round-trip,AXIOM 22.2 反例;
+  喂 RFC-007/008)。
+  **下一轮聚焦:① 执行 T2.0 caller 盘点作为审计工作(Invoke/Subscribe/OpenBidi JSON 控制帧
+  逐调用方分类——载体归一的前置事实清单);② ability.json schema 与 control.sock JSON 面的
+  所有权检查;③ Frontend URA 渲染纪律抽查(skill 要求显示必走 URAChip,grep font-mono 裸渲染)。**
+- **2026-06-12 第 10 轮**:T2.0 盘点首批事实——**backend 的 JSON 控制路径已退役**
+  (internal/cliipc 不存在,仅余 2 处陈旧注释 → F-044;实际走 daemon_grpc Invocation gRPC ✓),
+  Cli 的 control.sock 在 daemon/process.rs:392 已自标 "Legacy"(降级方向代码内有共识),
+  8 个 Cli 内部引用文件(interpreter.rs/easynet-daemon.rs/workspace.rs/两个 ability/
+  start/auth/doctor)待 op 级分类。新增 F-043(URAChip 渲染纪律 6+ 处失守,5 处在 Dialog)。
+  **下一轮聚焦:① T2.0 收尾:Cli 8 文件 op 级分类,重点 interpreter.rs(EAL 若经 legacy JSON
+  派发能力即载体违例,升级 F-004 批);② ability.json schema 所有权检查(上轮顺延);
+  ③ 若 T2.0 收尾完成,重新评估收敛条件。**
+- **2026-06-12 第 11 轮(第二次收敛终审)**:T2.0 关闭,全绿——interpreter.rs 嫌疑澄清
+  (不触 control.sock,EAL 不走 legacy JSON);easynet-daemon.rs:32 书面不变量
+  「Nothing on control.sock dispatches product abilities」= skill 迁移第 4 步已满足;
+  载体债收窄到 SessionDispatch 帧唯一面(F-004/F-040 范围确认)。
+  ability manifest(.ability.toml)所有权合规且字段级标注协议边界(「Not a protocol field」
+  :137/:674)——正面样本。
+  **边界维度收敛核对:URA 构造(Cli 门面+守卫 ✓/backend 集中于 fork=F-015/Frontend 集中 ✓,
+  守卫缺口=F-041)、载体(control.sock 已降级 ✓,SessionDispatch=F-004/F-040)、七元组完整性
+  (FFI/CLI/mission ✓)、渲染(F-043)、receipt 形状(F-042→RFC)、manifest ✓——无未审残留。
+  质量/重量/规范/状态机/边界五维全部扫毕,44 条编号(6 撤销、38 活跃)全核验,
+  修复计划(spec)与状态机理想态(plan)完整。第二次收敛达成,loop 退出。**
+- **2026-06-12 第 12 轮(loop 三启,角色转增量审计)**:盘点三仓 40+ 新提交。
+  正面:三件套文档已入库(6317a7e 等,「未跟踪」悬置解除);CI 双工作流落地
+  (clippy-ratchet.yml 棘轮咬合 PR/main + tests.yml 全测试目标编译,F-005 验收项部分闭环);
+  Frontend parseURA 与 Axon 新语法同步落地(8f8847f,镜像纪律 ✓)。
+  新增 **F-047**:device-owned agent 语法(2026-06-11 批准)落地后,Cli 管理面 8 个
+  `agent_ids()` 消费点对 DeviceAgent 变体隐式 bail,支持/拒绝无人逐点声明——语法演进漂移温床。
+  附带:ura-discipline skill 的形状表缺两个新批准形状(待 CTO 授权更新 skill 文档,
+  本轮自动更新被权限层正确拦截)。
+  **下一轮聚焦:① 增量继续——审 d9f8bd4a(OriginCallerClaim 上 ForwardInvokeRequest)与
+  12f07370(ability_names_with_prefix)的消费面;② F-047 的 8 点支持/拒绝清单细化(给修复者
+  直接可执行的逐点判定);③ EasyNet e2e 五连修(3a23dc8 等)的脚本质量抽查。**
+- **2026-06-12 第 13 轮(增量)**:12f07370 消费面审毕——`ability_names_with_prefix` 为全局锁内
+  O(n) 扫描(F-011 附注,低频无害,锁改造时一并出锁);F-047 判定清单 4/8 落档
+  (支持×2、显式拒绝×2,其中 owner_projection 点暴露 device-agent 的 resource_dot owner
+  形状未定义——本体缺口,与 F-042 同类,禁止就地发明);federation_wrappers 发现
+  3 处 `origin_caller: None` 构造点(:2277/:2298/:2332)待逐点判定。
+  **下一轮聚焦:① F-047 余 4 点判定(ura.rs:181、mcp_reflective:1327、invocation_history:395、
+  bootstrap:313);② federation_wrappers 3 处 None 判定(内部调用合法 vs 转发链丢 caller 保真);
+  ③ e2e 五连修脚本抽查(连续两轮顺延,下轮必做)。**
+- **2026-06-12 第 14 轮(增量)**:三项全清。F-047 判定表 **8/8 收口**(支持×4、显式拒绝×3
+  其中 2 点归并同一 RFC 本体缺口、现状即正确×1;前提确认:URAKind 无 DeviceAgent 变体,
+  修复必须双访问器);**federation_wrappers 3 处 None 嫌疑清除**(全在 #[cfg(test)] 测试构造体,
+  含 wire-shape pin 测试,非生产丢真——不入册);e2e 五连修脚本抽查通过(set -euo pipefail 达标)。
+  本轮零新债——增量流趋净。ura-discipline skill 已获 CTO 授权更新(形状表 + 缺口节,
+  含第 4 野生 receipt 形状标注 invalid)。
+  **下一轮聚焦:① 盘点本轮之后的新增提交(增量节拍);② 若增量连续两轮零新债,
+  评估第三次收敛(增量模式的退出条件:新提交流的审计延迟 < 一个节拍且连续两轮无新债)。**
+- **第 15 轮(第三次收敛,loop 退出)**:三仓自 14:15 基线零新提交,审计延迟 < 一个节拍;
+  第 14-15 轮连续零新债——增量模式退出条件成立。
+  **日期勘误**:本文件中标注「2026-06-12」的条目(F-036…F-039 的修复会话标签、第 9-14 轮
+  日志、F-040…F-046 标签)实际均发生于 **2026-06-11**(跨夜会话误标;`date` 实证)。
+  内容与 file:line 证据不受影响,日期以本勘误为准。
+  **终态:47 条编号 = 41 活跃(全核验,F-047 带 8/8 可执行判定表)+ 6 撤销;
+  增量批(40+ 提交)全部审毕;三件套已入库由 git 承载演进。**
