@@ -213,6 +213,21 @@ pub struct JoinConnectionSnapshot {
     pub observed_at_unix_ms: i64,
 }
 
+/// The fields of a failed `JoinConnectionSnapshot`, grouped so the
+/// constructor takes one value instead of eight positional arguments
+/// (the realm/node_id/message/source strings are owned here, decoded
+/// once from the caller's `impl Into<String>`).
+pub struct JoinFailureParts {
+    pub failure_code: JoinFailureCode,
+    pub transition: JoinTransition,
+    pub realm: String,
+    pub node_id: String,
+    pub hub_endpoint: Option<String>,
+    pub message: String,
+    pub retryable: bool,
+    pub source: String,
+}
+
 impl JoinConnectionSnapshot {
     pub fn from_parts(
         state: JoinConnectionState,
@@ -295,19 +310,17 @@ impl JoinConnectionSnapshot {
         }
     }
 
-    pub fn failed_from_parts(
-        failure_code: JoinFailureCode,
-        transition: JoinTransition,
-        realm: impl Into<String>,
-        node_id: impl Into<String>,
-        hub_endpoint: Option<String>,
-        message: impl Into<String>,
-        retryable: bool,
-        source: impl Into<String>,
-    ) -> Self {
-        let realm = realm.into();
-        let node_id = node_id.into();
-        let message = message.into();
+    pub fn failed_from_parts(parts: JoinFailureParts) -> Self {
+        let JoinFailureParts {
+            failure_code,
+            transition,
+            realm,
+            node_id,
+            hub_endpoint,
+            message,
+            retryable,
+            source,
+        } = parts;
         let detail_code = failure_detail_code(&message, failure_code);
         let device_ura = if realm.is_empty() || node_id.is_empty() {
             String::new()
@@ -329,7 +342,7 @@ impl JoinConnectionSnapshot {
             node_id,
             device_ura,
             hub_endpoint,
-            source: source.into(),
+            source,
             observed_at_unix_ms: Utc::now().timestamp_millis(),
         }
     }

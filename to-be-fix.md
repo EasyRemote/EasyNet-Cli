@@ -36,7 +36,7 @@
 - 方向:先基准(每秒帧数 × P99 延迟 × 分配),后定型 proto oneof 帧;**不测不改**。
 - 诚实注:当前规模(单设备低频 dispatch)可能无感;列高是因为它是协议形状,越晚改迁移成本越高。
 
-### F-005 lib clippy 警告 【部分清,2026-06-11:20→9】
+### F-005 lib clippy 警告 【部分清:20→8(2026-06-11/12)】
 - 落点:全仓(`cargo clippy --lib --features axon-pb`) · 规范 · 中
 - 已清(11 条):8 条 `--fix` 自动(needless_borrow/return/useless_format 等)+ 人工 4 条
   (owner_projection redundant_closure、session_initiator type_complexity 别名化、ffi 两处
@@ -45,10 +45,10 @@
   · 6× `result_large_err`(AxonError ≥144B)→ 箱化 AxonError,跨 Axon SDK 改动 + 影响所有
     Result 调用点,超出"小而安全";单列。
   · 3× `too_many_arguments`,精确归属:boot.rs:1003 spawn_session_supervisor(F-002 直属);
-    join_connection_state.rs:298 failed_from_parts(8 参→ JoinFailureParts 结构体,独立可做但
-    改全调用点);local_session_dispatcher.rs:320 try_dispatch_via_axon(7 dispatch 字段,热路径、
-    caller 多,收拢风险>收益)。三者皆参数收拢,clippy 限 7/8 边界警告 —— 随 F-002 收拢一并清,
-    不单独为消边界警告改热路径签名。
+    join_connection_state.rs:298 failed_from_parts → 【已清 2026-06-12】JoinFailureParts 结构体,
+    3 调用点改字面量、无 #[allow] 消音(真重构);local_session_dispatcher.rs:320 try_dispatch_via_axon
+    (7 dispatch 字段,热路径、caller 多,收拢风险>收益)随 F-002 一并清。即:剩 8 条 = 6 large_err
+    + boot.rs(F-002) + dispatcher(F-002)。
 - 方向:箱化 + F-002 收拢后清零;CI 加 `-D warnings` 防回潮。
 
 ### F-006 OnceLock 全局单例 HubPublishedAbilityStore::global() 【已核验,2026-06-11 评估:中型非小修】
