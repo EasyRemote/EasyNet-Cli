@@ -399,7 +399,8 @@ mod tests {
             "liangbing.ghost_op",
             make_ability(|_ctx| async move { Ok(Vec::new()) }),
         )
-        .await;
+        .await
+        .expect("seed registration must succeed");
         assert!(rt.has_ability("liangbing.ghost_op").await);
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
