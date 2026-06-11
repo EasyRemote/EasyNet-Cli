@@ -126,6 +126,7 @@ impl PluginRuntimeManager {
         let state = PluginRuntimeState::load_default()?;
         self.runtime_host.register(state.load_plan(), reg)?;
         self.wire_registry.replace_from_plugin_runtime_state(&state);
+        super::publish_default_state(&state);
         *self
             .state
             .write()
@@ -154,6 +155,7 @@ impl PluginRuntimeManager {
         let state = PluginRuntimeState::load_default()?;
         let report = self.runtime_host.hot_reload(state.load_plan(), reg)?;
         self.wire_registry.replace_from_plugin_runtime_state(&state);
+        super::publish_default_state(&state);
         *self
             .state
             .write()

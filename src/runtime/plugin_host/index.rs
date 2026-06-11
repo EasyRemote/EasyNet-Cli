@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::runtime::plugin_host::errors::{PluginHostError, Result};
 use crate::runtime::plugin_host::install::PluginStateToml;
@@ -68,12 +68,24 @@ impl PluginPackageIndexLoadReport {
 
 impl PluginPackageIndex {
     /// Build an index from builtin packages compiled into this binary.
+    ///
+    /// The builtin binding set and its installable surface are fixed for the
+    /// process lifetime, so the index is computed once and cloned per call.
+    /// Construction hashes every file under each builtin package root
+    /// (including `bin/` sidecars); without this cache each descriptor lookup
+    /// re-reads all of it. Construction failures are not cached so error
+    /// reporting stays live.
     pub fn builtin() -> Result<Self> {
+        static BUILTIN: OnceLock<PluginPackageIndex> = OnceLock::new();
+        if let Some(index) = BUILTIN.get() {
+            return Ok(index.clone());
+        }
         let mut packages = Vec::new();
         for binding in crate::plugins::builtin::builtin_bindings() {
             packages.push(Arc::new(PluginPackage::from_builtin(binding)?));
         }
-        Self::from_packages(packages)
+        let index = Self::from_packages(packages)?;
+        Ok(BUILTIN.get_or_init(|| index).clone())
     }
 
     /// Build an index from the active installed packages under a plugin root.

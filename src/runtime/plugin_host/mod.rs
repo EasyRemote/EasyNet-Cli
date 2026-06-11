@@ -32,7 +32,8 @@ pub use runtime_manager::{PluginRuntimeManager, PluginRuntimeState};
 pub use surface::{PluginAbilitySurface, PluginAbilitySurfaceRecord, PluginSurfaceProjector};
 pub use wire::PluginWireRegistry;
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 
@@ -135,11 +136,55 @@ fn default_loaded_package_for_ability(
         .ok_or_else(|| PluginHostError::MissingBuiltinBinding(format!("loaded ability {name:?}")))
 }
 
-fn default_state() -> Result<DefaultPluginHostState> {
-    PluginRuntimeState::load_default()
+/// Process-wide default plugin state snapshot keyed by the plugin root it was
+/// loaded from.
+///
+/// Catalog listings resolve descriptors once per published ability; loading
+/// package state from disk inside each lookup turns one listing into hundreds
+/// of package re-hashes. Register/reload paths refresh this snapshot via
+/// [`publish_default_state`] after they observe fresh package-store state. The
+/// root key keeps processes that re-point `$HOME` (tests, tools) from reading
+/// another root's snapshot.
+struct DefaultStateSnapshot {
+    plugin_root: PathBuf,
+    state: Arc<PluginRuntimeState>,
 }
 
-type DefaultPluginHostState = PluginRuntimeState;
+static DEFAULT_STATE: RwLock<Option<DefaultStateSnapshot>> = RwLock::new(None);
+
+fn default_state() -> Result<Arc<PluginRuntimeState>> {
+    let plugin_root = index::default_plugin_root();
+    {
+        let cached = DEFAULT_STATE
+            .read()
+            .expect("default plugin state poisoned");
+        if let Some(snapshot) = cached.as_ref() {
+            if snapshot.plugin_root == plugin_root {
+                return Ok(Arc::clone(&snapshot.state));
+            }
+        }
+    }
+    let state = Arc::new(PluginRuntimeState::load_default()?);
+    *DEFAULT_STATE
+        .write()
+        .expect("default plugin state poisoned") = Some(DefaultStateSnapshot {
+        plugin_root,
+        state: Arc::clone(&state),
+    });
+    Ok(state)
+}
+
+/// Replace the default-state snapshot with state loaded from the current
+/// plugin root. Called by manager register/reload so descriptor lookups
+/// observe plugin install/remove/update without re-reading disk per lookup.
+pub(crate) fn publish_default_state(state: &PluginRuntimeState) {
+    *DEFAULT_STATE
+        .write()
+        .expect("default plugin state poisoned") = Some(DefaultStateSnapshot {
+        plugin_root: index::default_plugin_root(),
+        state: Arc::new(state.clone()),
+    });
+}
 
 #[cfg(test)]
 mod tests {
