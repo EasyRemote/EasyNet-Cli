@@ -102,6 +102,18 @@ use crate::runtime::dispatch::DriverOverrides;
 /// surface area with a single grep.
 pub const ABILITY_VERB: &str = "chat";
 
+/// Wire sentinel for the agent's lifelong (default) session. A caller
+/// that sends `session_id: "lifelong"` selects the agent's one durable
+/// default thread instead of naming a concrete session: the handler
+/// resolves the sentinel through the per-agent pointer persisted in
+/// `chat_sessions::SessionIndex.lifelong` — resuming the bound session
+/// when one exists, otherwise running a fresh turn and binding the
+/// resulting id. The pointer (not a fixed literal id) is what gives
+/// the thread real LLM continuity: drivers only resume UUID-shaped
+/// thread ids they minted themselves, so a constant id would persist
+/// a transcript while the LLM forgot every prior turn.
+pub const LIFELONG_SESSION_ID: &str = "lifelong";
+
 /// Trait that pluggable context loaders implement. Each loader
 /// contributes a string fragment that the chat handler appends to
 /// the assembled context block before invoking the LLM.
@@ -461,7 +473,7 @@ pub(crate) fn invoke_direct_with_progress(
     progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
 ) -> anyhow::Result<Value> {
     let started = Instant::now();
-    let parsed = ChatArgs::parse(&args)?;
+    let mut parsed = ChatArgs::parse(&args)?;
 
     // The RPC entry point cannot return a stream. Surface the
     // mistake as a deterministic, actionable error rather than
@@ -471,6 +483,16 @@ pub(crate) fn invoke_direct_with_progress(
             "chat: `stream: true` is only valid via the subscribe entry point; \
              call subscribe with the same args instead of invoke"
         );
+    }
+
+    // Lifelong-sentinel resolution (see LIFELONG_SESSION_ID). Resolve
+    // before any session_id consumer below: the pointer either yields
+    // a concrete id (resume path, identical to the caller naming it
+    // directly) or `None` (fresh-turn path; the id that turn ends up
+    // with is bound as the pointer after the transcript write).
+    let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
+    if lifelong_requested {
+        parsed.session_id = crate::persistence::chat_sessions::lifelong_session(agent_name);
     }
 
     // Session id resolution. When the caller supplies one we echo
@@ -697,6 +719,14 @@ pub(crate) fn invoke_direct_with_progress(
         &tool_calls_json,
         &usage_value,
     );
+    // Bind (or re-affirm) the lifelong pointer after the turn is on
+    // disk, so the next sentinel turn resumes this same thread.
+    if lifelong_requested {
+        crate::persistence::chat_sessions::set_lifelong_session_best_effort(
+            agent_name,
+            &session_id,
+        );
+    }
 
     Ok(json!({
         "session_id": session_id,
@@ -775,7 +805,13 @@ fn stream_handler(
     use tokio::sync::broadcast;
 
     let started = Instant::now();
-    let parsed = ChatArgs::parse(&args)?;
+    let mut parsed = ChatArgs::parse(&args)?;
+    // Lifelong-sentinel resolution — mirrors invoke_direct_with_progress;
+    // see the comment there and on LIFELONG_SESSION_ID.
+    let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
+    if lifelong_requested {
+        parsed.session_id = crate::persistence::chat_sessions::lifelong_session(agent_name);
+    }
     let session_id = parsed
         .session_id
         .clone()
@@ -956,6 +992,12 @@ fn stream_handler(
                         &tool_calls_json,
                         &usage_value,
                     );
+                    if lifelong_requested {
+                        crate::persistence::chat_sessions::set_lifelong_session_best_effort(
+                            &agent_name_owned,
+                            &resolved_session_id,
+                        );
+                    }
                     json!({
                         "type": "done",
                         "session_id": resolved_session_id,
@@ -1673,6 +1715,67 @@ mod tests {
                 let first = &snapshot[0];
                 assert_eq!(first.get("type").and_then(Value::as_str), Some("session"));
                 assert!(first.get("session_id").is_some());
+            }
+            other => panic!("expected SnapshotThenLive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lifelong_sentinel_is_not_a_driver_thread_id() {
+        // The sentinel must never reach the driver as a resume id —
+        // resolution replaces it before the resume-shape check runs,
+        // and even if it leaked, the shape check rejects it.
+        assert!(!looks_like_thread_id(LIFELONG_SESSION_ID));
+    }
+
+    #[test]
+    fn stream_handler_resolves_lifelong_sentinel_against_bound_pointer() {
+        // With a lifelong pointer bound, a sentinel turn must surface
+        // the bound concrete id in the leading `session` frame — the
+        // literal "lifelong" never appears on the wire as a session id.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let bound = "38e5640c-6843-4f15-8f3a-2c8de75d0209";
+        crate::persistence::chat_sessions::set_lifelong_session("alice", bound).expect("bind");
+        let entry = entry();
+        let source = stream_handler(
+            "alice",
+            &entry,
+            &[],
+            json!({"prompt": "hi", "session_id": LIFELONG_SESSION_ID}),
+        )
+        .expect("snapshot construction must succeed even if dispatch will fail");
+        match source {
+            StreamSource::SnapshotThenLive(snapshot, _rx) => {
+                assert_eq!(
+                    snapshot[0].get("session_id").and_then(Value::as_str),
+                    Some(bound),
+                );
+            }
+            other => panic!("expected SnapshotThenLive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_handler_unbound_lifelong_sentinel_mints_fresh_id() {
+        // No pointer bound: the sentinel falls through to the
+        // fresh-turn path, so the session frame carries a minted id,
+        // not the sentinel literal.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = entry();
+        let source = stream_handler(
+            "alice",
+            &entry,
+            &[],
+            json!({"prompt": "hi", "session_id": LIFELONG_SESSION_ID}),
+        )
+        .expect("snapshot construction must succeed even if dispatch will fail");
+        match source {
+            StreamSource::SnapshotThenLive(snapshot, _rx) => {
+                let sid = snapshot[0]
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .expect("session frame carries an id");
+                assert_ne!(sid, LIFELONG_SESSION_ID);
             }
             other => panic!("expected SnapshotThenLive, got {other:?}"),
         }

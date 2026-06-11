@@ -1017,7 +1017,10 @@ pub fn default_chat_manifest() -> AbilityManifest {
                 "type": "string",
                 "description": "Optional conversation id to resume an existing session. When \
                                 omitted the chat handler creates a fresh one and returns the \
-                                generated id in the response."
+                                generated id in the response. The literal value `lifelong` \
+                                selects the agent's lifelong default thread: it resumes the \
+                                session bound as lifelong, binding one first when none exists \
+                                yet; the response carries the resolved concrete id."
             },
             "skills": {
                 "type": "object",

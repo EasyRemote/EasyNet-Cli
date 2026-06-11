@@ -49,7 +49,11 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 }
 
 /// `chat.history.list` — args `{ "agent": string }`.
-/// Returns `{ "agent": string, "sessions": [SessionDescriptor, ...] }`.
+/// Returns `{ "agent": string, "lifelong_session_id": string|null,
+/// "sessions": [SessionDescriptor, ...] }`. `lifelong_session_id`
+/// names the session bound as the agent's lifelong default thread
+/// (null until the first lifelong turn), so the Frontend can open it
+/// by default and badge it in the session list.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
     let agent = require_agent(&args)?;
     let sessions = crate::persistence::chat_sessions::list_sessions(&agent);
@@ -57,7 +61,12 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         .iter()
         .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
         .collect();
-    Ok(json!({ "agent": agent, "sessions": json_sessions }))
+    let lifelong = crate::persistence::chat_sessions::lifelong_session(&agent);
+    Ok(json!({
+        "agent": agent,
+        "lifelong_session_id": lifelong,
+        "sessions": json_sessions,
+    }))
 }
 
 /// `chat.history.get` — args `{ "agent": string, "session_id": string }`.
@@ -125,6 +134,18 @@ mod tests {
     fn list_requires_agent() {
         let err = list_handler(json!({})).unwrap_err();
         assert!(err.to_string().contains("agent"));
+    }
+
+    #[test]
+    fn list_surfaces_lifelong_session_id() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        // Unbound: explicit null, not a missing key — the Frontend
+        // reads the field unconditionally.
+        let resp = list_handler(json!({"agent": "demot"})).expect("list");
+        assert!(resp["lifelong_session_id"].is_null());
+        crate::persistence::chat_sessions::set_lifelong_session("demot", "sess-1").expect("bind");
+        let resp = list_handler(json!({"agent": "demot"})).expect("list");
+        assert_eq!(resp["lifelong_session_id"], "sess-1");
     }
 
     #[test]
