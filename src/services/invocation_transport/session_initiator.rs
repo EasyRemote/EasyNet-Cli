@@ -56,7 +56,8 @@
 //   without spinning up the full AxonAbilityCatalog.
 // - The exponential-backoff supervisor `run_session_supervisor`:
 //   the `dial_and_run_session` returns an error → wait → retry.
-//   Bounded jitter, capped maximum, never gives up.
+//   Full-jitter delay (uniform in [0, curve]), capped maximum,
+//   never gives up.
 //
 // Signature model
 // ---------------
@@ -197,7 +198,8 @@ pub(crate) fn initial_session_admission_probe() -> (
 pub const SESSION_BACKOFF_INITIAL: Duration = Duration::from_millis(250);
 
 /// Cap for the backoff curve. After the curve hits this value the
-/// supervisor keeps retrying at this period with jitter. 30 s
+/// supervisor keeps retrying, each wait drawn uniformly in
+/// [0, this] (full jitter). 30 s
 /// matches the reconnect SLO the production deploy script
 /// configures for federation_client.
 pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -1231,10 +1233,18 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                     }
                 }
 
-                // Sleep, also cancellable.
+                // Sleep the FULL-JITTER delay, also cancellable. The
+                // deterministic curve (`backoff`) is the upper bound;
+                // the actual wait is uniform in [0, backoff], which
+                // de-synchronizes a fleet that all lost a hub at the
+                // same instant (the 250 ms in-phase thundering herd
+                // b2ba441 only damped per-device). The curve state is
+                // unchanged — doubling and the healthy-uptime reset
+                // operate on `backoff`, not the jittered sample.
+                let jittered = full_jitter(backoff);
                 tokio::select! {
                     _ = &mut cancel => return,
-                    _ = tokio::time::sleep(backoff) => {}
+                    _ = tokio::time::sleep(jittered) => {}
                 }
 
                 backoff = next_backoff(backoff);
@@ -1250,6 +1260,21 @@ fn next_backoff(current: Duration) -> Duration {
     } else {
         doubled
     }
+}
+
+/// Full-jitter sample of a backoff bound: a uniform draw in
+/// `[0, bound]`. AWS's "Exponential Backoff And Jitter" full-jitter
+/// variant — it minimizes the collision probability of a fleet that
+/// retries in lockstep, which is exactly the hub-restart thundering
+/// herd. The deterministic `bound` (the doubling curve) is preserved
+/// as the ceiling; only the per-attempt WAIT is randomized, so the
+/// curve's escalation and reset semantics are untouched.
+fn full_jitter(bound: Duration) -> Duration {
+    let ms = bound.as_millis() as u64;
+    if ms == 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_millis(rand::rngs::OsRng.next_u64() % (ms + 1))
 }
 
 /// Backoff policy for a session that ended with a clean hub-side
@@ -2495,6 +2520,28 @@ mod tests {
         assert_eq!(first.sequence, 1);
         let second = rx.recv().await.expect("second frame");
         assert_eq!(second.sequence, 2);
+    }
+
+    #[test]
+    fn full_jitter_stays_within_bound_and_curve_is_unchanged() {
+        // The deterministic curve must be untouched by jitter: the
+        // doubling test below still holds, and the jitter sample is
+        // always within [0, bound].
+        for bound_ms in [0u64, 1, 250, 30_000] {
+            let bound = Duration::from_millis(bound_ms);
+            for _ in 0..1000 {
+                let j = full_jitter(bound);
+                assert!(j <= bound, "jitter {j:?} exceeded bound {bound:?}");
+            }
+        }
+        // Zero bound → zero wait (no panic on modulo).
+        assert_eq!(full_jitter(Duration::ZERO), Duration::ZERO);
+        // Non-degenerate spread: 1000 draws from a 30s bound must not
+        // all collapse to one value (the bug being fixed).
+        let bound = Duration::from_secs(30);
+        let samples: std::collections::HashSet<u128> =
+            (0..1000).map(|_| full_jitter(bound).as_millis()).collect();
+        assert!(samples.len() > 100, "jitter not spread: {} distinct", samples.len());
     }
 
     #[test]
