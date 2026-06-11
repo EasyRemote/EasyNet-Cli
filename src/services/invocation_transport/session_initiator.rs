@@ -588,6 +588,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // loop spawned after the preludes (its requests multiplex over
     // this same connection).
     let resync_channel = channel.clone();
+    // Second clone for the federation.heartbeat liveness loop — same
+    // multiplexing over this connection, independent client.
+    let heartbeat_channel = channel.clone();
 
     // Bump client-side gRPC message limits to match the server side.
     // The tonic-default 4 MiB decoder cap aborted `<self>.session`
@@ -727,6 +730,57 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     } else {
         None
     };
+
+    // Directory-liveness heartbeat loop. The hub keeps TWO presence
+    // planes: stream membership (PresenceRegistry — registered while
+    // this session's bidi is open) and the federation directory
+    // (`AgentRecord.last_heartbeat_unix_ms` — what `federation.discover`
+    // and the Web UI read). The directory plane decays on its own: the
+    // hub sweeper demotes records to Suspended after 15 s without a
+    // `federation.heartbeat`, so without this loop every device shows
+    // offline/REMOVED ~15 s after join even while invocations keep
+    // flowing over the healthy bidi. The legacy heartbeat sidecar
+    // (`_EASYNET_HB_ENDPOINT` + dendrite bridge) cannot reach a TLS
+    // hub — pinned-CA support never landed there — so the session owns
+    // the tick: one unary per interval multiplexed over this channel,
+    // aborted with the session, restarted by the next dial. Failures
+    // are advisory (logged, deduped) — the bidi's own reconnect
+    // machinery is the authority on session health.
+    let heartbeat_caller = caller_ura.clone();
+    let _federation_heartbeat_guard = AbortOnDrop(tokio::spawn(async move {
+        let mut heartbeat_client =
+            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(
+                heartbeat_channel,
+            );
+        let mut last_error: Option<String> = None;
+        loop {
+            tokio::time::sleep(FEDERATION_HEARTBEAT_INTERVAL).await;
+            match send_federation_heartbeat(&mut heartbeat_client, &heartbeat_caller).await {
+                Ok(()) => {
+                    if last_error.take().is_some() {
+                        crate::op_event!(
+                            component = session,
+                            kind = federation_heartbeat_recovered,
+                        );
+                    }
+                }
+                Err(status) => {
+                    let msg = format!("{status}");
+                    // Dedupe identical consecutive failures — at a 5 s
+                    // cadence a hub outage would otherwise write 12
+                    // identical lines per minute.
+                    if last_error.as_deref() != Some(msg.as_str()) {
+                        crate::op_event!(
+                            component = session,
+                            kind = federation_heartbeat_failed,
+                            error = msg,
+                        );
+                    }
+                    last_error = Some(msg);
+                }
+            }
+        }
+    }));
 
     // Hosted-agent advertise prelude (RFC-006-B v0.6 §URL +
     // RFC-006-C v0.1 §INV-2). RFC-005 namespace.resolve consumes
@@ -1638,6 +1692,19 @@ pub struct UserTrustSync {
 /// meaningful load.
 const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Cadence of the session-lifetime `federation.heartbeat` loop. The
+/// hub-side sweeper demotes an Active directory record to Suspended
+/// after 15 s without a heartbeat (3× this cadence), and the Web UI
+/// renders anything non-active as offline — this tick is what keeps
+/// a healthy device's directory entry green between session re-dials.
+const FEDERATION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Hub-side cap on the owner-projection lease batch
+/// (`hub_profile/heartbeat.rs::MAX_HEARTBEAT_LEASE_REFRESH_OWNERS`).
+/// A batch over the cap is rejected outright — which would silently
+/// kill device liveness — so the sender truncates instead.
+const MAX_HEARTBEAT_LEASE_REFRESH_OWNERS: usize = 64;
+
 /// Aborts the wrapped task when dropped — ties a background loop's
 /// lifetime to the owning scope (here: one dialed session).
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
@@ -1646,6 +1713,50 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// One `federation.heartbeat` unary over the session channel.
+///
+/// Refreshes this device's `last_heartbeat_unix_ms` in the hub
+/// directory plus the owner-projection leases this daemon has
+/// published (RFC-005), and applies the hub-broadcast abilities diff
+/// from the receipt (AXON-RFC-001 v4.1.7) so the local
+/// `HubPublishedAbilityStore` stays current between re-dials. Wire
+/// shape mirrors the hub's `hub_profile/heartbeat.rs::HeartbeatArgs`;
+/// the hub keys the record refresh on the envelope caller URA and
+/// auto-includes it in the lease batch, so an empty batch after a
+/// cursor-load failure still refreshes device liveness.
+async fn send_federation_heartbeat(
+    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_ura: &str,
+) -> Result<(), tonic::Status> {
+    let store = crate::services::hub_published_ability_store::global();
+    let mut refresh_owner_uras =
+        crate::runtime::owner_projection::heartbeat_refresh_owner_uras().unwrap_or_default();
+    refresh_owner_uras.truncate(MAX_HEARTBEAT_LEASE_REFRESH_OWNERS);
+    let body = serde_json::json!({
+        "since_abilities_revision": store.revision(),
+        "refresh_owner_uras": refresh_owner_uras,
+    });
+    let arguments = serde_json::to_vec(&body)
+        .map_err(|e| tonic::Status::internal(format!("federation.heartbeat serialize: {e}")))?;
+    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
+        .and_then(|env| env.invoke_request("federation.heartbeat", arguments))
+        .map_err(|e| tonic::Status::invalid_argument(format!("federation.heartbeat: {e}")))?;
+    let response = invoke_prelude_unary(client, request, "federation.heartbeat").await?;
+    let body_bytes = response.result;
+    if !body_bytes.is_empty() {
+        if let Ok(receipt) = serde_json::from_slice::<
+            crate::runtime::federation_client::HeartbeatReceipt,
+        >(&body_bytes)
+        {
+            let diff = receipt.hub_abilities_diff;
+            if !diff.added.is_empty() || !diff.removed.is_empty() {
+                store.apply_diff(diff);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Pull the paired user's pubkey from the hub and import it into the
