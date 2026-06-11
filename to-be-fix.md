@@ -7,6 +7,19 @@
 ---
 
 ## EasyNet-Cli
+### F-038 session_dispatch_fixture 跨仓基线漂移:Federation-MVP 基线缺 ability_ura 【已核验,2026-06-12】
+- 落点:tests/session_dispatch_fixture.rs 读 `../EasyNet-Federation-MVP/tests/schema_compat/
+  baselines/rust/transport/session_dispatch.json`(**第五个兄弟仓**,不在 A/B/Cli/Axon 四仓内) · 测试/跨仓 · 中
+- 证据:`cargo test --test session_dispatch_fixture` → every_fixture_variant_round_trips_through_serde
+  FAILED:`decode fixture variant 'request': missing field 'ability_ura'`。Cli 的 SessionDispatch::Request
+  wire 结构要求 ability_ura,但 Federation-MVP 仓的基线 JSON 缺它 = 跨仓 wire-shape 漂移,基线未随
+  Cli 结构演进重生。
+- 归属:wire 结构演进可能涉及本会话(28d3822 在 ability_ura 的 -S 历史里)或更早 federation 工作
+  (0b6c7ad/e14a623);但基线在 **EasyNet-Federation-MVP**,我整夜未碰该仓且它不在工作范围。
+- 方向:在 Federation-MVP 仓按 Cli 当前 SessionDispatch wire 重生 session_dispatch.json 基线
+  (该 fixture 的存在目的就是捕获此漂移 —— 盲目重生会抹掉信号,需作者确认 wire 改动是有意的)。
+  **不擅自改第五个仓**:超出四仓范围,且基线机制是跨仓测试基础设施。
+- 发现途径:`cargo test --test session_dispatch_fixture`(运行本体)—— 第七个真问题,第二个 RUNTIME 失败。
 ### F-037 pages u14 测试运行时失败:has_rpc(<user>.pages.list) 断言失败 【已核验,2026-06-12,非本会话引入】
 - 落点:tests/pages_unit.rs:477 `assert!(reg.has_rpc(&ability))`,ability = `<user>.pages.list` · 测试/规范 · 中
 - 证据:`cargo test --test pages_unit` → u14_pages_management_abilities_are_in_local_runtime FAILED
