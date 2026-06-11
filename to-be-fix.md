@@ -117,6 +117,11 @@
 - 证据:状态无编译期约束;"running" 由运行目录 pid 文件的**存在性**表示——磁盘文件即状态机,
   进程异常退出时有 pid 残留→永久假 "running" 的风险面(残留清理路径待查证)。
 - 方向:`enum MissionRunStatus` 单点序列化;liveness 改心跳时间戳;见 plan §2.6 理想态。
+- 评估(2026-06-12,验是否隔离小修):否。status 是 MissionRunMeta 的**序列化字段**(写进
+  run.json),改 enum 跨三道边界:① serde wire 兼容(磁盘已有 run.json 是字符串,需
+  `#[serde(rename_all)]` + 全消费点核实)② "running"-via-pid 的 liveness 是 F-022 真正难点
+  (磁盘文件即状态机,pid 残留→假 running)③ 跨仓读 mission run 的消费面。中型,非小而安全;
+  与 liveness 心跳改造一并做。
 
 ### F-023 EalError 是 enum 壳 + String 载荷,控制流靠错误嗅探 【已核验,第 3 轮】
 - 落点:src/eal/error.rs(Validation/NotFound/Unavailable(String));src/eal/interpreter.rs:718、:874
