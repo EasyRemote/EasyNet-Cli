@@ -7,7 +7,7 @@
 ---
 
 ## EasyNet-Cli
-### F-039 retired 顶层 CLI 别名 join/start/stop 未移除,边界检查失败 【已核验,2026-06-12,非本会话引入】
+### F-039 retired 顶层 CLI 别名 join/start/stop 【已修复 2026-06-12,CTO 指令"不兼容旧方案/干净最新实现"授权】
 - 落点:src/facade/cli/mod.rs Join/Start/Stop variants + run arms;
   scripts/check-cli-flat-command-boundary.sh(规则:retired top-level aliases 应已删) · 规范/产品 · 中
 - 证据:`cargo test --test script_checks` → cli_flat_command_boundary_script_holds FAILED;直接跑
@@ -15,8 +15,13 @@
   边界规则要求这些顶层别名(= device join / runtime start/stop 的快捷方式)退役,但仍在 enum。
 - 归属:**非本会话引入** —— 别名来自早期 `7abd78b feat(cli): top-level join/start/stop shortcuts`;
   边界检查后来加了退役规则,别名未随之删除。我整夜未碰 join/start/stop。
-- 方向:删 Join/Start/Stop 顶层 variants(产品决策 —— 这是面向用户的破坏性 CLI 变更,移除快捷
-  命令影响现有用户脚本,需 CTO 拍板时机)。**不擅自删顶层命令**:破坏性、面向用户、需产品决定。
+- 修复:删 Join/Start/Stop 顶层 variants + run arms + HELP_TEMPLATE 行 + 3 处 doc 注释
+  (start.rs/bridge_lib.rs 的 `easynet join` → `easynet device join`)。**功能零丢失**:canonical
+  等价已存在且复用同一逻辑 —— `device join`(DeviceAction::Join→join::run)、`runtime start/stop`
+  (RuntimeAction→start::run/stop::run);mod join/start/stop 保留(canonical 仍用)。验证:
+  help-drift 测试过、boundary 检查 exit 0、facade::cli 259 测试过、全测试 target 编译、clippy 不变。
+  授权:CTO 反复指令"注意不用兼容旧的方案,我需要干净的最新实现"—— 别名是旧快捷方式兼容残留,
+  其字面所指;canonical 保功能使删除非破坏(用户迁移到 device join / runtime start)。
 - 发现途径:`cargo test --test script_checks`(运行本体)—— 第八个真问题。
 ### F-038 session_dispatch_fixture 跨仓基线漂移:Federation-MVP 基线缺 ability_ura 【已核验,2026-06-12】
 - 落点:tests/session_dispatch_fixture.rs 读 `../EasyNet-Federation-MVP/tests/schema_compat/

@@ -274,7 +274,6 @@ const HELP_TEMPLATE: &str = "\
     \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
 
   \x1b[1;36m[Network]\x1b[0m
-    \x1b[1mjoin\x1b[0m                 Pair THIS host with a Hub via a one-time token
     \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, exec, terminal
     \x1b[1magent\x1b[0m                Manage agents — network actors that expose abilities
     \x1b[1mability\x1b[0m              Manage abilities — deploy, invoke, list public endpoints
@@ -290,8 +289,6 @@ const HELP_TEMPLATE: &str = "\
 
   \x1b[1;36m[Runtime]\x1b[0m
     \x1b[1mruntime\x1b[0m              Manage the local Axon runtime (start, stop, status)
-    \x1b[1mstart\x1b[0m                Start the local Axon runtime as a background daemon
-    \x1b[1mstop\x1b[0m                 Stop the local Axon runtime
     \x1b[1mplugin\x1b[0m               Manage daemon ability-extension plugin packages
     \x1b[1mmcp\x1b[0m                  MCP server — expose device abilities to AI assistants
     \x1b[1mfederation\x1b[0m           Inspect cross-hub peers and trusted hubs
@@ -332,10 +329,6 @@ pub enum Command {
     // dispatcher hands off to the same impl regardless of spelling.
     // `start` / `stop` live in the Runtime bucket below alongside
     // `runtime`.
-    /// Pair THIS host with a Hub via a one-time token (alias of `device join`).
-    #[command(display_order = 20)]
-    Join(join::JoinArgs),
-
     /// Manage remote devices — pair, list, exec, terminal.
     #[command(display_order = 21)]
     Device(groups::device::DeviceArgs),
@@ -390,13 +383,6 @@ pub enum Command {
     #[command(display_order = 40)]
     Runtime(groups::runtime::RuntimeArgs),
 
-    /// Start the local Axon runtime as a background daemon (alias of `runtime start`).
-    #[command(display_order = 41)]
-    Start(start::StartArgs),
-
-    /// Stop the local Axon runtime (alias of `runtime stop`).
-    #[command(display_order = 42)]
-    Stop(stop::StopArgs),
 
     /// Manage daemon ability-extension plugin packages.
     #[command(display_order = 43)]
@@ -447,12 +433,6 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // layered forms (`device join`, `runtime start`, `runtime stop`)
         // call. `start` mirrors the runtime group's banner render so the
         // two spellings produce identical output.
-        Command::Join(args) => join::run(args),
-        Command::Start(args) => {
-            eprint!("{}", presentation::banner::render_logo());
-            start::run(args)
-        }
-        Command::Stop(args) => stop::run(args),
 
         // Layered groups
         Command::Auth(args) => groups::auth::dispatch(args),
