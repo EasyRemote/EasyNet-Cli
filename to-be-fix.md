@@ -7,6 +7,16 @@
 ---
 
 ## EasyNet-Cli
+### F-023 RFC-001 conformance baseline 严重落后(888 vs 实际 917)【已核验,2026-06-12】
+- 落点:docs/rfc/AXON-RFC-001-baseline-counts.txt(=888)vs `check-rfc-001-conformance.sh`(实际 917) · 规范 · 中
+- 证据:`check-rfc-001-baseline-lock.sh` FAIL,regression +29。二分定位:
+  · +28 先于本会话工作(387a645 已 916,baseline 888 更早 —— 历史累积未更新,非本次引入);
+  · +1 由 2d23b3a(MCP 自愈重连 bug 修复)引入,新增 MCP keyword(MCP executor dead-runtime
+    修复必要代码,743 条 "MCP keyword in CLI src" 警告里多 1)。
+- 影响:conformance CI 会红;baseline 落后掩盖真实违规趋势(本会话差点误判)。
+- 方向:**不擅自一次性吞 baseline**(会掩盖那 28 条未审违规)。需 CTO 决定:逐条审 916→917
+  的违规归属(大头是 MCP keyword 743 = facade/mcp P4.8d 移除待办,Rule 1),按真值更新 baseline
+  或修违规;本会话的 +1 MCP 修复是必要 bug fix,可随 MCP 移除一并清。
 
 ### F-001 daemon_invocation_service.rs 是 13,142 行 god-file 【已核验】
 - 落点:src/services/invocation_transport/daemon_invocation_service.rs · 重量/架构 · **高**
