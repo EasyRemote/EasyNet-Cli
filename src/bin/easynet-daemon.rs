@@ -264,11 +264,13 @@ async fn main() -> anyhow::Result<()> {
     // rather than after control/runtime-dispatch sockets already
     // exist. That keeps the PR-1 "load config before any listener
     // bind" invariant honest whenever the feature-gated transport is compiled in.
+    // Hold the session-shutdown handle for the daemon's lifetime;
+    // dropping it at shutdown drains the live `<self>.session` dial
+    // (F-007 — was Box::leak'd). Bound directly from the boot result:
+    // Ok yields the handle, Err returns, so there is no never-read
+    // placeholder.
     #[cfg(feature = "axon-pb")]
-    let mut session_shutdown =
-        easynet_cli::services::invocation_transport::SessionShutdown::none_handle();
-    #[cfg(feature = "axon-pb")]
-    {
+    let session_shutdown = {
         boot_bus.emit_started("daemon-invocation-transport");
         match easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
             Arc::clone(&local_runtime),
@@ -277,11 +279,8 @@ async fn main() -> anyhow::Result<()> {
             Some(Arc::clone(&built_registry.plugin_runtime_manager)),
         ) {
             Ok(handle) => {
-                // Hold the session-shutdown handle for the daemon's
-                // lifetime; dropping it at shutdown drains the live
-                // `<self>.session` dial (F-007 — was Box::leak'd).
-                session_shutdown = handle;
                 boot_bus.emit_ok("daemon-invocation-transport");
+                handle
             }
             Err(e) => {
                 eprintln!("[daemon-invocation] transport boot failed: {e:#}");
@@ -289,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
                 return Err(e);
             }
         }
-    }
+    };
     #[cfg(not(feature = "axon-pb"))]
     {
         boot_bus.emit_skipped("daemon-invocation-transport");
