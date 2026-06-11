@@ -2764,8 +2764,11 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
 
-        // No panic, no error — soft skip is the contract.
-        start_daemon_invocation_transport(
+        // No panic, no error — soft skip is the contract. Bind the
+        // returned SessionShutdown explicitly: its Drop runs the
+        // graceful drain at scope end, which is the intended teardown
+        // here (the bare-expression form reads as a dropped #[must_use]).
+        let _shutdown = start_daemon_invocation_transport(
             easynet_axon::invocation::LocalRuntime::new(),
             None,
             Arc::new(
