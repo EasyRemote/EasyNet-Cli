@@ -112,7 +112,9 @@ terminal-store 接入即收口。
 ### Phase 2 — 协议形状(P0 长线,T0.4 之后)
 | # | 内容 | 仓 | 规模 | 验收 |
 |---|---|---|---|---|
-| T2.1 | **F-004 帧格式定型**:基准证实开销后,SessionDispatch → proto oneof 帧;滚动升级(双读单写一版) | Cli(+Axon proto) | L,gate=T0.4 基准 | 基准对比落档;新旧帧互通一个版本;352+ transport 测试迁移 |
+| T2.0 | **载体归一前置:caller 盘点**(skill 迁移纪律):Invoke/Subscribe/OpenBidi 的 JSON 控制帧逐调用方分类(backend/绑定/CLI/boot/内部/测试) | Cli+BE | S | 盘点表落档,每调用方有去向(Invocation 替代 or 留诊断面) |
+| T2.1 | **F-004 载体归一**:dispatch 帧承载 canonical Invocation/proto 形状(JSON 降级诊断面);滚动升级(双读单写一版)。性能基准做对照而非 gate(边界违例本身已构成改造理由) | Cli(+Axon proto) | L → T2.0 | 基准对比落档;新旧帧互通一个版本;352+ transport 测试迁移;F-038 类漂移不再可能(单一形状源) |
+| T2.1b | **F-040 收口**:backend 改为向 daemon Invocation 提交完整七元组,退役 `<self>.invoke_remote` 包装与手抄 struct(过渡:共享形状入生成代码) | EasyNet BE | M → T2.1 | invoke_remote.go 手抄 struct 删除;contract test 改打 Invocation 面 |
 | T2.2a | **F-015 A 批**:urns.go(557)→ Axon Go SDK URA builders,删 fork 文件 | EasyNet BE | M | 编译零 fork 引用;URA 单测迁移;e2e 配对流程绿 |
 | T2.2b | **F-015 B 批**:admission fork → SDK;**F-017 全局开关收进配置注入**(阶段推出语义保留) | EasyNet BE | M → A 批后 | admission e2e;开关运行时可重配;测试无手工复位 |
 | T2.2c | **F-015 C 批**:invoke 客户面对齐 delta-table 两方法 Client 接口 | EasyNet BE | M | invoke/InvokeStream e2e |
