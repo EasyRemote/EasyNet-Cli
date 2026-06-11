@@ -44,15 +44,22 @@
 - 余 9 条(明确归类,需更大改动):
   · 6× `result_large_err`(AxonError ≥144B)→ 箱化 AxonError,跨 Axon SDK 改动 + 影响所有
     Result 调用点,超出"小而安全";单列。
-  · 3× `too_many_arguments`(boot.rs spawn_session_supervisor 8 参等)= F-002 的参数收拢
-    重构(配置结构体),随 F-002 一并清。
+  · 3× `too_many_arguments`,精确归属:boot.rs:1003 spawn_session_supervisor(F-002 直属);
+    join_connection_state.rs:298 failed_from_parts(8 参→ JoinFailureParts 结构体,独立可做但
+    改全调用点);local_session_dispatcher.rs:320 try_dispatch_via_axon(7 dispatch 字段,热路径、
+    caller 多,收拢风险>收益)。三者皆参数收拢,clippy 限 7/8 边界警告 —— 随 F-002 收拢一并清,
+    不单独为消边界警告改热路径签名。
 - 方向:箱化 + F-002 收拢后清零;CI 加 `-D warnings` 防回潮。
 
-### F-006 OnceLock 全局单例 HubPublishedAbilityStore::global() 【已核验】
+### F-006 OnceLock 全局单例 HubPublishedAbilityStore::global() 【已核验,2026-06-11 评估:中型非小修】
 - 落点:src/services/hub_published_ability_store.rs:149-151 · 架构 · 中
-- 证据:`static INSTANCE: OnceLock<Arc<…>>`;session prelude(session_initiator.rs join 回执处理)直接取全局。
-- 违反:运行时依赖必须构造注入(本仓自家家规);隐藏依赖 + 测试隔离脆弱(跨测试共享可变状态)。
-- 方向:store 随 boot 构造,经参数/字段注入两处消费点;global() 过渡期保留并标 deprecated。
+- 证据:`static INSTANCE: OnceLock<Arc<…>>` + `get_or_init`(无显式 boot 创建点,谁先调谁懒初始化);
+  5 个消费点散布在自由函数里(advertise.rs:503、meta_ability.rs:371/769、session_initiator.rs:1485),
+  均不在 DaemonInvocationService 内,拿不到其字段。
+- 评估:纯注入要把 store 引用穿过这 5 个深调用栈(改函数签名链)= 中型重构,非"小而安全";
+  半吊子(加 init_global 而消费点仍调 global())只挪懒初始化、不解决所有权,拒绝。
+- 方向:与 service 注入重构一并做——store 随 boot 构造存入 service(照 AdvertisedAgentStore),
+  5 消费点逐个改为接收引用;global() 过渡期标 deprecated。属 F-002 transport 重构同批。
 
 ### F-007 会话取消句柄 Box::leak,无优雅停机 【已修复 2026-06-11】
 - 落点:boot.rs / easynet-daemon.rs · 架构 · 中
