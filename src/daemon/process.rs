@@ -258,7 +258,7 @@ impl DaemonStartConfig {
     }
 
     fn validate_existing_daemon_identity(&self, path: &Path) -> Result<()> {
-        let disc = discovery::read(&path)
+        let disc = discovery::read(path)
             .map_err(|_| DaemonError::DiscoveryMissing {
                 path: path.to_path_buf(),
             })?

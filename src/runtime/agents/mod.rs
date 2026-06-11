@@ -344,7 +344,7 @@ pub fn build_registry() -> Arc<AxonAbilityCatalog> {
     #[cfg(not(test))]
     {
         static SNAPSHOT: std::sync::OnceLock<Arc<AxonAbilityCatalog>> = std::sync::OnceLock::new();
-        return Arc::clone(SNAPSHOT.get_or_init(build_registry_uncached));
+        Arc::clone(SNAPSHOT.get_or_init(build_registry_uncached))
     }
     #[cfg(test)]
     build_registry_uncached()

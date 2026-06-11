@@ -36,12 +36,17 @@
 - 方向:先基准(每秒帧数 × P99 延迟 × 分配),后定型 proto oneof 帧;**不测不改**。
 - 诚实注:当前规模(单设备低频 dispatch)可能无感;列高是因为它是协议形状,越晚改迁移成本越高。
 
-### F-005 lib 容忍 20 条 clippy 警告 【已核验】
-- 落点:全仓(`cargo clippy --lib --features axon-pb` = 20 条) · 规范 · 中
-- 证据:含 result_large_err(AxonError ≥144 字节,热 Result 路径每次返回都搬运)、
-  type_complexity(session_initiator.rs:155 probe 类型、boot.rs escalation 元组)、too_many_arguments。
-- 违反:工业教科书 = clippy 零警告;警告堆积让新增警告隐身(本会话差点误判 20→21)。
-- 方向:分责清零;AxonError 装箱(性能顺手赚);CI 加 `-D warnings` 防回潮。
+### F-005 lib clippy 警告 【部分清,2026-06-11:20→9】
+- 落点:全仓(`cargo clippy --lib --features axon-pb`) · 规范 · 中
+- 已清(11 条):8 条 `--fix` 自动(needless_borrow/return/useless_format 等)+ 人工 4 条
+  (owner_projection redundant_closure、session_initiator type_complexity 别名化、ffi 两处
+  unsafe `# Safety` 文档)。touched 模块测试全过。
+- 余 9 条(明确归类,需更大改动):
+  · 6× `result_large_err`(AxonError ≥144B)→ 箱化 AxonError,跨 Axon SDK 改动 + 影响所有
+    Result 调用点,超出"小而安全";单列。
+  · 3× `too_many_arguments`(boot.rs spawn_session_supervisor 8 参等)= F-002 的参数收拢
+    重构(配置结构体),随 F-002 一并清。
+- 方向:箱化 + F-002 收拢后清零;CI 加 `-D warnings` 防回潮。
 
 ### F-006 OnceLock 全局单例 HubPublishedAbilityStore::global() 【已核验】
 - 落点:src/services/hub_published_ability_store.rs:149-151 · 架构 · 中

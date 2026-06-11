@@ -169,7 +169,7 @@ pub fn dispatch(
                     audit_invoke(
                         caller,
                         target,
-                        &qualified,
+                        qualified,
                         &parsed.args,
                         result.as_ref(),
                         elapsed_ms,
@@ -235,7 +235,7 @@ pub fn dispatch(
             )
         })?;
         registry
-            .invoke_rpc_json(&qualified, parsed.args.clone())
+            .invoke_rpc_json(qualified, parsed.args.clone())
             .map_err(|err| {
                 let msg = format!("{err}");
                 if is_not_found_error(&msg) {

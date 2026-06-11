@@ -421,6 +421,10 @@ pub unsafe extern "C" fn easynet_invocation_bidi_send(
 /// the local up-direction sender.
 ///
 /// Unknown ids are treated as already closed and return `EASYNET_OK`.
+///
+/// # Safety
+/// `handle` must be a live handle returned by this FFI and not
+/// used concurrently from another thread during this call.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_invocation_bidi_close(
     handle: EasynetHandle,
@@ -453,6 +457,10 @@ pub unsafe extern "C" fn easynet_invocation_bidi_close(
 /// Cancellation drops the local reader and up-direction sender
 /// without sending protocol EOF. Unknown ids are treated as already
 /// closed and return `EASYNET_OK`.
+///
+/// # Safety
+/// `handle` must be a live handle returned by this FFI and not
+/// used concurrently from another thread during this call.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
     handle: EasynetHandle,

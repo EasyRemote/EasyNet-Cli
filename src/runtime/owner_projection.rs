@@ -436,7 +436,7 @@ fn canonical_projection_json(
         .iter()
         .map(canonical_summary_json)
         .collect::<Vec<_>>();
-    ability_values.sort_by(|a, b| serialize_value(a).cmp(&serialize_value(b)));
+    ability_values.sort_by_key(serialize_value);
     ability_values.dedup_by(|a, b| serialize_value(a) == serialize_value(b));
     json!({
         "owner_ura": owner_ura,

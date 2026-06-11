@@ -151,9 +151,15 @@ const SESSION_UP_CHANNEL_CAPACITY: usize = 256;
 /// PresenceRegistry". Only the first admission attempt matters for
 /// boot; after the daemon is admitted once, the long-lived supervisor
 /// owns reconnects.
+/// One-shot sender of the initial-admission verdict (Ok, or an error
+/// string). Aliased to keep `InitialSessionAdmissionProbe`'s field
+/// type legible.
+type AdmissionVerdictSender =
+    Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>;
+
 #[derive(Clone)]
 pub(crate) struct InitialSessionAdmissionProbe {
-    tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>,
+    tx: AdmissionVerdictSender,
 }
 
 impl InitialSessionAdmissionProbe {

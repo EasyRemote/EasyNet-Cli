@@ -881,10 +881,10 @@ fn verify_delegation_metadata(
 
     match (raw_delegation, raw_session) {
         (Some(_), Some(_)) => {
-            return Err(Status::invalid_argument(format!(
+            Err(Status::invalid_argument(format!(
                 "{REASON_AUTHORITY_FORMAT_INVALID}: invocation carries both `{DELEGATION_METADATA_KEY}` \
                  and `{SESSION_AUTHORITY_METADATA_KEY}`"
-            )));
+            )))
         }
         (Some(raw_proof), None) => {
             let payload = parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
