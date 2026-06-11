@@ -85,12 +85,17 @@
   测试:full_jitter ∈ [0,bound]、零界零等待、1000 抽样 >100 distinct(验非退化);
   next_backoff 确定性测试不受影响。352 transport 测试全过。
 
-### F-004 会话热路径双重序列化:JSON-in-protobuf 【已核验,量化待测】
+### F-004 会话热路径双重序列化:JSON-in-protobuf 【已核验;2026-06-12 边界镜头升格定性】
 - 落点:daemon_invocation_service.rs `drain_session_up_stream`(每帧 `serde_json::from_slice::<SessionDispatch>`)、
-  `push_session_request_result`(`serde_json::to_vec` 包进 BinaryChunk)及全部对称点 · 性能 · **高(方向)/待量化**
+  `push_session_request_result`(`serde_json::to_vec` 包进 BinaryChunk)及全部对称点 · 性能/**边界** · **高**
 - 证据:业务帧 = protobuf BinaryChunk 包 JSON;二进制 payload 在 JSON 内意味 base64 膨胀 ~33% + 每帧两次分配/解析。
-- 方向:先基准(每秒帧数 × P99 延迟 × 分配),后定型 proto oneof 帧;**不测不改**。
-- 诚实注:当前规模(单设备低频 dispatch)可能无感;列高是因为它是协议形状,越晚改迁移成本越高。
+- **边界升格(runtime-boundary skill 裁决)**:SessionDispatch JSON 帧携带 ability+args+origin claim+result,
+  是 Axon Invocation 之外的**第二 invocation 载体**,且形状被 backend 逐字节手抄(F-040)、被跨仓
+  fixture 抓到漂移(F-038)——三条同病。skill 明令:「daemon 控制帧不得成为 Invocation 构造的第二
+  真源」「JSON 控制帧降级到 status/boot/lifecycle/diagnostics」。
+- 方向(修订):不再是「JSON→proto oneof 提速」,而是**载体归一**——dispatch 帧承载 canonical
+  Invocation/proto 形状,JSON 降级为诊断面;性能收益顺带。迁移前先做 skill 要求的 caller 盘点
+  (Invoke/Subscribe/OpenBidi 逐调用方分类)。基准纪律保留(量化收益)。
 
 ### F-005 lib clippy 警告 【部分清:20→8(2026-06-11/12)】
 - 落点:全仓(`cargo clippy --lib --features axon-pb`) · 规范 · 中
@@ -275,6 +280,19 @@
 - 落点:backend/internal/receipt/(仅记录与查询) · 规范 · 低中
 - 方向:边界决定(信任 Axon 已验)写进 boundary 文档;或补链验证调用。
 
+### F-040 backend 把产品跨设备调用包成 daemon-internal 的 `<self>.invoke_remote`,wire 形状逐字节手抄 【已核验,2026-06-12 边界镜头】
+- 落点:backend/internal/daemon_grpc/invoke_remote.go:58(`const AbilityInvokeRemote = "<self>.invoke_remote"`);
+  文件头注释自认:「daemon-internal — the daemon's <self>.invoke_remote dispatcher owns it」
+  「Wire shape mirrors the Rust initiator … 1:1: struct names + JSON tags are byte-identical here,
+  with no translation layer」 · 架构/边界 · **中高**
+- 违反(runtime-boundary skill 两条明文):①「Ordinary product calls should not be wrapped as
+  `<self>.invoke_remote` at the backend boundary」;② Cli 拥有的 JSON 帧形状在 Go 里手抄副本 =
+  协议形状第二真源(与 F-015 同病,平面不同:F-015 fork 协议层,本条 fork 派发帧层)。
+- 缓和:contract test 对真 daemon 回环验证;注释记录 v4.1.6 计划改名 `device.invoke_remote`。
+- 方向:并入清洁目标迁移——backend 向 daemon Invocation 面提交**完整 Invocation**(七元组),
+  daemon 拥有 callee 本地性解析/转发;过渡期至少把共享帧形状挪到生成代码(随 F-004 载体归一)。
+  与 F-004/F-038 同批设计,不单独修。
+
 ### F-029 backend handler 层 DB 访问泄漏(5 文件 8 处) 【已核验,第 5 轮】
 - 落点:handler/openai/chat_completions.go(3 处)、pages_public/serve.go(2 处)、
   terminal/wshandler.go、sse/sse_handler.go、device/verifyCredentialHandler.go(各 1 处) · 架构/规范 · 中
@@ -375,3 +393,13 @@
   agent 假阳性累计 11 条全数拦截。审计收敛,loop 退出。**
   剩余开放面(声明,非缺口):Axon conformance 深审、各 god-file 拆分后的逐文件复审——
   属修复执行期工作,不属本审计范围。
+- **2026-06-12 边界镜头补审**(CTO 点题「URA 应只由 Axon 提供」,依 easynet-runtime-boundary +
+  easynet-ura-discipline 两 skill 复审所有权):
+  **正面确认(规则已被制度化执行)**:① Cli src/ura.rs 是纯门面(零语法实现,re-export
+  `easynet_axon::ura`)且有守卫脚本 test_no_raw_ura_construction.sh 禁裸构造——「URA 只由 Axon
+  提供」在 Cli 已达成;② AdmissionFacade 委托 `run_admission`+`canonical_invocation_bytes`
+  (DEC-009),非复刻;③ FFI C ABI 七元组完整(subject/nonce/causal_context 必填,Axon JSON
+  surface),无静默默认;④ Frontend parseURA 是 skill 钦定镜像。
+  **新债与升格**:F-040 入册(backend 包 `<self>.invoke_remote` + 帧形状逐字节手抄);
+  F-004 升格为「第二 invocation 载体」边界债,与 F-038/F-040 同病归批;
+  F-015 定性升格:从「未用 SDK」到「协议真源二元化」(Rule 1 拒绝类)。
