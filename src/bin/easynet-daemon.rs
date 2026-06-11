@@ -265,21 +265,30 @@ async fn main() -> anyhow::Result<()> {
     // exist. That keeps the PR-1 "load config before any listener
     // bind" invariant honest whenever the feature-gated transport is compiled in.
     #[cfg(feature = "axon-pb")]
+    let mut session_shutdown =
+        easynet_cli::services::invocation_transport::SessionShutdown::none_handle();
+    #[cfg(feature = "axon-pb")]
     {
         boot_bus.emit_started("daemon-invocation-transport");
-        if let Err(e) =
-            easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
-                Arc::clone(&local_runtime),
-                invocation_ledger,
-                Arc::clone(&hot_agent_registrar_cell),
-                Some(Arc::clone(&built_registry.plugin_runtime_manager)),
-            )
-        {
-            eprintln!("[daemon-invocation] transport boot failed: {e:#}");
-            boot_bus.emit_failed("daemon-invocation-transport", e.to_string());
-            return Err(e);
+        match easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
+            Arc::clone(&local_runtime),
+            invocation_ledger,
+            Arc::clone(&hot_agent_registrar_cell),
+            Some(Arc::clone(&built_registry.plugin_runtime_manager)),
+        ) {
+            Ok(handle) => {
+                // Hold the session-shutdown handle for the daemon's
+                // lifetime; dropping it at shutdown drains the live
+                // `<self>.session` dial (F-007 — was Box::leak'd).
+                session_shutdown = handle;
+                boot_bus.emit_ok("daemon-invocation-transport");
+            }
+            Err(e) => {
+                eprintln!("[daemon-invocation] transport boot failed: {e:#}");
+                boot_bus.emit_failed("daemon-invocation-transport", e.to_string());
+                return Err(e);
+            }
         }
-        boot_bus.emit_ok("daemon-invocation-transport");
     }
     #[cfg(not(feature = "axon-pb"))]
     {
@@ -415,6 +424,10 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_ready();
 
     wait_for_shutdown_signal().await;
+    // Cancel the session supervisor (drains the live `<self>.session`
+    // dial -> clean Eof at the hub) before tearing down control sockets.
+    #[cfg(feature = "axon-pb")]
+    drop(session_shutdown);
     cleanup_control_discovery();
     Ok(())
 }

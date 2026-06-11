@@ -49,11 +49,15 @@
 - 违反:运行时依赖必须构造注入(本仓自家家规);隐藏依赖 + 测试隔离脆弱(跨测试共享可变状态)。
 - 方向:store 随 boot 构造,经参数/字段注入两处消费点;global() 过渡期保留并标 deprecated。
 
-### F-007 会话取消句柄 Box::leak,无优雅停机 【已核验】
-- 落点:boot.rs(`Box::leak(Box::new(cancel_tx))`,session supervisor 的 cancel oneshot) · 架构 · 中
-- 证据:cancel_tx 故意泄漏 → supervisor 的 cancel 分支永不可达;daemon 停机 = 进程级击杀,
-  会话无 drain、上行帧可能截断(hub 侧表现为 StreamReset 而非 Eof)。
-- 方向:cancel_tx 收进 daemon 关停路径(已有 SIGHUP 任务基建可挂);verify:停机时 hub 看到干净 Eof。
+### F-007 会话取消句柄 Box::leak,无优雅停机 【已修复 2026-06-11】
+- 落点:boot.rs / easynet-daemon.rs · 架构 · 中
+- 修复:`SessionShutdown(Option<oneshot::Sender>)` 句柄,explicit Drop 主动 send 取消信号;
+  `start_daemon_invocation_transport` 与 `spawn_session_supervisor` 返回它(hub/未配置返回
+  none_handle);daemon main 持有到 `wait_for_shutdown_signal().await` 后 drop → supervisor
+  的 `_ = &mut cancel => return` 分支生产可达,会话优雅 drain(hub 见干净 Eof)。
+  陷阱已避:原 `if let Err = ...` 会在 Ok 分支立即 drop 句柄(立即取消)→ 改 match 捕获持有。
+  测试:drop 投递 () 信号、none 句柄惰性;354 transport 测试全过;顺手清掉 2 条自引入 clippy
+  警告(净 23→21)。
 
 ### F-008 设备会话生命周期为隐式状态机 【已核验,深挖见 plan §2.1】
 - 落点:session_initiator.rs(dial + supervisor 控制流即状态) · 架构 · **高**

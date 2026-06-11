@@ -200,6 +200,40 @@ impl AsyncWrite for NamedPipeGrpcIo {
 /// constructed below so post-boot `agent.start` invocations
 /// land their `<agent>.{chat,discover,invoke}` rows into the live
 /// Axon runtime instead of skipping runtime registration.
+/// Owns the session supervisor's cancel oneshot. Dropping it (at
+/// daemon shutdown) resolves the supervisor's `cancel` branch, so the
+/// in-flight `<self>.session` dial drains cleanly instead of being
+/// killed at the process level (the hub then sees a clean Eof, not a
+/// StreamReset). An empty handle (hub mode, unconfigured, no device
+/// identity) is a no-op on drop.
+#[must_use = "drop at shutdown to cancel the session supervisor; \
+              dropping immediately tears the session down"]
+pub struct SessionShutdown(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for SessionShutdown {
+    fn drop(&mut self) {
+        // Dropping the sender resolves the supervisor's `cancel`
+        // future; an explicit Drop also makes the field's role
+        // (consumed only at teardown) legible to readers and clippy.
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+impl SessionShutdown {
+    fn none() -> Self {
+        Self(None)
+    }
+
+    /// Public no-op handle for callers that hold the slot across a
+    /// `#[cfg]` boundary before the real handle is assigned (the
+    /// daemon binary). Identical to an unconfigured-mode result.
+    pub fn none_handle() -> Self {
+        Self::none()
+    }
+}
+
 pub fn start_daemon_invocation_transport(
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
@@ -207,7 +241,7 @@ pub fn start_daemon_invocation_transport(
         crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell,
     >,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<SessionShutdown> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
         Ok(cfg) => cfg,
@@ -223,7 +257,7 @@ pub fn start_daemon_invocation_transport(
                 config_path = config_path_display,
                 message = "no daemon-config.toml; skipping gRPC listener",
             );
-            return Ok(());
+            return Ok(SessionShutdown::none());
         }
         // A PRESENT-but-broken config (parse error, illegal field, bad TLS
         // pairing, …) is an operator mistake, not "unconfigured". Silently
@@ -723,6 +757,7 @@ pub fn start_daemon_invocation_transport(
     // what makes "device 连 hub + 保活" a real-world fact rather than
     // a library-level capability. Spec §1.3 ties the outbound dial
     // to device mode only.
+    let mut session_shutdown = SessionShutdown::none();
     if matches!(config.mode(), DaemonMode::Device) {
         if let (Some(hub_endpoint), Some(identity)) =
             (config.hub_endpoint().map(str::to_string), daemon_identity)
@@ -758,7 +793,7 @@ pub fn start_daemon_invocation_transport(
                     trust_anchor_path: trust_anchor_path.clone(),
                     cell: trust_anchor_cell.clone(),
                 };
-            spawn_session_supervisor(
+            session_shutdown = spawn_session_supervisor(
                 hub_endpoint,
                 identity,
                 hub_ca_pem_path,
@@ -778,7 +813,7 @@ pub fn start_daemon_invocation_transport(
         }
     }
 
-    Ok(())
+    Ok(session_shutdown)
 }
 
 /// Device-mode hot-advertise adapter for `agent.start`.
@@ -978,7 +1013,7 @@ fn spawn_session_supervisor(
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
     user_trust_sync: crate::services::invocation_transport::session_initiator::UserTrustSync,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<SessionShutdown> {
     // Build the device-owner descriptor projection from the same profile
     // registry that powers `meta.list_abilities`. RFC-005 route selection
     // consumes the hub-side owner projection; constructing it from bare
@@ -1066,8 +1101,11 @@ fn spawn_session_supervisor(
         caller_ura_for_wait,
         initial_admission_rx,
     );
-    Box::leak(Box::new(cancel_tx));
-    Ok(())
+    // The cancel sender travels back to the daemon's shutdown path
+    // (was Box::leak'd, which made the supervisor's cancel branch dead
+    // code — F-007). Dropping the returned handle at shutdown resolves
+    // `cancel_rx` and the supervisor drains the live dial.
+    Ok(SessionShutdown(Some(cancel_tx)))
 }
 
 fn device_owner_session_descriptors(
@@ -2348,6 +2386,30 @@ fn expand_home(path: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::SessionShutdown;
+
+    #[tokio::test]
+    async fn session_shutdown_drop_resolves_the_cancel_receiver() {
+        // F-007 regression: the handle must carry a live sender whose
+        // drop resolves the supervisor's cancel branch (the old
+        // Box::leak made that branch dead in production).
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = SessionShutdown(Some(tx));
+        drop(handle);
+        // Drop sends an explicit `()` cancel — the supervisor's
+        // `_ = &mut cancel => return` arm fires on the received value.
+        // Before F-007 the sender was Box::leak'd, so this never
+        // arrived and the arm was dead code in production.
+        assert_eq!(rx.await, Ok(()), "drop delivers the cancel signal");
+    }
+
+    #[test]
+    fn session_shutdown_none_is_inert() {
+        // hub/unconfigured mode: dropping a none handle is a no-op.
+        drop(SessionShutdown::none());
+        drop(SessionShutdown::none_handle());
+    }
+
     use super::*;
 
     #[test]

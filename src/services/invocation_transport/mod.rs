@@ -79,7 +79,7 @@ pub mod session_escalation;
 pub mod session_initiator;
 
 pub use admission_facade::AdmissionFacade;
-pub use boot::start_daemon_invocation_transport;
+pub use boot::{start_daemon_invocation_transport, SessionShutdown};
 pub use daemon_invocation_service::DaemonInvocationService;
 pub use invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
 pub use invoke_remote_initiator::{
