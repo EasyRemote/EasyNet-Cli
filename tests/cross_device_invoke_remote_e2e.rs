@@ -1044,6 +1044,7 @@ async fn run_round_trip() {
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: Default::default(),
+        origin_caller: None,
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
@@ -1167,6 +1168,7 @@ async fn run_round_trip_via_local_dispatcher() {
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
         metadata: Default::default(),
+        origin_caller: None,
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 

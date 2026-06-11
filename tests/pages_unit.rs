@@ -355,7 +355,7 @@ fn u9_unpublish_clears_state() {
 fn u10_list_returns_published() {
     let f = Fixture::new("u10");
     f.publish();
-    let v = handle_list(&f.user, &f.realm, json!({})).expect("list should succeed");
+    let v = handle_list(&f.user, f.listener_port, &f.realm, json!({})).expect("list should succeed");
     let projects = v.get("projects").and_then(Value::as_array).unwrap();
     assert!(
         projects
