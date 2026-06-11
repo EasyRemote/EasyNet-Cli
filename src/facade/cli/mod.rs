@@ -286,6 +286,7 @@ const HELP_TEMPLATE: &str = "\
     \x1b[1mpages\x1b[0m                Publish a folder of static bytes as a website
     \x1b[1mapi-key\x1b[0m              Mint / list / revoke OpenAI-compat API keys
     \x1b[1mllm-api\x1b[0m              One-shot OpenAI-compat chat completion
+    \x1b[1mcontext\x1b[0m              Track clipboard history and map project folders
 
   \x1b[1;36m[Runtime]\x1b[0m
     \x1b[1mruntime\x1b[0m              Manage the local Axon runtime (start, stop, status)
@@ -364,6 +365,7 @@ pub enum Command {
     #[command(display_order = 31)]
     Pages(pages::PagesArgs),
     /// Context surface: clipboard tracking + mapped project folders.
+    #[command(display_order = 34)]
     Context(context::ContextArgs),
 
     /// Mint / list / revoke OpenAI-compat API keys.
