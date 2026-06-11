@@ -1,0 +1,67 @@
+name: Tests
+
+# Compiles ALL test targets and runs the lib suite. This is the CI
+# that would have caught the five test-construction breaks the
+# 2026-06-12 full-suite sweep found: `cargo build` (the prior
+# verification) does NOT build test targets, so a struct field or fn
+# signature change can leave a test/integration construction site
+# broken with nothing to flag it. `cargo test --no-run` builds every
+# target (catching those), and `cargo test --lib` runs the unit suite
+# (catching runtime regressions like a drifted help template).
+#
+# Integration-test BODIES that need a daemon / network / docker are not
+# run here (they are operator-provisioned, the same boundary the
+# integration repo's testbed tier draws); --no-run still compiles them,
+# which is what catches field/arg drift.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout EasyNet-Cli
+        uses: actions/checkout@v4
+        with:
+          path: EasyNet-Cli
+
+      # Sibling path dependency (easynet-axon = { path =
+      # "../EasyNet-Axon/sdk/rust" }). Private repo: needs an
+      # AXON_CHECKOUT_TOKEN secret with read access, same as the clippy
+      # workflow; falls back to the default token so the file is valid
+      # before the secret is set.
+      - name: Checkout EasyNet-Axon (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: EasyRemote/EasyNet-Axon
+          path: EasyNet-Axon
+          token: ${{ secrets.AXON_CHECKOUT_TOKEN || github.token }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            EasyNet-Cli/target
+          key: tests-${{ runner.os }}-${{ hashFiles('EasyNet-Cli/Cargo.lock') }}
+          restore-keys: tests-${{ runner.os }}-
+
+      # Compile every test target (lib, integration, doc) — this alone
+      # catches construction-site drift that cargo build misses.
+      - name: Compile all test targets
+        working-directory: EasyNet-Cli
+        run: cargo test --features axon-pb --no-run
+
+      # Run the unit suite — catches runtime regressions. Integration
+      # bodies needing infra are excluded (--lib only).
+      - name: Run the lib test suite
+        working-directory: EasyNet-Cli
+        run: cargo test --features axon-pb --lib
