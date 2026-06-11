@@ -606,15 +606,38 @@ fn synthesize_hot_hosted_agent_descriptors(
                     descriptor = descriptor.with_output_schema(output_schema.clone());
                 }
             }
-            let Some(identity) = descriptor.identity() else {
-                continue;
-            };
-            if catalog.contains_key(&identity) {
-                continue;
-            }
-            catalog.insert(identity, descriptor);
+            insert_or_upgrade_hosted_descriptor(catalog, descriptor);
         }
     }
+}
+
+/// Insert a manifest-backed hosted-agent descriptor, upgrading any
+/// schema-less stub already catalogued under the same identity.
+///
+/// The live-registry pass (Phase 2) runs before the hosted-agent synth
+/// and inserts name-only stubs for registration sites that carried no
+/// manifest — the hot agent registrar does not (yet) register
+/// `_with_spec`, so every TOML-declared agent ability lands there with
+/// `schema_summary.input == Null`. The on-disk manifest is the
+/// authoritative contract source for these abilities; discarding the
+/// synth descriptor on key collision is what made the Frontend render
+/// "No input required" for abilities that do declare an input schema.
+/// An existing entry that already carries a schema (registered
+/// `_with_spec`) keeps winning.
+fn insert_or_upgrade_hosted_descriptor(
+    catalog: &mut std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor>,
+    descriptor: AbilityDescriptor,
+) {
+    let Some(identity) = descriptor.identity() else {
+        return;
+    };
+    if catalog
+        .get(&identity)
+        .is_some_and(|existing| !existing.schema_summary.input.is_null())
+    {
+        return;
+    }
+    catalog.insert(identity, descriptor);
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -677,6 +700,37 @@ mod tests {
 
     fn d_for_owner(name: &str, owner_ura: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(name, owner_ura, Visibility::Scoped).expect("test descriptor")
+    }
+
+    #[test]
+    fn hosted_descriptor_synth_upgrades_schema_less_stub_and_keeps_schemad_entry() {
+        let owner = "easynet:///r/localhost/agent/dev.demo";
+        let stub = d_for_owner("dev.demo.n8n_hello", owner)
+            .with_description("Registered local ability (no manifest schema)");
+        let manifest_backed = d_for_owner("dev.demo.n8n_hello", owner)
+            .with_description("Trigger the n8n easynet-hello workflow via webhook")
+            .with_input_schema(json!({
+                "type": "object",
+                "required": ["name"],
+                "properties": {"name": {"type": "string"}},
+            }));
+        let identity = manifest_backed.identity().expect("identity");
+
+        // Phase 2 stub first, synth second: the manifest schema must win.
+        let mut catalog = std::collections::BTreeMap::new();
+        insert_or_upgrade_hosted_descriptor(&mut catalog, stub.clone());
+        insert_or_upgrade_hosted_descriptor(&mut catalog, manifest_backed.clone());
+        assert!(
+            !catalog[&identity].schema_summary.input.is_null(),
+            "manifest-backed descriptor must upgrade the schema-less stub"
+        );
+
+        // An entry that already carries a schema is never downgraded.
+        insert_or_upgrade_hosted_descriptor(&mut catalog, stub);
+        assert_eq!(
+            catalog[&identity].description,
+            "Trigger the n8n easynet-hello workflow via webhook"
+        );
     }
 
     fn seed_test_credentials(realm: &str, node_id: &str, username: &str) {
