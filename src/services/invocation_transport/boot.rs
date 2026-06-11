@@ -226,12 +226,6 @@ impl SessionShutdown {
         Self(None)
     }
 
-    /// Public no-op handle for callers that hold the slot across a
-    /// `#[cfg]` boundary before the real handle is assigned (the
-    /// daemon binary). Identical to an unconfigured-mode result.
-    pub fn none_handle() -> Self {
-        Self::none()
-    }
 }
 
 pub fn start_daemon_invocation_transport(
@@ -2421,7 +2415,6 @@ mod tests {
     fn session_shutdown_none_is_inert() {
         // hub/unconfigured mode: dropping a none handle is a no-op.
         drop(SessionShutdown::none());
-        drop(SessionShutdown::none_handle());
     }
 
     use super::*;
