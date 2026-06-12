@@ -79,8 +79,13 @@ impl AbilityWireRegistry {
     }
 
     /// Load the default daemon profile and project its wire table.
+    ///
+    /// Reads the shared default-state snapshot (F-050: directory reads =
+    /// snapshot reads) — the write paths publish refreshed state, so this
+    /// never re-indexes packages from disk on a warm process.
     pub fn load_default_profile() -> std::result::Result<Self, PluginHostError> {
-        PluginRuntimeState::load_default().map(|state| Self::from_plugin_runtime_state(&state))
+        crate::runtime::plugin_host::default_state()
+            .map(|state| Self::from_plugin_runtime_state(&state))
     }
 
     /// Return the declared bidi wire profile for a locally hosted ability.

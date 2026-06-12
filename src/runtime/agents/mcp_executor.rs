@@ -238,12 +238,13 @@ where
     handle.spawn(async move {
         let _ = tx.send(fut.await);
     });
-    rx.recv_timeout(std::time::Duration::from_secs(600)).map_err(|_| {
-        anyhow::anyhow!(
-            "mcp executor: upstream call did not complete (runtime shutting \
+    rx.recv_timeout(std::time::Duration::from_secs(600))
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "mcp executor: upstream call did not complete (runtime shutting \
              down or upstream hung past the 600s ceiling)"
-        )
-    })?
+            )
+        })?
 }
 
 #[cfg(test)]

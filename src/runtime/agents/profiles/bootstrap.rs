@@ -310,6 +310,11 @@ fn is_current_agent_ura(ura: &str, realm: &str, user_id: &str) -> bool {
     if parsed.kind != crate::ura::URAKind::Agent {
         return false;
     }
+    // Device-sponsored System Agents (`agent/device.<id>.<agent>`,
+    // DEC-F048) intentionally fall out here: `agent_ids()` is None
+    // for them and a device-owned agent never belongs to "the
+    // current user" — None → false is the correct verdict, not an
+    // unhandled grammar case (F-047 point 8).
     parsed.realm == realm && parsed.agent_ids().map(|(user, _)| user) == Some(user_id)
 }
 

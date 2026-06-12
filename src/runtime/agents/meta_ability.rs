@@ -357,9 +357,37 @@ fn list_abilities_handler(
         synthesize_hot_hosted_agent_descriptors(&mut catalog, registry, &local);
     }
 
+    // Final pass — service-health metadata. Applied uniformly over
+    // the assembled catalog (static, live-registry, and hosted-synth
+    // entries alike) so no insertion path has to remember it. The
+    // store is keyed by canonical ability URA, the same
+    // `owner_ability_ura` construction `canonical_ability_ura()`
+    // uses, so the lookup cannot drift from the monitor's writes.
+    // Advisory metadata only: absence means "not monitored", never
+    // "down" — the invoke path does not consult this.
     let mut merged: Vec<Value> = catalog
         .into_values()
-        .map(|d| serde_json::to_value(d).unwrap_or(Value::Null))
+        .map(|d| {
+            let descriptor = match d
+                .canonical_ability_ura()
+                .and_then(|ura| crate::services::ability_health::snapshot(&ura))
+            {
+                Some(health) => {
+                    let mut d = d
+                        .with_metadata_entry("health_status", health.status.as_wire_str())
+                        .with_metadata_entry(
+                            "health_checked_unix_ms",
+                            health.checked_unix_ms.to_string(),
+                        );
+                    if !health.detail.is_empty() {
+                        d = d.with_metadata_entry("health_detail", health.detail);
+                    }
+                    d
+                }
+                None => d,
+            };
+            serde_json::to_value(descriptor).unwrap_or(Value::Null)
+        })
         .collect();
 
     // Phase 3: hub-published abilities. Only when the caller asked
@@ -798,6 +826,71 @@ mod tests {
                 .contains("/ability/")),
             "every public row must carry canonical ability_ura: {abilities:?}"
         );
+    }
+
+    #[test]
+    fn list_abilities_stamps_health_metadata_from_monitor_store() {
+        use crate::services::ability_health::{self, AbilityHealthRecord, HealthStatus};
+
+        // Seed the process-wide health store under THIS test's unique
+        // owner so parallel tests cannot collide (same residue
+        // discipline as the hub-store test below).
+        let owner = "easynet:///r/test/agent/dev.healthmeta";
+        let monitored = d_for_owner("svc_probe", owner);
+        let unmonitored = d_for_owner("svc_plain", owner);
+        let ability_ura = monitored
+            .canonical_ability_ura()
+            .expect("canonical ability ura");
+        ability_health::seed_for_tests(
+            &ability_ura,
+            AbilityHealthRecord {
+                status: HealthStatus::Unhealthy,
+                detail: "exit 7: connection refused".to_string(),
+                checked_unix_ms: 1_234,
+                consecutive_failures: 3,
+                last_boot_unix_ms: None,
+                next_probe_unix_ms: i64::MAX,
+            },
+        );
+
+        let mut reg = AxonAbilityCatalog::new();
+        let provider_rows = vec![monitored, unmonitored];
+        register(
+            &mut reg,
+            move || provider_rows.clone(),
+            empty_registry_handle(),
+            None,
+        );
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let abilities = resp["abilities"].as_array().unwrap();
+
+        let seeded = abilities
+            .iter()
+            .find(|a| a["ability_ura"].as_str() == Some(ability_ura.as_str()))
+            .expect("seeded ability row present");
+        assert_eq!(
+            seeded["metadata"]["health_status"].as_str(),
+            Some("unhealthy")
+        );
+        assert_eq!(
+            seeded["metadata"]["health_checked_unix_ms"].as_str(),
+            Some("1234")
+        );
+        assert_eq!(
+            seeded["metadata"]["health_detail"].as_str(),
+            Some("exit 7: connection refused")
+        );
+
+        // A descriptor with no record must NOT grow health keys —
+        // absence means "not monitored", never a fabricated state.
+        let plain = abilities
+            .iter()
+            .find(|a| a["name"].as_str() == Some("svc_plain"))
+            .expect("plain ability row present");
+        assert!(plain["metadata"]
+            .as_object()
+            .is_none_or(|m| !m.contains_key("health_status")));
     }
 
     #[test]

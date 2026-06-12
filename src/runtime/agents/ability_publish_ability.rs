@@ -394,6 +394,16 @@ fn agent_id_from_owner_ura(context: &str, owner_ura: &str) -> anyhow::Result<Str
     if parsed.kind != crate::ura::URAKind::Agent {
         anyhow::bail!("{context}: `owner_ura` must be an Agent URA");
     }
+    // DEC-F048: publish/unpublish is a hosted user-agent development
+    // surface; a device-sponsored System Agent declares only its
+    // device-native abilities and cannot publish here (RFC-005 §3.1.2).
+    if parsed.device_agent_ids().is_some() {
+        anyhow::bail!(
+            "{context}: `owner_ura` is a device-sponsored System Agent \
+             (RFC-005 §3.1.2, DEC-F048); publish/unpublish is a hosted \
+             user-agent surface"
+        );
+    }
     let Some((_, agent_id)) = parsed.agent_ids() else {
         anyhow::bail!("{context}: `owner_ura` is missing agent_id");
     };
@@ -484,6 +494,26 @@ pub fn unpublish_description() -> &'static str {
 mod tests {
     use super::*;
     use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+
+    #[test]
+    fn owner_ura_resolution_dual_shape() {
+        // User-owned agent resolves to its agent_id.
+        assert_eq!(
+            agent_id_from_owner_ura("ability.publish", "easynet:///r/localhost/agent/dev.claude")
+                .unwrap(),
+            "claude"
+        );
+        // Device-sponsored System Agent is refused with the
+        // normative citation (DEC-F048; F-047 verdict v2).
+        let err = agent_id_from_owner_ura(
+            "ability.publish",
+            "easynet:///r/localhost/agent/device.dev-1.terminal",
+        )
+        .expect_err("System Agent cannot own the publish surface");
+        let msg = err.to_string();
+        assert!(msg.contains("RFC-005 §3.1.2"), "{msg}");
+        assert!(msg.contains("device-sponsored System Agent"), "{msg}");
+    }
     use crate::facade::cli::test_support::HomeGuard;
     use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
     use crate::runtime::directory::{AgentDirectory, Location};

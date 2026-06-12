@@ -357,7 +357,10 @@ fn handler(
         );
     }
     let rx = backend.open(entry)?;
-    Ok(StreamSource::Live(tee_recording(rx, env.callee.unwrap_or_default())))
+    Ok(StreamSource::Live(tee_recording(
+        rx,
+        env.callee.unwrap_or_default(),
+    )))
 }
 
 // ── Context-surface recording tee ────────────────────────────

@@ -197,7 +197,11 @@ fn manifest_for_verb(relative_name: &str) -> crate::core::ability_spec::AbilityM
         .into_iter()
         .find(|s| s.relative_name == relative_name)
         .unwrap_or_else(|| panic!("no pages spec for {relative_name}"));
-    pages_manifest(pages_verb_tail(spec.relative_name), spec.description, spec.input_schema)
+    pages_manifest(
+        pages_verb_tail(spec.relative_name),
+        spec.description,
+        spec.input_schema,
+    )
 }
 
 /// Build an `AbilityManifest` for a pages verb. Panics only on a
@@ -264,7 +268,8 @@ pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
         },
         PagesAbilitySpec {
             relative_name: "pages.unpublish",
-            description: "Unpublish a project: release the folder fd and unregister the fetch ability.",
+            description:
+                "Unpublish a project: release the folder fd and unregister the fetch ability.",
             input_schema: pages_project_id_schema(),
         },
     ]
@@ -273,7 +278,9 @@ pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
 /// The verb tail of a `pages.<verb>` relative name (the bare manifest
 /// name AbilityManifest requires — `.` is the agent/verb separator).
 pub(crate) fn pages_verb_tail(relative_name: &str) -> &str {
-    relative_name.strip_prefix("pages.").unwrap_or(relative_name)
+    relative_name
+        .strip_prefix("pages.")
+        .unwrap_or(relative_name)
 }
 
 pub(crate) fn register_project_abilities(

@@ -17,7 +17,7 @@
 // CI enforcement lives in `scripts/check-kernel-boundary.sh`:
 // anything under `src/services/control/` may import
 // `crate::runtime::kernel_api`, `crate::runtime::invocation`,
-// `crate::runtime::domain`, and nothing else from `crate::runtime`.
+// `crate::core::domain`, and nothing else from `crate::runtime`.
 //
 // Why v1 KernelApi is still thin
 // ------------------------------
@@ -35,7 +35,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::runtime::domain::{
+use crate::core::domain::{
     DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest, RoomId,
     ScheduleEntry, ScheduleId, Session, SessionId,
 };

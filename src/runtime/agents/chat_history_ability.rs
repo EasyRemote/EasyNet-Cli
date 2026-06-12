@@ -163,16 +163,28 @@ mod tests {
         // read silently comes back empty (the regression that hid the
         // lifelong thread after a reload).
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        crate::persistence::chat_sessions::write_turn("demot", "sess-1", "hi", "yo", &[], &json!({}))
-            .expect("seed turn");
+        crate::persistence::chat_sessions::write_turn(
+            "demot",
+            "sess-1",
+            "hi",
+            "yo",
+            &[],
+            &json!({}),
+        )
+        .expect("seed turn");
         crate::persistence::chat_sessions::set_lifelong_session("demot", "sess-1").expect("bind");
         let ura = crate::ura::agent_ura("localhost", "dev", "demot");
         let resp = list_handler(json!({"agent": ura.as_str()})).expect("list via URA");
         assert_eq!(resp["agent"], "demot");
         assert_eq!(resp["lifelong_session_id"], "sess-1");
         assert_eq!(resp["sessions"].as_array().map(Vec::len), Some(1));
-        let resp = get_handler(json!({"agent": ura.as_str(), "session_id": "sess-1"})).expect("get via URA");
-        assert_eq!(resp["turns"].as_array().map(Vec::len), Some(2), "meta + 1 turn");
+        let resp = get_handler(json!({"agent": ura.as_str(), "session_id": "sess-1"}))
+            .expect("get via URA");
+        assert_eq!(
+            resp["turns"].as_array().map(Vec::len),
+            Some(2),
+            "meta + 1 turn"
+        );
     }
 
     #[test]

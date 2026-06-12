@@ -65,6 +65,13 @@ pub const MCP_UPSTREAM_SOURCE_PREFIX: &str = "mcp_upstream:";
 /// The daemon's core ability registry must remain a bounded boot
 /// step. MCP reflection touches external processes / HTTP servers
 /// and therefore lives outside the critical path by default.
+/// Rejected reflection-mode value — carries the trimmed, lowercased
+/// raw input so `from_env` can log exactly what the operator typed
+/// (F-034: data-bearing typed error, not a message string).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unrecognized MCP reflection mode `{0}`; expected lazy|background|off|disabled|0|false|eager|sync|blocking")]
+pub struct UnknownReflectionMode(pub String);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpReflectionMode {
     /// Do not reflect upstream tools as direct abilities. The
@@ -89,7 +96,7 @@ impl McpReflectionMode {
             Err(_) => Self::Lazy,
             Ok(raw) => match Self::parse(&raw) {
                 Ok(mode) => mode,
-                Err(unknown) => {
+                Err(UnknownReflectionMode(unknown)) => {
                     crate::op_event!(
                         component = mcp_reflective,
                         kind = reflection_mode_unknown,
@@ -109,13 +116,13 @@ impl McpReflectionMode {
     /// validators) and warn-and-fallback ([`Self::from_env`]).
     /// Empty strings normalize to `Lazy` because env-var-as-empty
     /// is indistinguishable from env-var-absent on many shells.
-    pub fn parse(raw: &str) -> Result<Self, String> {
+    pub fn parse(raw: &str) -> Result<Self, UnknownReflectionMode> {
         let normalized = raw.trim().to_ascii_lowercase();
         match normalized.as_str() {
             "" | "lazy" | "background" => Ok(Self::Lazy),
             "off" | "false" | "0" | "disabled" => Ok(Self::Off),
             "eager" | "sync" | "blocking" => Ok(Self::Eager),
-            _ => Err(normalized),
+            _ => Err(UnknownReflectionMode(normalized)),
         }
     }
 
@@ -1324,6 +1331,17 @@ fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String>
         crate::ura::parse_ura(owner_ura).map_err(|e| format!("owner URA parse failed: {e}"))?;
     match parsed.kind {
         crate::ura::URAKind::Agent => {
+            // DEC-F048: MCP reflective descriptors carry user-configured
+            // tooling. A device-sponsored System Agent carries no user
+            // identity and MUST NOT own them (RFC-005 §3.1.2) — explicit
+            // reject, not a missing-field error (F-047 verdict v2).
+            if parsed.device_agent_ids().is_some() {
+                return Err(format!(
+                    "owner {owner_ura} is a device-sponsored System Agent; \
+                     System Agents cannot own MCP reflective descriptors \
+                     (RFC-005 §3.1.2, DEC-F048)"
+                ));
+            }
             let Some((_, agent_id)) = parsed.agent_ids() else {
                 return Err("owner agent URA is missing agent_id".to_string());
             };
@@ -1514,6 +1532,23 @@ mod tests {
     use super::*;
     use crate::runtime::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
     use std::collections::HashMap;
+
+    #[test]
+    fn descriptor_owner_kind_dual_shape() {
+        // User-owned agent maps to OwnerKind::Agent.
+        assert_eq!(
+            owner_kind_for_descriptor_owner("easynet:///r/localhost/agent/dev.claude").unwrap(),
+            OwnerKind::Agent("claude".to_string())
+        );
+        // Device-sponsored System Agent is refused: MCP reflective
+        // descriptors are user-configured tooling and System Agents
+        // carry no user identity (DEC-F048; F-047 verdict v2).
+        let err =
+            owner_kind_for_descriptor_owner("easynet:///r/localhost/agent/device.dev-1.terminal")
+                .expect_err("System Agent cannot own MCP descriptors");
+        assert!(err.contains("RFC-005 §3.1.2"), "{err}");
+        assert!(err.contains("device-sponsored System Agent"), "{err}");
+    }
 
     /// Build an in-process MCP client wrapping a small Python echo
     /// server. The server answers `tools/list` with two tools and
@@ -1803,10 +1838,13 @@ while True:
         // that turns this `Err` into a logged warning + lazy fallback;
         // the parser itself stays honest so config validators can
         // hard-fail when they need to.
-        assert_eq!(McpReflectionMode::parse("eagre"), Err("eagre".to_string()));
+        assert_eq!(
+            McpReflectionMode::parse("eagre"),
+            Err(UnknownReflectionMode("eagre".to_string()))
+        );
         assert_eq!(
             McpReflectionMode::parse("not-a-mode"),
-            Err("not-a-mode".to_string())
+            Err(UnknownReflectionMode("not-a-mode".to_string()))
         );
     }
 

@@ -392,6 +392,11 @@ fn ledger_resource_ura() -> Option<String> {
         crate::ura::URAKind::Device => format!("device.{}", parsed.device_id()?),
         crate::ura::URAKind::User => format!("{}.invocations", parsed.user_id()?),
         crate::ura::URAKind::Agent => {
+            // DEC-F048 / RFC gap: `agent_ids()` is None for
+            // device-sponsored System Agents, and that None is the
+            // declared outcome — no resource_dot owner shape exists
+            // for them yet, and we do not invent one (RFC-007/008
+            // agenda; F-047 verdict).
             let (user_id, _) = parsed.agent_ids()?;
             format!("{user_id}.invocations")
         }

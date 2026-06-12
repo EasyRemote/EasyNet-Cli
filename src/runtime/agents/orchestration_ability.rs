@@ -210,7 +210,7 @@ impl OrchestrationService {
             // input on cycle N+1.
             let snapshot = self
                 .discuss
-                .turns_from(&crate::runtime::domain::RoomId::new(&room_id), 0)
+                .turns_from(&crate::core::domain::RoomId::new(&room_id), 0)
                 .map_err(|e| anyhow::anyhow!("read room transcript: {e}"))?;
             let snapshot_str = render_transcript(&snapshot);
 
@@ -276,8 +276,8 @@ impl OrchestrationService {
                 match result {
                     Ok(AgentCycleOutcome::Speak(text)) => {
                         let post_res = self.discuss.post(
-                            &crate::runtime::domain::RoomId::new(&room_id),
-                            crate::runtime::domain::AgentId::new(&agent),
+                            &crate::core::domain::RoomId::new(&room_id),
+                            crate::core::domain::AgentId::new(&agent),
                             text,
                             None,
                         );
@@ -339,7 +339,7 @@ impl OrchestrationService {
         // ignore the field.
         let final_turns = self
             .discuss
-            .turns_from(&crate::runtime::domain::RoomId::new(&room_id), 0)
+            .turns_from(&crate::core::domain::RoomId::new(&room_id), 0)
             .map(|ts| {
                 ts.into_iter()
                     .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
@@ -684,7 +684,7 @@ mod tests {
         let turns = vec![DiscussTurn {
             sequence: 0,
             timestamp_unix_ms: 0,
-            speaker: crate::runtime::domain::AgentId::new("alice"),
+            speaker: crate::core::domain::AgentId::new("alice"),
             message: "hi there".to_string(),
             payload: None,
         }];

@@ -170,10 +170,12 @@ fn target(name: &str, args: Value) -> InvocationTarget {
     }
 }
 
+// Borrowed receipt-URA shape (ledger.rs test convention) — no
+// production builder yet; RFC-007/008 tracks canonicalization (F-042).
 #[cfg(feature = "remote-desktop")]
 fn remote_desktop_test_consent_causal_context() -> easynet_axon::invocation::CausalContext {
     easynet_axon::invocation::CausalContext::Scalar(easynet_axon::invocation::ReceiptRef {
-        receipt_ura: "easynet:///r/acme/invocation/test-local-consent/receipt/1".to_string(),
+        receipt_ura: "easynet:///r/acme/resource/alice.invocations/test-local-consent".to_string(),
         receipt_hash: [0x42; 32],
     })
 }
@@ -3242,7 +3244,10 @@ fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
         .iter()
         .filter_map(|e| e["name"].as_str())
         .collect();
-    assert!(names.contains(&"sub") && names.contains(&"a.txt"), "got {names:?}");
+    assert!(
+        names.contains(&"sub") && names.contains(&"a.txt"),
+        "got {names:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3297,7 +3302,9 @@ fn real_chat_history_list_and_get_read_persisted_transcripts() {
     let listed = invoke("chat.history.list", json!({"agent": "demo"}));
     let sessions = listed["sessions"].as_array().expect("sessions array");
     assert!(
-        sessions.iter().any(|s| s["session_id"] == json!("real-session-1")),
+        sessions
+            .iter()
+            .any(|s| s["session_id"] == json!("real-session-1")),
         "listed: {listed}"
     );
 

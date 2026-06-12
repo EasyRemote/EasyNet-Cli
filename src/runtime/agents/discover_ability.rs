@@ -399,7 +399,7 @@ fn resolve_via_federation(
         // exactly the "no federated entries" case the helper
         // already handles.
         if let Ok(entries) =
-            crate::support::federation_invoke_shim::invoke_federation_discover(None, None)
+            crate::services::invocation_transport::federation_invoke_shim::invoke_federation_discover(None, None)
         {
             rows.extend(federated_directory_candidates(&entries));
         }

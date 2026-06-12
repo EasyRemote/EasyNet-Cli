@@ -238,9 +238,7 @@ pub fn description_for(name: &str) -> Option<&'static str> {
         ABILITY_CLIPBOARD_LIST => {
             "List captured clipboard history (newest first) with the tracking flag."
         }
-        ABILITY_CLIPBOARD_GET => {
-            "Read one clipboard entry; image entries include base64 PNG data."
-        }
+        ABILITY_CLIPBOARD_GET => "Read one clipboard entry; image entries include base64 PNG data.",
         ABILITY_CLIPBOARD_TRACK => "Enable or disable clipboard history tracking on this device.",
         ABILITY_FOLDERS_LIST => "List the project folders mapped via `easynet context add`.",
         ABILITY_FS_LIST => "Browse one directory level inside a mapped project folder.",
@@ -365,7 +363,10 @@ mod tests {
         assert_eq!(out["tracking"], true);
         assert_eq!(out["entries"].as_array().unwrap().len(), 0);
         clipboard_track_handler(json!({"enabled": false})).unwrap();
-        assert_eq!(clipboard_list_handler(json!({})).unwrap()["tracking"], false);
+        assert_eq!(
+            clipboard_list_handler(json!({})).unwrap()["tracking"],
+            false
+        );
     }
 
     #[test]

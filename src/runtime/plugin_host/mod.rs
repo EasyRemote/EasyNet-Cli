@@ -152,12 +152,15 @@ struct DefaultStateSnapshot {
 
 static DEFAULT_STATE: RwLock<Option<DefaultStateSnapshot>> = RwLock::new(None);
 
-fn default_state() -> Result<Arc<PluginRuntimeState>> {
+/// Directory reads = snapshot reads (F-050): every catalog-shaped reader
+/// inside the crate goes through here, never `PluginRuntimeState::
+/// load_default()` directly — the only direct loads left are this getter's
+/// miss path and the manager's register/reload writers, which re-read disk
+/// on purpose and then [`publish_default_state`].
+pub(crate) fn default_state() -> Result<Arc<PluginRuntimeState>> {
     let plugin_root = index::default_plugin_root();
     {
-        let cached = DEFAULT_STATE
-            .read()
-            .expect("default plugin state poisoned");
+        let cached = DEFAULT_STATE.read().expect("default plugin state poisoned");
         if let Some(snapshot) = cached.as_ref() {
             if snapshot.plugin_root == plugin_root {
                 return Ok(Arc::clone(&snapshot.state));

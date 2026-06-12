@@ -59,7 +59,6 @@ pub(crate) mod workspace;
 //   * `receipt_subscriber` exposes a v2 extension point; v1 code
 //     never consumes it, but the trait needs to be reachable from
 //     future out-of-tree consumers.
-pub mod domain;
 pub mod failure_codes;
 pub mod invocation;
 pub mod join_connection_state;

@@ -556,11 +556,20 @@ pub(crate) fn project_agent_skill_subject(
 
 /// Build the canonical Resource URA for a skill package owned by an Agent.
 ///
-/// Returns `None` when `agent_ura` is not an Agent URA. The caller decides
+/// Returns `None` when `agent_ura` is not an Agent URA, and for
+/// device-sponsored System Agents (see below). The caller decides
 /// whether that should be an omitted optional field or a hard input error.
 pub(crate) fn skill_resource_ura(agent_ura: &str, skill_name: &str) -> Option<String> {
     let parsed = crate::ura::parse_ura(agent_ura).ok()?;
     if parsed.kind != crate::ura::URAKind::Agent {
+        return None;
+    }
+    // DEC-F048 / RFC gap: the resource_dot owner segment for a
+    // device-sponsored System Agent (`agent.device.<id>.<agent>`?) is
+    // NOT yet defined. Deliberately None rather than an invented
+    // shape — ura-discipline: flag, don't extrapolate; the gap is on
+    // the RFC-007/008 agenda (F-047 verdict).
+    if parsed.device_agent_ids().is_some() {
         return None;
     }
     let (user_id, agent_id) = parsed.agent_ids()?;
@@ -602,6 +611,25 @@ fn serialize_value(value: &Value) -> String {
 mod tests {
     use super::*;
     use crate::runtime::ability_descriptor::AbilityDescriptor;
+
+    #[test]
+    fn skill_resource_ura_dual_shape() {
+        // User-owned agent: canonical resource_dot shape.
+        assert_eq!(
+            skill_resource_ura("easynet:///r/localhost/agent/dev.claude", "alive-video"),
+            Some("easynet:///r/localhost/resource/agent.dev.claude/skill/alive-video".to_string())
+        );
+        // Device-sponsored System Agent: declared None — its
+        // resource_dot owner shape is an open RFC-007/008 gap
+        // (DEC-F048; F-047 verdict), never an invented form.
+        assert_eq!(
+            skill_resource_ura(
+                "easynet:///r/localhost/agent/device.dev-1.terminal",
+                "alive-video"
+            ),
+            None
+        );
+    }
 
     fn descriptor(name: &str, owner: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(name, owner, Visibility::Public)
@@ -807,10 +835,7 @@ mod tests {
             file.cursor_for(owner).unwrap().projection_digest
         );
         assert_eq!(second.publication.lease_expires_unix_ms, 0);
-        assert_eq!(
-            file.cursor_for(owner).unwrap().lease_expires_unix_ms,
-            0
-        );
+        assert_eq!(file.cursor_for(owner).unwrap().lease_expires_unix_ms, 0);
     }
 
     #[test]
