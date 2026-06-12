@@ -9,7 +9,7 @@ additionalProperties = false
 
 [input_schema.properties.agent]
 type = "string"
-description = "Agent name that owns the session."
+description = "Agent that owns the session — local name or canonical Agent URA."
 
 [input_schema.properties.session_id]
 type = "string"
