@@ -1,5 +1,10 @@
 # EasyNet Axon / CLI Interface Commit Plan
 
+> **DEPRECATED (2026-06-12).** Superseded by `commit-plan-2` (forward
+> feature/release plan) and the `to-be-fix.md` / `to-be-fix.plan.md` /
+> `to-be-fix.spec.md` trio (debt plane). Kept for historical reference;
+> do not execute from this file.
+
 ## Core Invariant
 
 The discriminator is policy ownership, not process persistence.

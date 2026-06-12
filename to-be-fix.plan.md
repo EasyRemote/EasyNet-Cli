@@ -4,6 +4,13 @@
 > 与 `to-be-fix.md`(问题清单)配对:本文件回答「feature 的架构与状态机长什么样、理想态是什么」,
 > 清单文件回答「具体哪里不达标」。每轮迭代增量补充,迭代日志见文末。
 > 标注约定:【已核验】= 本人对照磁盘确认;【agent 盘点】= Explore 扫描结论,引用前需复核。
+>
+> **⚠ 状态时效(2026-06-12 注)**:本文件的现状描述与 §3.6 排序为**定稿期存档**
+> (2026-06-11),不随修复滚动更新——**live 状态一律以 `to-be-fix.spec.md` §3 行为准**。
+> 存档后已闭的大项(速览,防误读):P1 的 F-003/F-031(退避两点)、F-008 主体(T1.1 状态
+> 机)已闭;P2 的 F-011 全五步闭;P3 的 F-018(Dialog 四刀)、F-001/F-033/F-027 拆分
+> 在制或已闭;P4 大半已闭(F-005 双仓 result_large_err 归零、F-012/F-017/F-022/F-029/
+> F-030 等)。排序逻辑本身(P0 协议形状优先、测后改、合批)仍有效。
 
 ---
 
@@ -19,9 +26,13 @@
 | Receipt 因果链 + Ledger | audit.rs / ledger.rs | 链验证;receipt.state 为字符串往返 |
 | Nonce 重放检测 | admission.rs NonceReplayStore | 滑动窗口 |
 | 流式背压 / CallMode | call_mode.rs(3 态显式) | 显式 |
-| Voice session | sdk/rust/src/voice.rs | **隐式**(HashMap<id, state-string>) |
-| Ability 注册 | ability_registry.rs | **隐式**(bool changed + Option) |
+| Voice session | sdk/rust/src/voice.rs | 显式 enum + wire 测试(F-013 复核撤销初判「隐式」) |
+| Ability 注册 | ability_registry.rs | 无状态机债(实测 246 行,无 changed 标志;F-013 复核撤销) |
 | C 互操作执行 | core/runtime-rs/interop_native/execution.rs (3114 行) | — |
+
+> 形状补记(2026-06-12):已批准双新形状——`agent/device.<device-id>.<agent-id>`
+> (device-sponsored System Agent,DEC-F048;normative 文本 RFC-005 §3.1.2,Axon 52bb764a)
+> 与 hosted-agent 设备寻址(35efe641)。消费纪律见 ura-discipline skill 形状表 + 清单 F-047。
 
 ### EasyNet-Cli(Rust daemon + CLI)【已核验,本会话深度上下文】
 | Feature | 落点 | 状态机性质 |
@@ -33,16 +44,17 @@
 | Session escalation(device→hub 反向请求) | session_escalation.rs | 关联表 + outbox 快照 |
 | Device/User trust sync(on-miss 取键) | device_trust_sync.rs(单飞+负缓存) | 半显式(负缓存表) |
 | Origin-caller claim(跨设备 caller 保真) | origin_caller.rs | 无状态验证 |
-| Ability/plugin 运行时、MCP 反射注册 | runtime/agents/* | 未盘点(后续轮) |
-| EAL mission 脚本 / 语义算子 | core/ability_spec.rs、eal 相关 | 未盘点(后续轮) |
+| Ability/plugin 运行时、MCP 反射注册 | runtime/agents/* | 已盘点(第 3/7 轮:F-027/F-034) |
+| EAL mission 脚本 / 语义算子 | core/ability_spec.rs、eal 相关 | 已盘点(§2.6;半隐式,F-022/F-028) |
+| 联邦目录 presence 平面(F-049 揭示) | session_initiator.rs 心跳循环(fc8df1b)/ Axon federation.rs sweeper | 时间戳衰减(15s 无心跳即降级) |
 
 ### EasyNet(Go backend + React 前端)【agent 盘点】
 | Feature | 落点 | 状态机性质 |
 |---|---|---|
 | 设备注册/配对 | backend/internal/logic/device/*Pairing*.go | **隐式**(status 字段散落多个 logic 文件) |
 | 设备生命周期 | device_state.go(ONLINE/JOINING/SUSPECT/DRAINING/REMOVED/UNKNOWN) | 字符串常量(半显式) |
-| Axon 协议层 fork | backend/internal/axon/(41 文件,invoke_client.go 11,734 行) | — 架构债重点 |
-| Hub PTY 会话 | internal/runtime/kernel.go (33KB) + pty_driver.go | 隐式 |
+| Axon 协议层 fork | backend/internal/axon/(实测 7,765 行;invoke_client.go 实测 267 行,初报 11,734 系误读,F-015 勘误) | — 架构债重点 |
+| Hub PTY 会话 | internal/runtime/kernel.go(938 行,F-018 勘误)+ pty_driver.go | 隐式 |
 | 前端终端/媒体会话 | terminal-store.ts / media-channel-store.ts (2095 行) | TS union(半显式) |
 | 能力调用 UI | InvokeAbilityDialog.tsx (2926 行) | 隐式 |
 
@@ -73,8 +85,8 @@
 - 状态没有类型表示;「当前处于什么阶段」只能从日志 kind 推断
   (bidi_opened / initial_admission_observed / bidi_closed_cleanly / bidi_error_reconnecting)。
 - 关闭分类是事后指纹(b2ba441 加的 uptime/frames_received),不是一等状态。
-- 文档宣称 jitter("Bounded jitter, capped maximum"、SESSION_BACKOFF_MAX 注释),
-  代码无 jitter(next_backoff 纯翻倍)→ 文实不符,见清单 F-003。
+- 文档宣称 jitter,代码无 jitter → 文实不符(F-003)。**✅ 已修 2026-06-11**:full_jitter
+  落地、文实同提交对齐;理想态中「回退曲线 jitter」一项已兑现,其余(状态类型化)仍归 T1.1。
 
 **理想态:**
 
@@ -118,7 +130,8 @@ enum CloseClass {                                  // 一等公民,不是日志�
 ### §2.3 Axon InvocationState(对照标杆)
 
 9 态显式 enum、`#[repr(i32)]` pin 到 wire、terminal_states 常量、事件流驱动。
-**这是全宇宙状态机的家规;§2.1/§2.2 以及 Voice/AbilityRegistration/前端 store 都应向它看齐。**
+**这是全宇宙状态机的家规;§2.1/§2.2 与前端 store 应向它看齐**
+(Voice/AbilityRegistration 经 F-013 复核已达标,从看齐批次移除)。
 缺口:receipt.state 在 audit.rs 以字符串往返(from_wire_str)——链上对象应直接用 enum。
 
 ### §2.4 EasyNet 设备配对状态机(2026-06-11 第 7 轮深挖)【已核验】
@@ -146,8 +159,8 @@ enum CloseClass {                                  // 一等公民,不是日志�
 
 ## §3 理想修复计划(骨架,逐轮充实)
 
-1. **状态机显式化批次**(§2.1→§2.2→Voice→AbilityRegistration→前端 store):
-   每个先落转移表 + op_event,再迁移控制流。验收:状态覆盖测试 + 非法转移测试。
+1. **状态机显式化批次**(§2.1→§2.2→前端 store;Voice/AbilityRegistration 经 F-013
+   复核已达标,移除):每个先落转移表 + op_event,再迁移控制流。验收:状态覆盖测试 + 非法转移测试。
 2. **协议边界归一**:EasyNet backend internal/axon fork(实测 7,765 行)→ Axon Go SDK
    (RFC-001 delta table P3)。替换批次【2026-06-11 第 2 轮定稿】:
    - **A 批 URA**:urns.go(557)+ uri_test.go——纯函数、SDK 面最稳,顺手消灭 URI/URN/URA 漂移(F-016);
@@ -161,8 +174,8 @@ enum CloseClass {                                  // 一等公民,不是日志�
    (先基准测量,见清单 F-004,不测不改)。
 4. **god-file 拆分**:daemon_invocation_service.rs(13,142 行)按 RPC 面切分;
    kernel.go、InvokeAbilityDialog.tsx 同类。验收:文件 ≤ 千行级、单一职责、测试不动语义。
-5. **工程卫生**:clippy 清零(分配责任批次)、全局单例收编为注入依赖、
-   优雅停机(替换 Box::leak 的 cancel_tx)。
+5. **工程卫生**:clippy 清零(分配责任批次)、全局单例收编为注入依赖;
+   优雅停机 **✅ 已完成**(F-007 SessionShutdown,2026-06-11)。
 
 ### §3.6 修复排序终稿(2026-06-11 第 8 轮定稿;初版见第 4 轮,已按第 5–7 轮核验结果修订)
 
@@ -301,3 +314,8 @@ lastErr 错误隔离);ICE 轮询实有间隔休眠(:933),有界轮询达标。
   F-047 判定 8/8、None 嫌疑清除、e2e 通过、skill 形状表经授权更新;
   三仓零新提交 + 连续两轮零新债 → **第三次收敛,loop 退出**。
   增量审计的再启动条件:新提交批量落地后由 CTO 重启 loop,或并入常规 review 流程。
+- **2026-06-12 同步会话**:对照磁盘勘正本文件——§1 四处陈旧论断回写(Voice/AbilityRegistration
+  随 F-013 撤销、invoke_client.go 267/kernel.go 938 勘误数字、Cli 两行「未盘点」已盘);
+  §1 补双新形状注记 + 联邦目录 presence 平面行(F-049);§2.1 标注 F-003 已修;
+  §2.3/§3 批次随 F-013 撤销与 F-007 完成收口。spec 升 **v2**(44 活跃条全映射 +
+  §0 立意终局 + §6 防丢核对表),执行清单以 spec v2 为准,本文件继续承担「现状/理想态」。

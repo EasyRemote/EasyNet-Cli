@@ -23,7 +23,7 @@
   授权:CTO 反复指令"注意不用兼容旧的方案,我需要干净的最新实现"—— 别名是旧快捷方式兼容残留,
   其字面所指;canonical 保功能使删除非破坏(用户迁移到 device join / runtime start)。
 - 发现途径:`cargo test --test script_checks`(运行本体)—— 第八个真问题。
-### F-038 session_dispatch_fixture 跨仓基线漂移:Federation-MVP 基线缺 ability_ura 【已核验,2026-06-12】
+### F-038 session_dispatch_fixture 跨仓基线漂移:Federation-MVP 基线缺 ability_ura 【已修复 2026-06-12,Fed-MVP 705a0e3:确认 ability→ability_ura 系有意 wire 演进(28d3822),基线单行重生,fixture 2/2 绿】
 - 落点:tests/session_dispatch_fixture.rs 读 `../EasyNet-Federation-MVP/tests/schema_compat/
   baselines/rust/transport/session_dispatch.json`(**第五个兄弟仓**,不在 A/B/Cli/Axon 四仓内) · 测试/跨仓 · 中
 - 证据:`cargo test --test session_dispatch_fixture` → every_fixture_variant_round_trips_through_serde
@@ -36,7 +36,7 @@
   (该 fixture 的存在目的就是捕获此漂移 —— 盲目重生会抹掉信号,需作者确认 wire 改动是有意的)。
   **不擅自改第五个仓**:超出四仓范围,且基线机制是跨仓测试基础设施。
 - 发现途径:`cargo test --test session_dispatch_fixture`(运行本体)—— 第七个真问题,第二个 RUNTIME 失败。
-### F-037 pages u14 测试运行时失败:has_rpc(<user>.pages.list) 断言失败 【已核验,2026-06-12,非本会话引入】
+### F-037 pages u14 测试运行时失败:has_rpc(<user>.pages.list) 断言失败 【已修复 2026-06-12,155b6b4:判定测试期望过时(u14 写于 owner 限定名时代,779d295 统一裸名+OwnerKind 旁表约定),测试改裸名,15/15 绿】
 - 落点:tests/pages_unit.rs:477 `assert!(reg.has_rpc(&ability))`,ability = `<user>.pages.list` · 测试/规范 · 中
 - 证据:`cargo test --test pages_unit` → u14_pages_management_abilities_are_in_local_runtime FAILED
   (14 passed / 1 failed)。pages::register 用 `register_rpc_with_spec("pages.list", …)` + `OwnerKind::User`,
@@ -72,7 +72,8 @@
 - 方向:按 RPC 面 + 路由 + session-accept 拆 4–6 个模块;测试随实现走。
 
 ### F-002 transport 平面其余三文件同类超重 【已核验】
-- 落点:session_initiator.rs 3,074 行 / boot.rs 2,886 行 / local_session_dispatcher.rs 2,525 行 · 重量 · 中
+- 落点:session_initiator.rs 3,238 行 / boot.rs 2,958 行 / local_session_dispatcher.rs 2,525 行
+  (2026-06-12 刷新,含 fc8df1b 心跳 +111) · 重量 · 中
 - 证据:boot.rs 的 `start_daemon_invocation_transport` 单函数贯穿 500+ 行;
   `spawn_session_supervisor` 8 参(clippy too_many_arguments 现行警告,boot.rs:968)。
 - 方向:dial / prelude / supervisor / warmup 分模块;参数收拢为配置结构体。
@@ -269,10 +270,12 @@
 - 证据:进程级一次性开关;运行时不可重配;测试需手工复位。
 - 方向:收进配置对象随依赖注入(随 F-015 B 批);阶段推出语义保留。
 
-### F-018 InvokeAbilityDialog.tsx 2,926 行巨型组件(kernel.go 半边撤销) 【已核验修正,第 5 轮】
+### F-018 InvokeAbilityDialog.tsx 2,926 行巨型组件(kernel.go 半边撤销) 【✅ 已修复(四刀全落),2026-06-12】
 - 落点:Frontend/src/components/InvokeAbilityDialog.tsx(wc = 2,926 ✓) · 重量 · 中
 - 勘误:kernel.go 实测 **938 行**(agent 以 33KB 字节数误判「巨大单体」),低于本审计 god-file 线,撤销该半边。
 - 方向:Dialog 按 参数编辑/执行/结果 三分。
+- 修复:EasyNet f0c3300(history)+ 605e14b(output)+ f72ea1a(api)+ 4a48df6(workspaces),
+  Dialog 3,114→1,119;卫星按调用图闭簇划分而非机械三分(详 spec T4.7),每刀 52/52 + eslint 0 错。
 
 ### F-019 【已撤销,第 6 轮】媒体会话双实现并存
 - 撤销理由:DeviceMediaAccess.tsx 中 `RTCPeerConnection` / `new WebSocket` 计数 = **0**,
@@ -297,17 +300,23 @@
   daemon 拥有 callee 本地性解析/转发;过渡期至少把共享帧形状挪到生成代码(随 F-004 载体归一)。
   与 F-004/F-038 同批设计,不单独修。
 
-### F-029 backend handler 层 DB 访问泄漏(5 文件 8 处) 【已核验,第 5 轮】
+### F-029 backend handler 层 DB 访问泄漏(5 文件 8 处) 【已修复 2026-06-12,EasyNet e6e7a56:8 处全下沉 logic 层(另清 firstValidatedDevice 跨包重复 + list_models 第 4 调用点),check-handler-layer.sh 阀入 CI】
 - 落点:handler/openai/chat_completions.go(3 处)、pages_public/serve.go(2 处)、
   terminal/wshandler.go、sse/sse_handler.go、device/verifyCredentialHandler.go(各 1 处) · 架构/规范 · 中
 - 勘误:agent 报 "~19 行",实测 grep = **8 处调用点**;类别成立,计数修正。
 - 违反:三层纪律;多数 handler 干净,这 5 文件是离群点。
 - 方向:查询下沉 logic 层;CI 加 handler 目录禁 import ent 的 lint。
 
-### F-030 backend goroutine recover 缺口 + 错误包装率 50/99 【已核验,第 5 轮】
+### F-030 backend goroutine recover 缺口 + 错误包装率 50/99 【已修复 2026-06-12,4960a99】
 - 落点:middleware/apikey.go:97-101(每请求 `go func` 异步 DB update,无 defer recover——
   goroutine panic = 进程死);logic 层 fmt.Errorf 99 处中 %w 恰 50 处 · 规范 · 中
-- 方向:后台 goroutine 统一 recover 包装;%w 拉满。
+- 修复(4960a99):8 个裸 goroutine 站点按形状分置——fire-and-forget×3 `threading.GoSafe`;
+  长生命周期清扫循环×3 外层 GoSafe + 每 tick `RunSafe`(单次 panic 不杀循环);ws bidi 泵
+  GoSafe(defer close 在 unwind 仍执行);fanout.Map 捕获 worker panic(值+栈)在 Wait 后
+  调用方重抛(经 handler recover 中间件变 500,不杀进程),注入测试钉住。复用 go-zero
+  `threading`,零新轮子。
+- %w 半边复核(2026-06-12 宽模式 grep):logic 层"包 err 未用 %w"实为 **0 残留**
+  (51 处 %w;审计期 50/99 计数把不含底层 err 的新建错误也算进了分母)。无需施工。
 
 ### F-031 terminal 重连无退避(范围收窄) 【已核验定稿,第 6 轮】
 - 落点:terminal-store.ts:112(`MAX_TERMINAL_CONNECTION_FAILURES = 3`)+ :164-167
@@ -331,13 +340,13 @@
 - 违反:模块边界 typed error 家规(同 F-023 类,规模小得多)。
 - 方向:并入 F-023 的 typed-error 批次顺手收掉。
 
-### F-035 PairingStatusExpired 死常量 【已核验,第 7 轮】
+### F-035 PairingStatusExpired 死常量 【已修复 2026-06-12,EasyNet 84e2092:常量删除 + 配对转移表/配对×presence 映射文档落档(plan §2.4 文档批同车)】
 - 落点:EasyNet backend/internal/domain/constants.go:30(全后端零使用) · 规范 · 低
 - 证据:过期语义实际由 `ExpiresAtGT` 时间戳谓词承担(validatePairingLogic.go:77/:134,
   设计本身达标且优于状态写入式);死常量误导读者以为 expired 是存储态。
 - 方向:删除,或注释「视图态,勿写入」;随 §2.4 文档批次。
 
-### F-041 URA 防裸构造守卫只覆盖 Cli 一仓 【已核验,第 9 轮(边界维度)】
+### F-041 URA 防裸构造守卫只覆盖 Cli 一仓 【🟡 Frontend 半边 ✅(EasyNet 793972a,2026-06-12)】
 - 落点:Cli 有 9 个 URA 边界守卫脚本(test_no_raw_ura_construction.sh 等家族);
   backend/scripts 与 Frontend 均无等价阀 · 规范/制度 · 中低
 - 现状澄清(亲核):两仓当前**无活跃违例**——backend 28 处字面量中 12 处在 urns.go(fork 内
@@ -345,10 +354,12 @@
   easynet-ura.ts(:393/:415/:419),api 文件字面量为注释/校验前缀/MOCK 夹具。
 - 风险:合规靠约定,无防回潮阀——下一个 PR 在 handler 里 `fmt.Sprintf("easynet:///r/%s/...")`
   不会被任何东西拦住。
-- 方向:把 Cli 守卫模式移植两仓各一脚本(backend:internal/ 禁 URA 拼接、白名单 urns.go→SDK;
-  Frontend:`easynet:///r/${` 仅限 easynet-ura.ts)。小改,随 F-015 A 批同车。
+- Frontend 半边 ✅:easynet 本地插件第二条规则 ura-no-raw-construction(模板插值 + 字符串拼接
+  两形态);easynet-ura.ts 白名单、测试文件带理由豁免(夹具构造的是测试数据非铸造身份,且全部
+  6 处现存插值都在 .test. 文件);双向验证:全树零命中 + 注入两形态各自即红。
+- backend 半边:internal/ 禁 URA 拼接、白名单 urns.go→SDK——仍随 F-015 A 批(T2.2a,并行会话主干)同车。
 
-### F-042 receipt URA 第四种野生形状:非法顶层 role 钉进测试夹具 【已核验,第 9 轮(边界维度)】
+### F-042 receipt URA 第四种野生形状:非法顶层 role 钉进测试夹具 【夹具批已修 2026-06-12(Cli dbf7615:实为 7 处/4 文件,全改 borrowed 形状 + 标注;EasyNet 458c60a:demo 标注 + Dialog 错形 owner 规范化);残留 ② RFC-007/008 builder ③ parse_ura round-trip 强制】
 - 落点:src/plugins/builtin/remote_desktop/session_consent.rs:206/:292、handlers/show_session.rs:156/:171
   (`easynet:///r/acme/invocation/1/receipt/1`,#[cfg(test)] 夹具);
   Frontend gallery demo 6× `resource/<owner>.invocations/<id>`(借用形状,未标注 borrowed) · 规范/本体 · 低中
@@ -369,7 +380,7 @@
 - 方向:5 处集中在 Dialog,随 F-018 三分时顺手换 URAChip;可加 eslint 自定义规则防回潮。
 
 ### F-044 backend 两处陈旧注释引用已退役的 cliipc JSON 路径 【已核验,第 10 轮】
-- 落点:backend/internal/daemon_grpc/client.go:12、svc/servicecontext.go:165
+- 落点:backend/internal/daemon_grpc/client.go:12、svc/servicecontext.go:172(行号 2026-06-12 刷新)
   (引用 `internal/cliipc/` —— 该目录已不存在) · 卫生 · 低
 - 价值:这是**好消息的残渣**——backend 的 JSON 控制路径已实际退役(T2.0 盘点确认 backend
   非 JSON 控制帧调用方),注释清掉即闭环。随 F-040 批顺手清。
@@ -390,7 +401,7 @@
   私钥不出 daemon(最小暴露,倾向此路);(b) 导出契约(keyring 派生只读种子给本机 SDK)。
 - 过渡可用:既有 caller_signature 透传 = 「调用方自备种子」模式今天就通,零 Cli 改动。
 
-### F-047 device-owned agent 新语法:Cli 管理面 8 消费点行为未声明(隐式 bail) 【已核验,第 12 轮(增量)】
+### F-047 device-owned agent 新语法:Cli 管理面 8 消费点行为未声明(隐式 bail) 【已修复 2026-06-12,4487344;验收复核通过(循环会话):9 处 §3.1.2 文案、3 点 sponsor 语义重判(support→reject,含 mcp_reflective)、resource_dot 两点判 None 不发明形状挂 RFC-007/008、双形状测试随附;"commit 时套件绿"的复跑并入 transport 拆分落地后的全量验证】
 - 落点:Axon 64190a6b/35efe641(2026-06-11 批准 `agent/device.<device-id>.<agent-id>`,
   `agent_ids()` 对 DeviceAgent 变体返回 None——分流本身规范 ✓);Cli 8 处 `agent_ids()`
   消费点对 None 一律 bail:src/ura.rs:149/:181(AbilitySelector owner)、owner_projection.rs:566、
@@ -415,6 +426,8 @@
   | mcp_reflective_registry.rs:1327(owner_kind) | MCP 描述符 owner | **支持(简单)**:OwnerKind::Agent 语义不变,agent_id 取 `device_agent_ids().1`;hosted agent 拥有反射描述符是合理场景 |
   | invocation_history_ability.rs:395(ledger owner) | 账本资源 owner | **显式拒绝(None)+ RFC 注记**:device-agent 的 resource_dot owner 未定义——与 owner_projection 点同一本体缺口,禁止就地发明 |
   | profiles/bootstrap.rs:313(is_current_agent_ura) | 当前用户 agent 匹配 | **现状即正确**:device-owned 永不属于「当前用户」,None→false 语义恰好对;补一行注释声明意图防回归 |
+
+### F-033 facade/cli 面 20,858 行;agent.rs 单文件 3,556 行 【已核验,第 5 轮;标题行 2026-06-12 修复——增量插入时被覆盖】
 - 落点:src/facade/cli/(agent.rs 3,556;federation_wire 1,383 / start 1,267 / join 1,221 /
   auth 1,120 / agent_new_ability 1,118 各为千行级命令文件) · 重量 · 中高
 - 方向:agent.rs 优先拆(子命令各自成模块);其余千行级命令文件观察,不强拆。
@@ -464,14 +477,15 @@
   设备上线 15s 后 UI 必显示掉线,而 bidi 上的调用全程正常(「看着掉线其实在干活」)。
   连带:backend device_state.go:43-54 把「目录无条目」default 映射成 REMOVED(墓碑语义),
   误导为设备已被撤销。
-- **✅ 已修(2026-06-11,工作树):session_initiator.rs 新增会话级心跳循环**——
+- **✅ 已修(2026-06-11,提交 fc8df1b):session_initiator.rs 新增会话级心跳循环**——
   5s 一拍 `federation.heartbeat` unary 复用会话 channel(与 user-trust resync 同模式:
   tokio::spawn + AbortOnDrop,随 bidi 生死,重拨自动重启);附带 v4.1.7 hub-abilities diff
   应用 + RFC-005 owner-projection lease 批刷新(truncate 至 hub 上限 64);失败仅去重记日志,
   会话健康权威仍归 bidi 重连机。实测:设备跨 3 个 15s 清扫窗口保持 ONLINE,零失败日志。
-- 残留(不阻塞,后续批):① legacy `_EASYNET_HB_ENDPOINT` sidecar 应退役或补 TLS
-  (现状对 TLS hub 必死,是死代码);② device_state.go default→REMOVED 应改 OFFLINE/UNKNOWN
-  (REMOVED 只留给操作员撤销);③ hub 可考虑 bidi 流活跃时顺带刷新目录记录(双平面兜底)。
+- 残留:① **✅ 已修(fbbad85,2026-06-12)** legacy sidecar 退役(heartbeat.rs 915 行 +
+  隐藏命令 + boot 门控全删,grep 零命中);② **✅ 已修(EasyNet e1c332b)** device_state
+  映射修正(`suspended`→SUSPECT、`revoked`→REMOVED 显式、未知/无条目→UNKNOWN,
+  REMOVED 只留操作员撤销);③ hub bidi 活跃兜底刷新目录(spec T1.5③,随 T1.1 设计)仍开放。
 
 ### F-050 目录类接口 3.7s:每个 ability 描述符查询全量重建+重哈希内置插件包索引 【已核验,2026-06-11 线上 debug】
 - 落点:plugin_host/mod.rs `default_state()`(每次 `load_default()` 全量加载)→
@@ -487,9 +501,82 @@
 - **✅ 已修(c03df45):builtin 索引 OnceLock 进程缓存(输入全为编译期常量,仅缓存成功值)
   + default_state 快照缓存(plugin root 为键,register/hot_reload 经 publish_default_state
   主动刷新,插件安装实时性保留)**。实测:meta.list_abilities 3.41s → 0.15s(22×)。
-- 残留(不阻塞,后续批):backend listAbilityCatalogViaMetaList 串行 per-target fan-out
-  无并行无 TTL 缓存(hub 侧放大器,2 target 即 7.4s);discover/skill.list 同属
-  「目录读 = 快照读」纪律的待迁移面。
+- 残留(后续批):backend listAbilityCatalogViaMetaList 串行 fan-out **✅ 已修
+  (EasyNet 0716861:catalog 端点并发 fan-out + 短 TTL invoke 缓存,2026-06-12 核验)**;
+  仅余 discover/skill.list 「目录读 = 快照读」纪律的待迁移面(spec T5.12)。
+
+### F-051 D7 invocation stats:158 行新 CLI 面零测试 【已核验,第 17 轮(增量)】
+- 落点:src/facade/cli/groups/invocation.rs(299f135 新增 stats 子命令,ledger 聚合
+  投影) · 规范/测试 · 低中
+- 证据:`git show 299f135 | grep -c '#[test]'` = 0;同批 D 系列(D2 4 测、D3 2 测)
+  均带测试,此面独漏。聚合算术(计数/分组/排序)无一钉死;只读投影故无数据风险,
+  但回归无守卫。
+- 方向:补聚合行为测试(空 ledger / 单态 / 多态分组排序各一)。S 级。
+- **已修复 2026-06-12(同轮)**:三测试经 SDK builder 构造记录入册——空账本零值/确定性分组排序/百分位排除失败调用(nearest-rank 1..=100 钉死)。
+
+### F-054 SDK dendrite_bridge federation_advertise_abilities 9 参超界 【✅ 已修复(Axon e9893dae),第 26 轮】
+- 落点:Axon sdk/rust/src/dendrite_bridge.rs:598(clippy too_many_arguments 9/7) · 重量/API 工学 · 低
+- 证据:第 25 轮 SDK 全 target clippy 实跑;与 Cli spawn_session_supervisor(F-002,8 参,
+  T4.3 配置结构体收拢)同款形态。SDK 公开面参数爆炸比内部函数更贵(下游签名跟着碎)。
+- 修复:不塞 Args 抽屉而是实体化领域概念——`FederationOwnerProjection`(= schemas §2 的完整
+  request body,derive Serialize,**结构体即 wire 形**);`build_advertise_abilities_body` 退役
+  (json! 手抄孪生消亡,单一真源),V9 conformance 钉改断言结构体序列化;签名收为
+  (tenant_id, &projection, timeout_ms)。Python 桥系独立实现不受牵连(parity 是操作面非签名面)。
+  SDK 442/442;clippy 全 target 零警告。
+
+### F-056 mission_runs 测试家族并行隔离债:HomeGuard 突变进程全局 HOME 【已核验,第 41 轮】
+- 落点:src/facade/cli/mission_runs.rs tests(HomeGuard::new() 家族,T5.3/911ae6b 同批) · 测试工程 · 低中
+- 证据:全量并行下**非确定性成员败**——首跑败 3(create_starts_heartbeat/interrupted_run/
+  list_runs_skips),复跑败 1(仅 list_runs_skips,panic 点 heartbeat_fresh :1051),两跑
+  败集不同 = 竞态铁证;串行 `--test-threads=1` 21/21 绿(0.03s)。机制:HOME env 是
+  进程全局,守卫存取竞态 + 其他线程测试中途读 HOME。
+- 方向:HOME 依赖改注入(missions 根目录参数化,测试传 TempDir,env 仅生产入口读一次);
+  或该家族统一 serial_test::serial 标注(次优,治症不治因)。回流 T5.3 作者会话。
+- **✅ 已修(T5.3 作者会话,1c14cbe,2026-06-12)**:MissionRunStore 实体化(open_default
+  单点读 env / with_root 测试注入 TempDir / 自由函数门面保住全部外部调用方零改动);
+  10 测试弃 HomeGuard。**且诊断再深一层**:HOME 锁此前顺带串行化了该家族——锁一摘,
+  暴露 create() 先于 pump 首触返回的真竞态(新建 run 瞬时读作 not-running,生产可见)。
+  首触改 start() 内同步写,「create 返回 ⇒ 读作 alive」成不变量。6/6 并行确定性
+  (修前每跑 2-3 个不同成员败);facade 家族 252/252;双特性构建净。
+
+### F-055 Cli 无树级 URA 裸构造阀;守卫家族执行位/接线双缺 【已核验+主修 2026-06-12,第 32 轮】
+- 落点:scripts/ 守卫家族 + .github/workflows/rfc-001-conformance.yml · 守卫基建 · 中
+- 证据:① 「Cli 9 脚本」实为逐面形状 pin,无 backend/FE 同款的树级 format! 禁令——
+  step-2c 的 F-042 mint(:484)因此无声穿过;② 6 个 URA pin 全不在 CI(仅 3 个
+  conformance 脚本接线);③ 16 个守卫脚本 git mode 100644(./ 直接 permission denied);
+  ④ openai pin 锚点随 T4.5 mod.rs 拆分失效(描述符源移居 catalog_metadata.rs)。
+- **主修(同轮)**:check-ura-construction.sh 落地(facade 白名单 + 内容钉死的临时豁免,
+  豁免失效即红——首跑即抓到 6e34457 已修而豁免未删);豁免余 1(hub/ability 路由键
+  fixture,形状裁决挂载体会话);6 pin + 阀入 conformance CI(hub-boundary 跨仓引用留手动);
+  16 脚本补执行位;openai 锚点重指。
+- 残留:hub/ability 路由键形状裁决(载体会话);hub-boundary pin 的跨仓 CI 方案(低优)。
+
+### F-053 SDK 错误契约文实漂移:normative §7 落后参考实现 5 个 wire 字段 【已核验+主修 2026-06-12,第 19 轮】
+- 落点:Axon sdk/SDK_INTERFACE_SPEC.md §7(normative)vs sdk/rust/src/invocation/error.rs
+  (参考实现) · 规范/跨 SDK 契约 · 中
+- 证据:§7 只载 6 字段(kind/reason/message/invocation_id/retry_after_ms/cause_chain);
+  Rust wire 形实有 11(+code 49 词机器税则/stage/security_class/retryable/context)。
+  Python 恰为 §7 六字段(本地 raise 用,无 wire decode,故未兑现丢字段事故);
+  SDK_PARITY.md 错误行 ✅×6 对扩展面沉默即超报。命名裂缝:wire 拼 `retryable`
+  (Rust 字段),Python 是计算属性拼 `retriable`。按 §7 实现新 SDK 必欠实现 wire。
+- **主修(同轮,c1a03e8f)**:§7.1 落全 wire 形(键拼写/缺省规则/retryable 命名裂缝
+  documented/decode SDK 的容忍+透传义务);PARITY 表加诚实扩展行(Rust ✅,余 —)。
+- 残留(按需,不投机):Python/Node 等长出 wire decode 时采全 schema;conformance
+  套件加扩展字段往返用例(挂在哪个 SDK 先长 decode)。
+
+### F-052 lifelong 前端半边:86 行会话路由逻辑零测试 【🟡 lib 半边 ✅(EasyNet 21fb2e5),第 32 轮】
+- lib 半边(easynet-chat-history.ts +15)已钉 6 测:'lifelong' 哨兵字面量(与 Cli 9719a99
+  同字钉死)/ lifelong_session_id 透传与首回合前 null 缺省 / 哨兵→具体 id 解析 / 字段缺省回退。
+  页面半边(AskToDoPage +71,绑定/续传/置顶三件)仍待占用释放。
+- 落点:EasyNet Frontend AskToDoPage.tsx(+71)+ easynet-chat-history.ts(+15)
+  (37bdb92,lifelong 默认会话的前端绑定/续传/置顶逻辑) · 规范/测试 · 低中
+- 证据:`git show 37bdb92 | grep -c "it('"` = 0。lifelong 三连的另两半都有钉子
+  (Cli 9719a99 带 6 测 + "字面量永不上 wire" 钉死;Go backend 透传面薄),独此面裸奔。
+  会话绑定走错 = 用户回合落错线程,属产品逻辑风险而非纯展示。F-051 同款模式
+  (同批同伴带测试、单面独漏)。
+- 方向:绑定行为测试三件——首回合发哨兵后绑定 lifelong_session_id /
+  续传只用已绑 UUID(哨兵不再发)/ 显式新会话逃逸不污染 lifelong 指针。S 级。
+- **占用注记**:AskToDoPage.tsx 在前端在制波前中(未提交修改),修复须等释放或由占用会话搭车。
 
 ---
 
@@ -616,5 +703,406 @@
   **日期勘误**:本文件中标注「2026-06-12」的条目(F-036…F-039 的修复会话标签、第 9-14 轮
   日志、F-040…F-046 标签)实际均发生于 **2026-06-11**(跨夜会话误标;`date` 实证)。
   内容与 file:line 证据不受影响,日期以本勘误为准。
-  **终态:47 条编号 = 41 活跃(全核验,F-047 带 8/8 可执行判定表)+ 6 撤销;
+  **终态(计数 2026-06-12 勘正,F-048/049/050 系终态行之后追加):50 条编号 = 44 活跃
+  (全核验,F-047 带 8/8 可执行判定表;含 F-048 已决议、F-049/F-050 已修主体)+ 6 撤销;
   增量批(40+ 提交)全部审毕;三件套已入库由 git 承载演进。**
+- **2026-06-12 第 16 轮(T0.7 增量重启,循环会话)**:基线(第 15 轮)后 72 提交;排除
+  本循环自产与已验收面,五个最高风险新 feature 面五维快审(边界/本体/状态机/错误/测试):
+  ① D2 ability search(57e8d9d)——零裸 URA、经 local_invoke 边界、确定性 token 评分
+  (可解释,无凭据信号不冒充排序,与终局裁决一致)、4 测试 ✓;② D3 trust show(950c685)
+  ——只读起步、零裸 URA、消费真实 trust 平面(anchors+多设备 user keys)✓;③ T5.3
+  MissionRunStatus(911ae6b)——**守护性约束验证通过**(grep 零 step-retry/checkpoint 面)、
+  serde lowercase+legacy 字符串测试+bogus 拒绝 ✓;④ T1.1 unit2(8b38a99)——状态机家规
+  三件套齐(显式 enum、单 transition() 点、8 处 op_event)✓;⑤ T2.1 step-2a(cf749ad)——
+  min(device,hub) 版本协商对齐 mini-RFC、8 测试+独立集成测试文件 ✓。
+  **判定:零新债。** 未深审面(后续节拍):D7 operator stats、T5.4 上下文显式传参、
+  chat/lifelong 三连(已由 f49d757 TOML 漂移修复部分覆盖)、T2.1 step-1 帧形状。
+- **2026-06-12 第 17 轮(T0.7 队列清空)**:① T5.4(e53ac88)——env 桥死刑 + 审计不变量
+  注释 + 测试钉"in-process 零写 EASYNET_MISSION_ID" ✓;② 4c17c96——canonical URA 经
+  `parse_ura`+`agent_ids()` 访问器,权威留 Axon,1 测 ✓;③ 9719a99——lifelong 哨兵为
+  命名常量 + "字面量永不上 wire" 钉死 + 6 测 ✓;④ b89d514——已由既有目录面覆盖审计,
+  跳深审;⑤ 520f1a3(step-1)——42 行 awareness-only 涟漪零测试,**可接受附注**
+  (真实施工 step-2a 带 8 测);⑥ D7(299f135)——**158 行新 CLI 面零测试,入册 F-051**
+  (同批 D 系列均带测试,此面独漏;聚合算术无守卫)。
+  **判定:一条新债(F-051,低中);T0.7 队列清空,增量审计回到零积压。**
+- **2026-06-12 三件套 review + 落库 + spec v2 会话**:全量对照磁盘复核三文档。
+  确认仍准确:F-001(13,142 分毫不差)、F-005(clippy 实跑恰 8 条:6 large_err + 2 too_many_args)、
+  F-036(实跑仍 FAIL 888 vs 917)、F-037(实跑仍 14/15 u14 FAILED)、F-038(基线仍缺 ability_ura)、
+  F-047(device_agent_ids 仅 route_resolver 在用,8 管理点未动)、T0.5a/b 两闸未实施。
+  勘正本文件:F-033 标题行(增量插入时被覆盖)、终态计数 47→50、F-044 行号 :165→:172、
+  F-002 行数刷新、F-050 残留 backend 半边已由 EasyNet 0716861 修复、F-049 标注提交哈希。
+  落库:F-049 主修 **fc8df1b**、三件套增量 288303f、Axon RFC-005 §3.1.2 = **52bb764a**
+  (**T0.5d 关闭**,CTO 指令落库即批准)。spec 升 **v2**:44 活跃条全映射(v1 漏 F-041–F-046、
+  F-049/F-050 残留)+ §0 立意终局 + §6 防丢核对表。
+  未审新提交 7 个(chat/lifelong 面为主:Cli 9719a99/b89d514/4c17c96、EasyNet 37bdb92/0716861、
+  Axon 80a72ece、Cli fc8df1b)→ spec T0.7 增量审计重启。
+- **2026-06-12 第 18 轮(T0.7 增量,循环会话)**:并行波前已提交面五维快审,全部对照磁盘亲核:
+  ① Axon 28245ab4(F-012/T5.5 receipt 9 态 enum)——typed state 落 audit.rs:143/handle.rs:200,
+  TryFrom<&str> 为 as_str 精确逆且 bogus 拒绝,wire 转换仅余两边界点,439→440 ✓;
+  ② Axon 90841fed+f9d7419b(T2.1 step-1 帧形状,补第 16 轮队列尾项)——DispatchCall 携完整
+  InvokeRequest(erratum-2 正确:ability/args 在 request 不在 envelope),call_id 注释明示
+  「非协议身份、永不入签名字节」,SessionOpenExt 预埋 contract_version + claimant_boot_nonce
+  (T1.1/T1.2 接口已留),proto 落 Axon 仓(Rule 1)✓;③ Axon 70beb54c(T3.1-⑤ 注册表
+  RwLock)——22 触点单表原子对宣称与 diff 一致,守卫不跨 await,超订阅 −37% 如实入档不粉饰,
+  ArcSwap 留路径不投机 ✓;④ EasyNet c54c59c(F-031/T1.3 前端退避)——full-jitter 均匀
+  [0, min(250ms·2^n, 30s)),n=100 不溢出钉死,random 可注入测试确定 ✓;⑤ Axon cebccda5
+  (跨仓 wire 基线 pin,处理 prost map 非确定序)+ 80a72ece(1 行测试构造修)✓。
+  chat/lifelong 三连深审收尾:Cli 两半第 17 轮已审,EasyNet 37bdb92 半边——**新债 F-052**
+  (86 行前端会话路由零测试,F-051 同款「同批独漏」模式;AskToDoPage 在制占用,修复挂起)。
+  **判定:五面零新债 + 一条新债(F-052,低中);第 16 轮遗留队列(D7/T5.4/chat-lifelong/step-1
+  帧形状)至此全部清空。**
+- **2026-06-12 第 35 轮(循环会话)**:验收 Fed-MVP f9b006a(carrier-v1 四帧金基线——
+  DispatchCall/DispatchResult/ReverseDispatchCall/EnvelopeOpen+SessionOpenExt 的 prost
+  golden bytes,T0.3 预告的「基线随 canonical 帧重生」兑现)——**跨仓钉实跑绿**
+  (Axon dispatch_frame_carrier 5/5,含 carrier_v1_frames_match_cross_repo_baseline;
+  注意该套件 `#![cfg(feature = "proto")]` 门控,裸 cargo test 静默 0 测——axon-pb 盲点
+  同款,验证脚本须带特性);F-038 漂移陷阱机制成功移入 proto 时代,JSON 基线退役点
+  挂 step-3 后一个发布窗(mini-RFC §3 已批);生成器单跑带 #[ignore] 防误再生。
+  **零新债**。记忆维护:MEMORY.md 的 RFC-005 索引行过期勘正(治本已全提交,
+  分支前缀 chore/ 非 codex/)。
+- **2026-06-12 第 39 轮(循环会话,红色收尾+问责)**:HEAD 复绿验证——工作区会话 c2df5a3
+  补提 18 调用方后,旁侧 worktree 实跑 `cargo build --lib --features axon-pb` **Finished ✓**
+  (2m19s;option-C 套件债可恢复清偿)。尾项:federation_wrappers.rs 残留注释路径引用随
+  18572b5 入库。**问责(我侧)**:ee2663f 是本会话的 move-only 提交——搬模块没带
+  cfg(axon-pb) 调用方,且明知 axon-pb 盲点教训在账(记忆原文就是这个故障模式)仍未跑
+  双特性构建即提交,致 HEAD 红 ~4h;记忆已收紧(move-only 不豁免双特性构建)。
+  **二次小披露**:18572b5 想只提注释 hunk,实际把同文件一个空白缩进 hunk(origin_caller:
+  None 重缩进,语义零)一并带入——hunk 过滤纪律执行又松了一次,幸属 fmt 类无害。
+- **2026-06-12 第 43 轮(循环会话,:4562 执行处方+真相)**:测试文件释放后按第 40 轮
+  处方代修(**8ee1c49**,worktree@HEAD 隔离验证):fake_device 断言改 oneshot 回传 +
+  dispatch await 包 10s timeout——**悬挂→失败化实证**(1 秒出诊断 vs 0% CPU 吞套件)。
+  **问题 (a) 答案:不是 v1 帧回归**——no-frame verdict + outcome dump 显示派发死于
+  上游:fixture 的 hub-ability URA(`.../hub/ability/federation.forward_invoke`,
+  即第 32 轮 shape-ruling-pending、F-055 阀豁免的同一形状)被会话所有权闸
+  PermissionDenied,**钉从未钉到载体选择逻辑**(它一直悬着,故 step-2b/2d 后的锈蚀
+  无人察觉)。处置:#[ignore] 带由(锈蚀有声、理由内联、owner 指名),套件双特性
+  免 --skip 复绿;hub 路由键形状裁决归载体会话,裁后摘 ignore。
+- **2026-06-12 第 42 轮(循环会话,DoD 双特性收口)**:默认特性半边(skip 死锁钉):
+  **3,196 过 / 2 败 / 3 忽略,343.54s**——败者仍 mission_runs 家族、再换成员
+  (三跑三个不同败集:3/1/2),**F-056 竞态三重确证**。DoD 两特性全量至此清偿:
+  axon-pb 3,197/3,198 + 默认 3,196/3,198,全部偏差 = F-056(串行已证 21/21)。
+  **:4562 补注(影响面扩大)**:首次裸跑默认特性同样悬挂(11 CPU 分钟后 0% CPU)
+  ——死锁钉**不带特性门控**,任何 `cargo test --lib` 都被吞,载体会话修复优先级应升
+  (在它修复前,任何会话全量验证都必须带 --skip)。验证基建 worktree 已清理。
+- **2026-06-12 第 45 轮(循环会话,step-3 验收 + :4562 全弧终结)**:验收 Cli f952c5b
+  (T2.1 step 3 设备半球)——五镜面合格:frame-0 SessionOpenExt(OnceLock 每启动
+  16B nonce,T1.2 指纹;旧 hub 忽略未知字段)/ 协商记录在 SessionUpSender 单一上行
+  权威(不开二真源)/ handle_down 双读 DispatchCall 经 admitted_from_wire_parts 直入
+  LocalRuntime(七元组完整、零 JSON 再投影 = F-044 兑现)/ 协商偏斜双向不丢调用 /
+  open_bidi 显式缓刑 step-3b(范围诚实);397/397 已记(验证纪律回正)。**:4562 弧
+  独立复证终结**:fixture 已换 canonical 形 + ignore 已摘,干净 worktree 单测 1/1 过
+  (0.01s)——死锁→诊断→失败化→上游真相→裁决溶解→钉复活,全链有账。**零新债**。
+  (注:第 44 轮条目在账面重复两遍,疑提交事故,内容一致无害——留对方自清。)
+- **2026-06-12 第 44 轮(循环会话,审计+路由键裁决)**:验收 8ee1c49(:4562 悬挂转失败)
+  ——第 40 轮处方逐字执行(oneshot 裁决通道 + 10s 超时;悬挂→1s 判决,双特性),诊断
+  问题 (a) 判明**非** fallback #2 回归,pin 上游死于 fixture 路由键,#[ignore] 带名留档,
+  **零新债**。**路由键裁决(本轮,溶解而非立案)**:session ownership 闸经 parse_ura
+  接受канonical `ability/hub.<ns>.<name>` 形(ura-rs :897 Hub 臂)——`hub/ability/...`
+  系 fixture 自创野形(F-042 第 5 形),从未可解析、从未被接受;**无 spec 缺口,无需
+  RFC 卡**,载体会话换 fixture 为 canonical 形即可 un-ignore,阀豁免随之删除
+  (豁免注释已更新为裁决文)。
+- **2026-06-12 第 49 轮(循环会话,(a)/(b) 回应:附议 (b) 且非新裁)**:第 47 轮路由的
+  运载设计问题,**答案已在批文里**——spec §0.2:48 终局字面:「backend 向 daemon 提交
+  完整七元组 Invocation,daemon 拥有 callee 本地性解析/转发」,即 (b) 案本身;(a) 扩
+  forward 形 = 养肥转发包装,与已批终局相悖。(b) 下三道运载缺口结构性消失
+  (content/authority 本在 InvokeRequest,流式天然,与 step-3 设备侧七元组直入对称)。
+  **载体会话可径行 (b),无需 CTO 往返**(终局文本系 v2 spec 已批内容,此为回溯非新裁;
+  决策密度家规:开问题前先查已批文)。附:aa0bb5f2 投影钉独立复跑 6/6 ✓;ec0b7a60
+  Go SDK 独立复证补记(全包测试绿 + gofmt 零漂移)✓。
+- **2026-06-12 第 54 轮(循环会话,幻影占用拆除)**:逐文件以「工作树 ≡ rustfmt(HEAD)」
+  判别 57 文件占用集——**53 个纯 fmt 残渣**(R19 全 crate cargo-fmt 事件长尾,6+ 小时
+  被各会话互读为对方活跃 WIP),真语义 WIP 仅 4 文件(ability_spec/agent_new_ability/
+  chat_ability/files-handlers,chat/files 特性)。按吸收先例(Axon bc5f7fd4 同类结清)
+  批量收账 **e1abba0**(53 文件 +295/−230,4 语义文件原封),worktree 复验 check 绿。
+  **T4.4(interpreter)与载体 step-4(transport)双解锁**。**事故披露(秒级自纠)**:
+  首刀 pathspec `src/ tests/` 把 4 个语义文件卷过精选暂存(pathspec 覆盖 staging!
+  57≠53 数字对账当场抓获),soft-reset 重提;教训入记忆——精选暂存即提交内容时
+  **不带 pathspec 按 index 提交**,提交后必对账文件数。fmt 处置卡(裁决队列旧项)
+  以吸收路线事实结案。
+- **2026-06-12 第 53 轮(循环会话,step-2c 转正销案)**:应信件 2026-06-13-01 点单,
+  干净 worktree @ HEAD 36b7400 实跑
+  `cargo test --lib --features axon-pb invocation_transport`:
+  **test result: ok. 397 passed; 0 failed; 1 ignored; finished in 4.38s**
+  ——step-2c(1168b09+6e34457)验收**转正**,载体会话 option-C 债**销账**;其 6 轮
+  9 次自跑死于锁的等待终结。context_store 归属销案知悉。
+- **2026-06-12 第 52 轮(循环会话)**:验收 Cli 6051d45(T0.4/step-5 重基线)——bench
+  纪律满格:after 臂为**真发运帧**非代理(carrier_v1_roundtrip = step-2d/3 实装
+  DispatchCall),同 harness 双尺寸(1KB 21.0µs→0.87µs = **24×**;64KB 1.073ms→5.97µs
+  = **180×**),裸 InvokeRequest 参照列示信封代价 ~5%,JSON 列保留至 step-5 退役——
+  F-004 的性能表症至此定量闭账;T0.4 验收条款(同 harness before/after)关闭。
+  一处笔误不立债:文档节标日期 2026-06-13(应为 06-12)。ed1698d(commit-plan 载体节
+  终态)知悉。**零新债**。
+- **2026-06-12 第 54 轮(循环会话)**:增量审计 47430b0(step-5 删除卡:305 站点/14 文件
+  自干净 HEAD 盘点,免疫脏集;删除收束为 codec fence 单提交;397 地板/grep 零门/24×180×
+  引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
+  切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
+  step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-12/13 第 56 轮(循环会话,step-4 unary 臂施工 + 磁盘事故)**:unary 远端臂
+  写成——resolver 撤 self 硬拒(本地性判定下沉分支点)、共享派发核 dispatch_frame_to_presence
+  提取(forward 臂同核重构,DEC-F004 单结算路)、远端臂 envelope 逐字移植 + resolver 裁定
+  callee 钉牌、v0 回退诚实降级(canonical CallerSignature 无 signer pubkey,不伪造 key
+  material,claim 缺省 = trust-domain 身份,随 step-5 死)。**fd346dc HEAD 隔离 worktree
+  验证编译零错**。**⚠ 磁盘事故(我,第四起)**:验证用 cargo target 长期停在根卷
+  /tmp/headcheck-target 且未清,测试中写满根卷——两会话全瘫数轮,Bash 连输出文件都开不出,
+  最终经终端通知 + 重试 rm 解锁(释放后余 5.1GB)。教训入记忆:重型构建 target 永不放
+  根卷、用毕即清、开工前 df。**未竟**:4 测试 + 397 回归 + 提交——主树被 T4.4 拆分
+  在制(65 错全在 eal/interpreter/)挡住,且 5.1GB 不容新 worktree target;等树愈合即收。
+  期间 43b1335(step-3b 设备臂)落地审计零新债(同因式分解哲学/象限测试/双特性 23/23)。
+- **2026-06-12 第 52 轮(循环会话,step-4 交接受阻+请求)**:增量审计两提交零新债——
+  6051d45(载体重基线:1KB 21.0us→0.87us **24×**、64KB 1.073ms→5.97us **180×**,v1 帧
+  距裸 InvokeRequest ~5%「bidi 信封零成本」,同 harness 真 after 臂,T0.4 验收闭);
+  ed1698d(commit-plan 载体节终态:step-4 = T2.1b 归并行会话即我,step-5 一个发布窗)。
+  **step-4 物理受阻**:daemon 远端臂落点三文件(unary_dispatcher/daemon_invocation_service/
+  bidi_dispatcher)全部在工作区会话脏集中(transport 14 文件,载体计划已终态——疑似
+  滞留 WIP)。按共享 checkout 家规不入占用文件(本会话已三次事故)。**请求工作区会话**:
+  提交或释放 transport 滞留 WIP(绿窗 A 案:提交=可编译单元),释放即 step-4 开工
+  (终形已钉:daemon 远端臂 + backend 整 fork 退役,prep 件 §七)。
+- **2026-06-12 第 51 轮(循环会话)**:验收 Cli d370cb6(step-3 第 4 项,回执回家)——
+  `RpcDispatchOutcome.terminal_receipt` 经既有 `snapshot_receipts()` 浮出(零新运行时面),
+  typed `is_terminal()` 选取(F-012 红利),DispatchResult 经 aa0bb5f2 投影逐字回携,
+  hub 端 step-2c 只记账不签名——**DEC-F004 头条赢点(callee 签名回执过 hub 跳)端到端
+  闭合**;4 处执行路径 clone / 9 处非执行路径显式 None(无 Default 偷运);20/20 +
+  397/397 已记。**零新债**。
+- **2026-06-12 第 54 轮(循环会话)**:增量审计 47430b0(step-5 删除卡:305 站点/14 文件
+  自干净 HEAD 盘点,免疫脏集;删除收束为 codec fence 单提交;397 地板/grep 零门/24×180×
+  引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
+  切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
+  step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-12/13 第 56 轮(循环会话,step-4 unary 臂施工 + 磁盘事故)**:unary 远端臂
+  写成——resolver 撤 self 硬拒(本地性判定下沉分支点)、共享派发核 dispatch_frame_to_presence
+  提取(forward 臂同核重构,DEC-F004 单结算路)、远端臂 envelope 逐字移植 + resolver 裁定
+  callee 钉牌、v0 回退诚实降级(canonical CallerSignature 无 signer pubkey,不伪造 key
+  material,claim 缺省 = trust-domain 身份,随 step-5 死)。**fd346dc HEAD 隔离 worktree
+  验证编译零错**。**⚠ 磁盘事故(我,第四起)**:验证用 cargo target 长期停在根卷
+  /tmp/headcheck-target 且未清,测试中写满根卷——两会话全瘫数轮,Bash 连输出文件都开不出,
+  最终经终端通知 + 重试 rm 解锁(释放后余 5.1GB)。教训入记忆:重型构建 target 永不放
+  根卷、用毕即清、开工前 df。**未竟**:4 测试 + 397 回归 + 提交——主树被 T4.4 拆分
+  在制(65 错全在 eal/interpreter/)挡住,且 5.1GB 不容新 worktree target;等树愈合即收。
+  期间 43b1335(step-3b 设备臂)落地审计零新债(同因式分解哲学/象限测试/双特性 23/23)。
+- **2026-06-12 第 52 轮(循环会话,step-4 交接受阻+请求)**:增量审计两提交零新债——
+  6051d45(载体重基线:1KB 21.0us→0.87us **24×**、64KB 1.073ms→5.97us **180×**,v1 帧
+  距裸 InvokeRequest ~5%「bidi 信封零成本」,同 harness 真 after 臂,T0.4 验收闭);
+  ed1698d(commit-plan 载体节终态:step-4 = T2.1b 归并行会话即我,step-5 一个发布窗)。
+  **step-4 物理受阻**:daemon 远端臂落点三文件(unary_dispatcher/daemon_invocation_service/
+  bidi_dispatcher)全部在工作区会话脏集中(transport 14 文件,载体计划已终态——疑似
+  滞留 WIP)。按共享 checkout 家规不入占用文件(本会话已三次事故)。**请求工作区会话**:
+  提交或释放 transport 滞留 WIP(绿窗 A 案:提交=可编译单元),释放即 step-4 开工
+  (终形已钉:daemon 远端臂 + backend 整 fork 退役,prep 件 §七)。
+- **2026-06-12 第 51 轮(循环会话)**:增量审计 Cli d370cb6(step-3 第 4 项,execution
+  receipt 回家)——复用既有 snapshot_receipts(零投机 API),receipt 经 aa0bb5f2 投影
+  逐字过线,+30/−5 聚焦 diff,20/20 + 397/397。**mini-RFC 头条收益端到端闭合**:
+  callee 签名 receipt 跨 hub 跳离线可验(投影 aa0bb5f2 → 设备回携 d370cb6 → hub 入账
+  1168b09/6e34457)。**零新债**。daemon catch-all 远端臂仍在制。
+- **2026-06-12 第 50 轮(循环会话,(b) 裁定消化)**:承认第 49 轮的反向命中——运载问题
+  的答案在已批 spec §0.2:48 字面里,路由前未查批文,违自家决策密度家规(记忆原则再固化)。
+  (b) 终形入 prep 件 §七:**backend 切换再简化**——RemoteRoutingClient 整体退役(分类器/
+  transportCaller/origin 提取全归 daemon),handler 请求原样直交 canonical 面;删除清单
+  不变,时点 = daemon catch-all 远端臂落地(载体施工中)。ec0b7a60 形仍服务跨域腿。
+- **2026-06-12 第 48 轮(循环会话)**:增量审计 Axon aa0bb5f2(domain→wire receipt 投影,
+  DEC-F004 审计 5)——try_* 读者的出站镜像全集(身份/因果四形/callee 签名/六变体
+  authority binding 双 proof 体),审计承载字段逐字过线(canonical bytes 覆盖
+  authority_binding,部分投影即破离线验证——契约测试钉 hash/nonce/bindings/签名/
+  ability/authority);纯增量 +216,解锁设备 DispatchResult 回携本地铸造执行 receipt
+  (step-3 构造单第 4 项)。**零新债**。运载设计 (a)/(b) 尚无回应。
+- **2026-06-12 第 47 轮(循环会话,T2.1b 施工核验→暂缓+路由)**:逐行读降级层与消费面后
+  **推翻单批可完**——forward_invoke 今日形运不动 backend 真实面三样:流式(活生产两站点,
+  daemon InvokeStream 无远端臂 :852)、内容信封(加密会话依赖)、SessionAuthority
+  (6+ handler 站点)。不做按特性分叉的半切。设计问题路由载体会话:扩 forward 形 vs
+  给 catch-all 长远端臂(canonical InvokeRequest 直接受理)——**倾向后者**,与 step-3
+  设备侧对称、不养肥转发包装。prep 件 §六 全档。step-0 SDK 形两案均不浪费。
+- **2026-06-12 第 46 轮(循环会话,T2.1b step-0)**:开工即堵 Rule-1 缺口——Go SDK 无
+  ForwardInvokeRequest(形状只在 Rust,backend 若直切必手抄,恰是 T2.1b 要杀的 F-015/F-040
+  模式)。Axon ec0b7a60:ForwardInvokeRequest/Response 逐键镜像 federation_directory.rs、
+  内层信封 builder({ability_ura,args,call_id} b64,与 Cli federation_invoke.rs :212 canonical
+  发送方同形)、causal_context_bytes 走 Go 原生 []byte base64(与 Rust string serde 字节兼容,
+  测试钉死)、origin claim 骑 NewOriginCallerClaim(fe6060e7 构造器升任生产 builder)。
+  4/4 wire pin + 校验边界;全包绿。backend 五步切换下轮主体施工。
+- **2026-06-12 第 45 轮(循环会话,step-3 审计 + T2.1b 开闸)**:增量审计 Cli f952c5b
+  (T2.1 step-3 设备半球)——frame-0 声明 SessionOpenExt(OnceLock 每 boot nonce,T1.2
+  指纹搭车)、协商记录于 SessionUpSender 单一上行权威、handle_down 双读 DispatchCall →
+  admitted_from_wire_parts 直入 LocalRuntime(**七元组完整零 JSON 再投影,F-044 兑现**)、
+  open_bidi 显式缓议 3b;397/397,**零新债**。**T2.1b 闸开**:亲核 unary catch-all 仅
+  本地路由,远端腿唯一经 forward_invoke 臂——prep 件 §二 精确化为 forward_invoke +
+  SDK ForwardInvokeRequest 形;backend 切换下轮全预算开工。
+- **2026-06-12 第 44 轮(循环会话,审计+路由键裁决溶解)**:验收 8ee1c49(:4562 悬挂转
+  失败)——第 40 轮处方逐字执行(oneshot 裁决通道 + 10s 超时,悬挂→1s 判决,双特性),
+  诊断问题 (a) 判明**非** fallback #2 回归:pin 上游死于 fixture 路由键。**裁决并溶解**:
+  session ownership 闸经 parse_ura 接受 canonical `ability/hub.<ns>.<name>` 形
+  (ura-rs :897 Hub 臂)——`hub/ability/...` 系 fixture 自创野形(F-042 第 5 形),
+  无 spec 缺口、无需 RFC 卡;且 8ee1c49 已先于裁决换上 canonical 形。**阀豁免清零**
+  (两条创始豁免全部在落地数小时内退役——豁免过期自红机制两连胜),valve 绿。
+  pin 的 un-ignore 留载体会话(其 #[ignore] 理由随裁决可更新)。零新债。
+- **2026-06-12 第 42 轮(循环会话,F-056 主修)**:MissionRunStore 落地 + pump 首触同步化
+  (1c14cbe,详见 F-056 条目)——「该用 OOP 的没用」教科书案例:根目录本该是对象状态,
+  16 处测试用全局 env 突变冒充注入;且修复揭出第二层(HOME 锁掩盖的 create/pump 竞态,
+  生产可见瞬时态)。验收:6/6 并行确定性、252/252、双特性净。
+- **2026-06-12 第 41 轮(循环会话,option-C 清偿终态)**:c2df5a3 全量 lib 套件
+  (axon-pb,skip 死锁钉):**3,197 过 / 1 败 / 3 忽略,333.95s**——唯一败者系
+  mission_runs 家族且两跑败集不同(首跑 3 败,本跑 1 败),串行 21/21 绿(0.03s)
+  = 竞态非回归,立项 **F-056**(HomeGuard 全局 HOME 突变,方向:HOME 注入参数化,
+  回流 T5.3 作者)。**结论:已提交树健康**——除 ① :4562 死锁钉(机制诊断已在第 40 轮
+  回流,owner 待修)② F-056 并行竞态外全绿;载体会话 step-2 系列至此**可验收转正**
+  (其 option-C 债以本跑清偿,默认特性半边在途)。第 39 轮(工作区会话)对 c2df5a3 的
+  表述补一笔:hunk 作者系工作区会话,提交者系本会话(代执行信件 04 选项 1,提交信全记)。
+- **2026-06-12 第 40 轮(循环会话,:4562 死锁机制诊断,回流载体会话)**:只读追踪给出
+  高置信机制——**「pin 以悬挂而非失败的方式报警」**。三件事实叠加:① pending 等待
+  **设计上无内建超时**(unary_dispatcher.rs:1397 注释明言依赖 operator 侧 HTTP 超时——
+  测试里不存在);② 测试把断言放进 spawn 的 fake_device 任务,任务内任何 panic(含
+  「收到 v1 DispatchCall 而非期望的 JSON 回退」这一 pin 的本体断言)被 JoinHandle 吞掉,
+  pending 永不 complete,主 future 在 dispatch await 处永悬——**panic 变 0% CPU 死锁**;
+  ③ 五进程同款悬挂(含两个早于 1168b09)与「任何 completion 错失皆悬」一致。
+  **给 owner 的两个检查点**:(a) step-2d 协商写是否令此无 envelope 路径回归发了 v1
+  (即 deliberate-fallback #2 真被违反,pin 抓到了真回归);(b) 不论 (a) 真假,测试模板
+  应加 `tokio::time::timeout` 包裹 dispatch await + spawn 任务断言改回传通道——
+  悬挂式报警吞套件,是 F-051/F-052 同级的测试工程债。机制诊断仅静态推理,运行验证留 owner。
+- **2026-06-12 第 39 轮(循环会话,红色发现②+复绿)**:① ee2663f 调用方切片已代为提交
+  (**c2df5a3**,9 文件 +32/−20,逐行验纯零无关 WIP,工作树与其余 WIP 未触;axon-pb
+  check 复绿 8.3s)——HEAD 4 小时破裂期结束。② 全套件清偿时发现**第二层红**:step-2c
+  行为钉 `carrier_v1_slot_without_caller_envelope_falls_back_to_json_dispatch`
+  (daemon_invocation_service_tests.rs:4562,1168b09)**死锁**——stack 取样实证
+  (22 线程,test 闭包悬于 :4562,bidi/webrtc/terminal 运行时线程全起);载体会话
+  自己的 5 个 transport 测试进程已挂 1–2 小时(0% CPU,同一二进制),**其 option-C
+  债清不掉的根因即此**(注:最老两挂起早于 1168b09,可能另有更早悬因,待其自查)。
+  skip 该测的全量复跑在途;**发现回流载体会话**:钉测试需修死锁(嫌疑:JSON 回退
+  路径在测试 harness 无应答方,await 无超时)。环境注:生产 daemon(5:59AM 起)与
+  control.sock 存活,测试若耦合真 daemon 资源亦属隔离债。
+- **2026-06-12 第 38 轮(循环会话,红色发现)**:替载体会话清偿 option-C 套件债时
+  (干净 HEAD worktree + 隔离 target;注:worktree 须置于 GitHub 同级目录以解析
+  ../EasyNet-Axon 相对依赖)发现 **HEAD 自 ee2663f(07:11)起破裂 ~4 小时**:该提交
+  自称 move-only(support::federation_invoke → invocation_transport)却**没带调用方**
+  ——18 × E0433 横跨 auth/devices/groups/ability/reset 等 facade 文件;调用方系
+  cfg(axon-pb) 生产代码,故 **axon-pb 生产 lib 破 + 双特性 lib-test 破**,仅默认特性
+  生产独绿——「lib production build clean」宣称系 axon-pb 盲点(账内既有教训再兑现)。
+  修复已存在:工作区在制版本 0 处旧引用——**滞留未提交即全树门禁失效**,绿窗 A 案
+  (提交=可编译单元)被违反。option-C 债在 HEAD 复绿前**不可清偿**。回流:致信
+  工作区会话——最小切片提交 18 站点调用方 hunk(其既有 hunk-level 纪律),或革退
+  ee2663f。
+- **2026-06-12 第 37 轮(循环会话)**:补审 hub 半球两漏网提交,**零新债**——
+  a5b59ed(step-2b 双读):settle_terminal_result 提出 JSON 臂共享,单结算核不开二真源
+  (DEC-F004 纪律);缺 receipt 的终帧「报事件但仍结算」,liveness 优先且可观测。
+  5be0bc0(step-2d 协商写):双写点查 slot 协商版本;envelope 逐字移植零铸造(勘误 2
+  使之为 transplant 非 translation);unary 路径穿透 caller_envelope(F-040 隐藏 envelope
+  缺口在 hub 站点先行闭合)。**依赖链明确化**(bd3d709 commit-plan):T2.1 余 = step-3
+  设备半球(停靠 T1.1 相位机之后,转移点即 frame-0 ext 钩子)→ step-4 = T2.1b(我侧,
+  prep 件 a7f0aa7 待命)→ step-5(JSON 删除+基线退役+重基准)。hub 半球至此全审讫
+  (步 1/2a/2b/2c/2d + 基准双臂 + Fed-MVP 金基线)。
+- **2026-06-12 第 36 轮(循环会话)**:增量审计 Cli 3ece4f5(载体基准 after 臂)——方法论
+  正确:before(JSON-in-BinaryChunk)/after(真 step-2d DispatchCall 帧)同 harness 对照,
+  替换 canonical_proto_roundtrip 代理臂;并按家规披露顺带吸收的 fmt 触碰。**零新债**。
+  T2.1 验收仪表就位,step-5 重基线临近。
+- **2026-06-12 第 34 轮(循环会话)**:验收 Cli 5b52f94 + b32bb34(F-055 树级 URA 构造阀
+  + 16 脚本执行位恢复)——**实跑绿**(1 条带主豁免);设计合格:豁免按精确内容钉、过期
+  自红(6e34457 落地即在首跑实证),src/ura.rs 门面白名单与仓库合规模型一致,作用域与
+  FE AST 规则同款(只拦插值构造,静态字面量不扰);至此**三仓阀族对称收口**
+  (Cli 脚本阀 / FE eslint 阀 / backend grep 阀)且 6 钉入 conformance CI。一处微瑕:
+  注释过滤只识 `//` 行(块注释/doc 续行不滤,Rust 实务影响近零,不立债)。
+  对方披露的注入毁 WIP 事故(context_store.rs ~16 行,载体会话所有,不可恢复)系
+  会话间事项,教训已由其入册;与我会话无涉。**零新债**。
+- **2026-06-12 第 33 轮(循环会话)**:增量审计 EasyNet 21fb2e5(F-052 lib 半边)——6 测试
+  与入册处方逐项对应(哨兵绑定字面量钉死/lifelong_session_id 透传+首回合前 null 默认/
+  getChatSession 哨兵→具体 id 解析),AskToDoPage 路由半边正确留开(占用中),**零新债**。
+  F-052 余:page 绑定测试(等 chat-attachments 波释放)。
+- **2026-06-12 第 32 轮(循环会话)**:验收 Cli 6e34457(第 31 轮发现的修复)——与处方
+  逐项吻合:铸形回退 → `?` 传播(对齐 unary 先例),消费侧 and_then 折叠派生+put 单一
+  outcome match,派生失败跳行带 ledger_write_failed 可观测性(野生 URA 永不入账),双写
+  注释残渣同清,纪律注释引 F-042/§0.1-3。**双循环交叉评审闭环样板**(发现→回流→修复→
+  验收 < 15 分钟)。step-2c 系列验收转正仍待作者 option-C 套件回归。F-052 lib 半边同窗
+  关闭(21fb2e5,6 测,'lifelong' 哨兵与 Cli 9719a99 成对钉死)。
+- **2026-06-12 第 32 轮(循环会话)**:顺着第 31 轮修正深挖守卫面,入册并同轮主修 **F-055**
+  (Cli 树级裸构造阀缺失 + 6 pin 无 CI + 16 脚本无执行位 + openai pin 锚点失效)——阀首跑
+  即证明豁免失效检测的价值(6e34457 在本轮中途落地,阀立即报豁免过期)。
+  **⚠ 事故披露(shared-checkout 第三起,首起破坏性)**:阀双向验证时把注入行追加到了
+  context_store.rs——该文件带着另一会话约 16 行未暂存 WIP(自会话开始即在脏集),随后的
+  `git restore` 将其连同注入行一并清除。恢复尝试四路全败(git 无暂存不可恢/对方 transcript
+  无该文件 Edit 记录/编辑器本地历史无/APFS 快照仅系统更新)。**教训已入记忆:验证注入
+  永不落在脏文件上**(用临时文件或确认目标 clean)。受影响改动归属与重做成本待另会话确认。
+- **2026-06-12 第 31 轮(循环会话,审计修正)**:第 30 轮对 1168b09 的「receipt URA 走
+  既有五参派生不造形状、零新债」判定**漏看了失败臂**——`ledger_record_from_remote_receipt`
+  的 `unwrap_or_else(|_| format!("easynet:///r/{realm}/invocation/{id}"))` 在派生失败时
+  铸造顶层 `invocation/` role(F-042 判过的第 4 野生形状,parse_ura 必拒),且与同文件
+  unary 先例(:66,`?` 传播不铸形)相悖,违 §0.1-3「flag 而非 extrapolate」。
+  四级 or_else 后该臂近死路径——改错误传播损失为零。**发现回流 step-2c 作者会话**;
+  另:同函数有双写注释残渣一处(微)。其余维度同意第 30 轮判定(DEC-F004/F-020 纪律、
+  行为钉、typed state 回退均合格);验收随作者 option-C 套件债转正。
+- **2026-06-12 第 30 轮(循环会话)**:增量审计 Cli 1168b09(T2.1 step-2c,callee receipt
+  入 hub ledger)——**DEC-F020 纪律严谨**(hub 不见转发明文,args 记空 digest,callee 行
+  自持其事;hub 只投影不签名,与 DEC-F004「hub 不入 receipt 签名链」无抵触)、F-012 typed
+  state 路径、receipt URA 走既有五参派生不造形状、**行为 pin 显式护住 T2.1b 前置**
+  (v1 槽无 caller envelope 必走 JSON 载体,防过早"优化"掉回退),**零新债**。
+  T0.1 归属表由另会话以快照法重产(e9d6d92,现值 927,卡 #4 sign-ready)——
+  我的第一轮表加 SUPERSEDED 指针(59166d4),防对旧数签字。transport 占用 19→15,
+  step-2 系列(2a/2b/2c/2d)聚合中。
+- **2026-06-12 第 29 轮(循环会话)**:增量审计 Axon 20c4e947——proto 落地未竟波的**第三层
+  也是最后一层**(1b4dedc0 修 runtime,本提交修 bridge+client-sdk):同一裁决一致应用
+  (dispatch 帧上 invocation 面 = 协议违例,同 reason 码);F-053 扩展字段在 pb::Error
+  fixture 的涟漪以 ..Default::default() 正确吸收;8 参 test adapter 内联为具名字段结构体
+  字面量(与 F-054 同一实体化哲学);client-sdk/dendrite-bridge clippy 升 all-targets——
+  **接力完成 28669f1c 留下的最后两个 lib-only 洞,Axon 全 crate 阀矩阵均一**。零新债。
+  未竟落地弧(step-1 → 三层 fallout)全闭,且其教训已被 CI 结构性锁定。
+- **2026-06-12 第 28 轮(循环会话)**:无新提交可审(另会话移驻 dendrite-bridge
+  invoke_signed 双文件,T2.1 FFI 传播在制)。阀对称收尾:sdk-go-test 作业有 vet+test
+  无 gofmt 门(bc5f7fd4 结清的 4 文件漂移正积累于此)——补 gofmt 门(Axon c52b5d74,
+  先验 gofmt -l 清)。至此三语言 SDK 阀组对称:Rust fmt+clippy all-targets /
+  Go fmt+vet+test / FE eslint-in-CI。
+- **2026-06-12 第 27 轮(循环会话)**:增量审计 Axon 5ea9bb03(clippy 20 清零,±24 行机械
+  sweep,零走私)——**Axon 两 crate 全 target clippy 归零里程碑**。随即查阀:sdk/rust 的 CI
+  作业「只测不 lint」(36 警告与 fmt 漂移积累不可见的根因)、runtime-rs clippy 不含
+  --all-targets(1b4dedc0 破点藏身处)。**收口(28669f1c)**:sdk 作业加 fmt+clippy
+  all-targets 双门、runtime-rs clippy 升 all-targets——本周到达的零警告态从此 CI 锁定
+  (本地先验:clippy all-targets 0、fmt 清;ura-rs/local_runtime 两处尾漂移顺手结清
+  9be17760,12/12 + 24 套件绿)。自纠勘误:第一判「sdk/rust 无 CI 作业」错——作业在
+  :465+(三特性测试齐),缺的只是 lint 门;查到底再下结论。
+- **2026-06-12 第 26 轮(循环会话)**:增量审计 Axon e9893dae(F-054 收口)——9 参实为
+  「wire body 散落进签名」,改判正确:FederationOwnerProjection 实体化 derive Serialize 即
+  wire 形(单一真源),build_advertise_abilities_body 手镜 builder 删除(无兼容垫),V9
+  conformance pin 改锚结构体序列化;442/442 + clippy 全 target 零警告。**零新债**,
+  F-054 关账与磁盘一致。
+- **2026-06-12 第 25 轮(循环会话;与 53fab2f 的第 25 轮系并行双记,1b4dedc0 两方独立核验结论一致)**:增量审计 Axon 1b4dedc0(T2.1 proto 落地补完)——
+  根因诚实(step-1 两提交未跑 scripts/proto/sync_axon_v1.sh,client-sdk 镜像漂移致
+  --all-targets 双重破)、修复正确(脚本同步字节同一;dispatch 帧上错信道 = 协议违例,显式
+  fail 臂 + AXON_BIDI_UNEXPECTED_DISPATCH_FRAME,与 duplicate-EnvelopeOpen 同族),587/587,
+  **零新债**;00c9d058 样式平凡。**审计自纠**:第 18 轮我对 step-1 的快审只验了 sdk/rust
+  测试,未跑跨 crate --all-targets——proto 改动的审计门从此含「镜像同步 + 全 crate 构建」
+  (与 Cli 侧 axon-pb 特性盲区同族教训,已入记忆)。
+- **2026-06-12 第 25 轮(循环会话)**:**审计修正——第 17 轮对 90841fed+f9d7419b 的放行有盲点**:
+  帧形状审过但落地没审完——canonical proto 改动未跑 sync_axon_v1.sh(client-sdk 构建脚本
+  panic),其后按调用 bidi 环路 match 对新 up-帧不穷尽 + 夹具缺 session_ext;HEAD
+  `--all-targets` 不可构建,第二层被第一层 panic 遮蔽。收口 **1b4dedc0**:镜像同步(规定
+  脚本,字节一致)+ 显式违例臂(AXON_BIDI_UNEXPECTED_DISPATCH_FRAME——会话派发帧不属于
+  按调用 bidi 面,同 duplicate-open 族;**不实现 T2.1 派发语义**,主干仍归对方)+ 夹具补
+  None;587/587 绿(2 条 cross_boundary 失败系隔离 CARGO_TARGET_DIR 打破 verify_binary_path
+  的 ancestors(4) 共置假设,文档化 EASYNET_VERIFY_BIN 覆盖即绿,环境性不立债)。
+  顺手 **00c9d058**(SDK items_after_test_module,测试模块移文件尾,move-only,117/117)。
+  **新债 F-054**(SDK dendrite_bridge 9 参,低)。**教训入则:proto 改动 DoD = 同步脚本跑过
+  + 全 target 构建过;形状审过 ≠ 落地审过。**
+- **2026-06-12 第 24 轮(循环会话)**:增量审计两提交零新债——EasyNet 793972a(F-041 前端
+  AST 阀,双向验证)与 f1a2372(卫星模块 12 符号出口降级,tsc 证活、52/52,cut-4 出口纪律
+  反哺 cut-1/2)。**冗余收口(f47c176)**:同一纪律出现双真源(我的 grep 脚本 b8b2114 vs
+  他们的 AST 规则)且 FE eslint 根本不在任何 CI 里跑(两条 eslint 阀都只咬编辑器)——
+  frontend-lint.yml 入 CI(npm ci + 全树 lint,paths 过滤),conformance 工作流撤 FE 腿,
+  grep 孪生删除;每纪律一阀、取强者、CI 咬合。backend 保 grep(Go 侧无 lint 宿主)。
+  F-052 仍挂(AskToDoPage 在 chat-attachments 波中未释放)。
+- **2026-06-12 第 23 轮(循环会话)**:增量审计 EasyNet 4a48df6(T4.7 cut-4 终刀,context-rail
+  模型+卫星簇 → workspaces.tsx)——收支平衡(−585/+622)、零副作用、**出口面最小化**(仅 5 个
+  workbench 入口导出,面板内件 file-private,闭簇裁定有据),**零新债**。T4.7/F-018 四刀全审完:
+  dialog 3,114→1,119 + 5 卫星模块,另会话关账(bf85793)与磁盘逐项吻合。A8 的 F-043 阀同批闭。
+- **2026-06-12 第 22 轮(循环会话)**:增量审计 EasyNet f72ea1a(T4.7 cut-3,API workspace →
+  invoke-ability/api.tsx,dialog 2,191→1,695)——收支平衡(−502/+530)、零副作用走私,**零新债**。
+  拆分收敛轨迹:2,929→2,592→2,191→1,695(已提交),工作树已 1,119(cut-4 在制)——
+  T4.7 主体接近 F-018 验收线。
+- **2026-06-12 第 21 轮(循环会话)**:增量审计 EasyNet 605e14b(T4.7 cut-2,output/receipt
+  面 → invoke-ability/output.tsx,dialog 2,593→2,191)——收支平衡(−402/+447)、零副作用走私、
+  保留边界声明清晰(ApiCopyField/SnippetCard/HintBadges 留 dialog 有由),**零新债**。
+  基建维护:easynet-ura-discipline skill 修正失效真源路径(client-sdk ura.rs 现仅 pb 适配器,
+  builders 真源 = core/ura-rs/src/lib.rs)+ 缺口节同步 RFC-007 议程两裁决;
+  project_backend_axon_protocol_fork 记忆同步 F-015 收窄终态(防按旧定性开工)。
+- **2026-06-12 第 20 轮(循环会话)**:增量审计 EasyNet f0c3300(T4.7 cut-1,dialog 2,929→2,592)
+  ——move-only 收支核对(−359/+415,差额=文件头+import+export)、新文件零副作用走私(无
+  fetch/store/useEffect 混入)、增量切割模式与 T4.6/T4.2 纪律同款,**零新债**。Axon 格式漂移
+  12 文件(8 Rust + 4 Go,28245ab4/70beb54c 波次遗留)就地清账(bc5f7fd4,format-only;
+  209/209 + Go 套件绿)——Axon 仓干净无占用,无需等静窗;静窗随手账仅余 Cli 侧四项。
+- **2026-06-12 第 19 轮(循环会话)**:T5.1 SDK 半边主修(Axon 3a4d4cdf,AxonError 144→112,
+  36 处 result_large_err 源头归零,尺寸 pin + wire 透明双钉);顺藤摸出 **F-053**(normative
+  §7 落后参考实现 5 个 wire 字段,PARITY 表超报)并同轮主修(c1a03e8f:§7.1 全 wire 形 +
+  诚实扩展行)。F-037 复核确认已闭(155b6b4)。
+
