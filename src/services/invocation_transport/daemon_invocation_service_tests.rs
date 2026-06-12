@@ -5583,14 +5583,14 @@ async fn build_session_request_result_frame_round_trips_through_serde() {
 }
 
 #[tokio::test]
-async fn push_session_request_result_evicts_slow_device_when_channel_full() {
-    use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+async fn push_session_request_result_drops_frame_but_keeps_slow_device_when_channel_full() {
+    use crate::services::presence_registry::PresenceEvent;
     use tokio::sync::mpsc;
 
     let presence = Arc::new(PresenceRegistry::new());
     let mut events = presence.subscribe_events();
     let caller_ura = "easynet:///r/test-realm/device/device-a";
-    let (tx, _rx) = mpsc::channel(1);
+    let (tx, mut rx) = mpsc::channel(1);
     presence.insert(caller_ura.to_string(), tx.clone());
     match events.recv().await.expect("online event") {
         PresenceEvent::Online { ura } => assert_eq!(ura, caller_ura),
@@ -5617,17 +5617,26 @@ async fn push_session_request_result_evicts_slow_device_when_channel_full() {
         ),
     );
 
+    // Full = slow, not dead (2026-06-13 policy): the overflow frame
+    // is dropped — the device-side waiter times out and retries —
+    // but the session survives. Evicting here turned one burst into
+    // a false offline plus a failure avalanche for every pending
+    // call to the device.
     assert!(
-        presence.lookup_tracked(caller_ura).is_none(),
-        "slow device must be evicted from presence on RequestResult backpressure"
+        presence.lookup_tracked(caller_ura).is_some(),
+        "slow device must STAY in presence on RequestResult backpressure"
     );
-    match events.recv().await.expect("offline event") {
-        PresenceEvent::Offline { ura, reason } => {
-            assert_eq!(ura, caller_ura);
-            assert_eq!(reason, OfflineReason::SendFailed);
-        }
-        other => panic!("expected offline event, got {other:?}"),
-    }
+
+    // Only the pre-buffered frame was delivered; the overflow frame
+    // was dropped, not queued behind it.
+    assert!(
+        rx.try_recv().is_ok(),
+        "buffered frame is still delivered to the device"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "overflow frame must be dropped, not delivered"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

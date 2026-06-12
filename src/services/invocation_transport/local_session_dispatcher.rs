@@ -1571,13 +1571,30 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 }
                 Err(reason) => Ok(Self::session_error_result(call_id, reason)),
             }
-        } else if origin_caller.is_some() {
-            // Origin-caller dispatches may need the session channel
-            // themselves (resolve_key trust sync escalates up the
-            // SAME bidi this loop consumes) — awaiting them inline
-            // would deadlock the reply until the escalation times
-            // out. Run them as their own task and reply through the
-            // cloned outbound, the spawn_stream_forwarder pattern.
+        } else {
+            // ── Phase 5f: Axon-only session dispatch ───────────────
+            //
+            // When the shared `LocalRuntime` hosts this ability, route
+            // through `invoke_async`. The runtime fires the wired
+            // `LedgerSink` on the terminal event. If the runtime does
+            // not host the ability, we return a terminal error; there
+            // is no legacy RPC fallback from session frames.
+            //
+            // Every dispatch runs as its own task, replying through
+            // the cloned outbound (the spawn_stream_forwarder
+            // pattern), for two load-bearing reasons:
+            // - Origin-caller dispatches may need the session channel
+            //   themselves (resolve_key trust sync escalates up the
+            //   SAME bidi this loop consumes) — awaiting them inline
+            //   would deadlock the reply until the escalation times
+            //   out.
+            // - The session frame loop is the device's only inbound
+            //   lane. Awaiting ability execution inline serialized
+            //   EVERY invocation on this device behind the slowest
+            //   in-flight one (a 2s ability turned 1ms echoes into
+            //   2s waits, measured 2026-06-12). Concurrent replies
+            //   are sequence-safe because SessionUpSender stamps and
+            //   enqueues under its single-writer gate.
             let this = self.clone();
             let outbound_task = outbound.clone();
             tokio::spawn(async move {
@@ -1605,33 +1622,6 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 let _ = Self::send_result_frame(&outbound_task, call_id, result).await;
             });
             return Ok(());
-        } else if let Some(axon_result) = self
-            .try_dispatch_via_axon(
-                call_id,
-                callee_ura.as_deref(),
-                subject_ura.as_deref(),
-                &ability,
-                &args,
-                &metadata,
-                origin_caller.as_ref(),
-            )
-            .await
-        {
-            // ── Phase 5f: Axon-only session dispatch ───────────────
-            //
-            // When the shared `LocalRuntime` hosts this ability, route
-            // through `invoke_async`. The runtime fires the wired
-            // `LedgerSink` on the terminal event. If the runtime does
-            // not host the ability, we return a terminal error below;
-            // there is no legacy RPC fallback from session frames.
-            Ok(axon_result)
-        } else {
-            Ok(Self::session_error_result(
-                call_id,
-                format!(
-                    "<self>.session: ability `{ability}` is not registered in Axon LocalRuntime"
-                ),
-            ))
         }?;
 
         Self::send_result_frame(outbound, call_id, result).await

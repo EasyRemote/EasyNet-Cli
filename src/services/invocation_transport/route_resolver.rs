@@ -537,7 +537,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 .unwrap_or("<none>"),
             owner_matches_self = owner_matches_self,
             runtime_has_binding = runtime_has_binding,
-            presence_has_owner = self.registry.snapshot().contains(&selector.owner_ura),
+            presence_has_owner = self.registry.contains(&selector.owner_ura),
             branch = if owner_matches_self {
                 "device_local"
             } else {
@@ -592,7 +592,7 @@ impl<'a> DaemonRouteResolver<'a> {
         device_local: &DeviceLocalAuthoritySource,
         authority_ura: String,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
-        if !self.registry.snapshot().contains(&authority_ura) {
+        if !self.registry.contains(&authority_ura) {
             return Err(ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
                 reason: axon_pb::NegativeReason::Noroute,

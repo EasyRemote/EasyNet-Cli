@@ -309,13 +309,10 @@ impl BidiDispatcher {
         match sender.try_send(Ok(open_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.directory.presence.remove_if_session(
-                    &selected_route.execution_host_ura,
-                    session_id,
-                    crate::services::presence_registry::OfflineReason::SendFailed,
-                );
-                return Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                // Full = device is slow, not dead: keep its session,
+                // fail only this call as retryable backpressure.
+                return Err(Status::resource_exhausted(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON,
                 ));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
@@ -502,21 +499,14 @@ impl BidiDispatcher {
                 match sender.try_send(Ok(bridge_frame)) {
                     Ok(()) => {}
                     Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        presence_for_up.remove_if_session(
-                            &execution_host_ura_owned,
-                            session_id,
-                            crate::services::presence_registry::OfflineReason::SendFailed,
-                        );
+                        // Full = device is slow, not dead: keep its
+                        // session, fail only this call as retryable.
                         let reason =
-                            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON.to_string();
+                            federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON.to_string();
                         let _ = pending_for_up
                             .finish(
                                 call_id,
-                                failed_dispatch_result(
-                                    &reason,
-                                    "TARGET_NOT_IN_PRESENCE_REGISTRY",
-                                    true,
-                                ),
+                                failed_dispatch_result(&reason, "TARGET_BUSY", true),
                             )
                             .await;
                         return;
@@ -1037,17 +1027,17 @@ impl BidiDispatcher {
         match target_sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                // Bounded backpressure → presence transition (same
-                // policy as forward_invoke commit 8/9).
-                self.directory.presence.remove_if_session(
-                    &selected_route.execution_host_ura,
-                    target_session_id,
-                    OfflineReason::SendFailed,
-                );
+                // Full = the device is slow (its session drain is
+                // behind), not dead. Keep its session and fail only
+                // this call as retryable backpressure — evicting
+                // here turned one >256-frame burst into a false
+                // offline plus a failure avalanche for every
+                // pending call (measured 2026-06-12).
                 return invoke_remote_inband_error_response(format!(
-                    "<self>.invoke_remote: selected execution host `{}` channel full; \
-                     removed from registry with OfflineReason::SendFailed",
-                    selected_route.execution_host_ura
+                    "<self>.invoke_remote: selected execution host `{}` dispatch \
+                     channel full ({}); retry",
+                    selected_route.execution_host_ura,
+                    federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON,
                 ));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
@@ -2336,14 +2326,15 @@ pub(crate) fn push_session_request_result(
     match sender.try_send(Ok(frame)) {
         Ok(()) => {}
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::SendFailed);
+            // Full = device is slow, not dead: drop this one frame
+            // (the device-side waiter times out and retries) instead
+            // of evicting the whole session.
             crate::op_event!(
                 component = session_accept,
                 kind = request_result_push_failed,
                 caller = caller_ura,
                 call_id = id_hex,
-                reason = "channel_full",
-                offline_reason = "SendFailed",
+                reason = "channel_full_dropped",
             );
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
@@ -2443,7 +2434,12 @@ pub(crate) fn build_reverse_dispatch_result_frame(
 /// Terminal-result settlement shared by the JSON `Result` arm and the
 /// carrier-v1 `DispatchResult` arm: streaming map first, unary map as
 /// fallback, every miss surfaced (DEC-F004 — one settle path, not two).
-async fn settle_terminal_result(
+///
+/// Deliberately non-blocking: this runs on the session drain — the
+/// only reader of the device's whole `<self>.session` — so it must
+/// never wait on one call's consumer. A stalled streaming consumer
+/// costs that call alone (`ConsumerStalled`), not the session.
+fn settle_terminal_result(
     pending: &Option<Arc<PendingDispatchMap>>,
     pending_stream: &Option<Arc<PendingStreamDispatchMap>>,
     caller_ura: &str,
@@ -2452,9 +2448,20 @@ async fn settle_terminal_result(
 ) {
     let mut completed = false;
     if let Some(pending_stream) = pending_stream.as_ref() {
-        completed = pending_stream
-            .finish(call_id, dispatch_result.clone())
-            .await;
+        match pending_stream.try_finish(call_id, dispatch_result.clone()) {
+            crate::services::pending_dispatch::StreamDeliver::Delivered => completed = true,
+            crate::services::pending_dispatch::StreamDeliver::ConsumerStalled => {
+                crate::op_event!(
+                    component = session_accept,
+                    kind = terminal_result_consumer_stalled,
+                    caller = caller_ura,
+                    call_id = call_id,
+                    note = "terminal dropped; consumer stopped draining its chunks",
+                );
+                return;
+            }
+            crate::services::pending_dispatch::StreamDeliver::NoMatch => {}
+        }
     }
     if !completed {
         let Some(pending) = pending.as_ref() else {
@@ -2476,6 +2483,37 @@ async fn settle_terminal_result(
             call_id = call_id,
             note = "caller_may_have_cancelled",
         );
+    }
+}
+
+/// Surface a non-`Delivered` chunk delivery from the session drain.
+/// `ConsumerStalled` means the entry was evicted: that one call is
+/// cut so the drain (and every other invocation on the device's
+/// session) keeps flowing.
+fn report_chunk_delivery(
+    outcome: crate::services::pending_dispatch::StreamDeliver,
+    caller_ura: &str,
+    call_id: u64,
+) {
+    match outcome {
+        crate::services::pending_dispatch::StreamDeliver::Delivered => {}
+        crate::services::pending_dispatch::StreamDeliver::NoMatch => {
+            crate::op_event!(
+                component = session_accept,
+                kind = streaming_result_chunk_no_match,
+                caller = caller_ura,
+                call_id = call_id,
+            );
+        }
+        crate::services::pending_dispatch::StreamDeliver::ConsumerStalled => {
+            crate::op_event!(
+                component = session_accept,
+                kind = streaming_result_consumer_stalled,
+                caller = caller_ura,
+                call_id = call_id,
+                note = "pending entry evicted; stalled call cancelled to protect the session drain",
+            );
+        }
     }
 }
 
@@ -2609,18 +2647,13 @@ async fn drain_session_up_stream(
                 let call_id = result.call_id;
                 let mapped = pending_result_from_carrier_v1(&result);
                 if terminal {
-                    settle_terminal_result(&pending, &pending_stream, &caller_ura, call_id, mapped)
-                        .await;
+                    settle_terminal_result(&pending, &pending_stream, &caller_ura, call_id, mapped);
                 } else if let Some(pending_stream) = pending_stream.as_ref() {
-                    let completed = pending_stream.push_chunk(call_id, mapped.payload).await;
-                    if !completed {
-                        crate::op_event!(
-                            component = session_accept,
-                            kind = streaming_result_chunk_no_match,
-                            caller = caller_ura,
-                            call_id = call_id,
-                        );
-                    }
+                    report_chunk_delivery(
+                        pending_stream.try_push_chunk(call_id, mapped.payload),
+                        &caller_ura,
+                        call_id,
+                    );
                 }
                 continue;
             }
@@ -2732,8 +2765,7 @@ async fn drain_session_up_stream(
                         &caller_ura,
                         call_id,
                         dispatch_result,
-                    )
-                    .await;
+                    );
                 } else {
                     let Some(pending_stream) = pending_stream.as_ref() else {
                         crate::op_event!(
@@ -2744,15 +2776,11 @@ async fn drain_session_up_stream(
                         );
                         continue;
                     };
-                    let completed = pending_stream.push_chunk(call_id, payload).await;
-                    if !completed {
-                        crate::op_event!(
-                            component = session_accept,
-                            kind = streaming_result_chunk_no_match,
-                            caller = caller_ura,
-                            call_id = call_id,
-                        );
-                    }
+                    report_chunk_delivery(
+                        pending_stream.try_push_chunk(call_id, payload),
+                        &caller_ura,
+                        call_id,
+                    );
                 }
             }
             SessionDispatch::Dispatch { call_id, .. } => {

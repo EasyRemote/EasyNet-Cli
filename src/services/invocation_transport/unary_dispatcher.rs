@@ -1384,13 +1384,10 @@ impl UnaryDispatcher {
         match sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.directory.presence.remove_if_session(
-                    &selected_route.execution_host_ura,
-                    session_id,
-                    crate::services::presence_registry::OfflineReason::SendFailed,
-                );
-                return Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                // Full = device is slow, not dead: keep its session,
+                // fail only this call as retryable backpressure.
+                return Err(Status::resource_exhausted(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON,
                 ));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {

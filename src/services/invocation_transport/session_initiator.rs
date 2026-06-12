@@ -84,7 +84,6 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -587,7 +586,14 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
 #[derive(Clone, Debug)]
 pub struct SessionUpSender {
     tx: mpsc::Sender<InvokeBidiUp>,
-    next_sequence: Arc<AtomicU64>,
+    /// Sequence allocation and channel insertion must be one atomic
+    /// step: the hub validates a strictly monotonic up-sequence and
+    /// resets the whole session on violation, so two producers that
+    /// allocate N and N+1 but enqueue in the opposite order kill the
+    /// session. The mutex spans allocate+send — it is the session's
+    /// single-writer gate, and the serialization it imposes is
+    /// exactly the ordering the wire contract requires.
+    sequence_gate: Arc<tokio::sync::Mutex<u64>>,
     /// Negotiated dispatch contract for THIS session (DEC-F004):
     /// written once by the supervisor when the admission receipt's
     /// session_contract arrives; read by reply producers to pick the
@@ -602,7 +608,7 @@ impl SessionUpSender {
             tx,
             // Frame 0 is EnvelopeOpen. First post-frame-0 producer
             // therefore owns sequence = 1.
-            next_sequence: Arc::new(AtomicU64::new(1)),
+            sequence_gate: Arc::new(tokio::sync::Mutex::new(1)),
             negotiated_contract: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
@@ -621,8 +627,27 @@ impl SessionUpSender {
             >= 1
     }
 
-    fn allocate_sequence(&self) -> u64 {
-        self.next_sequence.fetch_add(1, Ordering::Relaxed)
+    /// Stamp the next sequence number and enqueue under the
+    /// single-writer gate, so channel order always equals sequence
+    /// order even with concurrent reply producers.
+    async fn send_sequenced(
+        &self,
+        payload: UpPayload,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+        let mut next = self.sequence_gate.lock().await;
+        let sequence = *next;
+        let sent = self
+            .tx
+            .send(InvokeBidiUp {
+                sequence,
+                payload: Some(payload),
+                ..InvokeBidiUp::default()
+            })
+            .await;
+        if sent.is_ok() {
+            *next += 1;
+        }
+        sent
     }
 
     /// Send a BinaryChunk on the live session, stamping the next
@@ -631,13 +656,7 @@ impl SessionUpSender {
         &self,
         chunk: BinaryChunk,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
-        self.tx
-            .send(InvokeBidiUp {
-                sequence: self.allocate_sequence(),
-                payload: Some(UpPayload::BinaryChunk(chunk)),
-                ..InvokeBidiUp::default()
-            })
-            .await
+        self.send_sequenced(UpPayload::BinaryChunk(chunk)).await
     }
 
     /// Send any up-direction payload on the live session, stamping
@@ -647,13 +666,7 @@ impl SessionUpSender {
         &self,
         payload: UpPayload,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
-        self.tx
-            .send(InvokeBidiUp {
-                sequence: self.allocate_sequence(),
-                payload: Some(payload),
-                ..InvokeBidiUp::default()
-            })
-            .await
+        self.send_sequenced(payload).await
     }
 
     /// Send a control frame on the live session, stamping the next
@@ -662,13 +675,7 @@ impl SessionUpSender {
         &self,
         control: BidiControl,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
-        self.tx
-            .send(InvokeBidiUp {
-                sequence: self.allocate_sequence(),
-                payload: Some(UpPayload::Control(control)),
-                ..InvokeBidiUp::default()
-            })
-            .await
+        self.send_sequenced(UpPayload::Control(control)).await
     }
 }
 

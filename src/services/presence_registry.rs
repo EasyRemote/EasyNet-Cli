@@ -427,6 +427,22 @@ impl PresenceRegistry {
             .map(|entry| (entry.session_id, entry.sender.clone()))
     }
 
+    /// O(1) liveness check. Hot paths (route resolution runs per
+    /// invocation) must use this, never `snapshot().contains(...)`
+    /// — `snapshot()` materializes and sorts the whole table.
+    #[must_use]
+    pub fn contains(&self, ura: &str) -> bool {
+        self.by_ura.contains_key(ura)
+    }
+
+    /// Cheap online-device count for stats fields (heartbeat runs
+    /// per device every 5s — counting via `snapshot()` there was
+    /// O(devices²·log) across the fleet).
+    #[must_use]
+    pub fn online_count(&self) -> usize {
+        self.by_ura.len()
+    }
+
     /// Take a deterministic snapshot of currently-online URAs. Used
     /// as the initial frame of a `federation.subscribe_directory`
     /// pump and as the recovery path for a subscriber that received
