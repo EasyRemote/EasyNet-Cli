@@ -39,8 +39,8 @@
 
 use std::path::PathBuf;
 
+use crate::core::domain::TenantId;
 use crate::persistence::config::state_dir;
-use crate::runtime::domain::TenantId;
 
 /// Well-known kinds of tenant-scoped storage. Every reader and
 /// writer routes through `path_for_tenant` with one of these; no

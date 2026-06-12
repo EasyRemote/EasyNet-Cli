@@ -153,7 +153,9 @@ pub fn clip_image_abs_path(id: &str) -> Option<PathBuf> {
     if id.contains('/') || id.contains('\\') || id.contains("..") {
         return None;
     }
-    let entry = list_clips(LIST_CLIPS_MAX).into_iter().find(|e| e.id == id)?;
+    let entry = list_clips(LIST_CLIPS_MAX)
+        .into_iter()
+        .find(|e| e.id == id)?;
     let file = entry.image_file?;
     if file.contains('/') || file.contains('\\') || file.contains("..") {
         return None;
@@ -331,7 +333,11 @@ pub fn list_favorites() -> Vec<Favorite> {
 fn save_favorites(favorites: Vec<Favorite>) -> anyhow::Result<()> {
     fs::create_dir_all(context_dir())?;
     let json = serde_json::to_string_pretty(&FavoritesFile { favorites })?;
-    atomic_write_with_permissions(&favorites_path(), json.as_bytes(), WritePermissions::Default)?;
+    atomic_write_with_permissions(
+        &favorites_path(),
+        json.as_bytes(),
+        WritePermissions::Default,
+    )?;
     Ok(())
 }
 
@@ -518,8 +524,7 @@ pub fn capture_abs_path(id: &str) -> Option<(PathBuf, CaptureEntry)> {
     let entry = list_captures(None, LIST_CAPTURES_MAX)
         .into_iter()
         .find(|e| e.id == id)?;
-    if !safe_path_segment(&entry.ability) || entry.file.contains('/') || entry.file.contains("..")
-    {
+    if !safe_path_segment(&entry.ability) || entry.file.contains('/') || entry.file.contains("..") {
         return None;
     }
     let p = captures_dir().join(&entry.ability).join(&entry.file);
@@ -643,7 +648,18 @@ mod tests {
         assert!(capture_abs_path("../evil").is_none());
 
         // unsafe ability folder refused
-        assert!(record_capture("d", "../escape", "jpg", b"x", "image/jpeg", None, None, None, "p".into()).is_err());
+        assert!(record_capture(
+            "d",
+            "../escape",
+            "jpg",
+            b"x",
+            "image/jpeg",
+            None,
+            None,
+            None,
+            "p".into()
+        )
+        .is_err());
     }
 
     #[test]
