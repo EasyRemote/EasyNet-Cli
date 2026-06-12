@@ -79,7 +79,7 @@ Skill 支撑 Ability 实现(资源面,不可寻址)。  EasyNet backend/browser 
 | F-039 retired 顶层别名删除 | a1a4aea + f1c1f29 |
 | F-049 **主修**:会话级 federation.heartbeat | **fc8df1b**(5s 心跳循环,AbortOnDrop,21/21 定向测试;残留 3 项见 T1.5) |
 | F-050 **主修**:builtin 索引 + default_state 缓存 | c03df45(3.41s → 0.15s);backend fan-out 半边 **0716861**(并发 + 短 TTL 缓存);残留见 T5.12 |
-| F-005 部分:clippy 20 → **8**(实跑核验:6 result_large_err + 2 too_many_args) | `#![deny]` 棘轮锁 5 类(lib.rs:49);clippy-ratchet.yml 咬合 CI |
+| F-005 部分:clippy 20 → **0(lib check/clippy + touched test-target compile)**(最新实跑:result_large_err crate-wide deny 已咬合;`clippy::too_many_arguments` 源码零命中;6 个既有 dead-code/unused 与旧 test import warning 已清) | `#![deny]` 棘轮锁 6 类(lib.rs:49,含 result_large_err;tonic Status transport 边界局部例外);clippy-ratchet.yml 咬合 CI |
 | T2.0 载体归一 caller 盘点 | 第 10-11 轮;载体债收窄到 SessionDispatch 帧唯一面 |
 | T0.5d RFC-005 §3.1.2 入库 | Axon **52bb764a**(DEC-F048 C 案 normative 文本) |
 | T5.7 F-030 recover 全覆盖 | **4960a99**(8 站点按形状分置 GoSafe / 每 tick RunSafe / fanout 捕获重抛 + 注入测试;%w 复核 0 残留——50/99 系审计期分母误计) |
@@ -131,19 +131,19 @@ status/boot/lifecycle/diagnostics」。T2.0 盘点已确认范围收窄到此唯
 
 ### A5. 巨石与 god-file(F-001 / F-002 / F-006 / F-010 / F-021 / F-027 / F-033)
 **本质**:单 crate 三 crate-type(链接 4–8GB,历史 OOM SIGKILL,共享 checkout 双引擎
-互锁);daemon_invocation_service.rs 13,142 / interpreter.rs 3,976 / agent.rs 3,556 /
-agents/mod.rs 2,918(session_initiator 3,238 / boot 2,958,2026-06-12 刷新)。文件即
-模块边界:13k 行 = 评审不可能完整 + 永久冲突源 + 全量重链。F-006(OnceLock 单例)
-评估为中型,归并 transport 拆分批(注:F-049 心跳修复新增一个 `global()` 消费点
-session_initiator::send_federation_heartbeat,注入化时一并收,共 6 点)。
+互锁);daemon_invocation_service 实现面 908 + 测试面已拆分(最大 1,460) / interpreter.rs 3,976 / agent.rs 3,556 /
+agents/mod.rs 2,918(session_initiator 3,719 / local_session_dispatcher 3,136 / boot 2,985,2026-06-12 刷新)。文件即
+模块边界:历史 13k 行已由 F-001 拆分切掉最大冲突面;剩余大面转向 workspace 依赖图与少数千行观察名单。F-006(OnceLock 单例)
+已在当前 WIP 注入化收口:HubPublishedAbilityStore 由 daemon boot 显式创建,同一 Arc 传给
+registry/meta.list_abilities 与 session join/heartbeat;生产 `global()` 零调用。
 **终态**:workspace 化 + 五处 god-file 拆分。→ T4.1–T4.6
 
 ### A6. mission 运行态与上下文传播(F-022 / F-028)
-**本质**:状态 = String 五字面量,"running" = pid 文件存在性(磁盘即状态机,异常退出
-= 永久假 running);上下文经 `EASYNET_MISSION_ID` env var + thread-local(5 文件),
-async/rayon 混编脆弱。已评估非小修(serde wire 兼容 + liveness + 跨仓消费面)。
-**终态**(plan §2.6):`enum MissionRunStatus { Running{heartbeat}, … }` 单点序列化;
-显式传参/task_local。**守护性约束**:不引入步级重试/断点续跑(§0.1-5)。→ T5.3 / T5.4
+**本质**:历史实现把状态写成 String 五字面量,又用 pid 文件存在性推导 running(磁盘即状态机,异常退出
+= 永久假 running);上下文同时依赖 `EASYNET_MISSION_ID` process env 与 thread-local,async/rayon 混编下脆弱。
+**当前 WIP 收口(2026-06-12)**:F-022 已升 `MissionRunStatus` enum + heartbeat liveness;F-028 已把进程内 mission
+归属收敛到 typed `DispatchContext`,rayon worker 显式 handoff,`EASYNET_MISSION_ID`/`EASYNET_AGENT_DEPTH` 仅保留子进程
+spawn/env 入口边界。**守护性约束**:不引入步级重试/断点续跑(§0.1-5)。→ T5.3 / T5.4
 
 ### A7. 跨仓一致性基础设施失修(F-036 / F-037 / F-038)
 **本质**:契约执行回路断了——conformance baseline 落后 29 条(888 vs 917,实跑复核
@@ -223,7 +223,7 @@ DEC-F046 拍板签名路线。→ T0.5a–c / T0.6 / T2.3 / T5.11 / T5.1(F-045 �
 |---|---|---|---|---|
 | T2.1-pre | **dispatch 帧 mini-RFC**(设计件,T2.1 施工硬前置):① proto schema——SessionDispatch::{Request,Result} 字段 ↔ canonical Invocation 七元组逐字段映射,origin-caller claim 与 receipt 回程归位;② 版本协商——契约版本号载于 frame0 admission receipt,**与 T1.1 同一设计(frame0 只动一次)**;③ JSON 残留面清单(status/boot/lifecycle/diagnostics 哪些帧留下);④ 滚动升级序(双读单写一版,新旧 hub×device 四象限行为表) | Axon+Cli | M → T2.0✅ | mini-RFC 经 CTO 评审;字段映射表零「待定」格;四象限表完整 |
 | T2.1 | **F-004 载体归一**:按 T2.1-pre 设计施工(proto 定义落 Axon,Cli 消费——boundary Rule 1);JSON 降级诊断面。性能基准(T0.4)做对照而非 gate——边界违例本身已构成改造理由 | Cli(+Axon proto) | L → T2.1-pre, T0.4 | 基准对比落档;新旧帧互通一个版本;352+ transport 测试迁移;Fed-MVP 基线随新帧重生(T0.3 终态);「单一形状源」= F-038 类漂移结构性不可能 |
-| T2.1b | **F-040 收口(🟢 execution-ready)**:backend 改为向 daemon Invocation 面提交完整七元组;退役 `<self>.invoke_remote` 包装与手抄 struct。**施工准备件已落**(docs/t2.1b-backend-cutover-prep-2026-06-12.md,2026-06-12):消费面 9+6 文件盘点齐——真切口仅 daemon_grpc 一层(handler 经 routing client 隔离零感知);降级层 remote_routing 路由矩阵随 callee 本地性解析归 daemon 而退役;五步序列单批可完。**搭车 F-044 勘正**:陈旧 cliipc 注释实为 **3 处**(client.go:12 / servicecontext.go:179 / mapping.go:348 新发现) | EasyNet BE | M → T2.1 | invoke_remote.go(546)删除;contract test 改打 Invocation 面;grep cliipc 零命中(3 处) |
+| T2.1b | **F-040 收口(🟢 execution-ready;Cli unary 臂已落)**:backend 改为向 daemon Invocation 面提交完整七元组;退役 `<self>.invoke_remote` 包装与手抄 struct。**施工准备件已落**(docs/t2.1b-backend-cutover-prep-2026-06-12.md,2026-06-12):消费面 9+6 文件盘点齐——真切口仅 daemon_grpc 一层(handler 经 routing client 隔离零感知);降级层 remote_routing 路由矩阵随 callee 本地性解析归 daemon 而退役;五步序列单批可完。**当前 Cli WIP 已补齐 step-4 unary 远端臂**:resolver-selected remote host 进入 `dispatch_remote_rpc_selected_route`;v1 走 canonical carrier, v0 只保留一版 JSON fallback 且不伪造 origin-caller claim;forward_invoke 与 canonical Invoke 共享 `dispatch_frame_to_presence` 单-settle 核心。**剩余真工作在 BE cutover**:daemon_grpc 改投 Invocation 七元组、删除 invoke_remote.go 与 remote_routing 降级矩阵、contract test 改面。**搭车 F-044 勘正**:陈旧 cliipc 注释实为 **3 处**(client.go:12 / servicecontext.go:179 / mapping.go:348 新发现) | EasyNet BE(+Cli) | M → T2.1 | invoke_remote.go(546)删除;contract test 改打 Invocation 面;grep cliipc 零命中(3 处);Cli `invocation_transport` 回归绿 |
 | T2.2a | **✅ 已完成(2026-06-12;「验收收尾」改判被兑现)**:urns.go 实已 SDK 门面(48 委托/0 拼接);9/9 SDK-covered 验收抽查通过(盘点 §三·六,Cli 7665536),密码学旗标双双排除。**F-041 搭车落地(EasyNet b8b2114)**:backend+Frontend 双阀,三态验证,入 conformance CI | EasyNet BE+FE | 完成 | ✓ 阀注入即红验证过 |
 | T2.2b | **✅ 已完成(2026-06-12)**:admission fork 验明薄委托;**F-017 收口(EasyNet 8bc917d)**:SubjectGate 注入对象替双全局+init() 暗读——boot 显式读 env、SetEnforcement 运行时翻转、sink 构造期入结构化日志;5 生产点+streambridge 必填字段+urautil 显式收参;测试自建 gate 零复位+翻转钉死;32/32 | EasyNet BE | 完成 | ✓ 运行时可重配 ✓ 测试无复位 |
 | T2.2c | **🟡 F-015 C 批,2/3 收口(2026-06-12)**:① descriptor 读面上移——SDK 读写同档互逆(Axon b58d124c + EasyNet 2edbc56,−71 行 wire 知识);② OriginCaller 钉 SDK 类型——NewOriginCallerClaim 单一编码+校验边界(Axon fe6060e7),backend 三表示收一、legacy metadata 双写退役(EasyNet 7a0feed,−80 行;Cli origin_caller.rs from_metadata 回退面成死代码,transport 释放后删)。**余**:answer codec 批(盘点 §三-2 重定义待 CTO 签;Rust 产者半边待 pbjson 基建批) | EasyNet BE | M → 盘点签字 | descriptor 读写同源 ✓;claim 单编码边界 ✓;余项随 §三-2 裁决 |
@@ -241,10 +241,10 @@ DEC-F046 拍板签名路线。→ T0.5a–c / T0.6 / T2.3 / T5.11 / T5.1(F-045 �
 | # | 内容 | 仓 | 规模 | 验收 |
 |---|---|---|---|---|
 | T4.1 | **F-010 workspace 化**:persistence 先切验证收益,再 transport/runtime/facade。**前置设计件(M)**:crate 依赖图先画后切——op_event! 宏、config 类型、error 类型等横切面的归属 crate 先定,否则切到一半发现环依赖回退重来 | Cli | L(+M 设计) | 依赖图经评审无环;增量链接时间/内存数字落档;CI 双特性矩阵不变 |
-| T4.2 | **F-001 拆分**:daemon_invocation_service.rs(13,142)按 unary/stream/bidi 三 RPC 面 + 路由 + accept/drain 拆 4–6 模块;6,000 行同文件测试随实现走 | Cli | L | 每文件 ≤~2,000 行;测试零语义变化;move-only 提交与逻辑提交分离(git blame 可追) |
-| T4.3 | **F-002 + F-006 同批**:boot/dial/supervisor/warmup 分模块;spawn_session_supervisor 8 参收拢配置结构体;HubPublishedAbilityStore 注入化——store 随 boot 构造存入 service(照 AdvertisedAgentStore),**6 个** global() 消费点改签名(advertise.rs:503、meta_ability.rs:371/:769、session_initiator.rs:1485 + fc8df1b 心跳点);local_session_dispatcher try_dispatch_via_axon 借用 vs owned 边界一并定(7 参全借用 + tokio::spawn 跨 async,见清单 F-005 评估) | Cli | L → T4.2 | too_many_arguments 清零;global() 生产路径零调用(deprecated → 删除) |
-| T4.4 | **F-021 拆分**:interpreter.rs(3,976)→ 调度/派发/重试/trace/receipt 5–7 模块。**守护性约束**:拆分不改执行语义——mission 仍是脚本,无步级重试(§0.1-5) | Cli | M | 91 EAL 测试零回归 |
-| T4.5 | **🟡 mod.rs 半边 ✅(524818d,2026-06-12)**:2,918 → mod.rs 260(装配+再导出,公开路径不变)+ pages_identity/registry_builder(~990)/catalog_metadata(~900)/assembly_tests(~750,22/22 绿);move-only,仅拆分强制的 import/pub(super) 调整,双特性 check 干净。**real_invoke 半边按证据重判待裁决**:该文件 124 处 crate 内部引用且已在 #[cfg(test)] 后(零 lib 重量)——"出 src/ 进 tests/"会强迫 pub-for-tests 可见性泄漏,原验收"文件不存在"系盘点期误判动机(以为它进 lib 产物)。建议改判:留 src/ 现状即正确,或仅删验收第二条。**CTO 拍板** | Cli | mod.rs 半边完成 | mod.rs 260<500 ✓;real_invoke 待重裁 |
+| T4.2 | **✅ F-001 拆分已落(当前 WIP,2026-06-12)**:`daemon_invocation_service.rs` 实现面已缩到 908 行,原盘点的 13,142 行失效;`daemon_invocation_service_tests.rs` 6,202 行测试巨石已拆为父 fixture 模块 445 行 + `daemon_invocation_service_tests/` 六个子模块:`unary.rs` 1,460、`forward.rs` 1,202、`session_request.rs` 1,166、`bidi.rs` 888、`local_rpc.rs` 572、`stream.rs` 490。共享 response/assert/forward payload/recording federation client fixture 留父模块;子模块通过 `#[path]` sibling modules 接入,保持 `#[cfg(test)]` 私有访问,未把测试 seam 做成生产 public API。 | Cli | 完成待提交 | 每文件 ≤~2,000 行 ✓;测试零语义变化 ✓;生产实现不为测试可见性扩口 ✓ |
+| T4.3 | **F-002 + F-006 同批**:boot/dial/supervisor/warmup 分模块;**参数对象化收口 ✅(当前 WIP,2026-06-12)**:spawn_session_supervisor 8 参已收拢为 owned `SessionSupervisorConfig`;local_session_dispatcher try_dispatch_via_axon 7 参已收拢为借用 `AxonSessionDispatchRequest<'_>`;public `dial_and_run_session` 的 prelude 依赖收敛为 `SessionPreludeInputs`;one-shot/idle-timeout dial 为私有 `SessionDialAttempt<'_, D>`,supervisor task 为 owned `SessionSupervisorRunConfig<D>`;补齐 `BidiDispatcherDeps` 与 `InvokeRemoteDispatchFrameRequest<'_>`,`services::invocation_transport` 内 `too_many_arguments` 豁免归零并由 clippy 实跑守住。**物理拆分推进 ✅(当前 WIP,2026-06-12)**:`session_initiator.rs` 中 session 状态机/close 分类/backoff 策略拆为 `session_initiator/supervisor.rs`(286 行),frame0 EnvelopeOpen/canonical signing 拆为 `session_initiator/envelope.rs`(113 行,复用 transport 顶层 `DEFAULT_URA_PROFILE`),credential REST warmup 拆为 `session_initiator/warmup.rs`(129 行),up keepalive + federation directory heartbeat 拆为 `session_initiator/heartbeat.rs`(150 行),membership/owner-projection/user-trust/hosted-agent advertise prelude 拆为 `session_initiator/prelude.rs`(812 行),live bidi open/down-frame loop/outbox guard 拆为 `session_initiator/frame_loop.rs`(191 行),Endpoint/TLS/channel/client 构造拆为 `session_initiator/transport.rs`(71 行),后台任务 abort guard 拆为 `session_initiator/tasks.rs`(9 行),主文件 3720→1933 行;`boot.rs` identity/trust/path helper 拆为 `boot/identity.rs`(339 行)、`boot/trust.rs`(253 行)、`boot/paths.rs`(15 行),UDS/named-pipe/TCP+TLS listener 拆为 `boot/listeners.rs`(346 行),demo/device self presence seed 拆为 `boot/presence_seed.rs`(129 行),主文件 2985→1959 行;`SessionCloseStats`、frame0 builder、`boot::trust_anchor_path_from_env_or_default` 旧 crate 路径继续 re-export,公开 API 不变。**F-006 ✅(当前 WIP,2026-06-12)**:HubPublishedAbilityStore singleton 删除;daemon boot 创建同一 Arc,registry/meta.list_abilities 与 session join/heartbeat 显式注入共享;测试各自 new store,不再污染进程状态;源码 `global()` 零命中。 | Cli | 完成待提交 | session 与 boot 主文件均 <2k;transport 参数面已清;历史宽参豁免归零;listener/presence seed 边界已清 |
+| T4.4 | **✅ F-021 拆分已落(当前 WIP,2026-06-12)**:interpreter.rs(3,976)→ `eal/interpreter/` 六文件:mod(编排+公开 API)/dispatch/phases/retry/trace/tests。**守护性约束已保持**:拆分不改执行语义——mission 仍是脚本,无步级重试(§0.1-5);只做边界、可见性、导入修复。**验证**:`cargo test -q eal::interpreter:: --lib` 当前 38/38 绿 | Cli | 完成待提交 | interpreter.rs 根文件删除;新目录六文件;EAL 聚焦测试绿;diff review 确认无执行语义改写 |
+| T4.5 | **✅ mod.rs 半边(524818d,2026-06-12)**:2,918 → mod.rs 260(装配+再导出,公开路径不变)+ pages_identity/registry_builder(~990)/catalog_metadata(~900)/assembly_tests(~750,22/22 绿);move-only,仅拆分强制的 import/pub(super) 调整,双特性 check 干净。**assembly smoke 边界 ✅(当前 WIP,2026-06-12)**:broad RPC smoke 改为 `discovery_hints_for(...).read_only` + fast/env-independent allow-list 双门,显式跳过 effectful/expensive 能力并钉住 `process.exec` 不进入 smoke,避免测试以“全量调 handler”名义触发副作用或长耗时面。**registry_builder 参数面 ✅(当前 WIP,2026-06-12)**:`RegistryBuildServices` / `RegistryBuildConfig<'_>` / `RegistryDaemonBuildConfig` 承载服务依赖、agent/loaders/pages/runtime/hot registrar/store 注入,`registry_builder.rs` 内 `too_many_arguments` 豁免归零;daemon boot 与测试装配均走对象入口。**real_invoke 边界重判 ✅(当前 WIP,2026-06-12)**:`real_invoke_tests.rs` 保持 `src/runtime/agents` 下是正确实现:它只由 `mod.rs` 的 `#[cfg(test)]` 引入,release/lib 产物零重量;测试需要访问 `runtime::agents` 私有 registry builders/descriptors/fixture seams,移入 `tests/` 会强迫 pub-for-tests 可见性泄漏;已在文件头补 placement note 固化该边界。 | Cli | 完成待提交 | mod.rs 260<500 ✓;assembly smoke 低成本 read-only 聚焦绿;registry_builder 参数面清;real_invoke test-only 私有边界钉住 |
 | T4.6 | **✅ 已完成(Cli e57990f + a22042f,2026-06-12)** F-033:agent.rs(3,556)→ agent/ 八文件(mod=参数+派发 474、lifecycle 610、send 613、mcp 541、inspect 179、publish 160、history 141、tests 1088);move-only,仅拆分强制的 import/pub(super)/两处搁浅节文档迁移;agent 套件 64/64 双跑绿(format 前后);验证经独立 CARGO_TARGET_DIR 绕开共享构建锁(对方 5 个套件排队)。千行级观察名单(federation_wire/start/join/auth/agent_new_ability)维持不强拆 | Cli | 完成 | ✓ 64/64 ×2 |
 | T4.7 | **✅ 已完成(EasyNet 2d78e71 + f0c3300 + 605e14b + f72ea1a + 4a48df6,2026-06-12)** F-043 阀:本地 flat-config 插件规则(显式 AST visitor 非 esquery 串),7 处换 URAChip + 2 处理由豁免,阀双向验证。F-018 拆分四刀(move-only):Cut1 history.tsx(388)+panel.ts(27);Cut2 output.tsx(447,输出/回执面);Cut3 api.tsx(530,API 工作区+OpenAITestResult 探针类型);Cut4 workspaces.tsx(622,context-rail 模型+卫星簇——**闭簇裁定**:info→overview/contract、demo→input/guide 为簇内边,拆两文件会强迫私有接线跨文件导出,故一文件 5 出口、面板内件全 file-private)。Dialog 3,114→1,119(shell+detail+workbench 编排);每刀 tsc 收敛+52/52+eslint 0 错,pathspec 提交 | EasyNet FE | 完成 | ✓ 1,119<1,500;52/52 ×4 |
 
@@ -252,10 +252,10 @@ DEC-F046 拍板签名路线。→ T0.5a–c / T0.6 / T2.3 / T5.11 / T5.1(F-045 �
 
 | # | 内容 | 仓 | 规模 | 验收 |
 |---|---|---|---|---|
-| T5.1 | **🟡 F-045 ✅(4930a67 + 夹具 ff8b009) + F-005 本仓半边 ✅(58d08ed,2026-06-12)**:result_large_err 在 Cli lib 归零——dispatch_shim 三签名 + json_value_to_payload/payload_to_json_value(审计后新增)Box 化,消费者仅错误路径拆箱(*err / map_err(\|e\| *e));decode_pubkey 例外走 justified #[allow](SDK trait KeyResolver::resolve 钉死错误类型,Box 即拆是凑数——该处归 SDK AxonError 瘦身)。注:bidi *err 与 daemon/invocation session_ext 两 hunk 被并行会话 520f1a3 吸收入库(共享索引,内容无损,归属混入)。**SDK 半边 ✅(Axon 3a4d4cdf,2026-06-12)**:AxonError 144→112 字节——诊断尾字段(context/cause_chain,两仓零按值消费点)Box 化,auto-deref 全访问点零改动、serde wire 透明;Axon 36 处 result_large_err 归零于源头;尺寸 pin 测试(<128,「新字段装箱而非提阈值」)+ wire 透明回环双钉。**仍开放**:2× too_many_args(随 T4.3);**静窗随手账**:decode_pubkey 的 justified #[allow] 已失效可删(类型已入预算)+ lib.rs 棘轮 result_large_err warn→deny(需热树释放后实跑确认) | Cli+Axon | 双半边完成 | result_large_err 两仓 0 ✓;too_many_args 随 T4.3 |
-| T5.2 | **✅ 已完成(F-023 f0ce6f0 + F-034 8504e1a + 夹具修 ff8b009,2026-06-12;全量 axon-pb 3189/3189)** F-023:判别升到铸造点——LocalInvokeFailure{DaemonOffline,AbilityUnregistered}(thiserror,anyhow 链 downcast);classify_invoke_error 落 local_invoke 边界,旧子串表只在此作过渡回退(daemon 状态码无类型面=RFC 缺口),"全 crate 唯一许可嗅探点";四处生产消费改 match。**判别落 local_invoke 而非 EalError 加变体**:EAL 非唯一消费者,边界判别一次服务全部。验收 grep:生产面零命中,仅剩 mcp.rs:1137 文案钉死测试(消息契约非控制流)。F-034::572/:1322 已被先前重构消解;:112 改 UnknownReflectionMode 数据承载错误。F-045 测试夹具随 ff8b009 升 canonical URA(parse-only 旧夹具过不了 builder checked_ura) | Cli | 完成 | ✓ 3189/3189 |
-| T5.3 | **F-022**:`enum MissionRunStatus{Running{heartbeat},Ok,Partial,Error,Cancelled}` 单点序列化;liveness = 心跳时间戳,pid 文件废除(serde wire 兼容迁移:旧 run.json 字符串可读)。**前置(S)**:run.json 消费面盘点——跨仓 grep(backend/前端/脚本是否直读 run.json 或 status 字符串),消费点清单落档后才许改 wire | Cli | M | 消费面清单无遗漏;旧 run.json 可读;假 running 场景测试(进程亡 → 状态可判定) |
-| T5.4 | **F-028**:mission 上下文显式传参 / tokio task_local;`EASYNET_MISSION_ID` env var 仅保留子进程边界并文档化(5 文件:dispatch.rs/context.rs/agent.rs/mission_runs.rs/real-user-smoke.rs) | Cli | M,与 T5.3 同期 | 并发 mission 测试互不污染 |
+| T5.1 | **✅ F-045 + F-005 clippy 静窗已闭(当前 WIP,2026-06-12)**:F-045 已由 4930a67 + 夹具 ff8b009 闭合。F-005 本仓半边先由 58d08ed 清 AxonError large_err;本轮补齐静窗账:删除 `decode_pubkey` 失效 justified `#[allow]`;`src/lib.rs` 将 `clippy::result_large_err` 纳入 crate-wide deny;`services::invocation_transport` 仅保留 tonic `Status` trait-boundary 局部例外并写明边界;`DispatchStreamEvent::Terminal(Box<DispatchResult>)` 消除新暴露的 `large_enum_variant`;spawn_session_supervisor / public+private session dial / run_session_supervisor / try_dispatch_via_axon / BidiDispatcher / invoke_remote frame builder / registry_builder 构建链 / `AgentDispatchRequest<'_>` / `CuratorTurnRequest<'_>` / `CaptureRecord<'_>` / EAL `PhaseRunState<'_>` 参数对象化后目标面 `too_many_arguments` 归零,源码 grep 零命中;本轮再删重复 `daemon_row_agent_type`,测试专用 MissionRun/SessionPhase helper 收 `#[cfg(test)]`,移除未构造 `LocalInvokeFailure::AbilityUnregistered` payload 与未用 ShutdownSignal 轮询/timeout API,清掉 agent/daemon/invoke_remote 测试旧 import 噪声,`cargo check/clippy --lib --features axon-pb` 与触达 test-target 编译均无 warning。**SDK 半边 ✅(Axon 3a4d4cdf,2026-06-12)**:AxonError 144→112 字节,Axon 36 处 result_large_err 源头归零 | Cli+Axon | clippy 静窗完成;lib 静态输出清洁;触达测试编译输出清洁 | `cargo clippy --lib --features axon-pb` 0 warning;result_large_err/large_enum_variant/too_many_arguments 0 |
+| T5.2 | **✅ 已完成(F-023 f0ce6f0 + F-034 8504e1a + 夹具修 ff8b009,2026-06-12;当前 WIP 清理未构造 payload,2026-06-12)** F-023:判别升到铸造点——LocalInvokeFailure 仅保留结构可铸造的 `DaemonOffline`;`LocalInvokeErrorKind::AbilityUnregistered` 仍由唯一分类点 `classify_invoke_error` 根据 daemon not_found/unknown_ability 状态文本产生(daemon 状态码无类型面=RFC 缺口),消费者继续 match kind 而不嗅探消息。**判别落 local_invoke 而非 EalError 加变体**:EAL 非唯一消费者,边界判别一次服务全部。验收 grep:生产面零命中,仅剩 mcp.rs:1137 文案钉死测试(消息契约非控制流)。F-034::572/:1322 已被先前重构消解;:112 改 UnknownReflectionMode 数据承载错误。F-045 测试夹具随 ff8b009 升 canonical URA(parse-only 旧夹具过不了 builder checked_ura) | Cli | 完成 | ✓ targeted local_invoke + EAL fallback 语义保持 |
+| T5.3 | **✅ F-022 已完成(当前 WIP,2026-06-12)**:消费面盘点落 `docs/mission-run-status-consumer-inventory.md` 并复核跨仓无直接 `meta.json` status 消费;`MissionRunStatus` enum 成为 `MissionRunMeta.status` 单一类型,`#[serde(rename_all = "lowercase")]` 保持历史 `ok/error/partial/running/cancelled` 字面量可读,未知状态解析期拒绝;pid 活性模型删除,`MissionRunDir` 拥有 heartbeat pump,`running` 投影由 heartbeat mtime freshness 判定,`Running + stale heartbeat` 显式为 interrupted 且可被 `cancel_run` 结算为 Cancelled。 | Cli | 完成待提交 | 消费面清单无遗漏 ✓;旧 `meta.json` status 可读 ✓;假 running 场景测试覆盖 ✓ |
+| T5.4 | **✅ F-028 已完成(当前 WIP,2026-06-12)**:mission 上下文显式传参闭环;`MissionContextGuard` 只安装 typed `DispatchContext`,不再写 parent process env;EAL/rayon worker 显式携带 context;`runtime::context::{serialize_to_env,from_env}` 成为唯一子进程边界;`agent send` 注释、`ARCHITECTURE_STATE` 与 `real-user-smoke` 均改成 typed context 语义,真实 smoke 的 blocking worker 内显式 `enter`。 | Cli | 完成待提交 | mission context guard 不触碰 env ✓;parent invocation 保留 ✓;伪造 env 无 run-dir 被拒绝 ✓;real-user-smoke bin 编译 ✓ |
 | T5.5 | **✅ 已完成(Axon 28245ab4,2026-06-12)** F-012:InvocationReceipt.state 升 9 态 enum,new_receipt 收 enum(生产者本就持 enum,删一次转换);typed→wire 转换收敛到恰两个边界点(canonical_serialise + signing_body)以 as_str() 字节同形——**既有签名/链校验测试零改动全过(439→440)即 canonical 不变性实证**;TryFrom<&str> 落解析期拒绝(as_str 精确逆,大小写严格,bogus 拒绝,往返测试与 i32 pin 并排) | Axon | 完成 | ✓ 440/440;编译期+解析期双拒绝 |
 | T5.6 | **✅ 已完成(EasyNet e6e7a56,2026-06-12)** F-029:8 处(实查另有 list_models.go 第 4 调用点 + firstValidatedDevice 跨包逐字重复)全部下沉 logic 层(pairing_queries/username_lookup/resolve_bearer 三新文件);check-handler-layer.sh 阀入 conformance workflow。build 清洁,16 测试包 ok | EasyNet BE | 完成 | 阀绿 ✓ |
 | T5.7 | **✅ 已完成(EasyNet 4960a99,2026-06-12)** F-030:8 站点按形状分置——fire-and-forget×3 GoSafe;清扫循环×3 外层 GoSafe+每 tick RunSafe(单 panic 不杀循环);ws bidi 泵 GoSafe;fanout.Map 捕获 worker panic(值+栈)Wait 后调用方重抛(经 recover 中间件变 500)+ 注入测试钉住。%w 半边复核:宽模式 grep 0 残留(50/99 系审计期把无底层 err 的新建错误计入分母),无需施工 | EasyNet BE | 完成 | build/vet/触达包测试绿 ✓ |
@@ -307,7 +307,7 @@ T0.5b 注册闸 ───► T0.5c F-047 八点(闸先立,面后修)
 T0.6 DEC-F046(含预言机三问)──► T2.3 签名服务面
 T1.1 状态机 ────► T1.2 指纹(claimant_conflict 需要状态机的家)
 T4.1 依赖图设计 ─► T4.1 切分;T4.2 F-001 拆 ──► T4.3 F-002/F-006
-T5.3 消费面盘点 ─► T5.3 改 wire
+T5.3 消费面盘点 ✅ ─► T5.3 改 wire ✅
 T0.1–T0.3 / T0.7 / T1.3 / T1.4 / T1.5①② / T5.6–T5.9 / T5.11① 互不依赖,立即可做
 ```
 
@@ -318,20 +318,20 @@ T0.1–T0.3 / T0.7 / T1.3 / T1.4 / T1.5①② / T5.6–T5.9 / T5.11① 互不依
 - **设计件线**(可与工程线并行):T2.1-pre 帧 mini-RFC + T2.2 SDK parity 盘点 + T4.1 crate 依赖图
 - **前端线**:T1.3 + T4.7(含 F-043)
 
-**设计件清单**(决策完备、设计待产的四件,产出物都是文档,先评审后施工):
+**设计件清单**(决策完备、设计待产的三件,产出物都是文档,先评审后施工):
 T2.1-pre(帧 mini-RFC)· T2.2 parity 盘点(逐函数映射表)· T4.1 crate 依赖图 ·
-T5.3 run.json 消费面清单。其余 TODO 按行内描述即可直接施工。
+其余 TODO 按行内描述即可直接施工。T5.3 run/meta.json 消费面清单已落并闭合。
 
 ## §6 条目 → TODO 完整映射(防丢核对表;44 活跃条,每条恰有一个主归宿)
 
 | 条目 | 主归宿 | 搭车/备注 |
 |---|---|---|
-| F-001 | T4.2 | |
-| F-002 | T4.3 | |
+| F-001 ✅ | T4.2 当前 WIP | `daemon_invocation_service.rs` 908 行;测试巨石拆为父 fixture 445 + 六个子模块,最大 1,460 行 |
+| F-002 | T4.3 | session supervisor/warmup/heartbeat/prelude/frame-loop/transport/envelope 已拆且主文件 1933;boot identity/trust/path/listeners/presence_seed 已拆且主文件 1959 |
 | F-003 ✅ | 基线 | 文实同提交范本 |
 | F-004 | T2.1 | A2 核心 |
-| F-005 | T5.1 | 2× too_many_args 随 T4.3 |
-| F-006 | T4.3 | global() 6 消费点(含 fc8df1b 新增心跳点) |
+| F-005 | T5.1 ✅ | clippy 静窗闭合;lib check/clippy 0 warning;触达测试编译输出清洁 |
+| F-006 ✅ | T4.3 当前 WIP | HubPublishedAbilityStore 注入化;源码 global() 零命中 |
 | F-007 ✅ | 基线 | |
 | F-008 | T1.1 | |
 | F-009 | T1.2 | |
@@ -343,12 +343,12 @@ T5.3 run.json 消费面清单。其余 TODO 按行内描述即可直接施工。
 | F-017 | T2.2b | |
 | F-018 | T4.7 | |
 | F-020 | T5.8 | |
-| F-021 | T4.4 | |
-| F-022 | T5.3 | |
+| F-021 | T4.4 ✅(当前 WIP) | interpreter 单体拆成六文件;待提交 |
+| F-022 ✅ | T5.3 当前 WIP | MissionRunStatus enum + heartbeat liveness;pid 文件活性模型删除 |
 | F-023 | T5.2 | |
 | F-024 | T1.4 | |
 | F-027 | T4.5 | |
-| F-028 | T5.4 | |
+| F-028 ✅ | T5.4 当前 WIP | mission in-process context 只走 typed `DispatchContext`;env 仅子进程边界 |
 | F-029 | T5.6 | |
 | F-030 ✅ | T5.7(4960a99) | %w 半边复核 0 残留 |
 | F-031 | T1.3 | |
@@ -359,7 +359,7 @@ T5.3 run.json 消费面清单。其余 TODO 按行内描述即可直接施工。
 | F-037 | T0.2 | |
 | F-038 | T0.3 | 终态由 T2.1 结构性消灭 |
 | F-039 ✅ | 基线 | a1a4aea + f1c1f29 |
-| F-040 | T2.1b | |
+| F-040 | T2.1b | Cli unary remote arm ✅;BE cutover 仍待做 |
 | F-041 | T2.2a 搭车 | backend+FE 守卫脚本 |
 | F-042 | T5.11 | ②③ 系 RFC-007/008 议程 |
 | F-043 | T4.7 搭车 | + eslint 阀 |
