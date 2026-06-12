@@ -23,12 +23,20 @@ impl RealmTrustAnchorKeyResolver {
     }
 }
 
+// result_large_err: the consuming trait (easynet_axon
+// `KeyResolver::resolve`) pins the error type at AxonError, so boxing
+// here would be unboxed one expression later. The large variant is the
+// trait's contract; shrinking it is the SDK-side AxonError diet
+// (cross-repo half of F-005), not a call-site fix.
+#[allow(clippy::result_large_err)]
 fn decode_pubkey(public_key_b64: &str, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-    let raw = B64_STANDARD.decode(public_key_b64.as_bytes()).map_err(|err| {
-        AxonError::permission_denied(format!(
-            "realm_trust_anchor: pubkey base64 invalid for {agent_ura}: {err}"
-        ))
-    })?;
+    let raw = B64_STANDARD
+        .decode(public_key_b64.as_bytes())
+        .map_err(|err| {
+            AxonError::permission_denied(format!(
+                "realm_trust_anchor: pubkey base64 invalid for {agent_ura}: {err}"
+            ))
+        })?;
     let bytes: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
         AxonError::permission_denied(format!(
             "realm_trust_anchor: pubkey for {agent_ura} is {} bytes; expected 32",

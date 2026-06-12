@@ -154,8 +154,7 @@ const SESSION_UP_CHANNEL_CAPACITY: usize = 256;
 /// One-shot sender of the initial-admission verdict (Ok, or an error
 /// string). Aliased to keep `InitialSessionAdmissionProbe`'s field
 /// type legible.
-type AdmissionVerdictSender =
-    Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>;
+type AdmissionVerdictSender = Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>;
 
 #[derive(Clone)]
 pub(crate) struct InitialSessionAdmissionProbe {
@@ -278,18 +277,8 @@ const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
 /// This is the evidence record for diagnosing hub-side close causes
 /// when hub logs are unavailable (incident 2026-06-11: the hub
 /// container's logs were lost with the process; only device-side
-/// correlation survived). The two fields discriminate the known
-/// close classes:
-///
-/// * `uptime` sub-second + `frames_received == 1` (admission receipt
-///   only) — presence displacement by a second claimant of the same
-///   caller URA.
-/// * `frames_received == 0` — hub accepted the RPC but never sent
-///   the RFC-003 §1.1 admission receipt (pre-2026-05-02 hub build).
-/// * `uptime` ≈ 5 s, low frame count — hub tore the session down on
-///   the device's first up-heartbeat (up-frame contract skew).
-/// * `uptime` ≥ `SESSION_HEALTHY_MIN_UPTIME` — ordinary close of a
-///   healthy session (hub shutdown, deploy).
+/// correlation survived). [`SessionCloseStats::classify`] is the
+/// single point that turns the fingerprint into a [`CloseClass`].
 ///
 /// It is NOT an error type: error exits keep returning
 /// `SessionError`, which carries its own diagnostics.
@@ -301,6 +290,201 @@ pub struct SessionCloseStats {
     /// Down frames received after acceptance: admission receipt,
     /// keepalives, and business dispatches all count.
     pub frames_received: u64,
+}
+
+/// First-class classification of a clean `<self>.session` close
+/// (F-008 / T1.1: the close class drives backoff policy and ops
+/// alerting; while it lived as prose + ad-hoc comparisons, the
+/// 2026-06-11 displacement ping-pong stayed invisible until 5,428
+/// cycles had passed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseClass {
+    /// `uptime ≥ SESSION_HEALTHY_MIN_UPTIME` — ordinary close of a
+    /// genuinely live session (hub shutdown, deploy). The only class
+    /// that earns a backoff reset.
+    Healthy,
+    /// Sub-second uptime with at most the admission receipt seen —
+    /// the displacement signature: a second claimant of the same
+    /// caller URA replaced this session.
+    DisplacedSuspect,
+    /// Zero down frames: the hub accepted the RPC but never sent the
+    /// RFC-003 §1.1 admission receipt (pre-2026-05-02 hub build).
+    NoAdmissionReceipt,
+    /// Closed after a normal admission but before healthy uptime —
+    /// first-heartbeat teardown (up-frame contract skew) and
+    /// rolling-restart races land here.
+    ContractSkew,
+}
+
+impl CloseClass {
+    /// Stable lowercase token for op_event fields and dashboards.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CloseClass::Healthy => "healthy",
+            CloseClass::DisplacedSuspect => "displaced_suspect",
+            CloseClass::NoAdmissionReceipt => "no_admission_receipt",
+            CloseClass::ContractSkew => "contract_skew",
+        }
+    }
+}
+
+impl SessionCloseStats {
+    /// The fingerprint table, in one place. Order matters: healthy
+    /// uptime wins outright; a frameless session is the missing
+    /// admission receipt regardless of duration; sub-second with only
+    /// the receipt is displacement; everything else that died young
+    /// is contract skew.
+    pub fn classify(&self) -> CloseClass {
+        if self.uptime >= SESSION_HEALTHY_MIN_UPTIME {
+            CloseClass::Healthy
+        } else if self.frames_received == 0 {
+            CloseClass::NoAdmissionReceipt
+        } else if self.uptime < Duration::from_secs(1) && self.frames_received <= 1 {
+            CloseClass::DisplacedSuspect
+        } else {
+            CloseClass::ContractSkew
+        }
+    }
+}
+
+/// Typed phase of one supervised `<self>.session` (F-008 / T1.1).
+///
+/// The supervisor's control flow DRIVES transitions; the phase type
+/// makes "what stage is this device in" a queryable, observable fact
+/// instead of a position inside `dial_and_run_session*`'s control
+/// flow. Macro-phase edges are strict (see `may_transition_to`);
+/// ordering WITHIN the prelude is deliberately loose — prelude steps
+/// are the dial function's business and may reorder as the protocol
+/// evolves, while the op_event stream still records the actual
+/// sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceSessionPhase {
+    /// Supervisor constructed, no dial attempted yet — or shut down.
+    Idle,
+    /// Credential warmup + endpoint connect in progress.
+    Dialing,
+    /// Channel up; running the session preludes.
+    Preluding(PreludeStep),
+    /// Bidi accepted (`bidi_opened`); frame loop running.
+    Live,
+    /// Between attempts, waiting out the backoff curve.
+    Backoff,
+}
+
+/// The session preludes, in their current wire order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreludeStep {
+    Join,
+    OwnerProjection,
+    Advertise,
+}
+
+impl DeviceSessionPhase {
+    /// Stable lowercase token for op_event fields and dashboards.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeviceSessionPhase::Idle => "idle",
+            DeviceSessionPhase::Dialing => "dialing",
+            DeviceSessionPhase::Preluding(PreludeStep::Join) => "preluding_join",
+            DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection) => {
+                "preluding_owner_projection"
+            }
+            DeviceSessionPhase::Preluding(PreludeStep::Advertise) => "preluding_advertise",
+            DeviceSessionPhase::Live => "live",
+            DeviceSessionPhase::Backoff => "backoff",
+        }
+    }
+
+    /// The legal edge relation of the session state machine.
+    ///
+    /// * Any phase may drop to `Backoff` (failure exits) and any
+    ///   phase may return to `Idle` (supervisor shutdown).
+    /// * Forward progress is strict: `Idle|Backoff → Dialing →
+    ///   Preluding → Live`; no phase may skip into `Live`.
+    pub fn may_transition_to(&self, to: &DeviceSessionPhase) -> bool {
+        use DeviceSessionPhase::*;
+        match (self, to) {
+            // Shutdown and failure edges are always available.
+            (_, Idle) | (_, Backoff) => true,
+            (Idle, Dialing) | (Backoff, Dialing) => true,
+            (Dialing, Preluding(_)) => true,
+            // Prelude steps may chain in any order (loose-by-design),
+            // and only a prelude may open the bidi.
+            (Preluding(_), Preluding(_)) | (Preluding(_), Live) => true,
+            _ => false,
+        }
+    }
+}
+
+/// The single transition point of the session state machine
+/// (F-008 / T1.1: 转移函数集中一处). Every phase change emits one
+/// `session_state_transition{from,to,attempt,reason}` op_event —
+/// alerting and SLO tooling consume the transition stream instead of
+/// grepping scattered log kinds. Illegal edges are a bookkeeping bug:
+/// debug builds assert; release builds emit
+/// `session_phase_violation` and continue — a daemon must not die
+/// for an observability defect.
+pub(crate) struct SessionPhaseTracker {
+    phase: DeviceSessionPhase,
+    attempt: u64,
+}
+
+impl SessionPhaseTracker {
+    pub(crate) fn new() -> Self {
+        Self {
+            phase: DeviceSessionPhase::Idle,
+            attempt: 0,
+        }
+    }
+
+    /// Begin a dial attempt: bumps the attempt counter and enters
+    /// `Dialing`. The counter is per-supervisor, monotonically
+    /// increasing across reconnects — it correlates the transition
+    /// stream with the backoff curve.
+    pub(crate) fn begin_attempt(&mut self) {
+        self.attempt += 1;
+        self.transition(DeviceSessionPhase::Dialing, "dial_attempt");
+    }
+
+    /// The current phase — for status surfaces and tests.
+    pub(crate) fn phase(&self) -> DeviceSessionPhase {
+        self.phase
+    }
+
+    pub(crate) fn transition(&mut self, to: DeviceSessionPhase, reason: &str) {
+        let from = self.phase;
+        if from == to {
+            return;
+        }
+        let legal = from.may_transition_to(&to);
+        debug_assert!(
+            legal,
+            "illegal session phase transition {from:?} → {to:?} (reason: {reason})"
+        );
+        if !legal {
+            let from_str = from.as_str();
+            let to_str = to.as_str();
+            crate::op_event!(
+                component = session,
+                kind = session_phase_violation,
+                from = from_str,
+                to = to_str,
+                reason = reason,
+            );
+        }
+        self.phase = to;
+        let from_str = from.as_str();
+        let to_str = to.as_str();
+        let attempt = self.attempt;
+        crate::op_event!(
+            component = session,
+            kind = session_state_transition,
+            from = from_str,
+            to = to_str,
+            attempt = attempt,
+            reason = reason,
+        );
+    }
 }
 
 /// Default URA profile used when the session frame carries a signed
@@ -318,6 +502,56 @@ pub type SessionSigningSeed = [u8; 32];
 /// `handle_down` because the bidi is duplex — the implementation
 /// drives whatever response shape it needs through the supplied
 /// `outbound` sender.
+/// Parse the admission receipt's `session_contract` (mini-RFC §2) and
+/// record the negotiation on the session's up sender. Absent/legacy
+/// payloads leave the session at v0 — every shape stays valid.
+fn apply_session_contract(frame: &InvokeBidiDown, outbound: &SessionUpSender, hub_endpoint: &str) {
+    use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
+    let Some(Payload::Receipt(receipt)) = frame.payload.as_ref() else {
+        return;
+    };
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&receipt.payload) else {
+        return;
+    };
+    let Some(contract) = body.get("session_contract") else {
+        return;
+    };
+    let version = contract
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
+    let negotiated = version.min(DEVICE_DISPATCH_CONTRACT_VERSION);
+    outbound.set_negotiated_contract(negotiated);
+    let displaced_prior = contract
+        .get("displaced_prior")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    crate::op_event!(
+        component = session,
+        kind = session_contract_negotiated,
+        hub_endpoint = hub_endpoint,
+        version = negotiated,
+        displaced_prior = displaced_prior,
+    );
+}
+
+/// Highest dispatch-frame contract this device speaks (DEC-F004).
+pub const DEVICE_DISPATCH_CONTRACT_VERSION: u32 = 1;
+
+/// T1.2 claimant fingerprint: one random 16-byte nonce per process
+/// boot. Lets the hub distinguish a same-device restart (same URA,
+/// new nonce each boot — sequential) from two live processes fighting
+/// over one URA (alternating distinct nonces).
+pub fn claimant_boot_nonce() -> &'static [u8; 16] {
+    static NONCE: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+    NONCE.get_or_init(|| {
+        let mut nonce = [0_u8; 16];
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        nonce
+    })
+}
+
 #[async_trait::async_trait]
 pub trait SessionFrameDispatcher: Send + Sync + 'static {
     /// Handle one inbound frame. The dispatcher writes any reply
@@ -354,6 +588,11 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
 pub struct SessionUpSender {
     tx: mpsc::Sender<InvokeBidiUp>,
     next_sequence: Arc<AtomicU64>,
+    /// Negotiated dispatch contract for THIS session (DEC-F004):
+    /// written once by the supervisor when the admission receipt's
+    /// session_contract arrives; read by reply producers to pick the
+    /// frame encoding. 0 until negotiation lands = JSON era.
+    negotiated_contract: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl SessionUpSender {
@@ -364,7 +603,22 @@ impl SessionUpSender {
             // Frame 0 is EnvelopeOpen. First post-frame-0 producer
             // therefore owns sequence = 1.
             next_sequence: Arc::new(AtomicU64::new(1)),
+            negotiated_contract: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
+    }
+
+    /// Supervisor-only: record the hub's negotiated session contract.
+    pub fn set_negotiated_contract(&self, version: u32) {
+        self.negotiated_contract
+            .store(version, std::sync::atomic::Ordering::Release);
+    }
+
+    /// True when this session speaks carrier-v1 dispatch frames.
+    #[must_use]
+    pub fn carrier_v1(&self) -> bool {
+        self.negotiated_contract
+            .load(std::sync::atomic::Ordering::Acquire)
+            >= 1
     }
 
     fn allocate_sequence(&self) -> u64 {
@@ -381,6 +635,22 @@ impl SessionUpSender {
             .send(InvokeBidiUp {
                 sequence: self.allocate_sequence(),
                 payload: Some(UpPayload::BinaryChunk(chunk)),
+                ..InvokeBidiUp::default()
+            })
+            .await
+    }
+
+    /// Send any up-direction payload on the live session, stamping
+    /// the next monotonic sequence number. Carrier-v1 reply frames
+    /// (DispatchResult / ReverseDispatchCall) ride this.
+    pub async fn send_payload(
+        &self,
+        payload: UpPayload,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+        self.tx
+            .send(InvokeBidiUp {
+                sequence: self.allocate_sequence(),
+                payload: Some(payload),
                 ..InvokeBidiUp::default()
             })
             .await
@@ -479,6 +749,10 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     >,
     ability_descriptors: &[AbilityDescriptor],
 ) -> Result<SessionCloseStats, SessionError> {
+    // One-shot dial (no supervisor): the phase stream still emits,
+    // scoped to this call's private tracker.
+    let mut phase = SessionPhaseTracker::new();
+    phase.begin_attempt();
     dial_and_run_session_with_idle_timeout(
         hub_endpoint,
         caller_ura,
@@ -490,6 +764,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         SESSION_IDLE_TIMEOUT,
         None,
         None,
+        &mut phase,
     )
     .await
 }
@@ -508,7 +783,12 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     idle_timeout: Duration,
     initial_admission: Option<InitialSessionAdmissionProbe>,
     user_trust_sync: Option<&UserTrustSync>,
+    phase: &mut SessionPhaseTracker,
 ) -> Result<SessionCloseStats, SessionError> {
+    // Idempotent under a supervisor (begin_attempt already entered
+    // Dialing; same-phase transitions early-return); direct callers
+    // (one-shot dial, tests) enter the machine here.
+    phase.transition(DeviceSessionPhase::Dialing, "dial_entered");
     warm_device_credential_for_session(&caller_ura).await;
 
     let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
@@ -619,6 +899,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // authoritative health gate — if join didn't take, the bidi
     // still surfaces the underlying error and the supervisor's
     // reconnect loop retries everything.
+    phase.transition(
+        DeviceSessionPhase::Preluding(PreludeStep::Join),
+        "channel_connected",
+    );
     crate::op_event!(
         component = session,
         kind = federation_join_prelude_sending,
@@ -653,6 +937,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         }
     }
 
+    phase.transition(
+        DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection),
+        "join_prelude_done",
+    );
     // Owner-projection prelude (AXON-RFC-005): publish the daemon's
     // device-profile descriptors as a bounded owner projection
     // through `federation.advertise_abilities`. The hub stores the
@@ -739,9 +1027,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // hub sweeper demotes records to Suspended after 15 s without a
     // `federation.heartbeat`, so without this loop every device shows
     // offline/REMOVED ~15 s after join even while invocations keep
-    // flowing over the healthy bidi. The legacy heartbeat sidecar
-    // (`_EASYNET_HB_ENDPOINT` + dendrite bridge) cannot reach a TLS
-    // hub — pinned-CA support never landed there — so the session owns
+    // flowing over the healthy bidi. The legacy env-gated heartbeat
+    // sidecar (dendrite bridge, no pinned-CA support — retired in
+    // T1.5/F-049) could never reach a TLS hub, so the session owns
     // the tick: one unary per interval multiplexed over this channel,
     // aborted with the session, restarted by the next dial. Failures
     // are advisory (logged, deduped) — the bidi's own reconnect
@@ -749,9 +1037,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     let heartbeat_caller = caller_ura.clone();
     let _federation_heartbeat_guard = AbortOnDrop(tokio::spawn(async move {
         let mut heartbeat_client =
-            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(
-                heartbeat_channel,
-            );
+            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(heartbeat_channel);
         let mut last_error: Option<String> = None;
         loop {
             tokio::time::sleep(FEDERATION_HEARTBEAT_INTERVAL).await;
@@ -925,6 +1211,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             "{:?}",
             entries.iter().map(|e| &e.short_label).collect::<Vec<_>>()
         );
+        phase.transition(
+            DeviceSessionPhase::Preluding(PreludeStep::Advertise),
+            "projection_published",
+        );
         crate::op_event!(
             component = session,
             kind = advertise_agent_prelude_sending,
@@ -1092,6 +1382,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
 
     let mut down_stream = response.into_inner();
     let opened_at = Instant::now();
+    phase.transition(DeviceSessionPhase::Live, "bidi_accepted");
     let dispatcher = dispatcher;
     crate::op_event!(
         component = session,
@@ -1143,6 +1434,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                     });
                 }
                 expected_down_sequence = expected_down_sequence.saturating_add(1);
+                if frame.sequence == 0 {
+                    apply_session_contract(&frame, &outbound_tx, &hub_endpoint);
+                }
                 if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
                     let err_msg = format!("{err}");
                     crate::op_event!(
@@ -1229,15 +1523,15 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut backoff = SESSION_BACKOFF_INITIAL;
+    let mut phase = SessionPhaseTracker::new();
     loop {
-        tokio::select! {
-            _ = &mut cancel => {
-                crate::op_event!(
-                    component = session,
-                    kind = supervisor_cancelled,
-                );
-                return;
-            }
+        phase.begin_attempt();
+        // Arm bodies stay trivial: the dial future holds `&mut phase`
+        // for its lifetime, so phase handling (like all result
+        // handling) happens after the select expression, once the
+        // future is out of scope.
+        let outcome = tokio::select! {
+            _ = &mut cancel => None,
             result = dial_and_run_session_with_idle_timeout(
                 hub_endpoint.clone(),
                 caller_ura.clone(),
@@ -1249,67 +1543,78 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 SESSION_IDLE_TIMEOUT,
                 initial_admission.clone(),
                 user_trust_sync.as_ref(),
-            ) => {
-                match result {
-                    Ok(stats) => {
-                        backoff = backoff_after_clean_close(&stats, backoff);
-                        // Render Durations as integer milliseconds —
-                        // `Duration` has no `Display` impl, and the
-                        // Debug form (`250ms` / `1.5s`) mixes unit
-                        // suffixes that complicate SRE arithmetic on
-                        // the field. Milliseconds is the unit operators
-                        // already see in `*_ms` fields elsewhere.
-                        let uptime_ms = stats.uptime.as_millis() as u64;
-                        let frames_received = stats.frames_received;
-                        let healthy = stats.uptime >= SESSION_HEALTHY_MIN_UPTIME;
-                        let next_backoff_ms = backoff.as_millis() as u64;
-                        crate::op_event!(
-                            component = session,
-                            kind = bidi_closed_cleanly,
-                            uptime_ms = uptime_ms,
-                            frames_received = frames_received,
-                            healthy = healthy,
-                            next_backoff_ms = next_backoff_ms,
-                        );
-                    }
-                    Err(err) => {
-                        // `{err:#}` walks the std::error::Error source
-                        // chain so opaque `tonic::transport::Error`
-                        // ("transport error") surfaces the underlying
-                        // rustls / hyper / io cause. Without this, a
-                        // CA-trust failure or DNS error is
-                        // indistinguishable from a NAT idle drop.
-                        let err_msg = format!("{err:#}");
-                        if let Some(probe) = &initial_admission {
-                            probe.failed(err_msg.clone());
-                        }
-                        let next_backoff_ms = backoff.as_millis() as u64;
-                        crate::op_event!(
-                            component = session,
-                            kind = bidi_error_reconnecting,
-                            error = err_msg,
-                            next_backoff_ms = next_backoff_ms,
-                        );
-                    }
+                &mut phase,
+            ) => Some(result),
+        };
+        let Some(result) = outcome else {
+            phase.transition(DeviceSessionPhase::Idle, "supervisor_cancelled");
+            crate::op_event!(component = session, kind = supervisor_cancelled,);
+            return;
+        };
+        match result {
+            Ok(stats) => {
+                backoff = backoff_after_clean_close(&stats, backoff);
+                // Render Durations as integer milliseconds —
+                // `Duration` has no `Display` impl, and the
+                // Debug form (`250ms` / `1.5s`) mixes unit
+                // suffixes that complicate SRE arithmetic on
+                // the field. Milliseconds is the unit operators
+                // already see in `*_ms` fields elsewhere.
+                let uptime_ms = stats.uptime.as_millis() as u64;
+                let frames_received = stats.frames_received;
+                let close_class = stats.classify().as_str();
+                phase.transition(DeviceSessionPhase::Backoff, close_class);
+                let next_backoff_ms = backoff.as_millis() as u64;
+                crate::op_event!(
+                    component = session,
+                    kind = bidi_closed_cleanly,
+                    uptime_ms = uptime_ms,
+                    frames_received = frames_received,
+                    close_class = close_class,
+                    next_backoff_ms = next_backoff_ms,
+                );
+            }
+            Err(err) => {
+                phase.transition(DeviceSessionPhase::Backoff, "session_error");
+                // `{err:#}` walks the std::error::Error source
+                // chain so opaque `tonic::transport::Error`
+                // ("transport error") surfaces the underlying
+                // rustls / hyper / io cause. Without this, a
+                // CA-trust failure or DNS error is
+                // indistinguishable from a NAT idle drop.
+                let err_msg = format!("{err:#}");
+                if let Some(probe) = &initial_admission {
+                    probe.failed(err_msg.clone());
                 }
-
-                // Sleep the FULL-JITTER delay, also cancellable. The
-                // deterministic curve (`backoff`) is the upper bound;
-                // the actual wait is uniform in [0, backoff], which
-                // de-synchronizes a fleet that all lost a hub at the
-                // same instant (the 250 ms in-phase thundering herd
-                // b2ba441 only damped per-device). The curve state is
-                // unchanged — doubling and the healthy-uptime reset
-                // operate on `backoff`, not the jittered sample.
-                let jittered = full_jitter(backoff);
-                tokio::select! {
-                    _ = &mut cancel => return,
-                    _ = tokio::time::sleep(jittered) => {}
-                }
-
-                backoff = next_backoff(backoff);
+                let next_backoff_ms = backoff.as_millis() as u64;
+                crate::op_event!(
+                    component = session,
+                    kind = bidi_error_reconnecting,
+                    error = err_msg,
+                    next_backoff_ms = next_backoff_ms,
+                );
             }
         }
+
+        // Sleep the FULL-JITTER delay, also cancellable. The
+        // deterministic curve (`backoff`) is the upper bound;
+        // the actual wait is uniform in [0, backoff], which
+        // de-synchronizes a fleet that all lost a hub at the
+        // same instant (the 250 ms in-phase thundering herd
+        // b2ba441 only damped per-device). The curve state is
+        // unchanged — doubling and the healthy-uptime reset
+        // operate on `backoff`, not the jittered sample.
+        let jittered = full_jitter(backoff);
+        let cancelled = tokio::select! {
+            _ = &mut cancel => true,
+            _ = tokio::time::sleep(jittered) => false,
+        };
+        if cancelled {
+            phase.transition(DeviceSessionPhase::Idle, "supervisor_cancelled");
+            return;
+        }
+
+        backoff = next_backoff(backoff);
     }
 }
 
@@ -1346,10 +1651,13 @@ fn full_jitter(bound: Duration) -> Duration {
 /// `SESSION_HEALTHY_MIN_UPTIME` for why a clean close alone must
 /// not reset the curve (incident 2026-06-11, 5428-cycle loop).
 fn backoff_after_clean_close(stats: &SessionCloseStats, current: Duration) -> Duration {
-    if stats.uptime >= SESSION_HEALTHY_MIN_UPTIME {
-        SESSION_BACKOFF_INITIAL
-    } else {
-        current
+    match stats.classify() {
+        CloseClass::Healthy => SESSION_BACKOFF_INITIAL,
+        // Every unhealthy class keeps the escalating curve — the
+        // 2026-06-11 lesson: a clean EOF is not evidence of health.
+        CloseClass::DisplacedSuspect
+        | CloseClass::NoAdmissionReceipt
+        | CloseClass::ContractSkew => current,
     }
 }
 
@@ -2093,6 +2401,14 @@ pub fn build_session_envelope_open_with_seed(
                 content_type: "application/json".to_string(),
                 ..StreamDescriptor::default()
             }],
+            // Carrier negotiation + claimant fingerprint (DEC-F004 /
+            // T2.1 step 3, T1.2): declare contract v1 and this
+            // process's boot nonce. A pre-carrier hub ignores the
+            // unknown field (proto3) and the session runs as v0.
+            session_ext: Some(easynet_axon::pb::axon::v1::SessionOpenExt {
+                contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
+                claimant_boot_nonce: claimant_boot_nonce().to_vec(),
+            }),
             ..EnvelopeOpen::default()
         })),
     }
@@ -2658,7 +2974,11 @@ mod tests {
         let bound = Duration::from_secs(30);
         let samples: std::collections::HashSet<u128> =
             (0..1000).map(|_| full_jitter(bound).as_millis()).collect();
-        assert!(samples.len() > 100, "jitter not spread: {} distinct", samples.len());
+        assert!(
+            samples.len() > 100,
+            "jitter not spread: {} distinct",
+            samples.len()
+        );
     }
 
     #[test]
@@ -2671,6 +2991,79 @@ mod tests {
         assert_eq!(next_backoff(Duration::from_secs(20)), SESSION_BACKOFF_MAX);
         // Past the cap stays at the cap.
         assert_eq!(next_backoff(SESSION_BACKOFF_MAX), SESSION_BACKOFF_MAX);
+    }
+
+    #[test]
+    fn session_phase_edge_relation() {
+        use DeviceSessionPhase::*;
+        let join = Preluding(PreludeStep::Join);
+        let advertise = Preluding(PreludeStep::Advertise);
+        // The forward chain.
+        assert!(Idle.may_transition_to(&Dialing));
+        assert!(Dialing.may_transition_to(&join));
+        assert!(join.may_transition_to(&advertise), "prelude steps chain");
+        assert!(advertise.may_transition_to(&Live));
+        assert!(Live.may_transition_to(&Backoff));
+        assert!(Backoff.may_transition_to(&Dialing));
+        // Failure and shutdown edges are available from anywhere.
+        assert!(Dialing.may_transition_to(&Backoff));
+        assert!(join.may_transition_to(&Backoff));
+        assert!(Live.may_transition_to(&Idle));
+        // Illegal: nothing skips into Live, nothing resurrects from
+        // Backoff or Idle without dialing.
+        assert!(!Idle.may_transition_to(&Live));
+        assert!(!Dialing.may_transition_to(&Live));
+        assert!(!Backoff.may_transition_to(&Live));
+        assert!(!Idle.may_transition_to(&join));
+    }
+
+    #[test]
+    fn phase_tracker_walks_the_supervised_lifecycle() {
+        let mut t = SessionPhaseTracker::new();
+        assert_eq!(t.phase(), DeviceSessionPhase::Idle);
+        t.begin_attempt();
+        assert_eq!(t.phase(), DeviceSessionPhase::Dialing);
+        t.transition(DeviceSessionPhase::Preluding(PreludeStep::Join), "test");
+        t.transition(
+            DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection),
+            "test",
+        );
+        t.transition(
+            DeviceSessionPhase::Preluding(PreludeStep::Advertise),
+            "test",
+        );
+        t.transition(DeviceSessionPhase::Live, "test");
+        t.transition(DeviceSessionPhase::Backoff, "healthy");
+        // The next attempt re-enters Dialing from Backoff.
+        t.begin_attempt();
+        assert_eq!(t.phase(), DeviceSessionPhase::Dialing);
+        // Shutdown is reachable from any phase.
+        t.transition(DeviceSessionPhase::Idle, "supervisor_cancelled");
+        assert_eq!(t.phase(), DeviceSessionPhase::Idle);
+    }
+
+    #[test]
+    fn close_class_fingerprint_table() {
+        // The four-class table (F-008/T1.1), pinned: each fingerprint
+        // from the 2026-06-11 incident analysis maps to its class.
+        let class = |uptime_ms: u64, frames: u64| {
+            SessionCloseStats {
+                uptime: Duration::from_millis(uptime_ms),
+                frames_received: frames,
+            }
+            .classify()
+        };
+        // Healthy uptime wins regardless of frame count.
+        assert_eq!(class(30_000, 7), CloseClass::Healthy);
+        assert_eq!(class(45_000, 0), CloseClass::Healthy);
+        // Frameless young session: hub never sent the admission receipt.
+        assert_eq!(class(120, 0), CloseClass::NoAdmissionReceipt);
+        assert_eq!(class(5_000, 0), CloseClass::NoAdmissionReceipt);
+        // Sub-second with only the receipt: displacement signature.
+        assert_eq!(class(120, 1), CloseClass::DisplacedSuspect);
+        // Survived admission but died young: contract skew family.
+        assert_eq!(class(5_000, 2), CloseClass::ContractSkew);
+        assert_eq!(class(1_200, 1), CloseClass::ContractSkew);
     }
 
     #[test]
@@ -2930,6 +3323,7 @@ mod tests {
             Duration::from_millis(80),
             None,
             None, // user_trust_sync: not exercised here
+            &mut SessionPhaseTracker::new(),
         )
         .await;
 
@@ -3001,6 +3395,7 @@ mod tests {
             Duration::from_millis(80),
             None,
             None, // user_trust_sync: not exercised here
+            &mut SessionPhaseTracker::new(),
         )
         .await;
         assert!(
@@ -3100,9 +3495,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = cancel_tx.send(());
 
-        let exit_within_bound = tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor_handle)
-            .await
-            .expect("supervisor exits promptly after cancel");
+        let exit_within_bound =
+            tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor_handle)
+                .await
+                .expect("supervisor exits promptly after cancel");
         exit_within_bound.expect("supervisor task did not panic");
     }
 
@@ -3189,6 +3585,7 @@ mod tests {
             Duration::from_millis(80),
             None,
             None, // user_trust_sync: not exercised here
+            &mut SessionPhaseTracker::new(),
         )
         .await;
 
@@ -3217,6 +3614,7 @@ mod tests {
             Duration::from_secs(1),
             None,
             None, // user_trust_sync: not exercised here
+            &mut SessionPhaseTracker::new(),
         )
         .await;
 

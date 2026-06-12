@@ -291,7 +291,10 @@ mod tests {
 
         // non-JSON
         let mut md2 = HashMap::new();
-        md2.insert(ORIGIN_CALLER_METADATA_KEY.to_string(), "not json".to_string());
+        md2.insert(
+            ORIGIN_CALLER_METADATA_KEY.to_string(),
+            "not json".to_string(),
+        );
         assert!(OriginCaller::from_metadata(&md2).is_err());
     }
 

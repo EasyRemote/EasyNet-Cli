@@ -71,10 +71,16 @@ use crate::services::session_failure::SessionFailure;
 /// Result the target device sent back for a cross-device dispatch.
 /// Mirrors the shape `<self>.session`'s receive task will hand off
 /// when it sees a `Result` frame on the session up stream.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DispatchResult {
     /// Reply payload from the target ability (opaque bytes).
     pub payload: Vec<u8>,
+    /// Callee-signed execution receipt when the target spoke
+    /// carrier-v1 (DEC-F004 landing audit 3). Internal projection
+    /// field — never serialized; the invoke_remote consumer side
+    /// projects it into the hub ledger where the full call context
+    /// (ability, route) lives. `None` on the JSON carrier.
+    pub receipt: Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
     /// `Some(message)` if the target reported an execution error;
     /// `None` for a clean reply.
     pub error: Option<String>,
@@ -237,6 +243,7 @@ impl PendingDispatchMap {
                         true,
                     )),
                     request_id: None,
+                    receipt: None,
                 });
                 count += 1;
             }
@@ -254,7 +261,7 @@ impl PendingDispatchMap {
 /// One streamed event flowing back from a target device's remote
 /// bidi session. Same-hub remote `fs.transfer` uses this:
 /// zero or more `Chunk`s followed by exactly one `Terminal`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DispatchStreamEvent {
     Chunk(Vec<u8>),
     Terminal(DispatchResult),
@@ -368,6 +375,7 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
+                    receipt: None,
                 },
             )
         });
@@ -399,6 +407,7 @@ mod tests {
         let still_completes = map.complete(
             id,
             DispatchResult {
+                receipt: None,
                 payload: b"too late".to_vec(),
                 error: None,
                 failure: None,
@@ -425,6 +434,7 @@ mod tests {
                     error: Some("target ability raised".into()),
                     failure: Some(failure),
                     request_id: None,
+                    receipt: None,
                 },
             )
         });
@@ -479,6 +489,7 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
+                    receipt: None,
                 },
             )
         });
@@ -522,6 +533,7 @@ mod tests {
                     map.finish(
                         id,
                         DispatchResult {
+                            receipt: None,
                             payload: br#"{"sha256":"abc"}"#.to_vec(),
                             error: None,
                             failure: None,
@@ -540,6 +552,7 @@ mod tests {
         assert_eq!(
             handle.recv().await,
             Some(DispatchStreamEvent::Terminal(DispatchResult {
+                receipt: None,
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
                 error: None,
                 failure: None,
@@ -565,6 +578,7 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
+                    receipt: None,
                 },
             )
             .await

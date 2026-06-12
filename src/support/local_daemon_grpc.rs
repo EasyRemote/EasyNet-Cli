@@ -257,10 +257,12 @@ impl LocalDaemonAbilityClient {
     fn validate_socket() -> anyhow::Result<()> {
         let socket_path = resolve_socket_path();
         if !probe_accepting(&socket_path) {
-            anyhow::bail!(
-                "daemon not running: gRPC listener not reachable at {}. Start it with `easynet runtime start` or `easynet start`.",
-                socket_path.display()
-            );
+            return Err(anyhow::Error::new(
+                crate::support::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+                    "daemon not running: gRPC listener not reachable at {}. Start it with `easynet runtime start` or `easynet start`.",
+                    socket_path.display()
+                )),
+            ));
         }
         Ok(())
     }
@@ -367,11 +369,13 @@ fn invoke_local_daemon_ability_with_caller_and_subject(
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
-        bail!(
-            "daemon not running (local Axon gRPC listener unreachable at {}). \
-             Start it with `easynet runtime start`.",
-            socket_path.display()
-        );
+        return Err(anyhow::Error::new(
+            crate::support::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+                "daemon not running (local Axon gRPC listener unreachable at {}). \
+                 Start it with `easynet runtime start`.",
+                socket_path.display()
+            )),
+        ));
     }
 
     let caller_ura = caller_override
@@ -531,11 +535,9 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
             let receipt_ura = parent.get("receipt_ura").and_then(Value::as_str)?;
             let hash_hex = parent.get("receipt_hash").and_then(Value::as_str)?;
             let receipt_hash = hex::decode(hash_hex.trim()).ok()?;
-            (!receipt_ura.trim().is_empty() && !receipt_hash.is_empty()).then(|| {
-                pb::ReceiptRef {
-                    receipt_hash,
-                    receipt_ura: receipt_ura.trim().to_string(),
-                }
+            (!receipt_ura.trim().is_empty() && !receipt_hash.is_empty()).then(|| pb::ReceiptRef {
+                receipt_hash,
+                receipt_ura: receipt_ura.trim().to_string(),
             })
         })
         .collect();

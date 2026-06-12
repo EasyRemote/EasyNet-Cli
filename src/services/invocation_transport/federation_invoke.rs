@@ -397,8 +397,7 @@ fn device_origin_claim(
     }
     let device_id = parsed.device_id()?.to_string();
     let callee_ura = crate::ura::ability_owner_identity_ura(ability_ura)?;
-    let public_ability =
-        crate::ura::public_ability_name_from_ability_ura(target_ura, ability_ura)?;
+    let public_ability = crate::ura::public_ability_name_from_ability_ura(target_ura, ability_ura)?;
 
     let subject_id = easynet_axon::invocation::private_agent_subject_id(&device_id);
     let (seed, signer_pubkey_b64) =

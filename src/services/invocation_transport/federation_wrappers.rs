@@ -2310,7 +2310,7 @@ mod tests {
         // `forward_deadline_ms` are wire fields on
         // `ForwardInvokeRequest` that round-trip verbatim from the
         // caller's `<self>.invoke_remote` initiator (or the CLI
-        // bridge in `support::federation_invoke`) through the
+        // bridge in `services::invocation_transport::federation_invoke`) through the
         // dispatcher's JSON deserialise step. The dispatcher
         // surfaces these to the target's session frame so PR-N5's
         // InvocationReceipt can stamp `causal_context.list` and
@@ -2329,7 +2329,7 @@ mod tests {
             inner_envelope_b64: String::new(),
             causal_context_bytes: audit_bytes.clone(),
             forward_deadline_ms: 12_345,
-                origin_caller: None,
+            origin_caller: None,
         };
         let bytes = serde_json::to_vec(&original).unwrap();
 

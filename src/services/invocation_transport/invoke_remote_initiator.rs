@@ -63,13 +63,18 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
-use tonic::Status;
+use tonic::{Response, Status};
 
 use crate::services::session_failure::SessionFailure;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-#[cfg(test)]
-use easynet_axon::pb::axon::v1::BinaryChunk;
+use easynet_axon::pb::axon::v1::{
+    invoke_bidi_down::Payload as DownPayload, BinaryChunk, InvokeBidiDown,
+};
+
+use crate::services::invocation_transport::invocation_wire::BoxedDownStream;
+use crate::services::invocation_transport::peer_envelope_signer::decode_inner_envelope;
+use crate::services::presence_registry::DispatchFrame;
 use easynet_axon::pb::axon::v1::{
     invoke_bidi_up::Payload as UpPayload, ContentEnvelope, EnvelopeOpen, InvocationTarget,
     InvokeBidiUp, StreamDescriptor,
@@ -116,6 +121,23 @@ pub struct SessionContentEnvelope {
     pub schema_ura: String,
     pub encryption: i32,
     pub key_id: String,
+}
+
+impl SessionDispatch {
+    /// Single wire codec for hub<->device session frames.
+    ///
+    /// Every production frame crosses this fence — to-be-fix.spec §A2
+    /// (T2.1) swaps the carrier HERE, in one place, when the JSON
+    /// envelope retires for the canonical proto shape. Do not call
+    /// serde_json on a SessionDispatch anywhere else.
+    pub fn encode_frame(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec(self)
+    }
+
+    /// See [`SessionDispatch::encode_frame`].
+    pub fn decode_frame(bytes: &[u8]) -> serde_json::Result<Self> {
+        serde_json::from_slice(bytes)
+    }
 }
 
 impl SessionContentEnvelope {
@@ -169,7 +191,8 @@ pub enum InvokeRemoteUp {
         /// §22.2; the legacy `x-easynet-origin-caller` metadata item
         /// is its rolling-upgrade fallback.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
+        origin_caller:
+            Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     },
 }
 
@@ -248,7 +271,8 @@ pub enum SessionDispatch {
         /// verifies it and runs the ability with the real user as
         /// Caller.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
+        origin_caller:
+            Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
     },
     /// Hub → target device. Open one long-lived local bidi handler
     /// on the target and bind it to `call_id`. Used by the
@@ -455,6 +479,8 @@ fn build_envelope_open_frame(initial_args: &[u8]) -> InvokeBidiUp {
             ordering: "STRICT".to_string(),
         }],
         metadata: Default::default(),
+        // Carrier negotiation (DEC-F004): v0 until T2.1 step 3.
+        session_ext: None,
         content_envelope: Some(ContentEnvelope {
             content_type: "application/json".to_string(),
             encoding: "identity".to_string(),
@@ -592,7 +618,226 @@ fn extract_chunk_bytes(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> Op
     match frame.payload.as_ref()? {
         Payload::BinaryChunk(chunk) => Some(chunk.data.as_slice()),
         Payload::Receipt(_) | Payload::Control(_) => None,
+        // Carrier-v1 frames (DEC-F004): not chunk traffic; dual-read
+        // lands in T2.1 steps 2-3.
+        Payload::DispatchCall(_) | Payload::ReverseDispatchResult(_) => None,
     }
+}
+
+// ── Hub-side frame construction ─────────────────────────────────────
+// The dispatch/terminal frame builders and the inner-payload decode
+// the hub uses when it drives `<self>.invoke_remote` over a device's
+// session channel. Moved next to the wire types they serialize
+// (commit-plan-2 E2d).
+
+/// **PR-N1 commit 11/N + C1a**. The inner-envelope payload
+/// shape the CLI bridge (`support/federation_invoke.rs::
+/// invoke_via_federation_forward`) emits: a JSON object
+/// carrying the canonical `(ability_ura, args)` pair the user
+/// selected plus a `call_id` minted client-side that DEC-N4
+/// §2.1 threads back through `ForwardInvokeResponse.
+/// correlation_call_id` so the caller can correlate the
+/// response with its awaiting bidi.
+pub(crate) struct InnerPayload {
+    pub ability_ura: String,
+    pub args_bytes: Vec<u8>,
+    pub call_id: String,
+}
+
+/// **PR-N1 commit 11/N + C1a**. Decode the base64-then-JSON
+/// inner payload the CLI bridge ships, surfacing each parse
+/// failure as `Status::invalid_argument` with a wire-stable
+/// hint so scripts grepping the daemon log can distinguish
+/// them. Non-empty `call_id` is required by DEC-N4 §2.1; a
+/// missing or empty value rejects with a clear error rather
+/// than synthesising a server-side id (which would defeat the
+/// caller-side correlation contract).
+pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
+    let raw = decode_inner_envelope(b64)?;
+    if raw.is_empty() {
+        return Err(Status::invalid_argument(
+            "federation.forward_invoke: inner_envelope_b64 is empty; \
+             cross-hub dispatch requires a base64-encoded JSON \
+             {ability_ura, args, call_id} payload",
+        ));
+    }
+    let parsed: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation.forward_invoke: inner envelope is not valid JSON: {err}"
+        ))
+    })?;
+    let obj = parsed.as_object().ok_or_else(|| {
+        Status::invalid_argument(
+            "federation.forward_invoke: inner envelope must be a JSON object \
+             with `ability_ura`, `args`, and `call_id` fields",
+        )
+    })?;
+    let ability_ura = obj
+        .get("ability_ura")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "federation.forward_invoke: inner envelope is missing a non-empty \
+                 string `ability_ura` field",
+            )
+        })?
+        .to_string();
+    let call_id = obj
+        .get("call_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "federation.forward_invoke: inner envelope is missing a non-empty \
+                 string `call_id` field (DEC-N4 §2.1 correlation requirement)",
+            )
+        })?
+        .to_string();
+    let args_value = obj
+        .get("args")
+        .cloned()
+        .unwrap_or(serde_json::Value::Object(Default::default()));
+    let args_bytes = serde_json::to_vec(&args_value).map_err(|err| {
+        Status::internal(format!(
+            "federation.forward_invoke: re-serialise inner args: {err}"
+        ))
+    })?;
+    Ok(InnerPayload {
+        ability_ura,
+        args_bytes,
+        call_id,
+    })
+}
+
+/// Carrier-v1 dispatch frame (DEC-F004 / T2.1 step 2d): the complete
+/// canonical InvokeRequest rides the wire verbatim — no JSON, no
+/// unpack/repack, no base64 inflation. The JSON builder below it is
+/// the v0 shape and is deleted with the rest of the JSON carrier one
+/// release window after step 3.
+pub(crate) fn build_carrier_v1_dispatch_frame(
+    call_id: u64,
+    request: easynet_axon::pb::axon::v1::InvokeRequest,
+    open_bidi: bool,
+) -> DispatchFrame {
+    use easynet_axon::pb::axon::v1::DispatchCall;
+    DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(DownPayload::DispatchCall(DispatchCall {
+                call_id,
+                request: Some(request),
+                open_bidi,
+            })),
+            ..InvokeBidiDown::default()
+        },
+    }
+}
+
+/// Build a `DispatchFrame` carrying a `SessionDispatch::Dispatch` JSON
+/// payload, ready to push down a target's `<self>.session` reverse
+/// channel. Encoding failure is impossible for the current variant
+/// (call_id u64, owned String, owned Vec<u8>) but mapped to
+/// `Status::internal` for forward-compatibility per letter 25 §"flag".
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_invoke_remote_dispatch_frame(
+    call_id: u64,
+    callee_ura: &str,
+    subject_ura: Option<&str>,
+    ability: &str,
+    args: &[u8],
+    args_content_envelope: SessionContentEnvelope,
+    metadata: HashMap<String, String>,
+    origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
+) -> Result<DispatchFrame, Status> {
+    let payload = SessionDispatch::Dispatch {
+        call_id,
+        callee_ura: Some(callee_ura.to_string()),
+        subject_ura: subject_ura
+            .filter(|subject| !subject.trim().is_empty())
+            .map(ToOwned::to_owned),
+        ability: ability.to_string(),
+        args: args.to_vec(),
+        args_content_envelope,
+        metadata,
+        origin_caller,
+    };
+    let bytes = payload.encode_frame().map_err(|err| {
+        Status::internal(format!(
+            "<self>.invoke_remote: encode SessionDispatch::Dispatch: {err}"
+        ))
+    })?;
+    let chunk = BinaryChunk {
+        stream_id: INVOKE_REMOTE_STREAM_ID,
+        data: bytes,
+        ..BinaryChunk::default()
+    };
+    Ok(DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(chunk)),
+            ..InvokeBidiDown::default()
+        },
+    })
+}
+
+/// Build the terminal `InvokeBidiDown` frame the
+/// `<self>.invoke_remote` caller's down stream yields. Carries the
+/// `InvokeRemoteDown::Result` JSON in `BinaryChunk.data`.
+pub(crate) fn build_invoke_remote_terminal_frame(
+    down: &InvokeRemoteDown,
+) -> Result<InvokeBidiDown, Status> {
+    let bytes = serde_json::to_vec(down).map_err(|err| {
+        Status::internal(format!(
+            "<self>.invoke_remote: encode InvokeRemoteDown: {err}"
+        ))
+    })?;
+    let chunk = BinaryChunk {
+        stream_id: INVOKE_REMOTE_STREAM_ID,
+        data: bytes,
+        ..BinaryChunk::default()
+    };
+    Ok(InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(chunk)),
+        ..InvokeBidiDown::default()
+    })
+}
+
+/// Build a one-shot `<self>.invoke_remote` Response stream carrying a
+/// single terminal frame whose `InvokeRemoteDown::Result` has
+/// `error = Some(msg)` and an empty payload.
+///
+/// Why this exists: `dispatch_invoke_remote` has two flavours of
+/// failure — protocol/structural (malformed frame 0, daemon
+/// misconfigured) and operational (target not in registry, target
+/// channel full / closed, target handler errored). The protocol /
+/// structural ones return a `tonic::Status` (gRPC-level error,
+/// surfaces upstream as HTTP 500). The operational ones MUST stay
+/// in-band so the caller sees a successful stream that yields a
+/// final frame whose `error` field carries the structured reason —
+/// otherwise a Go/HTTP shim atop tonic surfaces them as opaque 500s
+/// and the human user never sees "target offline", just "500".
+/// The post-dispatch failure paths already did this (target session
+/// dropped, target replied with error); the pre-dispatch paths used
+/// to raise `Status`. This helper aligns both halves under one
+/// shape.
+pub(crate) fn invoke_remote_inband_error_response(
+    msg: String,
+) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
+    let failure = SessionFailure::from_reason(&msg, "INVOCATION_FAILED", false);
+    let down = InvokeRemoteDown::Result {
+        payload: Vec::new(),
+        error: Some(msg),
+        failure: Some(failure),
+        request_id: None,
+    };
+    let frame = build_invoke_remote_terminal_frame(&down)?;
+    let (down_tx, down_rx) = mpsc::channel::<Result<InvokeBidiDown, Status>>(1);
+    tokio::spawn(async move {
+        let _ = down_tx.send(Ok(frame)).await;
+    });
+    let stream = ReceiverStream::new(down_rx);
+    Ok(Response::new(
+        Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+    ))
 }
 
 #[cfg(test)]
@@ -1039,5 +1284,184 @@ mod tests {
             0x0e, 0x0f,
         ];
         assert_eq!(call_id_hex(&bytes), "000102030405060708090a0b0c0d0e0f");
+    }
+}
+
+#[cfg(test)]
+mod hub_frame_tests {
+    use super::*;
+
+    #[test]
+    fn carrier_v1_dispatch_frame_carries_complete_invoke_request() {
+        use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+        let frame = build_carrier_v1_dispatch_frame(
+            42,
+            InvokeRequest {
+                envelope: Some(Envelope {
+                    caller: Some(AgentIdentity {
+                        ura: "easynet:///r/t/user/alice".into(),
+                        profile: "easynet-strict-v2".into(),
+                    }),
+                    ..Envelope::default()
+                }),
+                function_name: "dev.fs.read".into(),
+                arguments: b"{\"path\":\"/tmp/x\"}".to_vec(),
+                ..InvokeRequest::default()
+            },
+            false,
+        );
+        let Some(DownPayload::DispatchCall(call)) = frame.frame.payload else {
+            panic!("expected DispatchCall payload");
+        };
+        assert_eq!(call.call_id, 42);
+        assert!(!call.open_bidi);
+        let request = call.request.expect("request present");
+        assert_eq!(request.function_name, "dev.fs.read");
+        assert_eq!(
+            request.envelope.unwrap().caller.unwrap().ura,
+            "easynet:///r/t/user/alice"
+        );
+    }
+
+    #[test]
+    fn build_invoke_remote_dispatch_frame_carries_session_dispatch_json() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "x-easynet-delegation".to_string(),
+            "serialized-proof".to_string(),
+        );
+        let frame = build_invoke_remote_dispatch_frame(
+            42,
+            "easynet:///r/realm/device/dev",
+            Some("easynet:///r/realm/resource/camera-1"),
+            "echo",
+            b"hello",
+            SessionContentEnvelope::plaintext_json(),
+            metadata,
+            None,
+        )
+        .expect("built");
+        let payload = match frame.frame.payload.expect("frame has payload") {
+            DownPayload::BinaryChunk(chunk) => chunk,
+            _ => panic!("expected BinaryChunk"),
+        };
+        assert_eq!(payload.stream_id, INVOKE_REMOTE_STREAM_ID);
+        let parsed: SessionDispatch =
+            serde_json::from_slice(&payload.data).expect("decode SessionDispatch");
+        match parsed {
+            SessionDispatch::Dispatch {
+                call_id,
+                callee_ura,
+                subject_ura,
+                ability,
+                args,
+                args_content_envelope,
+                metadata,
+                origin_caller,
+            } => {
+                assert_eq!(call_id, 42);
+                assert!(origin_caller.is_none(), "no claim attached in this test");
+                assert_eq!(callee_ura.as_deref(), Some("easynet:///r/realm/device/dev"));
+                assert_eq!(
+                    subject_ura.as_deref(),
+                    Some("easynet:///r/realm/resource/camera-1")
+                );
+                assert_eq!(ability, "echo");
+                assert_eq!(args, b"hello");
+                assert_eq!(args_content_envelope.content_type, "application/json");
+                assert_eq!(
+                    metadata.get("x-easynet-delegation").map(String::as_str),
+                    Some("serialized-proof")
+                );
+            }
+            _ => panic!("expected Dispatch variant"),
+        }
+    }
+    #[test]
+    fn build_invoke_remote_terminal_frame_round_trips_done_payload() {
+        let down = InvokeRemoteDown::Result {
+            payload: b"the-reply".to_vec(),
+            error: None,
+            failure: None,
+            request_id: None,
+        };
+        let frame = build_invoke_remote_terminal_frame(&down).expect("built");
+        let chunk = match frame.payload.expect("frame has payload") {
+            DownPayload::BinaryChunk(c) => c,
+            _ => panic!("expected BinaryChunk"),
+        };
+        assert_eq!(chunk.stream_id, INVOKE_REMOTE_STREAM_ID);
+        let parsed: InvokeRemoteDown = serde_json::from_slice(&chunk.data).expect("decode");
+        assert_eq!(parsed, down);
+    }
+    #[test]
+    fn build_invoke_remote_terminal_frame_round_trips_chunk_payload() {
+        let down = InvokeRemoteDown::Chunk {
+            payload: b"screen-frame".to_vec(),
+        };
+        let frame = build_invoke_remote_terminal_frame(&down).expect("built");
+        let chunk = match frame.payload.expect("frame has payload") {
+            DownPayload::BinaryChunk(c) => c,
+            _ => panic!("expected BinaryChunk"),
+        };
+        assert_eq!(chunk.stream_id, INVOKE_REMOTE_STREAM_ID);
+        let parsed: InvokeRemoteDown = serde_json::from_slice(&chunk.data).expect("decode");
+        assert_eq!(parsed, down);
+    }
+    #[tokio::test]
+    async fn invoke_remote_inband_error_response_surfaces_reason_in_terminal_frame() {
+        // Operational failures inside `<self>.invoke_remote` (target
+        // offline, channel full, handler errored) used to surface as
+        // `tonic::Status` — i.e., a gRPC-level error, which the Go
+        // HTTP shim above tonic logs as a bare HTTP 500. The frontend
+        // then had nothing to render except "500". The helper used by
+        // those sites must instead produce a successful Response
+        // carrying ONE InvokeRemoteDown::Result frame whose `error`
+        // field carries the structured reason, so the shim sees
+        // gRPC success and can serialise the reason to the HTTP body.
+        use futures::StreamExt;
+
+        let response = invoke_remote_inband_error_response(
+            "target `easynet:///r/test-realm/agent/dev.liangbing` is not in PresenceRegistry"
+                .to_string(),
+        )
+        .expect("helper must return Ok — failure is in-band, not gRPC-level");
+
+        let mut stream = response.into_inner();
+        let frame = tokio_stream::StreamExt::next(&mut stream)
+            .await
+            .expect("stream yields one terminal frame")
+            .expect("terminal frame is not a gRPC-level error");
+
+        let chunk = match frame.payload.expect("frame has payload") {
+            DownPayload::BinaryChunk(c) => c,
+            _ => panic!("expected BinaryChunk"),
+        };
+        assert_eq!(chunk.stream_id, INVOKE_REMOTE_STREAM_ID);
+
+        let parsed: InvokeRemoteDown =
+            serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
+        match parsed {
+            InvokeRemoteDown::Result { payload, error, .. } => {
+                assert!(payload.is_empty(), "in-band error frame carries no payload");
+                let msg = error.expect("error field must be Some(...)");
+                assert!(
+                    msg.contains("dev.liangbing"),
+                    "reason string must round-trip the target URA verbatim — got {msg:?}"
+                );
+                assert!(
+                    msg.contains("not in PresenceRegistry"),
+                    "reason string must round-trip the diagnostic verbatim — got {msg:?}"
+                );
+            }
+            other => panic!("expected Result variant, got {other:?}"),
+        }
+
+        // Single-frame stream: after the terminal frame, the stream
+        // must close (otherwise a caller iterating frames hangs).
+        assert!(
+            tokio_stream::StreamExt::next(&mut stream).await.is_none(),
+            "in-band error stream must be one-shot and close after the terminal frame"
+        );
     }
 }

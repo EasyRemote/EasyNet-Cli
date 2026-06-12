@@ -60,23 +60,45 @@
 #![allow(clippy::result_large_err)]
 
 pub mod admission_facade;
+pub(crate) mod bidi_dispatcher;
 pub mod boot;
 pub mod daemon_invocation_service;
+pub(crate) mod deps;
+pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;
+/// CLI-side `federation.forward_invoke` helper (moved from `support`,
+/// T4.1 pre-move b — it consumes this module's ProtoEnvelope).
+#[cfg(feature = "axon-pb")]
+pub(crate) mod federation_invoke;
+/// Feature-agnostic shim over [`federation_invoke`]. Callers in the
+/// hot path (ability discovery, federation surfaces) depend on this
+/// module instead of `federation_invoke` directly so they remain
+/// compilable under default features (axon-pb off). With axon-pb on,
+/// the shim re-exports the real implementation; with axon-pb off, it
+/// returns empty/typed-error responses so the caller's logic stays
+/// uniform and degrades to a local-only view. One shim, one place
+/// that knows the feature exists — the alternative scatters a
+/// transport-layer flag through product-layer branches.
+pub(crate) mod federation_invoke_shim;
 pub mod federation_wrappers;
 pub mod hub_resolver;
 pub mod invocation_wire;
 pub mod invoke_remote_initiator;
+pub(crate) mod ledger_projection;
 pub mod list_user_pubkeys;
 pub mod local_session_dispatcher;
-pub mod device_trust_sync;
 pub mod origin_caller;
+pub(crate) mod peer_envelope_signer;
+pub(crate) mod quota_meter;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;
 pub mod route_resolver;
 pub mod session_escalation;
 pub mod session_initiator;
+pub(crate) mod stream_dispatcher;
+pub(crate) mod target_gate;
+pub(crate) mod unary_dispatcher;
 
 pub use admission_facade::AdmissionFacade;
 pub use boot::{start_daemon_invocation_transport, SessionShutdown};

@@ -35,9 +35,18 @@
 
 use rand::RngCore;
 
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
+use tonic::{Response, Status};
+
+use easynet_axon::pb::axon::v1::{
+    AgentIdentity, Envelope, InvokeRequest, InvokeResponse, SubjectIdentity,
+};
 
 pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
+
+/// Invocation metadata keys carrying caller-authority proofs
+/// (single wire-contract source; admission verifies, ledger records).
+pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
+pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
 
 #[derive(Debug, Clone)]
 pub struct ProtoEnvelope {
@@ -129,6 +138,118 @@ fn fresh_invocation_nonce() -> [u8; 16] {
     let mut nonce = [0_u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     nonce
+}
+
+/// Content type the daemon dispatch surfaces emit on
+/// `InvokeResponse.result` / `InvokeStreamChunk.content_type`.
+/// Centralised here so call sites cannot drift away from the value
+/// PR-4's baselines expect.
+pub(crate) const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
+
+/// Boxed pinned stream type used for both server-stream and
+/// bidirectional response stream associated types.
+pub(crate) type BoxedDownStream<T> =
+    std::pin::Pin<Box<dyn futures::Stream<Item = Result<T, tonic::Status>> + Send + 'static>>;
+
+/// Extract the namespace.resolve target URA from a request envelope:
+/// callee first, caller as fallback (genesis preludes carry caller
+/// only). Validates URA grammar before returning. Shared by the
+/// unary and server-stream local-dispatch paths.
+pub(crate) fn target_ura_from_envelope(
+    envelope: Option<&Envelope>,
+    label: &str,
+) -> Result<String, tonic::Status> {
+    use tonic::Status;
+
+    let envelope = envelope.ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "{label} request missing envelope for namespace.resolve"
+        ))
+    })?;
+    let target_ura = envelope
+        .callee
+        .as_ref()
+        .or(envelope.caller.as_ref())
+        .map(|identity| identity.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "{label} request envelope must carry callee or caller URA for namespace.resolve"
+            ))
+        })?;
+    crate::ura::parse_ura(target_ura)
+        .map_err(|err| Status::invalid_argument(format!("{label} target URA is invalid: {err}")))?;
+    Ok(target_ura.to_string())
+}
+
+/// Map an Axon `LocalRuntime` dispatch error onto the tonic `Status`
+/// the daemon wire surfaces return. Shared by the unary, server-stream,
+/// and bidi local-dispatch paths.
+pub(crate) fn status_from_axon_invoke_error(
+    surface: &str,
+    ability: &str,
+    err: easynet_axon::invocation::AxonError,
+) -> tonic::Status {
+    use easynet_axon::invocation::AxonErrorKind;
+    use tonic::Status;
+
+    let message =
+        format!("{surface}: Axon LocalRuntime dispatch of ability `{ability}` failed: {err}");
+    if err.reason.contains("unknown_ability") || err.reason.contains("mode_not_supported") {
+        return Status::not_found(message);
+    }
+    match err.kind {
+        AxonErrorKind::Cancelled => Status::cancelled(message),
+        AxonErrorKind::DeadlineExceeded => Status::deadline_exceeded(message),
+        AxonErrorKind::Unavailable => Status::unavailable(message),
+        AxonErrorKind::InvalidArgument => Status::invalid_argument(message),
+        AxonErrorKind::ResourceExhausted => Status::resource_exhausted(message),
+        AxonErrorKind::PermissionDenied => Status::permission_denied(message),
+        AxonErrorKind::Internal => Status::internal(message),
+    }
+}
+
+/// Parse a JSON-encoded request body, mapping any error to
+/// `Status::invalid_argument` with a useful message. Centralised so
+/// every wrapper dispatch site reports parse failures the same way.
+pub(crate) fn parse_json_args<T: serde::de::DeserializeOwned>(
+    arguments: &[u8],
+) -> Result<T, Status> {
+    serde_json::from_slice(arguments).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation wrapper: failed to decode JSON arguments: {err}"
+        ))
+    })
+}
+
+/// Encode a typed federation response into `InvokeResponse.result`
+/// with `result_content_type = "application/json"`. Mapping any
+/// serialisation error to `Status::internal` because the wrappers
+/// use serde-derived types — failure here is a programmer bug, not
+/// a caller bug.
+///
+/// `state` is set to `INVOCATION_STATE_COMPLETED` so unary callers
+/// that grep on `resp.state == "completed"` (Go-side
+/// `stateString` mapping) see the expected wire-visible success
+/// signal. Without this the proto default-zero value
+/// (`INVOCATION_STATE_UNSPECIFIED`) collapses to `"failed"` on the
+/// Go side per `stateString`'s default arm — silent failure-look-
+/// like under what the dispatcher considers a clean dispatch.
+pub(crate) fn wrap_json_response<T: serde::Serialize>(
+    response: &T,
+) -> Result<Response<InvokeResponse>, Status> {
+    let bytes = serde_json::to_vec(response).map_err(|err| {
+        Status::internal(format!(
+            "federation wrapper: failed to encode JSON response: {err}"
+        ))
+    })?;
+    let invoke_response = InvokeResponse {
+        result: bytes,
+        result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+        ..InvokeResponse::default()
+    };
+    Ok(Response::new(invoke_response))
 }
 
 #[cfg(test)]

@@ -85,6 +85,10 @@
 // deletion. Until that lands, the operator log is the audit
 // source for non-terminal calls.
 
+/// Service-discovery health metadata for manifest abilities that
+/// front an external service (`[health]` probe + optional `[boot]`
+/// self-heal). Advisory only — the invoke path never consults it.
+pub mod ability_health;
 pub mod clipboard_tracker;
 pub mod control;
 pub mod session_failure;
@@ -231,8 +235,7 @@ pub mod federation_directory;
 mod tests {
     #[test]
     fn quota_meters_user_abilities_but_exempts_control_plane() {
-        let meters =
-            crate::services::invocation_transport::daemon_invocation_service::quota_meters_function;
+        let meters = crate::services::invocation_transport::quota_meter::quota_meters_function;
 
         assert!(meters("observe.health"));
         assert!(meters("agent.todo.run"));

@@ -112,8 +112,7 @@ impl DeviceTrustSync {
     async fn resolve_from_hub(&self, agent_ura: &str) -> anyhow::Result<Vec<String>> {
         match &self.source {
             KeySource::Session(handle) => {
-                let args =
-                    serde_json::to_vec(&serde_json::json!({ "agent_ura": agent_ura }))?;
+                let args = serde_json::to_vec(&serde_json::json!({ "agent_ura": agent_ura }))?;
                 let ability = crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY;
                 match handle.escalate(ability.to_string(), args).await {
                     RequestOutcome::Ok { result_bytes } => parse_resolved_keys(&result_bytes),
@@ -273,14 +272,21 @@ mod tests {
     }
 
     fn test_key_b64() -> String {
-        B64.encode(SigningKey::from_bytes(&[0x42; 32]).verifying_key().to_bytes())
+        B64.encode(
+            SigningKey::from_bytes(&[0x42; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
     }
 
     #[tokio::test]
     async fn miss_resolves_imports_and_admits() {
         fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
-            Ok(vec![B64
-                .encode(SigningKey::from_bytes(&[0x42; 32]).verifying_key().to_bytes())])
+            Ok(vec![B64.encode(
+                SigningKey::from_bytes(&[0x42; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )])
         }
         let dir = tempfile::tempdir().expect("tmp");
         let sync = sync_with(resolver, &dir);
@@ -318,6 +324,10 @@ mod tests {
         }
         let dir = tempfile::tempdir().expect("tmp");
         let sync = sync_with(resolver, &dir);
-        assert!(!sync.ensure_caller_key("easynet:///r/test-realm/user/alice").await);
+        assert!(
+            !sync
+                .ensure_caller_key("easynet:///r/test-realm/user/alice")
+                .await
+        );
     }
 }

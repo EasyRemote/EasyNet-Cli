@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
 
-use crate::runtime::domain::NodeId;
+use crate::core::domain::NodeId;
 #[cfg(test)]
 use crate::runtime::invocation_target::LocalNodeResolver;
 use crate::runtime::invocation_target::{CallMode, InvocationPlan, TargetResolver};

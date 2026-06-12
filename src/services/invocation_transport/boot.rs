@@ -225,7 +225,6 @@ impl SessionShutdown {
     fn none() -> Self {
         Self(None)
     }
-
 }
 
 pub fn start_daemon_invocation_transport(
@@ -604,7 +603,7 @@ pub fn start_daemon_invocation_transport(
     service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
 
     if let Ok(seed) =
-        crate::services::invocation_transport::daemon_invocation_service::read_hub_identity_seed(
+        crate::services::invocation_transport::peer_envelope_signer::read_hub_identity_seed(
             config.realm(),
         )
     {
@@ -1003,9 +1002,11 @@ fn render_session_request_error(error: &SessionRequestError) -> String {
 /// through the boot path. Built once in device mode; `None` in
 /// hub/both modes.
 struct DeviceEscalationState {
-    correlation: Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
+    correlation:
+        Arc<crate::services::invocation_transport::session_escalation::EscalationCorrelation>,
     outbox: crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
-    device_trust_sync: Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
+    device_trust_sync:
+        Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
 }
 
 fn spawn_session_supervisor(
@@ -1832,7 +1833,7 @@ fn device_id_from_caller_ura(ura: &str) -> Option<String> {
 /// the daemon's trust file is empty, admission rejects everything"
 /// failure mode that single-user host-mode installs hit when
 /// neither root nor an env override is in play.
-fn trust_anchor_path_from_env_or_default() -> PathBuf {
+pub(crate) fn trust_anchor_path_from_env_or_default() -> PathBuf {
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
         return expand_home(override_path.to_string_lossy().as_ref());
     }

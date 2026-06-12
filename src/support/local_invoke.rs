@@ -40,6 +40,71 @@
 
 use serde_json::Value;
 
+/// Typed failure classes for local-daemon invocation (F-023).
+///
+/// Minted at the transport layer where the cause is structurally known
+/// (socket probe failed, crate built without `axon-pb`), so consumers
+/// branch with [`classify_invoke_error`] instead of sniffing message
+/// text.
+#[derive(Debug, thiserror::Error)]
+pub enum LocalInvokeFailure {
+    /// The daemon is not reachable (listener probe failed, or this
+    /// build has no gRPC transport). Falling back to an in-process
+    /// executor is legitimate — nothing ran.
+    #[error("{0}")]
+    DaemonOffline(String),
+    /// The daemon answered: no such ability is registered there.
+    #[error("{0}")]
+    AbilityUnregistered(String),
+}
+
+/// Consumer-facing classification of a local-invoke error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalInvokeErrorKind {
+    DaemonOffline,
+    AbilityUnregistered,
+    /// The daemon executed the request and it failed for real.
+    /// Re-running through another executor would double-execute a
+    /// side-effecting ability to mask a true error.
+    Failed,
+}
+
+/// Classify a local-invoke error for fallback decisions.
+///
+/// Prefers the typed [`LocalInvokeFailure`] payload (walks the anyhow
+/// chain). The string table below is the TRANSITIONAL fallback for
+/// error paths that cannot mint typed payloads yet — daemon-side
+/// status codes have no typed surface (RFC gap: flagged, not
+/// extrapolated). It is the single permitted sniffing point in the
+/// crate; consumers must not grow their own.
+pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind {
+    for cause in err.chain() {
+        if let Some(f) = cause.downcast_ref::<LocalInvokeFailure>() {
+            return match f {
+                LocalInvokeFailure::DaemonOffline(_) => LocalInvokeErrorKind::DaemonOffline,
+                LocalInvokeFailure::AbilityUnregistered(_) => {
+                    LocalInvokeErrorKind::AbilityUnregistered
+                }
+            };
+        }
+    }
+    let lower = format!("{err:#}").to_ascii_lowercase();
+    if lower.contains("daemon not running")
+        || lower.contains("listener unreachable")
+        || lower.contains("connect to local axon daemon")
+        || lower.contains("requires the `axon-pb` feature")
+    {
+        return LocalInvokeErrorKind::DaemonOffline;
+    }
+    if lower.contains("unknown_ability")
+        || lower.contains("not_found")
+        || lower.contains("no local handler registered")
+    {
+        return LocalInvokeErrorKind::AbilityUnregistered;
+    }
+    LocalInvokeErrorKind::Failed
+}
+
 /// Invoke an ability against the local daemon's Axon runtime.
 ///
 /// `ability` is the wire-level qualified name (e.g. `easynet.discover`,
@@ -139,10 +204,10 @@ pub fn invoke_local_ability_with_invocation_meta(
 /// sees the verb that failed in front of the same explanation.
 #[cfg(not(feature = "axon-pb"))]
 pub fn federation_not_wired_error(action: &str) -> anyhow::Error {
-    anyhow::anyhow!(
+    anyhow::Error::new(LocalInvokeFailure::DaemonOffline(format!(
         "{action} requires the `axon-pb` feature; rebuild with \
          `cargo build --features axon-pb` (production builds always do)."
-    )
+    )))
 }
 
 #[cfg(test)]

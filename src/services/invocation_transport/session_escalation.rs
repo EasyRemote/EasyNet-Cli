@@ -457,7 +457,9 @@ fn build_session_request_up_chunk(
     };
     // serde encoding of an owned-fields enum cannot fail here;
     // the unwrap is justified by the typed enum domain.
-    let data = serde_json::to_vec(&dispatch).expect("encode SessionDispatch::Request");
+    let data = dispatch
+        .encode_frame()
+        .expect("encode SessionDispatch::Request");
 
     BinaryChunk {
         stream_id: SESSION_STREAM_ID,
