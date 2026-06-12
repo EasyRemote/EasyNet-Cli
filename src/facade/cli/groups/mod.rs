@@ -35,3 +35,4 @@ pub mod mission;
 pub mod plugin;
 pub mod runtime;
 pub mod selfcmd;
+pub mod trust;

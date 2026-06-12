@@ -479,7 +479,7 @@ fn pad(text: &str, width: usize) -> String {
     }
 }
 
-fn truncate_display(text: &str, max: usize) -> String {
+pub(crate) fn truncate_display(text: &str, max: usize) -> String {
     if measure_text_width(text) <= max {
         return text.to_string();
     }
@@ -520,11 +520,11 @@ fn invoke_remote_list_abilities(
 ) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+    let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
         &target_ura,
         "meta.list_abilities",
     )?;
-    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
         ability_ura.as_str(),
         query.to_request(),
         &target_ura,

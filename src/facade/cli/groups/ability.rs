@@ -49,7 +49,7 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::Value;
 
-use crate::facade::cli::{abilities, ability_scaffold, deploy, exec, invoke};
+use crate::facade::cli::{abilities, ability_scaffold, ability_search, deploy, exec, invoke};
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
 
@@ -67,6 +67,9 @@ pub enum AbilityAction {
     Validate(ability_scaffold::ValidateArgs),
     /// List published abilities across the federation.
     List(abilities::AbilitiesArgs),
+    /// Find abilities by intent — describe what you want done and
+    /// get ranked local + federated candidates.
+    Search(ability_search::SearchArgs),
     /// Inspect a deployed ability: endpoint name, version, input
     /// schema, runtime state, and hosting device. Use `--format json`
     /// to pipe the raw registry record into other tools.
@@ -122,6 +125,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::New(a) => ability_scaffold::run_new(a),
         AbilityAction::Validate(a) => ability_scaffold::run_validate(a),
         AbilityAction::List(a) => abilities::run(a),
+        AbilityAction::Search(a) => ability_search::run(a),
         AbilityAction::Show(a) => run_show(a),
         AbilityAction::Deploy(a) => deploy::run(a),
         AbilityAction::Uninstall(a) => run_uninstall(a),
@@ -292,11 +296,11 @@ fn ensure_ability_ura(value: &str) -> anyhow::Result<()> {
 fn invoke_remote_list_abilities(node: &str) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+    let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
         &target_ura,
         "meta.list_abilities",
     )?;
-    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
         ability_ura.as_str(),
         serde_json::json!({}),
         &target_ura,

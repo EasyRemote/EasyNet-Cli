@@ -96,6 +96,7 @@
 pub(crate) mod abilities;
 pub(crate) mod ability_catalog_row;
 pub(crate) mod ability_scaffold;
+pub(crate) mod ability_search;
 pub(crate) mod agent;
 pub(crate) mod agent_new_ability;
 pub(crate) mod agent_sessions;
@@ -117,28 +118,21 @@ pub(crate) mod federation_gen_cert;
 pub(crate) mod federation_peers;
 pub(crate) mod federation_wire;
 pub(crate) mod groups;
-pub(crate) mod heartbeat;
 pub mod presentation;
 
-/// Public re-export of the daemon entry point so the `easynet-daemon`
-/// bin (in `src/bin/easynet-daemon.rs`) can call it without widening
-/// the `heartbeat` module to `pub`. Keeping the module `pub(crate)`
-/// is the correct default — only the daemon's main needs the entry
-/// point outside the crate.
-pub use heartbeat::run_daemon;
 /// RFC-006-C v0.1 — `easynet api-key` for OpenAI-compat bearer
 /// tokens, and `easynet llm-api` for chat-completion calls.
 pub(crate) mod api_key_cli;
+/// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
+/// `<user>.pages.{publish,unpublish,list,get}` and the
+/// `<user>.<project_id>.page.fetch` family.
+pub(crate) mod context;
 pub(crate) mod invoke;
 pub(crate) mod join;
 pub(crate) mod llm_api;
 pub(crate) mod mcp_install;
 pub(crate) mod mcp_server;
 pub(crate) mod mission_runs;
-/// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
-/// `<user>.pages.{publish,unpublish,list,get}` and the
-/// `<user>.<project_id>.page.fetch` family.
-pub(crate) mod context;
 pub(crate) mod pages;
 /// #185 — `easynet quota` owner verb to inspect/edit the per-consumer
 /// invocation quota policy (`[daemon.quota]`).
@@ -272,6 +266,7 @@ const HELP_TEMPLATE: &str = "\
 \x1b[1;36mCommands:\x1b[0m
   \x1b[1;36m[Identity]\x1b[0m
     \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
+    \x1b[1mtrust\x1b[0m                Inspect the realm trust anchor — whose keys admission accepts
 
   \x1b[1;36m[Network]\x1b[0m
     \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, exec, terminal
@@ -319,6 +314,10 @@ pub enum Command {
     /// Log in / out, mint device-pairing tokens.
     #[command(display_order = 10)]
     Auth(groups::auth::AuthArgs),
+
+    /// Inspect the realm trust anchor — whose keys admission accepts.
+    #[command(display_order = 11)]
+    Trust(groups::trust::TrustArgs),
 
     // ── Network (20-29) ──────────────────────────────────────────────────
     // Top-level lifecycle shortcuts (join / start / stop). The layered
@@ -383,7 +382,6 @@ pub enum Command {
     #[command(display_order = 40)]
     Runtime(groups::runtime::RuntimeArgs),
 
-
     /// Manage daemon ability-extension plugin packages.
     #[command(display_order = 43)]
     Plugin(groups::plugin::PluginArgs),
@@ -420,11 +418,6 @@ pub enum Command {
     /// Emit a shell completion script (bash/zsh/fish/powershell).
     #[command(display_order = 54)]
     Completion(completion::CompletionArgs),
-
-    // ── Internal ─────────────────────────────────────────────────────────
-    /// Internal heartbeat daemon process (not for direct use).
-    #[command(name = "_heartbeat-daemon", hide = true)]
-    HeartbeatDaemon,
 }
 
 pub fn run(cmd: Command) -> anyhow::Result<()> {
@@ -436,6 +429,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
 
         // Layered groups
         Command::Auth(args) => groups::auth::dispatch(args),
+        Command::Trust(args) => groups::trust::run(args),
         Command::Agent(args) => groups::agent::run(args),
         Command::Ability(args) => groups::ability::run(args),
         Command::Device(args) => groups::device::run(args),
@@ -458,9 +452,6 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Docker(args) => docker::run(args),
         Command::Quota(args) => quota_cmd::run(args),
         Command::Completion(args) => completion::run::<App>(args),
-
-        // Internal
-        Command::HeartbeatDaemon => heartbeat::run_daemon(),
     }
 }
 
@@ -548,7 +539,7 @@ mod help_template_sync_tests {
     }
 
     /// Names clap actually derives from the `Command` enum, minus
-    /// hidden variants (HeartbeatDaemon) and minus the `help` row
+    /// hidden variants (none currently) and minus the `help` row
     /// (which clap auto-injects into `--help`; the template lists
     /// it manually for visual consistency).
     fn enum_command_names() -> BTreeSet<String> {

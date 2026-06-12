@@ -136,18 +136,20 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     match invoke_local_ability("observe.health", json!({"source": "runtime.status"})) {
         Ok(_) => {}
         Err(e) => {
-            // The Axon daemon helper already converts the common
-            // case (daemon.sock missing/refused because the daemon
-            // process is gone) into an actionable "daemon not
-            // running" sentence with a recovery hint. When that
-            // sentence is the inner error we surface it directly;
-            // wrapping it in "despite runtime metadata: …" duplicated
-            // the diagnosis and made the actionable line harder to
-            // read. For genuinely-unexpected failures (permission,
-            // protocol mismatch, etc.) we keep the wrapping so the
-            // diagnosis context is preserved.
+            // The transport layer already converts the common case
+            // (daemon.sock missing/refused because the daemon process
+            // is gone) into an actionable daemon-offline error with a
+            // recovery hint. Surface that one directly; wrapping it in
+            // "despite runtime metadata: …" duplicated the diagnosis
+            // and made the actionable line harder to read. For
+            // genuinely-unexpected failures (permission, protocol
+            // mismatch, etc.) keep the wrapping so the diagnosis
+            // context is preserved.
             let inner = format!("{e}");
-            if inner.contains("daemon not running") {
+            if matches!(
+                crate::support::local_invoke::classify_invoke_error(&e),
+                crate::support::local_invoke::LocalInvokeErrorKind::DaemonOffline
+            ) {
                 output::warn(&inner);
             } else {
                 output::warn(&format!(
@@ -251,7 +253,9 @@ fn run_json() -> anyhow::Result<()> {
 /// above; whether any peers are advertised is a softer signal).
 #[cfg(feature = "axon-pb")]
 fn fetch_directory_entries() -> Vec<Value> {
-    match crate::support::federation_invoke::invoke_federation_discover(None, None) {
+    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
+        None, None,
+    ) {
         Ok(entries) => entries,
         Err(e) => {
             output::info(&format!("Fleet: cannot query federation.discover ('{e}')"));

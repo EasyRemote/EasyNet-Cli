@@ -98,7 +98,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
 
     // PR-N1 commit 8/N: `--node` is now wired against the local
     // daemon's `federation.forward_invoke` ability via the
-    // `support::federation_invoke` helper. The path requires the
+    // `services::invocation_transport::federation_invoke` helper. The path requires the
     // `axon-pb` feature (production builds) — minimal builds still
     // bail with the legacy message.
     let node_ura: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
@@ -110,7 +110,9 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Some(node) => {
             #[cfg(feature = "axon-pb")]
             {
-                Some(crate::support::federation_invoke::parse_node_ura(node)?)
+                Some(
+                    crate::services::invocation_transport::federation_invoke::parse_node_ura(node)?,
+                )
             }
             #[cfg(not(feature = "axon-pb"))]
             {
@@ -164,12 +166,12 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
                 .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
             let ability_ura =
-                crate::support::federation_invoke::TargetOwnedAbilityUra::from_ability_ura(
+                crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_ability_ura(
                     target,
                     ability_selector.ability_ura(),
                 )?;
             let value =
-                crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+                crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
                     ability_ura.as_str(),
                     arguments,
                     target,

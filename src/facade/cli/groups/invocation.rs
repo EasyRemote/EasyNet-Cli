@@ -39,6 +39,19 @@ pub enum InvocationAction {
     Trace(TraceArgs),
     /// Print the native ledger database path.
     Path,
+    /// Aggregate operational stats over recent records — state mix,
+    /// latency percentiles, top abilities and error codes.
+    Stats(StatsArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct StatsArgs {
+    /// How many most-recent records to aggregate.
+    #[arg(long, default_value_t = 500)]
+    pub limit: usize,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -92,6 +105,7 @@ pub fn run(args: InvocationArgs) -> anyhow::Result<()> {
         InvocationAction::List(a) => run_list(a),
         InvocationAction::Show(a) => run_show(a),
         InvocationAction::Trace(a) => run_trace(a),
+        InvocationAction::Stats(a) => run_stats(a),
         InvocationAction::Path => {
             let response: HistoryPathResponse =
                 invoke_invocation_ability(ABILITY_HISTORY_PATH, json!({}))?;
@@ -320,6 +334,150 @@ fn ledger_path_label(path: Option<String>) -> String {
     path.unwrap_or_else(|| "daemon ledger path unavailable".to_string())
 }
 
+/// `easynet invocation stats` — the D7 operator view: one screen that
+/// answers "is invoke healthy right now" from the daemon's own ledger,
+/// no log spelunking. Pure projection over invocation.history.list;
+/// the daemon stays the only ledger reader.
+fn run_stats(args: StatsArgs) -> anyhow::Result<()> {
+    let response: HistoryListResponse =
+        invoke_invocation_ability(ABILITY_HISTORY_LIST, json!({ "limit": args.limit }))?;
+    let summary = summarize(&response.records);
+
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+    if summary.total == 0 {
+        output::info("No invocation records yet. Run an ability through the daemon first.");
+        return Ok(());
+    }
+
+    println!("records analysed: {}", summary.total);
+    println!("\nstates:");
+    for (state, count) in &summary.states {
+        println!(
+            "  {:<12} {:>6}  ({:>5.1}%)",
+            state,
+            count,
+            *count as f64 * 100.0 / summary.total as f64
+        );
+    }
+    if let Some(lat) = &summary.latency_ms {
+        println!(
+            "\nlatency (completed, ms):  p50={}  p95={}  p99={}  max={}",
+            lat.p50, lat.p95, lat.p99, lat.max
+        );
+    }
+    println!("\ntop abilities:");
+    for row in &summary.top_abilities {
+        println!(
+            "  {:<40} {:>6} calls  {:>4} failed",
+            row.ability, row.calls, row.failed
+        );
+    }
+    if !summary.top_errors.is_empty() {
+        println!("\ntop error codes:");
+        for (code, count) in &summary.top_errors {
+            println!("  {:<32} {:>6}", code, count);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct StatsSummary {
+    total: usize,
+    /// (state, count), descending by count.
+    states: Vec<(String, usize)>,
+    latency_ms: Option<LatencySummary>,
+    top_abilities: Vec<AbilityStat>,
+    /// (error code, count), descending.
+    top_errors: Vec<(String, usize)>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct LatencySummary {
+    p50: u64,
+    p95: u64,
+    p99: u64,
+    max: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AbilityStat {
+    ability: String,
+    calls: usize,
+    failed: usize,
+}
+
+fn summarize(records: &[InvocationRecord]) -> StatsSummary {
+    use std::collections::BTreeMap;
+
+    let mut states: BTreeMap<String, usize> = BTreeMap::new();
+    let mut abilities: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut errors: BTreeMap<String, usize> = BTreeMap::new();
+    let mut latencies: Vec<u64> = Vec::new();
+
+    for r in records {
+        *states.entry(r.state.clone()).or_default() += 1;
+        let failed = r.error.is_some();
+        let slot = abilities.entry(r.ability_name.clone()).or_default();
+        slot.0 += 1;
+        if failed {
+            slot.1 += 1;
+        }
+        if let Some(err) = &r.error {
+            *errors.entry(err.code.clone()).or_default() += 1;
+        }
+        if let Some(ms) = r.elapsed_ms {
+            if !failed {
+                latencies.push(ms);
+            }
+        }
+    }
+
+    let mut states: Vec<_> = states.into_iter().collect();
+    states.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+    let mut top_abilities: Vec<AbilityStat> = abilities
+        .into_iter()
+        .map(|(ability, (calls, failed))| AbilityStat {
+            ability,
+            calls,
+            failed,
+        })
+        .collect();
+    top_abilities.sort_by(|a, b| b.calls.cmp(&a.calls).then(a.ability.cmp(&b.ability)));
+    top_abilities.truncate(5);
+
+    let mut top_errors: Vec<_> = errors.into_iter().collect();
+    top_errors.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    top_errors.truncate(3);
+
+    latencies.sort_unstable();
+    let latency_ms = (!latencies.is_empty()).then(|| LatencySummary {
+        p50: percentile(&latencies, 50),
+        p95: percentile(&latencies, 95),
+        p99: percentile(&latencies, 99),
+        max: *latencies.last().expect("non-empty"),
+    });
+
+    StatsSummary {
+        total: records.len(),
+        states,
+        latency_ms,
+        top_abilities,
+        top_errors,
+    }
+}
+
+/// Nearest-rank percentile over a sorted slice. p in [1, 100].
+fn percentile(sorted: &[u64], p: u64) -> u64 {
+    debug_assert!(!sorted.is_empty());
+    let rank = (p as usize * sorted.len()).div_ceil(100);
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+}
+
 fn fetch_history_list(args: &ListArgs) -> anyhow::Result<HistoryListResponse> {
     invoke_invocation_ability(ABILITY_HISTORY_LIST, history_list_args(args))
 }
@@ -439,5 +597,102 @@ mod tests {
             "easynet:///r/test/user/alice"
         );
         assert!(body["filter"].get("subject").is_none());
+    }
+
+    // ── `invocation stats` aggregation (F-051) ──────────────────
+
+    fn stats_record(
+        ability: &str,
+        state: &str,
+        error_code: Option<&str>,
+        elapsed_ms: Option<u64>,
+    ) -> InvocationRecord {
+        let mut b = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+            .invocation_ura("easynet:///r/test/resource/alice.invocations/i-1")
+            .request_id("req-1")
+            .caller_ura("easynet:///r/test/device/caller")
+            .callee_ura("easynet:///r/test/device/callee")
+            .subject_ura("easynet:///r/test/device/callee")
+            .ability_ura("easynet:///r/test/ability/device.callee.fs.read")
+            .ability_name(ability)
+            .state(state)
+            .started_unix_ms(1_700_000_000_000_i64)
+            .args(easynet_axon::invocation::LedgerEventPayload::Digest {
+                content_type: "application/json".to_string(),
+                sha256: "0".repeat(64),
+                size_bytes: 2,
+            });
+        if let Some(code) = error_code {
+            b = b.error(easynet_axon::invocation::LedgerErrorRecord {
+                source: "test".to_string(),
+                code: code.to_string(),
+                message: "boom".to_string(),
+                retryable: false,
+                context: Default::default(),
+            });
+        }
+        if let Some(ms) = elapsed_ms {
+            b = b.elapsed_ms(ms);
+        }
+        b.build().expect("stats test record")
+    }
+
+    #[test]
+    fn summarize_empty_ledger_is_all_zero() {
+        let s = summarize(&[]);
+        assert_eq!(s.total, 0);
+        assert!(s.states.is_empty());
+        assert!(s.latency_ms.is_none());
+        assert!(s.top_abilities.is_empty());
+        assert!(s.top_errors.is_empty());
+    }
+
+    #[test]
+    fn summarize_groups_and_orders_deterministically() {
+        // Counts descend; ties break by name so output is stable run
+        // to run (the explainability promise in the module doc).
+        let records = vec![
+            stats_record("b.read", "completed", None, Some(10)),
+            stats_record("b.read", "completed", None, Some(20)),
+            stats_record("a.write", "failed", Some("E_IO"), None),
+            stats_record("c.list", "completed", None, Some(30)),
+        ];
+        let s = summarize(&records);
+        assert_eq!(s.total, 4);
+        assert_eq!(
+            s.states,
+            vec![("completed".to_string(), 3), ("failed".to_string(), 1)]
+        );
+        let names: Vec<(&str, usize, usize)> = s
+            .top_abilities
+            .iter()
+            .map(|a| (a.ability.as_str(), a.calls, a.failed))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("b.read", 2, 0), ("a.write", 1, 1), ("c.list", 1, 0)]
+        );
+        assert_eq!(s.top_errors, vec![("E_IO".to_string(), 1)]);
+    }
+
+    #[test]
+    fn summarize_latency_excludes_failures_and_uses_nearest_rank() {
+        // A failed call's elapsed time is recovery noise, not service
+        // latency — it must not pollute the percentiles.
+        let mut records: Vec<InvocationRecord> = (1..=100)
+            .map(|i| stats_record("x.call", "completed", None, Some(i)))
+            .collect();
+        records.push(stats_record(
+            "x.call",
+            "failed",
+            Some("E_TIMEOUT"),
+            Some(9_999),
+        ));
+        let s = summarize(&records);
+        let lat = s.latency_ms.expect("latencies present");
+        assert_eq!(lat.p50, 50);
+        assert_eq!(lat.p95, 95);
+        assert_eq!(lat.p99, 99);
+        assert_eq!(lat.max, 100, "failed 9999ms must be excluded");
     }
 }

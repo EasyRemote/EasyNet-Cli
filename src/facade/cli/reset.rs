@@ -142,7 +142,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_federation_revoke_for_reset(device_ura: &str) -> anyhow::Result<()> {
-    crate::support::federation_invoke::invoke_federation_revoke(
+    crate::services::invocation_transport::federation_invoke::invoke_federation_revoke(
         device_ura,
         "device-reset",
         Some(device_ura),
