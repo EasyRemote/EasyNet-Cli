@@ -342,16 +342,16 @@ pub(crate) fn think_with_registry(
     let catalog = collect_owner_catalog(&owner);
 
     let curator_outcome = match last_parsed_verdict.as_ref() {
-        Some(v) if should_curate(v) => Some(run_curator_turn(
+        Some(v) if should_curate(v) => Some(run_curator_turn(CuratorTurnRequest {
             registry,
-            &owner,
-            &judge,
-            &prompt,
-            v,
-            &transcript,
-            &catalog,
+            owner: &owner,
+            curator_agent: &judge,
+            initial_prompt: &prompt,
+            verdict: v,
+            transcript: &transcript,
+            catalog: &catalog,
             dry_run,
-        )),
+        })),
         _ => None,
     };
 
@@ -413,6 +413,17 @@ fn should_curate(verdict: &Value) -> bool {
 pub(crate) struct CatalogEntry {
     pub qualified: String,
     pub description: String,
+}
+
+struct CuratorTurnRequest<'a> {
+    registry: &'a Arc<AxonAbilityCatalog>,
+    owner: &'a str,
+    curator_agent: &'a str,
+    initial_prompt: &'a str,
+    verdict: &'a Value,
+    transcript: &'a [Value],
+    catalog: &'a [CatalogEntry],
+    dry_run: bool,
 }
 
 /// Read the owner agent's currently-published ability catalog. Two
@@ -559,17 +570,18 @@ fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<Str
 /// JSON outcome describing what happened at every stage so the
 /// operator reading the mission.think envelope can audit the
 /// publish step without grep'ing the daemon log.
-#[allow(clippy::too_many_arguments)]
-fn run_curator_turn(
-    registry: &Arc<AxonAbilityCatalog>,
-    owner: &str,
-    curator_agent: &str,
-    initial_prompt: &str,
-    verdict: &Value,
-    transcript: &[Value],
-    catalog: &[CatalogEntry],
-    dry_run: bool,
-) -> Value {
+fn run_curator_turn(request: CuratorTurnRequest<'_>) -> Value {
+    let CuratorTurnRequest {
+        registry,
+        owner,
+        curator_agent,
+        initial_prompt,
+        verdict,
+        transcript,
+        catalog,
+        dry_run,
+    } = request;
+
     let scope = verdict
         .get("scope")
         .and_then(Value::as_str)

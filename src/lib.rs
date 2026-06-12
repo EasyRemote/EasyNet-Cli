@@ -41,15 +41,16 @@
     clippy::module_name_repetitions
 )]
 // Ratchet (F-005): categories cleared to zero are DENIED so they
-// cannot creep back; the two still-open categories
-// (`result_large_err` — needs AxonError boxing/SDK slim, and
-// `too_many_arguments` — the F-002 transport arg-struct refactor)
-// stay at warn until their tracked fixes land. Lower the warn set,
-// never raise it.
+// cannot creep back. `result_large_err` is denied crate-wide; the
+// generated-tonic `Status` boundary owns its narrow module exception
+// in `services::invocation_transport`. `too_many_arguments` remains
+// tracked under the F-002 transport arg-struct refactor. Lower the
+// warn set, never raise it.
 #![deny(
     clippy::needless_borrow,
     clippy::needless_return,
     clippy::redundant_closure,
+    clippy::result_large_err,
     clippy::useless_format,
     clippy::missing_safety_doc
 )]

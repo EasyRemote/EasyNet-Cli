@@ -2,26 +2,9 @@
 //! from facade/cli/agent.rs, F-033 / T4.6).
 
 use super::*;
-use super::{history::*, inspect::*, lifecycle::*, mcp::*, publish::*, send::*};
 
-use clap::{Args, Subcommand, ValueEnum};
-use console::style;
-use serde_json::Value;
-use std::time::Duration;
-
-use crate::facade::cli::mission_runs::{self, MissionRunOpts};
-use crate::facade::cli::{
-    daemon_agent_view,
-    daemon_agent_view::{AgentRuntimeKind, DaemonAgentRow},
-};
 use crate::persistence::config;
 use crate::runtime::directory::AgentDirectory;
-use crate::runtime::drivers::{claude_code, codex};
-use crate::support::local_daemon_grpc::LocalDaemonAbilityClient;
-use crate::support::output;
-use crate::support::timeouts;
-
-use super::*;
 
 #[test]
 fn eal_string_literal_quotes_and_escapes_metachars() {

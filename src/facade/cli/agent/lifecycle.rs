@@ -273,10 +273,6 @@ fn daemon_agent_row(
         })
 }
 
-fn daemon_row_agent_type(row: &DaemonAgentRow) -> anyhow::Result<AgentRuntimeKind> {
-    daemon_agent_view::agent_kind(row)
-}
-
 fn daemon_row_root(row: &DaemonAgentRow) -> std::path::PathBuf {
     daemon_agent_view::agent_root(row)
 }

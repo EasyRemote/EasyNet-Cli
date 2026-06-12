@@ -3,7 +3,6 @@
 
 use console::style;
 
-
 use super::*;
 
 pub(super) fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
