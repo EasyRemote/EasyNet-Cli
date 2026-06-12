@@ -82,7 +82,7 @@ where
 {
     let trimmed = node.trim();
     if crate::ura::parse_ura(trimmed).is_ok() {
-        return crate::support::federation_invoke::parse_node_ura(trimmed);
+        return crate::services::invocation_transport::federation_invoke::parse_node_ura(trimmed);
     }
     if let Some(ura) = lookup(trimmed) {
         return Ok(ura);
@@ -102,7 +102,11 @@ where
 /// device URA. Best-effort only: discover failures must not block the
 /// legacy local-realm fallback.
 fn lookup_node_ura_in_directory(node: &str) -> Option<String> {
-    let entries = crate::support::federation_invoke::invoke_federation_discover(None, None).ok()?;
+    let entries =
+        crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
+            None, None,
+        )
+        .ok()?;
     for entry in entries {
         if entry.get("node_id").and_then(Value::as_str) == Some(node) {
             if let Some(ura) = entry.get("agent_ura").and_then(Value::as_str) {

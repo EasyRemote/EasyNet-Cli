@@ -5,7 +5,7 @@
 //
 // Why this module exists
 // ----------------------
-// `support::federation_invoke` is gated behind `#[cfg(feature =
+// `services::invocation_transport::federation_invoke` is gated behind `#[cfg(feature =
 // "axon-pb")]` because it depends on the tonic-generated `pb::axon`
 // types. Product-layer call sites (ability discovery, federation
 // surfaces in `runtime::agents::*`) want to consult the federation
@@ -34,7 +34,7 @@ use serde_json::Value;
 
 /// Read the federated directory through the local daemon's
 /// `federation.discover` ability. See
-/// [`crate::support::federation_invoke::invoke_federation_discover`]
+/// [`crate::services::invocation_transport::federation_invoke::invoke_federation_discover`]
 /// for the real implementation contract.
 ///
 /// **Feature-off behaviour:** returns `Ok(vec![])`. The daemon
@@ -45,7 +45,10 @@ pub fn invoke_federation_discover(
     agent_ura_filter: Option<&str>,
     caller_ura: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    crate::support::federation_invoke::invoke_federation_discover(agent_ura_filter, caller_ura)
+    crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
+        agent_ura_filter,
+        caller_ura,
+    )
 }
 
 #[cfg(not(feature = "axon-pb"))]

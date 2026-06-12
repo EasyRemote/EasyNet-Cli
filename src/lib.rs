@@ -40,6 +40,20 @@
     clippy::doc_overindented_list_items,
     clippy::module_name_repetitions
 )]
+// Ratchet (F-005): categories cleared to zero are DENIED so they
+// cannot creep back. `result_large_err` is denied crate-wide; the
+// generated-tonic `Status` boundary owns its narrow module exception
+// in `services::invocation_transport`. `too_many_arguments` remains
+// tracked under the F-002 transport arg-struct refactor. Lower the
+// warn set, never raise it.
+#![deny(
+    clippy::needless_borrow,
+    clippy::needless_return,
+    clippy::redundant_closure,
+    clippy::result_large_err,
+    clippy::useless_format,
+    clippy::missing_safety_doc
+)]
 
 pub mod core;
 pub mod daemon;

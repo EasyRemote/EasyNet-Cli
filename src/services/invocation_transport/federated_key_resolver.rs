@@ -347,7 +347,7 @@ impl FederatedKeyResolver {
         };
 
         let caller_realm =
-            crate::services::invocation_transport::daemon_invocation_service::parse_realm_from_ura(
+            crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura(
                 agent_ura,
             )
             .ok_or_else(|| caller_key_not_found(agent_ura, "malformed_ura"))?;

@@ -88,7 +88,7 @@ fn agent_rows(
             let model = spec_model.or_else(|| e.model.clone());
             let timeout_secs = spec_timeout_secs.unwrap_or(e.timeout_secs);
             let ura =
-                crate::persistence::local_agents::lookup_hosted_ura(&local_agents, "llm", name);
+                crate::persistence::local_agents::lookup_hosted_ura(local_agents, "llm", name);
             json!({
                 "name": name,
                 "ura": ura.map(Value::String).unwrap_or(Value::Null),

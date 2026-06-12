@@ -612,7 +612,7 @@ fn collect_placeholders(template: &str, names: &mut BTreeSet<String>) {
     }
 }
 
-fn build_cost_meta(
+pub(super) fn build_cost_meta(
     cost_kind: Option<CostKindArg>,
     cost_label: Option<&str>,
 ) -> anyhow::Result<Option<CostMeta>> {

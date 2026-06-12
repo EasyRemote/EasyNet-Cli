@@ -2,29 +2,18 @@
 // =====================================
 //
 // File: src/bin/easynet-daemon.rs
-// Description: Long-running daemon entry. v10.5 R1 PR-DAEMON Commit 3
-//              wires the local Control-plane IPC server alongside the
-//              existing heartbeat loop ("scheme X" — one process owns
-//              pair, heartbeat, IPC, and (later) ability dispatch).
+// Description: Long-running daemon entry — one process owns the
+//              Control-plane IPC server, daemon Invocation, runtime
+//              dispatch, and ability hosting. Directory liveness is
+//              the session-lifetime federation.heartbeat loop inside
+//              the invocation transport (the legacy heartbeat sidecar
+//              was retired in F-049/T1.5-1).
 //
 // Current shape
 // -------------
 // - Always: spin up a tokio multi-thread runtime and run the daemon
 //   IPC surfaces on it: boot/status control, daemon Invocation, and
 //   runtime-dispatch for Axon local-tool delegation.
-// - Optional: if `_EASYNET_HB_ENDPOINT` is set in the environment,
-//   start the heartbeat loop on a dedicated OS thread. The heartbeat
-//   loop is sync today (uses ureq + ctrlc); embedding it on the tokio
-//   runtime would block the accept loop, hence the dedicated thread.
-//
-// Why both?
-// ---------
-// Plan v10.5 R1 §"方案 X" pins single-daemon ownership of pair +
-// heartbeat + IPC + ability publisher. v1 ships pair + heartbeat from
-// `facade::cli::run_daemon` and IPC from `services::control::server`.
-// PR-INVOCATION-EXEC-UNITY collapses the two so heartbeat lives on the
-// same Kernel handle the IPC server already holds; until then we run
-// them as cooperating-but-separate subsystems.
 //
 // What is NOT here yet
 // --------------------
@@ -41,13 +30,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use easynet_cli::facade::cli::run_daemon;
+use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig,
 };
 use easynet_cli::runtime::agents;
-use easynet_cli::runtime::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::runtime::execution::schedule::ScheduleService;
 use easynet_cli::runtime::gateway::NoopGateway;
@@ -61,11 +49,6 @@ use easynet_cli::services::control::runtime_dispatch_adapter::RuntimeDispatchAda
 use easynet_cli::services::control::{discovery, runtime_dispatch, server};
 
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
-/// Heartbeat is opt-in: only spawn the legacy loop if the parent
-/// process configured an endpoint. This lets `cargo run --bin
-/// easynet-daemon` boot in IPC-only mode for FFI smoke tests without
-/// requiring a Hub.
-const ENV_HB_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -213,6 +196,8 @@ async fn main() -> anyhow::Result<()> {
     let pages_identity = agents::PagesIdentity::from_env();
     let invocation_ledger = open_invocation_ledger();
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
+    let hub_published_abilities =
+        easynet_cli::services::hub_published_ability_store::HubPublishedAbilityStore::new();
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -231,18 +216,22 @@ async fn main() -> anyhow::Result<()> {
     // landing.
     let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
         Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
-    let built_registry = agents::build_registry_for_daemon_result(
-        kernel.session_service(),
-        kernel.permission_service(),
-        kernel.discuss_service(),
-        kernel.schedule_service(),
-        kernel.loop_service(),
-        invocation_ledger.clone(),
-        None,
-        pages_identity,
-        Some(Arc::clone(&local_runtime)),
-        Arc::clone(&hot_agent_registrar_cell),
-    );
+    let built_registry =
+        agents::build_registry_for_daemon_result(agents::RegistryDaemonBuildConfig {
+            services: agents::RegistryBuildServices::new(
+                kernel.session_service(),
+                kernel.permission_service(),
+                kernel.discuss_service(),
+                kernel.schedule_service(),
+                kernel.loop_service(),
+            ),
+            invocation_ledger: invocation_ledger.clone(),
+            loaders: None,
+            pages_identity,
+            local_runtime: Some(Arc::clone(&local_runtime)),
+            hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
+            shared_stores: agents::RegistrySharedStores::new(Arc::clone(&hub_published_abilities)),
+        });
     let registry = Arc::clone(&built_registry.catalog);
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
@@ -264,52 +253,35 @@ async fn main() -> anyhow::Result<()> {
     // rather than after control/runtime-dispatch sockets already
     // exist. That keeps the PR-1 "load config before any listener
     // bind" invariant honest whenever the feature-gated transport is compiled in.
+    // Hold the session-shutdown handle for the daemon's lifetime;
+    // dropping it at shutdown drains the live `<self>.session` dial
+    // (F-007 — was Box::leak'd). Bound directly from the boot result:
+    // Ok yields the handle, Err returns, so there is no never-read
+    // placeholder.
     #[cfg(feature = "axon-pb")]
-    {
+    let session_shutdown = {
         boot_bus.emit_started("daemon-invocation-transport");
-        if let Err(e) =
-            easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
-                Arc::clone(&local_runtime),
-                invocation_ledger,
-                Arc::clone(&hot_agent_registrar_cell),
-                Some(Arc::clone(&built_registry.plugin_runtime_manager)),
-            )
-        {
-            eprintln!("[daemon-invocation] transport boot failed: {e:#}");
-            boot_bus.emit_failed("daemon-invocation-transport", e.to_string());
-            return Err(e);
+        match easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
+            Arc::clone(&local_runtime),
+            invocation_ledger,
+            Arc::clone(&hot_agent_registrar_cell),
+            Some(Arc::clone(&built_registry.plugin_runtime_manager)),
+            Arc::clone(&hub_published_abilities),
+        ) {
+            Ok(handle) => {
+                boot_bus.emit_ok("daemon-invocation-transport");
+                handle
+            }
+            Err(e) => {
+                eprintln!("[daemon-invocation] transport boot failed: {e:#}");
+                boot_bus.emit_failed("daemon-invocation-transport", e.to_string());
+                return Err(e);
+            }
         }
-        boot_bus.emit_ok("daemon-invocation-transport");
-    }
+    };
     #[cfg(not(feature = "axon-pb"))]
     {
         boot_bus.emit_skipped("daemon-invocation-transport");
-    }
-
-    // Optional sidecar: heartbeat. Run on a dedicated OS thread
-    // because run_daemon() is blocking (ureq + ctrlc handler). Errors
-    // are logged but do not tear down the IPC server; if heartbeat
-    // dies the device is in a degraded state but Client UIs can still
-    // attach via FFI.
-    let heartbeat_endpoint = std::env::var(ENV_HB_ENDPOINT)
-        .ok()
-        .filter(|endpoint| !endpoint.trim().is_empty());
-    if heartbeat_endpoint.is_some() {
-        boot_bus.emit_started("heartbeat");
-        if let Err(err) = std::thread::Builder::new()
-            .name("easynet-heartbeat".into())
-            .spawn(|| {
-                if let Err(e) = run_daemon() {
-                    eprintln!("[heartbeat] daemon exited with error: {e:#}");
-                }
-            })
-        {
-            boot_bus.emit_failed("heartbeat", err.to_string());
-            return Err(err.into());
-        }
-        boot_bus.emit_ok("heartbeat");
-    } else {
-        boot_bus.emit_skipped("heartbeat");
     }
 
     // Clipboard tracker (Context surface). Always spawned; the thread
@@ -319,6 +291,16 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_started("clipboard-tracker");
     easynet_cli::services::clipboard_tracker::spawn();
     boot_bus.emit_ok("clipboard-tracker");
+
+    // Ability service-health monitor. Probes manifest abilities that
+    // declare `[health]`, runs `[boot]` self-heal when the backing
+    // service is down, and feeds `meta.list_abilities` the
+    // health_status metadata the catalog surfaces. Abilities without
+    // a `[health]` section cost nothing — the thread only ticks over
+    // declared probes.
+    boot_bus.emit_started("ability-health");
+    easynet_cli::services::ability_health::spawn();
+    boot_bus.emit_ok("ability-health");
 
     // Schedule tick runner. Fires due schedules every TICK_PERIOD
     // by constructing a RuntimeInvocation adapter record per fire and routing it
@@ -415,6 +397,10 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_ready();
 
     wait_for_shutdown_signal().await;
+    // Cancel the session supervisor (drains the live `<self>.session`
+    // dial -> clean Eof at the hub) before tearing down control sockets.
+    #[cfg(feature = "axon-pb")]
+    drop(session_shutdown);
     cleanup_control_discovery();
     Ok(())
 }

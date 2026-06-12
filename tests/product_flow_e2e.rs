@@ -1,6 +1,6 @@
 //! Product-flow end-to-end test (RFC-002 + RFC-002.2).
 //!
-//! User asked: 创建用户获得 key → easynet-cli join → 设备1 注册
+//! User asked: 创建用户获得 key → easynet device join → 设备1 注册
 //! agent1 → 设备2 注册 agent2 → agent1 调用 agent2.chat
 //! 一起讨论. The previous axon-internal tests (forward_invoke_e2e,
 //! multi_shard_e2e) proved the protocol layer; this one walks the

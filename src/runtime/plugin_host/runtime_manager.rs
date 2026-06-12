@@ -94,8 +94,12 @@ pub struct PluginRuntimeManager {
 impl PluginRuntimeManager {
     /// Construct an empty manager. State is loaded lazily so daemon metadata
     /// queries do not panic if package indexing fails.
+    ///
+    /// Reads through the shared default-state snapshot (F-050): on a cold
+    /// process this is the one boot-time disk read that also primes the
+    /// snapshot for every later catalog reader.
     pub fn new() -> Self {
-        let loaded = PluginRuntimeState::load_default();
+        let loaded = super::default_state().map(|state| (*state).clone());
         let wire_registry = loaded
             .as_ref()
             .map(AbilityWireRegistry::from_plugin_runtime_state)
@@ -126,6 +130,7 @@ impl PluginRuntimeManager {
         let state = PluginRuntimeState::load_default()?;
         self.runtime_host.register(state.load_plan(), reg)?;
         self.wire_registry.replace_from_plugin_runtime_state(&state);
+        super::publish_default_state(&state);
         *self
             .state
             .write()
@@ -154,6 +159,7 @@ impl PluginRuntimeManager {
         let state = PluginRuntimeState::load_default()?;
         let report = self.runtime_host.hot_reload(state.load_plan(), reg)?;
         self.wire_registry.replace_from_plugin_runtime_state(&state);
+        super::publish_default_state(&state);
         *self
             .state
             .write()

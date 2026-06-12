@@ -221,12 +221,39 @@ pub enum PresenceEvent {
 struct PresenceSlot {
     session_id: PresenceSessionId,
     sender: DispatchSender,
+    /// Carrier contract the device declared on frame 0 (DEC-F004).
+    /// 0 = legacy JSON device; 1 = carrier-v1 proto frames.
+    contract: SessionContract,
+}
+
+/// Frame-0 session negotiation facts (DEC-F004 / mini-RFC §2): the
+/// dispatch contract version the claimant declared plus its per-boot
+/// claimant fingerprint (T1.2). One value object so registration
+/// sites cannot pass half the negotiation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionContract {
+    pub version: u32,
+    pub claimant_boot_nonce: Vec<u8>,
+}
+
+impl SessionContract {
+    /// A device that sent no SessionOpenExt — the JSON era.
+    pub fn legacy() -> Self {
+        Self::default()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct PresenceRegistration {
     pub session_id: PresenceSessionId,
     pub displaced: Option<DispatchSender>,
+    /// T1.2: the prior claimant's boot nonce when this registration
+    /// displaced a live slot. Empty nonce = the prior was a legacy
+    /// device. `None` = nothing was displaced. A displacement whose
+    /// nonce differs from the new claimant's is a claimant conflict
+    /// (two processes fighting over one URA), not a same-device
+    /// restart.
+    pub displaced_claimant_nonce: Option<Vec<u8>>,
 }
 
 /// Concurrent registry of live `<self>.session` reverse channels.
@@ -284,18 +311,50 @@ impl PresenceRegistry {
     /// Returns the displaced sender if any so the caller can observe
     /// the prior session's state if it cares; production paths
     /// drop it.
+    /// Carrier contract version the live session at `ura` declared on
+    /// frame 0. `None` = no live session. `Some(0)` = legacy JSON
+    /// device. The hub dispatch write path consults this to pick the
+    /// frame encoding per device (DEC-F004 rolling upgrade).
+    pub fn dispatch_contract_version(&self, ura: &str) -> Option<u32> {
+        self.by_ura.get(ura).map(|slot| slot.contract.version)
+    }
+
     pub fn insert(&self, ura: String, sender: DispatchSender) -> Option<DispatchSender> {
         self.insert_tracked(ura, sender).displaced
     }
 
     /// Register a new `<self>.session` and return the registry-owned
-    /// `session_id` alongside any displaced prior sender.
+    /// `session_id` alongside any displaced prior sender. Legacy
+    /// (contract-v0) registration; frame-0 negotiated sessions use
+    /// [`PresenceRegistry::insert_negotiated`].
     pub fn insert_tracked(&self, ura: String, sender: DispatchSender) -> PresenceRegistration {
+        self.insert_negotiated(ura, sender, SessionContract::legacy())
+    }
+
+    /// Register a new `<self>.session` carrying the frame-0 carrier
+    /// negotiation facts (DEC-F004). The slot remembers the declared
+    /// contract so the hub's dispatch write path can pick the frame
+    /// encoding per device, and the prior claimant's fingerprint is
+    /// surfaced for T1.2 conflict classification.
+    pub fn insert_negotiated(
+        &self,
+        ura: String,
+        sender: DispatchSender,
+        contract: SessionContract,
+    ) -> PresenceRegistration {
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-        let displaced = self
-            .by_ura
-            .insert(ura.clone(), PresenceSlot { session_id, sender })
-            .map(|prior| prior.sender);
+        let prior = self.by_ura.insert(
+            ura.clone(),
+            PresenceSlot {
+                session_id,
+                sender,
+                contract,
+            },
+        );
+        let displaced_claimant_nonce = prior
+            .as_ref()
+            .map(|p| p.contract.claimant_boot_nonce.clone());
+        let displaced = prior.map(|prior| prior.sender);
         if displaced.is_some() {
             // Always emit Offline for the displaced session before
             // Online for the newcomer; ignore broadcast send errors
@@ -309,6 +368,7 @@ impl PresenceRegistry {
         PresenceRegistration {
             session_id,
             displaced,
+            displaced_claimant_nonce,
         }
     }
 
@@ -365,6 +425,22 @@ impl PresenceRegistry {
         self.by_ura
             .get(ura)
             .map(|entry| (entry.session_id, entry.sender.clone()))
+    }
+
+    /// O(1) liveness check. Hot paths (route resolution runs per
+    /// invocation) must use this, never `snapshot().contains(...)`
+    /// — `snapshot()` materializes and sorts the whole table.
+    #[must_use]
+    pub fn contains(&self, ura: &str) -> bool {
+        self.by_ura.contains_key(ura)
+    }
+
+    /// Cheap online-device count for stats fields (heartbeat runs
+    /// per device every 5s — counting via `snapshot()` there was
+    /// O(devices²·log) across the fleet).
+    #[must_use]
+    pub fn online_count(&self) -> usize {
+        self.by_ura.len()
     }
 
     /// Take a deterministic snapshot of currently-online URAs. Used
@@ -426,6 +502,56 @@ mod tests {
         let registry = PresenceRegistry::new();
         assert!(registry.snapshot().is_empty());
         assert!(registry.lookup("easynet:///r/x/device/y").is_none());
+    }
+
+    #[test]
+    fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
+        let reg = PresenceRegistry::new();
+        let (tx1, _rx1) = tokio::sync::mpsc::channel(1);
+        let first = reg.insert_negotiated(
+            "easynet:///r/t/device/d1".into(),
+            tx1,
+            SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![1; 16],
+            },
+        );
+        assert!(first.displaced.is_none());
+        assert!(first.displaced_claimant_nonce.is_none());
+        assert_eq!(
+            reg.dispatch_contract_version("easynet:///r/t/device/d1"),
+            Some(1)
+        );
+
+        // A different claimant displacing the slot surfaces the prior
+        // fingerprint so the accept path can classify the conflict.
+        let (tx2, _rx2) = tokio::sync::mpsc::channel(1);
+        let second = reg.insert_negotiated(
+            "easynet:///r/t/device/d1".into(),
+            tx2,
+            SessionContract {
+                version: 0,
+                claimant_boot_nonce: vec![2; 16],
+            },
+        );
+        assert!(second.displaced.is_some());
+        assert_eq!(second.displaced_claimant_nonce, Some(vec![1; 16]));
+        assert_eq!(
+            reg.dispatch_contract_version("easynet:///r/t/device/d1"),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn legacy_insert_tracked_registers_contract_v0() {
+        let reg = PresenceRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let r = reg.insert_tracked("easynet:///r/t/device/d2".into(), tx);
+        assert!(r.displaced_claimant_nonce.is_none());
+        assert_eq!(
+            reg.dispatch_contract_version("easynet:///r/t/device/d2"),
+            Some(0)
+        );
     }
 
     #[test]

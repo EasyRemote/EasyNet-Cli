@@ -71,7 +71,10 @@ pub(crate) fn list_agents() -> anyhow::Result<Vec<DaemonAgentRow>> {
         Err(err) => {
             #[cfg(test)]
             {
-                if format!("{err}").contains("daemon not running") {
+                if matches!(
+                    crate::support::local_invoke::classify_invoke_error(&err),
+                    crate::support::local_invoke::LocalInvokeErrorKind::DaemonOffline
+                ) {
                     return list_agents_from_disk_for_tests();
                 }
             }

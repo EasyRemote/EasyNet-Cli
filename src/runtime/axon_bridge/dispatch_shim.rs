@@ -80,7 +80,7 @@ pub fn from_envelope_open(
     envelope: pb::Envelope,
     target_ability_name: String,
     initial_args: Vec<u8>,
-) -> Result<WireDispatch, AxonError> {
+) -> Result<WireDispatch, Box<AxonError>> {
     let signature = envelope
         .caller_signature
         .clone()
@@ -99,11 +99,13 @@ pub fn from_envelope_open(
 /// envelopes because the caller admission decision was made by
 /// `AdmissionFacade` at the gRPC boundary. It still builds the canonical
 /// Axon envelope so LocalRuntime handlers see caller/callee/subject.
+// Err is boxed (clippy result_large_err): AxonError is ≥144 B, and the
+// Ok path of every dispatch would otherwise carry the large variant.
 pub fn admitted_from_wire_parts(
     envelope: pb::Envelope,
     target_ability_name: String,
     initial_args: Vec<u8>,
-) -> Result<AdmittedWireDispatch, AxonError> {
+) -> Result<AdmittedWireDispatch, Box<AxonError>> {
     let trace_id = envelope.trace_id.clone();
     let caller = envelope
         .caller
@@ -146,7 +148,7 @@ pub fn admitted_from_wire_parts(
 
 pub fn admitted_from_envelope_open(
     envelope_open: &pb::EnvelopeOpen,
-) -> Result<AdmittedWireDispatch, AxonError> {
+) -> Result<AdmittedWireDispatch, Box<AxonError>> {
     let ability = envelope_open
         .target
         .as_ref()
@@ -174,6 +176,9 @@ pub struct RpcDispatchOutcome {
     pub state: InvocationState,
     pub payload_bytes: Vec<u8>,
     pub error: Option<AxonError>,
+    /// Terminal execution receipt, when the runtime minted one —
+    /// carried back to the hub on carrier-v1 sessions (DEC-F004).
+    pub terminal_receipt: Option<easynet_axon::invocation::InvocationReceipt>,
 }
 
 /// Drain an `InvocationHandle` to its terminal state and project
@@ -185,6 +190,13 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
     let state = handle.wait().await;
     let events = handle.core().snapshot_events().await;
     let terminal = events.iter().rev().find(|e| e.state.is_terminal()).cloned();
+    let terminal_receipt = handle
+        .core()
+        .snapshot_receipts()
+        .await
+        .into_iter()
+        .rev()
+        .find(|r| r.state.is_terminal());
 
     match (state, terminal) {
         (InvocationState::Completed, Some(ev)) => RpcDispatchOutcome {
@@ -192,6 +204,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             state,
             payload_bytes: ev.payload,
             error: None,
+            terminal_receipt: terminal_receipt.clone(),
         },
         (InvocationState::Failed, Some(ev)) => RpcDispatchOutcome {
             invocation_id: Some(ev.invocation_id.clone()),
@@ -200,6 +213,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             error: Some(
                 AxonError::internal(ev.reason.clone()).with_invocation_id(ev.invocation_id),
             ),
+            terminal_receipt: terminal_receipt.clone(),
         },
         (InvocationState::TimedOut, Some(ev)) => RpcDispatchOutcome {
             invocation_id: Some(ev.invocation_id.clone()),
@@ -209,6 +223,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
                 AxonError::deadline_exceeded(ev.reason.clone())
                     .with_invocation_id(ev.invocation_id),
             ),
+            terminal_receipt: terminal_receipt.clone(),
         },
         (InvocationState::Cancelled, Some(ev)) => RpcDispatchOutcome {
             invocation_id: Some(ev.invocation_id.clone()),
@@ -217,6 +232,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             error: Some(
                 AxonError::cancelled(ev.reason.clone()).with_invocation_id(ev.invocation_id),
             ),
+            terminal_receipt: terminal_receipt.clone(),
         },
         // No terminal event recorded — should not happen because
         // wait() returned, but treat defensively.
@@ -227,6 +243,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             error: Some(AxonError::internal(
                 "axon dispatch ended without a terminal event",
             )),
+            terminal_receipt: None,
         },
         // Wait() returned a non-terminal state — defensive.
         (other, _) => RpcDispatchOutcome {
@@ -237,6 +254,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
                 "axon dispatch ended in non-terminal state {}",
                 other.as_str()
             ))),
+            terminal_receipt: None,
         },
     }
 }
@@ -289,6 +307,7 @@ pub async fn dispatch_rpc_with_dispatch_key(
             state: InvocationState::Failed,
             payload_bytes: Vec::new(),
             error: Some(err),
+            terminal_receipt: None,
         },
     }
 }
@@ -315,6 +334,7 @@ pub async fn dispatch_rpc_admitted(
             state: InvocationState::Failed,
             payload_bytes: Vec::new(),
             error: Some(err),
+            terminal_receipt: None,
         },
     }
 }
@@ -474,6 +494,7 @@ pub async fn dispatch_rpc_local(
             state: InvocationState::Failed,
             payload_bytes: Vec::new(),
             error: Some(err),
+            terminal_receipt: None,
         },
     }
 }
@@ -539,6 +560,7 @@ pub fn outcome_to_invoke_remote_result(outcome: RpcDispatchOutcome) -> (Vec<u8>,
     let RpcDispatchOutcome {
         invocation_id: _,
         state: _,
+        terminal_receipt: _,
         payload_bytes,
         error,
     } = outcome;
@@ -815,6 +837,7 @@ mod tests {
             state: InvocationState::Completed,
             payload_bytes: b"ok".to_vec(),
             error: None,
+            terminal_receipt: None,
         };
         let (payload, err) = outcome_to_invoke_remote_result(outcome);
         assert_eq!(payload, b"ok");
@@ -828,6 +851,7 @@ mod tests {
             state: InvocationState::Failed,
             payload_bytes: Vec::new(),
             error: Some(AxonError::internal("synthetic boom")),
+            terminal_receipt: None,
         };
         let (payload, err) = outcome_to_invoke_remote_result(outcome);
         assert!(payload.is_empty());

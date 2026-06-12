@@ -468,15 +468,17 @@ fn handler(
     // legacy captures/camera tree above stays — it is keyed by
     // resource and consumed by the CLI; this one feeds the UI index.
     if let Err(err) = crate::persistence::context_store::record_capture(
-        env.callee.as_deref().unwrap_or_default(),
-        ABILITY_CAMERA_SNAPSHOT,
-        "jpg",
-        &jpeg_bytes,
-        "image/jpeg",
-        Some(width),
-        Some(height),
-        None,
-        format!("Photo {width}x{height}"),
+        crate::persistence::context_store::CaptureRecord {
+            device: env.callee.as_deref().unwrap_or_default(),
+            ability: ABILITY_CAMERA_SNAPSHOT,
+            ext: "jpg",
+            bytes: &jpeg_bytes,
+            content_type: "image/jpeg",
+            width: Some(width),
+            height: Some(height),
+            duration_ms: None,
+            preview: format!("Photo {width}x{height}"),
+        },
     ) {
         crate::op_event!(
             component = context,

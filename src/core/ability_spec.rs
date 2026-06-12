@@ -209,6 +209,27 @@ pub struct AbilityManifest {
     /// flows through telemetry, not this struct.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     cost: Option<CostMeta>,
+    /// Optional boot script (`[boot]`). Declares how to START the
+    /// external service this ability fronts (a local n8n container,
+    /// a database, …). Run by the daemon's ability-health monitor
+    /// when the `[health]` probe reports the service down. Only
+    /// meaningful together with `[health]` — a manifest that
+    /// declares `[boot]` without `[health]` is rejected at
+    /// validate-time, because a boot whose outcome can never be
+    /// observed is an unverifiable side effect.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    boot: Option<BootSpec>,
+    /// Optional health probe (`[health]`). Declares how to CHECK the
+    /// live status of the backing service. The daemon probes on the
+    /// declared interval and publishes the result as catalog
+    /// metadata (`health_status` / `health_detail` /
+    /// `health_checked_unix_ms`), so discovery surfaces reflect the
+    /// real service state instead of just owner presence. Abilities
+    /// with an external dependency (`cost.kind = "external_metered"`)
+    /// that omit `[health]` are surfaced as `unmonitored` rather
+    /// than silently presented as invocable.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    health: Option<HealthSpec>,
 }
 
 /// Per-ability cost declaration, written to disk under the `[cost]`
@@ -563,6 +584,47 @@ pub struct McpExec {
     pub tool: String,
 }
 
+/// Configuration for the `[boot]` section — a script that starts the
+/// external service backing this ability (e.g. `docker start
+/// easynet-n8n`). Same argv-not-`sh -c` rule as `ShellExec`: values
+/// cannot expand into extra tokens. No template substitution — boot
+/// runs with no invocation args in scope, so placeholders would have
+/// nothing to bind against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootSpec {
+    /// Argv vector. argv[0] is the program (absolute path when the
+    /// daemon's PATH cannot be assumed); subsequent elements are
+    /// arguments. Run verbatim — no templating.
+    pub argv: Vec<String>,
+    /// Upper bound for the boot script run. `None` inherits the
+    /// monitor default (60 s). The monitor kills the process at the
+    /// deadline and records the attempt as failed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub timeout_seconds: Option<u64>,
+}
+
+/// Configuration for the `[health]` section — a liveness probe for
+/// the backing service. Exit status 0 means healthy, anything else
+/// (including a timeout) means unhealthy — the same convention as
+/// Docker `HEALTHCHECK` and Kubernetes exec probes, so an operator
+/// can paste an existing probe command unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthSpec {
+    /// Argv vector for the probe (e.g. `["curl", "-fsS", "-m", "5",
+    /// "http://127.0.0.1:5678/healthz"]`). Run verbatim — no
+    /// templating.
+    pub argv: Vec<String>,
+    /// Seconds between probes. `None` inherits the monitor default
+    /// (30 s).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub interval_seconds: Option<u64>,
+    /// Upper bound for one probe run. `None` inherits the monitor
+    /// default (10 s). A probe killed at the deadline counts as
+    /// unhealthy.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub timeout_seconds: Option<u64>,
+}
+
 impl AbilityManifest {
     /// Build a manifest, validating the fields that downstream
     /// consumers rely on.
@@ -584,9 +646,39 @@ impl AbilityManifest {
             exec: None,
             access: None,
             cost: None,
+            boot: None,
+            health: None,
         };
         m.validate()?;
         Ok(m)
+    }
+
+    /// Attach a boot script. Requires a `[health]` probe to already
+    /// be attached (or attached before the manifest is persisted) —
+    /// `validate()` rejects boot-without-health. Returns the
+    /// manifest for builder chaining.
+    pub fn with_boot(mut self, boot: BootSpec) -> anyhow::Result<Self> {
+        self.boot = Some(boot);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Attach a health probe. Returns the manifest for builder
+    /// chaining.
+    pub fn with_health(mut self, health: HealthSpec) -> anyhow::Result<Self> {
+        self.health = Some(health);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// The declared boot script, if any.
+    pub fn boot(&self) -> Option<&BootSpec> {
+        self.boot.as_ref()
+    }
+
+    /// The declared health probe, if any.
+    pub fn health(&self) -> Option<&HealthSpec> {
+        self.health.as_ref()
     }
 
     /// Attach a cost declaration. Optional; absence falls back to the
@@ -799,6 +891,20 @@ impl AbilityManifest {
         if let Some(cost) = &self.cost {
             cost.validate()?;
         }
+        if let Some(boot) = &self.boot {
+            boot.validate()?;
+            if self.health.is_none() {
+                anyhow::bail!(
+                    "ability.toml declares [boot] without [health] — a boot script \
+                     whose outcome can never be observed is an unverifiable side \
+                     effect. Declare a [health] probe for the service the boot \
+                     script starts."
+                );
+            }
+        }
+        if let Some(health) = &self.health {
+            health.validate()?;
+        }
         Ok(())
     }
 }
@@ -812,6 +918,58 @@ impl AbilityExec {
             AbilityExec::Mcp(m) => m.validate(),
         }
     }
+}
+
+impl BootSpec {
+    fn validate(&self) -> anyhow::Result<()> {
+        validate_lifecycle_argv("[boot]", &self.argv)?;
+        if let Some(0) = self.timeout_seconds {
+            anyhow::bail!(
+                "ability.toml [boot] `timeout_seconds` of 0 means `kill \
+                 immediately`. Omit the field to inherit the monitor default."
+            );
+        }
+        Ok(())
+    }
+}
+
+impl HealthSpec {
+    fn validate(&self) -> anyhow::Result<()> {
+        validate_lifecycle_argv("[health]", &self.argv)?;
+        if let Some(0) = self.interval_seconds {
+            anyhow::bail!(
+                "ability.toml [health] `interval_seconds` of 0 would probe in a \
+                 busy loop. Omit the field to inherit the monitor default."
+            );
+        }
+        if let Some(0) = self.timeout_seconds {
+            anyhow::bail!(
+                "ability.toml [health] `timeout_seconds` of 0 means every probe \
+                 is killed immediately and counts as unhealthy. Omit the field \
+                 to inherit the monitor default."
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Shared argv validation for `[boot]` / `[health]` — mirrors the
+/// `ShellExec` rules so the three script-shaped sections fail with
+/// the same vocabulary.
+fn validate_lifecycle_argv(section: &str, argv: &[String]) -> anyhow::Result<()> {
+    if argv.is_empty() {
+        anyhow::bail!(
+            "ability.toml {section} requires a non-empty `argv` (the first \
+             element is the program; subsequent elements are arguments)"
+        );
+    }
+    if argv[0].trim().is_empty() {
+        anyhow::bail!(
+            "ability.toml {section} `argv[0]` (the program) must not be \
+             empty/whitespace"
+        );
+    }
+    Ok(())
 }
 
 impl ShellExec {
@@ -1017,7 +1175,10 @@ pub fn default_chat_manifest() -> AbilityManifest {
                 "type": "string",
                 "description": "Optional conversation id to resume an existing session. When \
                                 omitted the chat handler creates a fresh one and returns the \
-                                generated id in the response."
+                                generated id in the response. The literal value `lifelong` \
+                                selects the agent's lifelong default thread: it resumes the \
+                                session bound as lifelong, binding one first when none exists \
+                                yet; the response carries the resolved concrete id."
             },
             "skills": {
                 "type": "object",
@@ -1099,11 +1260,15 @@ pub fn default_chat_manifest() -> AbilityManifest {
             },
             "attachments": {
                 "type": "array",
-                "description": "Files to read off disk and embed inline in the prompt's \
-                                context block. Each entry is read with the same path-safety \
-                                rules as the `fs.read` ability (no traversal outside the \
-                                workspace) and a per-call total cap of 1 MiB. Use this \
-                                instead of writing file contents into `context` by hand.",
+                "description": "Files to surface to the agent. Each entry names its source \
+                                with exactly one of `path` (daemon-local file, embedded \
+                                inline in the prompt's context block, per-call total cap \
+                                of 1 MiB) or `ura` (a `<user>.files` store blob, \
+                                materialised into the agent workspace's `uploads/` \
+                                directory and cited by workspace-relative path so the \
+                                agent reads it with its own file tools — no inline size \
+                                cap). Use this instead of writing file contents into \
+                                `context` by hand.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -1115,13 +1280,25 @@ pub fn default_chat_manifest() -> AbilityManifest {
                         "encoding": {
                             "type": "string",
                             "enum": ["utf8", "base64"],
-                            "description": "How to read the file. `utf8` (default) embeds \
-                                            text verbatim; `base64` embeds binary content \
-                                            with `<file encoding=\"base64\">…</file>` so \
-                                            the LLM can reason about non-text payloads."
+                            "description": "Only valid with `path`. How to read the file: \
+                                            `utf8` (default) embeds text verbatim; `base64` \
+                                            embeds binary content with \
+                                            `<file encoding=\"base64\">…</file>` so the LLM \
+                                            can reason about non-text payloads."
+                        },
+                        "ura": {
+                            "type": "string",
+                            "description": "v4.1.5 files-store resource URA \
+                                            (easynet:///r/<realm>/resource/<u>.files/<sha256>), \
+                                            e.g. as returned by `<user>.files.put`."
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "Only valid with `ura`: display name for the \
+                                            materialised copy. Sanitised to its basename; \
+                                            the file lands at uploads/<sha8>-<name>."
                         }
                     },
-                    "required": ["path"],
                     "additionalProperties": false
                 }
             }
@@ -1866,6 +2043,153 @@ url = "ftp://example.com"
 "#;
         let err = AbilityManifest::from_toml_str(toml).unwrap_err();
         assert!(format!("{err}").contains("http://"));
+    }
+
+    // ── [boot] / [health] lifecycle sections ───────────────────────────────
+
+    #[test]
+    fn boot_and_health_round_trip_through_toml() {
+        // Round-trip must hold for any well-formed lifecycle pair, not
+        // one blessed fixture: pin the all-optionals shape and the
+        // minimal shape with neutral argv values (the schema owes
+        // nothing to any particular backing service). Struct equality
+        // after the round-trip covers field preservation generically;
+        // the per-variant closure asserts the parse mapped TOML to the
+        // right fields in the first place.
+        type Check = fn(&AbilityManifest);
+        let full_check: Check = |m| {
+            let boot = m.boot().expect("boot preserved");
+            assert_eq!(boot.argv, vec!["svc-up", "--now"]);
+            assert_eq!(boot.timeout_seconds, Some(60));
+            let health = m.health().expect("health preserved");
+            assert_eq!(health.argv, vec!["svc-probe"]);
+            assert_eq!(health.interval_seconds, Some(30));
+            assert_eq!(health.timeout_seconds, Some(10));
+        };
+        let minimal_check: Check = |m| {
+            let boot = m.boot().expect("boot preserved");
+            assert_eq!(boot.timeout_seconds, None);
+            let health = m.health().expect("health preserved");
+            assert_eq!(health.interval_seconds, None);
+            assert_eq!(health.timeout_seconds, None);
+        };
+        let variants: [(&str, Check); 2] = [
+            (
+                "[boot]\nargv = [\"svc-up\", \"--now\"]\ntimeout_seconds = 60\n\
+                 [health]\nargv = [\"svc-probe\"]\ninterval_seconds = 30\ntimeout_seconds = 10",
+                full_check,
+            ),
+            (
+                "[boot]\nargv = [\"svc-up\"]\n[health]\nargv = [\"svc-probe\"]",
+                minimal_check,
+            ),
+        ];
+        for (lifecycle_toml, check) in variants {
+            let toml = format!(
+                "schema_version = \"1\"\nname = \"x\"\ndescription = \"\"\n\
+                 [input_schema]\ntype = \"object\"\n{lifecycle_toml}\n"
+            );
+            let m = AbilityManifest::from_toml_str(&toml).expect("manifest must parse");
+            check(&m);
+            let serialized = m.to_toml_string().expect("serializes");
+            let back = AbilityManifest::from_toml_str(&serialized).expect("round-trips");
+            assert_eq!(
+                back, m,
+                "round-trip must preserve every field for: {lifecycle_toml}"
+            );
+        }
+    }
+
+    #[test]
+    fn health_without_boot_is_a_valid_probe_only_manifest() {
+        // A remote SaaS dependency can be probed but not booted —
+        // probe-only must stay legal.
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[health]
+argv = ["curl", "-fsS", "https://api.example.com/health"]
+"#;
+        let m = AbilityManifest::from_toml_str(toml).expect("probe-only manifest parses");
+        assert!(m.boot().is_none());
+        assert!(m.health().is_some());
+    }
+
+    #[test]
+    fn boot_without_health_is_rejected() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[boot]
+argv = ["docker", "start", "svc"]
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("[boot] without [health]"),
+            "validator must explain the boot-without-health rule: {err}"
+        );
+    }
+
+    #[test]
+    fn boot_rejects_empty_argv() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[boot]
+argv = []
+[health]
+argv = ["true"]
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(format!("{err}").contains("[boot]"), "{err}");
+        assert!(format!("{err}").contains("argv"), "{err}");
+    }
+
+    #[test]
+    fn health_rejects_zero_interval_and_zero_timeout() {
+        for (field, toml) in [
+            (
+                "interval_seconds",
+                r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[health]
+argv = ["true"]
+interval_seconds = 0
+"#,
+            ),
+            (
+                "timeout_seconds",
+                r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[health]
+argv = ["true"]
+timeout_seconds = 0
+"#,
+            ),
+        ] {
+            let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+            assert!(
+                format!("{err}").contains(field),
+                "validator must call out {field}: {err}"
+            );
+        }
     }
 
     #[test]

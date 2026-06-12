@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::core::domain::{AgentId, RoomId};
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::runtime::domain::{AgentId, RoomId};
 use crate::runtime::execution::discuss::DiscussService;
 
 pub const ABILITY_CREATE: &str = "discuss.create";

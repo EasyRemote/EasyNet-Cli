@@ -51,12 +51,14 @@ pub struct InvokeArgs {
     /// e.g. `easynet:///r/<realm>/ability/device.<node>.observe.health`
     /// or `easynet:///r/<realm>/ability/<user>.<agent>.chat`.
     pub ability_ura: String,
-    /// ⚠ Pinning to a remote node id is not wired in this build.
-    /// The federation Invoke surface that would back it ships in a
-    /// follow-up to AXON-RFC-001 P1.5. Passing '--node' today
-    /// returns a precise error rather than silently auto-routing
-    /// locally.
-    #[arg(long, short = 'n', value_name = "NODE_ID")]
+    /// Pin the invocation to a remote node: a canonical Device URA
+    /// (`easynet:///r/<realm>/device/<node_id>`) or Hub URA
+    /// (`easynet:///r/<realm>/hub`). The call routes through the
+    /// local daemon's `federation.forward_invoke` ability — the
+    /// cross-device main channel. Requires the `axon-pb` feature
+    /// (production builds always enable it); minimal builds reject
+    /// the flag with a re-build hint. Omit to dispatch locally.
+    #[arg(long, short = 'n', value_name = "URA")]
     pub node: Option<String>,
     /// JSON object passed to the ability as its arguments — for
     /// example: --args {"location":"Beijing"}. Defaults to {} when
@@ -96,7 +98,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
 
     // PR-N1 commit 8/N: `--node` is now wired against the local
     // daemon's `federation.forward_invoke` ability via the
-    // `support::federation_invoke` helper. The path requires the
+    // `services::invocation_transport::federation_invoke` helper. The path requires the
     // `axon-pb` feature (production builds) — minimal builds still
     // bail with the legacy message.
     let node_ura: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
@@ -108,7 +110,9 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Some(node) => {
             #[cfg(feature = "axon-pb")]
             {
-                Some(crate::support::federation_invoke::parse_node_ura(node)?)
+                Some(
+                    crate::services::invocation_transport::federation_invoke::parse_node_ura(node)?,
+                )
             }
             #[cfg(not(feature = "axon-pb"))]
             {
@@ -162,12 +166,12 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
                 .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
             let ability_ura =
-                crate::support::federation_invoke::TargetOwnedAbilityUra::from_ability_ura(
+                crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_ability_ura(
                     target,
                     ability_selector.ability_ura(),
                 )?;
             let value =
-                crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+                crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
                     ability_ura.as_str(),
                     arguments,
                     target,

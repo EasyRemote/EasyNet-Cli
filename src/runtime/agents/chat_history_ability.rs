@@ -49,7 +49,11 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 }
 
 /// `chat.history.list` — args `{ "agent": string }`.
-/// Returns `{ "agent": string, "sessions": [SessionDescriptor, ...] }`.
+/// Returns `{ "agent": string, "lifelong_session_id": string|null,
+/// "sessions": [SessionDescriptor, ...] }`. `lifelong_session_id`
+/// names the session bound as the agent's lifelong default thread
+/// (null until the first lifelong turn), so the Frontend can open it
+/// by default and badge it in the session list.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
     let agent = require_agent(&args)?;
     let sessions = crate::persistence::chat_sessions::list_sessions(&agent);
@@ -57,7 +61,12 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         .iter()
         .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
         .collect();
-    Ok(json!({ "agent": agent, "sessions": json_sessions }))
+    let lifelong = crate::persistence::chat_sessions::lifelong_session(&agent);
+    Ok(json!({
+        "agent": agent,
+        "lifelong_session_id": lifelong,
+        "sessions": json_sessions,
+    }))
 }
 
 /// `chat.history.get` — args `{ "agent": string, "session_id": string }`.
@@ -80,15 +89,34 @@ fn require_agent(args: &Value) -> anyhow::Result<String> {
     args.get("agent")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(normalize_agent)
         .ok_or_else(|| anyhow::anyhow!("chat.history: `agent` required"))
+}
+
+/// Accept either the local agent name (`caesura`) or the canonical
+/// Agent URA (`easynet:///r/<realm>/agent/<user>.<agent>`) and project
+/// both to the local registry name that keys the on-disk session store
+/// (`~/.easynet/agents/<name>/sessions/`). The Frontend sends the URA —
+/// its `agent_id` field is canonical per RFC-001 — while the CLI sends
+/// the bare name; without this projection the URA was used as a
+/// directory name and every UI history read came back empty. Parsing
+/// stays with Axon (`parse_ura`); non-URA strings pass through as-is.
+fn normalize_agent(raw: &str) -> String {
+    if let Ok(parsed) = crate::ura::parse_ura(raw) {
+        if parsed.kind == crate::ura::URAKind::Agent {
+            if let Some((_user_id, agent_id)) = parsed.agent_ids() {
+                return agent_id.to_string();
+            }
+        }
+    }
+    raw.to_string()
 }
 
 pub fn list_input_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "agent": {"type": "string", "description": "Agent name whose chat sessions to list."}
+            "agent": {"type": "string", "description": "Agent whose chat sessions to list — local name (`caesura`) or canonical Agent URA."}
         },
         "required": ["agent"],
         "additionalProperties": false,
@@ -99,7 +127,7 @@ pub fn get_input_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "agent": {"type": "string", "description": "Agent name that owns the session."},
+            "agent": {"type": "string", "description": "Agent that owns the session — local name or canonical Agent URA."},
             "session_id": {"type": "string", "description": "Session id to read (from chat.history.list)."}
         },
         "required": ["agent", "session_id"],
@@ -125,6 +153,50 @@ mod tests {
     fn list_requires_agent() {
         let err = list_handler(json!({})).unwrap_err();
         assert!(err.to_string().contains("agent"));
+    }
+
+    #[test]
+    fn list_and_get_accept_canonical_agent_ura() {
+        // The Frontend's `agent_id` is the canonical Agent URA; the
+        // on-disk session store is keyed by the local name. Both
+        // handlers must project URA → local name, or every UI history
+        // read silently comes back empty (the regression that hid the
+        // lifelong thread after a reload).
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        crate::persistence::chat_sessions::write_turn(
+            "demot",
+            "sess-1",
+            "hi",
+            "yo",
+            &[],
+            &json!({}),
+        )
+        .expect("seed turn");
+        crate::persistence::chat_sessions::set_lifelong_session("demot", "sess-1").expect("bind");
+        let ura = crate::ura::agent_ura("localhost", "dev", "demot");
+        let resp = list_handler(json!({"agent": ura.as_str()})).expect("list via URA");
+        assert_eq!(resp["agent"], "demot");
+        assert_eq!(resp["lifelong_session_id"], "sess-1");
+        assert_eq!(resp["sessions"].as_array().map(Vec::len), Some(1));
+        let resp = get_handler(json!({"agent": ura.as_str(), "session_id": "sess-1"}))
+            .expect("get via URA");
+        assert_eq!(
+            resp["turns"].as_array().map(Vec::len),
+            Some(2),
+            "meta + 1 turn"
+        );
+    }
+
+    #[test]
+    fn list_surfaces_lifelong_session_id() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        // Unbound: explicit null, not a missing key — the Frontend
+        // reads the field unconditionally.
+        let resp = list_handler(json!({"agent": "demot"})).expect("list");
+        assert!(resp["lifelong_session_id"].is_null());
+        crate::persistence::chat_sessions::set_lifelong_session("demot", "sess-1").expect("bind");
+        let resp = list_handler(json!({"agent": "demot"})).expect("list");
+        assert_eq!(resp["lifelong_session_id"], "sess-1");
     }
 
     #[test]

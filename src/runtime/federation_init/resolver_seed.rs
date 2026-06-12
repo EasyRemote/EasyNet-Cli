@@ -117,6 +117,10 @@ pub fn load_from(path: impl AsRef<Path>) -> ResolverSeed {
 /// Default loader: locates the file at `$XDG_CONFIG_HOME/easynet/shards.json`
 /// (or platform fallback). Returns `Absent` with the canonical
 /// path when no config dir exists either.
+///
+/// Cold path by design (F-050 classification): a one-shot boot-time
+/// config read, not a catalog query — the snapshot-read rule does not
+/// apply, direct disk read stays.
 pub fn load_default() -> ResolverSeed {
     let path = match dirs::config_dir() {
         Some(d) => d.join("easynet").join(SHARDS_FILE_NAME),

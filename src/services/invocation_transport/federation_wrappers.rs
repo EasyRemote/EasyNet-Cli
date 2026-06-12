@@ -490,7 +490,7 @@ pub(crate) fn handle_heartbeat(
     }
     HeartbeatResponse {
         membership_status: "active".to_string(),
-        realm_directory_size: registry.snapshot().len(),
+        realm_directory_size: registry.online_count(),
         refreshed_owner_count,
     }
 }
@@ -1042,6 +1042,16 @@ pub fn handle_revoke(
 /// target presence-registry lookup misses on the local-realm
 /// fast-path. Wire-stable per DEC-N4 §2.1.
 pub const FORWARD_INVOKE_TARGET_OFFLINE_REASON: &str = "target_offline";
+
+/// Reason text emitted when the target device's dispatch channel is
+/// full. A full channel means the device is SLOW (its session drain
+/// is behind), not DEAD: the device stays in the presence registry
+/// and only the triggering call fails, retryable. Evicting on full
+/// — the pre-2026-06-13 policy — turned a load spike into a false
+/// offline plus a failure avalanche for every pending call
+/// (measured: one >256-frame burst killed 73% of 2048 in-flight
+/// invocations).
+pub const FORWARD_INVOKE_TARGET_BUSY_REASON: &str = "target_busy_retry";
 
 /// Handle a local-realm `federation.forward_invoke` invocation.
 ///
@@ -2274,6 +2284,7 @@ mod tests {
                 inner_envelope_b64: String::new(),
                 causal_context_bytes: Vec::new(),
                 forward_deadline_ms: 0,
+                origin_caller: None,
             },
             "call-id-7",
             target_reply.clone(),
@@ -2294,6 +2305,7 @@ mod tests {
                 inner_envelope_b64: String::new(),
                 causal_context_bytes: Vec::new(),
                 forward_deadline_ms: 0,
+                origin_caller: None,
             },
             "call-id-8",
             Vec::new(),
@@ -2308,7 +2320,7 @@ mod tests {
         // `forward_deadline_ms` are wire fields on
         // `ForwardInvokeRequest` that round-trip verbatim from the
         // caller's `<self>.invoke_remote` initiator (or the CLI
-        // bridge in `support::federation_invoke`) through the
+        // bridge in `services::invocation_transport::federation_invoke`) through the
         // dispatcher's JSON deserialise step. The dispatcher
         // surfaces these to the target's session frame so PR-N5's
         // InvocationReceipt can stamp `causal_context.list` and
@@ -2327,6 +2339,7 @@ mod tests {
             inner_envelope_b64: String::new(),
             causal_context_bytes: audit_bytes.clone(),
             forward_deadline_ms: 12_345,
+            origin_caller: None,
         };
         let bytes = serde_json::to_vec(&original).unwrap();
 

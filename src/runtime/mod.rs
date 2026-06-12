@@ -46,6 +46,26 @@ pub(crate) mod timeline;
 pub(crate) mod toml_escape;
 pub(crate) mod workspace;
 
+/// Install a mission dispatch context on the current thread and return the
+/// guard that restores the previous context on drop.
+///
+/// This is the narrow public bridge used by crate binaries that must exercise
+/// runtime dispatch directly instead of entering through
+/// `facade::cli::mission_runs::run_mission_inproc`. It intentionally does not
+/// expose the full `context` module: production mission execution still owns
+/// context construction, while subprocess propagation remains centralized in
+/// `DispatchContext::serialize_to_env`.
+#[must_use = "mission context only stays installed while the returned guard is alive"]
+pub fn enter_mission_context_for_current_thread(
+    mission_id: impl Into<String>,
+    mission_run_dir: impl Into<std::path::PathBuf>,
+) -> impl Drop {
+    context::enter(context::DispatchContext::for_mission(
+        mission_id,
+        mission_run_dir.into(),
+    ))
+}
+
 // v10.5 R1 (PR-DAEMON) — Invocation as the system-level unit of
 // execution + domain object model at the KernelApi boundary +
 // Receipt subscriber v2 extension point. These modules are `pub`
@@ -59,7 +79,6 @@ pub(crate) mod workspace;
 //   * `receipt_subscriber` exposes a v2 extension point; v1 code
 //     never consumes it, but the trait needs to be reachable from
 //     future out-of-tree consumers.
-pub mod domain;
 pub mod failure_codes;
 pub mod invocation;
 pub mod join_connection_state;

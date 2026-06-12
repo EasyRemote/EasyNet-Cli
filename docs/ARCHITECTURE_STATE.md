@@ -22,13 +22,16 @@ it to the runtime. The MCP `send_to_agent` tool is the wire-level form
 of `<agent>.chat(<prompt>)` and reaches the runtime through the same
 entry point.
 
-Recursion is bounded by `EASYNET_AGENT_DEPTH` (max 2) and gated by
-`EASYNET_MISSION_ID` (anti-forgery presence + run-dir existence
-check). Both env vars are managed by `MissionContextGuard`, which is
-panic-safe. Legacy callers (`cli/think.rs`, `cli/discuss.rs`) wrap
-themselves in `LegacyMissionContext` to satisfy the gate without going
-through the full mission runtime; they are deprecated aliases per
-ontology §8.
+Recursion is bounded by the typed `runtime::context::DispatchContext`
+depth (max 2) and gated by a mission id whose run directory must exist.
+`MissionContextGuard` installs that context in thread-local state and
+restores the previous value on drop. `EASYNET_MISSION_ID` and
+`EASYNET_AGENT_DEPTH` are reserved for subprocess entry only: the parent
+runtime writes them into a child command's env map at the spawn boundary,
+and fresh agent CLI processes reconstruct the typed context from them.
+Legacy callers (`cli/think.rs`, `cli/discuss.rs`) wrap themselves in
+`LegacyMissionContext` to satisfy the gate without going through the
+full mission runtime; they are deprecated aliases per ontology §8.
 
 ## Identity layer
 

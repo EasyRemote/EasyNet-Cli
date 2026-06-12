@@ -18,7 +18,7 @@ Control remote edge devices through EasyNet Axon Runtime using the `easynet` CLI
 The `easynet` CLI must be installed and a runtime must be running. To start a local runtime:
 
 ```bash
-easynet start
+easynet runtime start
 ```
 
 To check status:

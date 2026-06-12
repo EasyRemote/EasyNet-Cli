@@ -48,7 +48,7 @@ EasyNet, packaged as an Agent Skill with pre-built abilities.
 ### 1. Start the Runtime
 
 ```bash
-easynet start
+easynet runtime start
 ```
 
 ### 2. (Optional) Start a Second Device
@@ -56,7 +56,7 @@ easynet start
 On another machine or terminal:
 
 ```bash
-easynet start --hub <hub_endpoint>
+easynet runtime start --hub <hub_endpoint>
 # or if already paired:
 easynet connect
 ```
@@ -111,10 +111,10 @@ $SKILL abilities device-01
 
 ```bash
 # Terminal 1: Start runtime + Hub
-easynet start
+easynet runtime start
 
 # Terminal 2: Start second device
-easynet start --hub http://127.0.0.1:50051
+easynet runtime start --hub http://127.0.0.1:50051
 
 # Install MCP servers for each agent, bound to specific devices
 easynet mcp-install claude --name easynet-a --bound-node device-a --agent claude

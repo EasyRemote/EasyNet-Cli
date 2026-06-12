@@ -53,32 +53,57 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-// The axon service boundary is tonic-shaped: generated server traits
-// and handler adapters return `tonic::Status` by value. Boxing it in
-// local helpers would add mapping noise while the public trait still
-// has to use `Status`, so this module owns the exception.
+// Tonic generated service traits and daemon-side dispatch helpers are
+// `Result<_, tonic::Status>` boundaries. Boxing `Status` inside this
+// module would only add unwrap/rebox noise before returning to the
+// same generated trait surface. Keep the exception local to the
+// transport boundary so the crate-level F-005 ratchet still catches
+// large error regressions everywhere else.
 #![allow(clippy::result_large_err)]
 
 pub mod admission_facade;
+pub(crate) mod bidi_dispatcher;
 pub mod boot;
 pub mod daemon_invocation_service;
+pub(crate) mod deps;
+pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;
+/// CLI-side `federation.forward_invoke` helper (moved from `support`,
+/// T4.1 pre-move b — it consumes this module's ProtoEnvelope).
+#[cfg(feature = "axon-pb")]
+pub(crate) mod federation_invoke;
+/// Feature-agnostic shim over [`federation_invoke`]. Callers in the
+/// hot path (ability discovery, federation surfaces) depend on this
+/// module instead of `federation_invoke` directly so they remain
+/// compilable under default features (axon-pb off). With axon-pb on,
+/// the shim re-exports the real implementation; with axon-pb off, it
+/// returns empty/typed-error responses so the caller's logic stays
+/// uniform and degrades to a local-only view. One shim, one place
+/// that knows the feature exists — the alternative scatters a
+/// transport-layer flag through product-layer branches.
+pub(crate) mod federation_invoke_shim;
 pub mod federation_wrappers;
 pub mod hub_resolver;
 pub mod invocation_wire;
 pub mod invoke_remote_initiator;
+pub(crate) mod ledger_projection;
 pub mod list_user_pubkeys;
 pub mod local_session_dispatcher;
 pub mod origin_caller;
+pub(crate) mod peer_envelope_signer;
+pub(crate) mod quota_meter;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;
 pub mod route_resolver;
 pub mod session_escalation;
 pub mod session_initiator;
+pub(crate) mod stream_dispatcher;
+pub(crate) mod target_gate;
+pub(crate) mod unary_dispatcher;
 
 pub use admission_facade::AdmissionFacade;
-pub use boot::start_daemon_invocation_transport;
+pub use boot::{start_daemon_invocation_transport, SessionShutdown};
 pub use daemon_invocation_service::DaemonInvocationService;
 pub use invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
 pub use invoke_remote_initiator::{

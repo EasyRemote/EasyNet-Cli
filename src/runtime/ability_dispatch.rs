@@ -281,19 +281,26 @@ impl RuntimeHandlerSet {
     }
 }
 
-fn payload_to_json_value(payload: &[u8]) -> Result<Value, AxonError> {
+fn payload_to_json_value(payload: &[u8]) -> Result<Value, Box<AxonError>> {
     if payload.is_empty() {
         Ok(Value::Object(Default::default()))
     } else {
         serde_json::from_slice(payload).map_err(|err| {
-            AxonError::invalid_argument(format!("local_runtime_adapter: payload not JSON: {err}"))
+            Box::new(AxonError::invalid_argument(format!(
+                "local_runtime_adapter: payload not JSON: {err}"
+            )))
         })
     }
 }
 
-fn json_value_to_payload(value: &Value) -> Result<Vec<u8>, AxonError> {
-    serde_json::to_vec(value)
-        .map_err(|err| AxonError::internal(format!("local_runtime_adapter: encode JSON: {err}")))
+// Err boxed (clippy result_large_err): keeps the hot Ok path from
+// carrying the ≥144 B AxonError variant.
+fn json_value_to_payload(value: &Value) -> Result<Vec<u8>, Box<AxonError>> {
+    serde_json::to_vec(value).map_err(|err| {
+        Box::new(AxonError::internal(format!(
+            "local_runtime_adapter: encode JSON: {err}"
+        )))
+    })
 }
 
 pub(crate) fn rpc_handler_to_ability_fn(handler: LocalRpcHandler) -> AbilityFn {
@@ -301,7 +308,7 @@ pub(crate) fn rpc_handler_to_ability_fn(handler: LocalRpcHandler) -> AbilityFn {
         let handler = Arc::clone(&handler);
         let payload = ctx.payload.clone();
         async move {
-            let value = payload_to_json_value(&payload)?;
+            let value = payload_to_json_value(&payload).map_err(|e| *e)?;
             let result = tokio::task::spawn_blocking(move || handler(value))
                 .await
                 .map_err(|err| {
@@ -312,7 +319,7 @@ pub(crate) fn rpc_handler_to_ability_fn(handler: LocalRpcHandler) -> AbilityFn {
                         "local_runtime_adapter: handler returned error: {err}"
                     ))
                 })?;
-            json_value_to_payload(&result)
+            json_value_to_payload(&result).map_err(|e| *e)
         }
     })
 }
@@ -368,7 +375,7 @@ fn rpc_env_handler_to_ability_fn(handler: LocalRpcHandlerWithEnvelope) -> Abilit
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
         async move {
-            let value = payload_to_json_value(&ctx.payload)?;
+            let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
             let env = envelope_context_from_axon(&ctx).await;
             let result = tokio::task::spawn_blocking(move || handler(env, value))
                 .await
@@ -382,13 +389,13 @@ fn rpc_env_handler_to_ability_fn(handler: LocalRpcHandlerWithEnvelope) -> Abilit
                         "local_runtime_adapter: env handler returned error: {err}"
                     ))
                 })?;
-            json_value_to_payload(&result)
+            json_value_to_payload(&result).map_err(|e| *e)
         }
     })
 }
 
 async fn emit_json_progress(ctx: &Arc<AbilityContext>, value: Value) -> Result<(), AxonError> {
-    let payload = json_value_to_payload(&value)?;
+    let payload = json_value_to_payload(&value).map_err(|e| *e)?;
     ctx.emit_progress(payload, "application/json").await
 }
 
@@ -437,7 +444,7 @@ fn stream_handler_to_ability_fn(handler: LocalStreamHandler) -> AbilityFn {
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
         async move {
-            let value = payload_to_json_value(&ctx.payload)?;
+            let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
             let source = tokio::task::spawn_blocking(move || handler(value))
                 .await
                 .map_err(|err| {
@@ -459,7 +466,7 @@ fn stream_env_handler_to_ability_fn(handler: LocalStreamHandlerWithEnvelope) -> 
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
         async move {
-            let value = payload_to_json_value(&ctx.payload)?;
+            let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
             let env = envelope_context_from_axon(&ctx).await;
             let source = tokio::task::spawn_blocking(move || handler(env, value))
                 .await
@@ -502,7 +509,7 @@ async fn run_bidi_source(
             inbound = ctx.recv_message(None) => {
                 match inbound {
                     Some(msg) => {
-                        let value = payload_to_json_value(&msg.payload)?;
+                        let value = payload_to_json_value(&msg.payload).map_err(|e| *e)?;
                         let send_closed = match to_client.as_ref() {
                             Some(sender) => sender.send(value).await.is_err(),
                             None => false,
@@ -531,7 +538,7 @@ fn bidi_handler_to_ability_fn(handler: LocalBidiHandler) -> AbilityFn {
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
         async move {
-            let value = payload_to_json_value(&ctx.payload)?;
+            let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
             let source = handler(value).map_err(|err| {
                 AxonError::internal(format!(
                     "local_runtime_adapter: bidi handler returned error: {err}"
@@ -546,7 +553,7 @@ fn bidi_env_handler_to_ability_fn(handler: LocalBidiHandlerWithEnvelope) -> Abil
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
         async move {
-            let value = payload_to_json_value(&ctx.payload)?;
+            let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
             let env = envelope_context_from_axon(&ctx).await;
             let source = handler(env, value).map_err(|err| {
                 AxonError::internal(format!(
@@ -2299,7 +2306,7 @@ fn runtime_bidi_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::domain::NodeId;
+    use crate::core::domain::NodeId;
     use crate::runtime::gateway_api::PeerInfo;
     use serde_json::json;
 
@@ -2489,7 +2496,7 @@ mod tests {
         // routes through GatewayApi (deleted along with
         // NoopGateway's invoke_remote_ability stub). Cross-device
         // dispatch flows through
-        // `support::federation_invoke::invoke_via_federation_forward`
+        // `services::invocation_transport::federation_invoke::invoke_via_federation_forward`
         // instead. The dispatcher surfaces a typed error
         // pointing the caller at the new path so a stale Remote
         // construction fails loud instead of silently bouncing

@@ -32,6 +32,12 @@
 pub mod ability_spec;
 pub mod agent_id;
 pub mod agent_spec;
+/// Pure runtime-domain identifier types (TenantId/NodeId/ScheduleId).
+/// Moved from `runtime::domain` (T4.1 pre-move a): they have zero
+/// internal dependencies, and their old home made `persistence`
+/// reach upward into `runtime` — the only production edge keeping
+/// the future `easynet-domain` leaf crate from being a leaf.
+pub mod domain;
 
 // We intentionally do NOT re-export `agent_id::*` at the crate
 // root. Every call site that needs an identity type reaches for it

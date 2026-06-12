@@ -169,7 +169,7 @@ pub fn dispatch(
                     audit_invoke(
                         caller,
                         target,
-                        &qualified,
+                        qualified,
                         &parsed.args,
                         result.as_ref(),
                         elapsed_ms,
@@ -235,7 +235,7 @@ pub fn dispatch(
             )
         })?;
         registry
-            .invoke_rpc_json(&qualified, parsed.args.clone())
+            .invoke_rpc_json(qualified, parsed.args.clone())
             .map_err(|err| {
                 let msg = format!("{err}");
                 if is_not_found_error(&msg) {
@@ -429,9 +429,9 @@ fn lookup_access_policy(
     bare_ability: &str,
 ) -> Option<crate::core::ability_spec::AccessPolicy> {
     let entry = agents.agents.get(target_agent)?;
-    let manifests = crate::runtime::abilities::manifests_for(target_agent, entry);
+    let manifests = crate::runtime::abilities::manifests_for_shared(target_agent, entry);
     manifests
-        .into_iter()
+        .iter()
         .find(|m| m.name() == bare_ability)
         .map(|m| m.access())
 }

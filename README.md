@@ -59,14 +59,14 @@ EasyNet gives every capability a **URA** (Universal Resource Address): one netwo
 cargo install --path .
 ```
 
-> **Note:** `easynet start` launches `easynet-daemon`, which embeds the Axon Invocation runtime and joins the Hub. Product/device paths should target the daemon, not a standalone Axon reference runtime.
+> **Note:** `easynet runtime start` launches `easynet-daemon`, which embeds the Axon Invocation runtime and joins the Hub. Product/device paths should target the daemon, not a standalone Axon reference runtime.
 
 ## Quick Start
 
 ### Join a Hub
 
 ```bash
-easynet start --hub axon://hub.easynet.run:50084 --tenant myteam --foreground
+easynet runtime start --hub axon://hub.easynet.run:50084 --tenant myteam --foreground
 # ✓ easynet-daemon started
 # ✓ Joined hub.easynet.run as alice-macbook
 ```
@@ -268,8 +268,8 @@ easynet mcp-install claude --name easynet-edge-b --tenant myteam --bound-node ed
 ## CLI Reference
 
 ```
-easynet start   --hub <endpoint> [--tenant T] [--label L] [--token T] [--foreground]
-easynet stop
+easynet runtime start   --hub <endpoint> [--tenant T] [--label L] [--token T] [--foreground]
+easynet runtime stop
 easynet status
 easynet devices  [--state online|offline] [--format table|json]
 easynet abilities [--node N] [--format table|json]

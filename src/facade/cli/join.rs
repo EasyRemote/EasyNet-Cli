@@ -33,7 +33,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::persistence::config;
 use crate::runtime::join_connection_state::{
-    record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode, JoinTransition,
+    record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode,
+    JoinFailureParts, JoinTransition,
 };
 use crate::support::{output, sysinfo};
 
@@ -145,14 +146,16 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     let token = args.token.trim().to_string();
     if let Err(err) = validate_token_format(&token) {
         record_snapshot(JoinConnectionSnapshot::failed_from_parts(
-            JoinFailureCode::JoinFailedPreflight,
-            JoinTransition::PreflightToken,
-            "",
-            "",
-            Some(validate_base.clone()),
-            err.to_string(),
-            false,
-            "cli.join",
+            JoinFailureParts {
+                failure_code: JoinFailureCode::JoinFailedPreflight,
+                transition: JoinTransition::PreflightToken,
+                realm: String::new(),
+                node_id: String::new(),
+                hub_endpoint: Some(validate_base.clone()),
+                message: err.to_string(),
+                retryable: false,
+                source: "cli.join".to_string(),
+            },
         ));
         return Err(err);
     }
@@ -237,14 +240,16 @@ fn run_join_stages(
         }
         Err(e) => {
             record_snapshot(JoinConnectionSnapshot::failed_from_parts(
-                JoinFailureCode::JoinFailedPreflight,
-                JoinTransition::PreflightToken,
-                "",
-                "",
-                Some(validate_base.to_string()),
-                e.to_string(),
-                false,
-                "cli.join",
+                JoinFailureParts {
+                    failure_code: JoinFailureCode::JoinFailedPreflight,
+                    transition: JoinTransition::PreflightToken,
+                    realm: String::new(),
+                    node_id: String::new(),
+                    hub_endpoint: Some(validate_base.to_string()),
+                    message: e.to_string(),
+                    retryable: false,
+                    source: "cli.join".to_string(),
+                },
             ));
             renderer.stage_failed("preflight", &format!("{e}"));
             renderer.finish();
@@ -266,14 +271,16 @@ fn run_join_stages(
         }
         Err(e) => {
             record_snapshot(JoinConnectionSnapshot::failed_from_parts(
-                JoinFailureCode::JoinFailedValidate,
-                JoinTransition::ValidateToken,
-                preflight.realm.clone(),
-                preflight.node_id.clone(),
-                Some(validate_base.to_string()),
-                e.to_string(),
-                false,
-                "cli.join",
+                JoinFailureParts {
+                    failure_code: JoinFailureCode::JoinFailedValidate,
+                    transition: JoinTransition::ValidateToken,
+                    realm: preflight.realm.clone(),
+                    node_id: preflight.node_id.clone(),
+                    hub_endpoint: Some(validate_base.to_string()),
+                    message: e.to_string(),
+                    retryable: false,
+                    source: "cli.join".to_string(),
+                },
             ));
             renderer.stage_failed("validate-token", &format!("{e}"));
             renderer.finish();

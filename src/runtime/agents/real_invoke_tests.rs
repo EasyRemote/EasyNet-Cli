@@ -58,6 +58,14 @@
 // Author: Silan.Hu
 // Email: silan.hu@u.nus.edu
 // Copyright (c) 2026-2027 easynet. All rights reserved.
+//
+// Placement note
+// --------------
+// This intentionally remains a `#[cfg(test)]` child of `runtime::agents`
+// instead of an integration-test crate. The harness reaches private registry
+// builders, descriptors, and fixture seams that should not be made public just
+// to satisfy a file-location metric. Keeping it under `src/` has zero release
+// artifact weight and preserves the production visibility boundary.
 
 #![allow(dead_code)] // helpers below are referenced per-test; some unused on macOS-only paths
 
@@ -90,18 +98,11 @@ fn registry_with_temp_home() -> (
     let guard = crate::facade::cli::test_support::HomeGuard::new();
     // build_registry_for_daemon does the agent-registry load that
     // some abilities need (agent.list, chat-per-agent etc).
-    let reg = build_registry_for_daemon(
-        Arc::new(crate::runtime::execution::session::SessionService::new()),
-        Arc::new(crate::runtime::execution::permission::PermissionService::new()),
-        Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
-        Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
-        Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
-        None,
-        Some(Arc::new(Vec::new())),
-        crate::runtime::agents::PagesIdentity::default(),
-        None,
-        Arc::new(crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new()),
+    let mut config = crate::runtime::agents::RegistryDaemonBuildConfig::new(
+        crate::runtime::agents::RegistryBuildServices::fresh(),
     );
+    config.loaders = Some(Arc::new(Vec::new()));
+    let reg = build_registry_for_daemon(config);
     (reg, guard)
 }
 
@@ -170,10 +171,12 @@ fn target(name: &str, args: Value) -> InvocationTarget {
     }
 }
 
+// Borrowed receipt-URA shape (ledger.rs test convention) — no
+// production builder yet; RFC-007/008 tracks canonicalization (F-042).
 #[cfg(feature = "remote-desktop")]
 fn remote_desktop_test_consent_causal_context() -> easynet_axon::invocation::CausalContext {
     easynet_axon::invocation::CausalContext::Scalar(easynet_axon::invocation::ReceiptRef {
-        receipt_ura: "easynet:///r/acme/invocation/test-local-consent/receipt/1".to_string(),
+        receipt_ura: "easynet:///r/acme/resource/alice.invocations/test-local-consent".to_string(),
         receipt_hash: [0x42; 32],
     })
 }
@@ -3242,7 +3245,10 @@ fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
         .iter()
         .filter_map(|e| e["name"].as_str())
         .collect();
-    assert!(names.contains(&"sub") && names.contains(&"a.txt"), "got {names:?}");
+    assert!(
+        names.contains(&"sub") && names.contains(&"a.txt"),
+        "got {names:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3253,15 +3259,17 @@ fn real_context_captures_record_list_get() {
     // Seed one artifact the way a media handler does, then read it
     // back through both abilities.
     let entry = crate::persistence::context_store::record_capture(
-        "easynet:///r/test/device/d1",
-        "screen.snapshot",
-        "jpg",
-        b"\xff\xd8jpegbytes",
-        "image/jpeg",
-        Some(100),
-        Some(50),
-        None,
-        "Screenshot 100x50".into(),
+        crate::persistence::context_store::CaptureRecord {
+            device: "easynet:///r/test/device/d1",
+            ability: "screen.snapshot",
+            ext: "jpg",
+            bytes: b"\xff\xd8jpegbytes",
+            content_type: "image/jpeg",
+            width: Some(100),
+            height: Some(50),
+            duration_ms: None,
+            preview: "Screenshot 100x50".into(),
+        },
     )
     .expect("seed capture");
 
@@ -3297,7 +3305,9 @@ fn real_chat_history_list_and_get_read_persisted_transcripts() {
     let listed = invoke("chat.history.list", json!({"agent": "demo"}));
     let sessions = listed["sessions"].as_array().expect("sessions array");
     assert!(
-        sessions.iter().any(|s| s["session_id"] == json!("real-session-1")),
+        sessions
+            .iter()
+            .any(|s| s["session_id"] == json!("real-session-1")),
         "listed: {listed}"
     );
 

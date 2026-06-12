@@ -146,7 +146,15 @@ pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
 
     match owner.kind {
         URAKind::Agent => {
-            let Some((_, agent_id)) = owner.agent_ids() else {
+            // Hosted user agents and device-sponsored System Agents
+            // (DEC-F048) both prefix owner-local names with their
+            // agent_id; the two grammars expose it through different
+            // accessors (`agent_ids` vs `device_agent_ids`).
+            let Some(agent_id) = owner
+                .agent_ids()
+                .map(|(_, id)| id)
+                .or_else(|| owner.device_agent_ids().map(|(_, id)| id))
+            else {
                 return name.to_string();
             };
             name.strip_prefix(&format!("{agent_id}."))
@@ -178,7 +186,12 @@ pub fn local_dispatch_ability_key(target_ura: &str, ability: &str) -> String {
 
     match target.kind {
         URAKind::Agent => {
-            let Some((_, agent_id)) = target.agent_ids() else {
+            // Dual-grammar agent_id, same as owner_local_ability_name.
+            let Some(agent_id) = target
+                .agent_ids()
+                .map(|(_, id)| id)
+                .or_else(|| target.device_agent_ids().map(|(_, id)| id))
+            else {
                 return name.to_string();
             };
             let public_name = owner_local_ability_name(target_ura, name);
@@ -235,6 +248,26 @@ mod tests {
         assert_eq!(
             owner_local_ability_name("easynet:///r/localhost/agent/alice.claude", "chat",),
             "chat"
+        );
+    }
+
+    #[test]
+    fn owner_local_ability_name_handles_device_sponsored_agents() {
+        // DEC-F048 grammar: agent/device.<device-id>.<agent-id>.
+        // The agent_id prefix strips exactly like a user-owned agent.
+        assert_eq!(
+            owner_local_ability_name(
+                "easynet:///r/localhost/agent/device.dev-1.terminal",
+                "terminal.screenshot"
+            ),
+            "screenshot"
+        );
+        assert_eq!(
+            local_dispatch_ability_key(
+                "easynet:///r/localhost/agent/device.dev-1.terminal",
+                "screenshot"
+            ),
+            "terminal.screenshot"
         );
     }
 

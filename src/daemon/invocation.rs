@@ -24,6 +24,7 @@ pub struct DaemonInvocation {
     content_type: String,
     metadata: HashMap<String, String>,
     caller_signature: Option<easynet_axon::pb::axon::v1::CallerSignature>,
+    timeout_seconds: Option<i32>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -86,6 +87,12 @@ impl DaemonInvocation {
     }
 
     /// Optional caller signature carried on the envelope.
+    /// Per-call timeout in seconds, when the caller set one. `None`
+    /// leaves the wire field at proto default (0 = daemon default).
+    pub fn timeout_seconds(&self) -> Option<i32> {
+        self.timeout_seconds
+    }
+
     pub fn caller_signature(&self) -> Option<&easynet_axon::pb::axon::v1::CallerSignature> {
         self.caller_signature.as_ref()
     }
@@ -131,6 +138,7 @@ impl DaemonInvocation {
             content_type: self.content_type,
             metadata: self.metadata,
             content_envelope: Some(content_envelope),
+            timeout_seconds: self.timeout_seconds.unwrap_or(0),
             ..InvokeRequest::default()
         })
     }
@@ -186,6 +194,10 @@ impl DaemonInvocation {
                 streams,
                 metadata: self.metadata,
                 content_envelope: Some(content_envelope),
+                // No session-resume semantics on the SDK frame-0 path;
+                // the session extension is the transport supervisor's
+                // concern (proto invoke.proto SessionOpenExt).
+                session_ext: None,
             })),
         })
     }
@@ -205,6 +217,7 @@ pub struct DaemonInvocationBuilder {
     content_type: String,
     metadata: HashMap<String, String>,
     caller_signature: Option<easynet_axon::pb::axon::v1::CallerSignature>,
+    timeout_seconds: Option<i32>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -235,6 +248,7 @@ impl DaemonInvocationBuilder {
             content_type: "application/json".to_string(),
             metadata: HashMap::new(),
             caller_signature: None,
+            timeout_seconds: None,
         })
     }
 
@@ -298,6 +312,19 @@ impl DaemonInvocationBuilder {
         self
     }
 
+    /// Per-call timeout in seconds (`InvokeRequest.timeout_seconds`,
+    /// capped daemon-side by the envelope deadline). Rejects
+    /// non-positive values — leave unset for the daemon default.
+    pub fn timeout_seconds(mut self, seconds: i32) -> Result<Self> {
+        if seconds <= 0 {
+            return Err(DaemonError::InvalidInvocation(
+                "timeout_seconds must be positive; omit it for the daemon default".to_string(),
+            ));
+        }
+        self.timeout_seconds = Some(seconds);
+        Ok(self)
+    }
+
     /// Finish building the Invocation.
     pub fn build(self) -> DaemonInvocation {
         DaemonInvocation {
@@ -311,6 +338,7 @@ impl DaemonInvocationBuilder {
             content_type: self.content_type,
             metadata: self.metadata,
             caller_signature: self.caller_signature,
+            timeout_seconds: self.timeout_seconds,
         }
     }
 }

@@ -247,10 +247,7 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
     // Two URL columns: LOCAL is the daemon's dev listener (the URL
     // that actually opens during local dev); PUBLIC is the Hub
     // production URL (resolves once the realm is publicly served).
-    println!(
-        "{:<22} {:<8} {:<46} {}",
-        "PROJECT", "VIS", "LOCAL", "PUBLIC"
-    );
+    println!("{:<22} {:<8} {:<46} PUBLIC", "PROJECT", "VIS", "LOCAL");
     for p in projects {
         let id = p.get("project_id").and_then(Value::as_str).unwrap_or("?");
         let vis = p.get("visibility").and_then(Value::as_str).unwrap_or("?");

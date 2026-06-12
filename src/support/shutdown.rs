@@ -8,7 +8,6 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
 
 /// A signal that can be awaited by one thread and triggered by another.
 /// Uses `Condvar` for efficient blocking instead of busy-polling.
@@ -38,31 +37,6 @@ impl ShutdownSignal {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *fired = true;
         cvar.notify_all();
-    }
-
-    /// Returns true if shutdown has been signaled.
-    pub fn is_triggered(&self) -> bool {
-        let (lock, _) = &*self.inner;
-        *lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Sleep for `duration` unless shutdown is signaled first.
-    /// Returns `true` if the caller should continue (timeout elapsed, no shutdown).
-    /// Returns `false` if shutdown was signaled (caller should stop).
-    pub fn sleep_unless_triggered(&self, duration: Duration) -> bool {
-        let (lock, cvar) = &*self.inner;
-        let fired = lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *fired {
-            return false;
-        }
-        let result = cvar.wait_timeout(fired, duration);
-        let (fired, timeout_result) = result.unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Continue if we timed out normally (no shutdown signal).
-        timeout_result.timed_out() && !*fired
     }
 
     /// Block until shutdown is signaled (no timeout).

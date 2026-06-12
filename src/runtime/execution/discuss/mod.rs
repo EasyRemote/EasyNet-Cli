@@ -41,7 +41,7 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::runtime::domain::{AgentId, DiscussRoom, NodeId, RoomId, TenantId};
+use crate::core::domain::{AgentId, DiscussRoom, NodeId, RoomId, TenantId};
 
 /// One turn posted into a discuss room. Mirrors the wire shape
 /// the IPC layer fans out for `discuss.subscribe`.

@@ -242,7 +242,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
         let status = if r.running {
             "running".to_string()
         } else {
-            r.meta.status.clone()
+            r.meta.status.to_string()
         };
         let steps = format!("{}/{}", r.meta.steps_completed, r.meta.steps_total);
         let dur = format!("{:.1}s", r.meta.duration_ms as f64 / 1000.0);

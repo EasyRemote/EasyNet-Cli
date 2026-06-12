@@ -136,22 +136,6 @@ impl HubPublishedAbilityStore {
     }
 }
 
-/// Process-wide singleton. The session-prelude functions in
-/// `services/invocation_transport/session_initiator.rs` need to reach the
-/// store without threading a new `Arc` through five layers of
-/// supervisor / dial / handshake plumbing; the meta-ability synth
-/// path (read-only) does too. We expose a `OnceLock` so both
-/// sides see the same store without owning the lifecycle dance.
-///
-/// **Long-term**: this should be passed via `DaemonInvocationService`
-/// the same way `AdvertisedAgentStore` is, removing the singleton.
-/// Tracked as a follow-up cleanup; v0 keeps the smaller footprint.
-static INSTANCE: std::sync::OnceLock<Arc<HubPublishedAbilityStore>> = std::sync::OnceLock::new();
-
-pub fn global() -> &'static Arc<HubPublishedAbilityStore> {
-    INSTANCE.get_or_init(HubPublishedAbilityStore::new)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

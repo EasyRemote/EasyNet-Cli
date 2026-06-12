@@ -157,7 +157,7 @@ impl ContextLoader for ScheduleLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::domain::{
+    use crate::core::domain::{
         AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
     };
 

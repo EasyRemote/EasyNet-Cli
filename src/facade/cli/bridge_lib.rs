@@ -6,7 +6,7 @@
 //   bridge dynamic library (`libaxon_dendrite_bridge.{dylib,so,dll}`).
 //
 // Why this module exists:
-// - `easynet join` stages the bridge lib into
+// - `easynet device join` stages the bridge lib into
 //   `~/.easynet/dendrite-bridge/native/`, but the Axon SDK loader
 //   (`resolve_native_lib`) does not search that path. It only checks
 //   `EASYNET_DENDRITE_BRIDGE_LIB` / `_HOME`, a gated local-source build,
@@ -38,7 +38,7 @@ use crate::persistence::config;
 ///    value means "no explicit override".
 /// 2. `EASYNET_DENDRITE_BRIDGE_LIB` from this process's environment.
 /// 3. `~/.easynet/dendrite-bridge/native/<libname>` — the data-dir
-///    location `easynet join` stages into.
+///    location `easynet device join` stages into.
 /// 4. The lib already wired into `~/.claude/settings.json`.
 /// 5. The lib already wired into `~/.codex/config.toml`.
 /// 6. A local repo build (`EasyNet-Axon/core/runtime-rs/dendrite-bridge`).

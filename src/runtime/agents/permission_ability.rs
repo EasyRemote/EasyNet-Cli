@@ -32,10 +32,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::core::domain::{PermissionDecision, PermissionId};
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::agents::profiles::DEFAULT_CONSENT_AGENT_ID;
-use crate::runtime::domain::{PermissionDecision, PermissionId};
 use crate::runtime::execution::permission::PermissionService;
 
 pub const ABILITY_SUBSCRIBE: &str = "consent.subscribe";

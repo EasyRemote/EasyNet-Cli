@@ -78,6 +78,17 @@ pub struct HotAgentRegistrar {
     hot_advertiser: OnceLock<Arc<dyn HotAgentAdvertiser>>,
 }
 
+/// True when `name` claims the reserved `device.` owner token — the
+/// grammar slot for device-sponsored System Agents
+/// (`agent/device.<device-id>.<agent-id>`, RFC-005 §3.1.2 / DEC-F048).
+/// Hosted user agents MUST NOT register under it: a hosted agent named
+/// `device.<x>` would mint `device.<x>.*` runtime rows that read as
+/// device-owned ability shapes downstream.
+#[must_use]
+pub fn name_claims_reserved_device_owner(name: &str) -> bool {
+    name == "device" || name.starts_with("device.")
+}
+
 /// Outcome reported back to the caller of `register_agent` /
 /// `unregister_agent` so the lifecycle handler's op_event line can
 /// surface how many `<agent>.*` rows actually landed.
@@ -86,6 +97,11 @@ pub struct HotAgentRuntimeSyncOutcome {
     pub registered: usize,
     pub replaced: usize,
     pub failed: usize,
+    /// True when the agent name claimed the reserved `device.` owner
+    /// token and the whole registration was refused (RFC-005 §3.1.2:
+    /// hosted user agent ≠ device-sponsored System Agent). No runtime
+    /// rows were touched.
+    pub rejected_reserved_owner: bool,
     /// Rows reconciled away: previously-registered `<agent>.*`
     /// abilities whose backing manifest is gone. The registrar owns
     /// the whole `<agent>.` LocalRuntime namespace (see
@@ -216,6 +232,26 @@ impl HotAgentRegistrar {
         name: &str,
         entry: &AgentEntry,
     ) -> HotAgentRuntimeSyncOutcome {
+        // DEC-F048 enforcement gate: the registrar owns the
+        // `<agent>.*` LocalRuntime namespace and refuses to mint rows
+        // under the reserved `device.` owner token regardless of
+        // caller — the lifecycle surface rejects earlier with a
+        // user-facing error; this is the invariant's home.
+        if name_claims_reserved_device_owner(name) {
+            crate::op_event!(
+                component = axon_bridge,
+                kind = hot_agent_register_reserved_owner_rejected,
+                agent = name,
+                message = "`device.` is the reserved owner token for \
+                          device-sponsored System Agents (RFC-005 §3.1.2); \
+                          hosted user agents cannot register under it",
+            );
+            return HotAgentRuntimeSyncOutcome {
+                rejected_reserved_owner: true,
+                ..Default::default()
+            };
+        }
+
         let Some(runtime) = self.runtime.get() else {
             crate::op_event!(
                 component = axon_bridge,
@@ -385,6 +421,35 @@ mod tests {
     /// This is what lets a provider WITHDRAW an ability via
     /// `agent refresh` instead of a daemon restart.
     #[tokio::test]
+    async fn register_agent_rejects_reserved_device_owner_token() {
+        let registrar = build_pending();
+        let rt = LocalRuntime::new();
+        registrar.set_runtime(Arc::clone(&rt));
+        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+
+        // Dotted form — would mint rows that read as device-owned
+        // ability shapes (`device.dev-1.sys.chat`).
+        let outcome = registrar.register_agent("device.dev-1.sys", &entry).await;
+        assert!(outcome.rejected_reserved_owner);
+        assert_eq!(outcome.registered, 0);
+        assert!(
+            !rt.has_ability("device.dev-1.sys.chat").await,
+            "no device-owned-shaped rows may reach the runtime"
+        );
+
+        // Bare reserved token — would collide with the `device.*`
+        // system ability namespace.
+        let outcome = registrar.register_agent("device", &entry).await;
+        assert!(outcome.rejected_reserved_owner);
+        assert!(!rt.has_ability("device.chat").await);
+
+        // User-owned shape passes the same gate untouched.
+        let outcome = registrar.register_agent("liangbing", &entry).await;
+        assert!(!outcome.rejected_reserved_owner);
+        assert!(rt.has_ability("liangbing.chat").await);
+    }
+
+    #[tokio::test]
     async fn register_agent_reconciles_rows_without_backing_manifests() {
         use easynet_axon::invocation::make_ability;
 
@@ -399,7 +464,8 @@ mod tests {
             "liangbing.ghost_op",
             make_ability(|_ctx| async move { Ok(Vec::new()) }),
         )
-        .await;
+        .await
+        .expect("seed registration must succeed");
         assert!(rt.has_ability("liangbing.ghost_op").await);
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);

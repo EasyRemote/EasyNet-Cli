@@ -168,10 +168,10 @@ fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
             let hub_ura = crate::ura::hub_ura(realm);
             let caller_ura = crate::ura::device_ura(realm, node_id);
             let ability_ura =
-                crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+                crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
                     &hub_ura, ability,
                 )?;
-            return crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+            return crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
                 ability_ura.as_str(),
                 args,
                 &hub_ura,

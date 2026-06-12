@@ -11,6 +11,7 @@
 //   * `context.clipboard.get`    — one clip, with base64 PNG for images
 //   * `context.clipboard.track`  — enable/disable capture (persisted;
 //                                  the tracker thread re-reads per tick)
+//   * `context.clipboard.remove` — delete one clip (and its PNG)
 //   * `context.folders.list`     — mapped project folders
 //   * `context.fs.list`          — browse one level inside a mapping
 //                                  (containment-checked)
@@ -38,6 +39,7 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 pub const ABILITY_CLIPBOARD_LIST: &str = "context.clipboard.list";
 pub const ABILITY_CLIPBOARD_GET: &str = "context.clipboard.get";
 pub const ABILITY_CLIPBOARD_TRACK: &str = "context.clipboard.track";
+pub const ABILITY_CLIPBOARD_REMOVE: &str = "context.clipboard.remove";
 pub const ABILITY_FOLDERS_LIST: &str = "context.folders.list";
 pub const ABILITY_FS_LIST: &str = "context.fs.list";
 pub const ABILITY_FAVORITES_LIST: &str = "context.favorites.list";
@@ -63,6 +65,11 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         ABILITY_CLIPBOARD_TRACK,
         OwnerKind::Device,
         std::sync::Arc::new(clipboard_track_handler),
+    );
+    reg.register_rpc_with_owner(
+        ABILITY_CLIPBOARD_REMOVE,
+        OwnerKind::Device,
+        std::sync::Arc::new(clipboard_remove_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_FOLDERS_LIST,
@@ -176,6 +183,12 @@ fn clipboard_track_handler(args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "tracking": enabled }))
 }
 
+fn clipboard_remove_handler(args: Value) -> anyhow::Result<Value> {
+    let id = require_str(&args, "id", "context.clipboard.remove")?;
+    let removed = context_store::remove_clip(&id)?;
+    Ok(serde_json::to_value(removed)?)
+}
+
 fn folders_list_handler(_args: Value) -> anyhow::Result<Value> {
     let folders: Vec<Value> = context_store::list_folders()
         .iter()
@@ -238,10 +251,9 @@ pub fn description_for(name: &str) -> Option<&'static str> {
         ABILITY_CLIPBOARD_LIST => {
             "List captured clipboard history (newest first) with the tracking flag."
         }
-        ABILITY_CLIPBOARD_GET => {
-            "Read one clipboard entry; image entries include base64 PNG data."
-        }
+        ABILITY_CLIPBOARD_GET => "Read one clipboard entry; image entries include base64 PNG data.",
         ABILITY_CLIPBOARD_TRACK => "Enable or disable clipboard history tracking on this device.",
+        ABILITY_CLIPBOARD_REMOVE => "Delete one clipboard entry (and its stored image, if any).",
         ABILITY_FOLDERS_LIST => "List the project folders mapped via `easynet context add`.",
         ABILITY_FS_LIST => "Browse one directory level inside a mapped project folder.",
         ABILITY_FAVORITES_LIST => "List favorites (starred clips, files, folders).",
@@ -281,6 +293,14 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
                 "enabled": {"type": "boolean", "description": "true to start capturing, false to stop."}
             },
             "required": ["enabled"],
+            "additionalProperties": false,
+        }),
+        ABILITY_CLIPBOARD_REMOVE => json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Clip id from context.clipboard.list."}
+            },
+            "required": ["id"],
             "additionalProperties": false,
         }),
         ABILITY_CAPTURES_LIST => json!({
@@ -342,10 +362,11 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
 }
 
 /// Every context ability name, for registration loops/tests.
-pub const ALL: [&str; 8] = [
+pub const ALL: [&str; 9] = [
     ABILITY_CLIPBOARD_LIST,
     ABILITY_CLIPBOARD_GET,
     ABILITY_CLIPBOARD_TRACK,
+    ABILITY_CLIPBOARD_REMOVE,
     ABILITY_FOLDERS_LIST,
     ABILITY_FS_LIST,
     ABILITY_FAVORITES_LIST,
@@ -365,7 +386,10 @@ mod tests {
         assert_eq!(out["tracking"], true);
         assert_eq!(out["entries"].as_array().unwrap().len(), 0);
         clipboard_track_handler(json!({"enabled": false})).unwrap();
-        assert_eq!(clipboard_list_handler(json!({})).unwrap()["tracking"], false);
+        assert_eq!(
+            clipboard_list_handler(json!({})).unwrap()["tracking"],
+            false
+        );
     }
 
     #[test]
@@ -383,6 +407,39 @@ mod tests {
             assert!(description_for(name).is_some(), "{name} description");
             assert!(input_schema_for(name).is_some(), "{name} schema");
         }
+    }
+
+    #[test]
+    fn clipboard_remove_deletes_entry_and_errors_on_unknown_id() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = context_store::ClipEntry {
+            id: "clip-1".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            device: "easynet:///r/localhost/device/d1".into(),
+            kind: "text".into(),
+            text: Some("hello".into()),
+            image_file: None,
+            preview: "hello".into(),
+        };
+        context_store::append_clip(&entry).unwrap();
+        assert_eq!(
+            clipboard_list_handler(json!({})).unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let removed = clipboard_remove_handler(json!({"id": "clip-1"})).unwrap();
+        assert_eq!(removed["id"], "clip-1");
+        assert_eq!(
+            clipboard_list_handler(json!({})).unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(clipboard_remove_handler(json!({"id": "clip-1"})).is_err());
+        assert!(clipboard_remove_handler(json!({})).is_err());
     }
 
     #[test]

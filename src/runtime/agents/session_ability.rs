@@ -37,9 +37,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::core::domain::SessionId;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::runtime::domain::SessionId;
 use crate::runtime::execution::session::SessionService;
 
 pub const ABILITY_LIST: &str = "session.list";
@@ -72,7 +72,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, sessions: Arc<SessionService>) {
 ///
 /// Args: `{ "include_terminated": bool? = true }`
 /// Returns: `{ "sessions": [Session, ...] }` where each Session
-/// matches `runtime::domain::Session`.
+/// matches `core::domain::Session`.
 fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
     let include_terminated = args
         .get("include_terminated")
@@ -162,7 +162,7 @@ pub fn attach_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::domain::{AgentId, NodeId, TenantId};
+    use crate::core::domain::{AgentId, NodeId, TenantId};
 
     fn svc_with(ids: &[&str]) -> Arc<SessionService> {
         let svc = Arc::new(SessionService::new());

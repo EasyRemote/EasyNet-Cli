@@ -670,6 +670,25 @@ impl McpClientService {
             .join("mcp_clients.json")
     }
 
+    /// Drop every cached upstream connection (stdio child handles,
+    /// listener tasks, HTTP clients). The next call per server
+    /// reconnects lazily on the CALLER's runtime.
+    ///
+    /// Why this exists: boot-time eager reflection drives
+    /// `reflect_all` on a temporary helper runtime
+    /// (`mcp_reflective_registry::run_eager_blocking`). Connections
+    /// born there die with that runtime — a serve-time reuse touches
+    /// a shut-down tokio context ("A Tokio 1.x context was found,
+    /// but it is being shutdown"). Reflection callers reset the
+    /// cache before their helper runtime drops.
+    pub async fn reset_connections(&self) {
+        let mut g = self.inner.lock().await;
+        for row in g.servers.values_mut() {
+            row.conn = None;
+            row.http_conn = None;
+        }
+    }
+
     /// Construct from an in-memory file (test path or operator-
     /// supplied snapshot). Production callers prefer `from_path`.
     pub fn from_file(file: McpClientsFile) -> Self {
@@ -742,6 +761,39 @@ impl McpClientService {
     ///     Messages", every JSON-RPC message is a new POST; the
     ///     session is identified by the `Mcp-Session-Id` header.
     pub async fn rpc(&self, name: &str, method: &str, params: Value) -> anyhow::Result<Value> {
+        match self.rpc_once(name, method, params.clone()).await {
+            Err(err) if is_dead_runtime_context(&err) => {
+                // Self-healing reconnect: a cached connection whose
+                // owning runtime has shut down (born on a temporary
+                // bridge runtime — boot reflection, hot refresh, any
+                // future sync→async bridge) surfaces tokio's
+                // "context ... being shutdown" from its dead child
+                // pipes or listener task. The CALLER's runtime is
+                // alive (we are polling on it) — drop the dead
+                // connection and reconnect here, once. This heals
+                // every creation path instead of patching each
+                // bridge call site.
+                crate::op_event!(
+                    component = mcp_client,
+                    kind = dead_runtime_connection_recycled,
+                    server = name,
+                );
+                self.invalidate_connection(name).await;
+                self.rpc_once(name, method, params).await
+            }
+            other => other,
+        }
+    }
+
+    async fn invalidate_connection(&self, name: &str) {
+        let mut g = self.inner.lock().await;
+        if let Some(row) = g.servers.get_mut(name) {
+            row.conn = None;
+            row.http_conn = None;
+        }
+    }
+
+    async fn rpc_once(&self, name: &str, method: &str, params: Value) -> anyhow::Result<Value> {
         let mut g = self.inner.lock().await;
         let row = g.servers.get_mut(name).ok_or_else(|| {
             anyhow::anyhow!("no upstream MCP server configured with name `{name}`")
@@ -919,6 +971,15 @@ impl std::fmt::Debug for McpClientService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("McpClientService").finish_non_exhaustive()
     }
+}
+
+/// tokio's stable diagnostic for touching a resource whose owning
+/// runtime is gone (`tokio::util::error::RUNTIME_SHUTTING_DOWN_ERROR`,
+/// surfaced through child pipes / dropped listener tasks of a
+/// connection born on a since-dropped bridge runtime). String-matched
+/// because tokio types it as a plain io::Error.
+fn is_dead_runtime_context(err: &anyhow::Error) -> bool {
+    format!("{err:#}").contains("but it is being shutdown")
 }
 
 /// Spawn the configured child and send the MCP `initialize`

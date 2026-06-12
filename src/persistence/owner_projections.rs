@@ -157,7 +157,9 @@ mod tests {
         });
 
         assert!(file.remove("easynet:///r/acme/agent/alice.claude"));
-        assert!(file.cursor_for("easynet:///r/acme/agent/alice.claude").is_none());
+        assert!(file
+            .cursor_for("easynet:///r/acme/agent/alice.claude")
+            .is_none());
         // Idempotent: removing an absent owner reports false, no panic.
         assert!(!file.remove("easynet:///r/acme/agent/alice.claude"));
     }

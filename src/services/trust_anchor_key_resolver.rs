@@ -24,11 +24,13 @@ impl RealmTrustAnchorKeyResolver {
 }
 
 fn decode_pubkey(public_key_b64: &str, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-    let raw = B64_STANDARD.decode(public_key_b64.as_bytes()).map_err(|err| {
-        AxonError::permission_denied(format!(
-            "realm_trust_anchor: pubkey base64 invalid for {agent_ura}: {err}"
-        ))
-    })?;
+    let raw = B64_STANDARD
+        .decode(public_key_b64.as_bytes())
+        .map_err(|err| {
+            AxonError::permission_denied(format!(
+                "realm_trust_anchor: pubkey base64 invalid for {agent_ura}: {err}"
+            ))
+        })?;
     let bytes: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
         AxonError::permission_denied(format!(
             "realm_trust_anchor: pubkey for {agent_ura} is {} bytes; expected 32",

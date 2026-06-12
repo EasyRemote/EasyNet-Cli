@@ -14,14 +14,24 @@
 //     ├── ir.json        — Mission IR v2 (compiler output)
 //     ├── trace.json     — full execution trace
 //     ├── meta.json      — name, status, duration, step counts
-//     └── pid             — empty file: presence means the run is in-flight
+//     │                    (written with status=running at create, so
+//     │                    in-flight runs are visible in listings)
+//     └── heartbeat      — touched every HEARTBEAT_INTERVAL by the run's
+//                          pump thread; liveness = freshness, so a run
+//                          whose process died stops looking alive within
+//                          HEARTBEAT_STALE_AFTER (F-022: the pid file's
+//                          "presence == in-flight" lied forever after a
+//                          crash)
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -33,27 +43,140 @@ pub fn root_dir() -> PathBuf {
     config::state_dir().join("missions").join("runs")
 }
 
+/// The mission-run store: every run.json-family operation is anchored to
+/// ONE missions root, resolved exactly once at construction. The object
+/// exists so embedders and tests anchor to an explicit directory instead
+/// of steering the free functions through the process-global HOME — the
+/// F-056 race was sixteen tests mutating HOME to retarget [`root_dir`].
+pub struct MissionRunStore {
+    root: PathBuf,
+}
+
+impl MissionRunStore {
+    /// Production entry: the canonical missions root under the state dir.
+    /// The free-function facade below resolves through this, so the env
+    /// is consulted only here.
+    pub fn open_default() -> Self {
+        Self { root: root_dir() }
+    }
+
+    /// Anchor to an explicit root (tests pass a TempDir path; no env).
+    #[cfg(test)]
+    pub fn with_root(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    #[cfg(test)]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+/// Cadence of the run's heartbeat pump.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+/// A heartbeat older than this (3× the cadence) means the owning
+/// process is gone — the run reads as not-running even if its meta
+/// still says `running` (an interrupted run).
+const HEARTBEAT_STALE_AFTER: Duration = Duration::from_secs(15);
+/// Pump-thread stop poll. Bounds both shutdown latency and the
+/// drift between a stop signal and the last touch.
+const HEARTBEAT_STOP_POLL: Duration = Duration::from_millis(500);
+
+/// Background toucher for the run's `heartbeat` file. Owned by
+/// [`MissionRunDir`]: the thread lives exactly as long as the run
+/// object, so process death (the F-022 failure mode the pid file
+/// could not express) stops the heartbeat within one interval.
+struct HeartbeatPump {
+    stop: Arc<AtomicBool>,
+}
+
+impl HeartbeatPump {
+    fn start(file: PathBuf) -> Self {
+        // First touch is SYNCHRONOUS: `create` returning means the run
+        // already reads alive. Deferring it to the spawned thread made
+        // "freshly created run" momentarily indistinguishable from an
+        // interrupted one (and made the F-056 test family racy once the
+        // HOME lock no longer serialized it incidentally). Content is
+        // forensic (humans reading the dir); freshness checks use mtime.
+        let _ = fs::write(&file, Local::now().to_rfc3339());
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let _ = std::thread::Builder::new()
+            .name("mission-heartbeat".into())
+            .spawn(move || {
+                let mut since_touch = Duration::ZERO; // first touch already done
+                while !flag.load(Ordering::Relaxed) {
+                    if since_touch >= HEARTBEAT_INTERVAL {
+                        let _ = fs::write(&file, Local::now().to_rfc3339());
+                        since_touch = Duration::ZERO;
+                    }
+                    std::thread::sleep(HEARTBEAT_STOP_POLL);
+                    since_touch += HEARTBEAT_STOP_POLL;
+                }
+            });
+        Self { stop }
+    }
+
+    fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for HeartbeatPump {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// True when the run directory's heartbeat is fresh enough to call
+/// the run alive.
+fn heartbeat_fresh(run_path: &Path) -> bool {
+    fs::metadata(run_path.join("heartbeat"))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|age| age < HEARTBEAT_STALE_AFTER)
+        .unwrap_or(false)
+}
+
 pub struct MissionRunDir {
     pub path: PathBuf,
+    pump: Option<HeartbeatPump>,
+}
+
+impl MissionRunStore {
+    pub fn create(&self, name: &str) -> anyhow::Result<MissionRunDir> {
+        fs::create_dir_all(&self.root)?;
+        let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
+        let safe_name = sanitize_for_path(name);
+        let path = allocate_unique_run_dir(&self.root, &stamp, &safe_name)?;
+        let run = MissionRunDir {
+            pump: Some(HeartbeatPump::start(path.join("heartbeat"))),
+            path,
+        };
+        // Initial meta with status=running: in-flight runs are visible
+        // in listings instead of appearing only after completion. The
+        // completion path overwrites this with the terminal record.
+        // Best-effort, like every write on this surface.
+        if let Err(e) = run.write_meta(&MissionRunMeta {
+            name: name.to_string(),
+            started_at: Local::now().to_rfc3339(),
+            status: MissionRunStatus::Running,
+            ..Default::default()
+        }) {
+            eprintln!(
+                "[easynet warn] mission run {}: write initial meta failed ({e})",
+                run.path.display()
+            );
+        }
+        Ok(run)
+    }
 }
 
 impl MissionRunDir {
+    /// Facade for the production root; see [`MissionRunStore::create`].
     pub fn create(name: &str) -> anyhow::Result<Self> {
-        let root = root_dir();
-        fs::create_dir_all(&root)?;
-        let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
-        let safe_name = sanitize_for_path(name);
-        let path = allocate_unique_run_dir(&root, &stamp, &safe_name)?;
-        // Mark in-flight; deleted on completion. Best-effort: if the
-        // pid file fails to write the run still proceeds (the file is
-        // a debugging aid, not load-bearing for correctness).
-        if let Err(e) = fs::write(path.join("pid"), std::process::id().to_string()) {
-            eprintln!(
-                "[easynet warn] mission run {}: write pid failed ({e})",
-                path.display()
-            );
-        }
-        Ok(Self { path })
+        MissionRunStore::open_default().create(name)
     }
 
     pub fn write_source(&self, source: &str) -> std::io::Result<()> {
@@ -71,7 +194,10 @@ impl MissionRunDir {
         fs::write(self.path.join("meta.json"), s + "\n")
     }
     pub fn finish(&self) {
-        let _ = fs::remove_file(self.path.join("pid"));
+        if let Some(pump) = &self.pump {
+            pump.stop();
+        }
+        let _ = fs::remove_file(self.path.join("heartbeat"));
     }
 }
 
@@ -109,13 +235,56 @@ fn allocate_unique_run_dir(
     )
 }
 
+/// Mission run lifecycle — the stored state machine for `meta.json`
+/// (F-022 / T5.3: stringly status plus pid-file liveness was the
+/// "disk file as state machine" debt). Serialized lowercase, which is
+/// byte-identical to the historical string literals, so every
+/// existing run directory on disk parses unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MissionRunStatus {
+    /// Written at create; a terminal status overwrites it at
+    /// completion. `Running` in a meta whose heartbeat went stale is
+    /// an interrupted run (see [`MissionRunSummary::is_interrupted`]).
+    #[default]
+    Running,
+    Ok,
+    Partial,
+    Error,
+    Cancelled,
+}
+
+impl MissionRunStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MissionRunStatus::Running => "running",
+            MissionRunStatus::Ok => "ok",
+            MissionRunStatus::Partial => "partial",
+            MissionRunStatus::Error => "error",
+            MissionRunStatus::Cancelled => "cancelled",
+        }
+    }
+
+    /// Terminal states never transition again; `Running` is the only
+    /// non-terminal state.
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self, MissionRunStatus::Running)
+    }
+}
+
+impl std::fmt::Display for MissionRunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MissionRunMeta {
     pub name: String,
     pub source_file: Option<String>,
     pub started_at: String,
     pub duration_ms: u64,
-    pub status: String, // "ok" | "error" | "partial" | "running" | "cancelled"
+    pub status: MissionRunStatus,
     pub error: Option<String>,
     pub steps_total: usize,
     pub steps_completed: usize,
@@ -147,85 +316,129 @@ pub struct MissionRunSummary {
     pub id: String,
     pub path: PathBuf,
     pub meta: MissionRunMeta,
+    /// Alive RIGHT NOW: the run directory's heartbeat is fresh.
     pub running: bool,
 }
 
-pub fn list_runs() -> anyhow::Result<Vec<MissionRunSummary>> {
-    let root = root_dir();
-    if !root.exists() {
-        return Ok(Vec::new());
+impl MissionRunSummary {
+    /// The run's process died without writing a terminal status —
+    /// meta still says `running` but the heartbeat went stale. The
+    /// exact state F-022's pid file misrendered as forever-running.
+    #[cfg(test)]
+    pub fn is_interrupted(&self) -> bool {
+        self.meta.status == MissionRunStatus::Running && !self.running
     }
-    let mut out = Vec::new();
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let id = entry.file_name().to_string_lossy().to_string();
-        let meta_path = path.join("meta.json");
-        let meta: MissionRunMeta = match fs::read_to_string(&meta_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-        {
-            Some(m) => m,
-            None => continue,
-        };
-        let running = path.join("pid").exists();
-        out.push(MissionRunSummary {
-            id,
-            path,
-            meta,
-            running,
-        });
-    }
-    out.sort_by(|a, b| b.id.cmp(&a.id));
-    Ok(out)
 }
 
+/// Facade for the production root; see [`MissionRunStore::list_runs`].
+pub fn list_runs() -> anyhow::Result<Vec<MissionRunSummary>> {
+    MissionRunStore::open_default().list_runs()
+}
+
+/// Facade for the production root; see [`MissionRunStore::find_run`].
 pub fn find_run(id: &str) -> anyhow::Result<MissionRunSummary> {
-    // Reject blank ids — otherwise `starts_with("")` would match every run
-    // and silently return the first one (or bail "ambiguous"), neither of
-    // which is helpful.
-    let id = id.trim();
-    if id.is_empty() {
-        anyhow::bail!("mission run id is empty");
+    MissionRunStore::open_default().find_run(id)
+}
+
+impl MissionRunStore {
+    pub fn list_runs(&self) -> anyhow::Result<Vec<MissionRunSummary>> {
+        let root = &self.root;
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().to_string();
+            let meta_path = path.join("meta.json");
+            let meta: MissionRunMeta = match fs::read_to_string(&meta_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+            {
+                Some(m) => m,
+                None => continue,
+            };
+            let running = heartbeat_fresh(&path);
+            out.push(MissionRunSummary {
+                id,
+                path,
+                meta,
+                running,
+            });
+        }
+        out.sort_by(|a, b| b.id.cmp(&a.id));
+        Ok(out)
     }
 
-    let runs = list_runs()?;
-    // Exact match short-circuits the prefix search so an id that happens
-    // to also be a prefix of a longer id ("a" vs "ab") still resolves
-    // unambiguously.
-    if let Some(r) = runs.iter().find(|r| r.id == id) {
-        return Ok(MissionRunSummary {
-            id: r.id.clone(),
-            path: r.path.clone(),
-            meta: r.meta.clone(),
-            running: r.running,
-        });
+    pub fn find_run(&self, id: &str) -> anyhow::Result<MissionRunSummary> {
+        // Reject blank ids — otherwise `starts_with("")` would match every run
+        // and silently return the first one (or bail "ambiguous"), neither of
+        // which is helpful.
+        let id = id.trim();
+        if id.is_empty() {
+            anyhow::bail!("mission run id is empty");
+        }
+
+        let runs = self.list_runs()?;
+        // Exact match short-circuits the prefix search so an id that happens
+        // to also be a prefix of a longer id ("a" vs "ab") still resolves
+        // unambiguously.
+        if let Some(r) = runs.iter().find(|r| r.id == id) {
+            return Ok(MissionRunSummary {
+                id: r.id.clone(),
+                path: r.path.clone(),
+                meta: r.meta.clone(),
+                running: r.running,
+            });
+        }
+        // Allow id prefix as a convenience.
+        let matches: Vec<&MissionRunSummary> =
+            runs.iter().filter(|r| r.id.starts_with(id)).collect();
+        if matches.len() == 1 {
+            let r = matches[0];
+            return Ok(MissionRunSummary {
+                id: r.id.clone(),
+                path: r.path.clone(),
+                meta: r.meta.clone(),
+                running: r.running,
+            });
+        }
+        if matches.len() > 1 {
+            anyhow::bail!(
+                "ambiguous run id '{id}' — matches: {}",
+                matches
+                    .iter()
+                    .map(|r| r.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        anyhow::bail!("no mission run found for id '{id}'")
     }
-    // Allow id prefix as a convenience.
-    let matches: Vec<&MissionRunSummary> = runs.iter().filter(|r| r.id.starts_with(id)).collect();
-    if matches.len() == 1 {
-        let r = matches[0];
-        return Ok(MissionRunSummary {
-            id: r.id.clone(),
-            path: r.path.clone(),
-            meta: r.meta.clone(),
-            running: r.running,
-        });
+
+    /// Mark a run cancelled if (and only if) its stored status is still
+    /// non-terminal. The gate is the STATUS, not the liveness bool: an
+    /// interrupted run (meta says running, heartbeat stale) is settled to
+    /// `Cancelled` instead of being unreachable forever. A live run's
+    /// completion write may still race this — same advisory semantics the
+    /// surface always had.
+    pub fn cancel_run(&self, id: &str) -> anyhow::Result<CancelOutcome> {
+        let mut run = self.find_run(id)?;
+        if run.meta.status.is_terminal() {
+            return Ok(CancelOutcome::AlreadyTerminal(run));
+        }
+        run.meta.status = MissionRunStatus::Cancelled;
+        let _ = fs::remove_file(run.path.join("heartbeat"));
+        if let Ok(s) = serde_json::to_string_pretty(&run.meta) {
+            let _ = fs::write(run.path.join("meta.json"), s + "\n");
+        }
+        run.running = false;
+        Ok(CancelOutcome::Cancelled(run))
     }
-    if matches.len() > 1 {
-        anyhow::bail!(
-            "ambiguous run id '{id}' — matches: {}",
-            matches
-                .iter()
-                .map(|r| r.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-    anyhow::bail!("no mission run found for id '{id}'")
 }
 
 /// Outcome of a `cancel_run` call. Lets callers report accurately whether
@@ -235,20 +448,9 @@ pub enum CancelOutcome {
     AlreadyTerminal(MissionRunSummary),
 }
 
-/// Mark a run cancelled if (and only if) it is currently in-flight.
-/// Best-effort: only updates meta.json + removes pid.
+/// Facade for the production root; see [`MissionRunStore::cancel_run`].
 pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
-    let mut run = find_run(id)?;
-    if !run.running {
-        return Ok(CancelOutcome::AlreadyTerminal(run));
-    }
-    run.meta.status = "cancelled".to_string();
-    let _ = fs::remove_file(run.path.join("pid"));
-    if let Ok(s) = serde_json::to_string_pretty(&run.meta) {
-        let _ = fs::write(run.path.join("meta.json"), s + "\n");
-    }
-    run.running = false;
-    Ok(CancelOutcome::Cancelled(run))
+    MissionRunStore::open_default().cancel_run(id)
 }
 
 // ── In-process mission entry point ─────────────────────────────────────────
@@ -491,7 +693,7 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
         source_file: opts.source_label.clone(),
         started_at,
         duration_ms,
-        status: "ok".into(),
+        status: MissionRunStatus::Ok,
         error: None,
         steps_total: total_steps,
         steps_completed: 0,
@@ -512,7 +714,7 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
             // — surface that as "partial" so the listing doesn't lie about
             // a run with broken steps.
             if report.steps_failed > 0 {
-                meta.status = "partial".into();
+                meta.status = MissionRunStatus::Partial;
             }
             if let Ok(trace_json) = serde_json::to_string_pretty(&report.trace) {
                 if let Err(e) = run_dir.write_trace(&trace_json) {
@@ -558,7 +760,7 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
             })
         }
         Err(e) => {
-            meta.status = "error".into();
+            meta.status = MissionRunStatus::Error;
             meta.error = Some(e.to_string());
             if let Err(write_err) = run_dir.write_meta(&meta) {
                 eprintln!(
@@ -574,61 +776,47 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
 
 // ── Mission context guard ──────────────────────────────────────────────────
 //
-// Installs the active `DispatchContext` for the duration of a mission
-// run on TWO channels:
+// Installs the active `DispatchContext` for the duration of a mission run on
+// the typed in-process channel only. Concurrent missions on different threads
+// get independent contexts; worker pools receive the context by explicit
+// handoff, not by process-global mutation.
 //
-//   1. The typed thread-local in `runtime::context` — the primary
-//      in-process channel. Concurrent missions on different threads
-//      get independent contexts (no cross-thread stomping).
-//   2. The `EASYNET_MISSION_ID` env var — the cross-process channel.
-//      When the mission interpreter spawns an external agent CLI as a
-//      child process, the child inherits the env var and reconstructs
-//      the typed context from it on entry.
-//
-// Both channels are reset on Drop (panic-safe). The env-var write is the
-// remaining piece of process-global state in this codebase; it is here
-// because spawning a subprocess is the only operation that crosses the
-// thread-local boundary, and the env is the only mechanism that crosses
-// the process boundary. See `runtime::context` for the design rationale.
+// `EASYNET_MISSION_ID` is reserved for the cross-process boundary. When the
+// runtime spawns an external agent CLI, `DispatchContext::serialize_to_env`
+// writes the child command's env map; the parent process env is never mutated.
+// See `runtime::context` for the design rationale.
+/// RAII scope for the mission's typed dispatch context.
+///
+/// Audit invariant: NOTHING in-process writes `EASYNET_MISSION_ID`.
+/// Writers exist only on the child command's env map
+/// (`DispatchContext::serialize_to_env` at the spawn boundary); the
+/// cross-process *read* path is `DispatchContext::from_env()` at the
+/// child's entry. If you find yourself wanting a process-env writer,
+/// install a typed `DispatchContext` instead — the env var is the
+/// subprocess boundary, not a general-purpose channel.
 struct MissionContextGuard {
-    prev_env: Option<String>,
     _ctx: crate::runtime::context::ContextGuard,
 }
 
 impl MissionContextGuard {
     fn enter(run_id: &str, invocation_context: Option<ParentInvocationContext>) -> Self {
-        let prev_env = std::env::var("EASYNET_MISSION_ID").ok();
-        std::env::set_var("EASYNET_MISSION_ID", run_id);
-        // Install the typed thread-local. The run_dir field is filled
-        // in best-effort from the canonical mission-runs root; if the
-        // dir is missing the dispatch invariant check will surface that
-        // separately (the Stage 2 anti-forgery check).
+        // Typed thread-local only (F-028 / T5.4): nothing in-process
+        // writes EASYNET_MISSION_ID anymore. The interpreter hands the
+        // context to its rayon workers explicitly, and the subprocess
+        // boundary injects env vars through
+        // `DispatchContext::serialize_to_env` on the child's command —
+        // never through the parent's own environment, which is
+        // process-global and stomped under concurrent missions.
+        //
+        // The run_dir field is filled in best-effort from the canonical
+        // mission-runs root; if the dir is missing the dispatch
+        // invariant check surfaces that separately (Stage 2
+        // anti-forgery).
         let ctx =
             crate::runtime::context::DispatchContext::for_mission(run_id, root_dir().join(run_id))
                 .with_parent_invocation(invocation_context);
-        let ctx_guard = crate::runtime::context::enter(ctx);
         Self {
-            prev_env,
-            _ctx: ctx_guard,
-        }
-    }
-}
-
-impl Drop for MissionContextGuard {
-    fn drop(&mut self) {
-        // Thread-local restore happens automatically via `_ctx`'s Drop;
-        // we only need to clean up the env var the SDK can't see into.
-        //
-        // Audit invariant: this `Drop` impl, together with `enter()`
-        // above, is the **only place in the codebase that writes
-        // `EASYNET_MISSION_ID`**. The cross-process *read* path is
-        // `runtime::context::DispatchContext::from_env()`. If you find
-        // yourself wanting another writer, install a typed
-        // `DispatchContext` instead — the env var is the subprocess
-        // boundary, not a general-purpose channel.
-        match self.prev_env.take() {
-            Some(p) => std::env::set_var("EASYNET_MISSION_ID", p),
-            None => std::env::remove_var("EASYNET_MISSION_ID"),
+            _ctx: crate::runtime::context::enter(ctx),
         }
     }
 }
@@ -740,13 +928,13 @@ mod tests {
         let _ = fs::remove_dir_all(&*root);
     }
 
-    fn make_meta(name: &str) -> MissionRunMeta {
+    fn make_meta(name: &str, status: MissionRunStatus) -> MissionRunMeta {
         MissionRunMeta {
             name: name.into(),
             source_file: Some(format!("/tmp/{name}.eal")),
             started_at: "2026-04-06T12:00:00+00:00".into(),
             duration_ms: 42,
-            status: "ok".into(),
+            status,
             error: None,
             steps_total: 3,
             steps_completed: 3,
@@ -757,18 +945,98 @@ mod tests {
     }
 
     #[test]
-    fn create_writes_pid_and_finish_removes_it() {
+    fn mission_context_guard_never_touches_process_env() {
         let _g = HomeGuard::new();
-        let dir = MissionRunDir::create("smoke").expect("create");
+        std::env::remove_var("EASYNET_MISSION_ID");
+        {
+            let _guard = MissionContextGuard::enter("env-free-run", None);
+            assert!(
+                std::env::var("EASYNET_MISSION_ID").is_err(),
+                "the in-process channel is the thread-local, never the env"
+            );
+            assert_eq!(
+                crate::runtime::context::current().map(|c| c.mission_id),
+                Some("env-free-run".to_string())
+            );
+        }
+        assert!(crate::runtime::context::current().is_none());
+    }
+
+    #[test]
+    fn status_serde_matches_historical_literals() {
+        // Every run directory written before the enum existed stores
+        // these exact lowercase strings — they must keep parsing.
+        for (s, expect) in [
+            ("\"ok\"", MissionRunStatus::Ok),
+            ("\"error\"", MissionRunStatus::Error),
+            ("\"partial\"", MissionRunStatus::Partial),
+            ("\"running\"", MissionRunStatus::Running),
+            ("\"cancelled\"", MissionRunStatus::Cancelled),
+        ] {
+            let parsed: MissionRunStatus = serde_json::from_str(s).expect(s);
+            assert_eq!(parsed, expect);
+            assert_eq!(serde_json::to_string(&parsed).unwrap(), s);
+        }
+        // Unknown literals are rejected at parse time — no silent
+        // string passthrough (AXIOM 22.2 family: no stringly state).
+        assert!(serde_json::from_str::<MissionRunStatus>("\"bogus\"").is_err());
+    }
+
+    #[test]
+    fn create_starts_heartbeat_and_finish_removes_it() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        let dir = store.create("smoke").expect("create");
         assert!(
-            dir.path.join("pid").exists(),
-            "pid file should exist after create"
+            dir.path.join("heartbeat").exists(),
+            "heartbeat file should exist after create"
         );
+        // The initial meta makes the in-flight run visible to listings.
+        let meta: MissionRunMeta = serde_json::from_str(
+            &fs::read_to_string(dir.path.join("meta.json")).expect("initial meta written"),
+        )
+        .expect("initial meta parses");
+        assert_eq!(meta.status, MissionRunStatus::Running);
+        assert!(heartbeat_fresh(&dir.path), "fresh heartbeat reads alive");
         dir.finish();
         assert!(
-            !dir.path.join("pid").exists(),
-            "pid file should be gone after finish"
+            !dir.path.join("heartbeat").exists(),
+            "heartbeat file should be gone after finish"
         );
+        assert!(!heartbeat_fresh(&dir.path));
+    }
+
+    #[test]
+    fn interrupted_run_reads_dead_not_running_forever() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        let dir = store.create("crashy").expect("create");
+        // Simulate process death: heartbeat stops being touched and
+        // goes stale (we backdate it rather than waiting 15 s).
+        if let Some(pump) = &dir.pump {
+            pump.stop();
+        }
+        let hb = dir.path.join("heartbeat");
+        let stale = std::time::SystemTime::now() - (HEARTBEAT_STALE_AFTER * 2);
+        let f = fs::File::options().write(true).open(&hb).expect("open hb");
+        f.set_modified(stale).expect("backdate");
+        drop(f);
+
+        let id = dir.path.file_name().unwrap().to_string_lossy().to_string();
+        let run = store.find_run(&id).expect("find");
+        assert!(!run.running, "stale heartbeat must not read as running");
+        assert!(
+            run.is_interrupted(),
+            "running-status + dead heartbeat = interrupted"
+        );
+        // And cancel can settle it (the pid file made this state
+        // permanently un-cancellable).
+        match store.cancel_run(&id).expect("cancel") {
+            CancelOutcome::Cancelled(r) => {
+                assert_eq!(r.meta.status, MissionRunStatus::Cancelled)
+            }
+            CancelOutcome::AlreadyTerminal(_) => panic!("interrupted run must be settleable"),
+        }
     }
 
     #[test]
@@ -794,47 +1062,64 @@ mod tests {
 
     #[test]
     fn create_collision_appends_suffix() {
-        let _g = HomeGuard::new();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
         // Two runs with the same timestamp (same name, no real time gap).
         // The second one must land on a `-1` suffix instead of clobbering.
-        let a = MissionRunDir::create("clash").expect("a");
-        let b = MissionRunDir::create("clash").expect("b");
+        let a = store.create("clash").expect("a");
+        let b = store.create("clash").expect("b");
         assert_ne!(a.path, b.path);
         assert!(b.path.to_string_lossy().contains("-1"));
     }
 
     #[test]
     fn list_runs_is_empty_when_root_missing() {
-        let _g = HomeGuard::new();
-        // No mission runs created in this clean HOME.
-        let runs = list_runs().expect("list");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        // No mission runs created under this fresh root.
+        let runs = store.list_runs().expect("list");
         assert!(runs.is_empty());
     }
 
     #[test]
     fn list_runs_skips_dirs_without_meta() {
-        let _g = HomeGuard::new();
-        let dir = MissionRunDir::create("noisy").expect("create");
-        // No write_meta call → list_runs must skip this directory.
-        let runs = list_runs().expect("list");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        // `create()` now writes an initial running meta (in-flight
+        // runs are visible by design), so a meta-less directory can
+        // only be foreign junk — fabricate one directly.
+        let junk = store.root().join("2026-01-01_000000_junk");
+        fs::create_dir_all(&junk).expect("mkdir junk");
+        fs::write(junk.join("source.eal"), "mission noop {}").expect("seed file");
+        let runs = store.list_runs().expect("list");
         assert!(
             runs.is_empty(),
             "found {:?}",
             runs.iter().map(|r| &r.id).collect::<Vec<_>>()
         );
         // Sanity: the directory itself does exist.
-        assert!(dir.path.exists());
+        assert!(junk.exists());
+
+        // And a freshly created run IS visible, as running.
+        let dir = store.create("inflight").expect("create");
+        let runs = store.list_runs().expect("list");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].meta.status, MissionRunStatus::Running);
+        assert!(runs[0].running, "fresh heartbeat reads alive");
+        dir.finish();
     }
 
     #[test]
     fn list_runs_returns_recorded_meta_sorted_desc() {
-        let _g = HomeGuard::new();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
         for n in ["alpha", "beta", "gamma"] {
-            let d = MissionRunDir::create(n).expect("create");
-            d.write_meta(&make_meta(n)).expect("write_meta");
+            let d = store.create(n).expect("create");
+            d.write_meta(&make_meta(n, MissionRunStatus::Ok))
+                .expect("write_meta");
             d.finish();
         }
-        let runs = list_runs().expect("list");
+        let runs = store.list_runs().expect("list");
         assert_eq!(runs.len(), 3);
         // ID prefix is the same timestamp; ordering then comes from the
         // collision suffix appended by `create`. Whichever ordering, the
@@ -851,61 +1136,68 @@ mod tests {
 
     #[test]
     fn find_run_rejects_empty_id() {
-        let _g = HomeGuard::new();
-        assert!(find_run("").is_err());
-        assert!(find_run("   ").is_err());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        assert!(store.find_run("").is_err());
+        assert!(store.find_run("   ").is_err());
     }
 
     #[test]
     fn find_run_finds_exact_then_prefix() {
-        let _g = HomeGuard::new();
-        let d = MissionRunDir::create("solo").expect("create");
-        d.write_meta(&make_meta("solo")).expect("write_meta");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        let d = store.create("solo").expect("create");
+        d.write_meta(&make_meta("solo", MissionRunStatus::Ok))
+            .expect("write_meta");
         d.finish();
 
         let id = d.path.file_name().unwrap().to_string_lossy().to_string();
         // exact
-        let r = find_run(&id).expect("exact");
+        let r = store.find_run(&id).expect("exact");
         assert_eq!(r.id, id);
 
         // prefix
         let prefix = &id[..id.len() - 4];
-        let r = find_run(prefix).expect("prefix");
+        let r = store.find_run(prefix).expect("prefix");
         assert_eq!(r.id, id);
 
         // missing
-        assert!(find_run("does-not-exist").is_err());
+        assert!(store.find_run("does-not-exist").is_err());
     }
 
     #[test]
     fn cancel_run_flips_in_flight_to_cancelled() {
-        let _g = HomeGuard::new();
-        let d = MissionRunDir::create("running").expect("create");
-        d.write_meta(&make_meta("running")).expect("write_meta");
-        // intentionally do NOT call finish — pid file stays in place.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        let d = store.create("running").expect("create");
+        d.write_meta(&make_meta("running", MissionRunStatus::Running))
+            .expect("write_meta");
+        // intentionally do NOT call finish — the run stays in flight.
         let id = d.path.file_name().unwrap().to_string_lossy().to_string();
 
-        match cancel_run(&id).expect("cancel") {
+        match store.cancel_run(&id).expect("cancel") {
             CancelOutcome::Cancelled(r) => {
-                assert_eq!(r.meta.status, "cancelled");
+                assert_eq!(r.meta.status, MissionRunStatus::Cancelled);
                 assert!(!r.running);
             }
             CancelOutcome::AlreadyTerminal(_) => panic!("expected Cancelled"),
         }
-        // pid file is gone now.
-        assert!(!d.path.join("pid").exists());
+        // heartbeat file is gone now.
+        assert!(!d.path.join("heartbeat").exists());
     }
 
     #[test]
     fn cancel_run_noop_on_terminal() {
-        let _g = HomeGuard::new();
-        let d = MissionRunDir::create("done").expect("create");
-        d.write_meta(&make_meta("done")).expect("write_meta");
-        d.finish(); // remove pid → terminal
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(tmp.path().join("runs"));
+        let d = store.create("done").expect("create");
+        d.write_meta(&make_meta("done", MissionRunStatus::Ok))
+            .expect("write_meta");
+        d.finish(); // stop heartbeat → run no longer reads alive
         let id = d.path.file_name().unwrap().to_string_lossy().to_string();
 
-        match cancel_run(&id).expect("cancel") {
-            CancelOutcome::AlreadyTerminal(r) => assert_eq!(r.meta.status, "ok"),
+        match store.cancel_run(&id).expect("cancel") {
+            CancelOutcome::AlreadyTerminal(r) => assert_eq!(r.meta.status, MissionRunStatus::Ok),
             CancelOutcome::Cancelled(_) => panic!("expected AlreadyTerminal"),
         }
     }

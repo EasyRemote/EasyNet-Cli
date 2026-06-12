@@ -490,6 +490,7 @@ pub fn heartbeat<I: AbilityInvoker>(
     invoker: &I,
     tenant_id: &str,
     realm: &str,
+    store: &crate::services::hub_published_ability_store::HubPublishedAbilityStore,
 ) -> Result<crate::runtime::federation_client::HeartbeatReceipt, String> {
     let resource_ura = heartbeat_resource_ura(realm, tenant_id);
     // AXON-RFC-001 v4.1.7 hub-broadcast contract: pass the
@@ -500,7 +501,6 @@ pub fn heartbeat<I: AbilityInvoker>(
     // the diff's `added` field. v4.1.6 hubs ignore the field and
     // omit `hub_abilities_diff` from the receipt; the parse path
     // below treats absent diff as "no change".
-    let store = crate::services::hub_published_ability_store::global();
     let since = store.revision();
     let refresh_owner_uras = crate::runtime::owner_projection::heartbeat_refresh_owner_uras()?;
     let payload = serde_json::json!({
@@ -900,7 +900,8 @@ mod tests {
             "membership_status": "active",
             "realm_directory_size": 1
         }));
-        let _receipt = heartbeat(&invoker, "tenant", "acme").expect("heartbeat succeeds");
+        let store = crate::services::hub_published_ability_store::HubPublishedAbilityStore::new();
+        let _receipt = heartbeat(&invoker, "tenant", "acme", &store).expect("heartbeat succeeds");
 
         let payload = invoker.last_payload.borrow().clone().unwrap();
         assert_eq!(payload["since_abilities_revision"].as_u64(), Some(0));

@@ -36,7 +36,7 @@ use std::sync::RwLock;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
-use crate::runtime::domain::{AgentId, NodeId, Session, SessionId, TenantId};
+use crate::core::domain::{AgentId, NodeId, Session, SessionId, TenantId};
 
 /// One indexed session, plus its per-session timeline broadcast.
 struct SessionEntry {

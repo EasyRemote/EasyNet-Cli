@@ -23,9 +23,10 @@ make_sandbox() {
     sandbox="$(mktemp -d)"
     mkdir -p "$sandbox/src/services/invocation_transport" "$sandbox/src/support" "$sandbox/tests" "$sandbox/docs" "$sandbox/scripts" "$sandbox/axon"
     cp "$REPO_ROOT/src/ura.rs" "$sandbox/src/ura.rs"
-    cp "$REPO_ROOT/src/support/federation_invoke.rs" "$sandbox/src/support/federation_invoke.rs"
+    cp "$REPO_ROOT/src/services/invocation_transport/federation_invoke.rs" "$sandbox/src/services/invocation_transport/federation_invoke.rs"
     cp "$REPO_ROOT/src/services/invocation_transport/admission_facade.rs" "$sandbox/src/services/invocation_transport/admission_facade.rs"
     cp "$REPO_ROOT/src/services/invocation_transport/daemon_invocation_service.rs" "$sandbox/src/services/invocation_transport/daemon_invocation_service.rs"
+    cp "$REPO_ROOT/src/services/invocation_transport/daemon_invocation_service_tests.rs" "$sandbox/src/services/invocation_transport/daemon_invocation_service_tests.rs"
     cp "$REPO_ROOT/src/services/invocation_transport/register_device_pubkey.rs" "$sandbox/src/services/invocation_transport/register_device_pubkey.rs"
     copy_if_present "$REPO_ROOT/docs/spec/owner-truth-table/ability-owner-truth-table.tex" "$sandbox/docs/spec/owner-truth-table/ability-owner-truth-table.tex"
     cp "$REPO_ROOT/../EasyNet-Axon/core/ura-rs/src/lib.rs" "$sandbox/axon/lib.rs"
@@ -59,7 +60,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "Axon hub-with-tail generation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/support/federation_invoke.rs"
+perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/services/invocation_transport/federation_invoke.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

@@ -257,10 +257,12 @@ impl LocalDaemonAbilityClient {
     fn validate_socket() -> anyhow::Result<()> {
         let socket_path = resolve_socket_path();
         if !probe_accepting(&socket_path) {
-            anyhow::bail!(
-                "daemon not running: gRPC listener not reachable at {}. Start it with `easynet runtime start` or `easynet start`.",
-                socket_path.display()
-            );
+            return Err(anyhow::Error::new(
+                crate::support::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+                    "daemon not running: gRPC listener not reachable at {}. Start it with `easynet runtime start` or `easynet start`.",
+                    socket_path.display()
+                )),
+            ));
         }
         Ok(())
     }
@@ -367,11 +369,13 @@ fn invoke_local_daemon_ability_with_caller_and_subject(
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
-        bail!(
-            "daemon not running (local Axon gRPC listener unreachable at {}). \
-             Start it with `easynet runtime start`.",
-            socket_path.display()
-        );
+        return Err(anyhow::Error::new(
+            crate::support::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+                "daemon not running (local Axon gRPC listener unreachable at {}). \
+                 Start it with `easynet runtime start`.",
+                socket_path.display()
+            )),
+        ));
     }
 
     let caller_ura = caller_override
@@ -464,6 +468,7 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     causal_parents: &[serde_json::Value],
     step_timeout: Option<Duration>,
     trace_id: Option<&str>,
+    callee_agent: Option<&str>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     use anyhow::{anyhow, bail, Context};
     use easynet_axon::pb::axon::v1 as pb;
@@ -484,17 +489,41 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     }
 
     let caller_ura = local_daemon_loopback_caller_ura();
-    let subject_ura = subject
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(caller_ura.as_str())
-        .to_string();
+    // Identity granularity (ratified 2026-06-11): when the caller names
+    // the owning agent, the callee is the device-owned agent URA
+    // (`agent/device.<device-id>.<agent>`); when a trace id (mission
+    // run id) is present and no explicit subject was given, the subject
+    // is the mission-run resource
+    // (`resource/device.<device-id>.missions/<mission-id>`). Both
+    // shapes are Axon builders — nothing is string-assembled here.
+    let parsed_caller = crate::ura::parse_ura(&caller_ura)
+        .with_context(|| format!("parse loopback caller URA {caller_ura:?}"))?;
+    let (realm, device_id) = (
+        parsed_caller.realm.clone(),
+        parsed_caller.device_id().unwrap_or_default().to_string(),
+    );
+    let callee_ura = match callee_agent.map(str::trim).filter(|a| !a.is_empty()) {
+        Some(agent) if !device_id.is_empty() => {
+            crate::ura::device_agent_ura(&realm, &device_id, agent)
+        }
+        _ => caller_ura.clone(),
+    };
+    let subject_ura = match subject.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(explicit) => explicit.to_string(),
+        None => match trace_id.map(str::trim).filter(|t| !t.is_empty()) {
+            Some(mission_id) if !device_id.is_empty() => crate::ura::resource_dot_ura(
+                &realm,
+                &format!("device.{device_id}.missions"),
+                mission_id,
+            ),
+            _ => caller_ura.clone(),
+        },
+    };
     let arguments = serde_json::to_vec(&payload_json)
         .with_context(|| format!("encode {function_name} args"))?;
     let mut request = crate::services::invocation_transport::ProtoEnvelope::targeted(
         caller_ura.clone(),
-        caller_ura.clone(),
+        callee_ura.clone(),
         subject_ura.clone(),
     )
     .and_then(|env| env.invoke_request(&function_name, arguments))
@@ -506,11 +535,9 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
             let receipt_ura = parent.get("receipt_ura").and_then(Value::as_str)?;
             let hash_hex = parent.get("receipt_hash").and_then(Value::as_str)?;
             let receipt_hash = hex::decode(hash_hex.trim()).ok()?;
-            (!receipt_ura.trim().is_empty() && !receipt_hash.is_empty()).then(|| {
-                pb::ReceiptRef {
-                    receipt_hash,
-                    receipt_ura: receipt_ura.trim().to_string(),
-                }
+            (!receipt_ura.trim().is_empty() && !receipt_hash.is_empty()).then(|| pb::ReceiptRef {
+                receipt_hash,
+                receipt_ura: receipt_ura.trim().to_string(),
             })
         })
         .collect();
@@ -636,17 +663,21 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
         })
     });
 
+    // Identity fields are the LEDGER's persisted values, not the
+    // submitted ones — the daemon may rewrite the callee during route
+    // selection, and the record must report what was actually
+    // persisted (same rule as trace_id). `submitted_*` keep the
+    // pre-admission view for audit diffing.
     let meta = serde_json::json!({
         "request_id": request_id,
-        // Deliberately the LEDGER's trace_id, not the submitted one:
-        // the record must report what the daemon persisted, so a
-        // daemon that drops trace_id is visible instead of masked.
         "trace_id": ledger_record.get("trace_id").cloned().unwrap_or(Value::Null),
         "invocation_ura": ledger_record.get("invocation_ura").cloned().unwrap_or(Value::Null),
-        "caller_ura": caller_ura.clone(),
-        "callee_ura": caller_ura,
+        "caller_ura": ledger_record.get("caller_ura").cloned().unwrap_or(Value::Null),
+        "callee_ura": ledger_record.get("callee_ura").cloned().unwrap_or(Value::Null),
+        "subject_ura": ledger_record.get("subject_ura").cloned().unwrap_or(Value::Null),
+        "submitted_callee_ura": callee_ura,
+        "submitted_subject_ura": subject_ura,
         "ability": function_name,
-        "subject_ura": subject_ura,
         "nonce": nonce_hex,
         "causal_context": { "parents": causal_parents },
         "receipt": terminal_receipt.unwrap_or(Value::Null),
@@ -664,6 +695,7 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     _causal_parents: &[serde_json::Value],
     _step_timeout: Option<std::time::Duration>,
     _trace_id: Option<&str>,
+    _callee_agent: Option<&str>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     anyhow::bail!(
         "invoking `{}` with invocation metadata requires the `axon-pb` feature; \

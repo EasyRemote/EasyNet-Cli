@@ -135,6 +135,15 @@ fn start_agent_handler(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("agent.start: `name` (non-empty string) required"))?
         .to_string();
+    // DEC-F048: hosted user agent ≠ device-sponsored System Agent.
+    if crate::runtime::axon_bridge::hot_agent_registrar::name_claims_reserved_device_owner(&name) {
+        anyhow::bail!(
+            "agent.start: `device.` is the reserved owner token for \
+             device-sponsored System Agents (RFC-005 §3.1.2, DEC-F048); \
+             hosted user agents cannot take a device-owned identity — \
+             choose a name that is not `device` and does not begin with `device.`"
+        );
+    }
     let model = args
         .get("model")
         .and_then(Value::as_str)
@@ -474,11 +483,8 @@ fn build_hot_agent_descriptors(
     let mut descriptors = Vec::new();
     for spec in crate::runtime::abilities::abilities_for_publication(name, entry) {
         let registry_name = spec.name();
-        let owner_local_name = crate::runtime::abilities::public_agent_ability_name(
-            agent_ura,
-            name,
-            registry_name,
-        );
+        let owner_local_name =
+            crate::runtime::abilities::public_agent_ability_name(agent_ura, name, registry_name);
         match crate::runtime::ability_descriptor::AbilityDescriptor::new(
             owner_local_name,
             agent_ura,
@@ -628,17 +634,16 @@ fn stop_agent_handler(
                 &host_device_ura,
             ) {
                 Ok(Some(publication)) => {
-                    let tombstone_payload =
-                        crate::runtime::advertise::advertise_abilities_payload(
-                            &agent_ura,
-                            &publication,
-                        )
-                        .and_then(|payload| {
-                            serde_json::to_vec(&payload).map_err(|e| {
-                                format!("encode advertise_abilities tombstone payload: {e}")
-                            })
+                    let tombstone_payload = crate::runtime::advertise::advertise_abilities_payload(
+                        &agent_ura,
+                        &publication,
+                    )
+                    .and_then(|payload| {
+                        serde_json::to_vec(&payload).map_err(|e| {
+                            format!("encode advertise_abilities tombstone payload: {e}")
                         })
-                        .ok();
+                    })
+                    .ok();
                     if let (Some(payload), Some(advertiser)) =
                         (tombstone_payload, advertiser.as_ref())
                     {
@@ -956,6 +961,17 @@ fn agent_name_from_ura(ura: &str) -> anyhow::Result<String> {
     if parsed.kind != crate::ura::URAKind::Agent {
         anyhow::bail!("agent.stop: `agent_ura` must be an Agent URA");
     }
+    // DEC-F048: device-sponsored System Agents are not hosted user
+    // agents — they cannot be registered here (see the agent.start
+    // gate), so a lifecycle reference to one is a category error,
+    // not a missing-agent case.
+    if parsed.device_agent_ids().is_some() {
+        anyhow::bail!(
+            "agent.stop: {ura} is a device-sponsored System Agent \
+             (RFC-005 §3.1.2, DEC-F048); System Agents are not \
+             lifecycle-managed as hosted agents on this surface"
+        );
+    }
     if let Some(entry) = crate::persistence::local_agents::load()
         .ok()
         .and_then(|file| {
@@ -1164,6 +1180,56 @@ mod tests {
         assert!(reg.get_rpc(ABILITY_START_AGENT).is_some());
         assert!(reg.get_rpc(ABILITY_STOP_AGENT).is_some());
         assert!(reg.get_rpc(ABILITY_REFRESH_AGENTS).is_some());
+    }
+
+    #[test]
+    fn stop_agent_rejects_device_sponsored_system_agent_ura() {
+        with_isolated_home(|| {
+            let err = agent_name_from_ura("easynet:///r/localhost/agent/device.dev-1.terminal")
+                .expect_err("System Agent URA must be refused on the lifecycle surface");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("RFC-005 §3.1.2"),
+                "error cites the normative source: {msg}"
+            );
+            assert!(
+                msg.contains("device-sponsored System Agent"),
+                "error names the category error: {msg}"
+            );
+        });
+    }
+
+    #[test]
+    fn start_agent_rejects_reserved_device_owner_name() {
+        with_isolated_home(|| {
+            for name in ["device.dev-1.sys", "device"] {
+                let err = start_agent_handler(
+                    json!({
+                        "name": name,
+                        "agent_type": "claude-code",
+                    }),
+                    &empty_hot_registrar(),
+                )
+                .expect_err("device-owned identity must be refused (DEC-F048)");
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("RFC-005 §3.1.2"),
+                    "error cites the normative source: {msg}"
+                );
+                assert!(
+                    msg.contains("device-sponsored"),
+                    "error names the reserved-owner semantics: {msg}"
+                );
+                assert!(
+                    agents::load_agents()
+                        .unwrap_or_default()
+                        .agents
+                        .get(name)
+                        .is_none(),
+                    "rejected name must not persist an agents.json row"
+                );
+            }
+        });
     }
 
     #[test]

@@ -164,8 +164,9 @@ pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow
 }
 
 /// Parse the trailing path segment of a v4.1.5 resource URA as
-/// the sha256-hex blob id.
-fn sha256_from_ura(ura: &str) -> anyhow::Result<String> {
+/// the sha256-hex blob id. pub(crate): the chat ability's URA
+/// attachments resolve store blobs through this same parse.
+pub(crate) fn sha256_from_ura(ura: &str) -> anyhow::Result<String> {
     // easynet:///r/<realm>/resource/<u>.files/<sha256>
     let parsed = crate::ura::parse_ura(ura)
         .map_err(|e| anyhow::anyhow!("files: invalid URA `{ura}`: {e}"))?;

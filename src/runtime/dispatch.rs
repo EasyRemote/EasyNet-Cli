@@ -121,6 +121,17 @@ pub struct AgentResponse {
     pub thread_id: Option<String>,
 }
 
+pub struct AgentDispatchRequest<'a> {
+    pub agent_name: &'a str,
+    pub entry: &'a AgentEntry,
+    pub prompt: &'a str,
+    pub context: Option<&'a str>,
+    pub extra_trace_path: Option<&'a Path>,
+    pub depth_override: Option<u32>,
+    pub overrides: Option<&'a DriverOverrides>,
+    pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+}
+
 /// Resolve the dispatch timeout from spec + entry precedence.
 ///
 /// `spec_timeout_secs = Some(n)` — operator set a timeout in
@@ -279,16 +290,16 @@ pub fn send_external_with_overrides_and_progress(
     overrides: Option<&DriverOverrides>,
     progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth_and_progress(
+    send_to_agent_with_depth_and_progress(AgentDispatchRequest {
         agent_name,
         entry,
         prompt,
         context,
-        None,
-        Some(0),
+        extra_trace_path: None,
+        depth_override: Some(0),
         overrides,
         progress_tx,
-    )
+    })
 }
 
 /// Same as `send_to_agent` but accepts an explicit `depth_override`. When
@@ -327,7 +338,7 @@ pub fn send_to_agent_with_depth(
     depth_override: Option<u32>,
     overrides: Option<&DriverOverrides>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth_and_progress(
+    send_to_agent_with_depth_and_progress(AgentDispatchRequest {
         agent_name,
         entry,
         prompt,
@@ -335,8 +346,8 @@ pub fn send_to_agent_with_depth(
         extra_trace_path,
         depth_override,
         overrides,
-        None,
-    )
+        progress_tx: None,
+    })
 }
 
 /// Same as `send_to_agent_with_depth` but threads through an
@@ -348,17 +359,20 @@ pub fn send_to_agent_with_depth(
 /// real per-token stream: the driver invokes `progress_tx`
 /// once per stdout line in stream-json mode, and chat's
 /// stream_handler forwards that into its broadcast channel.
-#[allow(clippy::too_many_arguments)]
 pub fn send_to_agent_with_depth_and_progress(
-    agent_name: &str,
-    entry: &AgentEntry,
-    prompt: &str,
-    context: Option<&str>,
-    extra_trace_path: Option<&Path>,
-    depth_override: Option<u32>,
-    overrides: Option<&DriverOverrides>,
-    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+    request: AgentDispatchRequest<'_>,
 ) -> anyhow::Result<AgentResponse> {
+    let AgentDispatchRequest {
+        agent_name,
+        entry,
+        prompt,
+        context,
+        extra_trace_path,
+        depth_override,
+        overrides,
+        progress_tx,
+    } = request;
+
     // Mission context invariant — only enforced in production, skipped
     // when a test passes `depth_override` to exercise the recursion
     // guard in isolation.

@@ -71,10 +71,16 @@ use crate::services::session_failure::SessionFailure;
 /// Result the target device sent back for a cross-device dispatch.
 /// Mirrors the shape `<self>.session`'s receive task will hand off
 /// when it sees a `Result` frame on the session up stream.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DispatchResult {
     /// Reply payload from the target ability (opaque bytes).
     pub payload: Vec<u8>,
+    /// Callee-signed execution receipt when the target spoke
+    /// carrier-v1 (DEC-F004 landing audit 3). Internal projection
+    /// field — never serialized; the invoke_remote consumer side
+    /// projects it into the hub ledger where the full call context
+    /// (ability, route) lives. `None` on the JSON carrier.
+    pub receipt: Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
     /// `Some(message)` if the target reported an execution error;
     /// `None` for a clean reply.
     pub error: Option<String>,
@@ -237,6 +243,7 @@ impl PendingDispatchMap {
                         true,
                     )),
                     request_id: None,
+                    receipt: None,
                 });
                 count += 1;
             }
@@ -254,10 +261,22 @@ impl PendingDispatchMap {
 /// One streamed event flowing back from a target device's remote
 /// bidi session. Same-hub remote `fs.transfer` uses this:
 /// zero or more `Chunk`s followed by exactly one `Terminal`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DispatchStreamEvent {
     Chunk(Vec<u8>),
-    Terminal(DispatchResult),
+    Terminal(Box<DispatchResult>),
+}
+
+/// Outcome of a non-blocking delivery into a pending stream entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamDeliver {
+    Delivered,
+    /// No live entry — the caller cancelled or already finished.
+    NoMatch,
+    /// The consumer's per-call channel was full: it stopped
+    /// draining. The entry has been evicted so the stalled call is
+    /// cancelled instead of blocking the shared session drain.
+    ConsumerStalled,
 }
 
 pub struct PendingStreamHandle {
@@ -330,10 +349,54 @@ impl PendingStreamDispatchMap {
     pub async fn finish(&self, call_id: u64, result: DispatchResult) -> bool {
         match self.inner.entries.remove(&call_id) {
             Some((_, sender)) => sender
-                .send(DispatchStreamEvent::Terminal(result))
+                .send(DispatchStreamEvent::Terminal(Box::new(result)))
                 .await
                 .is_ok(),
             None => false,
+        }
+    }
+
+    /// Non-blocking `push_chunk` for the session drain. The drain is
+    /// the ONE reader of a device's whole `<self>.session`; awaiting
+    /// a full per-call channel there lets a single stalled consumer
+    /// block every other invocation on that device (measured
+    /// 2026-06-12: one unread streaming caller froze all calls to
+    /// the device until it went away). On `Full` the entry is
+    /// evicted: the stalled call alone is cut — its consumer sees
+    /// end-of-stream after the buffered chunks — and the drain moves
+    /// on.
+    pub fn try_push_chunk(&self, call_id: u64, payload: Vec<u8>) -> StreamDeliver {
+        let Some(sender) = self.inner.entries.get(&call_id).map(|entry| entry.clone()) else {
+            return StreamDeliver::NoMatch;
+        };
+        match sender.try_send(DispatchStreamEvent::Chunk(payload)) {
+            Ok(()) => StreamDeliver::Delivered,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.inner.entries.remove(&call_id);
+                StreamDeliver::ConsumerStalled
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.inner.entries.remove(&call_id);
+                StreamDeliver::NoMatch
+            }
+        }
+    }
+
+    /// Non-blocking `finish`, same drain-protection rationale as
+    /// `try_push_chunk`. Unary calls only ever see the terminal
+    /// event, so their channel can never be full — `ConsumerStalled`
+    /// is reachable only for a streaming consumer that already
+    /// stopped draining its chunks.
+    pub fn try_finish(&self, call_id: u64, result: DispatchResult) -> StreamDeliver {
+        match self.inner.entries.remove(&call_id) {
+            Some((_, sender)) => {
+                match sender.try_send(DispatchStreamEvent::Terminal(Box::new(result))) {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(mpsc::error::TrySendError::Full(_)) => StreamDeliver::ConsumerStalled,
+                    Err(mpsc::error::TrySendError::Closed(_)) => StreamDeliver::NoMatch,
+                }
+            }
+            None => StreamDeliver::NoMatch,
         }
     }
 
@@ -368,6 +431,7 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
+                    receipt: None,
                 },
             )
         });
@@ -399,6 +463,7 @@ mod tests {
         let still_completes = map.complete(
             id,
             DispatchResult {
+                receipt: None,
                 payload: b"too late".to_vec(),
                 error: None,
                 failure: None,
@@ -425,6 +490,7 @@ mod tests {
                     error: Some("target ability raised".into()),
                     failure: Some(failure),
                     request_id: None,
+                    receipt: None,
                 },
             )
         });
@@ -479,6 +545,7 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
+                    receipt: None,
                 },
             )
         });
@@ -522,6 +589,7 @@ mod tests {
                     map.finish(
                         id,
                         DispatchResult {
+                            receipt: None,
                             payload: br#"{"sha256":"abc"}"#.to_vec(),
                             error: None,
                             failure: None,
@@ -539,12 +607,13 @@ mod tests {
         );
         assert_eq!(
             handle.recv().await,
-            Some(DispatchStreamEvent::Terminal(DispatchResult {
+            Some(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
+                receipt: None,
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
                 error: None,
                 failure: None,
                 request_id: None,
-            }))
+            })))
         );
         writer.await.expect("writer joined");
     }
@@ -565,6 +634,7 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
+                    receipt: None,
                 },
             )
             .await

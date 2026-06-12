@@ -319,16 +319,154 @@ pub fn manifests_for(
     agent_name: &str,
     entry: &AgentEntry,
 ) -> Vec<crate::core::ability_spec::AbilityManifest> {
-    let Some(dir) = open_entry_directory(agent_name, entry, "manifests_for") else {
-        return Vec::new();
-    };
-    match dir.list_ability_manifests() {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("manifests_for[{agent_name}]: failed to enumerate ability manifests: {e}");
-            Vec::new()
+    (*manifests_for_shared(agent_name, entry)).clone()
+}
+
+// ── Manifest catalog snapshot ───────────────────────────────────────
+//
+// Catalog reads are snapshot reads. Every network-visible list of an
+// agent's abilities used to re-open the AgentDirectory and re-parse
+// every `<verb>.ability.toml` on each call — O(agents × manifests)
+// disk IO + TOML parsing per discover, plus one full re-parse on
+// every dispatch (invoke and chat both resolve manifests). The cache
+// below keys each agent root by a stat-only signature (file name,
+// length, mtime of `agent.toml` + `*.ability.toml`), so the hot path
+// costs one `read_dir` and zero parsing. Any publish / edit / delete
+// changes the signature and rebuilds that one agent's entry. Entries
+// for roots that leave the registry linger until process exit —
+// bounded by the number of distinct roots ever served.
+
+type SharedManifests = std::sync::Arc<Vec<crate::core::ability_spec::AbilityManifest>>;
+
+#[derive(PartialEq, Eq)]
+struct ManifestDirSignature(Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)>);
+
+/// Stat-only signature of the files [`AgentDirectory`] reads when
+/// listing manifests: `<root>/agent.toml` (carries the spec name)
+/// plus every `<root>/abilities/*.ability.toml`. A missing
+/// `abilities/` dir is a valid "nothing declared" state; an
+/// unreadable root returns `None` (fail closed, uncached).
+fn manifest_dir_signature(root: &std::path::Path) -> Option<ManifestDirSignature> {
+    if !root.is_dir() {
+        return None;
+    }
+    let mut signature = Vec::new();
+    if let Ok(meta) = std::fs::metadata(root.join("agent.toml")) {
+        signature.push(("agent.toml".into(), meta.len(), meta.modified().ok()));
+    }
+    if let Ok(entries) = std::fs::read_dir(root.join("abilities")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name
+                .to_string_lossy()
+                .ends_with(crate::runtime::directory::ABILITY_MANIFEST_SUFFIX)
+            {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            signature.push((name, meta.len(), meta.modified().ok()));
         }
     }
+    signature.sort();
+    Some(ManifestDirSignature(signature))
+}
+
+/// One cached agent root. `spec_name` is the directory's OWN
+/// `agent.toml` name — requests are validated against it at serve
+/// time, so a mis-keyed registry row (name ≠ directory) yields the
+/// same fail-closed empty list as before without evicting the
+/// rightful owner's snapshot.
+struct CachedAgentManifests {
+    spec_name: String,
+    signature: ManifestDirSignature,
+    manifests: SharedManifests,
+}
+
+fn manifest_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, CachedAgentManifests>>
+{
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, CachedAgentManifests>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Shared-snapshot variant of [`manifests_for`]: returns the cached
+/// `Arc` without cloning manifest contents. Hot paths (dispatch,
+/// discover) should prefer this; the owned-`Vec` wrapper exists for
+/// callers that mutate or consume the list.
+pub fn manifests_for_shared(agent_name: &str, entry: &AgentEntry) -> SharedManifests {
+    let Some(root) = entry.root_path.as_ref() else {
+        eprintln!(
+            "manifests_for[{agent_name}]: registry row is missing root_path; publishing no abilities"
+        );
+        return SharedManifests::default();
+    };
+    let Some(signature) = manifest_dir_signature(root) else {
+        eprintln!(
+            "manifests_for[{agent_name}]: root_path {} is not a readable directory; publishing no abilities",
+            root.display()
+        );
+        return SharedManifests::default();
+    };
+
+    let cached = {
+        let cache = manifest_cache().lock().unwrap_or_else(|p| p.into_inner());
+        cache.get(root.as_path()).and_then(|c| {
+            (c.signature == signature)
+                .then(|| (c.spec_name.clone(), std::sync::Arc::clone(&c.manifests)))
+        })
+    };
+    let (spec_name, manifests) = match cached {
+        Some(hit) => hit,
+        None => {
+            // Slow path: open + parse OUTSIDE the lock so one agent's
+            // rebuild never serializes every other reader. Concurrent
+            // rebuilds of the same root are benign — identical data,
+            // last insert wins.
+            let dir = match AgentDirectory::open(root) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    eprintln!(
+                        "manifests_for[{agent_name}]: failed to open agent directory at {}: {e}; publishing no abilities",
+                        root.display()
+                    );
+                    return SharedManifests::default();
+                }
+            };
+            let manifests: SharedManifests = match dir.list_ability_manifests() {
+                Ok(m) => std::sync::Arc::new(m),
+                Err(e) => {
+                    eprintln!(
+                        "manifests_for[{agent_name}]: failed to enumerate ability manifests: {e}"
+                    );
+                    SharedManifests::default()
+                }
+            };
+            let spec_name = dir.spec().name.clone();
+            let mut cache = manifest_cache().lock().unwrap_or_else(|p| p.into_inner());
+            cache.insert(
+                root.clone(),
+                CachedAgentManifests {
+                    spec_name: spec_name.clone(),
+                    signature,
+                    manifests: std::sync::Arc::clone(&manifests),
+                },
+            );
+            (spec_name, manifests)
+        }
+    };
+
+    if spec_name != agent_name {
+        eprintln!(
+            "manifests_for[{agent_name}]: root_path {} belongs to agent {spec_name:?}; publishing no abilities",
+            root.display()
+        );
+        return SharedManifests::default();
+    }
+    manifests
 }
 
 /// Read the agent's on-disk ability manifests and convert them to
@@ -342,20 +480,9 @@ pub fn manifests_for(
 /// should not take the whole roster offline; operator-facing CLI paths keep
 /// fail-loud semantics.
 fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
-    let Some(dir) = open_entry_directory(agent_name, entry, "abilities_for") else {
-        return Vec::new();
-    };
-    let manifests = match dir.list_ability_manifests() {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!(
-                "abilities_for[{agent_name}]: failed to enumerate ability manifests: {e}; publishing no abilities"
-            );
-            return Vec::new();
-        }
-    };
+    let manifests = manifests_for_shared(agent_name, entry);
     let mut specs = Vec::with_capacity(manifests.len());
-    for manifest in manifests {
+    for manifest in manifests.iter() {
         match AgentAbilitySpec::new(
             manifest.qualified_name(agent_name),
             manifest.description().to_string(),
@@ -371,44 +498,6 @@ fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAb
         }
     }
     specs
-}
-
-fn open_entry_directory(
-    agent_name: &str,
-    entry: &AgentEntry,
-    caller: &str,
-) -> Option<AgentDirectory> {
-    let Some(root) = entry.root_path.as_ref() else {
-        eprintln!(
-            "{caller}[{agent_name}]: registry row is missing root_path; publishing no abilities"
-        );
-        return None;
-    };
-    if !root.is_dir() {
-        eprintln!(
-            "{caller}[{agent_name}]: root_path {} is not a directory; publishing no abilities",
-            root.display()
-        );
-        return None;
-    }
-    match AgentDirectory::open(root) {
-        Ok(dir) if dir.spec().name == agent_name => Some(dir),
-        Ok(dir) => {
-            eprintln!(
-                "{caller}[{agent_name}]: root_path {} belongs to agent {:?}; publishing no abilities",
-                root.display(),
-                dir.spec().name
-            );
-            None
-        }
-        Err(e) => {
-            eprintln!(
-                "{caller}[{agent_name}]: failed to open agent directory at {}: {e}; publishing no abilities",
-                root.display()
-            );
-            None
-        }
-    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -725,6 +814,50 @@ mod tests {
         let mut entry = AgentEntry::new(agent_type, None);
         entry.root_path = Some(root.clone());
         (root, entry)
+    }
+
+    #[test]
+    fn manifest_cache_rebuilds_when_a_manifest_changes_on_disk() {
+        // The snapshot cache must never serve a stale catalog: editing
+        // a manifest changes the stat signature (length and/or mtime)
+        // and forces a rebuild on the next read.
+        let (root, entry) = make_agent_on_disk("editline", AgentType::ClaudeCode);
+        let first = manifests_for("editline", &entry);
+        assert_eq!(first.len(), 1, "seeded chat manifest visible");
+
+        let manifest_path = root.join("abilities").join("chat.ability.toml");
+        let original = std::fs::read_to_string(&manifest_path).expect("read seeded manifest");
+        let edited = original.replace(
+            first[0].description(),
+            "edited description for cache invalidation",
+        );
+        assert_ne!(original, edited, "fixture must actually change the file");
+        std::fs::write(&manifest_path, edited).expect("rewrite manifest");
+
+        let second = manifests_for("editline", &entry);
+        assert_eq!(
+            second[0].description(),
+            "edited description for cache invalidation",
+            "a changed manifest must be re-read, not served from the snapshot"
+        );
+    }
+
+    #[test]
+    fn manifest_cache_is_not_poisoned_by_a_misnamed_request() {
+        // A registry row whose name disagrees with the directory's
+        // own agent.toml fails closed (empty list) — and must NOT
+        // evict the rightful owner's snapshot while doing so.
+        let (_root, entry) = make_agent_on_disk("owner", AgentType::ClaudeCode);
+        assert_eq!(manifests_for("owner", &entry).len(), 1);
+        assert!(
+            manifests_for("impostor", &entry).is_empty(),
+            "name/directory mismatch fails closed"
+        );
+        assert_eq!(
+            manifests_for("owner", &entry).len(),
+            1,
+            "the rightful owner's snapshot survives a misnamed request"
+        );
     }
 
     #[test]

@@ -33,7 +33,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::runtime::domain::NodeId;
+use crate::core::domain::NodeId;
 use serde_json::Value;
 
 /// Caller's request *before* the resolver has decided scope or

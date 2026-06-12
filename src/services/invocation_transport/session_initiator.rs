@@ -56,7 +56,8 @@
 //   without spinning up the full AxonAbilityCatalog.
 // - The exponential-backoff supervisor `run_session_supervisor`:
 //   the `dial_and_run_session` returns an error → wait → retry.
-//   Bounded jitter, capped maximum, never gives up.
+//   Full-jitter delay (uniform in [0, curve]), capped maximum,
+//   never gives up.
 //
 // Signature model
 // ---------------
@@ -83,32 +84,45 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use easynet_axon::invocation::axiom::{
-    canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-    InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UraProfile,
-};
-use ed25519_dalek::{Signer as _, SigningKey};
 use futures::Stream;
-use futures::StreamExt as _;
-use rand::RngCore as _;
-use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Channel, Endpoint};
 use tonic::Status;
 
 use crate::runtime::ability_descriptor::AbilityDescriptor;
+use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
 
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use easynet_axon::pb::axon::v1::{
-    AgentIdentity, BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen,
-    InvocationTarget, InvokeBidiDown, InvokeBidiUp, StreamDescriptor, SubjectIdentity,
+mod envelope;
+mod frame_loop;
+mod heartbeat;
+mod prelude;
+mod supervisor;
+mod tasks;
+mod transport;
+mod warmup;
+
+pub use envelope::{
+    build_session_envelope_open, build_session_envelope_open_with_seed, SessionSigningSeed,
 };
+use frame_loop::{run_live_session, LiveSessionRun};
+#[cfg(test)]
+use prelude::build_synthetic_pages_ability_descriptors;
+use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};
+pub use prelude::{SessionPreludeInputs, UserTrustSync};
+pub use supervisor::SessionCloseStats;
+use supervisor::{
+    backoff_after_clean_close, full_jitter, next_backoff, DeviceSessionPhase, SessionPhaseTracker,
+};
+#[cfg(test)]
+use supervisor::{CloseClass, PreludeStep, SESSION_HEALTHY_MIN_UPTIME};
+use warmup::warm_device_credential_for_session;
+#[cfg(test)]
+use warmup::{verify_device_credential_for_credentials, CredentialWarmupOutcome};
+
+use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+use easynet_axon::pb::axon::v1::{BidiControl, BinaryChunk, InvokeBidiDown, InvokeBidiUp};
 
 /// Daemon-side ability name this initiator targets. The hub's
 /// `InvokeBidi` dispatcher routes on
@@ -150,9 +164,14 @@ const SESSION_UP_CHANNEL_CAPACITY: usize = 256;
 /// PresenceRegistry". Only the first admission attempt matters for
 /// boot; after the daemon is admitted once, the long-lived supervisor
 /// owns reconnects.
+/// One-shot sender of the initial-admission verdict (Ok, or an error
+/// string). Aliased to keep `InitialSessionAdmissionProbe`'s field
+/// type legible.
+type AdmissionVerdictSender = Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>;
+
 #[derive(Clone)]
 pub(crate) struct InitialSessionAdmissionProbe {
-    tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>,
+    tx: AdmissionVerdictSender,
 }
 
 impl InitialSessionAdmissionProbe {
@@ -197,7 +216,8 @@ pub(crate) fn initial_session_admission_probe() -> (
 pub const SESSION_BACKOFF_INITIAL: Duration = Duration::from_millis(250);
 
 /// Cap for the backoff curve. After the curve hits this value the
-/// supervisor keeps retrying at this period with jitter. 30 s
+/// supervisor keeps retrying, each wait drawn uniformly in
+/// [0, this] (full jitter). 30 s
 /// matches the reconnect SLO the production deploy script
 /// configures for federation_client.
 pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -241,15 +261,8 @@ pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// the device-side `SESSION_IDLE_TIMEOUT`. Together they make the
 /// bidi liveness story symmetric in both directions.
 pub const SESSION_UP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
 const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
-
-/// Default URA profile used when the session frame carries a signed
-/// envelope. Empty profile fields canonicalise to the same value, but
-/// populating the string keeps the wire explicit and easier to inspect.
-const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
-
-/// Optional deterministic Ed25519 seed used to sign frame 0.
-pub type SessionSigningSeed = [u8; 32];
 
 /// What a device does with each `InvokeBidiDown` frame the hub
 /// pushes to it: either translate the inner payload into a local
@@ -258,6 +271,23 @@ pub type SessionSigningSeed = [u8; 32];
 /// `handle_down` because the bidi is duplex — the implementation
 /// drives whatever response shape it needs through the supplied
 /// `outbound` sender.
+/// Highest dispatch-frame contract this device speaks (DEC-F004).
+pub const DEVICE_DISPATCH_CONTRACT_VERSION: u32 = 1;
+
+/// T1.2 claimant fingerprint: one random 16-byte nonce per process
+/// boot. Lets the hub distinguish a same-device restart (same URA,
+/// new nonce each boot — sequential) from two live processes fighting
+/// over one URA (alternating distinct nonces).
+pub fn claimant_boot_nonce() -> &'static [u8; 16] {
+    static NONCE: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+    NONCE.get_or_init(|| {
+        let mut nonce = [0_u8; 16];
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        nonce
+    })
+}
+
 #[async_trait::async_trait]
 pub trait SessionFrameDispatcher: Send + Sync + 'static {
     /// Handle one inbound frame. The dispatcher writes any reply
@@ -293,7 +323,19 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
 #[derive(Clone, Debug)]
 pub struct SessionUpSender {
     tx: mpsc::Sender<InvokeBidiUp>,
-    next_sequence: Arc<AtomicU64>,
+    /// Sequence allocation and channel insertion must be one atomic
+    /// step: the hub validates a strictly monotonic up-sequence and
+    /// resets the whole session on violation, so two producers that
+    /// allocate N and N+1 but enqueue in the opposite order kill the
+    /// session. The mutex spans allocate+send — it is the session's
+    /// single-writer gate, and the serialization it imposes is
+    /// exactly the ordering the wire contract requires.
+    sequence_gate: Arc<tokio::sync::Mutex<u64>>,
+    /// Negotiated dispatch contract for THIS session (DEC-F004):
+    /// written once by the supervisor when the admission receipt's
+    /// session_contract arrives; read by reply producers to pick the
+    /// frame encoding. 0 until negotiation lands = JSON era.
+    negotiated_contract: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl SessionUpSender {
@@ -303,12 +345,46 @@ impl SessionUpSender {
             tx,
             // Frame 0 is EnvelopeOpen. First post-frame-0 producer
             // therefore owns sequence = 1.
-            next_sequence: Arc::new(AtomicU64::new(1)),
+            sequence_gate: Arc::new(tokio::sync::Mutex::new(1)),
+            negotiated_contract: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
 
-    fn allocate_sequence(&self) -> u64 {
-        self.next_sequence.fetch_add(1, Ordering::Relaxed)
+    /// Supervisor-only: record the hub's negotiated session contract.
+    pub fn set_negotiated_contract(&self, version: u32) {
+        self.negotiated_contract
+            .store(version, std::sync::atomic::Ordering::Release);
+    }
+
+    /// True when this session speaks carrier-v1 dispatch frames.
+    #[must_use]
+    pub fn carrier_v1(&self) -> bool {
+        self.negotiated_contract
+            .load(std::sync::atomic::Ordering::Acquire)
+            >= 1
+    }
+
+    /// Stamp the next sequence number and enqueue under the
+    /// single-writer gate, so channel order always equals sequence
+    /// order even with concurrent reply producers.
+    async fn send_sequenced(
+        &self,
+        payload: UpPayload,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+        let mut next = self.sequence_gate.lock().await;
+        let sequence = *next;
+        let sent = self
+            .tx
+            .send(InvokeBidiUp {
+                sequence,
+                payload: Some(payload),
+                ..InvokeBidiUp::default()
+            })
+            .await;
+        if sent.is_ok() {
+            *next += 1;
+        }
+        sent
     }
 
     /// Send a BinaryChunk on the live session, stamping the next
@@ -317,13 +393,17 @@ impl SessionUpSender {
         &self,
         chunk: BinaryChunk,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
-        self.tx
-            .send(InvokeBidiUp {
-                sequence: self.allocate_sequence(),
-                payload: Some(UpPayload::BinaryChunk(chunk)),
-                ..InvokeBidiUp::default()
-            })
-            .await
+        self.send_sequenced(UpPayload::BinaryChunk(chunk)).await
+    }
+
+    /// Send any up-direction payload on the live session, stamping
+    /// the next monotonic sequence number. Carrier-v1 reply frames
+    /// (DispatchResult / ReverseDispatchCall) ride this.
+    pub async fn send_payload(
+        &self,
+        payload: UpPayload,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+        self.send_sequenced(payload).await
     }
 
     /// Send a control frame on the live session, stamping the next
@@ -332,13 +412,7 @@ impl SessionUpSender {
         &self,
         control: BidiControl,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
-        self.tx
-            .send(InvokeBidiUp {
-                sequence: self.allocate_sequence(),
-                payload: Some(UpPayload::Control(control)),
-                ..InvokeBidiUp::default()
-            })
-            .await
+        self.send_sequenced(UpPayload::Control(control)).await
     }
 }
 
@@ -350,42 +424,33 @@ pub enum SessionDispatchError {
     Other(String),
 }
 
-struct SessionUpHeartbeatTask {
-    handle: tokio::task::JoinHandle<()>,
+struct SessionDialAttempt<'a, D: SessionFrameDispatcher> {
+    hub_endpoint: String,
+    caller_ura: String,
+    signing_seed: Option<SessionSigningSeed>,
+    hub_ca_pem_path: Option<&'a Path>,
+    dispatcher: Arc<D>,
+    escalation_outbox:
+        Option<&'a crate::services::invocation_transport::session_escalation::SharedSessionOutbox>,
+    preludes: SessionPreludeInputs<'a>,
+    idle_timeout: Duration,
+    initial_admission: Option<InitialSessionAdmissionProbe>,
+    user_trust_sync: Option<&'a UserTrustSync>,
 }
 
-impl SessionUpHeartbeatTask {
-    fn spawn(sender: SessionUpSender, hub_endpoint: String, caller_ura: String) -> Self {
-        let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(SESSION_UP_HEARTBEAT_INTERVAL);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // First tick fires immediately; consume it so the first
-            // keepalive is sent after one full heartbeat window.
-            interval.tick().await;
-            loop {
-                interval.tick().await;
-                if let Err(err) = sender.send_control(BidiControl::default()).await {
-                    let err_msg = format!("{err}");
-                    crate::op_event!(
-                        component = session,
-                        kind = up_heartbeat_send_failed,
-                        caller_ura = caller_ura,
-                        hub_endpoint = hub_endpoint,
-                        error = err_msg,
-                        message = "stopping heartbeat task",
-                    );
-                    break;
-                }
-            }
-        });
-        Self { handle }
-    }
-}
-
-impl Drop for SessionUpHeartbeatTask {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
+pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
+    pub(crate) hub_endpoint: String,
+    pub(crate) caller_ura: String,
+    pub(crate) signing_seed: Option<SessionSigningSeed>,
+    pub(crate) hub_ca_pem_path: Option<PathBuf>,
+    pub(crate) dispatcher: Arc<D>,
+    pub(crate) escalation_outbox:
+        Option<crate::services::invocation_transport::session_escalation::SharedSessionOutbox>,
+    pub(crate) ability_descriptors: Vec<AbilityDescriptor>,
+    pub(crate) hub_published_abilities: Arc<HubPublishedAbilityStore>,
+    pub(crate) initial_admission: Option<InitialSessionAdmissionProbe>,
+    pub(crate) user_trust_sync: Option<UserTrustSync>,
+    pub(crate) cancel: tokio::sync::oneshot::Receiver<()>,
 }
 
 /// Run one `<self>.session` bidi against `hub_endpoint`. Connects,
@@ -417,117 +482,60 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     escalation_outbox: Option<
         &crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
     >,
-    ability_descriptors: &[AbilityDescriptor],
-) -> Result<(), SessionError> {
+    preludes: SessionPreludeInputs<'_>,
+) -> Result<SessionCloseStats, SessionError> {
+    // One-shot dial (no supervisor): the phase stream still emits,
+    // scoped to this call's private tracker.
+    let mut phase = SessionPhaseTracker::new();
+    phase.begin_attempt();
     dial_and_run_session_with_idle_timeout(
+        SessionDialAttempt {
+            hub_endpoint,
+            caller_ura,
+            signing_seed,
+            hub_ca_pem_path,
+            dispatcher,
+            escalation_outbox,
+            preludes,
+            idle_timeout: SESSION_IDLE_TIMEOUT,
+            initial_admission: None,
+            user_trust_sync: None,
+        },
+        &mut phase,
+    )
+    .await
+}
+
+async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
+    attempt: SessionDialAttempt<'_, D>,
+    phase: &mut SessionPhaseTracker,
+) -> Result<SessionCloseStats, SessionError> {
+    let SessionDialAttempt {
         hub_endpoint,
         caller_ura,
         signing_seed,
         hub_ca_pem_path,
         dispatcher,
         escalation_outbox,
-        ability_descriptors,
-        SESSION_IDLE_TIMEOUT,
-        None,
-        None,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
-    hub_endpoint: String,
-    caller_ura: String,
-    signing_seed: Option<SessionSigningSeed>,
-    hub_ca_pem_path: Option<&Path>,
-    dispatcher: Arc<D>,
-    escalation_outbox: Option<
-        &crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
-    >,
-    ability_descriptors: &[AbilityDescriptor],
-    idle_timeout: Duration,
-    initial_admission: Option<InitialSessionAdmissionProbe>,
-    user_trust_sync: Option<&UserTrustSync>,
-) -> Result<(), SessionError> {
+        preludes,
+        idle_timeout,
+        initial_admission,
+        user_trust_sync,
+    } = attempt;
+    // Idempotent under a supervisor (begin_attempt already entered
+    // Dialing; same-phase transitions early-return); direct callers
+    // (one-shot dial, tests) enter the machine here.
+    phase.transition(DeviceSessionPhase::Dialing, "dial_entered");
     warm_device_credential_for_session(&caller_ura).await;
 
-    let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
-        .map_err(|err| SessionError::InvalidEndpoint {
-            endpoint: hub_endpoint.clone(),
-            source: err,
-        })?
-        // No timeout on the bidi itself — the stream is intended
-        // to live forever. Connect timeout caps the dial step.
-        .connect_timeout(Duration::from_secs(10))
-        // Production-WAN h2 hardening: HTTP/2 keep-alive PINGs every
-        // 5s with 10s timeout. Without this, intermediate NAT /
-        // hosting LB / corporate firewall can silently close idle
-        // long-lived bidi streams, surfacing as "h2 protocol error:
-        // error reading a body from connection" on the server side
-        // and "target_offline" / dropped Dispatch frames at the
-        // application layer. 5s is conservative-aggressive: stays
-        // well under any NAT idle window (~60s typical) and surfaces
-        // dead streams in ~15s rather than minutes. Cost is ~24
-        // bytes/ping × 12/min ≈ negligible. tcp_keepalive is OS-
-        // level and complements the h2 PING.
-        .http2_keep_alive_interval(Duration::from_secs(5))
-        .keep_alive_timeout(Duration::from_secs(10))
-        .keep_alive_while_idle(true)
-        .tcp_keepalive(Some(Duration::from_secs(15)));
-
-    if let Some(ca_path) = hub_ca_pem_path {
-        // Shared with `federation_client::cross_hub_dial::resolve_
-        // peer_channel` via `federation_client::peer_dial::pinned_
-        // tls_config` so both outbound dial sites have one audited
-        // PEM-read + Certificate::from_pem + ClientTlsConfig path.
-        // The pure-function helper returns a typed `PinnedTlsError`
-        // that we wrap into the existing `SessionError::TlsCaRead`
-        // variant — supervisor log formatting and downstream tests
-        // stay byte-identical.
-        let tls = crate::services::federation_client::pinned_tls_config(ca_path).map_err(
-            |err| match err {
-                crate::services::federation_client::PinnedTlsError::ReadFailed { path, source } => {
-                    SessionError::TlsCaRead { path, source }
-                }
-            },
-        )?;
-        endpoint = endpoint
-            .tls_config(tls)
-            .map_err(|err| SessionError::TlsConfig {
-                endpoint: hub_endpoint.clone(),
-                source: err,
-            })?;
-    } else if hub_endpoint.starts_with("https://") {
-        // No pinned CA + scheme is `https://` → caller wants TLS via
-        // OS native trust roots (Let's Encrypt et al.). Tonic 0.12's
-        // `Endpoint` has no default TLS config, so a `connect()` on
-        // an `https://` URL without an explicit `tls_config()` call
-        // fails with an opaque "transport error". `tls-roots` feature
-        // on the `tonic` dep ships rustls-native-certs probing; we
-        // hand it a `ClientTlsConfig::with_native_roots()` so the
-        // probe runs and the connection succeeds against any
-        // publicly-trusted CA. Domain validation uses the URL's
-        // host automatically.
-        let native_tls = tonic::transport::ClientTlsConfig::new().with_native_roots();
-        endpoint = endpoint
-            .tls_config(native_tls)
-            .map_err(|err| SessionError::TlsConfig {
-                endpoint: hub_endpoint.clone(),
-                source: err,
-            })?;
-    }
-
-    let channel: Channel = endpoint
-        .connect()
-        .await
-        .map_err(|err| SessionError::ConnectFailed {
-            endpoint: hub_endpoint.clone(),
-            source: err,
-        })?;
+    let channel = transport::connect_session_channel(&hub_endpoint, hub_ca_pem_path).await?;
     // Cheap tonic Channel clone retained for the user-key re-sync
     // loop spawned after the preludes (its requests multiplex over
     // this same connection).
     let resync_channel = channel.clone();
+    // Second clone for the federation.heartbeat liveness loop — same
+    // multiplexing over this connection, independent client.
+    let heartbeat_channel = channel.clone();
 
     // Bump client-side gRPC message limits to match the server side.
     // The tonic-default 4 MiB decoder cap aborted `<self>.session`
@@ -535,549 +543,34 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // The shared 64 MiB transport-envelope cap keeps legitimate
     // chunked traffic flowing without permitting near-unbounded
     // single-message allocations.
-    let mut client = InvocationClient::new(channel)
-        .max_decoding_message_size(
-            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-        )
-        .max_encoding_message_size(
-            crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-        );
+    let mut client = transport::session_invocation_client(channel);
 
-    // Membership prelude (URA v4.1.4 dev unblock): axon-runtime hub
-    // returns `AXON_MEMBERSHIP_REQUIRED` for any caller whose URA is
-    // not in its membership table. The genesis exception is
-    // `federation.join`, which the runtime accepts unsigned. We send
-    // one before opening `<self>.session` so a fresh axon-runtime
-    // (no audit-wal replay, e.g. `--reset-db` dev boot) does not
-    // reject the session bidi for the lifetime of the daemon.
-    //
-    // The call is best-effort: we ignore both "already member" and
-    // transport errors here. The session attempt below is the
-    // authoritative health gate — if join didn't take, the bidi
-    // still surfaces the underlying error and the supervisor's
-    // reconnect loop retries everything.
-    crate::op_event!(
-        component = session,
-        kind = federation_join_prelude_sending,
-        caller_ura = caller_ura,
-        hub_endpoint = hub_endpoint,
-    );
-    match send_federation_join_prelude(&mut client, &caller_ura).await {
-        Ok(()) => {
-            crate::op_event!(
-                component = session,
-                kind = federation_join_prelude_ok,
-                message = "proceeding to <self>.session",
-            );
-        }
-        Err(err) => {
-            // `tonic::Code` has both Display and Debug; Display renders
-            // the PascalCase variant name without surrounding quotes,
-            // which is what SRE pipelines grep on. `err.message()` is
-            // a `&str` — pass it through op_event!'s formatter so any
-            // embedded whitespace gets one (and only one) layer of
-            // quoting at the boundary, instead of pre-Debug-quoting it
-            // here and letting the macro re-quote on top.
-            let code = err.code();
-            let msg = err.message();
-            crate::op_event!(
-                component = session,
-                kind = federation_join_prelude_soft_failed,
-                code = code,
-                error = msg,
-                message = "proceeding to <self>.session — bidi will surface the error if join was required",
-            );
-        }
-    }
+    let prelude_channels = SessionPreludeChannels::new(resync_channel, heartbeat_channel);
+    let _prelude_guards = run_session_preludes(SessionPreludeRun {
+        client: &mut client,
+        phase,
+        hub_endpoint: &hub_endpoint,
+        caller_ura: &caller_ura,
+        inputs: preludes,
+        user_trust_sync,
+        channels: prelude_channels,
+    })
+    .await?;
 
-    // Owner-projection prelude (AXON-RFC-005): publish the daemon's
-    // device-profile descriptors as a bounded owner projection
-    // through `federation.advertise_abilities`. The hub stores the
-    // projection as a read model and projects summaries back through
-    // `federation.resolve(include_abilities=true)`.
-    //
-    // Hard gate: a device without an owner projection is not
-    // namespace-visible under RFC-005. Continuing would leave the
-    // owner online while every product ability resolves NODATA,
-    // which is worse than a reconnectable projection failure.
-    if !ability_descriptors.is_empty() {
-        let ability_count = ability_descriptors.len();
-        crate::op_event!(
-            component = session,
-            kind = advertise_abilities_prelude_sending,
-            ability_count = ability_count,
-        );
-        if let Err(status) = send_advertise_abilities_prelude(
-            &mut client,
-            &caller_ura,
-            &caller_ura,
-            &caller_ura,
-            ability_descriptors,
-        )
-        .await
-        {
-            let code = status.code();
-            let msg = status.message();
-            crate::op_event!(
-                component = session,
-                kind = advertise_abilities_prelude_failed,
-                code = code,
-                error = msg,
-                message = "owner projection publish failed; reconnecting instead of exposing an online owner with empty abilities",
-            );
-            return Err(SessionError::OwnerProjectionFailed {
-                endpoint: hub_endpoint,
-                status,
-            });
-        } else {
-            crate::op_event!(
-                component = session,
-                kind = advertise_abilities_prelude_ok,
-                ability_count = ability_count,
-            );
-        }
-    }
-
-    // DEC-EU user-key sync prelude: import the paired user's signing
-    // key from the hub registrar into the local trust anchor so the
-    // admission gate can verify user-signed envelopes arriving via
-    // invoke_remote user-caller pass-through. Advisory — the helper
-    // logs its own failures and never blocks the session.
-    //
-    // Plus a session-lifetime refresh loop: keys registered at the
-    // hub AFTER this dial (a new browser, a key rotation) become
-    // admissible without waiting for a session re-dial. The loop's
-    // requests multiplex over this session's channel; the drop-guard
-    // aborts it when the session ends, and the next dial starts a
-    // fresh one. Cost: one resolve_key unary per interval.
-    let _user_trust_resync_guard = if let Some(sync) = user_trust_sync {
-        sync_paired_user_trust_prelude(&mut client, &caller_ura, sync).await;
-        let sync = sync.clone();
-        let resync_caller = caller_ura.clone();
-        Some(AbortOnDrop(tokio::spawn(async move {
-            let mut resync_client =
-                easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(
-                    resync_channel,
-                );
-            loop {
-                tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
-                sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, &sync).await;
-            }
-        })))
-    } else {
-        None
-    };
-
-    // Hosted-agent advertise prelude (RFC-006-B v0.6 §URL +
-    // RFC-006-C v0.1 §INV-2). RFC-005 namespace.resolve consumes
-    // `AdvertisedAgentStore` when an owner is an agent URA
-    // `agent/<u>.<a>` and selects a hosted-agent route through
-    // the advertising device. Without these advertise calls the
-    // resolver has owner projection but no executable placement.
-    //
-    // Owner segments derived from the local ability catalog:
-    // every ability whose tail is `<owner>.<rest>` implies the
-    // daemon hosts agent `<owner>` (skip hub-rooted `01HUB.*`
-    // and the placeholder `<self>.*` shapes). Each unique
-    // `<owner>` is advertised once as
-    // `agent/<owner>.<owner>` HostedBy <caller_ura>; the user-
-    // segment of the agent URA matches the daemon's owner
-    // convention (EASYNET_PAGES_USER for pages, agent_name
-    // for chat-base).
-    let realm = crate::ura::parse_ura(&caller_ura)
-        .map(|parsed| parsed.realm)
-        .unwrap_or_default();
-    // user_segment resolution order (most authoritative first):
-    //   1. EASYNET_PAGES_USER env — explicit operator override,
-    //      used in the docker e2e harness + multi-user dev rigs.
-    //   2. credentials.json `username` — set by `easynet device join`
-    //      after the backend resolves the pairing token to a user
-    //      account. This is the production path on silan's Mac.
-    // Empty means "no joined user identity available"; the
-    // hosted-agent advertise prelude is a no-op in that case
-    // (caller is in a transitional state and will republish on
-    // reconnect once credentials are present).
-    let user_segment = std::env::var("EASYNET_PAGES_USER")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .or_else(|| {
-            crate::persistence::config::load_credentials()
-                .ok()
-                .and_then(|c| c.username)
-                .filter(|v| !v.is_empty())
-        })
-        .unwrap_or_default();
-    // Collect every hosted agent URA the daemon should
-    // advertise. Two sources, in priority order:
-    //
-    //   1. `local-agents.json` (authoritative). Each row
-    //      already carries the canonical agent_ura minted at
-    //      `easynet agent add` time (post-RFC-001 v4.1.7 the
-    //      mint is `<profile>-<name>` so the URA tail is
-    //      operator-meaningful: `consent-default-0`,
-    //      `llm-claude-1`, …). We advertise the URA verbatim;
-    //      no string reconstruction.
-    //
-    //   2. Synthetic `pages` / `files` user-scoped agents
-    //      (RFC-006-B + RFC-006-C). These are not stored in
-    //      local-agents.json — the page/file servers register
-    //      under `<user>.{pages,files}.*` ability names at
-    //      runtime. We mint the URA in-line and advertise.
-    #[derive(Debug, Clone)]
-    struct AdvertiseEntry {
-        agent_ura: String,
-        /// The agent_ura's tail (`<user>.<agent_id>` after
-        /// `agent/`), used purely for log lines + the
-        /// pages/files user-scoped marker check.
-        short_label: String,
-        /// Local `agents.json` key for user-installed LLM agents.
-        /// Synthetic pages/files and non-LLM profile agents do not
-        /// own user-agent ability manifests, so they leave this unset.
-        hosted_agent_name: Option<String>,
-    }
-
-    let mut entries: Vec<AdvertiseEntry> = Vec::new();
-    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-
-    // Source 1: local-agents.json hosted_agents.
-    let local_agents_file = crate::persistence::local_agents::load().unwrap_or_default();
-    for hosted in &local_agents_file.hosted_agents {
-        if hosted.agent_ura.is_empty() {
-            continue;
-        }
-        // Reject pre-join placeholder URAs (`<unjoined>`).
-        // Bootstrap repairs these on the next pass once the
-        // realm + user_id land in credentials; advertising
-        // them now would just push junk into the directory.
-        if hosted.agent_ura.contains("<unjoined>") {
-            continue;
-        }
-        if !seen.insert(hosted.agent_ura.clone()) {
-            continue;
-        }
-        // Derive short_label from the URA tail for log lines.
-        let short_label = crate::ura::parse_ura(&hosted.agent_ura)
-            .ok()
-            .filter(|p| p.kind == crate::ura::URAKind::Agent)
-            .and_then(|p| {
-                p.agent_ids()
-                    .map(|(user_id, agent_id)| format!("{user_id}.{agent_id}"))
-            })
-            .unwrap_or_else(|| hosted.agent_ura.clone());
-        entries.push(AdvertiseEntry {
-            agent_ura: hosted.agent_ura.clone(),
-            short_label,
-            hosted_agent_name: (hosted.profile == "llm").then(|| hosted.name.clone()),
-        });
-    }
-
-    // Source 2: synthetic pages + files. These don't appear
-    // in local-agents.json (no `agent add` step mints them)
-    // but the page-server / file-server handlers register
-    // ability families under `<user>.{pages,files}.*` at
-    // boot, so the AdvertisedAgentStore needs entries for
-    // them or RFC-006-B `agent/<user>.pages` URLs route to
-    // `target_offline`.
-    if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
-        for synthetic in ["pages", "files"] {
-            let ura = crate::ura::agent_ura(&realm, &user_segment, synthetic);
-            if seen.insert(ura.clone()) {
-                entries.push(AdvertiseEntry {
-                    agent_ura: ura,
-                    short_label: format!("{user_segment}.{synthetic}"),
-                    hosted_agent_name: None,
-                });
-            }
-        }
-    }
-
-    if !realm.is_empty() && !entries.is_empty() {
-        // Extract this device's node_id from the caller URA
-        // (`easynet:///r/<realm>/device/<node_id>`) so we can
-        // tell the hub which physical host serves each
-        // advertised agent. Without it, `/api/v1/agents` falls
-        // back to `<user>.<agent>` for `node_id`, and the
-        // Frontend DeviceDetailPage's `agent.node_id ===
-        // device.node_id` filter excludes the agent from the
-        // device's hosted-agent list — so files / pages /
-        // dynamically-added LLM agents would silently vanish
-        // from the device view.
-        let caller_node_id = crate::ura::parse_ura(&caller_ura)
-            .ok()
-            .filter(|p| p.kind == crate::ura::URAKind::Device)
-            .and_then(|p| p.device_id().map(str::to_string));
-        let entries_count = entries.len();
-        let labels_display = format!(
-            "{:?}",
-            entries.iter().map(|e| &e.short_label).collect::<Vec<_>>()
-        );
-        crate::op_event!(
-            component = session,
-            kind = advertise_agent_prelude_sending,
-            agent_count = entries_count,
-            user = user_segment,
-            labels = labels_display,
-        );
-        // user-scoped synthetic agents: pages + files exist
-        // per-user, not per-device. Every device the user owns
-        // serves them, and the user-content (published web
-        // projects, uploaded blobs) is logically owned by the
-        // user, not by any one host. Advertising them with a
-        // concrete `host_node_id` makes `/api/v1/agents`
-        // last-writer-wins — whichever device happened to
-        // advertise most recently captures the directory
-        // record, and the Frontend DeviceDetailPage filter
-        // (`agent.node_id === device.node_id`) shows them on
-        // an arbitrary device while hiding them from every
-        // other one. We advertise them with no host_node_id
-        // instead; backend `/api/v1/agents` falls back to the
-        // `<user>.<agent>` string sentinel, the Frontend reads
-        // that as "not bound to a specific device" and lists
-        // them at the user level. forward_invoke against
-        // `agent/<user>.{pages,files}` still resolves correctly
-        // because the hub keeps the agent_ura → host_ura
-        // mapping in `AdvertisedAgentStore`, independent of
-        // the directory's `host_node_id`.
-        //
-        // Detection rule: the synthetic markers are agent_id
-        // == "pages" / "files" exactly (no profile prefix).
-        // Friendly-minted hosted agents have prefixed ids
-        // (`consent-default-0`, `llm-pages` would never collide
-        // with the synthetic `pages`).
-        const USER_SCOPED_AGENT_IDS: &[&str] = &["pages", "files"];
-        let agent_registry = crate::registry::agents::load_agents().unwrap_or_default();
-        let live_registry = crate::runtime::agents::build_registry();
-        for entry in &entries {
-            // Decide whether this entry is the user-scoped
-            // pages/files synthetic. Read the agent_id off
-            // the URA so renames in the synthesis source
-            // don't drift away from this check.
-            let agent_id = crate::ura::parse_ura(&entry.agent_ura)
-                .ok()
-                .filter(|p| p.kind == crate::ura::URAKind::Agent)
-                .and_then(|p| p.agent_ids().map(|(_, agent_id)| agent_id.to_string()))
-                .unwrap_or_default();
-            let host_for_advertise = if USER_SCOPED_AGENT_IDS.contains(&agent_id.as_str()) {
-                None
-            } else {
-                caller_node_id.as_deref()
-            };
-            let advertise_agent_result = send_advertise_agent_prelude(
-                &mut client,
-                &caller_ura,
-                &entry.agent_ura,
-                host_for_advertise,
-            )
-            .await;
-            match advertise_agent_result {
-                Ok(()) => {
-                    let descriptors = match entry.hosted_agent_name.as_deref() {
-                        Some(agent_name) => {
-                            let Some(agent_config) = agent_registry.agents.get(agent_name) else {
-                                continue;
-                            };
-                            build_hosted_agent_ability_descriptors(
-                                &entry.agent_ura,
-                                agent_name,
-                                agent_config,
-                                caller_node_id.as_deref(),
-                                &live_registry,
-                            )
-                        }
-                        // Synthetic user-scoped `pages` agent carries no
-                        // hosted_agent_name and is absent from the agent
-                        // registry + the throwaway live registry; synthesize
-                        // its fixed ability set so pages.* resolves (else the
-                        // backend's namespace.resolve(pages.list) → NODATA).
-                        None if agent_id == "pages" => {
-                            build_synthetic_pages_ability_descriptors(&entry.agent_ura)
-                        }
-                        None => continue,
-                    };
-                    if descriptors.is_empty() {
-                        continue;
-                    }
-                    let ability_count = descriptors.len();
-                    crate::op_event!(
-                        component = session,
-                        kind = advertise_hosted_agent_abilities_prelude_sending,
-                        agent_ura = entry.agent_ura,
-                        ability_count = ability_count,
-                    );
-                    if let Err(err) = send_advertise_abilities_prelude(
-                        &mut client,
-                        &caller_ura,
-                        &entry.agent_ura,
-                        &caller_ura,
-                        &descriptors,
-                    )
-                    .await
-                    {
-                        let code = err.code();
-                        let msg = err.message();
-                        crate::op_event!(
-                            component = session,
-                            kind = advertise_hosted_agent_abilities_prelude_soft_failed,
-                            agent_ura = entry.agent_ura,
-                            code = code,
-                            error = msg,
-                        );
-                    } else {
-                        crate::op_event!(
-                            component = session,
-                            kind = advertise_hosted_agent_abilities_prelude_ok,
-                            agent_ura = entry.agent_ura,
-                            ability_count = ability_count,
-                        );
-                    }
-                }
-                Err(err) => {
-                    let agent_ura = entry.agent_ura.clone();
-                    let code = err.code();
-                    let msg = err.message();
-                    crate::op_event!(
-                        component = session,
-                        kind = advertise_agent_prelude_soft_failed,
-                        agent_ura = agent_ura,
-                        code = code,
-                        error = msg,
-                    );
-                }
-            }
-        }
-        let entries_done_count = entries.len();
-        crate::op_event!(
-            component = session,
-            kind = advertise_agent_prelude_done,
-            agent_count = entries_done_count,
-        );
-    }
-
-    let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
-    let outbound_tx = SessionUpSender::new(up_tx.clone());
-
-    // Frame 0: EnvelopeOpen carrying caller URA + ability name
-    // `<self>.session`. When boot resolved a deterministic device
-    // seed from credentials we sign the canonical bytes here; older
-    // sparse fixtures still degrade to the unsigned PR-2 shape.
-    let frame0 = build_session_envelope_open_with_seed(&caller_ura, signing_seed);
-    up_tx
-        .send(frame0)
-        .await
-        .map_err(|_| SessionError::SendFailed("frame 0 EnvelopeOpen"))?;
-
-    let outbound = ReceiverStream::new(up_rx);
-    let response =
-        client
-            .invoke_bidi(outbound)
-            .await
-            .map_err(|status| SessionError::HubRejected {
-                endpoint: hub_endpoint.clone(),
-                status,
-            })?;
-
-    let mut down_stream = response.into_inner();
-    let dispatcher = dispatcher;
-    crate::op_event!(
-        component = session,
-        kind = bidi_opened,
-        hub_endpoint = hub_endpoint,
-        caller_ura = caller_ura,
-        message = "awaiting down-stream frames",
-    );
-    if let Some(probe) = &initial_admission {
-        probe.admitted();
-    }
-
-    // PR-N6 C4: publish the active up sender so the device-mode
-    // escalation consumer task can push `SessionDispatch::Request`
-    // frames onto this same bidi. Cleared on every exit path
-    // below so the consumer's next snapshot reads `None` until the
-    // supervisor's next successful dial.
-    if let Some(outbox) = escalation_outbox {
-        outbox.set(outbound_tx.clone());
-    }
-    let _outbox_guard = OutboxGuard::new(escalation_outbox.cloned());
-    let _up_heartbeat = SessionUpHeartbeatTask::spawn(
-        outbound_tx.clone(),
-        hub_endpoint.clone(),
-        caller_ura.clone(),
-    );
-    let mut expected_down_sequence = 0_u64;
-
-    loop {
-        let frame_result = match tokio::time::timeout(idle_timeout, down_stream.next()).await {
-            Ok(Some(frame_result)) => frame_result,
-            Ok(None) => break,
-            Err(_elapsed) => {
-                return Err(SessionError::IdleTimeout {
-                    endpoint: hub_endpoint,
-                    timeout: idle_timeout,
-                });
-            }
-        };
-
-        match frame_result {
-            Ok(frame) => {
-                if frame.sequence != expected_down_sequence {
-                    return Err(SessionError::DownStreamSequence {
-                        endpoint: hub_endpoint,
-                        expected: expected_down_sequence,
-                        actual: frame.sequence,
-                        reason: REASON_BIDI_DOWN_SEQUENCE,
-                    });
-                }
-                expected_down_sequence = expected_down_sequence.saturating_add(1);
-                if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
-                    let err_msg = format!("{err}");
-                    crate::op_event!(
-                        component = session,
-                        kind = frame_dispatch_error,
-                        error = err_msg,
-                        message = "continuing",
-                    );
-                }
-            }
-            Err(status) => {
-                return Err(SessionError::DownStreamError {
-                    endpoint: hub_endpoint,
-                    status,
-                });
-            }
-        }
-    }
-
-    // Hub closed the down stream cleanly. The supervisor will
-    // reconnect.
-    Ok(())
-}
-
-/// RAII guard that clears the escalation outbox on Drop, ensuring
-/// every `dial_and_run_session` exit path (Ok return, error
-/// return, panic during the down-stream loop) leaves the outbox
-/// empty. The escalation consumer's next snapshot then surfaces
-/// `UpstreamFailure { reason: "no live <self>.session bidi" }`
-/// to in-flight escalations until the supervisor reconnects.
-struct OutboxGuard {
-    outbox: Option<crate::services::invocation_transport::session_escalation::SharedSessionOutbox>,
-}
-
-impl OutboxGuard {
-    fn new(
-        outbox: Option<
-            crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
-        >,
-    ) -> Self {
-        Self { outbox }
-    }
-}
-
-impl Drop for OutboxGuard {
-    fn drop(&mut self) {
-        if let Some(outbox) = &self.outbox {
-            outbox.clear();
-        }
-    }
+    run_live_session(
+        LiveSessionRun {
+            client,
+            hub_endpoint,
+            caller_ura,
+            signing_seed,
+            dispatcher,
+            escalation_outbox,
+            idle_timeout,
+            initial_admission,
+        },
+        phase,
+    )
+    .await
 }
 
 /// Long-lived supervisor wrapping `dial_and_run_session` with
@@ -1091,787 +584,121 @@ impl Drop for OutboxGuard {
 /// if a future change wires SIGHUP-driven trust reloads through
 /// the supervisor, this value should become a cell snapshot
 /// rather than an owned `PathBuf`.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
-    hub_endpoint: String,
-    caller_ura: String,
-    signing_seed: Option<SessionSigningSeed>,
-    hub_ca_pem_path: Option<PathBuf>,
-    dispatcher: Arc<D>,
-    escalation_outbox: Option<
-        crate::services::invocation_transport::session_escalation::SharedSessionOutbox,
-    >,
-    ability_descriptors: Vec<AbilityDescriptor>,
-    initial_admission: Option<InitialSessionAdmissionProbe>,
-    user_trust_sync: Option<UserTrustSync>,
-    mut cancel: tokio::sync::oneshot::Receiver<()>,
+    config: SessionSupervisorRunConfig<D>,
 ) {
+    let SessionSupervisorRunConfig {
+        hub_endpoint,
+        caller_ura,
+        signing_seed,
+        hub_ca_pem_path,
+        dispatcher,
+        escalation_outbox,
+        ability_descriptors,
+        hub_published_abilities,
+        initial_admission,
+        user_trust_sync,
+        mut cancel,
+    } = config;
+
     let mut backoff = SESSION_BACKOFF_INITIAL;
+    let mut phase = SessionPhaseTracker::new();
     loop {
-        tokio::select! {
-            _ = &mut cancel => {
+        phase.begin_attempt();
+        // Arm bodies stay trivial: the dial future holds `&mut phase`
+        // for its lifetime, so phase handling (like all result
+        // handling) happens after the select expression, once the
+        // future is out of scope.
+        let outcome = tokio::select! {
+            _ = &mut cancel => None,
+            result = dial_and_run_session_with_idle_timeout(
+                SessionDialAttempt {
+                    hub_endpoint: hub_endpoint.clone(),
+                    caller_ura: caller_ura.clone(),
+                    signing_seed,
+                    hub_ca_pem_path: hub_ca_pem_path.as_deref(),
+                    dispatcher: Arc::clone(&dispatcher),
+                    escalation_outbox: escalation_outbox.as_ref(),
+                    preludes: SessionPreludeInputs::new(
+                        &ability_descriptors,
+                        Arc::clone(&hub_published_abilities),
+                    ),
+                    idle_timeout: SESSION_IDLE_TIMEOUT,
+                    initial_admission: initial_admission.clone(),
+                    user_trust_sync: user_trust_sync.as_ref(),
+                },
+                &mut phase,
+            ) => Some(result),
+        };
+        let Some(result) = outcome else {
+            phase.transition(DeviceSessionPhase::Idle, "supervisor_cancelled");
+            crate::op_event!(component = session, kind = supervisor_cancelled,);
+            return;
+        };
+        match result {
+            Ok(stats) => {
+                backoff = backoff_after_clean_close(&stats, backoff);
+                // Render Durations as integer milliseconds —
+                // `Duration` has no `Display` impl, and the
+                // Debug form (`250ms` / `1.5s`) mixes unit
+                // suffixes that complicate SRE arithmetic on
+                // the field. Milliseconds is the unit operators
+                // already see in `*_ms` fields elsewhere.
+                let uptime_ms = stats.uptime.as_millis() as u64;
+                let frames_received = stats.frames_received;
+                let close_class = stats.classify().as_str();
+                phase.transition(DeviceSessionPhase::Backoff, close_class);
+                let next_backoff_ms = backoff.as_millis() as u64;
                 crate::op_event!(
                     component = session,
-                    kind = supervisor_cancelled,
+                    kind = bidi_closed_cleanly,
+                    uptime_ms = uptime_ms,
+                    frames_received = frames_received,
+                    close_class = close_class,
+                    next_backoff_ms = next_backoff_ms,
                 );
-                return;
             }
-            result = dial_and_run_session_with_idle_timeout(
-                hub_endpoint.clone(),
-                caller_ura.clone(),
-                signing_seed,
-                hub_ca_pem_path.as_deref(),
-                Arc::clone(&dispatcher),
-                escalation_outbox.as_ref(),
-                &ability_descriptors,
-                SESSION_IDLE_TIMEOUT,
-                initial_admission.clone(),
-                user_trust_sync.as_ref(),
-            ) => {
-                match result {
-                    Ok(()) => {
-                        // Render Duration as integer milliseconds —
-                        // `Duration` has no `Display` impl, and the
-                        // Debug form (`250ms` / `1.5s`) mixes unit
-                        // suffixes that complicate SRE arithmetic on
-                        // the field. Milliseconds is the unit operators
-                        // already see in `*_ms` fields elsewhere.
-                        let next_backoff_ms =
-                            SESSION_BACKOFF_INITIAL.as_millis() as u64;
-                        crate::op_event!(
-                            component = session,
-                            kind = bidi_closed_cleanly,
-                            next_backoff_ms = next_backoff_ms,
-                        );
-                        backoff = SESSION_BACKOFF_INITIAL;
-                    }
-                    Err(err) => {
-                        // `{err:#}` walks the std::error::Error source
-                        // chain so opaque `tonic::transport::Error`
-                        // ("transport error") surfaces the underlying
-                        // rustls / hyper / io cause. Without this, a
-                        // CA-trust failure or DNS error is
-                        // indistinguishable from a NAT idle drop.
-                        let err_msg = format!("{err:#}");
-                        if let Some(probe) = &initial_admission {
-                            probe.failed(err_msg.clone());
-                        }
-                        let next_backoff_ms = backoff.as_millis() as u64;
-                        crate::op_event!(
-                            component = session,
-                            kind = bidi_error_reconnecting,
-                            error = err_msg,
-                            next_backoff_ms = next_backoff_ms,
-                        );
-                    }
+            Err(err) => {
+                phase.transition(DeviceSessionPhase::Backoff, "session_error");
+                // `{err:#}` walks the std::error::Error source
+                // chain so opaque `tonic::transport::Error`
+                // ("transport error") surfaces the underlying
+                // rustls / hyper / io cause. Without this, a
+                // CA-trust failure or DNS error is
+                // indistinguishable from a NAT idle drop.
+                let err_msg = format!("{err:#}");
+                if let Some(probe) = &initial_admission {
+                    probe.failed(err_msg.clone());
                 }
-
-                // Sleep, also cancellable.
-                tokio::select! {
-                    _ = &mut cancel => return,
-                    _ = tokio::time::sleep(backoff) => {}
-                }
-
-                backoff = next_backoff(backoff);
+                let next_backoff_ms = backoff.as_millis() as u64;
+                crate::op_event!(
+                    component = session,
+                    kind = bidi_error_reconnecting,
+                    error = err_msg,
+                    next_backoff_ms = next_backoff_ms,
+                );
             }
         }
-    }
-}
 
-fn next_backoff(current: Duration) -> Duration {
-    let doubled = current.saturating_mul(2);
-    if doubled > SESSION_BACKOFF_MAX {
-        SESSION_BACKOFF_MAX
-    } else {
-        doubled
-    }
-}
-
-/// Best-effort REST backstop before each `<self>.session` dial.
-///
-/// Hub restarts can lose the in-memory trust view before the device's
-/// next gRPC reconnect. The backend already exposes
-/// `/api/v1/devices/verify-credential` as the idempotent path that
-/// replays `<self>.register_device_pubkey` into the hub daemon. Calling
-/// it here keeps the reconnect loop self-healing: if the Hub forgot this
-/// device, the trust entry is restored before `federation.join` and
-/// `federation.advertise_abilities` run. Failures are advisory; the
-/// subsequent gRPC prelude remains the authoritative session gate.
-async fn warm_device_credential_for_session(caller_ura: &str) {
-    let caller_ura = caller_ura.to_string();
-    let outcome = tokio::task::spawn_blocking(move || verify_device_credential_once(&caller_ura))
-        .await
-        .unwrap_or_else(|err| CredentialWarmupOutcome::Failed {
-            api_base: String::new(),
-            reason: format!("credential warmup task join failed: {err}"),
-        });
-
-    match outcome {
-        CredentialWarmupOutcome::Verified { api_base } => {
-            crate::op_event!(
-                component = session,
-                kind = credential_verify_warmup_ok,
-                api_base = api_base,
-                message = "device credential verified before <self>.session dial",
-            );
-        }
-        CredentialWarmupOutcome::Skipped { reason } => {
-            crate::op_event!(
-                component = session,
-                kind = credential_verify_warmup_skipped,
-                reason = reason,
-            );
-        }
-        CredentialWarmupOutcome::Failed { api_base, reason } => {
-            crate::op_event!(
-                component = session,
-                kind = credential_verify_warmup_failed,
-                api_base = api_base,
-                reason = reason,
-                message =
-                    "continuing to gRPC session prelude; Hub will return the authoritative status",
-            );
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum CredentialWarmupOutcome {
-    Verified { api_base: String },
-    Skipped { reason: String },
-    Failed { api_base: String, reason: String },
-}
-
-fn verify_device_credential_once(caller_ura: &str) -> CredentialWarmupOutcome {
-    // Test isolation: the warmup runs unconditionally at the top of
-    // dial_and_run_session_with_idle_timeout, so every dial test would
-    // otherwise read the developer's real ~/.easynet/credentials.json and
-    // fire a blocking 5s ureq POST that races other tests' loopback hubs
-    // (flaky Elapsed / corrupt-header failures under the parallel suite).
-    // Skip the live read+POST in test builds; the HTTP wire shape itself
-    // is covered by credential_warmup_posts_current_device_credential,
-    // which drives verify_device_credential_for_credentials directly.
-    if cfg!(test) {
-        return CredentialWarmupOutcome::Skipped {
-            reason: "credential warmup skipped under cargo test".to_string(),
+        // Sleep the FULL-JITTER delay, also cancellable. The
+        // deterministic curve (`backoff`) is the upper bound;
+        // the actual wait is uniform in [0, backoff], which
+        // de-synchronizes a fleet that all lost a hub at the
+        // same instant (the 250 ms in-phase thundering herd
+        // b2ba441 only damped per-device). The curve state is
+        // unchanged — doubling and the healthy-uptime reset
+        // operate on `backoff`, not the jittered sample.
+        let jittered = full_jitter(backoff);
+        let cancelled = tokio::select! {
+            _ = &mut cancel => true,
+            _ = tokio::time::sleep(jittered) => false,
         };
-    }
-    let creds = match crate::persistence::config::load_credentials() {
-        Ok(creds) => creds,
-        Err(err) => {
-            return CredentialWarmupOutcome::Skipped {
-                reason: format!("credentials unavailable: {err}"),
-            };
-        }
-    };
-    verify_device_credential_for_credentials(caller_ura, creds)
-}
-
-fn verify_device_credential_for_credentials(
-    caller_ura: &str,
-    creds: crate::persistence::config::Credentials,
-) -> CredentialWarmupOutcome {
-    let expected_caller = crate::ura::device_ura(&creds.realm, &creds.node_id);
-    if expected_caller != caller_ura {
-        return CredentialWarmupOutcome::Skipped {
-            reason: format!(
-                "credentials caller {expected_caller} does not match session caller {caller_ura}"
-            ),
-        };
-    }
-
-    let api_base = creds.api_base();
-    let url = format!("{api_base}/api/v1/devices/verify-credential");
-    let response = ureq::post(&url)
-        .timeout(Duration::from_secs(5))
-        .send_json(serde_json::json!({
-            "node_id": creds.node_id,
-            "credential_token": creds.credential_token,
-        }));
-
-    match response {
-        Ok(resp) if (200..300).contains(&resp.status()) => {
-            CredentialWarmupOutcome::Verified { api_base }
-        }
-        Ok(resp) => {
-            let status = resp.status();
-            let body = resp.into_string().unwrap_or_default();
-            CredentialWarmupOutcome::Failed {
-                api_base,
-                reason: format!("HTTP {status}: {body}"),
-            }
-        }
-        Err(ureq::Error::Status(status, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            CredentialWarmupOutcome::Failed {
-                api_base,
-                reason: format!("HTTP {status}: {body}"),
-            }
-        }
-        Err(err) => CredentialWarmupOutcome::Failed {
-            api_base,
-            reason: err.to_string(),
-        },
-    }
-}
-
-/// Send a one-shot `federation.join@1` over the same gRPC channel
-/// the session bidi will open on. Genesis exception in axon-runtime
-/// (`signature_policy=RequireSigned` allows this ability unsigned),
-/// so the call uses an envelope with caller URA only — no signing
-/// material — and a minimal JoinFederationRequest payload.
-///
-/// We treat both success and "already member" as positive outcomes;
-/// any other status is logged by the caller and we continue. The
-/// session bidi's HubRejected error is the authoritative gate
-/// downstream — if join was needed but failed, the bidi surfaces
-/// the right status and the supervisor backs off.
-async fn send_federation_join_prelude(
-    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_ura: &str,
-) -> Result<(), tonic::Status> {
-    // Wire shape mirrors `federation_wrappers::JoinRequest`:
-    // axon-runtime's deserializer is strict (Deserialize derive,
-    // no #[serde(default)] on either field) and rejects payloads
-    // whose top-level keys differ from `membership_ura` /
-    // `realm`. Sending `agent_ura` / `tenant_id` (the field names
-    // used by the local daemon's other federation.* requests)
-    // earns InvalidArgument — verified in PR-1 §5 schema-compat
-    // tests and observed in dev as
-    //   `failed to decode JSON arguments: missing field
-    //    membership_ura`
-    let realm = crate::ura::parse_ura(caller_ura)
-        .map(|parsed| parsed.realm)
-        .unwrap_or_default();
-
-    let body = serde_json::json!({
-        "membership_ura": caller_ura,
-        "realm": realm,
-    });
-    let arguments = serde_json::to_vec(&body)
-        .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
-
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.join", arguments))
-        .map_err(|e| tonic::Status::invalid_argument(format!("federation.join prelude: {e}")))?;
-
-    match client.invoke(request).await {
-        Ok(reply) => {
-            // AXON-RFC-001 v4.1.7 hub-broadcast contract: parse
-            // the receipt body so the device seeds its
-            // HubPublishedAbilityStore with whatever the hub
-            // currently advertises. Failures here are
-            // best-effort — a malformed body or absent fields
-            // (talking to a v4.1.6 hub) leaves the store empty,
-            // which is the correct transitional behavior.
-            let body_bytes = reply.into_inner().result;
-            if !body_bytes.is_empty() {
-                if let Ok(body) = serde_json::from_slice::<
-                    crate::runtime::federation_client::JoinReceipt,
-                >(&body_bytes)
-                {
-                    let store = crate::services::hub_published_ability_store::global();
-                    store.seed_from_snapshot(
-                        body.hub_abilities_revision,
-                        body.hub_published_abilities,
-                    );
-                    if !store.is_empty() {
-                        let ability_count = store.len();
-                        let hub_abilities_revision = body.hub_abilities_revision;
-                        crate::op_event!(
-                            component = session,
-                            kind = hub_broadcast_abilities_seeded,
-                            ability_count = ability_count,
-                            hub_abilities_revision = hub_abilities_revision,
-                        );
-                    }
-                }
-            }
-            Ok(())
-        }
-        // Already-a-member is a benign outcome; surface as success.
-        Err(status)
-            if status.code() == tonic::Code::AlreadyExists
-                || status.message().contains("already") =>
-        {
-            Ok(())
-        }
-        Err(status) => Err(status),
-    }
-}
-
-/// Send a one-shot `federation.advertise_abilities@1` over the same
-/// gRPC channel the session bidi will open on.
-///
-/// The prelude publishes an RFC-005 owner projection. It does not
-/// send raw `AbilityDescriptor` values to the hub; descriptors are
-/// local input used only to derive bounded
-/// `AbilityProjectionSummary` rows.
-/// Session-prelude variant of `federation.advertise_agent`. The
-/// device tells the hub "I host agent `<agent_ura>`"; the hub
-/// upserts an `AdvertisedAgentRecord { agent_ura, host_ura }` so
-/// later `namespace.resolve` calls can select a hosted-agent
-/// next hop through this device.
-async fn send_advertise_agent_prelude(
-    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_ura: &str,
-    agent_ura: &str,
-    host_node_id: Option<&str>,
-) -> Result<(), tonic::Status> {
-    // `host_node_id` is the device's bare uuid (extracted from
-    // the caller URA). The hub stores it on the directory record
-    // so RFC-002 §5.2 forward_invoke knows which UDS-bound
-    // local-tool registration to dispatch into, and so backend
-    // `/api/v1/agents` populates `AgentInfo.node_id` correctly
-    // — without which DeviceDetailPage's hosted-agent filter
-    // silently drops the agent from the device view.
-    let mut body = serde_json::json!({
-        "agent_ura": agent_ura,
-        "signing_authority": {
-            "kind": "hosted_by",
-            "host_ura": caller_ura,
-        },
-    });
-    if let Some(node_id) = host_node_id {
-        if let Some(map) = body.as_object_mut() {
-            map.insert(
-                "host_node_id".to_string(),
-                serde_json::Value::String(node_id.to_string()),
-            );
-        }
-    }
-    let arguments = serde_json::to_vec(&body).map_err(|e| {
-        tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
-    })?;
-
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.advertise_agent", arguments))
-        .map_err(|e| {
-            tonic::Status::invalid_argument(format!("federation.advertise_agent prelude: {e}"))
-        })?;
-
-    invoke_prelude_unary(client, request, "federation.advertise_agent")
-        .await
-        .map(|_| ())
-}
-
-async fn send_advertise_abilities_prelude(
-    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_ura: &str,
-    owner_ura: &str,
-    host_device_ura: &str,
-    descriptors: &[AbilityDescriptor],
-) -> Result<(), tonic::Status> {
-    let projection = crate::runtime::owner_projection::prepare_and_persist(
-        owner_ura,
-        host_device_ura,
-        descriptors,
-    )
-    .map_err(|e| {
-        tonic::Status::internal(format!(
-            "federation.advertise_abilities prelude projection: {e}"
-        ))
-    })?;
-
-    let body = serde_json::json!({
-        "owner_ura": projection.owner_ura,
-        "host_device_ura": projection.host_device_ura,
-        "projection_revision": projection.projection_revision,
-        "projection_digest": projection.projection_digest,
-        "lease_expires_unix_ms": projection.lease_expires_unix_ms,
-        "ability_summaries": projection.ability_summaries,
-    });
-    let arguments = serde_json::to_vec(&body).map_err(|e| {
-        tonic::Status::internal(format!(
-            "federation.advertise_abilities prelude serialize: {e}"
-        ))
-    })?;
-
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.advertise_abilities", arguments))
-        .map_err(|e| {
-            tonic::Status::invalid_argument(format!("federation.advertise_abilities prelude: {e}"))
-        })?;
-
-    invoke_prelude_unary(client, request, "federation.advertise_abilities")
-        .await
-        .map(|_| ())
-}
-
-/// Handles the daemon needs to import its paired user's signing key
-/// into the local realm trust anchor at session-establish time.
-///
-/// DEC-EU user-as-first-class-caller + invoke_remote user-caller
-/// pass-through: the device-side admission gate verifies the user's
-/// envelope signature against the LOCAL trust anchor only (INV-1:
-/// same-realm local miss is final — no federation fall-through). But
-/// user signing keys are registered at the realm's hub, the identity
-/// registrar, by the backend. This sync closes that gap with the
-/// correct authority direction: the device PULLS its own paired
-/// user's key over the session channel it already authenticated
-/// (pinned hub TLS CA + hub trust row), then writes the row through
-/// the same `register_device_pubkey` write policy the gRPC surface
-/// uses. Admission stays local-anchor-authoritative; the anchor is
-/// just kept warm.
-#[derive(Clone)]
-pub struct UserTrustSync {
-    pub daemon_realm: String,
-    pub trust_anchor_path: PathBuf,
-    pub cell: crate::services::trust_anchor_cell::SharedTrustAnchor,
-}
-
-/// Cadence of the session-lifetime user-key refresh loop. One
-/// resolve_key unary per tick; 60s bounds the "new browser key
-/// registered but not yet admissible at the device" window without
-/// meaningful load.
-const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Aborts the wrapped task when dropped — ties a background loop's
-/// lifetime to the owning scope (here: one dialed session).
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-/// Pull the paired user's pubkey from the hub and import it into the
-/// local trust anchor. Advisory: every failure path logs and returns —
-/// a device whose user key cannot be synced must still come online
-/// (abilities that don't need user-signed admission keep working; the
-/// next session dial retries the sync).
-async fn sync_paired_user_trust_prelude(
-    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_ura: &str,
-    sync: &UserTrustSync,
-) {
-    let Ok(creds) = crate::persistence::config::load_credentials() else {
-        return; // unpaired device — nothing to sync
-    };
-    let Some(username) = creds
-        .username
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
-        return;
-    };
-    let realm = creds.realm.trim();
-    if realm != sync.daemon_realm {
-        // Roaming device anchored at a foreign realm: user keys stay
-        // home-realm-authoritative (register_device_pubkey's cross-
-        // realm rule); admission for such callers is a DEC-EU
-        // §multi-realm follow-up, not this sync's job.
-        return;
-    }
-    let user_ura = crate::ura::user_ura(realm, username);
-
-    let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura })) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let request = match crate::services::invocation_transport::ProtoEnvelope::caller_only(
-        caller_ura,
-    )
-    .and_then(|env| {
-        env.invoke_request(
-            crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
-            args,
-        )
-    }) {
-        Ok(req) => req,
-        Err(_) => return,
-    };
-    let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
-        Ok(resp) => resp,
-        Err(status) => {
-            let code = status.code();
-            let msg = status.message();
-            crate::op_event!(
-                component = session,
-                kind = user_trust_sync_resolve_failed,
-                code = code,
-                error = msg,
-                user_ura = user_ura,
-            );
+        if cancelled {
+            phase.transition(DeviceSessionPhase::Idle, "supervisor_cancelled");
             return;
         }
-    };
-    // DEC-EU multi-device: the hub returns every key registered
-    // under the user URA (`public_keys_b64`); older hubs only emit
-    // the single `public_key_b64`. Import ALL of them — the browser
-    // signing the next invoke may hold any one of the user's keys,
-    // and admission verifies against the local anchor's full set.
-    let parsed = serde_json::from_slice::<serde_json::Value>(&response.result).ok();
-    let mut pubkeys: Vec<String> = parsed
-        .as_ref()
-        .and_then(|v| v.get("public_keys_b64"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|k| k.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    if pubkeys.is_empty() {
-        if let Some(pk) = parsed
-            .as_ref()
-            .and_then(|v| v.get("public_key_b64"))
-            .and_then(|pk| pk.as_str())
-        {
-            pubkeys.push(pk.to_string());
-        }
-    }
-    if pubkeys.is_empty() {
-        crate::op_event!(
-            component = session,
-            kind = user_trust_sync_resolve_empty,
-            user_ura = user_ura,
-            message = "hub returned no user keys — user key not registered at hub yet",
-        );
-        return;
-    }
 
-    for pubkey_b64 in pubkeys {
-        let register_args = match serde_json::to_vec(&serde_json::json!({
-            "agent_ura": user_ura,
-            "public_key_b64": pubkey_b64,
-            "role": "user",
-        })) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        match crate::services::invocation_transport::register_device_pubkey::handle(
-            &register_args,
-            &sync.daemon_realm,
-            &sync.trust_anchor_path,
-            &sync.cell,
-        ) {
-            Ok(_) => {
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_ok,
-                    user_ura = user_ura,
-                );
-            }
-            Err(status) if status.code() == tonic::Code::AlreadyExists => {
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_already_present,
-                    user_ura = user_ura,
-                );
-            }
-            Err(status) => {
-                let code = status.code();
-                let msg = status.message();
-                crate::op_event!(
-                    component = session,
-                    kind = user_trust_sync_write_failed,
-                    code = code,
-                    error = msg,
-                    user_ura = user_ura,
-                );
-            }
-        }
-    }
-}
-
-async fn invoke_prelude_unary(
-    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    request: easynet_axon::pb::axon::v1::InvokeRequest,
-    ability_name: &str,
-) -> Result<easynet_axon::pb::axon::v1::InvokeResponse, tonic::Status> {
-    let response = client.invoke(request).await?.into_inner();
-    if let Some(error) = response.error.as_ref() {
-        let message = if error.code.is_empty() {
-            error.message.clone()
-        } else if error.message.is_empty() {
-            error.code.clone()
-        } else {
-            format!("{}: {}", error.code, error.message)
-        };
-        return Err(tonic::Status::failed_precondition(format!(
-            "{ability_name} prelude rejected: {message}"
-        )));
-    }
-    Ok(response)
-}
-
-fn build_hosted_agent_ability_descriptors(
-    owner_ura: &str,
-    agent_name: &str,
-    entry: &crate::registry::agents::AgentEntry,
-    host_node_id: Option<&str>,
-    live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
-) -> Vec<AbilityDescriptor> {
-    let mut descriptors = Vec::new();
-    for spec in crate::runtime::abilities::abilities_for_publication(agent_name, entry) {
-        let registry_name = spec.name();
-        let owner_local_name = crate::runtime::abilities::public_agent_ability_name(
-            owner_ura,
-            agent_name,
-            registry_name,
-        );
-        let Ok(mut descriptor) = AbilityDescriptor::new(
-            owner_local_name,
-            owner_ura,
-            crate::runtime::ability_descriptor::Visibility::Scoped,
-        ) else {
-            continue;
-        };
-        descriptor = descriptor
-            .with_description(spec.description())
-            .with_input_schema(spec.parameters().clone())
-            .with_hints(crate::runtime::agents::discovery_hints_for(
-                live_registry,
-                registry_name,
-            ))
-            .with_source(format!("agent:{agent_name}"))
-            .with_metadata_entry("runtime", entry.agent_type.to_string())
-            .with_metadata_entry("agent_type", entry.agent_type.to_string())
-            .with_metadata_entry("base_runtime", entry.agent_type.to_string());
-        if let Some(node_id) = host_node_id {
-            descriptor = descriptor.with_metadata_entry("host_node_id", node_id.to_string());
-        }
-        if let Some(model) = entry.model.as_ref() {
-            descriptor = descriptor
-                .with_metadata_entry("model", model.clone())
-                .with_metadata_entry("base_model", model.clone());
-        }
-        descriptors.push(descriptor);
-    }
-    descriptors
-}
-
-/// Build advertise descriptors for the user-scoped synthetic `pages`
-/// agent. Its `pages.*` abilities are registered in the daemon's LIVE
-/// catalog under `OwnerKind::User(<user>)`, but that catalog is not
-/// reachable from the session prelude — and neither `build_registry()`
-/// nor `build_system_registry()` carries the user id — so the fixed,
-/// deterministic relative ability set is synthesized here, the same way
-/// the synthetic `["pages","files"]` agent entries themselves are minted.
-///
-/// Name match (RFC-005): the resolver matches the relative ability name
-/// (`pages.list`) and the canonical ability URA
-/// (`…/ability/<user>.pages.pages.list`). `descriptor.public_name()`
-/// strips the owner's agent-id prefix (`pages.`), so the descriptor name
-/// must be `pages.<relative>` (`pages.pages.list`) to project back to the
-/// `pages.list` relative name the backend invokes. Using `pages.list`
-/// directly would project to `list` and stay NODATA.
-fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<AbilityDescriptor> {
-    // Single source of truth with the local registration in
-    // src/runtime/agents/pages/mod.rs, so the advertised descriptor
-    // carries the same input schema (project_id / folder requirements)
-    // the Frontend InvokeAbilityDialog needs — otherwise it shows
-    // "No input required" and empty-arg invokes 400 with missing arg.
-    crate::runtime::agents::pages::management_ability_specs()
-        .into_iter()
-        .filter_map(|spec| {
-            // Descriptor name = `pages.<verb>` so public_name() (which
-            // strips the owner `pages.` agent-id prefix) projects back
-            // to the `<verb>`... wait: see the name-match note. The
-            // resolver matches the relative name `pages.list`, so the
-            // descriptor name must be `pages.pages.list`.
-            let descriptor_name = format!("pages.{}", spec.relative_name);
-            AbilityDescriptor::new(
-                descriptor_name,
-                owner_ura,
-                crate::runtime::ability_descriptor::Visibility::Scoped,
-            )
-            .ok()
-            .map(|descriptor| {
-                descriptor
-                    .with_description(spec.description)
-                    .with_input_schema(spec.input_schema)
-                    .with_source("synthetic:pages")
-            })
-        })
-        .collect()
-}
-
-/// Build the EnvelopeOpen frame 0 a device sends to open
-/// `<self>.session`. Public so PR-2 commit 1/N's hub-side
-/// acceptor tests can construct a matching expected frame, and
-/// so the integration test in PR-3 commit 3/3 can drive a mock
-/// device through the same shape.
-#[must_use]
-pub fn build_session_envelope_open(caller_ura: &str) -> InvokeBidiUp {
-    build_session_envelope_open_with_seed(caller_ura, None)
-}
-
-/// Build the frame-0 `EnvelopeOpen`, optionally signing it when a
-/// deterministic device seed is available.
-#[must_use]
-pub fn build_session_envelope_open_with_seed(
-    caller_ura: &str,
-    signing_seed: Option<SessionSigningSeed>,
-) -> InvokeBidiUp {
-    let initial_args = Vec::new();
-    let args_digest: [u8; 32] = Sha256::digest(&initial_args).into();
-
-    let mut envelope = Envelope {
-        caller: Some(AgentIdentity {
-            ura: caller_ura.to_string(),
-            profile: DEFAULT_URA_PROFILE.to_string(),
-        }),
-        // `<self>.session` is the device presenting its own long-
-        // lived reverse channel; callee + subject both point at the
-        // caller device so the signed tuple is stable and self-
-        // describing even before a future hub-URA contract lands.
-        callee: Some(AgentIdentity {
-            ura: caller_ura.to_string(),
-            profile: DEFAULT_URA_PROFILE.to_string(),
-        }),
-        subject: Some(SubjectIdentity {
-            ura: caller_ura.to_string(),
-            profile: DEFAULT_URA_PROFILE.to_string(),
-        }),
-        ..Envelope::default()
-    };
-
-    let mut mac = Vec::new();
-    if let Some(seed) = signing_seed {
-        let mut nonce = [0_u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        envelope.invocation_nonce = nonce.to_vec();
-
-        let axiom_env = InvocationEnvelope {
-            caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-            callee: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-            subject: AxiomSubjectIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-            ability: ABILITY_SELF_SESSION.to_string(),
-            args_digest,
-            invocation_nonce: nonce,
-            causal_context: CausalContext::None,
-        };
-        let signing_key = SigningKey::from_bytes(&seed);
-        let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_env));
-        mac = signature.to_bytes().to_vec();
-        envelope.caller_signature = Some(CallerSignature {
-            algorithm: "ed25519".to_string(),
-            signature: mac.clone(),
-            ..CallerSignature::default()
-        });
-    }
-
-    InvokeBidiUp {
-        sequence: 0,
-        mac,
-        payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(envelope),
-            target: Some(InvocationTarget {
-                ability_name: ABILITY_SELF_SESSION.to_string(),
-                ..InvocationTarget::default()
-            }),
-            initial_args,
-            streams: vec![StreamDescriptor {
-                stream_id: SESSION_STREAM_ID,
-                content_type: "application/json".to_string(),
-                ..StreamDescriptor::default()
-            }],
-            ..EnvelopeOpen::default()
-        })),
+        backoff = next_backoff(backoff);
     }
 }
 
@@ -1955,7 +782,7 @@ mod tests {
     use easynet_axon::pb::axon::v1::{
         InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
     };
-    use futures::stream;
+    use futures::{stream, StreamExt as _};
     use serde_json::Value;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -1970,6 +797,10 @@ mod tests {
     /// flaked here as `Elapsed`. The supervisor's own connect timeout is
     /// 10 s, so 10 s still fails fast on a real stall.
     const TEST_SUPERVISOR_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn hub_store() -> Arc<HubPublishedAbilityStore> {
+        HubPublishedAbilityStore::new()
+    }
 
     #[test]
     fn synthetic_pages_descriptors_match_resolver_lookup_keys() {
@@ -2080,6 +911,55 @@ mod tests {
             // must turn this silent hang into a bounded error.
             Ok(Response::new(
                 Box::pin(stream::pending()) as Self::InvokeBidiStream
+            ))
+        }
+    }
+
+    /// Hub that admits the bidi and immediately ends the down stream
+    /// with a clean EOF — the device-observable shape of hub-side
+    /// presence displacement (registered `DispatchSender` dropped
+    /// right after accept) and of incident 2026-06-11's repeated
+    /// closes.
+    struct CleanCloseSessionHub;
+
+    #[tonic::async_trait]
+    impl Invocation for CleanCloseSessionHub {
+        type InvokeStreamStream = TestInvokeStream;
+        type InvokeBidiStream = TestInvokeBidiStream;
+
+        async fn invoke(
+            &self,
+            _request: Request<InvokeRequest>,
+        ) -> Result<Response<InvokeResponse>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_stream(
+            &self,
+            _request: Request<InvokeServerStreamRequest>,
+        ) -> Result<Response<Self::InvokeStreamStream>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_bidi(
+            &self,
+            request: Request<tonic::Streaming<InvokeBidiUp>>,
+        ) -> Result<Response<Self::InvokeBidiStream>, Status> {
+            let mut up = request.into_inner();
+            let frame0 = up
+                .next()
+                .await
+                .ok_or_else(|| Status::invalid_argument("expected frame 0"))?
+                .map_err(|status| Status::internal(format!("frame 0 recv: {status}")))?;
+            let UpPayload::EnvelopeOpen(_) = frame0.payload.ok_or_else(|| {
+                Status::invalid_argument("frame 0 must carry EnvelopeOpen payload")
+            })?
+            else {
+                return Err(Status::invalid_argument("frame 0 must be EnvelopeOpen"));
+            };
+
+            Ok(Response::new(
+                Box::pin(stream::empty()) as Self::InvokeBidiStream
             ))
         }
     }
@@ -2224,6 +1104,22 @@ mod tests {
         (addr, handle)
     }
 
+    async fn spawn_clean_close_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind clean-close session hub");
+        let addr = listener.local_addr().expect("clean-close hub local addr");
+        let incoming = TcpListenerStream::new(listener);
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(InvocationServer::new(CleanCloseSessionHub))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("clean-close session hub server");
+        });
+        (addr, handle)
+    }
+
     async fn spawn_out_of_sequence_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -2352,6 +1248,32 @@ mod tests {
     }
 
     #[test]
+    fn full_jitter_stays_within_bound_and_curve_is_unchanged() {
+        // The deterministic curve must be untouched by jitter: the
+        // doubling test below still holds, and the jitter sample is
+        // always within [0, bound].
+        for bound_ms in [0u64, 1, 250, 30_000] {
+            let bound = Duration::from_millis(bound_ms);
+            for _ in 0..1000 {
+                let j = full_jitter(bound);
+                assert!(j <= bound, "jitter {j:?} exceeded bound {bound:?}");
+            }
+        }
+        // Zero bound → zero wait (no panic on modulo).
+        assert_eq!(full_jitter(Duration::ZERO), Duration::ZERO);
+        // Non-degenerate spread: 1000 draws from a 30s bound must not
+        // all collapse to one value (the bug being fixed).
+        let bound = Duration::from_secs(30);
+        let samples: std::collections::HashSet<u128> =
+            (0..1000).map(|_| full_jitter(bound).as_millis()).collect();
+        assert!(
+            samples.len() > 100,
+            "jitter not spread: {} distinct",
+            samples.len()
+        );
+    }
+
+    #[test]
     fn next_backoff_doubles_until_cap() {
         assert_eq!(
             next_backoff(SESSION_BACKOFF_INITIAL),
@@ -2361,6 +1283,147 @@ mod tests {
         assert_eq!(next_backoff(Duration::from_secs(20)), SESSION_BACKOFF_MAX);
         // Past the cap stays at the cap.
         assert_eq!(next_backoff(SESSION_BACKOFF_MAX), SESSION_BACKOFF_MAX);
+    }
+
+    #[test]
+    fn session_phase_edge_relation() {
+        use DeviceSessionPhase::*;
+        let join = Preluding(PreludeStep::Join);
+        let advertise = Preluding(PreludeStep::Advertise);
+        // The forward chain.
+        assert!(Idle.may_transition_to(&Dialing));
+        assert!(Dialing.may_transition_to(&join));
+        assert!(join.may_transition_to(&advertise), "prelude steps chain");
+        assert!(advertise.may_transition_to(&Live));
+        assert!(Live.may_transition_to(&Backoff));
+        assert!(Backoff.may_transition_to(&Dialing));
+        // Failure and shutdown edges are available from anywhere.
+        assert!(Dialing.may_transition_to(&Backoff));
+        assert!(join.may_transition_to(&Backoff));
+        assert!(Live.may_transition_to(&Idle));
+        // Illegal: nothing skips into Live, nothing resurrects from
+        // Backoff or Idle without dialing.
+        assert!(!Idle.may_transition_to(&Live));
+        assert!(!Dialing.may_transition_to(&Live));
+        assert!(!Backoff.may_transition_to(&Live));
+        assert!(!Idle.may_transition_to(&join));
+    }
+
+    #[test]
+    fn phase_tracker_walks_the_supervised_lifecycle() {
+        let mut t = SessionPhaseTracker::new();
+        assert_eq!(t.phase(), DeviceSessionPhase::Idle);
+        t.begin_attempt();
+        assert_eq!(t.phase(), DeviceSessionPhase::Dialing);
+        t.transition(DeviceSessionPhase::Preluding(PreludeStep::Join), "test");
+        t.transition(
+            DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection),
+            "test",
+        );
+        t.transition(
+            DeviceSessionPhase::Preluding(PreludeStep::Advertise),
+            "test",
+        );
+        t.transition(DeviceSessionPhase::Live, "test");
+        t.transition(DeviceSessionPhase::Backoff, "healthy");
+        // The next attempt re-enters Dialing from Backoff.
+        t.begin_attempt();
+        assert_eq!(t.phase(), DeviceSessionPhase::Dialing);
+        // Shutdown is reachable from any phase.
+        t.transition(DeviceSessionPhase::Idle, "supervisor_cancelled");
+        assert_eq!(t.phase(), DeviceSessionPhase::Idle);
+    }
+
+    #[test]
+    fn close_class_fingerprint_table() {
+        // The four-class table (F-008/T1.1), pinned: each fingerprint
+        // from the 2026-06-11 incident analysis maps to its class.
+        let class = |uptime_ms: u64, frames: u64| {
+            SessionCloseStats {
+                uptime: Duration::from_millis(uptime_ms),
+                frames_received: frames,
+            }
+            .classify()
+        };
+        // Healthy uptime wins regardless of frame count.
+        assert_eq!(class(30_000, 7), CloseClass::Healthy);
+        assert_eq!(class(45_000, 0), CloseClass::Healthy);
+        // Frameless young session: hub never sent the admission receipt.
+        assert_eq!(class(120, 0), CloseClass::NoAdmissionReceipt);
+        assert_eq!(class(5_000, 0), CloseClass::NoAdmissionReceipt);
+        // Sub-second with only the receipt: displacement signature.
+        assert_eq!(class(120, 1), CloseClass::DisplacedSuspect);
+        // Survived admission but died young: contract skew family.
+        assert_eq!(class(5_000, 2), CloseClass::ContractSkew);
+        assert_eq!(class(1_200, 1), CloseClass::ContractSkew);
+    }
+
+    #[test]
+    fn clean_close_backoff_resets_only_after_healthy_uptime() {
+        // A session that outlived SESSION_HEALTHY_MIN_UPTIME earns
+        // the reset back to the 250 ms floor.
+        let healthy = SessionCloseStats {
+            uptime: SESSION_HEALTHY_MIN_UPTIME,
+            frames_received: 7,
+        };
+        assert_eq!(
+            backoff_after_clean_close(&healthy, Duration::from_secs(8)),
+            SESSION_BACKOFF_INITIAL
+        );
+
+        // A sub-second clean close (hub-side displacement / contract
+        // skew) must NOT reset the curve — incident 2026-06-11 held
+        // 5428 cycles at the 250 ms floor because it did.
+        let displaced = SessionCloseStats {
+            uptime: Duration::from_millis(120),
+            frames_received: 1,
+        };
+        assert_eq!(
+            backoff_after_clean_close(&displaced, Duration::from_secs(8)),
+            Duration::from_secs(8),
+            "short-lived clean close must keep the escalating backoff"
+        );
+        // At the floor the policy is a no-op; the supervisor's
+        // post-sleep next_backoff() doubling does the escalation.
+        assert_eq!(
+            backoff_after_clean_close(&displaced, SESSION_BACKOFF_INITIAL),
+            SESSION_BACKOFF_INITIAL
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_close_reports_uptime_and_frame_count_stats() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        // Device-side fingerprint contract for hub-side close
+        // diagnosis (incident 2026-06-11: hub logs lost, device
+        // stats are the only surviving evidence). A hub that admits
+        // and immediately EOFs the down stream must yield Ok with
+        // zero frames and an uptime below the healthy threshold.
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, _server) = spawn_clean_close_session_hub().await;
+
+        let stats = tokio::time::timeout(
+            Duration::from_secs(5),
+            dial_and_run_session(
+                format!("http://{addr}"),
+                "easynet:///r/realm/device/n1".to_string(),
+                None,
+                None,
+                dispatcher,
+                None,
+                SessionPreludeInputs::new(&[], hub_store()),
+            ),
+        )
+        .await
+        .expect("clean-close dial bounded to 5 s")
+        .expect("clean hub close must surface as Ok(stats), not an error");
+
+        assert_eq!(stats.frames_received, 0, "empty down stream sent no frames");
+        assert!(
+            stats.uptime < SESSION_HEALTHY_MIN_UPTIME,
+            "immediate close cannot count as healthy uptime, got {:?}",
+            stats.uptime
+        );
     }
 
     #[test]
@@ -2391,6 +1454,46 @@ mod tests {
         }
     }
 
+    /// Read one full HTTP/1.1 request — header block plus exactly
+    /// `Content-Length` body bytes — off `stream`. A single `read()`
+    /// is NOT enough here: ureq writes the header block and the JSON
+    /// body in separate syscalls, so they can arrive as separate TCP
+    /// segments. A server that answers after the first segment and
+    /// drops the socket leaves the in-flight body unread in the
+    /// receive buffer; the kernel then resets the connection and the
+    /// client surfaces a transport error instead of the 200 (the
+    /// 1-in-3 flake of `credential_warmup_posts_current_device_credential`
+    /// recorded on 2026-06-11).
+    fn read_full_http_request(stream: &mut std::net::TcpStream) -> String {
+        let mut buf: Vec<u8> = Vec::with_capacity(4096);
+        let mut chunk = [0_u8; 4096];
+        loop {
+            if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.trim()
+                            .eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if buf.len() >= header_end + 4 + content_length {
+                    return String::from_utf8_lossy(&buf).to_string();
+                }
+            }
+            let n = stream.read(&mut chunk).expect("read verify request");
+            if n == 0 {
+                // Peer closed mid-request; return what arrived so the
+                // assertion failure shows the truncated request.
+                return String::from_utf8_lossy(&buf).to_string();
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+
     #[test]
     fn credential_warmup_posts_current_device_credential() {
         let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind verify server");
@@ -2398,9 +1501,7 @@ mod tests {
         let (tx, rx) = std_mpsc::channel::<String>();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept verify request");
-            let mut buf = [0_u8; 4096];
-            let n = stream.read(&mut buf).expect("read verify request");
-            tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
+            tx.send(read_full_http_request(&mut stream))
                 .expect("send captured request");
             stream
                 .write_all(
@@ -2453,7 +1554,7 @@ mod tests {
             None,
             dispatcher,
             None,
-            &[],
+            SessionPreludeInputs::new(&[], hub_store()),
         )
         .await;
         match result {
@@ -2479,7 +1580,7 @@ mod tests {
                 None,
                 dispatcher,
                 None,
-                &[],
+                SessionPreludeInputs::new(&[], hub_store()),
             ),
         )
         .await
@@ -2505,16 +1606,19 @@ mod tests {
         .expect("test descriptor")];
 
         let result = dial_and_run_session_with_idle_timeout(
-            format!("http://{addr}"),
-            owner.to_string(),
-            None,
-            None,
-            dispatcher,
-            None,
-            &descriptors,
-            Duration::from_millis(80),
-            None,
-            None, // user_trust_sync: not exercised here
+            SessionDialAttempt {
+                hub_endpoint: format!("http://{addr}"),
+                caller_ura: owner.to_string(),
+                signing_seed: None,
+                hub_ca_pem_path: None,
+                dispatcher,
+                escalation_outbox: None,
+                preludes: SessionPreludeInputs::new(&descriptors, hub_store()),
+                idle_timeout: Duration::from_millis(80),
+                initial_admission: None,
+                user_trust_sync: None, // not exercised here
+            },
+            &mut SessionPhaseTracker::new(),
         )
         .await;
 
@@ -2576,16 +1680,19 @@ mod tests {
         )
         .expect("test descriptor")];
         let result = dial_and_run_session_with_idle_timeout(
-            format!("http://{addr}"),
-            device_ura.to_string(),
-            None,
-            None,
-            dispatcher,
-            None,
-            &descriptors,
-            Duration::from_millis(80),
-            None,
-            None, // user_trust_sync: not exercised here
+            SessionDialAttempt {
+                hub_endpoint: format!("http://{addr}"),
+                caller_ura: device_ura.to_string(),
+                signing_seed: None,
+                hub_ca_pem_path: None,
+                dispatcher,
+                escalation_outbox: None,
+                preludes: SessionPreludeInputs::new(&descriptors, hub_store()),
+                idle_timeout: Duration::from_millis(80),
+                initial_admission: None,
+                user_trust_sync: None, // not exercised here
+            },
+            &mut SessionPhaseTracker::new(),
         )
         .await;
         assert!(
@@ -2649,7 +1756,7 @@ mod tests {
             Some(bogus.as_path()),
             dispatcher,
             None,
-            &[],
+            SessionPreludeInputs::new(&[], hub_store()),
         )
         .await;
         match result {
@@ -2665,18 +1772,19 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
 
-        let supervisor_handle = tokio::spawn(run_session_supervisor(
-            "http://127.0.0.1:1".to_string(),
-            "easynet:///r/realm/device/n1".to_string(),
-            None,
-            None,
+        let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: "http://127.0.0.1:1".to_string(),
+            caller_ura: "easynet:///r/realm/device/n1".to_string(),
+            signing_seed: None,
+            hub_ca_pem_path: None,
             dispatcher,
-            None,       // PR-N6 C4: no escalation outbox in this test
-            Vec::new(), // ability_descriptors: empty in tests
-            None,
-            None, // user_trust_sync: not exercised here
-            cancel_rx,
-        ));
+            escalation_outbox: None,
+            ability_descriptors: Vec::new(),
+            hub_published_abilities: hub_store(),
+            initial_admission: None,
+            user_trust_sync: None,
+            cancel: cancel_rx,
+        }));
 
         // Give the supervisor a beat to start its first dial then
         // cancel. The dial will fail (connect refused on port 1)
@@ -2685,9 +1793,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = cancel_tx.send(());
 
-        let exit_within_bound = tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor_handle)
-            .await
-            .expect("supervisor exits promptly after cancel");
+        let exit_within_bound =
+            tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor_handle)
+                .await
+                .expect("supervisor exits promptly after cancel");
         exit_within_bound.expect("supervisor task did not panic");
     }
 
@@ -2697,18 +1806,19 @@ mod tests {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let (probe, admission_rx) = initial_session_admission_probe();
 
-        let supervisor_handle = tokio::spawn(run_session_supervisor(
-            "http://127.0.0.1:1".to_string(),
-            "easynet:///r/realm/device/n1".to_string(),
-            None,
-            None,
+        let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: "http://127.0.0.1:1".to_string(),
+            caller_ura: "easynet:///r/realm/device/n1".to_string(),
+            signing_seed: None,
+            hub_ca_pem_path: None,
             dispatcher,
-            None,
-            Vec::new(),
-            Some(probe),
-            None, // user_trust_sync: not exercised here
-            cancel_rx,
-        ));
+            escalation_outbox: None,
+            ability_descriptors: Vec::new(),
+            hub_published_abilities: hub_store(),
+            initial_admission: Some(probe),
+            user_trust_sync: None,
+            cancel: cancel_rx,
+        }));
 
         let outcome = tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, admission_rx)
             .await
@@ -2733,18 +1843,19 @@ mod tests {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let (probe, admission_rx) = initial_session_admission_probe();
 
-        let supervisor_handle = tokio::spawn(run_session_supervisor(
-            format!("http://{addr}"),
-            "easynet:///r/realm/device/n1".to_string(),
-            None,
-            None,
+        let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: format!("http://{addr}"),
+            caller_ura: "easynet:///r/realm/device/n1".to_string(),
+            signing_seed: None,
+            hub_ca_pem_path: None,
             dispatcher,
-            None,
-            Vec::new(),
-            Some(probe),
-            None, // user_trust_sync: not exercised here
-            cancel_rx,
-        ));
+            escalation_outbox: None,
+            ability_descriptors: Vec::new(),
+            hub_published_abilities: hub_store(),
+            initial_admission: Some(probe),
+            user_trust_sync: None,
+            cancel: cancel_rx,
+        }));
 
         let outcome = tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, admission_rx)
             .await
@@ -2764,16 +1875,19 @@ mod tests {
         let (addr, _server) = spawn_silent_session_hub().await;
 
         let result = dial_and_run_session_with_idle_timeout(
-            format!("http://{addr}"),
-            "easynet:///r/realm/device/n1".to_string(),
-            None,
-            None,
-            dispatcher,
-            None,
-            &[],
-            Duration::from_millis(80),
-            None,
-            None, // user_trust_sync: not exercised here
+            SessionDialAttempt {
+                hub_endpoint: format!("http://{addr}"),
+                caller_ura: "easynet:///r/realm/device/n1".to_string(),
+                signing_seed: None,
+                hub_ca_pem_path: None,
+                dispatcher,
+                escalation_outbox: None,
+                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                idle_timeout: Duration::from_millis(80),
+                initial_admission: None,
+                user_trust_sync: None, // not exercised here
+            },
+            &mut SessionPhaseTracker::new(),
         )
         .await;
 
@@ -2792,16 +1906,19 @@ mod tests {
         let (addr, _server) = spawn_out_of_sequence_session_hub().await;
 
         let result = dial_and_run_session_with_idle_timeout(
-            format!("http://{addr}"),
-            "easynet:///r/realm/device/n1".to_string(),
-            None,
-            None,
-            dispatcher,
-            None,
-            &[],
-            Duration::from_secs(1),
-            None,
-            None, // user_trust_sync: not exercised here
+            SessionDialAttempt {
+                hub_endpoint: format!("http://{addr}"),
+                caller_ura: "easynet:///r/realm/device/n1".to_string(),
+                signing_seed: None,
+                hub_ca_pem_path: None,
+                dispatcher,
+                escalation_outbox: None,
+                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                idle_timeout: Duration::from_secs(1),
+                initial_admission: None,
+                user_trust_sync: None, // not exercised here
+            },
+            &mut SessionPhaseTracker::new(),
         )
         .await;
 

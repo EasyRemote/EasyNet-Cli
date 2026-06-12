@@ -214,17 +214,37 @@ fn require_object_args(args: &Value) -> anyhow::Result<Value> {
 /// surfaces rather than re-deriving the `Handle::try_current` /
 /// `block_in_place` ladder — duplicate bridges historically drifted
 /// on missing-runtime policy.
-fn block_on_async<F: std::future::Future<Output = anyhow::Result<Value>>>(
-    fut: F,
-) -> anyhow::Result<Value> {
-    tokio::runtime::Handle::try_current().map_err(|_| {
+fn block_on_async<F>(fut: F) -> anyhow::Result<Value>
+where
+    F: std::future::Future<Output = anyhow::Result<Value>> + Send + 'static,
+{
+    let handle = tokio::runtime::Handle::try_current().map_err(|_| {
         anyhow::anyhow!(
             "mcp executor: no ambient tokio runtime; \
              callers must drive `[exec] kind=\"mcp\"` from inside the daemon's \
              async InvokeStream/Invoke path or a `#[tokio::test]` runtime"
         )
     })?;
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
+    // Run the future ON the runtime's workers instead of
+    // `block_in_place + block_on` on THIS thread. Ability handlers
+    // execute on spawn_blocking threads; driving IO-registering
+    // futures (tokio::process pipes) from there entangles the IO
+    // driver with the blocking thread's context and has surfaced as
+    // "A Tokio 1.x context was found, but it is being shutdown".
+    // A worker-spawned task registers IO on the live driver; this
+    // thread just waits. The timeout fails fast instead of hanging
+    // if the runtime is genuinely going down.
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    handle.spawn(async move {
+        let _ = tx.send(fut.await);
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(600))
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "mcp executor: upstream call did not complete (runtime shutting \
+             down or upstream hung past the 600s ceiling)"
+            )
+        })?
 }
 
 #[cfg(test)]

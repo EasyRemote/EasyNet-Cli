@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
 use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = "meta.describe";
@@ -77,6 +78,7 @@ pub fn register<F>(
     descriptors_provider: F,
     registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     pages_user: Option<String>,
+    hub_published_abilities: Arc<HubPublishedAbilityStore>,
 ) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
 {
@@ -90,6 +92,7 @@ pub fn register<F>(
     );
     let p_for_list = Arc::clone(&provider);
     let handle_for_list = Arc::clone(&registry_handle);
+    let hub_published_abilities_for_list = Arc::clone(&hub_published_abilities);
     // Capture the pages-user identity at registration time so the
     // synth path doesn't read EASYNET_PAGES_USER on every call.
     // Production passes the same value the registry build used;
@@ -103,6 +106,7 @@ pub fn register<F>(
                 &handle_for_list,
                 args,
                 pages_user_for_list.as_deref(),
+                &hub_published_abilities_for_list,
             )
         });
     reg.register_rpc_with_owner(ABILITY_LIST_ABILITIES, OwnerKind::Device, list_handler);
@@ -172,6 +176,7 @@ fn list_abilities_handler(
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
     pages_user: Option<&str>,
+    hub_published_abilities: &HubPublishedAbilityStore,
 ) -> anyhow::Result<Value> {
     use crate::runtime::ability_descriptor::Visibility;
     let scope = AbilityListScope::from_args(&args)?;
@@ -357,9 +362,37 @@ fn list_abilities_handler(
         synthesize_hot_hosted_agent_descriptors(&mut catalog, registry, &local);
     }
 
+    // Final pass — service-health metadata. Applied uniformly over
+    // the assembled catalog (static, live-registry, and hosted-synth
+    // entries alike) so no insertion path has to remember it. The
+    // store is keyed by canonical ability URA, the same
+    // `owner_ability_ura` construction `canonical_ability_ura()`
+    // uses, so the lookup cannot drift from the monitor's writes.
+    // Advisory metadata only: absence means "not monitored", never
+    // "down" — the invoke path does not consult this.
     let mut merged: Vec<Value> = catalog
         .into_values()
-        .map(|d| serde_json::to_value(d).unwrap_or(Value::Null))
+        .map(|d| {
+            let descriptor = match d
+                .canonical_ability_ura()
+                .and_then(|ura| crate::services::ability_health::snapshot(&ura))
+            {
+                Some(health) => {
+                    let mut d = d
+                        .with_metadata_entry("health_status", health.status.as_wire_str())
+                        .with_metadata_entry(
+                            "health_checked_unix_ms",
+                            health.checked_unix_ms.to_string(),
+                        );
+                    if !health.detail.is_empty() {
+                        d = d.with_metadata_entry("health_detail", health.detail);
+                    }
+                    d
+                }
+                None => d,
+            };
+            serde_json::to_value(descriptor).unwrap_or(Value::Null)
+        })
         .collect();
 
     // Phase 3: hub-published abilities. Only when the caller asked
@@ -368,8 +401,7 @@ fn list_abilities_handler(
     // the hub published; we surface it verbatim so the
     // hub schema can evolve without forcing a Cli release.
     if scope.include_realm {
-        let store = crate::services::hub_published_ability_store::global();
-        for entry in store.snapshot() {
+        for entry in hub_published_abilities.snapshot() {
             let mut desc = entry.descriptor;
             // Stamp the canonical name on top — hub deployments
             // sometimes omit it inside the descriptor body
@@ -606,15 +638,38 @@ fn synthesize_hot_hosted_agent_descriptors(
                     descriptor = descriptor.with_output_schema(output_schema.clone());
                 }
             }
-            let Some(identity) = descriptor.identity() else {
-                continue;
-            };
-            if catalog.contains_key(&identity) {
-                continue;
-            }
-            catalog.insert(identity, descriptor);
+            insert_or_upgrade_hosted_descriptor(catalog, descriptor);
         }
     }
+}
+
+/// Insert a manifest-backed hosted-agent descriptor, upgrading any
+/// schema-less stub already catalogued under the same identity.
+///
+/// The live-registry pass (Phase 2) runs before the hosted-agent synth
+/// and inserts name-only stubs for registration sites that carried no
+/// manifest — the hot agent registrar does not (yet) register
+/// `_with_spec`, so every TOML-declared agent ability lands there with
+/// `schema_summary.input == Null`. The on-disk manifest is the
+/// authoritative contract source for these abilities; discarding the
+/// synth descriptor on key collision is what made the Frontend render
+/// "No input required" for abilities that do declare an input schema.
+/// An existing entry that already carries a schema (registered
+/// `_with_spec`) keeps winning.
+fn insert_or_upgrade_hosted_descriptor(
+    catalog: &mut std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor>,
+    descriptor: AbilityDescriptor,
+) {
+    let Some(identity) = descriptor.identity() else {
+        return;
+    };
+    if catalog
+        .get(&identity)
+        .is_some_and(|existing| !existing.schema_summary.input.is_null())
+    {
+        return;
+    }
+    catalog.insert(identity, descriptor);
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -679,6 +734,37 @@ mod tests {
         AbilityDescriptor::new(name, owner_ura, Visibility::Scoped).expect("test descriptor")
     }
 
+    #[test]
+    fn hosted_descriptor_synth_upgrades_schema_less_stub_and_keeps_schemad_entry() {
+        let owner = "easynet:///r/localhost/agent/dev.demo";
+        let stub = d_for_owner("dev.demo.n8n_hello", owner)
+            .with_description("Registered local ability (no manifest schema)");
+        let manifest_backed = d_for_owner("dev.demo.n8n_hello", owner)
+            .with_description("Trigger the n8n easynet-hello workflow via webhook")
+            .with_input_schema(json!({
+                "type": "object",
+                "required": ["name"],
+                "properties": {"name": {"type": "string"}},
+            }));
+        let identity = manifest_backed.identity().expect("identity");
+
+        // Phase 2 stub first, synth second: the manifest schema must win.
+        let mut catalog = std::collections::BTreeMap::new();
+        insert_or_upgrade_hosted_descriptor(&mut catalog, stub.clone());
+        insert_or_upgrade_hosted_descriptor(&mut catalog, manifest_backed.clone());
+        assert!(
+            !catalog[&identity].schema_summary.input.is_null(),
+            "manifest-backed descriptor must upgrade the schema-less stub"
+        );
+
+        // An entry that already carries a schema is never downgraded.
+        insert_or_upgrade_hosted_descriptor(&mut catalog, stub);
+        assert_eq!(
+            catalog[&identity].description,
+            "Trigger the n8n easynet-hello workflow via webhook"
+        );
+    }
+
     fn seed_test_credentials(realm: &str, node_id: &str, username: &str) {
         crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
             node_id: node_id.to_string(),
@@ -698,6 +784,23 @@ mod tests {
     /// passing an empty one is the cheapest fixture.
     fn empty_registry_handle() -> Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> {
         Arc::new(std::sync::OnceLock::new())
+    }
+
+    fn register<F>(
+        reg: &mut AxonAbilityCatalog,
+        descriptors_provider: F,
+        registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+        pages_user: Option<String>,
+    ) where
+        F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
+    {
+        super::register(
+            reg,
+            descriptors_provider,
+            registry_handle,
+            pages_user,
+            HubPublishedAbilityStore::new(),
+        );
     }
 
     #[test]
@@ -747,26 +850,88 @@ mod tests {
     }
 
     #[test]
+    fn list_abilities_stamps_health_metadata_from_monitor_store() {
+        use crate::services::ability_health::{self, AbilityHealthRecord, HealthStatus};
+
+        // Seed the process-wide health store under THIS test's unique
+        // owner so parallel tests cannot collide (same residue
+        // discipline as the hub-store test below).
+        let owner = "easynet:///r/test/agent/dev.healthmeta";
+        let monitored = d_for_owner("svc_probe", owner);
+        let unmonitored = d_for_owner("svc_plain", owner);
+        let ability_ura = monitored
+            .canonical_ability_ura()
+            .expect("canonical ability ura");
+        ability_health::seed_for_tests(
+            &ability_ura,
+            AbilityHealthRecord {
+                status: HealthStatus::Unhealthy,
+                detail: "exit 7: connection refused".to_string(),
+                checked_unix_ms: 1_234,
+                consecutive_failures: 3,
+                last_boot_unix_ms: None,
+                next_probe_unix_ms: i64::MAX,
+            },
+        );
+
+        let mut reg = AxonAbilityCatalog::new();
+        let provider_rows = vec![monitored, unmonitored];
+        register(
+            &mut reg,
+            move || provider_rows.clone(),
+            empty_registry_handle(),
+            None,
+        );
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let abilities = resp["abilities"].as_array().unwrap();
+
+        let seeded = abilities
+            .iter()
+            .find(|a| a["ability_ura"].as_str() == Some(ability_ura.as_str()))
+            .expect("seeded ability row present");
+        assert_eq!(
+            seeded["metadata"]["health_status"].as_str(),
+            Some("unhealthy")
+        );
+        assert_eq!(
+            seeded["metadata"]["health_checked_unix_ms"].as_str(),
+            Some("1234")
+        );
+        assert_eq!(
+            seeded["metadata"]["health_detail"].as_str(),
+            Some("exit 7: connection refused")
+        );
+
+        // A descriptor with no record must NOT grow health keys —
+        // absence means "not monitored", never a fabricated state.
+        let plain = abilities
+            .iter()
+            .find(|a| a["name"].as_str() == Some("svc_plain"))
+            .expect("plain ability row present");
+        assert!(plain["metadata"]
+            .as_object()
+            .is_none_or(|m| !m.contains_key("health_status")));
+    }
+
+    #[test]
     fn list_abilities_realm_scope_includes_hub_published_entries() {
         // RFC-001 v4.1.7 hub-broadcast contract: when the caller
         // passes `scope = "realm"`, the merged catalogue includes
         // entries cached from `federation.{join,heartbeat}`. The
         // default-local path stays disjoint — pin both axes.
         use crate::runtime::federation_client::HubAbilityEntry;
-        use crate::services::hub_published_ability_store as store_mod;
+        let hub_published_abilities = HubPublishedAbilityStore::new();
 
         let mut reg = AxonAbilityCatalog::new();
-        register(
+        super::register(
             &mut reg,
             || vec![d("observe.health")],
             empty_registry_handle(),
             None,
+            Arc::clone(&hub_published_abilities),
         );
-        // Seed the process-wide store. Tests in this binary share
-        // the singleton; we tolerate residue from earlier tests by
-        // looking for `hub.test.scope` specifically rather than
-        // asserting an exact count.
-        store_mod::global().apply_diff(crate::runtime::federation_client::HubAbilitiesDiff {
+        hub_published_abilities.apply_diff(crate::runtime::federation_client::HubAbilitiesDiff {
             revision: 99,
             added: vec![HubAbilityEntry {
                 name: "hub.test.scope".to_string(),

@@ -127,6 +127,14 @@ pub struct SessionIndex {
     /// pruned.
     #[serde(default)]
     pub latest: String,
+    /// The agent's lifelong (default) session id. The chat ability
+    /// binds it on the first turn sent with the `lifelong` sentinel
+    /// and resumes it on every later sentinel turn, so the agent
+    /// keeps one continuous default thread across reloads. Empty
+    /// until the first lifelong turn (pre-existing index files
+    /// deserialize with the field empty).
+    #[serde(default)]
+    pub lifelong: String,
     /// One entry per session, sorted most-recent-first. The picker
     /// for `--resume` reads this directly.
     #[serde(default)]
@@ -310,6 +318,40 @@ pub fn write_turn(
     save_index(agent, &idx)?;
 
     Ok(())
+}
+
+/// The agent's lifelong (default) session id, or `None` while no
+/// lifelong turn has been recorded yet. The chat ability resolves
+/// the `lifelong` sentinel through this before dispatch.
+pub fn lifelong_session(agent: &str) -> Option<String> {
+    let idx = load_index(agent);
+    if idx.lifelong.is_empty() {
+        None
+    } else {
+        Some(idx.lifelong)
+    }
+}
+
+/// Bind `session_id` as the agent's lifelong session. Called by the
+/// chat ability right after the first lifelong-sentinel turn was
+/// persisted, so the id is already in the index; like the index
+/// refresh in `write_turn` this must not fail the in-flight reply,
+/// hence the best-effort wrapper below.
+pub fn set_lifelong_session(agent: &str, session_id: &str) -> anyhow::Result<()> {
+    let mut idx = load_index(agent);
+    if idx.lifelong == session_id {
+        return Ok(());
+    }
+    idx.lifelong = session_id.to_string();
+    save_index(agent, &idx)
+}
+
+/// Best-effort variant of [`set_lifelong_session`], mirroring
+/// `write_turn_best_effort`'s contract.
+pub fn set_lifelong_session_best_effort(agent: &str, session_id: &str) {
+    if let Err(e) = set_lifelong_session(agent, session_id) {
+        eprintln!("[chat] warning: failed to bind lifelong session: {e}");
+    }
 }
 
 /// Mark `session_id` as the agent's most-recent session without
@@ -550,6 +592,34 @@ mod tests {
         // turn counts (only the index pointer moved).
         let old_lines = load_session("demot", "old").unwrap();
         assert_eq!(old_lines.len(), 2, "meta + 1 turn");
+    }
+
+    #[test]
+    fn lifelong_session_round_trip() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        assert_eq!(lifelong_session("demot"), None, "fresh agent has none");
+        write_turn("demot", "sess-1", "hi", "hello", &[], &json!({})).unwrap();
+        assert_eq!(
+            lifelong_session("demot"),
+            None,
+            "an ordinary turn must not bind the lifelong pointer"
+        );
+        set_lifelong_session("demot", "sess-1").expect("bind");
+        assert_eq!(lifelong_session("demot"), Some("sess-1".to_string()));
+        // Re-binding the same id is a no-op; a different id moves it.
+        set_lifelong_session("demot", "sess-1").expect("idempotent");
+        set_lifelong_session("demot", "sess-2").expect("rebind");
+        assert_eq!(lifelong_session("demot"), Some("sess-2".to_string()));
+    }
+
+    #[test]
+    fn index_without_lifelong_field_deserializes() {
+        // Pre-lifelong index.json files have no `lifelong` key; they
+        // must keep loading (serde default = empty string → None).
+        let raw = r#"{"latest": "a", "sessions": []}"#;
+        let idx: SessionIndex = serde_json::from_str(raw).expect("back-compat parse");
+        assert_eq!(idx.latest, "a");
+        assert!(idx.lifelong.is_empty());
     }
 
     #[test]

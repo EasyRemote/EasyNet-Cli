@@ -388,7 +388,7 @@ fn with_keyring_passphrase_env(
 
 /// Inject `EASYNET_DENDRITE_BRIDGE_LIB` into the daemon's environment.
 ///
-/// `easynet join` stages the native bridge lib into
+/// `easynet device join` stages the native bridge lib into
 /// `~/.easynet/dendrite-bridge/native/`, but the Axon SDK loader the
 /// daemon links against does not search that path — it only honours the
 /// env var (plus a gated local-source build and a crate-relative

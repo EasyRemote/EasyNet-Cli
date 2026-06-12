@@ -421,6 +421,10 @@ pub unsafe extern "C" fn easynet_invocation_bidi_send(
 /// the local up-direction sender.
 ///
 /// Unknown ids are treated as already closed and return `EASYNET_OK`.
+///
+/// # Safety
+/// `handle` must be a live handle returned by this FFI and not
+/// used concurrently from another thread during this call.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_invocation_bidi_close(
     handle: EasynetHandle,
@@ -453,6 +457,10 @@ pub unsafe extern "C" fn easynet_invocation_bidi_close(
 /// Cancellation drops the local reader and up-direction sender
 /// without sending protocol EOF. Unknown ids are treated as already
 /// closed and return `EASYNET_OK`.
+///
+/// # Safety
+/// `handle` must be a live handle returned by this FFI and not
+/// used concurrently from another thread during this call.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
     handle: EasynetHandle,
@@ -1182,6 +1190,7 @@ struct InvocationJson {
     metadata: std::collections::HashMap<String, String>,
     caller_signature: Option<easynet_axon::pb::axon::v1::CallerSignature>,
     bidi_streams: Vec<easynet_axon::pb::axon::v1::StreamDescriptor>,
+    timeout_seconds: Option<i32>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1205,6 +1214,7 @@ impl InvocationJson {
         let metadata = parse_metadata(obj)?;
         let caller_signature = parse_caller_signature(obj)?;
         let bidi_streams = parse_bidi_streams(obj)?;
+        let timeout_seconds = parse_timeout_seconds(obj)?;
 
         Ok(Self {
             caller_ura,
@@ -1218,6 +1228,7 @@ impl InvocationJson {
             metadata,
             caller_signature,
             bidi_streams,
+            timeout_seconds,
         })
     }
 
@@ -1235,8 +1246,28 @@ impl InvocationJson {
         if let Some(caller_signature) = self.caller_signature {
             builder = builder.caller_signature(caller_signature);
         }
+        if let Some(seconds) = self.timeout_seconds {
+            builder = builder.timeout_seconds(seconds)?;
+        }
         let invocation = builder.build();
         Ok(invocation)
+    }
+}
+
+/// Optional `timeout_seconds` field (F-045): positive integer,
+/// forwarded to `InvokeRequest.timeout_seconds`. Absent/null = daemon
+/// default.
+#[cfg(feature = "axon-pb")]
+fn parse_timeout_seconds(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<i32>, InvocationJsonError> {
+    match obj.get("timeout_seconds") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .filter(|s| *s > 0 && *s <= i32::MAX as i64)
+            .map(|s| Some(s as i32))
+            .ok_or(InvocationJsonError::InvalidTimeoutSeconds),
     }
 }
 
@@ -1257,6 +1288,8 @@ enum InvocationJsonError {
     ZeroNonce,
     #[error("causal_context must be a JSON object")]
     InvalidCausalContext,
+    #[error("timeout_seconds must be a positive integer within i32 range")]
+    InvalidTimeoutSeconds,
     #[error("unsupported causal_context.form `{0}`")]
     UnsupportedCausalForm(String),
     #[error("{0} is not valid hex: {1}")]
@@ -1835,6 +1868,19 @@ fn bidi_down_frame_json(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> se
                 "terminal": terminal,
             })
         }
+        // Carrier-v1 frames (DEC-F004): the FFI JSON projection learns
+        // these shapes when dual-read lands (T2.1 steps 2-3); until
+        // then they surface as an explicit unsupported event.
+        Some(Payload::DispatchCall(_)) | Some(Payload::ReverseDispatchResult(_)) => {
+            serde_json::json!({
+                "ok": false,
+                "event": "unsupported_frame",
+                "sequence": frame.sequence,
+                "mac_base64": mac_base64,
+                "message": "carrier-v1 dispatch frame before dual-read support",
+                "terminal": false,
+            })
+        }
         None => serde_json::json!({
             "ok": false,
             "event": "unknown",
@@ -1992,6 +2038,70 @@ mod tests {
             err.to_string().contains("causal_context"),
             "missing causal_context must be reported explicitly: {err}"
         );
+    }
+
+    /// Canonical-URA invocation JSON for tests that go past parse into
+    /// `into_daemon_invocation` (the builder's `checked_ura` rejects
+    /// the legacy `ura://` fixture shapes that parse-only tests use).
+    fn canonical_invocation_json(extra: serde_json::Value) -> String {
+        let mut obj = serde_json::json!({
+            "caller_ura": "easynet:///r/acme/device/dev-a",
+            "callee_ura": "easynet:///r/acme/device/dev-a",
+            "ability": "observe.health",
+            "subject_ura": "easynet:///r/acme/device/dev-a",
+            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+            "causal_context": {"form": "none"},
+            "args": {}
+        });
+        if let (Some(base), Some(more)) = (obj.as_object_mut(), extra.as_object()) {
+            for (k, v) in more {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        obj.to_string()
+    }
+
+    #[test]
+    fn timeout_seconds_passes_through_to_the_invoke_request_wire(// F-045
+    ) {
+        let raw = canonical_invocation_json(serde_json::json!({"timeout_seconds": 45}));
+        let request = InvocationJson::parse(&raw)
+            .expect("parse")
+            .into_daemon_invocation()
+            .expect("build")
+            .into_request()
+            .expect("request");
+        assert_eq!(request.timeout_seconds, 45);
+
+        // Absent field = proto default (0 → daemon default budget).
+        let request = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({})))
+            .expect("parse")
+            .into_daemon_invocation()
+            .expect("build")
+            .into_request()
+            .expect("request");
+        assert_eq!(request.timeout_seconds, 0);
+
+        // Non-positive and non-integer values are typed parse errors.
+        for bad in ["0", "-3", "\"45\"", "1.5"] {
+            let raw = format!(
+                r#"{{
+                    "caller_ura": "ura://device/test/caller",
+                    "callee_ura": "ura://device/test/callee",
+                    "ability": "observe.health",
+                    "subject_ura": "ura://device/test/callee",
+                    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                    "causal_context": {{"form": "none"}},
+                    "args": {{}},
+                    "timeout_seconds": {bad}
+                }}"#
+            );
+            let err = InvocationJson::parse(&raw).expect_err("must reject");
+            assert!(
+                matches!(err, InvocationJsonError::InvalidTimeoutSeconds),
+                "timeout_seconds={bad} must be InvalidTimeoutSeconds, got {err}"
+            );
+        }
     }
 
     #[test]

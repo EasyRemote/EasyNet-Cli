@@ -96,6 +96,7 @@
 pub(crate) mod abilities;
 pub(crate) mod ability_catalog_row;
 pub(crate) mod ability_scaffold;
+pub(crate) mod ability_search;
 pub(crate) mod agent;
 pub(crate) mod agent_new_ability;
 pub(crate) mod agent_sessions;
@@ -117,28 +118,21 @@ pub(crate) mod federation_gen_cert;
 pub(crate) mod federation_peers;
 pub(crate) mod federation_wire;
 pub(crate) mod groups;
-pub(crate) mod heartbeat;
 pub mod presentation;
 
-/// Public re-export of the daemon entry point so the `easynet-daemon`
-/// bin (in `src/bin/easynet-daemon.rs`) can call it without widening
-/// the `heartbeat` module to `pub`. Keeping the module `pub(crate)`
-/// is the correct default — only the daemon's main needs the entry
-/// point outside the crate.
-pub use heartbeat::run_daemon;
 /// RFC-006-C v0.1 — `easynet api-key` for OpenAI-compat bearer
 /// tokens, and `easynet llm-api` for chat-completion calls.
 pub(crate) mod api_key_cli;
+/// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
+/// `<user>.pages.{publish,unpublish,list,get}` and the
+/// `<user>.<project_id>.page.fetch` family.
+pub(crate) mod context;
 pub(crate) mod invoke;
 pub(crate) mod join;
 pub(crate) mod llm_api;
 pub(crate) mod mcp_install;
 pub(crate) mod mcp_server;
 pub(crate) mod mission_runs;
-/// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
-/// `<user>.pages.{publish,unpublish,list,get}` and the
-/// `<user>.<project_id>.page.fetch` family.
-pub(crate) mod context;
 pub(crate) mod pages;
 /// #185 — `easynet quota` owner verb to inspect/edit the per-consumer
 /// invocation quota policy (`[daemon.quota]`).
@@ -272,9 +266,9 @@ const HELP_TEMPLATE: &str = "\
 \x1b[1;36mCommands:\x1b[0m
   \x1b[1;36m[Identity]\x1b[0m
     \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
+    \x1b[1mtrust\x1b[0m                Inspect the realm trust anchor — whose keys admission accepts
 
   \x1b[1;36m[Network]\x1b[0m
-    \x1b[1mjoin\x1b[0m                 Pair THIS host with a Hub via a one-time token
     \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, exec, terminal
     \x1b[1magent\x1b[0m                Manage agents — network actors that expose abilities
     \x1b[1mability\x1b[0m              Manage abilities — deploy, invoke, list public endpoints
@@ -286,11 +280,10 @@ const HELP_TEMPLATE: &str = "\
     \x1b[1mpages\x1b[0m                Publish a folder of static bytes as a website
     \x1b[1mapi-key\x1b[0m              Mint / list / revoke OpenAI-compat API keys
     \x1b[1mllm-api\x1b[0m              One-shot OpenAI-compat chat completion
+    \x1b[1mcontext\x1b[0m              Track clipboard history and map project folders
 
   \x1b[1;36m[Runtime]\x1b[0m
     \x1b[1mruntime\x1b[0m              Manage the local Axon runtime (start, stop, status)
-    \x1b[1mstart\x1b[0m                Start the local Axon runtime as a background daemon
-    \x1b[1mstop\x1b[0m                 Stop the local Axon runtime
     \x1b[1mplugin\x1b[0m               Manage daemon ability-extension plugin packages
     \x1b[1mmcp\x1b[0m                  MCP server — expose device abilities to AI assistants
     \x1b[1mfederation\x1b[0m           Inspect cross-hub peers and trusted hubs
@@ -322,6 +315,10 @@ pub enum Command {
     #[command(display_order = 10)]
     Auth(groups::auth::AuthArgs),
 
+    /// Inspect the realm trust anchor — whose keys admission accepts.
+    #[command(display_order = 11)]
+    Trust(groups::trust::TrustArgs),
+
     // ── Network (20-29) ──────────────────────────────────────────────────
     // Top-level lifecycle shortcuts (join / start / stop). The layered
     // forms (`device join`, `runtime start`, `runtime stop`) remain the
@@ -331,10 +328,6 @@ pub enum Command {
     // dispatcher hands off to the same impl regardless of spelling.
     // `start` / `stop` live in the Runtime bucket below alongside
     // `runtime`.
-    /// Pair THIS host with a Hub via a one-time token (alias of `device join`).
-    #[command(display_order = 20)]
-    Join(join::JoinArgs),
-
     /// Manage remote devices — pair, list, exec, terminal.
     #[command(display_order = 21)]
     Device(groups::device::DeviceArgs),
@@ -364,6 +357,7 @@ pub enum Command {
     #[command(display_order = 31)]
     Pages(pages::PagesArgs),
     /// Context surface: clipboard tracking + mapped project folders.
+    #[command(display_order = 34)]
     Context(context::ContextArgs),
 
     /// Mint / list / revoke OpenAI-compat API keys.
@@ -387,14 +381,6 @@ pub enum Command {
     /// Manage the local Axon runtime (start, stop, status).
     #[command(display_order = 40)]
     Runtime(groups::runtime::RuntimeArgs),
-
-    /// Start the local Axon runtime as a background daemon (alias of `runtime start`).
-    #[command(display_order = 41)]
-    Start(start::StartArgs),
-
-    /// Stop the local Axon runtime (alias of `runtime stop`).
-    #[command(display_order = 42)]
-    Stop(stop::StopArgs),
 
     /// Manage daemon ability-extension plugin packages.
     #[command(display_order = 43)]
@@ -432,11 +418,6 @@ pub enum Command {
     /// Emit a shell completion script (bash/zsh/fish/powershell).
     #[command(display_order = 54)]
     Completion(completion::CompletionArgs),
-
-    // ── Internal ─────────────────────────────────────────────────────────
-    /// Internal heartbeat daemon process (not for direct use).
-    #[command(name = "_heartbeat-daemon", hide = true)]
-    HeartbeatDaemon,
 }
 
 pub fn run(cmd: Command) -> anyhow::Result<()> {
@@ -445,15 +426,10 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // layered forms (`device join`, `runtime start`, `runtime stop`)
         // call. `start` mirrors the runtime group's banner render so the
         // two spellings produce identical output.
-        Command::Join(args) => join::run(args),
-        Command::Start(args) => {
-            eprint!("{}", presentation::banner::render_logo());
-            start::run(args)
-        }
-        Command::Stop(args) => stop::run(args),
 
         // Layered groups
         Command::Auth(args) => groups::auth::dispatch(args),
+        Command::Trust(args) => groups::trust::run(args),
         Command::Agent(args) => groups::agent::run(args),
         Command::Ability(args) => groups::ability::run(args),
         Command::Device(args) => groups::device::run(args),
@@ -476,9 +452,6 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Docker(args) => docker::run(args),
         Command::Quota(args) => quota_cmd::run(args),
         Command::Completion(args) => completion::run::<App>(args),
-
-        // Internal
-        Command::HeartbeatDaemon => heartbeat::run_daemon(),
     }
 }
 
@@ -566,7 +539,7 @@ mod help_template_sync_tests {
     }
 
     /// Names clap actually derives from the `Command` enum, minus
-    /// hidden variants (HeartbeatDaemon) and minus the `help` row
+    /// hidden variants (none currently) and minus the `help` row
     /// (which clap auto-injects into `--help`; the template lists
     /// it manually for visual consistency).
     fn enum_command_names() -> BTreeSet<String> {

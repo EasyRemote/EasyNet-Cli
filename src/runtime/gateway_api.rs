@@ -29,7 +29,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::runtime::domain::NodeId;
+use crate::core::domain::NodeId;
 use serde_json::Value;
 
 /// A peer node as seen by this daemon's Axon registration.
@@ -50,7 +50,7 @@ pub struct PeerInfo {
 /// the `TargetScope::Remote` dispatch branch they backed. Cross-
 /// device dispatch now flows through the daemon's
 /// `federation.forward_invoke` ability instead — one path, one
-/// helper (`support::federation_invoke::invoke_via_federation_forward`).
+/// helper (`services::invocation_transport::federation_invoke::invoke_via_federation_forward`).
 /// The remaining trait methods (publish_ability / list_peers /
 /// send_heartbeat) describe lifecycle / discovery surfaces that
 /// are unrelated to remote dispatch and stay.

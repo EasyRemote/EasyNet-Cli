@@ -20,9 +20,7 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::runtime::domain::{
-    AgentId, LoopId, LoopInstance, LoopState, NodeId, SessionId, TenantId,
-};
+use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, NodeId, SessionId, TenantId};
 use crate::runtime::invocation::{
     runtime_invocation_id, RuntimeCausalContext, RuntimeInvocation, TerminalState,
 };

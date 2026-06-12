@@ -116,11 +116,11 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+    let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
         &target_ura,
         "process.exec",
     )?;
-    crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
         ability_ura.as_str(),
         payload,
         &target_ura,

@@ -1,49 +1,66 @@
-# EasyNet / Axon Commit Plan 2
+# EasyNet / Axon Commit Plan 2 — rev. 2026-06-12 (intraday update: Axis E executed)
+
+## Revision Note
+
+This revision rebaselines the 2026-06-05 plan against the repos as of
+2026-06-12. Three structural shifts since the original baseline:
+
+1. **RFC-005 landed.** The URA/namespace resolver train shipped across all
+   three repos (Axon PR #27 merge `cd0a51b5`, CLI PR #22 merge `5d1a55e`,
+   backend PR #20 merge `2c1118d`). Most of the original Axis A "DNS-like
+   resolver" content is now description of reality, not plan.
+2. **Receipt chain closure landed.** `easynet-verify` walks lifecycle and
+   causal chains (offline bundle mode), causal links persist to the ledger by
+   receipt hash, and EAL lowers exec steps to seven-tuple Invocations with
+   receipt-chained causal context. Axis B is mostly done.
+3. **The compatibility-window methodology is retired.** CTO standing
+   directive: no backward-compat shims — prove canonical equivalence, then
+   cut over cleanly (precedent: F-039 removed top-level `join/start/stop`
+   aliases same-day, `a1a4aea`). All dual-name rollout machinery in the
+   original plan is rewritten accordingly.
+
+**Division of labor.** The `to-be-fix.md` / `to-be-fix.plan.md` /
+`to-be-fix.spec.md` trio (live, 2026-06-12) owns the *debt plane*: problem
+inventory, architectural diagnosis, and fix specs. This file owns the
+*forward plan*: feature/release trains and sequencing. Debt items are
+referenced here by their F-number / spec section and are NOT respecified;
+single accounting lives in the trio.
 
 ## Purpose
 
-This plan supersedes `commit-plan` as the next execution plan after the daemon
-Invocation migration. The previous plan mostly closed the runtime boundary:
-EasyNet-Cli now exposes daemon Invocation as the product call path, EasyNet
-backend calls the daemon over gRPC, and Axon remains the protocol owner.
+This plan supersedes `commit-plan` as the execution plan after the daemon
+Invocation migration. It folds in the 2026-06-02 product/user-case review
+(`2026-06-02-015131-user-case.txt`): EasyNet must let a user discover,
+trust, authorize, transact with, and audit stranger agents without knowing
+the internal Axon/EAL/MCP machinery.
 
-This version also folds in the 2026-06-02 product/user-case review:
-`2026-06-02-015131-user-case.txt`. That review adds a product-surface
-constraint that the architecture ledger alone misses: EasyNet must let a user
-discover, trust, authorize, transact with, and audit stranger agents without
-knowing the internal Axon/EAL/MCP machinery.
+The remaining work has three axes:
 
-The remaining work should not be treated as one flat backlog. It has three
-different axes:
-
-1. **Naming / ontology cleanup** — cheap in implementation but highly coupled
-   across wire names, prompts, catalog rows, receipt display, and backend
-   routing.
-2. **Audit / capability completeness** — harder, less cosmetic, and the part
-   that gates third-party verifiability of EasyNet's architectural claims.
-3. **Product command-surface convergence** — the CLI/browser vocabulary that
-   turns Invocation, receipts, discovery, trust, permission, and adapters into
-   a usable marketplace workflow.
-
-The P0 naming work must share one coordinated wire-break window. It must not
-crowd out receipt-chain closure, because receipt closure is the proof surface
-that lets outsiders audit the system.
+1. **Naming / ontology cleanup** — now mostly reduced to the `<self>.*` /
+   flat-verb migration, which is coupled to the SessionDispatch carrier
+   unification (to-be-fix.spec §A2), not a standalone rename.
+2. **Audit / capability completeness** — chain verification shipped; what
+   remains is cross-process closure and hosted-agent signer binding.
+3. **Product command-surface convergence** — still the largest open gap:
+   intent-first discover, trust UX, and permission/policy UX do not exist.
 
 ## Core Verdict
 
-| Area | Verdict |
+| Area | Verdict (2026-06-12) |
 |---|---|
-| Daemon Invocation migration | Mostly closed. Keep guards; do not reopen JSON-control product calls. |
-| `<self>` alias + flat namespaces | One coordinated wire-breaking migration. Treat as a single release train, not independent fixes. |
-| Ability / Skill ontology | Must be normalized before further public docs or SDK prose. This is not just wording; it drives what is allowed to cross Axon. |
-| Receipt verifier closure | Underpriced in the old table. Raise to P0.5 because it gates auditable receipt-chain claims. |
-| FFI bidi terminal E2E | Closed in EasyNet-Cli. Keep the daemon happy-path smoke as a regression guard. |
-| Federation discovery unification | Important, but after the namespace release unless it is bundled as part of the same name-contract cleanup. |
-| Product command surface | Not converged. `discover`, `trust`, `permission/policy`, `whoami`, ability import front doors, and family projection are the missing user-facing closure. |
-| Ability adapters | Runtime model already supports Shell/HTTP/EAL/MCP ability execution, but the CLI front doors are under-marketed. Add ergonomic `ability from-*` commands instead of changing the execution model. |
-| Ability family/tree | Useful for discovery, policy scope, and rendering. Do not make it part of URA addressing or Invocation semantics. |
-| Project structure | Not healthy enough for the next migration wave. `src/services/invocation_transport/daemon_invocation_service.rs` is 11,399 lines and mixes tonic RPC facade, dispatch routing, session/bidi plumbing, target resolution, receipt/ledger helpers, quota, peer signing, and tests. |
-| Economy / pricing / settlement | Real future value, but do not implement before receipt closure. Keep as Axon RFC stub + no local fork. |
+| Daemon Invocation migration | Closed for product calls, with one diagnosed carrier violation: SessionDispatch JSON business frames are a second invocation carrier (to-be-fix.spec §A2, F-004/F-038/F-040). Guards stay green (`scripts/check-daemon-invocation-migration.sh`). |
+| URA / namespace resolution | DONE via RFC-005: `axon-ura` owner-token parser, namespace resolver contract, resolve-before-invoke in backend, hub-as-FIB, release profiles. |
+| `<self>` alias + flat namespaces | OPEN. 80 non-test `<self>` literals remain. Rescoped: no compat window; execute coupled with carrier unification; must also cover the new `<user>.*` owner-qualified names. |
+| Ability / Skill ontology | DONE. Axon README has a formal "Ability vs Skill" distinction (README.md §"Ability vs Skill: Formal Distinction"); CLI README carries no stale phrasing. |
+| Receipt verifier closure | DONE (offline); cross-process fetch CONFIRMED BLOCKED on protocol ground (2026-06-12): the ledger stores an InvocationReceiptChainSummary, not canonical receipts — the Axon receipt fetch/store contract must land before any CLI export can feed `verify_chain`. Backend projection audit still open. |
+| Hosted-agent signer binding | RAISED to P0.5 and rescoped. Trigger condition fired (hosted-agent forwarding shipped, `0b6c7ad`); build on the landed authority forms (`a583a3fb`, ledger `authority_binding` `e6f434ca`), not from scratch. |
+| FFI bidi terminal E2E | DONE; guard stays green. ABI is now **v3** (`scripts/check-ffi-abi-v3-header.sh`). |
+| Federation discovery unification | Reframed: RFC-005 unified the *resolution* half. Remaining discover-verb convergence must be specified against current `axon/v1/{namespace,federation}.proto`, not the pre-RFC-005 inventory. |
+| Product command surface | Mostly closed: `whoami`, `new-ability` imports, `invocation list/show/trace` (pre-existing); `ability search "<intent>"` (D2, 57e8d9d), `trust show` (D3, 950c685), `invocation stats` (D7 slice, 299f135) shipped 2026-06-12. Open: `policy/permission` (D4 — blocked on a unified policy store; canonical semantics Axon-owned, RFC-tier). |
+| Ability adapters | DONE as `new-ability` subcommands. Remaining work is documentation/visibility, not code. |
+| Ability family/tree | OPEN (P1). Align with the landed ability-layer classification (`ad2f060`) before adding `family` metadata. Still projection-only; never addressing. |
+| Project structure | **EXECUTED 2026-06-12** (commits 810dd23..dcec0d6): `daemon_invocation_service.rs` 13,142 → 913 lines — thin tonic facade + five dependency planes + TargetGate + Stream/Unary/Bidi dispatchers + peer_envelope_signer + ledger_projection + quota_meter; ~5.9k test lines in a #[path] companion. Gate E met. |
+| Economy / pricing / settlement | Unchanged. Axon RFC stub first; no local fork. P2. |
 
 ## Invariants
 
@@ -52,402 +69,331 @@ that lets outsiders audit the system.
    SDK contracts.
 2. EasyNet-Cli daemon owns product/device/Hub policy: local identity,
    keyring forwarding, plugins, EAL/Mission, local resources, sessions,
-   device abilities, and Hub/device behavior.
+   device abilities, and Hub/device behavior. Hub now requires TLS.
 3. EasyNet backend owns product surface: HTTP/API, browser UX, DB
    projections, auth/session UX, dashboards, and product aggregation.
 4. Public callable surfaces collapse to Ability. Skill, plugin, tool,
    handler, raw RPC, HTTP endpoint, and gRPC method are implementation or
    transport details unless explicitly exposed as an Ability.
-5. Every product invocation crossing a process or language boundary must
-   preserve the seven-tuple:
+5. Every product invocation crossing a process or language boundary
+   preserves the seven-tuple
    `caller, callee, ability, subject, nonce, causal_context, args -> receipt`.
-6. JSON control remains boot/status/diagnostics only. Product calls do not
-   return to `control.sock`.
-7. Ability family is projection metadata only. URA routing and Invocation stay
-   flat.
-8. Trust and permission are separate product questions: trust answers how much
-   confidence a caller/callee has; permission answers what an authorized caller
-   may do.
-9. Structure refactors must preserve protocol behavior first. Moving code out
-   of a large service file is allowed; changing Invocation semantics, receipt
-   fields, admission order, or stream terminal behavior is not part of that
-   refactor.
+   Status: implemented end-to-end for EAL exec steps (`ce8588e`, `04559af`,
+   agent-grained callee `9a84a98`, ratified 2026-06-11).
+6. JSON control remains boot/status/diagnostics only. Known violation:
+   SessionDispatch business frames (F-004); closing it is the carrier
+   unification (to-be-fix.spec §A2), not a relitigation of this invariant.
+7. Ability family is projection metadata only. URA routing and Invocation
+   stay flat.
+8. Trust and permission are separate product questions.
+9. Structure refactors preserve protocol behavior first.
+10. **URA is owner-token-first.** The `axon-ura` crate is the single parser;
+    grammar includes device-owned agents
+    (`agent/device.<device-id>.<agent-id>`) and hosted-agent abilities
+    addressed via their hosting device (`64190a6b`, `35efe641`). No
+    application-layer URA fabrication (backend dropped client route hints,
+    `09830a2`).
+11. **Resolve before invoke.** Catalog/product reads and routing consume
+    resolver answers; no owner inference from names.
+12. **No compatibility windows.** Migrations prove canonical equivalence,
+    then cut over. Aliases are deleted in the same change that proves
+    equivalence (CTO directive; F-039 precedent).
+13. **Single debt accounting.** Architecture/debt items live in the
+    to-be-fix trio; this plan references, never duplicates.
 
 ## Execution Axes
 
-### Axis A — Naming And Ontology Release
+### Axis A — Naming And Ontology (largely landed; remainder rescoped)
 
-This axis is coupled and should land under one release carrier, tentatively:
+What RFC-005 already delivered (do not re-plan):
 
-`AXON-RFC-001 v4.1.6 / EasyNet namespace cleanup release`
+- Namespace resolver proto contract + directory/route answers, WAL/
+  projection, release-profile gating, replay recovery (Axon `756c50c7`,
+  `d1e49430`, `d2b93e65`, `e2340fdf`).
+- `axon-ura` crate as the single owner-token-first parser with
+  cross-language conformance fixtures (`f1d8419f`, `573a3ef1`).
+- Resolver answers consumed before dispatch (`d5b54691`); device authority
+  projected into namespace records (`486e98dd`); hub-as-FIB, lease=0,
+  event-driven advertise (RFC-005 addendum `ea37935f`).
+- Backend resolve-before-invoke for ability/page/skill catalogs
+  (`e9ccd54`), strict identity parsing (`3f0b89c`), required `target_ura`
+  (`09830a2`); frontend `parseURA` mirrors the ratified grammar
+  (`8f8847f`).
 
-#### Namespace Target Model
+Remaining Axis A work:
 
-The namespace target should behave like DNS, but with receipts and policy:
-human-friendly names resolve into canonical URAs, URAs resolve into live
-placement and ability descriptors, and every resolution is cacheable,
-verifiable, and policy-filtered. Do not treat dotted ability names as the
-whole namespace system.
-
-| Layer | Owner | Current State | Target Shape | Consumers |
-|---|---|---|---|---|
-| L0 Realm | Axon | Realm is already encoded in URA as `easynet:///r/<realm>/...`; RFC says realm is a DNS name. | Realm is the root zone. It selects the hub/directory authority and verification root. | SDKs, daemon, backend, browser URA parser. |
-| L1 Role path | Axon | URA roles exist: user/device/agent/ability/hub/resource. | Strict role grammar is canonical identity. No product shortcut may become a routable address. | Receipt verifier, admission, directory, SDKs. |
-| L2 Friendly front door | EasyNet-Cli + EasyNet | CLI still uses AgentId and dotted ability names as ergonomic input. | Friendly names are aliases only: `claude.chat`, `device.fs.read`, `discover "intent"` resolve to URA + ability descriptor before Invocation. | CLI, browser UX, LLM prompts. |
-| L3 Directory record | Axon contract; daemon/backend project it | Backend catalog is already keyed by `(OwnerAgentURA, Descriptor.Name)`, but discovery verbs are fragmented. | Directory maps canonical URA to descriptors, endpoints, host placement, public keys, trust metadata, policy hints, and TTL. | Hub, daemon cache, backend aggregator, SDK discovery. |
-| L4 Ability descriptor | Axon contract; CLI supplies implementation metadata | Descriptor fields partly live in CLI manifests and backend projections. | Ability descriptor is cross-language contract; execution mode stays CLI-local. | Discovery ranking, policy, docs, SDK call builders. |
-| L5 Projection namespace | EasyNet-Cli + EasyNet | Family/tree and categories are not first-class enough. | `family`, `parent`, tags, categories, and marketplace facets are projections, not addresses. | `discover --tree`, policy scopes, UI grouping. |
-| L6 Resolution cache | Daemon + backend | There are local registries and backend catalogs, but no explicit DNS-like cache contract. | Cache entries carry TTL, issuer, generation/revision, stale-while-revalidate behavior, and receipt/audit pointers. | CLI fast path, backend pages, SDK clients. |
-
-The DNS-like lookup chain should be:
-
-```text
-user input / prompt term
-  -> local alias table
-  -> local daemon registry
-  -> realm directory cache
-  -> hub/federation discover
-  -> canonical Ability URA + descriptor + placement
-  -> complete Axon Invocation
-  -> receipt
-```
-
-This gives efficient use without making the user type URAs, while preserving
-the invariant that only URA is routable protocol identity.
-
-| Work | Current State | Target | Why Coupled |
+| Work | Current State | Target | Notes |
 |---|---|---|---|
-| Ability / Skill ontology | Older docs still phrase Ability as `skill + self-evolution + network-wide invocation`; code and boundary rules now treat Skill as implementation resource. | Ability is a network-visible executable contract. Skill is implementation/resource-plane support. | Public docs, SDK naming, marketplace language, and Axon contract text must agree before renaming callable surfaces. |
-| `<self>.*` alias | `<self>.session`, `<self>.register_device_pubkey`, and related names still exist as context-bound ability-name sugar. | Device bundle uses `device.*`; per-agent verbs use `<agent>.*`; historical receipts only display legacy names. | Device and Hub must accept double names during rollout. Prompt text, catalog, receipt reader, and backend routing must change together. |
-| Flat system namespace | Names such as `fs.*`, `fleet.*`, `voice.*`, `meta.*` can look like agent-owned verbs and require skip lists. | System verbs are under `device.*` or `hub.*`. | Same classifier and catalog code that removes `<self>` must also stop deriving fake owners from flat first segments. |
-| AgentId L2 vs URA L3 | CLI keeps `AgentId { tenant, name }` shorthand and converts to Axon URA at runtime. | L2 stays front-door syntax only; every public wire, receipt, catalog, and daemon Invocation field uses URA. | Namespace cleanup must not accidentally promote L2 IDs into protocol addresses. |
-| Directory v1/v2 | Backend still has a legacy handwritten directory event path next to generated proto v2. | Axon proto v2 is the only live directory event shape after compatibility window. | Federation catalog rows and ability names will churn during the same window; avoid two separate directory compatibility windows. |
-| DNS-like resolver | Local registry, backend catalog, and federation discovery exist but are not one explicit resolver stack. | Axon defines directory/discover record semantics; daemon/backend implement caching and product aliases without owning identity. | Namespace rename must land with resolver semantics, or friendly aliases will become accidental protocol names again. |
+| `<self>.*` / flat-verb migration | 80 non-test `<self>` literals; `device./hub./system.` prefixes recognized (`core/ability_spec.rs:108`) but registration not fully canonical. `<user>.*` owner-qualified names now exist (e.g. `<user>.pages.list`). | Device bundle uses `device.*`; per-agent verbs use `<agent>.*`; user-owned verbs use `<user>.*`. Historical receipts only display legacy names. | No dual-name window (Invariant 12). `<self>.session` / `<self>.invoke_remote` are carrier-plane verbs — they migrate as part of spec §A2 carrier unification, not as renames. |
+| Owner at registration (was A3) | DONE: `OwnerKind` recorded per registration (`runtime/ability_dispatch.rs:611,688`). | Confirm owner-URA (not just kind) is what catalog/meta surfaces project. | Verification, not implementation. |
+| Legacy-name lint (was A12) | URA guard checks exist (Axon `e8c84155`); CLI flat-command boundary script exists. | Lint fails on new active `<self>.*` registrations once migration cuts over. | Lands with the migration commit, not after a window. |
+| Backend directory v1 decode (was A10) | Subsumed: `internal/axon/` was rewritten under RFC-005, but remains a 7,765-line protocol fork. | Fork retired via the A→D batch replacement. | Owned by to-be-fix.spec §A4 (F-015/F-017/F-040). Referenced only. |
 
-### Axis B — Audit And Verifiability Release
+### Axis B — Audit And Verifiability (mostly landed)
 
-This axis is what makes the protocol defensible to a third party.
-
-| Work | Current State | Target | Priority |
-|---|---|---|---|
-| Receipt chain verifier | Single receipt verification exists; lifecycle chain walking and causal predecessor walking are deferred. | `easynet verify` can walk `prev_receipt_hash`, resolve causal parent receipts, and fail closed on missing links. | P0.5 |
-| Hosted-agent receipt signer | Receipt schema lacks distinct signer binding / host attestation fields for hosted agents. | Receipt can state callee, signer/host, and host attestation separately. | P0.5 once hosted-agent profile enters production |
-| Receipt fetch surface | Ledger exists, but verifier needs a URI-addressed fetcher/store contract to close chains across processes. | Axon defines receipt reference/fetch expectations; CLI/backend expose read-only fetch surfaces. | P1 |
-| FFI bidi terminal E2E | Real daemon `InvokeBidi` happy path now covers open/send/business frame/close/cleanup receipt through `device.fs.transfer`. | Keep `scripts/ffi-smoke.sh` as the ABI regression guard. | DONE |
-| Surface token semantics | `tokenRef` exists in RFC prose, but endpoint/TTL/scope/renewal/failure/audit semantics are deferred. | Hub resource stream token sub-RFC ratified before Frontend consumes `tokenRef`. | P1 |
-| Federation discovery contract | Multiple federation verbs and event shapes remain. | One Axon-owned `discover` and one stream variant, with thin daemon/backend wrappers. | P1/P2 |
-| Economy / settlement | Only narrative + hook stubs + CLI qualitative `[cost]` metadata. | Axon RFC defines optional price/usage/settlement attachment; CLI/backend consume only after Axon owns shape. | P2 |
-
-### Axis C — Product Command-Surface Release
-
-This axis is the user-case closure. It should not change Axon protocol
-semantics on its own; it should expose the already intended product journey.
-
-| Work | Current State | Target | Priority |
-|---|---|---|---|
-| Top-level identity | Identity exists inside daemon/device/account flows, but the user lacks one obvious product command. | `easynet whoami` shows local identity, tenant, device, hub binding, and active agent context. | P0 |
-| Discovery / marketplace entry | Federation and ability listing exist, but there is no intent-first command for stranger-agent discovery. | `easynet discover "<intent>" [--max-price] [--min-trust] [--format]` and `easynet ability search <query>` expose ranked candidates. | P0 |
-| Trust surface | Trust concepts exist in architecture prose, but the CLI lacks a direct trust UX. | `easynet trust show <agent|node>` and `easynet trust set <node> --level ...` expose trust without mixing it with permission. | P0 |
-| Permission / authorization | Axon policy/consent concepts exist, but owner-facing permission commands are not closed. | `policy list/show/create/update/simulate/why`, `policy override create/revoke`, `permission grant/revoke/list`, and `ability set-visibility`. | P0 |
-| Ability import front doors | `AbilityExec` supports Shell, HTTP, EAL, and MCP, but users may not discover this through CLI verbs. | Add `ability from-cli`, `ability from-restful-api`, `ability from-openapi`, `ability from-mcp`, and keep EAL composition visible as ability grouping/composition. `from-openapi` is the schema-driven REST import path; `from-restful-api` is the user-facing API command. | P0.5 |
-| Ability family projection | Ability set is effectively flat; family/tree is useful but dangerous if treated as call routing. | Optional `family` / `parent` metadata, `discover --tree`, and policy predicates over family scope. Invocation remains flat. | P1 |
-| Agent as network citizen | Agent lifecycle exists locally, but cross-owner identity UX is incomplete. | `agent resolve <ura>`, `agent register`, and `agent migrate` after Axon identity/profile contract is stable. | P1 |
-| Observability | Logs and daemon status exist, but network-level operator UX is fragmented. | `health`, `slo`, and `events --filter invoke.*` give operational closure. | P2 |
-| Economy UX | CLI has qualitative cost metadata; no authoritative wallet/agreement/payment contract. | Reserve `wallet` and `agreement` UX, but implement only after Axon RFC owns price/usage/settlement shape. | P2 |
-
-### Axis D — Structural Health Release
-
-This axis removes the main EasyNet-Cli maintainability bottleneck before the
-next protocol/name/discovery wave piles more behavior onto it.
-
-#### Ideal EasyNet-Cli Repository Shape
-
-EasyNet-Cli should read as a daemon product runtime, not as a second protocol
-repo and not as the EasyNet backend. The target structure is:
-
-```text
-src/
-  bin/                  # thin process entrypoints only
-  cli/                  # clap command tree + presentation; no daemon internals
-  daemon/               # process lifecycle, sockets, boot, config wiring
-  daemon_api/           # stable Rust client surface for controlling daemon
-  ffi/                  # C ABI facade over daemon_api and Invocation client
-  invocation/           # daemon Axon Invocation transport adapters
-    service.rs          # thin tonic facade
-    deps.rs             # dependency bundle / builder
-    unary.rs            # Invoke routing
-    stream.rs           # InvokeStream routing
-    bidi.rs             # InvokeBidi routing
-    target_resolver.rs
-    local_bidi.rs
-    session_accept.rs
-    remote_bidi.rs
-    ledger_projection.rs
-    quota.rs
-  abilities/            # EasyNet ability manifests/descriptors and import UX
-  execution/            # Shell/HTTP/MCP/EAL execution adapters
-  eal/                  # Mission/EAL compiler/interpreter only
-  agents/               # local hosted-agent lifecycle and profiles
-  plugins/              # plugin host, builtin plugins, sidecar/install logic
-  identity/             # keyring, self identity, trust anchor cells
-  directory/            # local/federated directory cache and resolver
-  policy/               # daemon-owned policy UX/storage wrappers
-  persistence/          # file/db config stores; no transport semantics
-  support/              # small platform utilities only
-```
-
-The point is not to rename everything immediately. The point is to make each
-folder name answer one question:
-
-| Folder | Owns | Must Not Own |
+| Work | Status | Evidence / Remaining |
 |---|---|---|
-| `cli/` | User command grammar, help text, terminal presentation. | Protocol semantics, daemon boot, ability execution. |
-| `daemon/` | Process lifecycle, sockets, boot wiring, config reload. | Axon Invocation canonicalization or backend product state. |
-| `daemon_api/` | Stable Rust API for starting/stopping/status/invocation endpoint. | One-method-per-ability APIs. |
-| `ffi/` | ABI-safe wrapper over daemon_api and generic Invocation. | Local business logic or Axon verifier semantics. |
-| `invocation/` | Daemon-side binding to Axon Invocation RPC and local dispatch adapters. | Axon protocol definitions, receipt verification, product UI. |
-| `abilities/` | EasyNet-local ability authoring/import metadata and descriptor projection. | Cross-language canonical descriptor contract once Axon owns it. |
-| `execution/` | Shell/REST/MCP/EAL execution backends. | Network-visible ability identity. |
-| `agents/` | Hosted local agent lifecycle, profiles, local agent registry. | Device/Hub protocol routing. |
-| `plugins/` | Plugin loading, builtin plugin handlers, sidecars. | Core Invocation dispatch or policy truth. |
-| `identity/` | Keyring, trust anchors, self identity, signing material access. | Admission semantics beyond calling Axon-owned checks. |
-| `directory/` | DNS-like resolver cache, federated directory projection. | Canonical URA grammar. |
-| `policy/` | Product policy storage/UX wrappers and consent profile integration. | Axon policy/admission contract shape. |
-| `persistence/` | TOML/JSON/redb stores and path conventions. | Transport routing decisions. |
-| `support/` | OS/network/process/time helpers. | Domain objects. |
+| Receipt chain verifier (was B1–B3) | DONE | `verify_chain`: lifecycle `prev_receipt_hash` walk, four causal_binding forms, cycle detection, MAX_CHAIN_DEPTH=256 (`easynet-verify/src/main.rs:246-368`). Offline file-bundle mode. |
+| Ledger causal completeness | DONE | Causal links persisted by receipt hash (`9c7e5cba`); operational trace_id (`79c1c7b6`); typed `InvocationReceipt.failure` (`76094ce1`). |
+| Receipt read surface (was B4) | MOSTLY DONE | `easynet invocation list/show/trace/path` over daemon `invocation.history.*` abilities, trace edges carry `from_receipt_ura` (`groups/invocation.rs`). Remaining: URA/hash-addressed cross-process fetch feeding `verify_chain` directly. P1. |
+| Backend receipt projection (was B5) | OPEN — audit | Receipts flow through stream/file handlers; no audited product projection surface. Verify projections stay non-canonical. P1. |
+| Hosted-agent signer binding (was B6) | RESCOPED, P0.5 | Authority closure landed: SessionAuthority/Bootstrap forms with canonical bytes + offline proof (`a583a3fb`), ledger `authority_binding` (`e6f434ca`), delegation separated from session authority (`1e745864`). Remaining: distinct callee vs signer/host vs host-attestation receipt fields for hosted agents, built on authority_binding. Trigger has fired: hosted-agent abilities are forwarded (`0b6c7ad`) and manifest schema is production (`b89d514`). |
+| Surface token semantics (was C2) | PARTIAL | `token_ref` exists in the federation proto (generated into backend pb). Frontend does not consume it. Sub-RFC ratification still gates consumption. P1. |
+| Economy / settlement | UNCHANGED | P2; Axon RFC shape first. |
 
-Current names can migrate gradually:
+### Axis C — Remaining Protocol Capability
 
-| Current Area | Target Area | Reason |
+| Work | Status |
+|---|---|
+| FFI bidi terminal E2E (C1) | DONE; `scripts/ffi-smoke.sh` is the regression guard. ABI v3 (`check-ffi-abi-v3-header.sh`). |
+| tokenRef RFC (C2) | See Axis B table. RFC before frontend consumption. |
+| Unified discover (C3/C4) | REWRITE against post-RFC-005 protos. Resolution is unified; remaining work is converging federation *discover/list* verbs and stream variant into one contract, with thin daemon/backend wrappers. P1. |
+| Economy RFC (C5) | UNCHANGED. P2. |
+
+### Axis D — Product Command Surface (largest open gap)
+
+The CLI grammar has converged to grouped commands; top-level aliases are
+retired and enforced by `scripts/check-cli-flat-command-boundary.sh`
+(F-039). All new product front doors must fit the grouped grammar.
+
+| Work | Status | Target |
 |---|---|---|
-| `src/facade/cli` | `src/cli` | "facade" hides that this is the product command tree. |
-| `src/services/invocation_transport` | `src/invocation` | This is the daemon Invocation adapter plane, not a generic service bag. |
-| `src/services/{keyring,self_identity,trust_*}` | `src/identity` | Identity/trust state is a coherent daemon domain. |
-| `src/services/federation_directory` + resolver pieces | `src/directory` | Directory/cache/resolution should become DNS-like and explicit. |
-| `src/runtime/execution/*` | `src/execution/*` | Execution adapters are implementation backends, not the runtime identity model. |
-| `src/runtime/agents/*` | `src/agents/*` plus `src/abilities/*` | Agent lifecycle and ability implementations are different domains. |
-| `src/runtime/plugin_host` + `src/plugins` | `src/plugins` | One plugin ownership tree, with builtin and sidecar submodules. |
-| `src/support/*` | Keep only platform helpers; move domain helpers out. | Prevent support from becoming a dumping ground. |
+| `whoami` (D1) | DONE (`facade/cli/auth.rs:293`). | Keep. The original "top-level invoke aliases" idea is retired — it contradicts the enforced flat-command boundary. |
+| Intent-first discover (D2) | OPEN, P0 | `discover "<intent>"` (grouped grammar placement TBD) ranking local + federated candidates **on top of the RFC-005 resolver**. Pure product-layer work now; the resolver exists. |
+| Trust surface (D3) | OPEN, P0 — respec | The trust plane materially changed: DeviceTrustSync with on-miss key resolution + negative cache (`28d3822`, `152d167`), origin-caller claims for cross-device caller fidelity (`a58695d`), user multi-device key admission (`d6e7303`), DEC-EU user-caller passthrough (`e14a623`, backend `72ad3da`), realm-trust.toml anchors. `trust show/set` must be specified over claims/anchors/sync state. The original "placeholder policy store" approach is retired. |
+| Permission / policy (D4) | OPEN, P0 | `policy list/show/simulate/why`, `permission grant/revoke/list`, `ability set-visibility`. Must account for the first shipped consent surface: remote-desktop owner self-consent (`8e0e7b3`). Canonical policy semantics stay Axon-owned. |
+| Ability import front doors (D5) | DONE | Shipped as `agent <id> new-ability {api, from-openapi, mcp, script add}` (`agent_new_ability.rs`). Remaining: docs/help visibility only. |
+| Ability family projection (D6) | OPEN, P1 | Optional `family`/`parent` metadata + `discover --tree`. Align with ability-layer classification (`ad2f060`) first. Projection only. |
+| Observability (D7) | PARTIAL, P2 | `invocation list/show/trace` covers audit reads. Missing: `health`, `slo`, `events --filter invoke.*`. Include the presence/heartbeat plane (federation.heartbeat, F-049). |
+| Economy UX (D8) | RESERVED, P2 | Unchanged. |
 
-| Work | Current State | Target | Priority |
-|---|---|---|---|
-| DaemonInvocationService split | `daemon_invocation_service.rs` is 11,399 lines; production logic ends around line 6,300 and the rest is inline tests. | Thin tonic facade plus focused domain modules. No behavior change in first pass. | P0 |
-| Dependency graph | `DaemonInvocationService` owns many `Arc` fields and builder-style `with_*` mutators. | `InvocationServiceDeps` / `InvocationServiceBuilder` groups dependencies by domain: admission, directory/federation, sessions, local runtime, ledger, quota, wire registry. | P0 |
-| RPC dispatch | Unary, stream, and bidi dispatch branches live in one impl. | `UnaryDispatcher`, `StreamDispatcher`, and `BidiDispatcher` own routing decisions behind small traits. | P0 |
-| Target resolution | Self-target matching, agent fallback, and diagnostics live inside the service. | `TargetResolver` resolves canonical target URA and returns typed `TargetLookupOutcome`. | P0 |
-| Bidi/session adapters | Local bidi frame mapping, terminal receipts, session down streams, remote bidi bridge helpers, and peer request signing are interleaved. | `local_bidi_adapter`, `session_accept`, `remote_bidi_bridge`, and `peer_envelope_signer` modules. | P1 |
-| Ledger/receipt projection | Ledger record construction, causal links, resource URA helpers, and response wrapping sit in service file. | `ledger_projection` and `receipt_resources` modules. Axon remains verifier owner. | P1 |
-| Quota metering | Quota selection is a free helper in service file. | `quota_meter` module with explicit exemption rules and tests. | P1 |
-| Tests | About 5k lines of tests live in the same file as production service logic. | Unit tests move with modules; service-level behavior tests move to `tests/invocation_transport_*`. | P1 |
-| Runtime folder sprawl | `runtime` currently contains agent lifecycle, execution, plugin host, resolver, kernel, dispatch, federation, receipts, and workspace logic. | Split by product domain first; leave `runtime` only for shared in-process orchestration that cannot belong to a narrower domain. | P1 |
-| Services folder sprawl | `services` mixes stores, identity, transport, presence, federation directory, quota, and invocation transport. | Convert `services` into narrower domain folders; keep only truly generic service helpers if needed. | P1 |
-| Plugin ownership | Plugin assets live under top-level `plugins`, `src/plugins`, `runtime/plugins`, and `runtime/plugin_host`. | One `src/plugins` code tree plus top-level `plugins/` as packaged plugin assets/examples. | P1 |
-| Support dumping ground | `support` contains platform helpers plus domain shims such as federation/local invoke. | Domain shims move to owning domain; support keeps OS/process/network utilities. | P2 |
+New product surfaces shipped since 2026-06-05 that the namespace and policy
+work must cover: chat history + lifelong sessions (`9692588`, `9719a99`,
+backend `37bdb92`), device context/media library (`d7b2519`), group chat,
+remote desktop (`8e0e7b3`), pages management abilities (`4aa2412`,
+`<user>.pages.*`).
 
-## Commit Sequence
+### Axis E — Structural Health (unexecuted; now the critical path)
 
-### Release Train A: Namespace And Ontology
+Facts as of 2026-06-12: `daemon_invocation_service.rs` is **13,142 lines**
+(was 11,399; ~6k of it inline tests). The `invocation_transport/` directory
+has accreted 16 sibling modules (`session_initiator`, `origin_caller`,
+`device_trust_sync`, `route_resolver`, `session_escalation`,
+`invoke_remote_initiator`, `local_session_dispatcher`, `hub_resolver`,
+`federated_key_resolver`, `admission_facade`, ...), so extraction targets
+must be re-derived from the current tree, not the 06-05 list.
 
-These commits should be planned as one cross-repo train. Do not merge only one
-side of a wire name change.
+Diagnosis and acceptance gates are owned by to-be-fix.spec §A5 (god-file)
+and F-001/F-002 (single-crate three-crate-type monolith, 4–8GB link,
+historical OOM). This plan keeps only the sequencing:
 
-| Commit | Repo | Subject | Scope | Exit Gate |
-|---|---|---|---|---|
-| A1 | EasyNet-Axon | `docs: normalize ability and skill ontology` | Update AXIOM / ontology-facing docs so Ability is the network contract and Skill is implementation support. No proto change. | Grep shows no normative doc still defines Ability as Skill component. Historical docs may keep the phrase only with an explicit historical note. |
-| A2 | EasyNet-Cli | `docs: normalize cli ability ontology` | Update README, ontology notes, author skills, and open-question docs to match A1. | CLI docs distinguish Ability, Skill, plugin, tool, and handler. |
-| A3 | EasyNet-Cli | `refactor(registry): store explicit ability owner ura` | Registration API records owner URA / owner kind at registration, not by name sniffing. | Catalog/meta listing reads owner from registry; no new behavior change. |
-| A4 | EasyNet-Cli | `refactor(abilities): introduce device and hub system namespaces` | Add canonical `device.*` / `hub.*` constants alongside legacy names. Register aliases where needed. | All new registrations use canonical constants; legacy aliases remain accepted. |
-| A5 | EasyNet-Axon | `feat(namespace): accept canonical device and hub ability names` | Add neutral name constants / compatibility table for wire-crossing system names that Axon/hub must understand. | Hub accepts both legacy and canonical names. Compatibility fixtures cover both. |
-| A6 | EasyNet backend | `backend: route canonical daemon ability namespaces` | Backend routing classifier accepts canonical `device.*` / `hub.*` and preserves legacy during rollout. | Tests prove `device.*` raw-inner routing and legacy alias compatibility. |
-| A7 | EasyNet-Cli | `refactor(abilities): migrate per-agent self verbs` | Rename Layer A from `<self>.*` to `<agent>.*`; update prompt templates and discover/invoke copy. | LLM discover-then-invoke smoke passes; no active per-agent `<self>` literals remain. |
-| A8 | EasyNet-Cli + EasyNet + Axon | `refactor(wire): migrate device bundle abilities to device namespace` | Device-bundle names switch from `<self>.*` to `device.*` in dialers while hub accepts both. | Paired device can join/register/session using canonical names; legacy device still joins in compatibility tests. |
-| A9 | EasyNet-Cli | `refactor(system): migrate flat system abilities to device namespace` | Move flat daemon system verbs under `device.*`; regenerate TOML manifests and prompt corpus. | `SYSTEM_NAMESPACES` skip list deleted or reduced to structural `device/hub` check. |
-| A10 | EasyNet backend | `backend: remove legacy directory event decode after namespace window` | Drop handwritten v1 directory event path only after telemetry/release window. | Broker consumes generated proto v2 only; tests updated. |
-| A11 | EasyNet-Axon + EasyNet-Cli + EasyNet | `feat(namespace): define dns-like resolver contract` | Define resolve/discover record fields, TTL, issuer, cache behavior, alias status, and policy-filtered visibility. | CLI/backend can resolve friendly names to canonical URAs through one stack; SDKs do not learn product aliases. |
-| A12 | All | `chore(namespace): add legacy-name lint and remove aliases` | Remove compatibility aliases after one full release cycle. | Grep/lint fails on new active `<self>.*` and flat system namespace registrations. Historical receipt display remains read-only compatible. |
+| Commit | Subject | Exit Gate |
+|---|---|---|
+| E1 | `refactor(invocation): extract service dependency bundle` | Field count drops; boot wiring compiles with mechanical call-site updates only. |
+| E2 | `refactor(invocation): split unary/stream/bidi dispatchers` | The three RPC methods read as admission + dispatch + record. |
+| E3 | `refactor(invocation): extract target resolver` | Typed `TargetLookupOutcome`; device/hub/hosted-agent/offline cases tested. |
+| E4 | `refactor(invocation): extract bidi and session adapters` | Existing bidi/session tests pass; no stream-ordering change. |
+| E5 | `refactor(invocation): extract ledger and quota helpers` | Ledger fixture output stays byte/JSON equivalent where asserted. |
+| E6 | `test(invocation): split service tests by responsibility` | Service file drops below ~1,000 production lines. |
 
-### Release Train B: Receipt Closure
+**Sequencing rule:** E1–E2 land before the carrier unification (spec §A2)
+touches this file, or in the same window by the same owner. The carrier
+work will rewrite dispatch paths; doing that inside a 13k-line file repeats
+the change-amplifier mistake this axis exists to fix.
 
-This should start in parallel after A1/A2 if staffing allows. It should not wait
-for all namespace churn unless the same engineer would conflict on files.
+### Debt-Plane Cross-References (owned by to-be-fix, sequenced here)
 
-| Commit | Repo | Subject | Scope | Exit Gate |
-|---|---|---|---|---|
-| B1 | EasyNet-Axon | `feat(receipt): define receipt chain verification contract` | Add verifier contract for lifecycle chain and causal predecessor traversal. Define fetcher trait / resolver interface without product storage policy. | Unit tests cover missing parent, bad hash, cycle, and terminal success. |
-| B2 | EasyNet-Axon | `feat(verify): walk lifecycle receipt chains` | `easynet-verify` verifies `prev_receipt_hash` chains. | Multi-receipt fixture verifies; tampered intermediate receipt fails. |
-| B3 | EasyNet-Axon | `feat(verify): walk causal receipt predecessors` | Verifier resolves causal refs and recursively validates parent receipts. | Scalar/list/merkle or proof-ref forms have golden fixtures. |
-| B4 | EasyNet-Cli | `feat(ledger): expose read-only receipt resolver` | Daemon/CLI exposes receipt lookup by receipt URA/hash using Axon ledger shapes. | `easynet verify` can validate a local daemon-produced chain through resolver. |
-| B5 | EasyNet backend | `backend: project receipt refs without owning verification` | Backend exposes product-friendly receipt links while leaving verification semantics to Axon. | Backend tests prove receipt links are projections, not canonical verifier logic. |
-| B6 | EasyNet-Axon | `feat(receipt): add hosted-agent signer binding` | Add signer/host attestation schema only when hosted-agent profile is ready. | Cross-language SDK fixtures include hosted-agent receipt; old selfsigned receipts remain valid. |
+| Item | Owner | Why it appears in this plan |
+|---|---|---|
+| Carrier unification — SessionDispatch JSON business frames are a second invocation carrier; backend hand-copies the struct in Go | to-be-fix.spec §A2 (F-004, F-038, F-040) | P0. Coupled with the `<self>` migration (Axis A) and gated on the Axis E split. Prerequisite already specced: caller inventory + baseline benchmark. |
+| Backend protocol fork replacement (7,765-line `internal/axon/`) | to-be-fix.spec §A4 (F-015, F-017, F-040) | P0/P1. Four batches (URA → admission → invoke → federation), freeze→replace→delete per batch. Heaviest single debt in the three repos. |
+| Session-plane state machine (implicit device-session lifecycle; hub slot accepts any claimant) | to-be-fix.spec §A1 (F-008, F-009) | P0.5. The 2026-06-11 ping-pong incident (5,428 reconnects) paid the interest; device-side amplifier fixed (`b2ba441`, F-003 jitter), root architecture open. |
+| LocalRuntime lock topology | to-be-fix.spec §A3 (F-011) | P1, benchmark-first. |
 
-### Release Train C: Remaining Protocol Capability Completeness
+## Carrier Unification Status (2026-06-12, end of day)
 
-| Commit | Repo | Subject | Scope | Exit Gate |
-|---|---|---|---|---|
-| C1 | EasyNet-Cli | `test(ffi): prove bidi terminal business frames` | Done: FFI smoke opens a real daemon local-bidi ability, sends client frames, receives business data, and observes a terminal cleanup receipt. | `scripts/ffi-smoke.sh` passes and must stay green. |
-| C2 | EasyNet | `rfc(surface): define resource token exchange` | RFC for `tokenRef` endpoint, TTL, renewal, scope, failure, audit hooks. | Frontend must not consume `tokenRef` until RFC is ratified. |
-| C3 | EasyNet-Axon | `feat(federation): define unified discover contract` | One discover request/response and stream variant. | SDKs generate one discover helper; legacy federation verbs marked compatibility. |
-| C4 | EasyNet-Cli + EasyNet | `refactor(federation): route discovery through unified contract` | CLI/backend wrappers call unified discover. | Existing listDevices/listAbilities/Agents pages pass through compatibility tests. |
-| C5 | EasyNet-Axon | `rfc(economy): define optional usage and settlement attachment` | Define contract shape only; no CLI-local economy fork. | Axon RFC ratified before any CLI/backend price field becomes authoritative. |
+All three prerequisites landed and the design is drafted:
 
-### Release Train D: Product Command Surface
+- T2.0 caller inventory ✅ (debt narrowed to the SessionDispatch frame);
+- T0.4 baselines ✅ both sides — frame path (ee5183f: 45×/156×
+  per-frame CPU vs canonical proto, ~4× wire inflation) and admission
+  throughput (Axon side);
+- codec fence ✅ (317e01b: every production frame crosses
+  `SessionDispatch::{encode_frame, decode_frame}` — the swap happens in
+  one place);
+- design ✅ as `docs/rfc/dispatch-frame-carrier-unification-mini-rfc.md`
+  (581c171, **draft awaiting CTO review**). Core insight: the bidi
+  protocol already has the canonical carrier (EnvelopeOpen = the
+  seven-tuple, down frame 0 = an InvocationReceipt); SessionDispatch is
+  a parasite carrier. Unification dissolves origin_caller into
+  caller+caller_signature and closes the receipt chain at the hub hop.
 
-This train makes the user-case reachable from CLI/browser vocabulary. It should
-reuse daemon Invocation, Axon receipts, and existing ability execution types.
+RATIFIED 2026-06-12 (f4b9818); DEC-F004 ruled all three review points
+as recommended, plus two landing-audit errata (session_ext = field 8;
+dispatch frames carry the complete InvokeRequest — envelope.ability
+does not exist).
 
-| Commit | Repo | Subject | Scope | Exit Gate |
-|---|---|---|---|---|
-| D1 | EasyNet-Cli | `feat(cli): expose north-star command aliases` | Add product-level `whoami`, `discover`, and top-level `invoke` aliases where they can route to existing daemon/ability flows. | Existing lower-level commands still work; help output presents the product path first. |
-| D2 | EasyNet-Cli + EasyNet | `feat(discover): add intent-first ability search` | Implement `discover "<intent>"` and `ability search`; start with current catalog/federation data and leave ranking contract extensible. | User can find a candidate ability without knowing agent IDs or internal namespaces. |
-| D3 | EasyNet-Cli | `feat(trust): expose trust commands` | Add `trust show` / `trust set` UX backed by existing identity or placeholder policy store as appropriate. | Trust commands do not grant permissions by themselves. |
-| D4 | EasyNet-Cli + EasyNet-Axon | `feat(permission): expose policy and consent command surface` | Add policy simulation/explanation plus grant/revoke/list commands. Keep canonical policy semantics Axon-owned. | Owner can answer "who can call what" for an ability or family scope. |
-| D5 | EasyNet-Cli | `feat(ability): add adapter import front doors` | Add `ability from-cli`, `ability from-restful-api`, `ability from-openapi`, and `ability from-mcp` over existing Shell/HTTP/MCP execution variants. | A user can package CLI, RESTful API/OpenAPI, and MCP tools as abilities without reading `AbilityExec`. |
-| D6 | EasyNet-Cli + EasyNet-Axon | `feat(ability): add family projection metadata` | Add optional `family` / `parent` metadata for discovery/policy rendering only. | `discover --tree` renders family; URA and Invocation are unchanged. |
-| D7 | EasyNet-Cli + EasyNet | `feat(observe): add network health, slo, and event views` | Add product operator commands over existing logs/status/receipt streams. | Operator can inspect invoke health without reading daemon internals. |
-| D8 | EasyNet-Axon | `rfc(economy): reserve wallet and agreement command contract` | Define wallet/agreement/payment UX terms as protocol-backed future work. No local CLI settlement fork. | CLI may show reserved commands/prose, but cannot claim authoritative billing. |
+Hub hemisphere SHIPPED same day (steps 1, 2a-2d): Axon proto
+(90841fed + f9d7419b), frame-0 negotiation into PresenceSlot with
+claimant-conflict observability (cf749ad), dual-read with a single
+shared settle core (a5b59ed), callee-receipt projection into the hub
+ledger at the consumer side (1168b09 + 6e34457 after the round-31
+URA-discipline audit), negotiated v1 writes at both dispatch sites
+(5be0bc0). Cross-repo golden baselines pinned (Fed-MVP f9b006a,
+accepted round 35); bench carries before/after arms (ee5183f +
+3ece4f5). Five consecutive parallel-session audit rounds (30-36)
+accepted the series; suite re-run rides the coordination letter
+(option-C ledger entry).
 
-### Release Train E: EasyNet-Cli Structure Health
+Device hemisphere SHIPPED 2026-06-13 (f952c5b): frame-0 declaration
+with per-boot claimant nonce, negotiation recorded on the
+SessionUpSender, DispatchCall dispatched straight through
+admitted_from_wire_parts (seven-tuple intact), replies by negotiated
+contract with quadrant tests pinning both new cells. The execution
+receipt rides home end-to-end (Axon aa0bb5f2 receipt_to_wire + Cli
+d370cb6): callee-signed, offline-verifiable, ledgered at the hub —
+the mini-RFC's headline win, audited zero-new-debt (parallel round
+51). Measured on one harness (6051d45): 21.0us -> 0.87us at 1KB
+(24x), 1.073ms -> 5.97us at 64KB (180x), the v1 frame within ~5% of
+the bare InvokeRequest.
 
-This train should be behavior-preserving. It is allowed to move code, rename
-private helpers, and split tests; it must not alter public Invocation wire
-semantics.
+step-3b (bidi opens) closed 2026-06-13 (43b1335 + 0cee062): the hub
+picks the bidi-open carrier by negotiation through one pure function
+(hollow-envelope opens pin to JSON, same doctrine as the unary slot
+fallback), the device admits the open through the same wire-parts
+path as the unary arm, and the terminal frame carries the execution
+receipt off the split receiver's receipt surface — chain closure now
+covers streaming calls, Completed and Failed alike, with zero SDK
+change. Transport suite floor moved 397 -> 401, both feature sets.
 
-| Commit | Repo | Subject | Scope | Exit Gate |
-|---|---|---|---|---|
-| E1 | EasyNet-Cli | `refactor(invocation): extract service dependency bundle` | Introduce `InvocationServiceDeps` / builder grouping the current service fields. Keep constructor behavior compatible. | `DaemonInvocationService` field count drops; boot wiring compiles unchanged or with mechanical call-site updates. |
-| E2 | EasyNet-Cli | `refactor(invocation): split unary stream and bidi dispatchers` | Move routing branches into focused dispatcher modules while the tonic trait impl stays thin. | `invoke`, `invoke_stream`, and `invoke_bidi` methods read as admission + dispatch + record only. |
-| E3 | EasyNet-Cli | `refactor(invocation): extract target resolver` | Move self-target matching, hosted-agent fallback, and diagnostic rendering out of the service. | Target resolution tests cover device, hub, hosted agent, not advertised, and host offline cases. |
-| E4 | EasyNet-Cli | `refactor(invocation): extract bidi and session adapters` | Move local bidi mapping, terminal receipt frame builders, session down stream, remote bidi helpers, and peer signing. | Existing bidi/session tests pass; no stream ordering behavior changes. |
-| E5 | EasyNet-Cli | `refactor(invocation): extract ledger and quota helpers` | Move ledger record construction, causal link extraction, invocation resource URA helpers, response wrapping, and quota metering. | Ledger fixture output stays byte/JSON equivalent where asserted. |
-| E6 | EasyNet-Cli | `test(invocation): split service tests by responsibility` | Move inline tests into module-local tests and `tests/invocation_transport_*` integration tests. | `daemon_invocation_service.rs` drops below 1,000 production-focused lines; moved tests still cover the same cases. |
+Remaining: backend direct InvokeRequest (step 4 / T2.1b — parallel
+session's lane, unary remote arm already HEAD-verified their round
+56), then JSON deletion + Fed-MVP JSON baseline retirement (step 5,
+one release window from f952c5b, armed in
+docs/carrier-step5-deletion-card.md; fires back-to-back with step 4
+in the same quiet window per the round-54 coordination point).
 
 ## Priority Repricing
 
-| Old Priority | New Priority | Item | Reason |
+| Old | New | Item | Reason |
 |---|---|---|---|
-| P1 | P0.5 | Receipt verifier closure | This is the third-party audit proof surface. It is more important than FFI bidi unless a binding release is imminent. |
-| P0 | P0 grouped | `<self>` alias, flat namespace, ontology cleanup | These are one wire-break release. Treating them separately creates repeated compatibility windows. |
-| P1 | DONE | FFI bidi terminal E2E | Completed as a regression-guarded binding path; no longer competes with receipt closure priority. |
-| P1 | P1/P2 | Federation discovery unification | Important for SDK cleanliness; can wait unless bundled with namespace cleanup. |
-| Missing | P0 | Discover/trust/permission CLI surface | This is the product route to stranger-agent usage; without it the system remains an engineer-facing runtime. |
-| Missing | P0.5 | Ability adapter front doors | The execution model exists, but users need visible verbs for CLI/API/MCP-to-ability packaging. |
-| Missing | P0 | Invocation service split | A 11k-line service is a change-amplifier. Namespace/discovery/receipt work will keep colliding unless the dispatch surface is split first or in parallel. |
-| P2 | P2 | Economy / settlement | Valuable, but dangerous to implement before receipt closure and Axon-owned shape. |
+| P0.5 | DONE | Receipt verifier closure | `verify_chain` shipped; remaining read-surface work is P1. |
+| P0 grouped | P0.5, rescoped | `<self>` / flat namespace migration | Resolver landed (RFC-005); rename remainder is coupled to carrier unification and runs under no-compat rules. |
+| P0 | **P0, first** | Invocation service split (E1–E2) | File grew 1,743 lines in a week; every upcoming train (carrier, namespace, discovery) lands in it. |
+| Missing | **P0** | Carrier unification (spec §A2) | Newly diagnosed second invocation carrier; F-038 drift already materialized cross-repo. |
+| Missing | P0/P1 | Backend fork replacement (spec §A4) | Protocol evolution currently costs double edits with no compile-time drift signal. |
+| Missing | P0.5 | Session-plane state machine (spec §A1) | Incident-backed. |
+| P0 | P0 | Discover / trust / permission CLI surface | Unchanged: still the product route to stranger-agent usage; trust respec'd over the new trust plane. |
+| P0.5 | DONE | Ability adapter front doors | Shipped as `new-ability` subcommands. |
+| P0.5 (cond.) | P0.5 (active) | Hosted-agent signer binding | Trigger fired; build on authority_binding. |
+| P1/P2 | P1 | Federation discover-verb unification | Rewrite against post-RFC-005 protos. |
+| P2 | P2 | Economy / settlement | Unchanged. |
 
 ## Release Gates
 
-### Gate A — Namespace Release
+### Gate A — Namespace Migration (rescoped)
 
-- No normative docs define Ability as a Skill component.
-- No new active `<self>.*` ability names.
-- No new flat daemon system ability namespace outside `device.*` / `hub.*`.
-- Friendly names, aliases, and family projection do not appear as canonical
-  routable identities in receipts.
-- Directory/discover records expose TTL, issuer/source, descriptor version, and
-  policy-filtered visibility.
-- Backend routes canonical names and legacy aliases during compatibility window.
-- Hub/device join, session, register-device-pubkey, keyring, and discover flows pass
-  with canonical names.
-- Historical receipt display can render legacy names without rewriting records.
-- Lint rejects active `<self>.*` or flat system registrations after cleanup commit.
+- No active `<self>.*` ability names after cutover; lint enforces in the
+  same change (no window).
+- No flat daemon system verbs outside `device.*` / `hub.*`; `<user>.*` /
+  `<agent>.*` owner-qualified names are registered with explicit OwnerKind.
+- Friendly names and family projection never appear as routable identities
+  in receipts.
+- Historical receipt display renders legacy names read-only, without
+  record rewriting.
+- RFC-005 guards stay green: URA guard checks, resolver release profiles,
+  resolve-before-invoke in backend.
 
-### Gate B — Receipt Closure
+### Gate B — Audit Closure (remainder)
 
-- `easynet verify` validates at least one multi-receipt lifecycle chain.
-- `easynet verify` fails on tampered parent hash.
-- `easynet verify` fails on missing causal parent unless explicitly configured for
-  partial/offline mode.
-- CLI daemon exposes read-only receipt lookup without owning Axon verification logic.
-- Backend exposes receipt links as product projections only.
-- Hosted-agent signer/attestation is not claimed until schema and fixtures exist.
+- `easynet verify` validates a daemon-produced chain through a
+  URA/hash-addressed fetch surface (not only pre-collected bundles).
+- Backend receipt links audited as projections only.
+- Hosted-agent receipts state callee, signer/host, and attestation
+  distinctly, building on `authority_binding`; old self-signed receipts
+  remain valid.
 
-### Gate C — No Regression To Old Runtime Boundary
+### Gate C — Runtime Boundary (unchanged + carrier)
 
 - `scripts/check-daemon-invocation-migration.sh` stays green.
-- No production caller constructs JSON control `Invoke`, `Subscribe`, or `OpenBidi`
-  product frames.
-- No Axon SDK API starts `easynet-daemon`.
-- No backend code hosts device abilities directly.
-- No CLI code defines canonical Invocation bytes or receipt verification semantics.
+- No production caller constructs JSON control product frames.
+- **SessionDispatch frames carry canonical Invocation shape after spec §A2
+  lands; until then the violation is tracked, not re-litigated.**
+- No Axon SDK API starts `easynet-daemon`; no backend code hosts device
+  abilities; no CLI code defines canonical bytes or verification semantics.
 
 ### Gate D — User-Case Command Surface
 
-- `easynet whoami` shows the current identity context without exposing Axon
-  internals as the primary UX.
-- `easynet discover "<intent>"` can return at least local and federated/catalog
-  ability candidates through one user-facing path.
-- `trust` commands do not imply authorization, and `permission/policy` commands
-  do not imply trust.
-- Owner can grant/revoke/list permission for an ability or ability family
-  projection.
-- `ability from-cli`, `ability from-restful-api`, `ability from-openapi`, and
-  `ability from-mcp` package existing execution variants instead of creating a
-  second ability model.
-- `discover --tree` renders ability family projection without changing URA or
-  Invocation semantics.
-- Wallet/agreement/payment remains reserved until Axon owns the settlement
-  contract.
+- `easynet whoami` — shipped; keep green.
+- `discover "<intent>"` returns local + federated candidates through one
+  resolver-backed path.
+- `trust` commands expose claims/anchors/sync state and do not imply
+  authorization; `policy`/`permission` commands do not imply trust.
+- Owner can grant/revoke/list permission for an ability or family scope;
+  remote-desktop self-consent folds into the same model.
+- `new-ability` import paths stay the single packaging model (no second
+  ability model).
+- Wallet/agreement/payment stays reserved until Axon owns settlement.
 
 ### Gate E — Structure Health
 
-- `daemon_invocation_service.rs` is a thin tonic facade, not a god object.
-- No extracted module owns Axon protocol semantics that belong in Axon.
-- No refactor commit changes admission order, quota order, receipt fields,
-  terminal stream behavior, or LocalRuntime fallback semantics.
-- Target resolution, bidi/session adapters, ledger projection, and quota
-  metering each have focused tests.
-- Inline service tests are moved or reduced enough that future protocol changes
-  touch the smallest relevant module.
+- Owned by to-be-fix.spec §A5 acceptance gates. This plan adds one rule:
+  E1–E2 precede (or co-land with) any spec §A2 carrier change to
+  `daemon_invocation_service.rs`.
 
 ## Do Not Do
 
-1. Do not split `<self>` removal and flat namespace cleanup into separate release
-   windows unless a release manager explicitly accepts two compatibility cycles.
-2. Do not add economy fields to CLI manifests as authoritative settlement terms.
-   CLI qualitative `[cost]` metadata is not billing.
-3. Do not promote `AgentId` into Axon as a routable address. Keep AgentId as
-   logical/front-door identity and URA as routable protocol address.
-4. Do not mark receipt-chain audit claims as complete while verifier only checks
-   one receipt.
-5. Do not delete legacy aliases before one release window with telemetry or tests
-   proving no supported caller depends on them.
-6. Do not let backend DB projections become canonical state or receipt truth.
-7. Do not put ability family/tree into URA routing or Invocation addressing.
-8. Do not hide shipped Shell/HTTP/MCP adapter capability behind internal
-   constructors only; expose product verbs if the user-case depends on them.
-9. Do not ship wallet/agreement/payment as local CLI truth before Axon defines
-   the contract.
-10. Do not hide semantic changes inside the structural split. If a behavior
-    change is needed, put it in a separate commit after the extraction tests
-    prove the old behavior.
+1. Do not re-open dual-name compatibility windows. Migrations prove
+   canonical equivalence and cut over in one change (Invariant 12).
+2. Do not add economy fields to CLI manifests as authoritative settlement
+   terms.
+3. Do not promote `AgentId` into Axon as a routable address; `axon-ura`
+   owner-token grammar is the only protocol identity.
+4. Do not claim receipt-chain audit completeness for surfaces
+   `verify_chain` cannot reach (cross-process fetch is still open).
+5. Do not respecify debt items in this plan; reference the to-be-fix trio
+   (single accounting).
+6. Do not let backend DB projections become canonical state or receipt
+   truth.
+7. Do not put ability family/tree into URA routing or Invocation
+   addressing.
+8. Do not hide the shipped `new-ability` import paths; product docs must
+   present them as the packaging front door.
+9. Do not ship wallet/agreement/payment as local CLI truth before Axon
+   defines the contract.
+10. Do not hide semantic changes inside structural splits; extraction
+    commits prove old behavior first.
+11. Do not start the spec §A2 carrier migration inside the unsplit
+    13k-line service file.
 
-## Suggested First Commits
+## Suggested Next Commits
 
-1. `docs: split naming cleanup from receipt closure in migration plan`
-   - Land this file and any docs references.
-   - No code behavior change.
-
-2. `docs: normalize ability and skill ontology`
-   - Axon + CLI docs only.
-   - This unblocks namespace work without touching wire names.
-
-3. `feat(receipt): define verifier chain-walk contract`
-   - Start Axis B early.
-   - Keep it Axon-owned and storage-agnostic.
-
-4. `feat(cli): expose whoami and discover product front doors`
-   - Start Axis C/D with low protocol risk.
-   - Route to existing daemon/catalog data first, then swap backing discovery
-     to the unified Axon contract when C3/C4 lands.
-
-5. `refactor(invocation): extract service dependency bundle`
-   - Start Axis D/E before adding more namespace/discovery branches to the
-     11k-line service.
-   - Keep this behavior-preserving and test-only/mechanical where possible.
+1. `docs: rebaseline commit-plan-2 against 2026-06-12 reality`
+   — this revision; no code change.
+2. `refactor(invocation): extract service dependency bundle` (E1)
+   — unblocks every downstream train; behavior-preserving.
+3. `refactor(invocation): split unary/stream/bidi dispatchers` (E2)
+   — completes the precondition for spec §A2 carrier work.
+4. `feat(discover): add intent-first ability search` (D2)
+   — pure product layer over the landed resolver; independent line, can run
+   in parallel with 2–3.
+5. Carrier-unification caller inventory (spec §A2 prerequisite)
+   — classification of every Invoke/Subscribe/OpenBidi caller; already
+   specced in to-be-fix.spec Phase 2 (`ecb0368`).
 
 ## Baseline Caveat
 
-This plan is based on the EasyNet-Cli current working tree on 2026-06-05 plus
-the current sibling EasyNet and EasyNet-Axon checkouts, plus the
-`2026-06-02-015131-user-case.txt` product review. Before any cross-repo release,
-re-confirm against clean release baselines for all three repos.
+This revision is based on: EasyNet-Cli branch
+`Easynet-Semantic-Operator-Integration` at `4c17c96`, EasyNet-Axon at
+`80a72ece`, EasyNet backend at `37bdb92`, all read on 2026-06-12. Two
+additional caveats the 06-05 baseline missed:
+
+- **Fifth repo:** EasyNet-Federation-MVP holds cross-repo wire fixtures;
+  its `session_dispatch.json` baseline has already drifted (F-038). Wire
+  changes must regenerate it deliberately.
+- **Uncommitted work:** the working tree carries `session_initiator.rs`
+  changes (federation.heartbeat, F-049) and to-be-fix doc updates. Confirm
+  their landing before cutting any release train from this baseline.
+
+Before any cross-repo release, re-confirm against clean release baselines
+for all repos.

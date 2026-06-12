@@ -1,0 +1,41 @@
+# AXON-RFC-001 baseline 漂移归属表(888 → 927)
+
+> 裁决卡 #4(T0.1 / F-036)的前置产出:逐条归属,供 CTO 按真值签新基线。
+> 方法:干净 HEAD 快照(4e1536b,git worktree,不含任何在途工作)对
+> 基线提交(757a917,2026-05-29)各跑一遍与守卫脚本逐字相同的 rg pattern
+> (含全部 glob 豁免),按文件做计数差,增长组逐组 git log 归属。
+> 在途 60 文件工作区**不在**本表统计内(基线锁对工作树报 927 与 HEAD 一致)。
+
+## 总分解(+39 = 三个规则族,无第四来源)
+
+| 规则族 | 基线 | 现值 | Δ | 性质 |
+|---|---|---|---|---|
+| Rule 3 MCP keyword | 720 | 752 | **+32** | 下表分解 |
+| Rule 2 AgentType 内部 enum | 148 | 156 | **+8** | 下表分解 |
+| Rule 1 publish_system_abilities | 1 | 0 | **−1** | 违规被修复(基线应随降) |
+
+## Rule 3:MCP +32 的三个来源
+
+| 来源 | Δ | 文件 | 归属提交 | 裁决建议 |
+|---|---|---|---|---|
+| plugin_host 新特性面 | **+27** | host_api(+9)/install(+8)/manifest(+8)/load_plan(+1)/validation(+1) | 8bf2e65 `feat(plugin): add runtime plugin host` | 真实新增:plugin manifest 承载 MCP tool spec 投影。属 P4.8d 范畴外的新消费点——**需 CTO 裁**:纳入 mcp-profile 豁免域,或随 P4.8d 一并清 |
+| mcp 注册表/执行器增长 | **+9** | mcp_reflective_registry(+5)/mcp_executor(+4) | 8504e1a(F-034 typed rejection)、4487344(T0.5c F-047) | 必要修复/本体闭合的文案与类型名,非新协议依赖。**建议入基线**(随 P4.8d 整体消亡) |
+| 拆分重分布净漂 | **±4** | agent.rs(−41)→agent/*(+45);agents/mod.rs(−39)→三新模块(+37);其余 ±1 散点 | 524818d(T4.5)、e57990f+a22042f(T4.6) | move-only 拆分的新文件头/模块文档提及 mcp。零协议影响,**建议入基线** |
+
+## Rule 2:AgentType +8 的两个来源
+
+| 来源 | Δ | 文件 | 归属提交 | 裁决建议 |
+|---|---|---|---|---|
+| F07/RFC-005 投影面 | **+16** | abilities.rs(+8)/a2a_labels(+4)/skill_ability(+4) | d7d3cdf `feat(cli): F07 daemon transport + RFC-005 owner projection` | 真实增长,但 AgentType 本就是 P4.4 决议保留的内部 enum(wire 无 kind 字段,Rule 2 主断言仍 0 违规)。**建议入基线**,计数继续作 drop-the-enum 进度信号 |
+| 拆分/迁移重分布 | **−8** | workspace.rs(−10)/agents/mod.rs(−7)→assembly_tests(+7)、transport 改名(+3)、profiles/mcp(−2)等 | 同上拆分批 + transport 迁移 | 重分布,净负。无需裁 |
+
+## Rule 1:−1(净改善)
+
+`publish_system_abilities` 调用点已消亡(workaround 退役)。基线应同步降——
+保持 1 会掩盖未来回潮。
+
+## 推荐裁决(一句话)
+
+**新基线 = 927,本表入库作归属注记;唯一真裁决点是 plugin_host 的 +27
+(豁免域 vs P4.8d 清理范围),其余 +12/−1 全部机械归属。** 签字后
+`AXON-RFC-001-baseline-counts.txt` 以 4e1536b 快照输出重生,baseline-lock 回绿。

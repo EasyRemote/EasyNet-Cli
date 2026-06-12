@@ -32,7 +32,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::runtime::domain::{
+use crate::core::domain::{
     PermissionDecision, PermissionId, PermissionRequest, PermissionSensitivity, SessionId, TenantId,
 };
 
