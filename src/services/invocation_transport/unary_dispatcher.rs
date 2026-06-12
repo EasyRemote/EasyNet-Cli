@@ -59,7 +59,8 @@ use crate::services::invocation_transport::invocation_wire::{
 use crate::services::invocation_transport::invoke_remote_initiator::{
     build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
     build_invoke_remote_terminal_frame, decode_inner_payload, invoke_remote_inband_error_response,
-    InnerPayload, InvokeRemoteDown, RequestOutcome, SessionContentEnvelope, SessionRequestError,
+    InnerPayload, InvokeRemoteDispatchFrameRequest, InvokeRemoteDown, RequestOutcome,
+    SessionContentEnvelope, SessionRequestError,
 };
 use crate::services::invocation_transport::list_user_pubkeys::handle as handle_list_user_pubkeys;
 use crate::services::invocation_transport::peer_envelope_signer::{
@@ -73,8 +74,8 @@ use crate::services::invocation_transport::route_resolver::{
 };
 use crate::services::invocation_transport::target_gate::{
     envelope_with_selected_callee, route_negative_status, route_owner_mismatch_message,
-    route_profile_blocked_status, route_selected_remote_host_status,
-    selected_host_unavailable_message, TargetGate, ROUTE_SELECTED_REMOTE_HOST_CODE,
+    route_profile_blocked_status, selected_host_unavailable_message, TargetGate,
+    ROUTE_SELECTED_REMOTE_HOST_CODE,
 };
 use crate::services::pending_dispatch::DispatchResult;
 use crate::services::session_failure::SessionFailure;
@@ -195,14 +196,6 @@ impl UnaryDispatcher {
         if !selected_route.is_authoritative_local_or_better() {
             return Err(route_profile_blocked_status(&selected_route));
         }
-        if !self
-            .gate
-            .matches_self_target_ura(&selected_route.execution_host_ura)
-            .await
-        {
-            return Err(route_selected_remote_host_status("Invoke", &selected_route));
-        }
-
         Ok(selected_route)
     }
 
@@ -216,6 +209,23 @@ impl UnaryDispatcher {
             Ok(route) => route,
             Err(status) => return (Err(status), false),
         };
+        // step-4 / T2.1b: locality is the daemon's decision, not the
+        // caller's. A resolver-selected remote host dispatches through
+        // that device's `<self>.session`. Like the federation-wrapper
+        // arms, this is a service-handler path — the manual unary
+        // record runs (axon_took_it = false); the executing device's
+        // own runtime holds the canonical ledger row.
+        if !self
+            .gate
+            .matches_self_target_ura(&selected_route.execution_host_ura)
+            .await
+        {
+            return (
+                self.dispatch_remote_rpc_selected_route(request, &selected_route)
+                    .await,
+                false,
+            );
+        }
         let Some(runtime) = self.runtime.local_runtime.as_ref() else {
             return (
                 Err(Status::failed_precondition(format!(
@@ -1333,6 +1343,199 @@ impl UnaryDispatcher {
         Ok(delegation)
     }
 
+    /// Shared presence-dispatch core (DEC-F004 single-settle
+    /// discipline): pending registration BEFORE the frame push so a
+    /// fast device reply lands a real `complete()` (race-free
+    /// correlation), offline fast-fail on both send-failure shapes,
+    /// then the awaited `DispatchResult`. Frame construction stays
+    /// with the caller — the carrier choice is arm-specific, the
+    /// mechanics are not.
+    ///
+    /// `register_pending_for(execution_host_ura)` keeps the
+    /// presence-offline watcher able to fail-fast this entry the
+    /// moment the host's `<self>.session` drops mid-call; without it
+    /// `await_reply()` blocks until the operator-side HTTP timeout.
+    async fn dispatch_frame_to_presence(
+        &self,
+        selected_route: &SelectedInvokeRoute,
+        label: &str,
+        build_frame: impl FnOnce(
+            u64,
+        )
+            -> Result<crate::services::presence_registry::DispatchFrame, Status>,
+    ) -> Result<(u64, DispatchResult), Status> {
+        let pending = self.sessions.pending.as_ref().ok_or_else(|| {
+            Status::failed_precondition(format!(
+                "{label}: daemon was constructed without a PendingDispatchMap; call \
+                 DaemonInvocationService::with_pending(...) at boot to enable \
+                 cross-device dispatch",
+            ))
+        })?;
+        let (session_id, sender) = self
+            .directory
+            .presence
+            .lookup_tracked(&selected_route.execution_host_ura)
+            .ok_or_else(|| {
+                Status::failed_precondition(selected_host_unavailable_message(selected_route))
+            })?;
+        let handle = pending.register_pending_for(&selected_route.execution_host_ura);
+        let call_id = handle.call_id();
+        let dispatch_frame = build_frame(call_id)?;
+        match sender.try_send(Ok(dispatch_frame)) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                self.directory.presence.remove_if_session(
+                    &selected_route.execution_host_ura,
+                    session_id,
+                    crate::services::presence_registry::OfflineReason::SendFailed,
+                );
+                return Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ));
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                self.directory.presence.remove_if_session(
+                    &selected_route.execution_host_ura,
+                    session_id,
+                    crate::services::presence_registry::OfflineReason::StreamClosed,
+                );
+                return Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ));
+            }
+        }
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = presence_dispatch_awaiting_reply,
+            label = label,
+            callee_ura = selected_route.callee_ura.as_str(),
+            execution_host_ura = selected_route.execution_host_ura.as_str(),
+            ability = selected_route.dispatch_name.as_str(),
+            route_ura = selected_route.route_ura.as_str(),
+            call_id = call_id,
+        );
+        let result = handle.await_reply().await.map_err(|_recv_err| {
+            Status::unavailable(format!(
+                "{label}: selected execution host `{}` session disconnected before reply \
+                 (call_id={call_id})",
+                selected_route.execution_host_ura,
+            ))
+        })?;
+        Ok((call_id, result))
+    }
+
+    /// step-4 / T2.1b: the canonical-face remote arm. A catch-all
+    /// `Invoke` whose resolver-selected execution host is another
+    /// device dispatches through that device's `<self>.session` — the
+    /// same single-settle core as forward_invoke, but the caller's
+    /// envelope travels verbatim (transplant, not translation):
+    /// content, authority fields and the presigned caller signature
+    /// are already ON the request, so nothing is wrapped and nothing
+    /// is re-minted. v1 devices receive the canonical carrier; v0
+    /// devices receive only the legacy JSON shape with the selected
+    /// subject and no fabricated origin-caller claim.
+    pub(crate) async fn dispatch_remote_rpc_selected_route(
+        &self,
+        request: &InvokeRequest,
+        selected_route: &SelectedInvokeRoute,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ability = request.function_name.trim().to_string();
+        let Some(envelope) = request.envelope.clone() else {
+            return Err(Status::invalid_argument(format!(
+                "Invoke: remote-hosted ability `{ability}` requires the seven-tuple \
+                 envelope on the canonical Invocation face",
+            )));
+        };
+        // The resolver's verdict is authoritative: send the SELECTED
+        // callee downstream, not the caller-supplied one.
+        let envelope = envelope_with_selected_callee(envelope, selected_route);
+        let dispatch_ability = selected_route.dispatch_key();
+        let target_contract_v1 = self
+            .directory
+            .presence
+            .dispatch_contract_version(&selected_route.execution_host_ura)
+            .unwrap_or(0)
+            >= 1;
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = remote_rpc_selected_route_dispatch,
+            ability = ability.as_str(),
+            dispatch_ability = dispatch_ability.as_str(),
+            callee_ura = selected_route.callee_ura.as_str(),
+            execution_host_ura = selected_route.execution_host_ura.as_str(),
+            route_ura = selected_route.route_ura.as_str(),
+            carrier_v1 = target_contract_v1,
+        );
+        let arguments = request.arguments.clone();
+        let (_call_id, dispatch_result) = self
+            .dispatch_frame_to_presence(selected_route, "Invoke", |call_id| {
+                if target_contract_v1 {
+                    Ok(build_carrier_v1_dispatch_frame(
+                        call_id,
+                        easynet_axon::pb::axon::v1::InvokeRequest {
+                            envelope: Some(envelope.clone()),
+                            function_name: dispatch_ability.clone(),
+                            arguments: arguments.clone(),
+                            ..easynet_axon::pb::axon::v1::InvokeRequest::default()
+                        },
+                        false,
+                    ))
+                } else {
+                    // v0 JSON fallback (one release window, dies with
+                    // step 5). No origin-caller claim: the canonical
+                    // envelope's CallerSignature carries no signer
+                    // pubkey (verifiers resolve keys independently),
+                    // so minting a claim here would fabricate key
+                    // material. Per the claim contract fidelity is
+                    // additive, never gating — v0 devices execute
+                    // with the trust-domain identity.
+                    let subject_ura = envelope.subject.as_ref().map(|s| s.ura.clone());
+                    build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
+                        call_id,
+                        callee_ura: &selected_route.callee_ura,
+                        subject_ura: subject_ura.as_deref(),
+                        ability: &dispatch_ability,
+                        args: &arguments,
+                        args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                        metadata: HashMap::new(),
+                        origin_caller: None,
+                    })
+                }
+            })
+            .await?;
+        let DispatchResult {
+            // Hub-side receipt projection for the unary face follows
+            // the bidi step-2c path in the next slice; the executing
+            // device's runtime already holds the canonical row.
+            receipt: _,
+            payload: result_bytes,
+            error,
+            failure,
+            request_id,
+        } = dispatch_result;
+        if let Some(err) = error {
+            let detail = failure
+                .as_ref()
+                .map(SessionFailure::status_detail)
+                .unwrap_or(err);
+            return Err(Status::failed_precondition(format!(
+                "Invoke: remote route `{}` ability `{}` failed: {detail}",
+                selected_route.route_ura, selected_route.dispatch_name,
+            )));
+        }
+        Ok(Response::new(InvokeResponse {
+            header: request_id.map(|rid| ResponseHeader {
+                request_id: rid,
+                status: "completed".to_string(),
+                ..ResponseHeader::default()
+            }),
+            result: result_bytes,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+            ..InvokeResponse::default()
+        }))
+    }
+
     /// Reverse-channel dispatch for a resolver-selected
     /// `federation.forward_invoke` route.
     ///
@@ -1367,115 +1570,47 @@ impl UnaryDispatcher {
         >,
         caller_envelope: Option<&Envelope>,
     ) -> Result<Response<InvokeResponse>, Status> {
-        let pending = self.sessions.pending.as_ref().ok_or_else(|| {
-            Status::failed_precondition(
-                "federation.forward_invoke: daemon was constructed without a \
-                 PendingDispatchMap; call DaemonInvocationService::with_pending(...) \
-                 at boot to enable cross-device forward_invoke dispatch",
-            )
-        })?;
-        let (session_id, sender) = self
-            .directory
-            .presence
-            .lookup_tracked(&selected_route.execution_host_ura)
-            .ok_or_else(|| {
-                Status::failed_precondition(selected_host_unavailable_message(selected_route))
-            })?;
-
         let dispatch_ability = selected_route.dispatch_key();
-
-        // Register pending entry BEFORE pushing the frame so a
-        // fast device reply lands a real `complete()` rather
-        // than a no-op (race-free correlation, same contract as
-        // `dispatch_invoke_remote`).
-        //
-        // Use `register_pending_for(target_ura)` so the daemon's
-        // presence-offline watcher (`with_pending` ctor hook) can
-        // fail-fast this entry the moment `<self>.session` for
-        // `request.target_ura` drops mid-call — without this the
-        // `await_reply()` below blocks on the oneshot until the
-        // operator-side HTTP timeout fires.
-        let handle = pending.register_pending_for(&selected_route.execution_host_ura);
-        let call_id = handle.call_id();
 
         // Carrier selection (DEC-F004): v1 device + a real caller
         // envelope in hand → canonical proto frame, verbatim forward.
         // No envelope (legacy bridge args) or an origin-caller claim
-        // → JSON shape until T2.1b retires both.
+        // → JSON shape until step 5 retires both.
         let target_contract_v1 = self
             .directory
             .presence
             .dispatch_contract_version(&selected_route.execution_host_ura)
             .unwrap_or(0)
             >= 1;
-        let dispatch_frame = match (target_contract_v1, caller_envelope, &origin_caller) {
-            (true, Some(envelope), None) => build_carrier_v1_dispatch_frame(
-                call_id,
-                easynet_axon::pb::axon::v1::InvokeRequest {
-                    envelope: Some(envelope.clone()),
-                    function_name: dispatch_ability.clone(),
-                    arguments: inner_payload.args_bytes.clone(),
-                    ..easynet_axon::pb::axon::v1::InvokeRequest::default()
-                },
-                false,
-            ),
-            _ => build_invoke_remote_dispatch_frame(
-                call_id,
-                &selected_route.callee_ura,
-                // No explicit subject: the executing device defaults the
-                // inner subject to the callee — the same rule the
-                // origin-caller claim signs over.
-                None,
-                &dispatch_ability,
-                &inner_payload.args_bytes,
-                SessionContentEnvelope::plaintext_json(),
-                HashMap::new(),
-                origin_caller.cloned(),
-            )?,
-        };
-
-        match sender.try_send(Ok(dispatch_frame)) {
-            Ok(()) => {}
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.directory.presence.remove_if_session(
-                    &selected_route.execution_host_ura,
-                    session_id,
-                    crate::services::presence_registry::OfflineReason::SendFailed,
-                );
-                return Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-                ));
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                self.directory.presence.remove_if_session(
-                    &selected_route.execution_host_ura,
-                    session_id,
-                    crate::services::presence_registry::OfflineReason::StreamClosed,
-                );
-                return Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-                ));
-            }
-        }
-
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = forward_invoke_local_presence_dispatch_awaiting_reply,
-            callee_ura = selected_route.callee_ura.as_str(),
-            execution_host_ura = selected_route.execution_host_ura.as_str(),
-            ability = selected_route.dispatch_name.as_str(),
-            route_ura = selected_route.route_ura.as_str(),
-            call_id = call_id,
-        );
-
-        // Await the matching Result frame.
-        let dispatch_result = handle.await_reply().await.map_err(|_recv_err| {
-            Status::unavailable(format!(
-                "federation.forward_invoke: selected execution host `{}` session disconnected before \
-                 reply (call_id={call_id})",
-                selected_route.execution_host_ura,
-            ))
-        })?;
+        let (call_id, dispatch_result) = self
+            .dispatch_frame_to_presence(selected_route, "federation.forward_invoke", |call_id| {
+                match (target_contract_v1, caller_envelope, &origin_caller) {
+                    (true, Some(envelope), None) => Ok(build_carrier_v1_dispatch_frame(
+                        call_id,
+                        easynet_axon::pb::axon::v1::InvokeRequest {
+                            envelope: Some(envelope.clone()),
+                            function_name: dispatch_ability.clone(),
+                            arguments: inner_payload.args_bytes.clone(),
+                            ..easynet_axon::pb::axon::v1::InvokeRequest::default()
+                        },
+                        false,
+                    )),
+                    _ => build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
+                        call_id,
+                        callee_ura: &selected_route.callee_ura,
+                        // No explicit subject: the executing device defaults the
+                        // inner subject to the callee — the same rule the
+                        // origin-caller claim signs over.
+                        subject_ura: None,
+                        ability: &dispatch_ability,
+                        args: &inner_payload.args_bytes,
+                        args_content_envelope: SessionContentEnvelope::plaintext_json(),
+                        metadata: HashMap::new(),
+                        origin_caller: origin_caller.cloned(),
+                    }),
+                }
+            })
+            .await?;
 
         let DispatchResult {
             // Forward-path receipt projection rides T2.1b (the backend
