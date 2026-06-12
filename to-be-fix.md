@@ -837,6 +837,15 @@
   引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
   切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
   step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-13 第 59 轮(循环会话,流形核查→路由)**:设备侧能力面亲核——
+  handle_carrier_v1_dispatch 仅两臂(open_bidi → step-3b 长连;否则 dispatch_rpc_admitted
+  unary),**server-stream over carrier 无设备臂**:stream-mode ability 走 DispatchCall 会
+  撞 modes.rpc 拒绝;流式现仅 JSON SessionDispatch 路(open_stream_via_axon :1554 在 JSON
+  臂内)。**路由载体会话(step-3c 提案)**:DispatchCall 加 stream 模态分支(等价
+  open_stream_via_axon → 非终 DispatchResult{terminal:false} 链回 chunk,与既有
+  remote_stream_sessions/spawn_stream_forwarder 同构,JSON 臂机械翻译);hub 侧流臂
+  (pending 多帧 recv → InvokeStream 响应通道)我建,设备臂落地即接。在此之前 backend
+  整 fork 退役维持等待(不做模式分叉半切,第 47 轮裁决不变)。
 - **2026-06-13 第 58 轮(循环会话,四波审计)**:2a60cb6(协商测试 +71)✓;056f4de
   (投影小改 ±25)✓;363fcb2 ✓——remote_desktop fixture 里**回潮的 F-042 第 4 野形**
   (`invocation/<id>/receipt/<n>`)换回 borrowed ledger 形(`resource/<owner>.invocations/
@@ -884,6 +893,15 @@
   引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
   切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
   step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-13 第 59 轮(循环会话,流形核查→路由)**:设备侧能力面亲核——
+  handle_carrier_v1_dispatch 仅两臂(open_bidi → step-3b 长连;否则 dispatch_rpc_admitted
+  unary),**server-stream over carrier 无设备臂**:stream-mode ability 走 DispatchCall 会
+  撞 modes.rpc 拒绝;流式现仅 JSON SessionDispatch 路(open_stream_via_axon :1554 在 JSON
+  臂内)。**路由载体会话(step-3c 提案)**:DispatchCall 加 stream 模态分支(等价
+  open_stream_via_axon → 非终 DispatchResult{terminal:false} 链回 chunk,与既有
+  remote_stream_sessions/spawn_stream_forwarder 同构,JSON 臂机械翻译);hub 侧流臂
+  (pending 多帧 recv → InvokeStream 响应通道)我建,设备臂落地即接。在此之前 backend
+  整 fork 退役维持等待(不做模式分叉半切,第 47 轮裁决不变)。
 - **2026-06-13 第 58 轮(循环会话,四波审计)**:2a60cb6(协商测试 +71)✓;056f4de
   (投影小改 ±25)✓;363fcb2 ✓——remote_desktop fixture 里**回潮的 F-042 第 4 野形**
   (`invocation/<id>/receipt/<n>`)换回 borrowed ledger 形(`resource/<owner>.invocations/
