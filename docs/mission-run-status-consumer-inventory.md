@@ -1,31 +1,47 @@
-# mission run.json 消费面盘点(T5.3 前置设计件,2026-06-12)
+# Mission `meta.json` Status Consumer Inventory
 
-> spec T5.3 前置:「run.json 消费面盘点——跨仓 grep,消费点清单落档后才许改 wire」。
-> 方法:三仓全量 grep(run.json / MissionRunMeta / mission_runs / 五个 status 字面量)。
+T5.3 precondition and closure note, refreshed on 2026-06-12.
 
-## 结论:wire 风险塌缩
+## Inventory Result
 
-1. **跨仓消费为零**【实测】:EasyNet backend(Go)、Frontend(TS)、scripts/、tests/
-   对 run.json 与 mission status 字面量全部零命中。审计期担心的「跨仓读 mission run
-   的消费面」不存在——T5.3 的 serde 兼容约束塌缩为单条:**磁盘上既有 run 目录的
-   历史 meta 仍可读**(且按总指令「不兼容旧方案」,此条也可降级为:旧 run 读不出
-   status 时显示 unknown,不阻塞)。
-2. **Cli 侧单一所有权**:facade/cli/mission_runs.rs 拥有全部:
-   - 结构定义 :118(`pub status: String // "ok"|"error"|"partial"|"running"|"cancelled"`);
-   - 写点 :245(cancelled)、:515(partial 投影)、创建期初值;
-   - **pid 活性判定 :174**(`path.join("pid").exists()` —— F-022 的「磁盘文件即状态机」本体);
-   - pid 写 :50 / 清 :74(注释自述 presence == in-flight)。
-   其余命中(eal/ir、parser、dispatch.rs:642 的 exit_status、mission_ability.rs 文档行)
-   均非 run.json status 的读写方。
-3. **enum 化的真实工作量**:`MissionRunStatus{Running, Ok, Partial, Error, Cancelled}`
-   + `#[serde(rename_all = "lowercase")]` 即可原位读旧值(旧字面量恰为小写)——
-   serde 迁移近乎免费。**T5.3 的实际难点只剩 liveness 半边**:
-   - pid 文件 → 心跳时间戳(运行循环周期 touch);
-   - 层向注意:心跳写手必须由 run 持有者(mission 运行循环)驱动,不可让 eal
-     反向依赖 facade——建议 MissionRunDir 暴露 `heartbeat()` 方法,以句柄形式
-     传入运行闭包(与 MissionContextGuard 同途),eal 不知道文件布局;
-   - 读侧:心跳超龄(> 3× 周期)→ 投影 `Error{interrupted}`,假 running 消亡。
+Cross-repository consumers of mission run status are effectively absent:
 
-## 对 spec 的修正建议
-T5.3 规模可从 M 降至 S+(单文件 + 心跳句柄穿线);「旧 run.json 可读」验收保留
-(lowercase rename 免费满足),「跨仓消费面无遗漏」验收由本盘点闭合。
+- EasyNet backend, frontend, scripts, and integration tests do not directly parse the CLI mission `meta.json` status vocabulary.
+- CLI owns the mission run directory layout in `src/facade/cli/mission_runs.rs`.
+- Other hits for `status`, `running`, or `mission_id` belong to unrelated surfaces such as device presence, boot status, control-plane diagnostics, and EAL trace metadata.
+
+That collapses the compatibility boundary to one local requirement: historical mission `meta.json` files that store lowercase status strings must continue to deserialize.
+
+## Implemented Shape
+
+`src/facade/cli/mission_runs.rs` now owns the complete F-022/T5.3 state model:
+
+- `MissionRunStatus` is an enum serialized with `#[serde(rename_all = "lowercase")]`.
+- Historical literals `ok`, `error`, `partial`, `running`, and `cancelled` parse into the enum unchanged.
+- Unknown status strings are rejected instead of flowing through as untyped state.
+- `MissionRunMeta.status` is typed as `MissionRunStatus`, not `String`.
+- `MissionRunStatus::is_terminal()` is the single terminal-state predicate.
+
+Liveness no longer uses a pid file:
+
+- `MissionRunStore::create` starts a run-owned heartbeat pump.
+- A fresh `heartbeat` file means the run is alive now.
+- A stale or missing heartbeat means `running = false`, even if `meta.status == Running`.
+- `MissionRunSummary::is_interrupted()` identifies the exact crash state: stored `Running` plus dead heartbeat.
+- `cancel_run` can settle an interrupted run to `Cancelled`.
+
+## Test Evidence
+
+The implementation is pinned by focused tests in `src/facade/cli/mission_runs.rs`:
+
+- `status_serde_matches_historical_literals`
+- `create_starts_heartbeat_and_finish_removes_it`
+- `interrupted_run_reads_dead_not_running_forever`
+- `cancel_run_flips_in_flight_to_cancelled`
+- `cancel_run_noop_on_terminal`
+
+## Boundary Decision
+
+This remains CLI-owned persistence, not an Axon protocol object. Axon may own cross-language mission control and receipt state, but the local run directory, heartbeat file, and CLI history listing are daemon/product runtime state.
+
+No backend or frontend migration is required for T5.3.

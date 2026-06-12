@@ -61,10 +61,12 @@ impl MissionRunStore {
     }
 
     /// Anchor to an explicit root (tests pass a TempDir path; no env).
+    #[cfg(test)]
     pub fn with_root(root: PathBuf) -> Self {
         Self { root }
     }
 
+    #[cfg(test)]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -234,7 +236,7 @@ fn allocate_unique_run_dir(
 }
 
 /// Mission run lifecycle — the stored state machine for `meta.json`
-/// (F-022 / T5.3: `status: String` plus pid-file liveness was the
+/// (F-022 / T5.3: stringly status plus pid-file liveness was the
 /// "disk file as state machine" debt). Serialized lowercase, which is
 /// byte-identical to the historical string literals, so every
 /// existing run directory on disk parses unchanged.
@@ -322,6 +324,7 @@ impl MissionRunSummary {
     /// The run's process died without writing a terminal status —
     /// meta still says `running` but the heartbeat went stale. The
     /// exact state F-022's pid file misrendered as forever-running.
+    #[cfg(test)]
     pub fn is_interrupted(&self) -> bool {
         self.meta.status == MissionRunStatus::Running && !self.running
     }
@@ -773,22 +776,15 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
 
 // ── Mission context guard ──────────────────────────────────────────────────
 //
-// Installs the active `DispatchContext` for the duration of a mission
-// run on TWO channels:
+// Installs the active `DispatchContext` for the duration of a mission run on
+// the typed in-process channel only. Concurrent missions on different threads
+// get independent contexts; worker pools receive the context by explicit
+// handoff, not by process-global mutation.
 //
-//   1. The typed thread-local in `runtime::context` — the primary
-//      in-process channel. Concurrent missions on different threads
-//      get independent contexts (no cross-thread stomping).
-//   2. The `EASYNET_MISSION_ID` env var — the cross-process channel.
-//      When the mission interpreter spawns an external agent CLI as a
-//      child process, the child inherits the env var and reconstructs
-//      the typed context from it on entry.
-//
-// Both channels are reset on Drop (panic-safe). The env-var write is the
-// remaining piece of process-global state in this codebase; it is here
-// because spawning a subprocess is the only operation that crosses the
-// thread-local boundary, and the env is the only mechanism that crosses
-// the process boundary. See `runtime::context` for the design rationale.
+// `EASYNET_MISSION_ID` is reserved for the cross-process boundary. When the
+// runtime spawns an external agent CLI, `DispatchContext::serialize_to_env`
+// writes the child command's env map; the parent process env is never mutated.
+// See `runtime::context` for the design rationale.
 /// RAII scope for the mission's typed dispatch context.
 ///
 /// Audit invariant: NOTHING in-process writes `EASYNET_MISSION_ID`.

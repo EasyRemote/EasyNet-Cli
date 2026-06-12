@@ -275,9 +275,9 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     };
 
     // Hand the source to THE single in-process mission entry point.
-    // The runner sets `EASYNET_MISSION_ID` for the duration of execution
-    // (see `mission_runs::MissionContextGuard`), so any nested
-    // `dispatch::send_to_agent` calls satisfy Step 9's invariant.
+    // The runner installs a typed `DispatchContext`; nested
+    // `dispatch::send_to_agent` calls satisfy Step 9's invariant without
+    // mutating the parent process environment.
     let result = mission_runs::run_mission_inproc(
         &eal_source,
         MissionRunOpts {
