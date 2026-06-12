@@ -177,15 +177,15 @@ pub fn dispatch(
     let local_agent_uras = LocalAgentAbilityOwners::load();
     let mut rows: Vec<Candidate> = Vec::new();
     for (peer_name, peer_entry) in agents.agents.iter() {
-        let manifests = crate::runtime::abilities::manifests_for(peer_name, peer_entry);
-        for m in manifests {
+        let manifests = crate::runtime::abilities::manifests_for_shared(peer_name, peer_entry);
+        for m in manifests.iter() {
             push_candidate(
                 &mut rows,
                 &local_agent_uras,
                 self_agent,
                 peer_name,
                 peer_entry,
-                &m,
+                m,
                 scope,
             );
         }
