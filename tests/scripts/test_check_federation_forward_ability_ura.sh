@@ -12,8 +12,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src" "$sandbox/tests"
+    mkdir -p "$sandbox/src/services/invocation_transport" "$sandbox/tests"
     cp -R "$REPO_ROOT/src/support" "$sandbox/src/support"
+    cp "$REPO_ROOT/src/services/invocation_transport/federation_invoke.rs" "$sandbox/src/services/invocation_transport/federation_invoke.rs"
     echo "$sandbox"
 }
 
@@ -27,7 +28,7 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: Ability URA boun
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-cat >>"$SB/src/support/federation_invoke.rs" <<'RS'
+cat >>"$SB/src/services/invocation_transport/federation_invoke.rs" <<'RS'
 
 pub fn invoke_via_federation_forward() {}
 RS
@@ -40,7 +41,7 @@ SB="$(make_sandbox)"
 mkdir -p "$SB/src/facade/cli"
 cat >"$SB/src/facade/cli/probe.rs" <<'RS'
 pub fn probe() {
-    crate::support::federation_invoke::invoke_via_federation_forward();
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward();
 }
 RS
 rc=0
@@ -49,7 +50,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "ability+args wrapper call should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-cat >>"$SB/src/support/federation_invoke.rs" <<'RS'
+cat >>"$SB/src/services/invocation_transport/federation_invoke.rs" <<'RS'
 
 fn forward_ability_ura_for_target() {}
 RS

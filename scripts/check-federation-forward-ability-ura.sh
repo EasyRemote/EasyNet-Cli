@@ -12,7 +12,7 @@ fail() {
     exit 1
 }
 
-[[ -f src/support/federation_invoke.rs ]] || fail "missing src/support/federation_invoke.rs"
+[[ -f src/services/invocation_transport/federation_invoke.rs ]] || fail "missing src/services/invocation_transport/federation_invoke.rs"
 
 bad="$(
     find src tests -name '*.rs' -print 2>/dev/null \
@@ -25,14 +25,14 @@ if [[ -n "$bad" ]]; then
 $bad"
 fi
 
-grep -q 'struct TargetOwnedAbilityUra' src/support/federation_invoke.rs \
+grep -q 'struct TargetOwnedAbilityUra' src/services/invocation_transport/federation_invoke.rs \
     || fail "missing explicit target-owned Ability URA value object"
 
-if grep -q 'fn forward_ability_ura_for_target' src/support/federation_invoke.rs; then
+if grep -q 'fn forward_ability_ura_for_target' src/services/invocation_transport/federation_invoke.rs; then
     fail "old target-owner Ability URA derivation helper must stay retired"
 fi
 
-grep -q 'fn invoke_via_federation_forward_ability_ura' src/support/federation_invoke.rs \
+grep -q 'fn invoke_via_federation_forward_ability_ura' src/services/invocation_transport/federation_invoke.rs \
     || fail "missing canonical Ability URA federation invoke helper"
 
 echo "check-federation-forward-ability-ura: ok"

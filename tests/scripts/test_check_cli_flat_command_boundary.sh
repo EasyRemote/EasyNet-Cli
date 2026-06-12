@@ -29,7 +29,7 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: layered CLI boun
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#Command::HeartbeatDaemon#Command::Start(args) => start::run(args),\n        Command::HeartbeatDaemon#' "$SB/src/facade/cli/mod.rs"
+perl -0pi -e 's#Command::Auth\(args\) => groups::auth::dispatch\(args\),#Command::Start(args) => start::run(args),\n        Command::Auth(args) => groups::auth::dispatch(args),#' "$SB/src/facade/cli/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

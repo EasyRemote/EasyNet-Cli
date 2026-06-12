@@ -14,7 +14,7 @@ fail() {
 
 LLM_RS="src/facade/cli/llm_api.rs"
 OPENAI_RS="src/runtime/agents/openai_compat_ability.rs"
-RUNTIME_AGENTS_RS="src/runtime/agents/mod.rs"
+RUNTIME_AGENTS_RS="src/runtime/agents/catalog_metadata.rs"  # descriptor source moved here in the T4.5 mod.rs split
 DOC_MD="docs/PAGES_AND_LLM_API.md"
 CHAT_TOML="abilities/system/openai.chat_completions.ability.toml"
 MODELS_TOML="abilities/system/openai.list_models.ability.toml"

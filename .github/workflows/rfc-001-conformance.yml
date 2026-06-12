@@ -37,3 +37,17 @@ jobs:
       - name: Baseline regression lock (fails if violations increased)
         run: |
           ./scripts/check-rfc-001-baseline-lock.sh
+
+      - name: URA construction valve (F-055 — facade builders only)
+        run: |
+          ./scripts/check-ura-construction.sh
+
+      - name: URA surface pins (self-contained set)
+        # check-canonical-hub-ura-boundary.sh stays manual-only: it
+        # cross-references the sibling EasyNet-Axon checkout.
+        run: |
+          ./scripts/check-cli-ability-invoke-ura.sh
+          ./scripts/check-federation-forward-ability-ura.sh
+          ./scripts/check-invoke-ability-ura-input.sh
+          ./scripts/check-openai-model-ability-ura.sh
+          ./scripts/check-pages-api-ability-ura.sh

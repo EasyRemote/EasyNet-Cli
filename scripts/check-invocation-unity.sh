@@ -55,7 +55,7 @@ for f in src/runtime/kernel_api.rs src/runtime/gateway_api.rs; do
     if [ -n "$bad" ]; then
         echo "ERROR: trait definition at $f uses raw JSON payload fragments:"
         echo "$bad"
-        echo "  Use Invocation or a typed domain object (see src/runtime/domain.rs)."
+        echo "  Use Invocation or a typed domain object (see src/core/domain.rs)."
         violations=$((violations + 1))
     fi
 done
