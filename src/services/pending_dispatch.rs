@@ -264,7 +264,7 @@ impl PendingDispatchMap {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DispatchStreamEvent {
     Chunk(Vec<u8>),
-    Terminal(DispatchResult),
+    Terminal(Box<DispatchResult>),
 }
 
 /// Outcome of a non-blocking delivery into a pending stream entry.
@@ -349,7 +349,7 @@ impl PendingStreamDispatchMap {
     pub async fn finish(&self, call_id: u64, result: DispatchResult) -> bool {
         match self.inner.entries.remove(&call_id) {
             Some((_, sender)) => sender
-                .send(DispatchStreamEvent::Terminal(result))
+                .send(DispatchStreamEvent::Terminal(Box::new(result)))
                 .await
                 .is_ok(),
             None => false,
@@ -390,7 +390,7 @@ impl PendingStreamDispatchMap {
     pub fn try_finish(&self, call_id: u64, result: DispatchResult) -> StreamDeliver {
         match self.inner.entries.remove(&call_id) {
             Some((_, sender)) => {
-                match sender.try_send(DispatchStreamEvent::Terminal(result)) {
+                match sender.try_send(DispatchStreamEvent::Terminal(Box::new(result))) {
                     Ok(()) => StreamDeliver::Delivered,
                     Err(mpsc::error::TrySendError::Full(_)) => StreamDeliver::ConsumerStalled,
                     Err(mpsc::error::TrySendError::Closed(_)) => StreamDeliver::NoMatch,
@@ -607,13 +607,13 @@ mod tests {
         );
         assert_eq!(
             handle.recv().await,
-            Some(DispatchStreamEvent::Terminal(DispatchResult {
+            Some(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
                 receipt: None,
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
                 error: None,
                 failure: None,
                 request_id: None,
-            }))
+            })))
         );
         writer.await.expect("writer joined");
     }

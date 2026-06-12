@@ -196,6 +196,8 @@ async fn main() -> anyhow::Result<()> {
     let pages_identity = agents::PagesIdentity::from_env();
     let invocation_ledger = open_invocation_ledger();
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
+    let hub_published_abilities =
+        easynet_cli::services::hub_published_ability_store::HubPublishedAbilityStore::new();
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -214,18 +216,22 @@ async fn main() -> anyhow::Result<()> {
     // landing.
     let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
         Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
-    let built_registry = agents::build_registry_for_daemon_result(
-        kernel.session_service(),
-        kernel.permission_service(),
-        kernel.discuss_service(),
-        kernel.schedule_service(),
-        kernel.loop_service(),
-        invocation_ledger.clone(),
-        None,
-        pages_identity,
-        Some(Arc::clone(&local_runtime)),
-        Arc::clone(&hot_agent_registrar_cell),
-    );
+    let built_registry =
+        agents::build_registry_for_daemon_result(agents::RegistryDaemonBuildConfig {
+            services: agents::RegistryBuildServices::new(
+                kernel.session_service(),
+                kernel.permission_service(),
+                kernel.discuss_service(),
+                kernel.schedule_service(),
+                kernel.loop_service(),
+            ),
+            invocation_ledger: invocation_ledger.clone(),
+            loaders: None,
+            pages_identity,
+            local_runtime: Some(Arc::clone(&local_runtime)),
+            hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
+            shared_stores: agents::RegistrySharedStores::new(Arc::clone(&hub_published_abilities)),
+        });
     let registry = Arc::clone(&built_registry.catalog);
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
@@ -260,6 +266,7 @@ async fn main() -> anyhow::Result<()> {
             invocation_ledger,
             Arc::clone(&hot_agent_registrar_cell),
             Some(Arc::clone(&built_registry.plugin_runtime_manager)),
+            Arc::clone(&hub_published_abilities),
         ) {
             Ok(handle) => {
                 boot_bus.emit_ok("daemon-invocation-transport");

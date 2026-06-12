@@ -4,14 +4,11 @@
 use super::registry_builder::build_system_registry;
 use super::*;
 use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::execution::discuss::DiscussService;
-use crate::runtime::execution::loop_instance::LoopService;
-use crate::runtime::execution::permission::PermissionService;
-use crate::runtime::execution::pty::PtyService;
-use crate::runtime::execution::schedule::ScheduleService;
-use crate::runtime::execution::session::SessionService;
 use std::sync::Arc;
+
+fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_> {
+    RegistryBuildConfig::new(RegistryBuildServices::fresh(), agents)
+}
 
 #[test]
 fn published_ability_names_contains_agent_list_and_terminal_list() {
@@ -229,29 +226,28 @@ fn every_published_ability_resolves_to_a_handler() {
     );
 }
 
-/// For every RPC-mode ability with no-arg or empty-args
-/// schema, actually invoke it through the dispatcher with
-/// `{}` and confirm the call returns SOME result (Ok(value)
-/// or a structured Err). The point is: we exercise the full
-/// dispatch path for every ability we can — registry lookup,
-/// handler invocation, response materialisation — not just
-/// "the function pointer exists".
+/// For a bounded, low-cost set of read-only RPC-mode abilities,
+/// actually invoke through the dispatcher with `{}` and confirm the
+/// call returns SOME result (Ok(value) or a structured Err). This
+/// exercises registry lookup, LocalRuntime dispatch, handler
+/// invocation, and response materialisation without turning the
+/// assembly suite into a daemon-runtime integration test.
 ///
-/// Rationale for the empty-args scope:
-///   * Many RPC abilities have required fields (e.g.
-///     fs.read needs `path`). Calling them with `{}` will
-///     return Err(`missing required field`) which is the
-///     CORRECT response and proves the handler runs end-to-
-///     end. We accept Err here as PASS — the handler
-///     reached arg-validation.
-///   * What we reject is: panic (test framework catches),
-///     ABILITY_NOT_FOUND error (means dispatch never reached
-///     a handler), or a hang (test would time out).
+/// Deliberately do NOT invoke every RPC ability. Operational verbs
+/// such as `agent.refresh`, `voice.create_call`, `skill.install`,
+/// `process.exec`, and bridge calls are real work surfaces. A broad
+/// assembly test must not mutate `~/.easynet`, create daemon state, or
+/// wait on device/network/process paths just to prove registration. We
+/// also skip effect-free but heavyweight discovery aggregators such as
+/// `meta.list_abilities`, `mcp.bridge.list_tools`, and A2A/MCP client
+/// surfaces because their handler path rebuilds or reflects the
+/// catalogue. Full-coverage handler behavior belongs in per-ability
+/// tests.
 #[test]
 fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
-    let reg = build_registry();
+    let reg = build_system_registry();
     let dispatcher = Arc::clone(&reg);
     let names = reg.list_abilities();
 
@@ -259,13 +255,20 @@ fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
     let mut invoked_err: Vec<(String, String)> = Vec::new();
     let mut not_found: Vec<String> = Vec::new();
     let mut not_rpc: Vec<String> = Vec::new();
+    let mut skipped_effectful_or_expensive: Vec<String> = Vec::new();
 
     for name in &names {
-        // Only invoke things that ARE RPC. Stream / Bidi
-        // abilities skip this stage; the previous test
-        // confirmed they have a handler under their mode.
-        if reg.get_rpc(name).is_none() {
+        // Only invoke things that ARE RPC. Stream / Bidi abilities
+        // skip this stage; the previous test confirmed they have a
+        // handler under their mode. Use has_rpc(), not get_rpc(), so
+        // envelope-aware RPC handlers count too.
+        if !reg.has_rpc(name) {
             not_rpc.push(name.clone());
+            continue;
+        }
+        let hints = discovery_hints_for(&reg, name);
+        if !hints.read_only || !is_fast_read_only_smoke_ability(name) {
+            skipped_effectful_or_expensive.push(name.clone());
             continue;
         }
         let target = InvocationTarget {
@@ -316,11 +319,53 @@ fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
     if !not_rpc.is_empty() {
         eprintln!("  skipped (registered as Stream/Bidi): {not_rpc:?}");
     }
+    if !skipped_effectful_or_expensive.is_empty() {
+        eprintln!("  skipped (effectful or expensive RPC): {skipped_effectful_or_expensive:?}");
+    }
 
+    assert!(
+        !invoked_ok.is_empty() || !invoked_err.is_empty(),
+        "fast read-only RPC smoke must exercise at least one handler; \
+         check discovery_hints_for/read_only classification and \
+         is_fast_read_only_smoke_ability"
+    );
+    assert!(
+        skipped_effectful_or_expensive
+            .iter()
+            .any(|name| name == "process.exec"),
+        "effectful RPCs must stay out of the broad smoke path; \
+         skipped set was {skipped_effectful_or_expensive:?}"
+    );
     assert!(
         not_found.is_empty(),
         "abilities advertised but dispatcher could not find an RPC handler: {not_found:?}"
     );
+}
+
+/// Returns the read-only RPC verbs that are safe for a broad assembly
+/// smoke test to call with `{}`. This is not a second source of ability
+/// purity; `discovery_hints_for(...).read_only` remains the purity
+/// gate above. The allow-list only answers the separate test-engineering
+/// question "is this pure read cheap and environment-independent enough
+/// to execute in a registry-wide smoke".
+fn is_fast_read_only_smoke_ability(name: &str) -> bool {
+    matches!(
+        name,
+        "observe.health"
+            | "observe.network_health"
+            | "admin.status"
+            | "agent.list"
+            | "terminal.list"
+            | "session.list"
+            | "consent.list_pending"
+            | "schedule.list"
+            | "plugin.status"
+            | "meta.list_resources"
+            | "context.clipboard.list"
+            | "context.folders.list"
+            | "context.favorites.list"
+            | "context.captures.list"
+    )
 }
 
 #[test]
@@ -489,25 +534,13 @@ fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
     agents
         .agents
         .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    let reg = build_registry_with_services(
-        Arc::new(SessionService::new()),
-        Arc::new(PermissionService::new()),
-        Arc::new(DiscussService::new()),
-        Arc::new(ScheduleService::new()),
-        Arc::new(LoopService::new()),
-        None,
-        &agents,
-        Arc::new(Vec::new()),
-        crate::runtime::agents::PagesIdentity::default(),
-        None,
-        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
-    );
+    let reg = build_registry_with_services(registry_config_for_agents(&agents));
     let hints = discovery_hints_for(&reg, "alice.chat");
     assert!(
-            !hints.streaming_only && !hints.bidi_only,
-            "alice.chat must stay on the unary/OpenAI path until generic InvokeStream support lands; got {:?}",
-            hints
-        );
+        !hints.streaming_only && !hints.bidi_only,
+        "alice.chat must stay on the unary/OpenAI path until generic InvokeStream support lands; got {:?}",
+        hints
+    );
 }
 
 #[test]
@@ -523,19 +556,7 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
     agents
         .agents
         .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    let reg = build_registry_with_services(
-        Arc::new(SessionService::new()),
-        Arc::new(PermissionService::new()),
-        Arc::new(DiscussService::new()),
-        Arc::new(ScheduleService::new()),
-        Arc::new(LoopService::new()),
-        None,
-        &agents,
-        Arc::new(Vec::new()),
-        crate::runtime::agents::PagesIdentity::default(),
-        None,
-        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
-    );
+    let reg = build_registry_with_services(registry_config_for_agents(&agents));
     // Sanity: the registry itself does include alice.chat.
     assert!(reg.list_abilities().iter().any(|n| n == "alice.chat"));
     // But the system publisher's view excludes it. We can't call
@@ -609,19 +630,7 @@ fn registry_includes_chat_handler_per_registered_agent() {
     agents
         .agents
         .insert("bob".into(), AgentEntry::new(AgentType::Codex, None));
-    let reg = build_registry_with_services(
-        Arc::new(SessionService::new()),
-        Arc::new(PermissionService::new()),
-        Arc::new(DiscussService::new()),
-        Arc::new(ScheduleService::new()),
-        Arc::new(LoopService::new()),
-        None,
-        &agents,
-        Arc::new(Vec::new()),
-        crate::runtime::agents::PagesIdentity::default(),
-        None,
-        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
-    );
+    let reg = build_registry_with_services(registry_config_for_agents(&agents));
     let names = reg.list_abilities();
     assert!(
         names.iter().any(|n| n == "alice.chat"),
@@ -649,19 +658,7 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
     std::env::set_var("EASYNET_KEYRING_PASS", "test-pass-keyring-init");
 
     let agents = AgentRegistry::default();
-    let reg = build_registry_with_services(
-        Arc::new(SessionService::new()),
-        Arc::new(PermissionService::new()),
-        Arc::new(DiscussService::new()),
-        Arc::new(ScheduleService::new()),
-        Arc::new(LoopService::new()),
-        None,
-        &agents,
-        Arc::new(Vec::new()),
-        crate::runtime::agents::PagesIdentity::default(),
-        None,
-        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
-    );
+    let reg = build_registry_with_services(registry_config_for_agents(&agents));
     let names = reg.list_abilities();
 
     // Restore env before assertions so a panic doesn't leak

@@ -53,10 +53,12 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-// The axon service boundary is tonic-shaped: generated server traits
-// and handler adapters return `tonic::Status` by value. Boxing it in
-// local helpers would add mapping noise while the public trait still
-// has to use `Status`, so this module owns the exception.
+// Tonic generated service traits and daemon-side dispatch helpers are
+// `Result<_, tonic::Status>` boundaries. Boxing `Status` inside this
+// module would only add unwrap/rebox noise before returning to the
+// same generated trait surface. Keep the exception local to the
+// transport boundary so the crate-level F-005 ratchet still catches
+// large error regressions everywhere else.
 #![allow(clippy::result_large_err)]
 
 pub mod admission_facade;

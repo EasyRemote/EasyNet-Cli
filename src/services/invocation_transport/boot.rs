@@ -73,12 +73,9 @@
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use ed25519_dalek::SigningKey;
 
 use crate::runtime::axon_bridge::hot_agent_registrar::{
     HotAgentAdvertiseOutcome, HotAgentAdvertiseRequest, HotAgentAdvertiser, HotAgentRevokeRequest,
@@ -86,42 +83,42 @@ use crate::runtime::axon_bridge::hot_agent_registrar::{
 use crate::services::invocation_transport::invoke_remote_initiator::{
     RequestOutcome, SessionRequestError,
 };
-use serde::Deserialize;
-
-#[cfg(windows)]
-use tonic::transport::server::Connected;
-use tonic::transport::{Identity, Server, ServerTlsConfig};
-
-#[cfg(windows)]
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-#[cfg(windows)]
-use tokio::net::windows::named_pipe::NamedPipeServer;
-#[cfg(windows)]
-use tokio_stream::wrappers::ReceiverStream;
-#[cfg(unix)]
-use tokio_stream::wrappers::UnixListenerStream;
 
 use crate::persistence::daemon_config::{
     DaemonConfig, DaemonConfigError, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
 };
-use crate::runtime::publish::derive_subject_keypair;
 use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
 use crate::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
-use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::invocation_transport::session_initiator::{
     initial_session_admission_probe, run_session_supervisor,
 };
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
-use crate::services::realm_trust_anchor::{
-    RealmTrustAnchor, TrustedAgent, TrustedAgentRole, DEFAULT_REALM_TRUST_PATH,
-};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::usage_quota_store::SharedUsageQuotaGate;
-#[cfg(windows)]
-use crate::support::named_pipe::PipeListener;
-use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+
+mod identity;
+mod listeners;
+mod paths;
+mod presence_seed;
+mod trust;
+
+#[cfg(test)]
+use identity::{
+    canonical_caller_ura_from_stored_identity, daemon_identity_from_stored, StoredDeviceIdentity,
+};
+use identity::{load_daemon_identity, maybe_bootstrap_runtime_self_identity, DaemonIdentity};
+use listeners::{spawn_tcp_tls_listener, spawn_uds_listener};
+use paths::expand_home;
+use presence_seed::seed_boot_presence;
+#[cfg(test)]
+use trust::read_backend_identity_record;
+pub(crate) use trust::trust_anchor_path_from_env_or_default;
+use trust::{
+    load_trust_anchor_from, reload_daemon_config_cells_from, reload_trust_anchor_cell_from,
+    upsert_backend_identity_from_disk,
+};
 
 /// Maximum decoded gRPC message size for InvocationServer/Client on
 /// both directions. tonic's default cap is 4 MiB which aborted
@@ -136,53 +133,6 @@ use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 /// `OutOfRange: decoded message length too large` mid-stream.
 pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const INITIAL_SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(15);
-
-#[cfg(windows)]
-#[derive(Debug)]
-struct NamedPipeGrpcIo(NamedPipeServer);
-
-#[cfg(windows)]
-impl Connected for NamedPipeGrpcIo {
-    type ConnectInfo = ();
-
-    fn connect_info(&self) -> Self::ConnectInfo {}
-}
-
-#[cfg(windows)]
-impl AsyncRead for NamedPipeGrpcIo {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
-    }
-}
-
-#[cfg(windows)]
-impl AsyncWrite for NamedPipeGrpcIo {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
-    }
-}
 
 /// Bring the daemon Invocation transport online inside the
 /// `easynet-daemon` process.
@@ -234,6 +184,9 @@ pub fn start_daemon_invocation_transport(
         crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell,
     >,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
+    hub_published_abilities: Arc<
+        crate::services::hub_published_ability_store::HubPublishedAbilityStore,
+    >,
 ) -> anyhow::Result<SessionShutdown> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
@@ -298,73 +251,7 @@ pub fn start_daemon_invocation_transport(
     let pending_stream =
         Arc::new(crate::services::pending_dispatch::PendingStreamDispatchMap::new());
 
-    // Demo-only presence seed (cfg-gated). Production binaries
-    // built without `--features demo-fixture` cannot honour the
-    // `EASYNET_DEMO_PRESENCE_SEED` env var no matter how it gets
-    // injected (container env, systemd unit override, etc.) —
-    // the symbol simply isn't there. Demo / e2e scripts pass
-    // `cargo build --features demo-fixture` to opt in.
-    maybe_seed_demo_presence(&presence);
-
-    // Device-mode self-presence seed.
-    //
-    // In device-mode the daemon's local PresenceRegistry is used by
-    // backend's `federation.resolve` (over the daemon UDS) to answer
-    // "which devices in this realm are online?". The hub-side
-    // presence registry holds the canonical answer, but in
-    // host-mode dev rigs (backend → device daemon UDS, no separate
-    // hub-mode daemon process) the backend never reaches the hub's
-    // presence — it queries this daemon's local one instead.
-    // Pre-this-fix: device daemon's local presence was empty because
-    // <self>.session is an OUTBOUND dial (the daemon dials the hub),
-    // not an inbound register, so nothing populated the local table.
-    // backend's `federation.resolve` then returned no agents; every
-    // device showed REMOVED in /api/v1/devices despite the bidi
-    // being healthy.
-    //
-    // Seed the local presence with the daemon's own URA on boot so
-    // the local resolve answers "yes I'm here" when the operator's
-    // backend asks. The dispatch sender pushes into a drain task
-    // (kept alive as long as the daemon process), so try_send never
-    // observes Closed/Full and the entry stays in the registry.
-    // For actual ability invokes targeting this URA, the
-    // `daemon_invocation_service` <self>.invoke_remote handler
-    // already short-circuits self-targeted invocations to the
-    // local Axon session dispatcher BEFORE try_send fires (see
-    // dispatch_self_targeted_forward_invoke in PR-1 commit 7/9).
-    //
-    // Hub / Both modes don't need this: their local presence is
-    // already populated by inbound device sessions, and the hub
-    // itself is the directory-of-record. Device-only.
-    if matches!(config.mode(), DaemonMode::Device) {
-        if let Some(ura) = daemon_ura.as_ref() {
-            let (noop_tx, mut noop_rx) = tokio::sync::mpsc::channel(
-                crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY,
-            );
-            // Drain task: holds the receiver alive for the lifetime
-            // of the daemon process. Without this, the receiver
-            // gets dropped when the seeding scope ends and the
-            // sender's first try_send observes Closed → presence
-            // entry deleted → the very state we're trying to fix.
-            tokio::spawn(async move {
-                while let Some(_frame) = noop_rx.recv().await {
-                    // Drop on the floor. The self-targeted
-                    // dispatch path runs inline through Axon
-                    // LocalRuntime; only defensive out-of-path frames
-                    // land here.
-                }
-            });
-            let prior = presence.insert(ura.clone(), noop_tx);
-            if prior.is_none() {
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = device_mode_self_presence_seeded,
-                    self_ura = ura,
-                    message = "drain task holds receiver; self-targeted invokes route through Axon LocalRuntime",
-                );
-            }
-        }
-    }
+    seed_boot_presence(config.mode(), daemon_ura.as_deref(), &presence);
 
     // Federated_peers cell first so we can hand it to BOTH the
     // DaemonInvocationService (for cross-hub `forward_invoke`
@@ -790,16 +677,17 @@ pub fn start_daemon_invocation_transport(
                     trust_anchor_path: trust_anchor_path.clone(),
                     cell: trust_anchor_cell.clone(),
                 };
-            session_shutdown = spawn_session_supervisor(
+            session_shutdown = spawn_session_supervisor(SessionSupervisorConfig {
                 hub_endpoint,
                 identity,
                 hub_ca_pem_path,
                 escalation_state,
-                Arc::clone(&local_runtime),
-                Arc::clone(&ability_wire_registry),
-                plugin_runtime_manager.clone(),
+                local_runtime: Arc::clone(&local_runtime),
+                ability_wire_registry: Arc::clone(&ability_wire_registry),
+                plugin_runtime_manager: plugin_runtime_manager.clone(),
+                hub_published_abilities: Arc::clone(&hub_published_abilities),
                 user_trust_sync,
-            )?;
+            })?;
         } else {
             crate::op_event!(
                 component = daemon_invocation,
@@ -1009,7 +897,7 @@ struct DeviceEscalationState {
         Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>,
 }
 
-fn spawn_session_supervisor(
+struct SessionSupervisorConfig {
     hub_endpoint: String,
     identity: DaemonIdentity,
     hub_ca_pem_path: Option<std::path::PathBuf>,
@@ -1017,8 +905,24 @@ fn spawn_session_supervisor(
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
+    hub_published_abilities:
+        Arc<crate::services::hub_published_ability_store::HubPublishedAbilityStore>,
     user_trust_sync: crate::services::invocation_transport::session_initiator::UserTrustSync,
-) -> anyhow::Result<SessionShutdown> {
+}
+
+fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<SessionShutdown> {
+    let SessionSupervisorConfig {
+        hub_endpoint,
+        identity,
+        hub_ca_pem_path,
+        escalation_state,
+        local_runtime,
+        ability_wire_registry,
+        plugin_runtime_manager,
+        hub_published_abilities,
+        user_trust_sync,
+    } = config;
+
     // Build the device-owner descriptor projection from the same profile
     // registry that powers `meta.list_abilities`. RFC-005 route selection
     // consumes the hub-side owner projection; constructing it from bare
@@ -1094,16 +998,19 @@ fn spawn_session_supervisor(
     let hub_endpoint_for_wait = hub_endpoint.clone();
     let caller_ura_for_wait = identity.caller_ura.clone();
     tokio::spawn(run_session_supervisor(
-        hub_endpoint,
-        identity.caller_ura,
-        identity.signing_seed,
-        hub_ca_pem_path,
-        dispatcher,
-        outbox,
-        ability_descriptors,
-        Some(initial_admission),
-        Some(user_trust_sync),
-        cancel_rx,
+        crate::services::invocation_transport::session_initiator::SessionSupervisorRunConfig {
+            hub_endpoint,
+            caller_ura: identity.caller_ura,
+            signing_seed: identity.signing_seed,
+            hub_ca_pem_path,
+            dispatcher,
+            escalation_outbox: outbox,
+            ability_descriptors,
+            hub_published_abilities,
+            initial_admission: Some(initial_admission),
+            user_trust_sync: Some(user_trust_sync),
+            cancel: cancel_rx,
+        },
     ));
     spawn_initial_session_admission_observer(
         hub_endpoint_for_wait,
@@ -1202,877 +1109,6 @@ fn spawn_initial_session_admission_observer(
             }
         }
     });
-}
-
-#[cfg(unix)]
-fn spawn_uds_listener(
-    config: &DaemonConfig,
-    service: DaemonInvocationService,
-) -> anyhow::Result<()> {
-    let uds_path = expand_home(
-        config
-            .uds_path()
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("daemon-config uds_path is not valid UTF-8"))?,
-    );
-
-    if uds_path.exists() {
-        // The existing daemon's control.sock bind code unlinks
-        // before binding; mirror that semantic so a previous
-        // process's stale daemon.sock does not block us.
-        if let Err(err) = std::fs::remove_file(&uds_path) {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                let uds_path_display = format!("{}", uds_path.display());
-                let err_msg = format!("{err}");
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = uds_unlink_failed,
-                    uds_path = uds_path_display,
-                    error = err_msg,
-                    message = "bind will likely fail",
-                );
-            }
-        }
-    }
-
-    let listener = tokio::net::UnixListener::bind(&uds_path).map_err(|err| {
-        anyhow::anyhow!(
-            "failed to bind daemon Invocation UDS at {}: {err}",
-            uds_path.display()
-        )
-    })?;
-
-    // Mode 0600 per spec §1.2 Invariant 3. UnixListener::bind already
-    // creates the file; chmod after-the-fact rather than racing the
-    // bind. A failure here is a soft warning (the file is owned by
-    // the same user that just bound it; mode 0600 vs 0644 is a
-    // hardening detail, not a correctness one).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(err) =
-            std::fs::set_permissions(&uds_path, std::fs::Permissions::from_mode(0o600))
-        {
-            let uds_path_display = format!("{}", uds_path.display());
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = uds_chmod_failed,
-                uds_path = uds_path_display,
-                error = err_msg,
-                message = "running with default umask perms",
-            );
-        }
-    }
-
-    let uds_path_display = format!("{}", uds_path.display());
-    crate::op_event!(
-        component = daemon_invocation,
-        kind = grpc_invocation_server_listening,
-        transport = "uds",
-        uds_path = uds_path_display,
-    );
-
-    let incoming = UnixListenerStream::new(listener);
-    tokio::spawn(async move {
-        let result = Server::builder()
-            // UDS is loopback-only; keepalive is purely defensive
-            // for symmetry with the TCP+TLS listener below. Same
-            // 5s ping cadence as the TCP+TLS server so behaviour
-            // is uniform across listener types.
-            .http2_keepalive_interval(Some(Duration::from_secs(5)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
-            .tcp_keepalive(Some(Duration::from_secs(15)))
-            .add_service(
-                InvocationServer::new(service)
-                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
-                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
-            )
-            .serve_with_incoming(incoming)
-            .await;
-        if let Err(err) = result {
-            let err_msg = format!("{err:#}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = grpc_server_exited_with_error,
-                transport = "uds",
-                error = err_msg,
-            );
-        }
-    });
-
-    Ok(())
-}
-
-#[cfg(windows)]
-fn spawn_uds_listener(
-    config: &DaemonConfig,
-    service: DaemonInvocationService,
-) -> anyhow::Result<()> {
-    let pipe_name = config
-        .uds_path()
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("daemon-config named-pipe path is not valid UTF-8"))?
-        .to_string();
-    let mut listener = PipeListener::bind(pipe_name.clone()).map_err(|err| {
-        anyhow::anyhow!(
-            "failed to bind daemon Invocation named pipe {}: {err}",
-            pipe_name
-        )
-    })?;
-
-    let pipe_name_log = pipe_name.clone();
-    crate::op_event!(
-        component = daemon_invocation,
-        kind = grpc_invocation_server_listening,
-        transport = "named_pipe",
-        pipe_name = pipe_name_log,
-    );
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<NamedPipeGrpcIo>>(32);
-    tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok(stream) => {
-                    if tx.send(Ok(NamedPipeGrpcIo(stream))).await.is_err() {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    let _ = tx.send(Err(err)).await;
-                    break;
-                }
-            }
-        }
-    });
-
-    let incoming = ReceiverStream::new(rx);
-    tokio::spawn(async move {
-        let result = Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(5)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
-            .tcp_keepalive(Some(Duration::from_secs(15)))
-            .add_service(
-                InvocationServer::new(service)
-                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
-                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
-            )
-            .serve_with_incoming(incoming)
-            .await;
-        if let Err(err) = result {
-            let err_msg = format!("{err:#}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = grpc_server_exited_with_error,
-                transport = "named_pipe",
-                error = err_msg,
-            );
-        }
-    });
-
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn spawn_uds_listener(
-    _config: &DaemonConfig,
-    _service: DaemonInvocationService,
-) -> anyhow::Result<()> {
-    anyhow::bail!(
-        "daemon Invocation local listener is unavailable on this platform until the local transport \
-         backend lands"
-    )
-}
-
-/// Spawn the hub-mode TCP+TLS gRPC listener (PR-10 commit 1/N).
-/// `DaemonConfig` already enforces invariant 2 ("TCP requires
-/// TLS"), so by the time we land here `tls_cert_pem` and
-/// `tls_key_pem` are both `Some`. We fail boot — not silently
-/// skip — if either file fails to load: PR-10 spec INV-1
-/// (fail-closed) governs.
-///
-/// Cert/key are loaded once at boot. Rotation today requires a
-/// daemon restart; an automated rotation surface (file watcher
-/// + tonic `serve_with_shutdown` swap) is a future concern that
-/// PR-10's runbook §"static cert lifecycle" covers as operator-
-/// owned.
-fn spawn_tcp_tls_listener(
-    config: &DaemonConfig,
-    listen_tcp: std::net::SocketAddr,
-    service: DaemonInvocationService,
-) -> anyhow::Result<()> {
-    let cert_path = config
-        .tls_cert_pem()
-        .ok_or_else(|| anyhow::anyhow!("PR-10 invariant 1: TCP listener requires tls_cert_pem"))?;
-    let key_path = config
-        .tls_key_pem()
-        .ok_or_else(|| anyhow::anyhow!("PR-10 invariant 1: TCP listener requires tls_key_pem"))?;
-
-    let cert_pem = std::fs::read(cert_path).map_err(|err| {
-        anyhow::anyhow!(
-            "daemon-invocation: failed to read tls_cert_pem at {}: {err}",
-            cert_path.display()
-        )
-    })?;
-    let key_pem = std::fs::read(key_path).map_err(|err| {
-        anyhow::anyhow!(
-            "daemon-invocation: failed to read tls_key_pem at {}: {err}",
-            key_path.display()
-        )
-    })?;
-
-    let identity = Identity::from_pem(&cert_pem, &key_pem);
-    let tls_config = ServerTlsConfig::new().identity(identity);
-
-    let listen_tcp_display = format!("{listen_tcp}");
-    let cert_path_display = format!("{}", cert_path.display());
-    let key_path_display = format!("{}", key_path.display());
-    crate::op_event!(
-        component = daemon_invocation,
-        kind = grpc_invocation_server_listening,
-        transport = "tcp_tls",
-        listen_tcp = listen_tcp_display,
-        cert_pem = cert_path_display,
-        key_pem = key_path_display,
-    );
-
-    // Production-WAN h2 hardening on the public TCP+TLS listener:
-    // long-lived `<self>.session` bidi streams from devices behind
-    // home/corporate NATs / hosting LBs need explicit keep-alive
-    // PINGs or intermediaries silently drop the connection,
-    // surfacing as "h2 protocol error: error reading a body" on
-    // the device side and "session ended (StreamReset)" here.
-    // 5s ping cadence: stays well under any NAT idle window
-    // (~60s typical), surfaces dead streams in ~15s rather than
-    // minutes, ~24 bytes/ping × 12/min ≈ negligible cost. Mirror
-    // the device-client side at session_initiator.rs.
-    let mut builder = match Server::builder().tls_config(tls_config) {
-        Ok(b) => b
-            .http2_keepalive_interval(Some(Duration::from_secs(5)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
-            .tcp_keepalive(Some(Duration::from_secs(15))),
-        Err(err) => {
-            return Err(anyhow::anyhow!(
-                "daemon-invocation: tls_config rejected by tonic: {err}"
-            ));
-        }
-    };
-
-    tokio::spawn(async move {
-        let result = builder
-            .add_service(
-                InvocationServer::new(service)
-                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
-                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
-            )
-            .serve(listen_tcp)
-            .await;
-        if let Err(err) = result {
-            let err_msg = format!("{err:#}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = grpc_server_exited_with_error,
-                transport = "tcp_tls",
-                error = err_msg,
-            );
-        }
-    });
-
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct DaemonIdentity {
-    caller_ura: String,
-    signing_seed: Option<SessionSigningSeed>,
-}
-
-/// Narrow read-projection of `~/.easynet/credentials.json` carrying
-/// only the three fields the daemon needs to derive its caller URA +
-/// signing seed.
-///
-/// MUST NOT use `#[serde(deny_unknown_fields)]`. The writer
-/// (`persistence::config::Credentials`) owns the file and its field
-/// set grows over time — `credential_token`, `hub_endpoint`,
-/// `hub_api_base`, `username`, `hub_pubkey_b64`, `hub_tls_ca_pem_b64`
-/// were all added after this projection. A strict reader would reject
-/// the whole file the moment any such field appears, silently
-/// collapsing `load_daemon_identity()` to `None` (the `.ok()?` at the
-/// call site). That drops the daemon's device identity, so the
-/// device-mode `<self>.session` supervisor never starts, the hub
-/// never sees the device's presence, and the backend renders it
-/// REMOVED. This is a projection, not a schema gate: tolerate unknown
-/// fields and read only what we own.
-///
-/// One field IS still rejected: `tenant_id`. It is the retired alias
-/// for `realm` (URA v4.1.4) — a credentials.json carrying it predates
-/// the rename and would derive a daemon URA under the wrong namespace.
-/// We reject it explicitly via a typed sentinel field rather than a
-/// blanket `deny_unknown_fields`, so retirement enforcement survives
-/// without re-introducing the field-drift regression above.
-#[derive(Debug, serde::Deserialize)]
-struct StoredDeviceIdentity {
-    #[serde(default)]
-    agent_ura: Option<String>,
-    #[serde(default)]
-    realm: Option<String>,
-    #[serde(default)]
-    node_id: Option<String>,
-    /// Retired `realm` alias. Present only in pre-v4.1.4 files; its
-    /// presence is a hard parse error (see `deserialize` below).
-    #[serde(default, rename = "tenant_id")]
-    _retired_tenant_id: Option<RejectedTenantId>,
-}
-
-/// Zero-sized marker whose `Deserialize` always errors, naming the
-/// retired field. Used as the type of `StoredDeviceIdentity::tenant_id`
-/// so any credentials.json still carrying `tenant_id` fails the parse
-/// with a clear message, while every other unknown field is tolerated.
-#[derive(Debug)]
-struct RejectedTenantId;
-
-impl<'de> serde::Deserialize<'de> for RejectedTenantId {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Err(serde::de::Error::custom(
-            "credentials.json carries retired `tenant_id`; it was renamed to `realm` in URA \
-             v4.1.4 — re-pair with `easynet join <token>` to rewrite the file",
-        ))
-    }
-}
-
-/// Resolve the daemon's caller URA plus the optional deterministic
-/// signing seed from `~/.easynet/credentials.json`.
-///
-/// Contract:
-/// - credentials must carry `(realm, node_id)`.
-/// - `tenant_id` is a retired field and is rejected by serde.
-/// - `agent_ura`, when present, is only a consistency checksum; it is
-///   never a fallback identity.
-/// - once we have the canonical `(realm, node_id)` pair, derive the same
-///   deterministic Ed25519 seed the SDK uses for
-///   `easynet:prv:reg:agent.<node>`.
-fn load_daemon_identity() -> Option<DaemonIdentity> {
-    let path = expand_home("~/.easynet/credentials.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let stored: StoredDeviceIdentity = serde_json::from_str(&raw).ok()?;
-    daemon_identity_from_stored(&stored)
-}
-
-fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonIdentity> {
-    let caller_ura = canonical_caller_ura_from_stored_identity(stored)?;
-
-    let realm = stored
-        .realm
-        .as_deref()
-        .map(str::trim)
-        .filter(|realm| !realm.is_empty())
-        .map(str::to_string);
-    let node_id = stored
-        .node_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|node| !node.is_empty())
-        .map(str::to_string)
-        .or_else(|| device_id_from_caller_ura(&caller_ura));
-
-    // Phase 3D: prefer the keyring vault's seed when the operator
-    // has opted in via EASYNET_KEYRING_PASSPHRASE. The vault's
-    // primary_self for this device is `caller_ura`; the role
-    // overlay also matches HubURI(realm) on the same host, so
-    // backend (Go side, Phase 3D's Go reader) and daemon (Rust
-    // side here) end up signing with the **same** Ed25519 seed.
-    //
-    // Misses (env unset, vault file missing, this URA not in
-    // vault) silently fall through to the v4.1.4 deterministic
-    // derive — operators who have not yet rolled their daemons
-    // onto the keyring stay unaffected.
-    let signing_seed = if let Some(seed) = try_load_daemon_seed_from_keyring(&caller_ura) {
-        Some(seed)
-    } else {
-        match (realm.as_deref(), node_id.as_deref()) {
-            (Some(realm), Some(node_id)) => {
-                let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
-                Some(derive_subject_keypair(realm, &subject_id).0)
-            }
-            _ => None,
-        }
-    };
-
-    Some(DaemonIdentity {
-        caller_ura,
-        signing_seed,
-    })
-}
-
-/// Best-effort runtime-side self-identity bootstrap for daemon boots
-/// that already have a live local runtime.
-///
-/// Why this exists:
-/// - `easynet start` already bootstraps runtime key material before
-///   republishing abilities.
-/// - The heartbeat daemon also bootstraps before its first tick.
-/// - `easynet-daemon` can, however, boot in shapes where neither of
-///   those has fired yet while local CLI surfaces already route
-///   through `BridgeAbilityInvoker` (`node.describe` ->
-///   `federation.resolve`, `node.list`, etc.).
-///
-/// In that window the runtime rejects signed federation reads with
-/// `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED`. Bootstrapping here closes
-/// the gap for any daemon boot that can already see a live runtime.
-///
-/// Best-effort by contract:
-/// - no runtime state file -> silent skip (standalone daemon harnesses)
-/// - runtime down / bridge connect fail -> log + continue
-/// - bootstrap reject -> log + continue
-///
-/// The call is idempotent. If `easynet start` or the heartbeat daemon
-/// already registered the keys, the runtime simply keeps the prior
-/// entries and startup proceeds unchanged.
-fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
-    let Some(realm) = realm_from_agent_ura(&identity.caller_ura) else {
-        return;
-    };
-    let Some(node_id) = device_id_from_caller_ura(&identity.caller_ura) else {
-        return;
-    };
-
-    let state = match crate::persistence::config::load() {
-        Ok(state) => state,
-        Err(_) => return,
-    };
-    if matches!(
-        state.runtime_kind,
-        crate::persistence::config::RuntimeKind::DaemonOnly
-    ) {
-        return;
-    }
-    let bridge = match state.connect_bridge() {
-        Ok(bridge) => bridge,
-        Err(err) => {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = runtime_self_bootstrap_skipped,
-                node_id = node_id,
-                reason = "connect_local_runtime_bridge_failed",
-                error = err_msg,
-            );
-            return;
-        }
-    };
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
-        &bridge,
-        identity.caller_ura.clone(),
-    );
-    match crate::runtime::publish::bootstrap_self_identity_via_runtime(
-        &invoker, &realm, &realm, &node_id,
-    )
-    .result
-    {
-        Ok(()) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = runtime_self_bootstrap_registered,
-                node_id = node_id,
-            );
-        }
-        Err(msg) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = runtime_self_bootstrap_failed,
-                node_id = node_id,
-                error = msg,
-            );
-        }
-    }
-}
-
-fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
-    use crate::services::keyring::{MasterKeySource, Vault, VaultError};
-
-    std::env::var("EASYNET_KEYRING_PASSPHRASE")
-        .ok()
-        .filter(|v| !v.is_empty())?;
-    let path = if let Ok(p) = std::env::var("EASYNET_KEYRING_VAULT_PATH") {
-        std::path::PathBuf::from(p)
-    } else {
-        expand_home(&format!(
-            "~/{}",
-            crate::services::keyring::DEFAULT_VAULT_REL
-        ))
-    };
-    if !path.exists() {
-        return None;
-    }
-    let source = match MasterKeySource::from_env() {
-        Ok(s) => s,
-        Err(err) => {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_master_key_source_failed,
-                error = err_msg,
-            );
-            return None;
-        }
-    };
-    let vault = match Vault::open(&path, &source) {
-        Ok(v) => v,
-        Err(VaultError::NotFound(_)) => return None,
-        Err(err) => {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_open_failed,
-                error = err_msg,
-            );
-            return None;
-        }
-    };
-    match vault.export_seed(self_ura) {
-        Ok(seed) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_daemon_seed_resolved,
-                self_ura = self_ura,
-            );
-            Some(seed)
-        }
-        Err(VaultError::NotFound(_)) => None,
-        Err(err) => {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_export_seed_failed,
-                self_ura = self_ura,
-                error = err_msg,
-            );
-            None
-        }
-    }
-}
-
-fn canonical_caller_ura_from_stored_identity(stored: &StoredDeviceIdentity) -> Option<String> {
-    let realm = stored
-        .realm
-        .as_deref()
-        .map(str::trim)
-        .filter(|realm| !realm.is_empty());
-    let node_id = stored
-        .node_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|node| !node.is_empty());
-
-    let (Some(realm), Some(node_id)) = (realm, node_id) else {
-        return None;
-    };
-
-    let expected = crate::ura::device_ura(realm, node_id);
-    if let Some(agent_ura) = stored
-        .agent_ura
-        .as_deref()
-        .map(str::trim)
-        .filter(|ura| !ura.is_empty())
-    {
-        if agent_ura != expected {
-            return None;
-        }
-    }
-
-    Some(expected)
-}
-
-// URA v4.1.5: strict parsing via crate::ura::parse_ura per memory
-// `feedback_no_legacy_ura.md`. The daemon's stored caller URA in
-// v4.1.5 is always `easynet:///r/<realm>/device/<device-uuid>`
-// (device-mode CLI's self-identity URA), so we only need to match
-// that one shape.
-//
-// Legacy `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` (URA v1) and
-// `agent/<bare-id>` (URA v2 transitional) shapes are rejected —
-// pre-v4.1.5 credential files cannot bootstrap signing seeds; users
-// must `easynet device join` again to mint a v4.1.5 credential.
-// Returning `None` triggers the parent code's "skip signing seed"
-// branch (CLI starts unsigned, harmless in dev).
-
-fn realm_from_agent_ura(ura: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(ura).ok()?;
-    if parsed.realm.is_empty() {
-        None
-    } else {
-        Some(parsed.realm)
-    }
-}
-
-fn device_id_from_caller_ura(ura: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(ura).ok()?;
-    // Only Device-kind URAs carry a device_id field; other kinds
-    // leave it empty. Empty == not a device URA.
-    parsed.device_id().map(str::to_string)
-}
-
-/// Resolve the realm-trust file path. Resolution order:
-///
-/// 1. `EASYNET_REALM_TRUST_PATH` env override (PR-7 commit 7/N
-///    test-redirect seam, also used by docker-e2e fixtures).
-/// 2. `/etc/easynet/realm-trust.toml` — production / packaged
-///    deploys where the file is admin-owned. When this file
-///    exists AND is non-empty we always prefer it.
-/// 3. `$HOME/.easynet/realm-trust.toml` — fallback for host-mode
-///    dev / unprivileged installs. `easynet device join` writes
-///    the device + local-hub trust entries here at pairing time
-///    (see `auto_wire_self_realm_trust_from_credentials`); the
-///    daemon picks them up here without needing `sudo` to write
-///    `/etc/easynet/`.
-///
-/// The home-mode fallback closes the operator-visible "I joined,
-/// the daemon's trust file is empty, admission rejects everything"
-/// failure mode that single-user host-mode installs hit when
-/// neither root nor an env override is in play.
-pub(crate) fn trust_anchor_path_from_env_or_default() -> PathBuf {
-    if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
-        return expand_home(override_path.to_string_lossy().as_ref());
-    }
-    let etc = expand_home(DEFAULT_REALM_TRUST_PATH);
-    if let Ok(meta) = std::fs::metadata(&etc) {
-        if meta.is_file() && meta.len() > 0 {
-            return etc;
-        }
-    }
-    expand_home("~/.easynet/realm-trust.toml")
-}
-
-fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
-    match RealmTrustAnchor::load_or_empty(path) {
-        Ok(anchor) => {
-            let path_display = format!("{}", path.display());
-            if anchor.is_empty() {
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = realm_trust_anchor_empty,
-                    path = path_display,
-                    message = "admission gate will reject every external caller until PR-7 pairing flow populates it",
-                );
-            } else {
-                let entry_count = anchor.len();
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = realm_trust_anchor_loaded,
-                    path = path_display,
-                    entries = entry_count,
-                );
-            }
-            anchor
-        }
-        Err(err) => {
-            let path_display = format!("{}", path.display());
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = realm_trust_anchor_load_failed,
-                path = path_display,
-                error = err_msg,
-                message = "proceeding with empty trust set",
-            );
-            RealmTrustAnchor::default()
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BackendIdentityRecord {
-    private_key_seed_hex: String,
-    #[serde(default)]
-    agent_ura: String,
-    #[serde(default, rename = "created_at_unix_ms")]
-    _created_at_unix_ms: Option<u64>,
-}
-
-fn upsert_backend_identity_from_disk(
-    realm: &str,
-    trust_anchor_path: &Path,
-    mut anchor: RealmTrustAnchor,
-) -> RealmTrustAnchor {
-    let Some(record) = read_backend_identity_record(realm) else {
-        return anchor;
-    };
-    let expected_ura = crate::ura::hub_ura(realm);
-    if !record.agent_ura.trim().is_empty() && record.agent_ura != expected_ura {
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = backend_identity_trust_upsert_skipped,
-            expected_ura = expected_ura,
-            actual_ura = record.agent_ura,
-            message = "backend identity file does not match daemon realm",
-        );
-        return anchor;
-    }
-    let seed = match decode_backend_identity_seed(&record.private_key_seed_hex) {
-        Ok(seed) => seed,
-        Err(err) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = backend_identity_trust_upsert_failed,
-                error = err,
-                message = "backend identity seed is not usable",
-            );
-            return anchor;
-        }
-    };
-    let signing_key = SigningKey::from_bytes(&seed);
-    let entry = TrustedAgent {
-        agent_ura: expected_ura.clone(),
-        public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
-        role: TrustedAgentRole::Backend,
-        added_at_unix_ms: now_unix_ms(),
-        origin_realm: None,
-        hub_endpoint: None,
-        tls_ca_pem_path: None,
-    };
-    if let Err(err) = anchor.upsert_singleton_agent(entry) {
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = backend_identity_trust_upsert_failed,
-            error = format!("{err}"),
-            message = "failed to merge backend identity into trust anchor",
-        );
-        return anchor;
-    }
-    if let Err(err) = anchor.save(trust_anchor_path) {
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = backend_identity_trust_save_failed,
-            path = format!("{}", trust_anchor_path.display()),
-            error = format!("{err}"),
-            message = "using backend identity in memory; disk trust anchor was not updated",
-        );
-    } else {
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = backend_identity_trust_upserted,
-            path = format!("{}", trust_anchor_path.display()),
-            agent_ura = expected_ura,
-            message = "backend identity public key is present in trust anchor",
-        );
-    }
-    anchor
-}
-
-fn read_backend_identity_record(realm: &str) -> Option<BackendIdentityRecord> {
-    let home = std::env::var_os("HOME")?;
-    let path = Path::new(&home)
-        .join(".easynet-hub")
-        .join(realm)
-        .join("identity.json");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(err) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = backend_identity_trust_upsert_failed,
-                path = format!("{}", path.display()),
-                error = format!("{err}"),
-                message = "failed to read backend identity file",
-            );
-            return None;
-        }
-    };
-    match serde_json::from_str(&raw) {
-        Ok(record) => Some(record),
-        Err(err) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = backend_identity_trust_upsert_failed,
-                path = format!("{}", path.display()),
-                error = format!("{err}"),
-                message = "failed to parse backend identity file",
-            );
-            None
-        }
-    }
-}
-
-fn decode_backend_identity_seed(raw: &str) -> Result<[u8; 32], String> {
-    let bytes = hex::decode(raw.trim()).map_err(|err| format!("seed hex decode failed: {err}"))?;
-    bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("seed must decode to 32 bytes, got {}", bytes.len()))
-}
-
-fn now_unix_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn reload_trust_anchor_cell_from(
-    path: &Path,
-    trust_anchor_cell: &SharedTrustAnchor,
-) -> anyhow::Result<usize> {
-    let next = RealmTrustAnchor::load_or_empty(path)
-        .map_err(|err| anyhow::anyhow!("load trust anchor from {}: {err}", path.display()))?;
-    let len = next.len();
-    trust_anchor_cell.replace(Arc::new(next));
-    Ok(len)
-}
-
-/// Demo-only presence seed. Compiled into the daemon binary
-/// only under `--features demo-fixture`; the production build
-/// emits a no-op no matter what `EASYNET_DEMO_PRESENCE_SEED`
-/// holds. The seed registers a no-op `DispatchSender` under
-/// each comma-separated URA in the env var so cross-hub
-/// `forward_invoke` targeting that URA survives the presence
-/// registry lookup gate without a real device pair flow.
-///
-/// Channel capacity 8 mirrors the `<self>.session` accept
-/// path. A drain task discards every queued frame so the
-/// channel never reports full or closed; the demo's
-/// transport-plane proof terminates at "frame queued for
-/// delivery". Real ability responses flow through
-/// `dispatch_federation_*` handlers that do not consult the
-/// presence frame queue.
-#[cfg(feature = "demo-fixture")]
-fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
-    let Ok(seed_value) = std::env::var("EASYNET_DEMO_PRESENCE_SEED") else {
-        return;
-    };
-    for seed_ura in seed_value
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<
-            Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
-        >(8);
-        presence.insert(seed_ura.to_string(), tx);
-        tokio::spawn(async move {
-            while rx.recv().await.is_some() {
-                // discard
-            }
-        });
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = demo_presence_seed_registered,
-            seed_ura = seed_ura,
-            message = "test fixture; do not use in production",
-        );
-    }
-}
-
-#[cfg(not(feature = "demo-fixture"))]
-fn maybe_seed_demo_presence(_presence: &Arc<PresenceRegistry>) {
-    // Production build: env var is ignored. If the operator
-    // set it expecting the demo behaviour, the missing log line
-    // is the signal — re-build with `--features demo-fixture`.
 }
 
 /// Unified SIGHUP-driven reload coordinator. Replaces the previous
@@ -2206,34 +1242,6 @@ fn spawn_unified_sighup_reload_task(
     _quota_gate: SharedUsageQuotaGate,
     _federated_key_cache: crate::services::invocation_transport::federated_key_resolver::SharedFederatedKeyCache,
 ) {
-}
-
-struct ReloadedDaemonConfigCells {
-    federated_peers_len: usize,
-    quota_configured: bool,
-}
-
-/// Re-parse daemon-config TOML at `path` and republish all live cells
-/// that are intentionally SIGHUP-managed from that file.
-fn reload_daemon_config_cells_from(
-    path: &Path,
-    federated_peers_cell: &crate::services::federated_peers_cell::SharedFederatedPeers,
-    quota_gate: &SharedUsageQuotaGate,
-) -> anyhow::Result<ReloadedDaemonConfigCells> {
-    let next_config = DaemonConfig::load(path)
-        .map_err(|err| anyhow::anyhow!("reload daemon-config from {}: {err}", path.display()))?;
-    let next_peers = next_config.federated_peers().clone();
-    let len = next_peers.len();
-    federated_peers_cell.replace(next_peers);
-
-    let next_quota = next_config.quota().cloned();
-    let quota_configured = next_quota.is_some();
-    quota_gate.replace_policy(next_quota);
-
-    Ok(ReloadedDaemonConfigCells {
-        federated_peers_len: len,
-        quota_configured,
-    })
 }
 
 /// **PR-N3 commit N3-3.1**. Spawn the cross-realm directory
@@ -2379,23 +1387,12 @@ fn spawn_federated_directory_streaming_supervisor(
     });
 }
 
-/// Expand a `~/...` prefix using the current user's HOME. Existing
-/// EasyNet code uses several different helpers for this (some via
-/// `dirs::home_dir`, some via `std::env::var("HOME")`); we mirror
-/// the simplest one used by `services::control::transport` to keep
-/// behaviour consistent across the daemon's UDS bind sites.
-fn expand_home(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::SessionShutdown;
+    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+    use ed25519_dalek::SigningKey;
 
     #[tokio::test]
     async fn session_shutdown_drop_resolves_the_cancel_receiver() {
@@ -2776,6 +1773,7 @@ mod tests {
                 crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
             None,
+            crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
         )
         .expect("missing config is a soft skip");
     }
@@ -2804,6 +1802,7 @@ mod tests {
                 crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
             None,
+            crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
         );
         assert!(
             result.is_err(),
@@ -2948,6 +1947,7 @@ tls_key_pem = {key:?}
                     crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
                 ),
                 None,
+                crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
             );
         }));
         // futures::FutureExt::catch_unwind would be nicer; we

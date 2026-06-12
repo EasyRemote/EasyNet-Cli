@@ -81,6 +81,17 @@ use crate::services::pending_dispatch::DispatchResult;
 use crate::services::session_failure::SessionFailure;
 use tokio_stream::wrappers::ReceiverStream;
 
+/// Hard ceiling on one presence-dispatch round-trip: the time between
+/// pushing a `Dispatch` frame down a device's `<self>.session` and
+/// that device's `Result` frame completing the pending entry. The
+/// presence-offline watcher already fail-fasts waiters whose session
+/// drops; this deadline covers every other never-reply shape (a
+/// device that accepted the frame and wedged, a drain-only presence
+/// entry) so a unary caller gets a structured error instead of
+/// hanging for the life of the connection.
+pub(crate) const PRESENCE_DISPATCH_REPLY_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(60);
+
 /// Unary `Invoke` routing surface. Cheap per-call construction: every
 /// plane and the gate are `Arc`-shaped.
 #[derive(Clone)]
@@ -1353,8 +1364,10 @@ impl UnaryDispatcher {
     ///
     /// `register_pending_for(execution_host_ura)` keeps the
     /// presence-offline watcher able to fail-fast this entry the
-    /// moment the host's `<self>.session` drops mid-call; without it
-    /// `await_reply()` blocks until the operator-side HTTP timeout.
+    /// moment the host's `<self>.session` drops mid-call;
+    /// [`PRESENCE_DISPATCH_REPLY_TIMEOUT`] backstops every reply that
+    /// neither completes nor goes offline (structured
+    /// `DeadlineExceeded` instead of an open-ended hang).
     async fn dispatch_frame_to_presence(
         &self,
         selected_route: &SelectedInvokeRoute,
@@ -1364,6 +1377,33 @@ impl UnaryDispatcher {
         )
             -> Result<crate::services::presence_registry::DispatchFrame, Status>,
     ) -> Result<(u64, DispatchResult), Status> {
+        // Self guard: in device mode the boot seed registers a
+        // resolve-only no-op presence entry under the daemon's own URA
+        // (boot/presence_seed.rs) whose drain task accepts every frame
+        // and never completes the pending entry — a frame dispatched
+        // there parks the waiter until the deadline. Self-targeted
+        // invocations belong to the local-runtime arms; refuse loudly
+        // here rather than queue a frame that can never be answered.
+        if self
+            .admission
+            .daemon_ura()
+            .is_some_and(|self_ura| self_ura == selected_route.execution_host_ura)
+        {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = presence_dispatch_refused_self_host,
+                label = label,
+                execution_host_ura = selected_route.execution_host_ura.as_str(),
+                route_ura = selected_route.route_ura.as_str(),
+            );
+            return Err(Status::failed_precondition(format!(
+                "{label}: selected execution host `{}` is this daemon itself; \
+                 self-targeted invocations dispatch through the local runtime, \
+                 never the presence reverse channel (device-mode self-presence \
+                 is resolve-only)",
+                selected_route.execution_host_ura,
+            )));
+        }
         let pending = self.sessions.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(format!(
                 "{label}: daemon was constructed without a PendingDispatchMap; call \
@@ -1411,13 +1451,38 @@ impl UnaryDispatcher {
             route_ura = selected_route.route_ura.as_str(),
             call_id = call_id,
         );
-        let result = handle.await_reply().await.map_err(|_recv_err| {
-            Status::unavailable(format!(
-                "{label}: selected execution host `{}` session disconnected before reply \
-                 (call_id={call_id})",
-                selected_route.execution_host_ura,
-            ))
-        })?;
+        let result =
+            match tokio::time::timeout(PRESENCE_DISPATCH_REPLY_TIMEOUT, handle.await_reply()).await
+            {
+                Ok(Ok(result)) => result,
+                Ok(Err(_recv_err)) => {
+                    return Err(Status::unavailable(format!(
+                        "{label}: selected execution host `{}` session disconnected before reply \
+                     (call_id={call_id})",
+                        selected_route.execution_host_ura,
+                    )));
+                }
+                Err(_elapsed) => {
+                    // Timing out drops the future that owns the
+                    // PendingHandle; its Drop evicts the map entry, so a
+                    // late Result frame is a silent no-op complete.
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = presence_dispatch_reply_timeout,
+                        label = label,
+                        execution_host_ura = selected_route.execution_host_ura.as_str(),
+                        route_ura = selected_route.route_ura.as_str(),
+                        call_id = call_id,
+                        timeout_ms = PRESENCE_DISPATCH_REPLY_TIMEOUT.as_millis(),
+                    );
+                    return Err(Status::deadline_exceeded(format!(
+                        "{label}: selected execution host `{}` accepted the dispatch frame but \
+                     sent no Result within {}s (call_id={call_id})",
+                        selected_route.execution_host_ura,
+                        PRESENCE_DISPATCH_REPLY_TIMEOUT.as_secs(),
+                    )));
+                }
+            };
         Ok((call_id, result))
     }
 

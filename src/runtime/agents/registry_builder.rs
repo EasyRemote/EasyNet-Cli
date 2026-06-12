@@ -64,21 +64,7 @@ pub fn build_registry() -> Arc<AxonAbilityCatalog> {
 
 fn build_registry_uncached() -> Arc<AxonAbilityCatalog> {
     build_registry_with_services_result_inner(
-        Arc::new(SessionService::new()),
-        Arc::new(PermissionService::new()),
-        Arc::new(DiscussService::new()),
-        Arc::new(ScheduleService::new()),
-        Arc::new(LoopService::new()),
-        None,
-        &AgentRegistry::default(),
-        Arc::new(Vec::new()),
-        PagesIdentity::default(),
-        None,
-        // Smoke-test path: no `LocalRuntime`-backed registrar is
-        // wired, so the OnceLock stays empty and `agent.start`
-        // skips runtime sync with an op_event. The agent still lands
-        // in `agents.json`.
-        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
+        RegistryBuildConfig::new(RegistryBuildServices::fresh(), &AgentRegistry::default()),
         PluginRegistryMode::BuiltinOnlyDeterministic,
     )
     .catalog
@@ -86,17 +72,7 @@ fn build_registry_uncached() -> Arc<AxonAbilityCatalog> {
 
 pub(super) fn build_system_registry() -> Arc<AxonAbilityCatalog> {
     build_registry_with_services_result_inner(
-        Arc::new(SessionService::new()),
-        Arc::new(PermissionService::new()),
-        Arc::new(DiscussService::new()),
-        Arc::new(ScheduleService::new()),
-        Arc::new(LoopService::new()),
-        None,
-        &AgentRegistry::default(),
-        Arc::new(Vec::new()),
-        PagesIdentity::default(),
-        None,
-        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
+        RegistryBuildConfig::new(RegistryBuildServices::fresh(), &AgentRegistry::default()),
         PluginRegistryMode::None,
     )
     .catalog
@@ -109,19 +85,10 @@ pub(super) fn build_system_registry() -> Arc<AxonAbilityCatalog> {
 pub fn build_registry_with_runtime(
     runtime: Arc<easynet_axon::invocation::LocalRuntime>,
 ) -> Arc<AxonAbilityCatalog> {
-    build_registry_with_services(
-        Arc::new(SessionService::new()),
-        Arc::new(PermissionService::new()),
-        Arc::new(DiscussService::new()),
-        Arc::new(ScheduleService::new()),
-        Arc::new(LoopService::new()),
-        None,
-        &AgentRegistry::default(),
-        Arc::new(Vec::new()),
-        PagesIdentity::default(),
-        Some(runtime),
-        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new()),
-    )
+    let agents = AgentRegistry::default();
+    let mut config = RegistryBuildConfig::new(RegistryBuildServices::fresh(), &agents);
+    config.local_runtime = Some(runtime);
+    build_registry_with_services(config)
 }
 
 /// Build a `AxonAbilityCatalog` with sub-service handles wired
@@ -152,34 +119,130 @@ pub struct BuiltAbilityRegistry {
     pub plugin_runtime_manager: Arc<crate::runtime::plugin_host::PluginRuntimeManager>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone)]
+pub struct RegistrySharedStores {
+    pub hub_published_abilities:
+        Arc<crate::services::hub_published_ability_store::HubPublishedAbilityStore>,
+}
+
+impl RegistrySharedStores {
+    #[must_use]
+    pub fn new(
+        hub_published_abilities: Arc<
+            crate::services::hub_published_ability_store::HubPublishedAbilityStore,
+        >,
+    ) -> Self {
+        Self {
+            hub_published_abilities,
+        }
+    }
+}
+
+impl Default for RegistrySharedStores {
+    fn default() -> Self {
+        Self::new(crate::services::hub_published_ability_store::HubPublishedAbilityStore::new())
+    }
+}
+
+#[derive(Clone)]
+pub struct RegistryBuildServices {
+    pub sessions: Arc<SessionService>,
+    pub perms: Arc<PermissionService>,
+    pub discuss: Arc<DiscussService>,
+    pub schedule: Arc<ScheduleService>,
+    pub loop_svc: Arc<LoopService>,
+}
+
+impl RegistryBuildServices {
+    #[must_use]
+    pub fn new(
+        sessions: Arc<SessionService>,
+        perms: Arc<PermissionService>,
+        discuss: Arc<DiscussService>,
+        schedule: Arc<ScheduleService>,
+        loop_svc: Arc<LoopService>,
+    ) -> Self {
+        Self {
+            sessions,
+            perms,
+            discuss,
+            schedule,
+            loop_svc,
+        }
+    }
+
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self::new(
+            Arc::new(SessionService::new()),
+            Arc::new(PermissionService::new()),
+            Arc::new(DiscussService::new()),
+            Arc::new(ScheduleService::new()),
+            Arc::new(LoopService::new()),
+        )
+    }
+}
+
+pub struct RegistryBuildConfig<'a> {
+    pub services: RegistryBuildServices,
+    pub invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    pub agents: &'a AgentRegistry,
+    pub loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
+    pub pages_identity: PagesIdentity,
+    pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
+    pub shared_stores: RegistrySharedStores,
+}
+
+impl<'a> RegistryBuildConfig<'a> {
+    #[must_use]
+    pub fn new(services: RegistryBuildServices, agents: &'a AgentRegistry) -> Self {
+        Self {
+            services,
+            invocation_ledger: None,
+            agents,
+            loaders: Arc::new(Vec::new()),
+            pages_identity: PagesIdentity::default(),
+            local_runtime: None,
+            hot_agent_registrar_cell: Arc::new(
+                agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+            ),
+            shared_stores: RegistrySharedStores::default(),
+        }
+    }
+}
+
+pub struct RegistryDaemonBuildConfig {
+    pub services: RegistryBuildServices,
+    pub invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    pub loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
+    pub pages_identity: PagesIdentity,
+    pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
+    pub shared_stores: RegistrySharedStores,
+}
+
+impl RegistryDaemonBuildConfig {
+    #[must_use]
+    pub fn new(services: RegistryBuildServices) -> Self {
+        Self {
+            services,
+            invocation_ledger: None,
+            loaders: None,
+            pages_identity: PagesIdentity::default(),
+            local_runtime: None,
+            hot_agent_registrar_cell: Arc::new(
+                agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+            ),
+            shared_stores: RegistrySharedStores::default(),
+        }
+    }
+}
+
 pub fn build_registry_with_services_result(
-    sessions: Arc<SessionService>,
-    perms: Arc<PermissionService>,
-    discuss: Arc<DiscussService>,
-    schedule: Arc<ScheduleService>,
-    loop_svc: Arc<LoopService>,
-    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
-    agents: &AgentRegistry,
-    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
-    pages_identity: PagesIdentity,
-    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
+    config: RegistryBuildConfig<'_>,
 ) -> BuiltAbilityRegistry {
-    build_registry_with_services_result_inner(
-        sessions,
-        perms,
-        discuss,
-        schedule,
-        loop_svc,
-        invocation_ledger,
-        agents,
-        loaders,
-        pages_identity,
-        local_runtime,
-        hot_agent_registrar_cell,
-        PluginRegistryMode::DefaultDaemon,
-    )
+    build_registry_with_services_result_inner(config, PluginRegistryMode::DefaultDaemon)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,21 +299,28 @@ fn build_plugin_runtime_manager(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_registry_with_services_result_inner(
-    sessions: Arc<SessionService>,
-    perms: Arc<PermissionService>,
-    discuss: Arc<DiscussService>,
-    schedule: Arc<ScheduleService>,
-    loop_svc: Arc<LoopService>,
-    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
-    agents: &AgentRegistry,
-    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
-    pages_identity: PagesIdentity,
-    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
+    config: RegistryBuildConfig<'_>,
     plugin_registry_mode: PluginRegistryMode,
 ) -> BuiltAbilityRegistry {
+    let RegistryBuildConfig {
+        services,
+        invocation_ledger,
+        agents,
+        loaders,
+        pages_identity,
+        local_runtime,
+        hot_agent_registrar_cell,
+        shared_stores,
+    } = config;
+    let RegistryBuildServices {
+        sessions,
+        perms,
+        discuss,
+        schedule,
+        loop_svc,
+    } = services;
+
     let mut reg = match local_runtime {
         Some(runtime) => AxonAbilityCatalog::new_with_runtime(runtime),
         None => AxonAbilityCatalog::new(),
@@ -674,6 +744,7 @@ fn build_registry_with_services_result_inner(
         profiles::load_host_descriptors,
         Arc::clone(&local_registry_handle),
         pages_identity.user.clone(),
+        Arc::clone(&shared_stores.hub_published_abilities),
     );
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
     // bridge above, but for the A2A agent-card surface. Closes over
@@ -831,34 +902,8 @@ fn build_registry_with_services_result_inner(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn build_registry_with_services(
-    sessions: Arc<SessionService>,
-    perms: Arc<PermissionService>,
-    discuss: Arc<DiscussService>,
-    schedule: Arc<ScheduleService>,
-    loop_svc: Arc<LoopService>,
-    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
-    agents: &AgentRegistry,
-    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
-    pages_identity: PagesIdentity,
-    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
-) -> Arc<AxonAbilityCatalog> {
-    build_registry_with_services_result(
-        sessions,
-        perms,
-        discuss,
-        schedule,
-        loop_svc,
-        invocation_ledger,
-        agents,
-        loaders,
-        pages_identity,
-        local_runtime,
-        hot_agent_registrar_cell,
-    )
-    .catalog
+pub fn build_registry_with_services(config: RegistryBuildConfig<'_>) -> Arc<AxonAbilityCatalog> {
+    build_registry_with_services_result(config).catalog
 }
 
 /// Daemon-side convenience wrapper. Loads the agent registry and
@@ -915,47 +960,20 @@ fn init_keyring_for_daemon(
 /// `LocalRuntime` + dispatch handle are wired. Passed through to
 /// the `agent.start` / `.stop` handlers so post-boot agent
 /// additions are registered into `LocalRuntime`.
-#[allow(clippy::too_many_arguments)]
-pub fn build_registry_for_daemon(
-    sessions: Arc<SessionService>,
-    perms: Arc<PermissionService>,
-    discuss: Arc<DiscussService>,
-    schedule: Arc<ScheduleService>,
-    loop_svc: Arc<LoopService>,
-    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
-    loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
-    pages_identity: PagesIdentity,
-    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
-) -> Arc<AxonAbilityCatalog> {
-    build_registry_for_daemon_result(
-        sessions,
-        perms,
-        discuss,
-        schedule,
-        loop_svc,
+pub fn build_registry_for_daemon(config: RegistryDaemonBuildConfig) -> Arc<AxonAbilityCatalog> {
+    build_registry_for_daemon_result(config).catalog
+}
+
+pub fn build_registry_for_daemon_result(config: RegistryDaemonBuildConfig) -> BuiltAbilityRegistry {
+    let RegistryDaemonBuildConfig {
+        services,
         invocation_ledger,
         loaders,
         pages_identity,
         local_runtime,
         hot_agent_registrar_cell,
-    )
-    .catalog
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn build_registry_for_daemon_result(
-    sessions: Arc<SessionService>,
-    perms: Arc<PermissionService>,
-    discuss: Arc<DiscussService>,
-    schedule: Arc<ScheduleService>,
-    loop_svc: Arc<LoopService>,
-    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
-    loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
-    pages_identity: PagesIdentity,
-    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
-) -> BuiltAbilityRegistry {
+        shared_stores,
+    } = config;
     let agents = match crate::registry::agents::load_agents() {
         Ok(r) => r,
         Err(e) => {
@@ -970,19 +988,19 @@ pub fn build_registry_for_daemon_result(
             AgentRegistry::default()
         }
     };
-    let loaders = loaders
-        .unwrap_or_else(|| Arc::new(context_loaders::default_loaders(Arc::clone(&schedule))));
-    build_registry_with_services_result(
-        sessions,
-        perms,
-        discuss,
-        schedule,
-        loop_svc,
+    let loaders = loaders.unwrap_or_else(|| {
+        Arc::new(context_loaders::default_loaders(Arc::clone(
+            &services.schedule,
+        )))
+    });
+    build_registry_with_services_result(RegistryBuildConfig {
+        services,
         invocation_ledger,
-        &agents,
+        agents: &agents,
         loaders,
         pages_identity,
         local_runtime,
         hot_agent_registrar_cell,
-    )
+        shared_stores,
+    })
 }

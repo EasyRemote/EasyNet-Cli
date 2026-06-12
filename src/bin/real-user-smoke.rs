@@ -39,7 +39,10 @@ use std::sync::Arc;
 
 use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_cli::runtime::agents::chat_ability::ContextLoader;
-use easynet_cli::runtime::agents::{build_registry_for_daemon, build_registry_with_runtime};
+use easynet_cli::runtime::agents::{
+    build_registry_for_daemon, build_registry_with_runtime, RegistryBuildServices,
+    RegistryDaemonBuildConfig,
+};
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
 use easynet_cli::runtime::resources::filesystem::{
@@ -72,21 +75,11 @@ impl RuntimeSmoke {
 
     fn daemon(loaders: Option<Arc<Vec<Arc<dyn ContextLoader>>>>) -> Self {
         let runtime = LocalRuntime::new();
-        let catalog = build_registry_for_daemon(
-            Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
-            Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
-            Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
-            Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
-            Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-            None,
-            loaders,
-            easynet_cli::runtime::agents::PagesIdentity::from_env(),
-            Some(Arc::clone(&runtime)),
-            Arc::new(
-                easynet_cli::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(
-                ),
-            ),
-        );
+        let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
+        config.loaders = loaders;
+        config.pages_identity = easynet_cli::runtime::agents::PagesIdentity::from_env();
+        config.local_runtime = Some(Arc::clone(&runtime));
+        let catalog = build_registry_for_daemon(config);
         Self { runtime, catalog }
     }
 
@@ -338,7 +331,6 @@ fn main() -> anyhow::Result<()> {
         let mission_root = home.join(".easynet").join("missions").join("runs");
         let mission_dir = mission_root.join(&mission_id);
         std::fs::create_dir_all(&mission_dir)?;
-        std::env::set_var("EASYNET_MISSION_ID", &mission_id);
 
         // 2. Build registry from the developer's ACTUAL ~/.easynet/agents.json
         //    so existing `claude` / `codex` rows are picked up. This bin is
@@ -369,8 +361,14 @@ fn main() -> anyhow::Result<()> {
         println!("Calling {chat_ability} (this will spawn the real CLI)...");
 
         let chat_for_invoke = chat_ability.clone();
+        let chat_mission_id = mission_id.clone();
+        let chat_mission_dir = mission_dir.clone();
         let result = rt.block_on(async move {
             tokio::task::spawn_blocking(move || {
+                let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
+                    chat_mission_id,
+                    chat_mission_dir,
+                );
                 smoke.execute_rpc(target(
                     &chat_for_invoke,
                     json!({"prompt": prompt, "stream": false}),
@@ -420,8 +418,14 @@ fn main() -> anyhow::Result<()> {
         );
         let ctx_runtime = RuntimeSmoke::daemon(Some(default_loaders));
         let canary_for_thread = canary.clone();
+        let ctx_mission_id = mission_id.clone();
+        let ctx_mission_dir = mission_dir.clone();
         let ctx_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
+                let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
+                    ctx_mission_id,
+                    ctx_mission_dir,
+                );
                 ctx_runtime.execute_rpc(InvocationTarget {
                     scope: TargetScope::Local,
                     ability: chat_for_ctx,
@@ -535,10 +539,16 @@ fn main() -> anyhow::Result<()> {
             subject: None,
             causal_context: None,
         };
-        let stream = dispatcher_for_stream
-            .execute_stream(stream_target)
-            .expect("execute_stream");
-        print_stream_frames(&rt, "Claude", stream);
+        {
+            let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
+                mission_id.clone(),
+                mission_dir.clone(),
+            );
+            let stream = dispatcher_for_stream
+                .execute_stream(stream_target)
+                .expect("execute_stream");
+            print_stream_frames(&rt, "Claude", stream);
+        }
 
         // Cleanup the mission dir. We did NOT mutate agents.json
         // (we used the developer's existing agent row), so nothing

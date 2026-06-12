@@ -79,21 +79,12 @@ impl RuntimeDispatchAdapter {
     pub fn new_for_test() -> Self {
         let agents = crate::registry::agents::load_agents().unwrap_or_default();
         let local_runtime = LocalRuntime::new();
-        let _registry = crate::runtime::agents::build_registry_with_services(
-            Arc::new(crate::runtime::execution::session::SessionService::new()),
-            Arc::new(crate::runtime::execution::permission::PermissionService::new()),
-            Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
-            Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
-            Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
-            None,
+        let mut config = crate::runtime::agents::RegistryBuildConfig::new(
+            crate::runtime::agents::RegistryBuildServices::fresh(),
             &agents,
-            Arc::new(Vec::new()),
-            crate::runtime::agents::PagesIdentity::default(),
-            Some(Arc::clone(&local_runtime)),
-            Arc::new(
-                crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
-            ),
         );
+        config.local_runtime = Some(Arc::clone(&local_runtime));
+        let _registry = crate::runtime::agents::build_registry_with_services(config);
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(node_id_from_env_or_default()));
         Self::new_with_runtime(local_runtime, resolver)

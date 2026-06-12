@@ -53,9 +53,6 @@ pub enum LocalInvokeFailure {
     /// executor is legitimate — nothing ran.
     #[error("{0}")]
     DaemonOffline(String),
-    /// The daemon answered: no such ability is registered there.
-    #[error("{0}")]
-    AbilityUnregistered(String),
 }
 
 /// Consumer-facing classification of a local-invoke error.
@@ -82,9 +79,6 @@ pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind {
         if let Some(f) = cause.downcast_ref::<LocalInvokeFailure>() {
             return match f {
                 LocalInvokeFailure::DaemonOffline(_) => LocalInvokeErrorKind::DaemonOffline,
-                LocalInvokeFailure::AbilityUnregistered(_) => {
-                    LocalInvokeErrorKind::AbilityUnregistered
-                }
             };
         }
     }

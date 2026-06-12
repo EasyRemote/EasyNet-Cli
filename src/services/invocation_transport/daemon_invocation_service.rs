@@ -125,7 +125,7 @@ use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::bidi_dispatcher::{
-    validate_and_extract_bidi_frame0, BidiDispatcher,
+    validate_and_extract_bidi_frame0, BidiDispatcher, BidiDispatcherDeps,
 };
 use crate::services::invocation_transport::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RegisterPubkeyContext, RuntimePlane,
@@ -383,15 +383,15 @@ impl DaemonInvocationService {
     /// `InvokeBidi` routing surface (commit-plan-2 E2). pub(crate) so
     /// module tests can drive session/bidi arms directly.
     pub(crate) fn bidi_dispatcher(&self) -> BidiDispatcher {
-        BidiDispatcher::new(
-            self.admission.clone(),
-            self.directory.clone(),
-            self.sessions.clone(),
-            self.identity.clone(),
-            self.runtime.clone(),
-            self.target_gate(),
-            self.unary_dispatcher(),
-        )
+        BidiDispatcher::new(BidiDispatcherDeps {
+            admission: self.admission.clone(),
+            directory: self.directory.clone(),
+            sessions: self.sessions.clone(),
+            identity: self.identity.clone(),
+            runtime: self.runtime.clone(),
+            gate: self.target_gate(),
+            unary: self.unary_dispatcher(),
+        })
     }
 
     /// Attach a `PendingDispatchMap` for `<self>.invoke_remote`

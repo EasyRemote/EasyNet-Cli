@@ -738,17 +738,32 @@ pub(crate) fn build_carrier_v1_dispatch_frame(
 /// channel. Encoding failure is impossible for the current variant
 /// (call_id u64, owned String, owned Vec<u8>) but mapped to
 /// `Status::internal` for forward-compatibility per letter 25 §"flag".
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct InvokeRemoteDispatchFrameRequest<'a> {
+    pub(crate) call_id: u64,
+    pub(crate) callee_ura: &'a str,
+    pub(crate) subject_ura: Option<&'a str>,
+    pub(crate) ability: &'a str,
+    pub(crate) args: &'a [u8],
+    pub(crate) args_content_envelope: SessionContentEnvelope,
+    pub(crate) metadata: HashMap<String, String>,
+    pub(crate) origin_caller:
+        Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
+}
+
 pub(crate) fn build_invoke_remote_dispatch_frame(
-    call_id: u64,
-    callee_ura: &str,
-    subject_ura: Option<&str>,
-    ability: &str,
-    args: &[u8],
-    args_content_envelope: SessionContentEnvelope,
-    metadata: HashMap<String, String>,
-    origin_caller: Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
+    request: InvokeRemoteDispatchFrameRequest<'_>,
 ) -> Result<DispatchFrame, Status> {
+    let InvokeRemoteDispatchFrameRequest {
+        call_id,
+        callee_ura,
+        subject_ura,
+        ability,
+        args,
+        args_content_envelope,
+        metadata,
+        origin_caller,
+    } = request;
+
     let payload = SessionDispatch::Dispatch {
         call_id,
         callee_ura: Some(callee_ura.to_string()),
@@ -1330,16 +1345,16 @@ mod hub_frame_tests {
             "x-easynet-delegation".to_string(),
             "serialized-proof".to_string(),
         );
-        let frame = build_invoke_remote_dispatch_frame(
-            42,
-            "easynet:///r/realm/device/dev",
-            Some("easynet:///r/realm/resource/camera-1"),
-            "echo",
-            b"hello",
-            SessionContentEnvelope::plaintext_json(),
+        let frame = build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
+            call_id: 42,
+            callee_ura: "easynet:///r/realm/device/dev",
+            subject_ura: Some("easynet:///r/realm/resource/camera-1"),
+            ability: "echo",
+            args: b"hello",
+            args_content_envelope: SessionContentEnvelope::plaintext_json(),
             metadata,
-            None,
-        )
+            origin_caller: None,
+        })
         .expect("built");
         let payload = match frame.frame.payload.expect("frame has payload") {
             DownPayload::BinaryChunk(chunk) => chunk,
@@ -1419,8 +1434,6 @@ mod hub_frame_tests {
         // carrying ONE InvokeRemoteDown::Result frame whose `error`
         // field carries the structured reason, so the shim sees
         // gRPC success and can serialise the reason to the HTTP body.
-        use futures::StreamExt;
-
         let response = invoke_remote_inband_error_response(
             "target `easynet:///r/test-realm/agent/dev.liangbing` is not in PresenceRegistry"
                 .to_string(),

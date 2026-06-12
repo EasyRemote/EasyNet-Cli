@@ -115,6 +115,17 @@ struct RemoteBidiOpenRequest {
     metadata: HashMap<String, String>,
 }
 
+struct AxonSessionDispatchRequest<'a> {
+    call_id: u64,
+    callee_ura: Option<&'a str>,
+    subject_ura: Option<&'a str>,
+    ability: &'a str,
+    args: &'a [u8],
+    metadata: &'a HashMap<String, String>,
+    origin_claim:
+        Option<&'a crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
+}
+
 impl LocalAxonSessionDispatcher {
     /// Carrier-v1 dispatch (DEC-F004 / step 3): the frame already IS
     /// the canonical invocation — no JSON re-projection, no owner
@@ -438,16 +449,17 @@ impl LocalAxonSessionDispatcher {
     /// wire shape.
     async fn try_dispatch_via_axon(
         &self,
-        call_id: u64,
-        callee_ura: Option<&str>,
-        subject_ura: Option<&str>,
-        ability: &str,
-        args: &[u8],
-        metadata: &std::collections::HashMap<String, String>,
-        origin_claim: Option<
-            &crate::services::invocation_transport::origin_caller::OriginCallerClaim,
-        >,
+        request: AxonSessionDispatchRequest<'_>,
     ) -> Option<SessionDispatch> {
+        let AxonSessionDispatchRequest {
+            call_id,
+            callee_ura,
+            subject_ura,
+            ability,
+            args,
+            metadata,
+            origin_claim,
+        } = request;
         let runtime = self.local_runtime.as_ref()?;
         if !runtime.has_ability(ability).await {
             return None;
@@ -1599,15 +1611,15 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
             let outbound_task = outbound.clone();
             tokio::spawn(async move {
                 let result = match this
-                    .try_dispatch_via_axon(
+                    .try_dispatch_via_axon(AxonSessionDispatchRequest {
                         call_id,
-                        callee_ura.as_deref(),
-                        subject_ura.as_deref(),
-                        &ability,
-                        &args,
-                        &metadata,
-                        origin_caller.as_ref(),
-                    )
+                        callee_ura: callee_ura.as_deref(),
+                        subject_ura: subject_ura.as_deref(),
+                        ability: &ability,
+                        args: &args,
+                        metadata: &metadata,
+                        origin_claim: origin_caller.as_ref(),
+                    })
                     .await
                 {
                     Some(result) => result,
@@ -1803,9 +1815,12 @@ mod tests {
         let session_tx = SessionUpSender::new(tx);
         session_tx.set_negotiated_contract(1);
 
-        disp.handle_down(carrier_v1_bidi_open(9, "test.echo", b"{}".to_vec()), &session_tx)
-            .await
-            .expect("open error replies as a frame, not an Err");
+        disp.handle_down(
+            carrier_v1_bidi_open(9, "test.echo", b"{}".to_vec()),
+            &session_tx,
+        )
+        .await
+        .expect("open error replies as a frame, not an Err");
 
         let reply = rx.recv().await.expect("reply produced");
         match reply.payload {
@@ -1834,9 +1849,12 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
-        disp.handle_down(carrier_v1_bidi_open(11, "test.echo", b"{}".to_vec()), &session_tx)
-            .await
-            .expect("open error replies as a frame, not an Err");
+        disp.handle_down(
+            carrier_v1_bidi_open(11, "test.echo", b"{}".to_vec()),
+            &session_tx,
+        )
+        .await
+        .expect("open error replies as a frame, not an Err");
 
         let reply = rx.recv().await.expect("reply produced");
         let chunk = match reply.payload {
@@ -2651,21 +2669,19 @@ mod tests {
         use crate::runtime::execution::permission::PermissionService;
         use crate::runtime::execution::schedule::ScheduleService;
         use crate::runtime::execution::session::SessionService;
-        crate::runtime::agents::build_registry_with_services(
-            Arc::new(SessionService::new()),
-            Arc::new(PermissionService::new()),
-            Arc::new(DiscussService::new()),
-            Arc::new(ScheduleService::new()),
-            Arc::new(LoopService::new()),
-            None,
-            &Default::default(),
-            Arc::new(Vec::new()),
-            crate::runtime::agents::PagesIdentity::default(),
-            local_runtime,
-            Arc::new(
-                crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+        let agents = Default::default();
+        let mut config = crate::runtime::agents::RegistryBuildConfig::new(
+            crate::runtime::agents::RegistryBuildServices::new(
+                Arc::new(SessionService::new()),
+                Arc::new(PermissionService::new()),
+                Arc::new(DiscussService::new()),
+                Arc::new(ScheduleService::new()),
+                Arc::new(LoopService::new()),
             ),
-        )
+            &agents,
+        );
+        config.local_runtime = local_runtime;
+        crate::runtime::agents::build_registry_with_services(config)
     }
 
     #[tokio::test]

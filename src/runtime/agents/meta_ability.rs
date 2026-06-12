@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
 use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = "meta.describe";
@@ -77,6 +78,7 @@ pub fn register<F>(
     descriptors_provider: F,
     registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     pages_user: Option<String>,
+    hub_published_abilities: Arc<HubPublishedAbilityStore>,
 ) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
 {
@@ -90,6 +92,7 @@ pub fn register<F>(
     );
     let p_for_list = Arc::clone(&provider);
     let handle_for_list = Arc::clone(&registry_handle);
+    let hub_published_abilities_for_list = Arc::clone(&hub_published_abilities);
     // Capture the pages-user identity at registration time so the
     // synth path doesn't read EASYNET_PAGES_USER on every call.
     // Production passes the same value the registry build used;
@@ -103,6 +106,7 @@ pub fn register<F>(
                 &handle_for_list,
                 args,
                 pages_user_for_list.as_deref(),
+                &hub_published_abilities_for_list,
             )
         });
     reg.register_rpc_with_owner(ABILITY_LIST_ABILITIES, OwnerKind::Device, list_handler);
@@ -172,6 +176,7 @@ fn list_abilities_handler(
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
     pages_user: Option<&str>,
+    hub_published_abilities: &HubPublishedAbilityStore,
 ) -> anyhow::Result<Value> {
     use crate::runtime::ability_descriptor::Visibility;
     let scope = AbilityListScope::from_args(&args)?;
@@ -396,8 +401,7 @@ fn list_abilities_handler(
     // the hub published; we surface it verbatim so the
     // hub schema can evolve without forcing a Cli release.
     if scope.include_realm {
-        let store = crate::services::hub_published_ability_store::global();
-        for entry in store.snapshot() {
+        for entry in hub_published_abilities.snapshot() {
             let mut desc = entry.descriptor;
             // Stamp the canonical name on top — hub deployments
             // sometimes omit it inside the descriptor body
@@ -782,6 +786,23 @@ mod tests {
         Arc::new(std::sync::OnceLock::new())
     }
 
+    fn register<F>(
+        reg: &mut AxonAbilityCatalog,
+        descriptors_provider: F,
+        registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+        pages_user: Option<String>,
+    ) where
+        F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
+    {
+        super::register(
+            reg,
+            descriptors_provider,
+            registry_handle,
+            pages_user,
+            HubPublishedAbilityStore::new(),
+        );
+    }
+
     #[test]
     fn registration_makes_both_abilities_dispatchable() {
         let mut reg = AxonAbilityCatalog::new();
@@ -900,20 +921,17 @@ mod tests {
         // entries cached from `federation.{join,heartbeat}`. The
         // default-local path stays disjoint — pin both axes.
         use crate::runtime::federation_client::HubAbilityEntry;
-        use crate::services::hub_published_ability_store as store_mod;
+        let hub_published_abilities = HubPublishedAbilityStore::new();
 
         let mut reg = AxonAbilityCatalog::new();
-        register(
+        super::register(
             &mut reg,
             || vec![d("observe.health")],
             empty_registry_handle(),
             None,
+            Arc::clone(&hub_published_abilities),
         );
-        // Seed the process-wide store. Tests in this binary share
-        // the singleton; we tolerate residue from earlier tests by
-        // looking for `hub.test.scope` specifically rather than
-        // asserting an exact count.
-        store_mod::global().apply_diff(crate::runtime::federation_client::HubAbilitiesDiff {
+        hub_published_abilities.apply_diff(crate::runtime::federation_client::HubAbilitiesDiff {
             revision: 99,
             added: vec![HubAbilityEntry {
                 name: "hub.test.scope".to_string(),

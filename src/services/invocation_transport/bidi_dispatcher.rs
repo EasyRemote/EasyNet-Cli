@@ -59,9 +59,9 @@ use crate::services::invocation_transport::invocation_wire::{
 use crate::services::invocation_transport::invoke_remote_initiator::{
     build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
     build_invoke_remote_terminal_frame, call_id_hex, decode_inner_payload,
-    invoke_remote_inband_error_response, InnerPayload, InvokeRemoteDown, InvokeRemoteUp,
-    RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,
-    ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
+    invoke_remote_inband_error_response, InnerPayload, InvokeRemoteDispatchFrameRequest,
+    InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionContentEnvelope, SessionDispatch,
+    SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
 use crate::services::invocation_transport::ledger_projection::ledger_record_from_remote_receipt;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
@@ -99,17 +99,28 @@ pub(crate) struct BidiDispatcher {
     unary: UnaryDispatcher,
 }
 
+pub(crate) struct BidiDispatcherDeps {
+    pub(crate) admission: AdmissionFacade,
+    pub(crate) directory: DirectoryPlane,
+    pub(crate) sessions: SessionPlane,
+    pub(crate) identity: IdentityPlane,
+    pub(crate) runtime: RuntimePlane,
+    pub(crate) gate: TargetGate,
+    pub(crate) unary: UnaryDispatcher,
+}
+
 impl BidiDispatcher {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        admission: AdmissionFacade,
-        directory: DirectoryPlane,
-        sessions: SessionPlane,
-        identity: IdentityPlane,
-        runtime: RuntimePlane,
-        gate: TargetGate,
-        unary: UnaryDispatcher,
-    ) -> Self {
+    pub(crate) fn new(deps: BidiDispatcherDeps) -> Self {
+        let BidiDispatcherDeps {
+            admission,
+            directory,
+            sessions,
+            identity,
+            runtime,
+            gate,
+            unary,
+        } = deps;
+
         Self {
             admission,
             directory,
@@ -356,13 +367,14 @@ impl BidiDispatcher {
                             break;
                         }
                     }
-                    DispatchStreamEvent::Terminal(DispatchResult {
-                        payload,
-                        error,
-                        failure,
-                        request_id: _,
-                        receipt: _,
-                    }) => {
+                    DispatchStreamEvent::Terminal(result) => {
+                        let DispatchResult {
+                            payload,
+                            error,
+                            failure,
+                            request_id: _,
+                            receipt: _,
+                        } = *result;
                         let frame = match error {
                             Some(reason) => {
                                 build_bidi_terminal_receipt_with_payload_and_failure_code(
@@ -1013,16 +1025,16 @@ impl BidiDispatcher {
                 false,
             )
         } else {
-            build_invoke_remote_dispatch_frame(
+            build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
                 call_id,
-                &selected_route.callee_ura,
-                subject_ura.as_deref(),
-                &dispatch_ability,
-                &args,
+                callee_ura: &selected_route.callee_ura,
+                subject_ura: subject_ura.as_deref(),
+                ability: &dispatch_ability,
+                args: &args,
                 args_content_envelope,
                 metadata,
                 origin_caller,
-            )?
+            })?
         };
         match target_sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
@@ -1069,13 +1081,14 @@ impl BidiDispatcher {
                             let down = InvokeRemoteDown::Chunk { payload };
                             (build_invoke_remote_terminal_frame(&down), false)
                         }
-                        DispatchStreamEvent::Terminal(DispatchResult {
-                            payload,
-                            error,
-                            failure,
-                            request_id,
-                            receipt: _,
-                        }) => {
+                        DispatchStreamEvent::Terminal(result) => {
+                            let DispatchResult {
+                                payload,
+                                error,
+                                failure,
+                                request_id,
+                                receipt: _,
+                            } = *result;
                             let down = InvokeRemoteDown::Result {
                                 payload,
                                 error,
