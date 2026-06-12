@@ -823,15 +823,17 @@ fn snapshot_handler(
     // Best-effort by design — a full disk must not fail the snapshot
     // the caller is waiting on.
     if let Err(err) = crate::persistence::context_store::record_capture(
-        env.callee.as_deref().unwrap_or_default(),
-        ABILITY_SCREEN_SNAPSHOT,
-        "jpg",
-        &jpeg_bytes,
-        "image/jpeg",
-        Some(width),
-        Some(height),
-        None,
-        format!("Screenshot {width}x{height}"),
+        crate::persistence::context_store::CaptureRecord {
+            device: env.callee.as_deref().unwrap_or_default(),
+            ability: ABILITY_SCREEN_SNAPSHOT,
+            ext: "jpg",
+            bytes: &jpeg_bytes,
+            content_type: "image/jpeg",
+            width: Some(width),
+            height: Some(height),
+            duration_ms: None,
+            preview: format!("Screenshot {width}x{height}"),
+        },
     ) {
         crate::op_event!(
             component = context,

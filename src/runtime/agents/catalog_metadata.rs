@@ -733,10 +733,12 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         "policy.evaluate"
         | "policy.simulate"
         | "consent.decide"
-        // context mutations — flip clipboard tracking, add /
-        // remove favorites: device-context configuration writes,
-        // same decision class as consent.decide.
+        // context mutations — flip clipboard tracking, delete a
+        // clip, add / remove favorites: device-context
+        // configuration writes, same decision class as
+        // consent.decide.
         | "context.clipboard.track"
+        | "context.clipboard.remove"
         | "context.favorites.add"
         | "context.favorites.remove"
         | "consent.subscribe" => Some(AbilityLayer::Control),

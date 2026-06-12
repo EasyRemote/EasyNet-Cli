@@ -146,6 +146,36 @@ pub fn list_clips(limit: usize) -> Vec<ClipEntry> {
     entries
 }
 
+/// Remove one clip by id: its JSONL line is dropped (every other line
+/// is kept byte-for-byte) and an image clip's PNG is deleted from
+/// `clips_dir()` best-effort. Returns the removed entry.
+pub fn remove_clip(id: &str) -> anyhow::Result<ClipEntry> {
+    let content = fs::read_to_string(clipboard_log_path()).unwrap_or_default();
+    let mut removed: Option<ClipEntry> = None;
+    let mut kept = String::with_capacity(content.len());
+    for line in content.lines() {
+        match serde_json::from_str::<ClipEntry>(line) {
+            Ok(e) if removed.is_none() && e.id == id => removed = Some(e),
+            _ => {
+                kept.push_str(line);
+                kept.push('\n');
+            }
+        }
+    }
+    let entry = removed.ok_or_else(|| anyhow::anyhow!("context clipboard: no clip {id}"))?;
+    atomic_write_with_permissions(
+        &clipboard_log_path(),
+        kept.as_bytes(),
+        WritePermissions::Default,
+    )?;
+    if let Some(file) = &entry.image_file {
+        if !(file.contains('/') || file.contains('\\') || file.contains("..")) {
+            let _ = fs::remove_file(clips_dir().join(file));
+        }
+    }
+    Ok(entry)
+}
+
 /// Absolute path of a stored clip image, if the entry exists and is an
 /// image. Resolves strictly inside `clips_dir()` — the id is ours, but
 /// the lookup still refuses separators so a crafted id can't traverse.
@@ -431,18 +461,31 @@ fn safe_path_segment(segment: &str) -> bool {
 
 /// Persist one media artifact: payload to `captures/<ability>/`,
 /// index row appended to `captures.jsonl`. Returns the entry.
-#[allow(clippy::too_many_arguments)]
-pub fn record_capture(
-    device: &str,
-    ability: &str,
-    ext: &str,
-    bytes: &[u8],
-    content_type: &str,
-    width: Option<u32>,
-    height: Option<u32>,
-    duration_ms: Option<u64>,
-    preview: String,
-) -> anyhow::Result<CaptureEntry> {
+pub struct CaptureRecord<'a> {
+    pub device: &'a str,
+    pub ability: &'a str,
+    pub ext: &'a str,
+    pub bytes: &'a [u8],
+    pub content_type: &'a str,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub preview: String,
+}
+
+pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry> {
+    let CaptureRecord {
+        device,
+        ability,
+        ext,
+        bytes,
+        content_type,
+        width,
+        height,
+        duration_ms,
+        preview,
+    } = record;
+
     if !safe_path_segment(ability) {
         anyhow::bail!("record_capture: ability {ability:?} is not a safe folder name");
     }
@@ -602,29 +645,29 @@ mod tests {
     #[test]
     fn captures_record_list_get_round_trip() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let entry = record_capture(
-            "easynet:///r/localhost/device/d1",
-            "screen.snapshot",
-            "jpg",
-            b"\xff\xd8fakejpeg",
-            "image/jpeg",
-            Some(2940),
-            Some(1912),
-            None,
-            "Screenshot 2940x1912".into(),
-        )
+        let entry = record_capture(CaptureRecord {
+            device: "easynet:///r/localhost/device/d1",
+            ability: "screen.snapshot",
+            ext: "jpg",
+            bytes: b"\xff\xd8fakejpeg",
+            content_type: "image/jpeg",
+            width: Some(2940),
+            height: Some(1912),
+            duration_ms: None,
+            preview: "Screenshot 2940x1912".into(),
+        })
         .unwrap();
-        record_capture(
-            "easynet:///r/localhost/device/d1",
-            "mic.subscribe",
-            "wav",
-            b"RIFFfakewav",
-            "audio/wav",
-            None,
-            None,
-            Some(1500),
-            "Recording 1.5s".into(),
-        )
+        record_capture(CaptureRecord {
+            device: "easynet:///r/localhost/device/d1",
+            ability: "mic.subscribe",
+            ext: "wav",
+            bytes: b"RIFFfakewav",
+            content_type: "audio/wav",
+            width: None,
+            height: None,
+            duration_ms: Some(1500),
+            preview: "Recording 1.5s".into(),
+        })
         .unwrap();
 
         // newest-first, ability filter works
@@ -648,17 +691,17 @@ mod tests {
         assert!(capture_abs_path("../evil").is_none());
 
         // unsafe ability folder refused
-        assert!(record_capture(
-            "d",
-            "../escape",
-            "jpg",
-            b"x",
-            "image/jpeg",
-            None,
-            None,
-            None,
-            "p".into()
-        )
+        assert!(record_capture(CaptureRecord {
+            device: "d",
+            ability: "../escape",
+            ext: "jpg",
+            bytes: b"x",
+            content_type: "image/jpeg",
+            width: None,
+            height: None,
+            duration_ms: None,
+            preview: "p".into(),
+        })
         .is_err());
     }
 

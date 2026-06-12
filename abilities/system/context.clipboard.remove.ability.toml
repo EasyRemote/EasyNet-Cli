@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "context.clipboard.remove"
+description = "Delete one clipboard entry (and its stored image, if any)."
+
+[input_schema]
+type = "object"
+required = ["id"]
+additionalProperties = false
+
+[input_schema.properties.id]
+type = "string"
+description = "Clip id from context.clipboard.list."

@@ -436,15 +436,17 @@ fn finalize_recording(device_ura: &str, pcm: &[u8], sample_rate: u32, channels: 
     let bytes_per_second = u64::from(sample_rate) * u64::from(channels) * 2;
     let duration_ms = (pcm.len() as u64).saturating_mul(1000) / bytes_per_second.max(1);
     if let Err(err) = crate::persistence::context_store::record_capture(
-        device_ura,
-        ABILITY_MIC_SUBSCRIBE,
-        "wav",
-        &wav,
-        "audio/wav",
-        None,
-        None,
-        Some(duration_ms),
-        format!("Recording {:.1}s", duration_ms as f64 / 1000.0),
+        crate::persistence::context_store::CaptureRecord {
+            device: device_ura,
+            ability: ABILITY_MIC_SUBSCRIBE,
+            ext: "wav",
+            bytes: &wav,
+            content_type: "audio/wav",
+            width: None,
+            height: None,
+            duration_ms: Some(duration_ms),
+            preview: format!("Recording {:.1}s", duration_ms as f64 / 1000.0),
+        },
     ) {
         crate::op_event!(
             component = context,
