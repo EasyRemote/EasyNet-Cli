@@ -12,6 +12,12 @@
 //
 // Pipeline: source → lexer → parser → planner → ir → interpreter
 //
+// String-escape contract (F-024, normative): the lexer preserves
+// escapes VERBATIM; consumers that machine-parse a string-literal
+// payload (`*_json` args) peel the authoring escapes through
+// `string_escape::unescape_string_literal` — never ad-hoc `replace`.
+// Opaque payloads are forwarded untouched. See `string_escape.rs`.
+//
 //   `planner` collapses what used to be a separate analyzer pass +
 //   planner pass into a single compile step (see `planner.rs`'s
 //   module doc for why — the old two-file split added a boundary
@@ -28,3 +34,4 @@ pub(crate) mod ir;
 pub(crate) mod lexer;
 pub(crate) mod parser;
 pub(crate) mod planner;
+pub(crate) mod string_escape;

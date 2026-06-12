@@ -427,7 +427,7 @@ fn dispatch_remote_via_forward_invoke(
         }
 
         let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
-            crate::support::federation_invoke::parse_node_ura(trimmed)
+            crate::services::invocation_transport::federation_invoke::parse_node_ura(trimmed)
                 .map_err(|e| EalError::Validation(format!("parse target URA: {e}")))?
         } else if !tenant.is_empty() {
             crate::ura::device_ura(tenant, trimmed)
@@ -442,12 +442,12 @@ fn dispatch_remote_via_forward_invoke(
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let ability_ura = crate::support::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
             &target_ura,
             ability_name,
         )
         .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
-        crate::support::federation_invoke::invoke_via_federation_forward_ability_ura(
+        crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
             ability_ura.as_str(),
             arguments.clone(),
             &target_ura,
@@ -689,15 +689,14 @@ fn dispatch_to_agent(
             let timeout = manifest
                 .timeout_seconds()
                 .map(std::time::Duration::from_secs);
-            let effective_parents: &[Value] = if arguments
-                .get("adapter_fault")
-                .and_then(Value::as_str)
-                == Some("drop_causal_context")
-            {
-                &[]
-            } else {
-                causal_parents
-            };
+            let effective_parents: &[Value] =
+                if arguments.get("adapter_fault").and_then(Value::as_str)
+                    == Some("drop_causal_context")
+                {
+                    &[]
+                } else {
+                    causal_parents
+                };
             match crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
                 &qualified,
                 arguments.clone(),
@@ -714,21 +713,23 @@ fn dispatch_to_agent(
                     });
                 }
                 Err(err) => {
-                    let lower = err.to_string().to_ascii_lowercase();
-                    let daemon_offline = lower.contains("daemon not running")
-                        || lower.contains("listener unreachable")
-                        || lower.contains("connect to local axon daemon")
-                        || lower.contains("requires the `axon-pb` feature");
-                    let unregistered = lower.contains("unknown_ability")
-                        || lower.contains("not_found")
-                        || lower.contains("no local handler registered");
-                    if !(daemon_offline || unregistered) {
+                    use crate::support::local_invoke::{
+                        classify_invoke_error, LocalInvokeErrorKind,
+                    };
+                    match classify_invoke_error(&err) {
+                        // Nothing ran (daemon down / ability not
+                        // registered there) — the in-process executor
+                        // below may legitimately take over.
+                        LocalInvokeErrorKind::DaemonOffline
+                        | LocalInvokeErrorKind::AbilityUnregistered => {}
                         // The daemon ran the same manifest and failed for
                         // real; re-running in-process would double-execute
                         // a side-effecting ability to mask a true error.
-                        return Err(EalError::Unavailable(format!(
-                            "daemon invoke {qualified}: {err}"
-                        )));
+                        LocalInvokeErrorKind::Failed => {
+                            return Err(EalError::Unavailable(format!(
+                                "daemon invoke {qualified}: {err}"
+                            )));
+                        }
                     }
                 }
             }
@@ -866,25 +867,14 @@ enum DaemonDispatch {
 /// daemon through Axon's local Invocation gRPC surface. Returns one
 /// of the four outcome variants the caller branches on.
 fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDispatch {
+    use crate::support::local_invoke::{classify_invoke_error, LocalInvokeErrorKind};
     match crate::support::local_invoke::invoke_local_ability(qualified_name, arguments.clone()) {
         Ok(value) => DaemonDispatch::Result(value),
-        Err(err) => {
-            let msg = format!("{err}");
-            let lower = msg.to_ascii_lowercase();
-            if lower.contains("daemon not running")
-                || lower.contains("listener unreachable")
-                || lower.contains("connect to local axon daemon")
-            {
-                DaemonDispatch::DaemonDown(msg)
-            } else if lower.contains("unknown_ability")
-                || lower.contains("not_found")
-                || msg.contains("no local handler registered")
-            {
-                DaemonDispatch::AbilityNotFound
-            } else {
-                DaemonDispatch::Error(msg)
-            }
-        }
+        Err(err) => match classify_invoke_error(&err) {
+            LocalInvokeErrorKind::DaemonOffline => DaemonDispatch::DaemonDown(format!("{err}")),
+            LocalInvokeErrorKind::AbilityUnregistered => DaemonDispatch::AbilityNotFound,
+            LocalInvokeErrorKind::Failed => DaemonDispatch::Error(format!("{err}")),
+        },
     }
 }
 
@@ -1274,12 +1264,21 @@ fn dispatch_batch(
             let causal_parents = causal_parents_from_captured(step, captured);
             tasks.push((local_idx, thread_dispatcher, merged_args, causal_parents));
         }
+        // Mission context handoff (F-028 / T5.4): rayon workers carry
+        // their own thread-locals, so the orchestrating thread's
+        // DispatchContext is captured ONCE here and re-installed
+        // inside each worker for the duration of its step. This is
+        // the in-process channel — the process-global env-var bridge
+        // it replaces let concurrent missions stomp each other's id.
+        let parent_ctx = crate::runtime::context::current();
         // Spawn rayon tasks — closure captures only Send types.
         rayon::scope(|scope| {
             for (local_idx, thread_dispatcher, merged_args, causal_parents) in tasks {
                 let step = &steps[local_idx];
                 let collector_ref = &collector;
+                let parent_ctx = parent_ctx.clone();
                 scope.spawn(move |_| {
+                    let _mission_ctx = parent_ctx.map(crate::runtime::context::enter);
                     let result = execute_step_with_retry(
                         thread_dispatcher.as_ref(),
                         run,
@@ -2008,7 +2007,10 @@ fn execute_step_with_retry(
 
         match res {
             Ok(outcome) => {
-                let StepDispatchOutcome { value: result, invocation } = outcome;
+                let StepDispatchOutcome {
+                    value: result,
+                    invocation,
+                } = outcome;
                 // Serializing a `serde_json::Value` back to bytes can
                 // only fail if the Value contains NaN / ±∞ numbers —
                 // JSON has no representation for those. A dispatcher
@@ -2631,6 +2633,68 @@ mod tests {
     }
 
     // ── Test 1: Parallel dispatch actually runs concurrently ──
+
+    #[test]
+    fn parallel_workers_inherit_the_mission_context() {
+        // F-028 / T5.4: rayon workers must see the orchestrating
+        // thread's DispatchContext via the explicit handoff — NOT via
+        // a process-global env var (which concurrent missions stomp).
+        struct ContextProbe {
+            seen: Arc<Mutex<Vec<Option<String>>>>,
+        }
+        impl StepDispatcher for ContextProbe {
+            fn dispatch(
+                &self,
+                _run: RunContext<'_>,
+                _target: &IrTarget,
+                _ability: &AbilityName,
+                _arguments: &Value,
+                _timeout_ms: Option<u64>,
+                _causal_parents: &[Value],
+            ) -> Result<StepDispatchOutcome, EalError> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push(crate::runtime::context::current().map(|c| c.mission_id));
+                Ok(StepDispatchOutcome::from(serde_json::json!({})))
+            }
+            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+                Ok(Box::new(ContextProbe {
+                    seen: Arc::clone(&self.seen),
+                }))
+            }
+        }
+
+        let src = r#"
+            mission "ctx-handoff" {
+                let a = call "slow.op" on "n1"
+                let b = call "slow.op" on "n2"
+                let c = call "slow.op" on "n3"
+            }
+        "#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let dispatcher = ContextProbe {
+            seen: Arc::clone(&seen),
+        };
+        let _ctx =
+            crate::runtime::context::enter(crate::runtime::context::DispatchContext::for_mission(
+                "ctx-handoff-run",
+                std::env::temp_dir(),
+            ));
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        assert_eq!(report.steps_completed, 3);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        for ctx in seen.iter() {
+            assert_eq!(
+                ctx.as_deref(),
+                Some("ctx-handoff-run"),
+                "every parallel worker must inherit the mission context"
+            );
+        }
+    }
 
     #[test]
     fn parallel_dispatch_is_concurrent() {

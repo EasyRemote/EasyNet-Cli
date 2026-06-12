@@ -44,7 +44,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule as CronSchedule;
 use uuid::Uuid;
 
-use crate::runtime::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
+use crate::core::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
 
 #[derive(Default)]
 pub struct ScheduleService {

@@ -28,8 +28,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::domain::{ScheduleEntry, ScheduleId, TenantId};
 use crate::persistence::tenant_paths::{ensure, TenantKind};
-use crate::runtime::domain::{ScheduleEntry, ScheduleId, TenantId};
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -136,7 +136,7 @@ impl ScheduleStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::domain::{
+    use crate::core::domain::{
         AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
     };
 

@@ -15,10 +15,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::persistence::tenant_paths::{ensure, TenantKind};
 #[cfg(test)]
-use crate::runtime::domain::LoopId;
-use crate::runtime::domain::{LoopInstance, TenantId};
+use crate::core::domain::LoopId;
+use crate::core::domain::{LoopInstance, TenantId};
+use crate::persistence::tenant_paths::{ensure, TenantKind};
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -102,7 +102,7 @@ impl LoopStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::domain::{AgentId, LoopState};
+    use crate::core::domain::{AgentId, LoopState};
 
     fn temp_tenant() -> TenantId {
         TenantId::new(format!("test-loop-{}", uuid::Uuid::new_v4()))
