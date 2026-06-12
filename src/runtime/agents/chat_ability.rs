@@ -579,7 +579,19 @@ pub(crate) fn invoke_direct_with_progress(
     // Materialise attachments to a delimited block. Failures bail
     // loud — attachments are explicit input, not best-effort
     // context, so a missing path is the operator's bug to fix.
-    let attachments_block = materialize_attachments(&parsed.attachments)?;
+    // Files-store root resolved only when a URA attachment is present:
+    // root_from_env creates the store directory as a side effect, which
+    // an attachment-less chat turn has no business doing.
+    let files_root = if parsed.attachments.iter().any(AttachmentSpec::is_ura) {
+        Some(super::files::state::root_from_env()?)
+    } else {
+        None
+    };
+    let attachments_block = materialize_attachments(
+        &parsed.attachments,
+        entry.root_path.as_deref(),
+        files_root.as_deref(),
+    )?;
 
     // Compose the literal context. Order: skills hint, cross-agent
     // hint, loader output, attachments block, caller's explicit
@@ -866,7 +878,19 @@ fn stream_handler(
     let skills_hint = format_skills_hint(&skill_specs);
     let other_specs = enumerate_other_agent_specs(agent_name);
     let cross_agent_hint = format_cross_agent_hint(&other_specs);
-    let attachments_block = materialize_attachments(&parsed.attachments)?;
+    // Files-store root resolved only when a URA attachment is present:
+    // root_from_env creates the store directory as a side effect, which
+    // an attachment-less chat turn has no business doing.
+    let files_root = if parsed.attachments.iter().any(AttachmentSpec::is_ura) {
+        Some(super::files::state::root_from_env()?)
+    } else {
+        None
+    };
+    let attachments_block = materialize_attachments(
+        &parsed.attachments,
+        entry.root_path.as_deref(),
+        files_root.as_deref(),
+    )?;
     if !skills_loaded.is_empty() || !context_used.is_empty() {
         snapshot.push(json!({
             "type": "loaded",
@@ -1171,16 +1195,35 @@ fn compose_chat_context(
 /// risking a runaway prompt.
 const ATTACHMENTS_BUDGET_BYTES: usize = 1024 * 1024;
 
-/// Read every attachment off disk and assemble a single delimited
-/// markdown block. Returns `Ok(None)` when the input list is empty
-/// so callers skip the wrapper.
+/// Read every attachment and assemble a single delimited markdown
+/// block. Returns `Ok(None)` when the input list is empty so callers
+/// skip the wrapper.
+///
+/// `Path` attachments embed file content inline (subject to the
+/// 1 MiB budget). `Ura` attachments copy the files-store blob into
+/// `<workspace_root>/uploads/<sha8>-<name>` and contribute only a
+/// one-line note with the workspace-relative path — the driver runs
+/// with cwd = workspace_root (dispatch's `ensure_from_directory`),
+/// so the agent reads the file itself with its own tools.
+///
+/// `workspace_root` is the agent's root_path; `files_root` is the
+/// content-addressed store root. Both are injected (not read from
+/// env here) so tests stay parallel-safe; callers resolve
+/// `files_root` lazily only when a URA attachment is present.
 ///
 /// Failure modes (all loud — chat does not silently swallow these):
 ///   * any path on the fs.read blocked list (e.g. /dev/zero)
-///   * file open/read I/O failure
+///   * file open/read/copy I/O failure
 ///   * encoding=utf8 on a non-UTF-8 byte sequence
-///   * accumulated bytes exceed `ATTACHMENTS_BUDGET_BYTES`
-fn materialize_attachments(specs: &[AttachmentSpec]) -> anyhow::Result<Option<String>> {
+///   * accumulated inline bytes exceed `ATTACHMENTS_BUDGET_BYTES`
+///   * a URA that does not parse as a `<u>.files` resource, names a
+///     blob missing from the store, or arrives when the agent has no
+///     workspace / the store root is unavailable
+fn materialize_attachments(
+    specs: &[AttachmentSpec],
+    workspace_root: Option<&std::path::Path>,
+    files_root: Option<&std::path::Path>,
+) -> anyhow::Result<Option<String>> {
     if specs.is_empty() {
         return Ok(None);
     }
@@ -1188,26 +1231,36 @@ fn materialize_attachments(specs: &[AttachmentSpec]) -> anyhow::Result<Option<St
     let mut out = String::from("## Attachments\n\n");
     let mut budget = ATTACHMENTS_BUDGET_BYTES;
     for (idx, spec) in specs.iter().enumerate() {
-        if super::fs_ability::is_blocked_read_path_for_chat(&spec.path) {
-            anyhow::bail!(
-                "chat: attachments[{idx}] {:?} is on the blocked-device path list",
-                spec.path
-            );
+        let (path, encoding) = match spec {
+            AttachmentSpec::Ura { ura, filename } => {
+                let note = materialize_ura_attachment(
+                    idx,
+                    ura,
+                    filename.as_deref(),
+                    workspace_root,
+                    files_root,
+                )?;
+                out.push_str(&note);
+                continue;
+            }
+            AttachmentSpec::Path { path, encoding } => (path, *encoding),
+        };
+        if super::fs_ability::is_blocked_read_path_for_chat(path) {
+            anyhow::bail!("chat: attachments[{idx}] {path:?} is on the blocked-device path list");
         }
-        let path = std::path::Path::new(&spec.path);
-        let metadata = std::fs::metadata(path)
-            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] stat {:?}: {e}", spec.path))?;
+        let fs_path = std::path::Path::new(path);
+        let metadata = std::fs::metadata(fs_path)
+            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] stat {path:?}: {e}"))?;
         if metadata.len() as usize > budget {
             anyhow::bail!(
-                "chat: attachments[{idx}] {:?} ({} bytes) would exceed the {} byte \
+                "chat: attachments[{idx}] {path:?} ({} bytes) would exceed the {} byte \
                  attachments budget",
-                spec.path,
                 metadata.len(),
                 ATTACHMENTS_BUDGET_BYTES
             );
         }
-        let mut file = std::fs::File::open(path)
-            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] open {:?}: {e}", spec.path))?;
+        let mut file = std::fs::File::open(fs_path)
+            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] open {path:?}: {e}"))?;
         // +1 over budget so an oversized file (e.g. one that grew
         // between stat and open) still fails loud rather than
         // truncating silently.
@@ -1215,42 +1268,99 @@ fn materialize_attachments(specs: &[AttachmentSpec]) -> anyhow::Result<Option<St
         let mut bytes: Vec<u8> = Vec::with_capacity(metadata.len() as usize);
         limited
             .read_to_end(&mut bytes)
-            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] read {:?}: {e}", spec.path))?;
+            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] read {path:?}: {e}"))?;
         if bytes.len() > budget {
             anyhow::bail!(
-                "chat: attachments[{idx}] {:?} grew past the {} byte attachments budget \
+                "chat: attachments[{idx}] {path:?} grew past the {} byte attachments budget \
                  mid-read",
-                spec.path,
                 ATTACHMENTS_BUDGET_BYTES
             );
         }
         budget = budget.saturating_sub(bytes.len());
 
-        let body = match spec.encoding {
+        let body = match encoding {
             AttachmentEncoding::Utf8 => {
                 let text = std::str::from_utf8(&bytes).map_err(|_| {
                     anyhow::anyhow!(
-                        "chat: attachments[{idx}] {:?} is not valid UTF-8; \
-                         use encoding=\"base64\"",
-                        spec.path
+                        "chat: attachments[{idx}] {path:?} is not valid UTF-8; \
+                         use encoding=\"base64\""
                     )
                 })?;
-                format!(
-                    "<file path={:?} encoding=\"utf8\">\n{text}\n</file>\n",
-                    spec.path
-                )
+                format!("<file path={path:?} encoding=\"utf8\">\n{text}\n</file>\n")
             }
             AttachmentEncoding::Base64 => {
                 let encoded = base64_encode(&bytes);
-                format!(
-                    "<file path={:?} encoding=\"base64\">\n{encoded}\n</file>\n",
-                    spec.path
-                )
+                format!("<file path={path:?} encoding=\"base64\">\n{encoded}\n</file>\n")
             }
         };
         out.push_str(&body);
     }
     Ok(Some(out))
+}
+
+/// Materialise one files-store blob into the workspace's `uploads/`
+/// directory and return its one-line context note. The copy target
+/// is `<sha8>-<sanitised filename>` — sha-prefixed so two uploads
+/// sharing a display name cannot collide, deterministic so re-sending
+/// the same turn is idempotent.
+fn materialize_ura_attachment(
+    idx: usize,
+    ura: &str,
+    filename: Option<&str>,
+    workspace_root: Option<&std::path::Path>,
+    files_root: Option<&std::path::Path>,
+) -> anyhow::Result<String> {
+    let workspace = workspace_root.ok_or_else(|| {
+        anyhow::anyhow!(
+            "chat: attachments[{idx}] is a URA but this agent has no workspace \
+             (registry row is missing root_path)"
+        )
+    })?;
+    let files_root = files_root.ok_or_else(|| {
+        anyhow::anyhow!("chat: attachments[{idx}] is a URA but the files store root is unavailable")
+    })?;
+    let sha = super::files::handlers::sha256_from_ura(ura)
+        .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}]: {e}"))?;
+    let blob = super::files::state::blob_path(files_root, &sha)
+        .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] resolve {sha}: {e}"))?;
+    let size = std::fs::metadata(&blob)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "chat: attachments[{idx}] {ura} names a blob missing from the files \
+                 store: {e}"
+            )
+        })?
+        .len();
+    let uploads_dir = workspace.join("uploads");
+    std::fs::create_dir_all(&uploads_dir)
+        .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] create {uploads_dir:?}: {e}"))?;
+    let target_name = sanitized_upload_name(filename, &sha);
+    let target = uploads_dir.join(&target_name);
+    std::fs::copy(&blob, &target).map_err(|e| {
+        anyhow::anyhow!("chat: attachments[{idx}] copy {blob:?} -> {target:?}: {e}")
+    })?;
+    let rel = format!("uploads/{target_name}");
+    Ok(format!(
+        "- `{rel}` ({size} bytes) — user-uploaded file {ura}, materialised at this \
+         workspace-relative path; read it from there with your file tools.\n"
+    ))
+}
+
+/// Display name for a materialised upload: `<sha8>-<basename>`.
+/// Only the final path component of the caller-supplied filename
+/// survives (no traversal, no separators); empty or pathological
+/// names fall back to "file".
+fn sanitized_upload_name(filename: Option<&str>, sha256_hex: &str) -> String {
+    let base = filename
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| {
+            std::path::Path::new(s)
+                .file_name()
+                .map(|os| os.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| "file".to_string());
+    format!("{}-{base}", &sha256_hex[..8])
 }
 
 /// Minimal base64 encoder (standard alphabet, with padding). Lifted
@@ -1355,9 +1465,29 @@ struct ChatArgs {
 }
 
 #[derive(Debug, Clone)]
-struct AttachmentSpec {
-    path: String,
-    encoding: AttachmentEncoding,
+enum AttachmentSpec {
+    /// Daemon-local file embedded inline in the prompt's context
+    /// block (the original v1 shape).
+    Path {
+        path: String,
+        encoding: AttachmentEncoding,
+    },
+    /// Files-store blob addressed by its v4.1.5 resource URA
+    /// (`easynet:///r/<realm>/resource/<u>.files/<sha256>`). Not
+    /// inlined: the blob is materialised into the agent workspace's
+    /// `uploads/` directory and the context block lists its
+    /// workspace-relative path, so the agent reads it with its own
+    /// file tools (works for files far past the inline budget).
+    Ura {
+        ura: String,
+        filename: Option<String>,
+    },
+}
+
+impl AttachmentSpec {
+    fn is_ura(&self) -> bool {
+        matches!(self, AttachmentSpec::Ura { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1420,7 +1550,9 @@ impl ChatArgs {
 
 /// Parse the optional `attachments` array into typed AttachmentSpecs.
 /// Absent/null → empty Vec; present-but-not-an-array → loud error so
-/// the caller sees the typo at the API boundary.
+/// the caller sees the typo at the API boundary. Each entry names its
+/// source with exactly one of `path` (daemon-local file, inlined) or
+/// `ura` (files-store blob, materialised into the workspace).
 fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec>> {
     let arr = match value {
         None | Some(Value::Null) => return Ok(Vec::new()),
@@ -1432,23 +1564,53 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
         let obj = item
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("chat: attachments[{idx}] must be an object"))?;
-        let path = obj
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("chat: attachments[{idx}].path (string) required"))?
-            .to_string();
-        if path.is_empty() {
-            anyhow::bail!("chat: attachments[{idx}].path must not be empty");
+        let path = obj.get("path").and_then(Value::as_str);
+        let ura = obj.get("ura").and_then(Value::as_str);
+        match (path, ura) {
+            (Some(_), Some(_)) => {
+                anyhow::bail!("chat: attachments[{idx}] must set `path` or `ura`, not both")
+            }
+            (Some(path), None) => {
+                if path.is_empty() {
+                    anyhow::bail!("chat: attachments[{idx}].path must not be empty");
+                }
+                let encoding = match obj.get("encoding").and_then(Value::as_str) {
+                    None => AttachmentEncoding::default(),
+                    Some("utf8") => AttachmentEncoding::Utf8,
+                    Some("base64") => AttachmentEncoding::Base64,
+                    Some(other) => anyhow::bail!(
+                        "chat: attachments[{idx}].encoding must be \"utf8\" or \"base64\" \
+                         (got {other:?})"
+                    ),
+                };
+                out.push(AttachmentSpec::Path {
+                    path: path.to_string(),
+                    encoding,
+                });
+            }
+            (None, Some(ura)) => {
+                if ura.is_empty() {
+                    anyhow::bail!("chat: attachments[{idx}].ura must not be empty");
+                }
+                if obj.contains_key("encoding") {
+                    anyhow::bail!(
+                        "chat: attachments[{idx}].encoding is only valid with `path` — \
+                         URA attachments are materialised to disk, not inlined"
+                    );
+                }
+                let filename = obj
+                    .get("filename")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                out.push(AttachmentSpec::Ura {
+                    ura: ura.to_string(),
+                    filename,
+                });
+            }
+            (None, None) => {
+                anyhow::bail!("chat: attachments[{idx}] requires `path` (string) or `ura` (string)")
+            }
         }
-        let encoding = match obj.get("encoding").and_then(Value::as_str) {
-            None => AttachmentEncoding::default(),
-            Some("utf8") => AttachmentEncoding::Utf8,
-            Some("base64") => AttachmentEncoding::Base64,
-            Some(other) => anyhow::bail!(
-                "chat: attachments[{idx}].encoding must be \"utf8\" or \"base64\" (got {other:?})"
-            ),
-        };
-        out.push(AttachmentSpec { path, encoding });
     }
     Ok(out)
 }
@@ -2282,8 +2444,53 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(args.attachments.len(), 1);
-        assert_eq!(args.attachments[0].path, "/etc/hosts");
-        assert_eq!(args.attachments[0].encoding, AttachmentEncoding::Utf8);
+        match &args.attachments[0] {
+            AttachmentSpec::Path { path, encoding } => {
+                assert_eq!(path, "/etc/hosts");
+                assert_eq!(*encoding, AttachmentEncoding::Utf8);
+            }
+            other => panic!("expected a Path attachment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_attachments_accepts_ura_with_filename() {
+        let args = ChatArgs::parse(&json!({
+            "prompt": "p",
+            "attachments": [{
+                "ura": "easynet:///r/easynet.run/resource/alice.files/aaaa",
+                "filename": "report.pdf"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(args.attachments.len(), 1);
+        match &args.attachments[0] {
+            AttachmentSpec::Ura { ura, filename } => {
+                assert_eq!(ura, "easynet:///r/easynet.run/resource/alice.files/aaaa");
+                assert_eq!(filename.as_deref(), Some("report.pdf"));
+            }
+            other => panic!("expected a Ura attachment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_attachments_rejects_path_and_ura_together() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "p",
+            "attachments": [{"path": "/x", "ura": "easynet:///r/x/resource/u.files/a"}]
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("not both"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_encoding_on_ura() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "p",
+            "attachments": [{"ura": "easynet:///r/x/resource/u.files/a", "encoding": "utf8"}]
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("only valid with `path`"));
     }
 
     #[test]
@@ -2297,13 +2504,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_attachments_rejects_missing_path() {
+    fn parse_attachments_rejects_missing_source() {
         let err = ChatArgs::parse(&json!({
             "prompt": "hi",
             "attachments": [{"encoding": "utf8"}]
         }))
         .unwrap_err();
-        assert!(format!("{err}").contains("path"));
+        assert!(format!("{err}").contains("`path` (string) or `ura`"));
     }
 
     #[test]
@@ -2318,7 +2525,7 @@ mod tests {
 
     #[test]
     fn materialize_attachments_empty_returns_none() {
-        assert!(materialize_attachments(&[]).unwrap().is_none());
+        assert!(materialize_attachments(&[], None, None).unwrap().is_none());
     }
 
     #[test]
@@ -2331,11 +2538,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("hello.txt");
         std::fs::write(&path, b"hello world").unwrap();
-        let specs = vec![AttachmentSpec {
+        let specs = vec![AttachmentSpec::Path {
             path: path.to_string_lossy().to_string(),
             encoding: AttachmentEncoding::Utf8,
         }];
-        let block = materialize_attachments(&specs).unwrap().unwrap();
+        let block = materialize_attachments(&specs, None, None)
+            .unwrap()
+            .unwrap();
         assert!(block.contains("## Attachments"));
         assert!(block.contains("encoding=\"utf8\""));
         assert!(block.contains("hello world"));
@@ -2354,11 +2563,13 @@ mod tests {
         let path = dir.join("blob.bin");
         // Bytes that are NOT valid UTF-8 — would panic on utf8 path.
         std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
-        let specs = vec![AttachmentSpec {
+        let specs = vec![AttachmentSpec::Path {
             path: path.to_string_lossy().to_string(),
             encoding: AttachmentEncoding::Base64,
         }];
-        let block = materialize_attachments(&specs).unwrap().unwrap();
+        let block = materialize_attachments(&specs, None, None)
+            .unwrap()
+            .unwrap();
         assert!(block.contains("encoding=\"base64\""));
         // base64("\xff\xfe\xfd") = "//79"
         assert!(
@@ -2378,26 +2589,137 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("blob.bin");
         std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
-        let specs = vec![AttachmentSpec {
+        let specs = vec![AttachmentSpec::Path {
             path: path.to_string_lossy().to_string(),
             encoding: AttachmentEncoding::Utf8,
         }];
-        let err = materialize_attachments(&specs).unwrap_err();
+        let err = materialize_attachments(&specs, None, None).unwrap_err();
         assert!(format!("{err}").contains("UTF-8"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn materialize_attachments_bails_on_missing_file() {
-        let specs = vec![AttachmentSpec {
+        let specs = vec![AttachmentSpec::Path {
             path: "/nonexistent/really/not/here.txt".to_string(),
             encoding: AttachmentEncoding::Utf8,
         }];
-        let err = materialize_attachments(&specs).unwrap_err();
+        let err = materialize_attachments(&specs, None, None).unwrap_err();
         assert!(
             format!("{err}").contains("stat") || format!("{err}").contains("open"),
             "expected an I/O error, got: {err}"
         );
+    }
+
+    /// Scratch (files_root, workspace_root, sha, ura) fixture for the
+    /// URA-attachment tests: one blob in a temp store plus an empty
+    /// temp workspace. Roots are injected into materialize_attachments
+    /// directly — no EASYNET_FILES_ROOT env writes, parallel-safe.
+    fn ura_attachment_fixture(
+        tag: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String, String) {
+        let base = std::env::temp_dir().join(format!(
+            "chat-ura-attach-{tag}-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
+        let files_root = base.join("store");
+        let workspace = base.join("workspace");
+        std::fs::create_dir_all(&files_root).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let sha = "ab".repeat(32); // 64 hex chars
+        std::fs::write(files_root.join(&sha), b"blob bytes").unwrap();
+        let ura = super::super::files::state::blob_ura("easynet.run", "alice", &sha);
+        (files_root, workspace, sha, ura)
+    }
+
+    #[test]
+    fn materialize_ura_attachment_copies_blob_and_notes_relative_path() {
+        let (files_root, workspace, sha, ura) = ura_attachment_fixture("ok");
+        let specs = vec![AttachmentSpec::Ura {
+            ura: ura.clone(),
+            filename: Some("report.pdf".to_string()),
+        }];
+        let block = materialize_attachments(&specs, Some(&workspace), Some(&files_root))
+            .unwrap()
+            .unwrap();
+        let rel = format!("uploads/{}-report.pdf", &sha[..8]);
+        assert!(
+            block.contains(&format!("`{rel}`")),
+            "block must cite the workspace-relative path, got: {block}"
+        );
+        assert!(block.contains(&ura), "block must cite the source URA");
+        let copied = std::fs::read(workspace.join(&rel)).unwrap();
+        assert_eq!(copied, b"blob bytes");
+        let _ = std::fs::remove_dir_all(files_root.parent().unwrap());
+    }
+
+    #[test]
+    fn materialize_ura_attachment_sanitizes_traversal_filenames() {
+        let (files_root, workspace, sha, ura) = ura_attachment_fixture("dotdot");
+        let specs = vec![AttachmentSpec::Ura {
+            ura,
+            filename: Some("../../etc/passwd".to_string()),
+        }];
+        let block = materialize_attachments(&specs, Some(&workspace), Some(&files_root))
+            .unwrap()
+            .unwrap();
+        // Only the basename survives; the copy lands inside uploads/.
+        let rel = format!("uploads/{}-passwd", &sha[..8]);
+        assert!(block.contains(&format!("`{rel}`")), "got: {block}");
+        assert!(workspace.join(&rel).is_file());
+        assert!(!workspace.parent().unwrap().join("etc/passwd").exists());
+        let _ = std::fs::remove_dir_all(files_root.parent().unwrap());
+    }
+
+    #[test]
+    fn materialize_ura_attachment_bails_on_unknown_blob() {
+        let (files_root, workspace, sha, _) = ura_attachment_fixture("missing");
+        std::fs::remove_file(files_root.join(&sha)).unwrap();
+        let ura = super::super::files::state::blob_ura("easynet.run", "alice", &sha);
+        let specs = vec![AttachmentSpec::Ura {
+            ura,
+            filename: None,
+        }];
+        let err = materialize_attachments(&specs, Some(&workspace), Some(&files_root)).unwrap_err();
+        assert!(
+            format!("{err}").contains("missing from the files store"),
+            "got: {err}"
+        );
+        let _ = std::fs::remove_dir_all(files_root.parent().unwrap());
+    }
+
+    #[test]
+    fn materialize_ura_attachment_requires_workspace_and_store_roots() {
+        let (files_root, workspace, _, ura) = ura_attachment_fixture("roots");
+        let specs = vec![AttachmentSpec::Ura {
+            ura,
+            filename: None,
+        }];
+        let err = materialize_attachments(&specs, None, Some(&files_root)).unwrap_err();
+        assert!(format!("{err}").contains("no workspace"), "got: {err}");
+        let err = materialize_attachments(&specs, Some(&workspace), None).unwrap_err();
+        assert!(
+            format!("{err}").contains("files store root is unavailable"),
+            "got: {err}"
+        );
+        let _ = std::fs::remove_dir_all(files_root.parent().unwrap());
+    }
+
+    #[test]
+    fn sanitized_upload_name_falls_back_and_strips_directories() {
+        let sha = "ab".repeat(32);
+        assert_eq!(
+            sanitized_upload_name(Some("report.pdf"), &sha),
+            "abababab-report.pdf"
+        );
+        assert_eq!(
+            sanitized_upload_name(Some("a/b/c.txt"), &sha),
+            "abababab-c.txt"
+        );
+        assert_eq!(sanitized_upload_name(Some(".."), &sha), "abababab-file");
+        assert_eq!(sanitized_upload_name(Some("  "), &sha), "abababab-file");
+        assert_eq!(sanitized_upload_name(None, &sha), "abababab-file");
     }
 
     #[test]

@@ -1260,11 +1260,15 @@ pub fn default_chat_manifest() -> AbilityManifest {
             },
             "attachments": {
                 "type": "array",
-                "description": "Files to read off disk and embed inline in the prompt's \
-                                context block. Each entry is read with the same path-safety \
-                                rules as the `fs.read` ability (no traversal outside the \
-                                workspace) and a per-call total cap of 1 MiB. Use this \
-                                instead of writing file contents into `context` by hand.",
+                "description": "Files to surface to the agent. Each entry names its source \
+                                with exactly one of `path` (daemon-local file, embedded \
+                                inline in the prompt's context block, per-call total cap \
+                                of 1 MiB) or `ura` (a `<user>.files` store blob, \
+                                materialised into the agent workspace's `uploads/` \
+                                directory and cited by workspace-relative path so the \
+                                agent reads it with its own file tools — no inline size \
+                                cap). Use this instead of writing file contents into \
+                                `context` by hand.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -1276,13 +1280,25 @@ pub fn default_chat_manifest() -> AbilityManifest {
                         "encoding": {
                             "type": "string",
                             "enum": ["utf8", "base64"],
-                            "description": "How to read the file. `utf8` (default) embeds \
-                                            text verbatim; `base64` embeds binary content \
-                                            with `<file encoding=\"base64\">…</file>` so \
-                                            the LLM can reason about non-text payloads."
+                            "description": "Only valid with `path`. How to read the file: \
+                                            `utf8` (default) embeds text verbatim; `base64` \
+                                            embeds binary content with \
+                                            `<file encoding=\"base64\">…</file>` so the LLM \
+                                            can reason about non-text payloads."
+                        },
+                        "ura": {
+                            "type": "string",
+                            "description": "v4.1.5 files-store resource URA \
+                                            (easynet:///r/<realm>/resource/<u>.files/<sha256>), \
+                                            e.g. as returned by `<user>.files.put`."
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "Only valid with `ura`: display name for the \
+                                            materialised copy. Sanitised to its basename; \
+                                            the file lands at uploads/<sha8>-<name>."
                         }
                     },
-                    "required": ["path"],
                     "additionalProperties": false
                 }
             }
@@ -2077,7 +2093,10 @@ url = "ftp://example.com"
             check(&m);
             let serialized = m.to_toml_string().expect("serializes");
             let back = AbilityManifest::from_toml_str(&serialized).expect("round-trips");
-            assert_eq!(back, m, "round-trip must preserve every field for: {lifecycle_toml}");
+            assert_eq!(
+                back, m,
+                "round-trip must preserve every field for: {lifecycle_toml}"
+            );
         }
     }
 
