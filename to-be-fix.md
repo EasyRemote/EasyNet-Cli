@@ -837,6 +837,14 @@
   引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
   切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
   step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-13 第 58 轮(循环会话,四波审计)**:2a60cb6(协商测试 +71)✓;056f4de
+  (投影小改 ±25)✓;363fcb2 ✓——remote_desktop fixture 里**回潮的 F-042 第 4 野形**
+  (`invocation/<id>/receipt/<n>`)换回 borrowed ledger 形(`resource/<owner>.invocations/
+  <id>`,等卡 #8 签后再 canonical 化);f7fc975 ✓——FFI 增 timeout_seconds 走请求生命周期
+  元数据,**正确地不当第八元组字段**(boundary 家规),正整数校验缺省 daemon 默认。
+  **零新债 ×4**。**stream 臂前置判定**:canonical 流臂需设备侧「stream-mode ability over
+  carrier」支持(step-3 unary 形 / step-3b open_bidi 形之外的 server-stream 形)——下轮
+  先读 local_session_dispatcher 能力面再定:有 → 建 hub 流臂;无 → 排给载体会话或同窗共建。
 - **2026-06-13 第 57 轮(循环会话,unary 臂落地)**:磁盘恢复(15GB)、eal 拆分愈合主树后,
   **bfe9b64 落地 step-4 daemon 半的 unary 臂**——本地性判定下沉、dispatch_frame_to_presence
   单结算核(forward 臂同核)、envelope 逐字移植 + resolver callee 钉牌、v0 无 claim 诚实
@@ -876,6 +884,14 @@
   引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
   切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
   step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-13 第 58 轮(循环会话,四波审计)**:2a60cb6(协商测试 +71)✓;056f4de
+  (投影小改 ±25)✓;363fcb2 ✓——remote_desktop fixture 里**回潮的 F-042 第 4 野形**
+  (`invocation/<id>/receipt/<n>`)换回 borrowed ledger 形(`resource/<owner>.invocations/
+  <id>`,等卡 #8 签后再 canonical 化);f7fc975 ✓——FFI 增 timeout_seconds 走请求生命周期
+  元数据,**正确地不当第八元组字段**(boundary 家规),正整数校验缺省 daemon 默认。
+  **零新债 ×4**。**stream 臂前置判定**:canonical 流臂需设备侧「stream-mode ability over
+  carrier」支持(step-3 unary 形 / step-3b open_bidi 形之外的 server-stream 形)——下轮
+  先读 local_session_dispatcher 能力面再定:有 → 建 hub 流臂;无 → 排给载体会话或同窗共建。
 - **2026-06-13 第 57 轮(循环会话,unary 臂落地)**:磁盘恢复(15GB)、eal 拆分愈合主树后,
   **bfe9b64 落地 step-4 daemon 半的 unary 臂**——本地性判定下沉、dispatch_frame_to_presence
   单结算核(forward 臂同核)、envelope 逐字移植 + resolver callee 钉牌、v0 无 claim 诚实
