@@ -355,7 +355,8 @@ fn u9_unpublish_clears_state() {
 fn u10_list_returns_published() {
     let f = Fixture::new("u10");
     f.publish();
-    let v = handle_list(&f.user, f.listener_port, &f.realm, json!({})).expect("list should succeed");
+    let v =
+        handle_list(&f.user, f.listener_port, &f.realm, json!({})).expect("list should succeed");
     let projects = v.get("projects").and_then(Value::as_array).unwrap();
     assert!(
         projects
@@ -473,7 +474,11 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     let reg = Arc::new(reg);
     assert!(handle.set(Arc::clone(&reg)).is_ok());
 
-    let ability = format!("{user}.pages.list");
+    // Management abilities register under their registry-relative
+    // name; the owner travels in the `OwnerKind` side table, not in
+    // the registry key (bare-name convention unified in 779d295,
+    // same as admin.status / a2a.* — this test predates it).
+    let ability = "pages.list".to_string();
     assert!(reg.has_rpc(&ability));
     let resp = invoke_local_rpc_sync(runtime, local_rpc_target(&ability, json!({})))
         .expect("pages.list should invoke through LocalRuntime");
