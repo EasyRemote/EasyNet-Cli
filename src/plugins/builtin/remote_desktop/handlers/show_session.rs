@@ -151,9 +151,11 @@ mod tests {
         resources::save(&file).unwrap();
 
         let caller = "easynet:///r/acme/user/alice";
+        // Borrowed receipt-URA shape (ledger.rs test convention) —
+        // no production builder yet; RFC-007/008 (F-042).
         let consent_receipt = json!({
             "kind": "scalar",
-            "receipt_ura": "easynet:///r/acme/invocation/approve-rd/receipt/1",
+            "receipt_ura": "easynet:///r/acme/resource/alice.invocations/approve-rd",
             "receipt_hash": "aa",
         });
         let created = crate::plugins::remote_desktop::handlers::create_session::handle(
@@ -168,7 +170,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             created["consent"]["approval_receipt"]["receipt_ura"],
-            json!("easynet:///r/acme/invocation/approve-rd/receipt/1")
+            json!("easynet:///r/acme/resource/alice.invocations/approve-rd")
         );
         let token = created["session_token"].as_str().unwrap();
 

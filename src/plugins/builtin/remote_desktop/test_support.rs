@@ -76,17 +76,20 @@ pub(in crate::plugins::builtin::remote_desktop) fn env_for_caller_with_causal(
     }
 }
 
+// Borrowed receipt-URA shape (`resource/<owner>.invocations/<id>`, the
+// Axon ledger.rs test convention) — no production receipt-body builder
+// exists yet; canonicalization tracked by RFC-007/008 (F-042).
 fn default_consent_receipt() -> serde_json::Value {
     json!({
         "kind": "scalar",
-        "receipt_ura": "easynet:///r/acme/invocation/test-local-consent/receipt/1",
+        "receipt_ura": "easynet:///r/acme/resource/alice.invocations/test-local-consent",
         "receipt_hash": "4242424242424242424242424242424242424242424242424242424242424242",
     })
 }
 
 pub(in crate::plugins::builtin::remote_desktop) fn test_consent_causal_context() -> CausalContext {
     CausalContext::Scalar(ReceiptRef {
-        receipt_ura: "easynet:///r/acme/invocation/test-local-consent/receipt/1".to_string(),
+        receipt_ura: "easynet:///r/acme/resource/alice.invocations/test-local-consent".to_string(),
         receipt_hash: [0x42; 32],
     })
 }

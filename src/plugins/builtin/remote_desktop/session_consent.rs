@@ -30,9 +30,7 @@ fn caller_is_device_owner(caller: Option<&str>) -> bool {
     }
     match parsed.kind {
         crate::ura::URAKind::Device => parsed.device_id() == Some(creds.node_id.trim()),
-        crate::ura::URAKind::User => {
-            creds.username.as_deref().map(str::trim) == parsed.user_id()
-        }
+        crate::ura::URAKind::User => creds.username.as_deref().map(str::trim) == parsed.user_id(),
         _ => false,
     }
 }
@@ -201,9 +199,12 @@ mod tests {
 
     #[test]
     fn causal_context_receipt_matching_accepts_scalar_and_list_forms() {
+        // Borrowed receipt-URA shape (ledger.rs test convention,
+        // `resource/<owner>.invocations/<id>`) — no production
+        // builder yet; RFC-007/008 tracks canonicalization (F-042).
         let scalar = json!({
             "kind": "scalar",
-            "receipt_ura": "easynet:///r/acme/invocation/1/receipt/1",
+            "receipt_ura": "easynet:///r/acme/resource/alice.invocations/1",
             "receipt_hash": "ab",
         });
         let expected = first_receipt_from_causal_context(&scalar).unwrap();
@@ -263,10 +264,10 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         for caller in [
-            "easynet:///r/acme/user/mallory",        // different user
-            "easynet:///r/other/user/alice",         // different realm
-            "easynet:///r/acme/device/dev-2",        // different device
-            "easynet:///r/acme/agent/alice.helper",  // agents never self-consent
+            "easynet:///r/acme/user/mallory",       // different user
+            "easynet:///r/other/user/alice",        // different realm
+            "easynet:///r/acme/device/dev-2",       // different device
+            "easynet:///r/acme/agent/alice.helper", // agents never self-consent
         ] {
             let env = EnvelopeContext {
                 caller: Some(caller.into()),
@@ -289,7 +290,7 @@ mod tests {
             caller: Some("easynet:///r/acme/user/alice".into()),
             causal_context: Some(json!({
                 "kind": "scalar",
-                "receipt_ura": "easynet:///r/acme/invocation/1/receipt/1",
+                "receipt_ura": "easynet:///r/acme/resource/alice.invocations/1",
                 "receipt_hash": "ab",
             })),
             ..EnvelopeContext::default()
