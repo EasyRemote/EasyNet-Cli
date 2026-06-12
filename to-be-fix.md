@@ -837,6 +837,14 @@
   引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
   切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
   step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-13 第 57 轮(循环会话,unary 臂落地)**:磁盘恢复(15GB)、eal 拆分愈合主树后,
+  **bfe9b64 落地 step-4 daemon 半的 unary 臂**——本地性判定下沉、dispatch_frame_to_presence
+  单结算核(forward 臂同核)、envelope 逐字移植 + resolver callee 钉牌、v0 无 claim 诚实
+  降级。双特性编译绿。**声明债**:行为 pin 骑 T4.2 测试搬迁后的新家(当前测试文件在制
+  -5,877 行,写入移动中的文件无意义);臂在 backend 切换前不可达(此前该路硬错),爆炸
+  半径 = 错误串。**待审**:新四提交波(2a60cb6 协商覆盖/056f4de 投影/363fcb2 receipt
+  fixture 对齐/f7fc975 ffi invocation options)下轮审。余:stream 臂 → backend 整 fork
+  退役 → 行为 pin 落新家。
 - **2026-06-12/13 第 56 轮(循环会话,step-4 unary 臂施工 + 磁盘事故)**:unary 远端臂
   写成——resolver 撤 self 硬拒(本地性判定下沉分支点)、共享派发核 dispatch_frame_to_presence
   提取(forward 臂同核重构,DEC-F004 单结算路)、远端臂 envelope 逐字移植 + resolver 裁定
@@ -868,6 +876,14 @@
   引证全预置)与 2b41796(step-2c 干净树晋级 397/397)——**零新债**。态势:双引擎各自的
   切割卡均已 armed(我 T2.1b prep §七;他 step-5 deletion card),同等 transport 释放;
   step-4→step-5 可在同一静窗连发(与 workspace 首切共窗 = CTO 卡 6 的协调点)。
+- **2026-06-13 第 57 轮(循环会话,unary 臂落地)**:磁盘恢复(15GB)、eal 拆分愈合主树后,
+  **bfe9b64 落地 step-4 daemon 半的 unary 臂**——本地性判定下沉、dispatch_frame_to_presence
+  单结算核(forward 臂同核)、envelope 逐字移植 + resolver callee 钉牌、v0 无 claim 诚实
+  降级。双特性编译绿。**声明债**:行为 pin 骑 T4.2 测试搬迁后的新家(当前测试文件在制
+  -5,877 行,写入移动中的文件无意义);臂在 backend 切换前不可达(此前该路硬错),爆炸
+  半径 = 错误串。**待审**:新四提交波(2a60cb6 协商覆盖/056f4de 投影/363fcb2 receipt
+  fixture 对齐/f7fc975 ffi invocation options)下轮审。余:stream 臂 → backend 整 fork
+  退役 → 行为 pin 落新家。
 - **2026-06-12/13 第 56 轮(循环会话,step-4 unary 臂施工 + 磁盘事故)**:unary 远端臂
   写成——resolver 撤 self 硬拒(本地性判定下沉分支点)、共享派发核 dispatch_frame_to_presence
   提取(forward 臂同核重构,DEC-F004 单结算路)、远端臂 envelope 逐字移植 + resolver 裁定
