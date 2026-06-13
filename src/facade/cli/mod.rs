@@ -135,6 +135,7 @@ pub(crate) mod mcp_install;
 pub(crate) mod mcp_server;
 pub(crate) mod mission_runs;
 pub(crate) mod pages;
+pub mod policy_cli;
 /// #185 — `easynet quota` owner verb to inspect/edit the per-consumer
 /// invocation quota policy (`[daemon.quota]`).
 pub(crate) mod quota_cmd;
@@ -269,6 +270,7 @@ const HELP_TEMPLATE: &str = "\
   \x1b[1;36m[Identity]\x1b[0m
     \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
     \x1b[1mtrust\x1b[0m                Inspect the realm trust anchor — whose keys admission accepts
+    \x1b[1mpolicy\x1b[0m               Policy rules — list, author, and dry-run the admission matcher
 
   \x1b[1;36m[Network]\x1b[0m
     \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, exec, terminal
@@ -321,6 +323,10 @@ pub enum Command {
     /// Inspect the realm trust anchor — whose keys admission accepts.
     #[command(display_order = 11)]
     Trust(groups::trust::TrustArgs),
+
+    /// Policy rules — list, author, and dry-run the admission matcher.
+    #[command(display_order = 12)]
+    Policy(policy_cli::PolicyArgs),
 
     // ── Network (20-29) ──────────────────────────────────────────────────
     // Top-level lifecycle shortcuts (join / start / stop). The layered
@@ -437,6 +443,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // Layered groups
         Command::Auth(args) => groups::auth::dispatch(args),
         Command::Trust(args) => groups::trust::run(args),
+        Command::Policy(args) => policy_cli::run(args),
         Command::Agent(args) => groups::agent::run(args),
         Command::Ability(args) => groups::ability::run(args),
         Command::Discover(args) => discover::run(args),
