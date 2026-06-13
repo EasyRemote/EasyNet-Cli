@@ -578,6 +578,30 @@
   续传只用已绑 UUID(哨兵不再发)/ 显式新会话逃逸不污染 lifelong 指针。S 级。
 - **占用注记**:AskToDoPage.tsx 在前端在制波前中(未提交修改),修复须等释放或由占用会话搭车。
 
+### F-057 `--no-default-features`(proto-free)构建既有损坏:4 错误 【已核验,seven-axes 期】
+- 落点:`groups/trust.rs:26`(invocation_transport 被 feature 配出)、
+  `runtime/agents/discover_ability.rs:402`(同)、`services/pending_dispatch.rs:83`
+  (easynet_axon::pb 不可达)、discover_ability.rs:401(E0277 连带) · 构建矩阵 · 低
+- 证据:seven-axes 实现期对 HEAD 复核(2026-06-13):`cargo check --no-default-features`
+  4 错误,全部在 seven-axes 未触碰的文件——默认特性已含 axon-pb,proto-free 配置
+  长期无 CI 咬合而漂移。记忆 `project_axon_pb_feature_build_blindspot` 描述的是
+  反向时代("默认 proto-free"),已过时。
+- 方向:裁决 proto-free 配置去留——(a) 修齐 cfg 门并入 CI 矩阵;(b) 正式宣布
+  axon-pb 为必选特性、删除 not(feature) 分支(更干净,与"无兼容层"方针一致)。
+  推荐 (b),需 DEC。S 级。
+- 2026-06-13 复核:seven-axes 后续修复已把新增的 `trust_ability::level_rank`
+  feature 回归清掉;当前 HEAD 的 `--no-default-features` 仍为上述基线 4 错误,
+  不再额外新增 policy/trust 错误。
+
+### F-058 eal/interpreter/tests.rs 与 agent_lifecycle_ability.rs 既有 clippy 5 告警 【已修复 2026-06-13,seven-axes 修复批】
+- 落点:`eal/interpreter/tests.rs:13,1352,1457`(mod 同名 + 复杂类型 ×2)、
+  `agent_lifecycle_ability.rs:1227,1255`(unnecessary get) · 卫生 · 低
+- 证据:`cargo clippy --features axon-pb --lib --tests` 稳定 5 条,seven-axes 全程
+  未触碰其文件(每轮 clippy 门均以"我的文件零告警"为准放行)。
+- 修复:内层测试模块改名避免 module inception;两处 loop dispatcher 记录类型提本地别名;
+  两处 `get(..).is_none()` 改 `contains_key`。`cargo clippy --features axon-pb --lib --tests`
+  已作为验证门。
+
 ---
 
 ## 迭代日志
@@ -1155,4 +1179,3 @@
   36 处 result_large_err 源头归零,尺寸 pin + wire 透明双钉);顺藤摸出 **F-053**(normative
   §7 落后参考实现 5 个 wire 字段,PARITY 表超报)并同轮主修(c1a03e8f:§7.1 全 wire 形 +
   诚实扩展行)。F-037 复核确认已闭(155b6b4)。
-
