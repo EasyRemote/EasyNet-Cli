@@ -9,6 +9,8 @@
 //
 // Verbs:
 //   list                        List published abilities                   (-> cli::abilities)
+//   search <intent>             Rank abilities across the discover ladder  (-> cli::discover,
+//                               same impl as top-level `easynet discover`)
 //   show <ability-ura>          Display one endpoint's contract surface    (NEW)
 //   new <name> [--lang LANG]    Scaffold a new ability project             (-> cli::ability_scaffold)
 //   validate <path>             Lint an ability manifest before deploy     (-> cli::ability_scaffold)
@@ -49,7 +51,7 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::Value;
 
-use crate::facade::cli::{abilities, ability_scaffold, ability_search, deploy, exec, invoke};
+use crate::facade::cli::{abilities, ability_scaffold, deploy, discover, exec, invoke};
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
 
@@ -68,8 +70,9 @@ pub enum AbilityAction {
     /// List published abilities across the federation.
     List(abilities::AbilitiesArgs),
     /// Find abilities by intent — describe what you want done and
-    /// get ranked local + federated candidates.
-    Search(ability_search::SearchArgs),
+    /// get ranked candidates from the discover ladder (same
+    /// implementation as top-level `easynet discover`).
+    Search(discover::DiscoverArgs),
     /// Inspect a deployed ability: endpoint name, version, input
     /// schema, runtime state, and hosting device. Use `--format json`
     /// to pipe the raw registry record into other tools.
@@ -125,7 +128,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::New(a) => ability_scaffold::run_new(a),
         AbilityAction::Validate(a) => ability_scaffold::run_validate(a),
         AbilityAction::List(a) => abilities::run(a),
-        AbilityAction::Search(a) => ability_search::run(a),
+        AbilityAction::Search(a) => discover::run(a),
         AbilityAction::Show(a) => run_show(a),
         AbilityAction::Deploy(a) => deploy::run(a),
         AbilityAction::Uninstall(a) => run_uninstall(a),

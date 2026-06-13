@@ -96,7 +96,6 @@
 pub(crate) mod abilities;
 pub(crate) mod ability_catalog_row;
 pub(crate) mod ability_scaffold;
-pub(crate) mod ability_search;
 pub(crate) mod agent;
 pub(crate) mod agent_new_ability;
 pub(crate) mod agent_sessions;
@@ -108,6 +107,7 @@ pub(crate) mod connect;
 pub(crate) mod daemon_agent_view;
 pub(crate) mod deploy;
 pub(crate) mod devices;
+pub mod discover;
 pub(crate) mod discuss;
 pub(crate) mod docker;
 pub(crate) mod doctor;
@@ -274,6 +274,7 @@ const HELP_TEMPLATE: &str = "\
     \x1b[1mability\x1b[0m              Manage abilities — deploy, invoke, list public endpoints
     \x1b[1mcall\x1b[0m                 Voice/video calls — create, join, leave conferences
     \x1b[1mmission\x1b[0m              Compile, run, and inspect EAL orchestration missions
+    \x1b[1mdiscover\x1b[0m             Find abilities by intent — ranked across device and realm
 
   \x1b[1;36m[Content]\x1b[0m
     \x1b[1mskill\x1b[0m                Manage agent-owned skills (install, list, upgrade, remove)
@@ -347,6 +348,10 @@ pub enum Command {
     /// Compile, run, and inspect EAL orchestration missions.
     #[command(display_order = 25)]
     Mission(groups::mission::MissionArgs),
+
+    /// Find abilities by intent — ranked across this device and the realm.
+    #[command(display_order = 26)]
+    Discover(discover::DiscoverArgs),
 
     // ── Content (30-39) ──────────────────────────────────────────────────
     /// Manage agent-owned skills (install, list, upgrade, remove).
@@ -432,6 +437,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Trust(args) => groups::trust::run(args),
         Command::Agent(args) => groups::agent::run(args),
         Command::Ability(args) => groups::ability::run(args),
+        Command::Discover(args) => discover::run(args),
         Command::Device(args) => groups::device::run(args),
         Command::Mission(args) => groups::mission::run(args),
         Command::Skill(args) => skill::run(args),

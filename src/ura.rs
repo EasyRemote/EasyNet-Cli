@@ -51,6 +51,7 @@ pub use easynet_axon::ura::*;
 pub struct AbilitySelector {
     ability_ura: String,
     owner_ura: String,
+    owner_kind: &'static str,
     dispatch_target: String,
     public_name: String,
     local_registry_ability: String,
@@ -73,18 +74,19 @@ impl AbilitySelector {
             anyhow::bail!("invalid Ability URA {ability_ura:?}: missing typed ability owner");
         };
 
-        let (owner_ura, dispatch_target) = match ability.owner {
+        let (owner_ura, owner_kind, dispatch_target) = match ability.owner {
             AbilityOwner::Agent { user_id, agent_id } => (
                 agent_ura(&parsed.realm, &user_id, &agent_id),
+                "agent",
                 agent_id.clone(),
             ),
             AbilityOwner::Device { device_id } => {
                 let owner_ura = device_ura(&parsed.realm, &device_id);
-                (owner_ura.clone(), owner_ura)
+                (owner_ura.clone(), "device", owner_ura)
             }
             AbilityOwner::Hub => {
                 let owner_ura = hub_ura(&parsed.realm);
-                (owner_ura.clone(), owner_ura)
+                (owner_ura.clone(), "hub", owner_ura)
             }
         };
         let public_name = ability_name_from_parts(&parsed).ok_or_else(|| {
@@ -95,6 +97,7 @@ impl AbilitySelector {
         Ok(Self {
             ability_ura: ability_ura.to_string(),
             owner_ura,
+            owner_kind,
             dispatch_target,
             public_name,
             local_registry_ability,
@@ -109,6 +112,13 @@ impl AbilitySelector {
     /// Canonical owner URA encoded by the Ability URA.
     pub fn owner_ura(&self) -> &str {
         &self.owner_ura
+    }
+
+    /// Owner kind encoded by the Ability URA: `"agent"`, `"device"`,
+    /// or `"hub"`. Derived from the typed `AbilityOwner` arm at parse
+    /// time — consumers never re-sniff URA strings (F-047).
+    pub fn owner_kind(&self) -> &'static str {
+        self.owner_kind
     }
 
     /// Dispatch target used by local/federation routing.
