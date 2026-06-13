@@ -3224,6 +3224,17 @@ fn real_context_clipboard_and_favorites_round_trip() {
     assert_eq!(favs["favorites"][0]["reference"], json!("clip-1"));
     let removed = invoke("context.favorites.remove", json!({"id": fav_id}));
     assert_eq!(removed["reference"], json!("clip-1"));
+
+    // Remove the clip itself: the removed entry is the receipt and
+    // the list forgets it.
+    let removed_clip = invoke("context.clipboard.remove", json!({"id": "clip-1"}));
+    assert_eq!(removed_clip["id"], json!("clip-1"));
+    let after = invoke("context.clipboard.list", json!({"limit": 10}));
+    assert_eq!(
+        after["entries"].as_array().expect("entries array").len(),
+        0,
+        "removed clip must not reappear in the list"
+    );
 }
 
 #[test]
