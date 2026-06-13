@@ -127,6 +127,7 @@ pub(crate) mod api_key_cli;
 /// `<user>.pages.{publish,unpublish,list,get}` and the
 /// `<user>.<project_id>.page.fetch` family.
 pub(crate) mod context;
+pub mod invocation_watch;
 pub(crate) mod invoke;
 pub(crate) mod join;
 pub(crate) mod llm_api;

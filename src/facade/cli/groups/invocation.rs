@@ -42,6 +42,9 @@ pub enum InvocationAction {
     /// Aggregate operational stats over recent records — state mix,
     /// latency percentiles, top abilities and error codes.
     Stats(StatsArgs),
+    /// Watch an Invocation causal set live — by invocation URA, or a
+    /// whole run via its trace anchor (seven-axes T2.4).
+    Watch(crate::facade::cli::invocation_watch::WatchArgs),
 }
 
 #[derive(Debug, Args)]
@@ -112,6 +115,7 @@ pub fn run(args: InvocationArgs) -> anyhow::Result<()> {
             println!("{}", response.ledger_path);
             Ok(())
         }
+        InvocationAction::Watch(a) => crate::facade::cli::invocation_watch::run(a),
     }
 }
 

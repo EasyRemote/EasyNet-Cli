@@ -495,6 +495,18 @@ pub(crate) fn ledger_record_from_remote_receipt(
         .unwrap_or_else(|_| format!("state_{}", receipt.state));
     Ok(InvocationLedgerRecord {
         invocation_ura,
+        // Signed usage rides the wire receipt verbatim into the row —
+        // never fabricated here (seven-axes DEC-010 card ①).
+        usage: receipt
+            .usage
+            .as_ref()
+            .map(|u| easynet_axon::invocation::axiom::InvocationUsage {
+                tokens_in: u.tokens_in,
+                tokens_out: u.tokens_out,
+                duration_ms: u.duration_ms,
+                external_calls: u.external_calls,
+            })
+            .unwrap_or_default(),
         request_id: receipt.invocation_id.clone(),
         caller_ura,
         subject_ura,

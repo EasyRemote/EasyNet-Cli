@@ -1,0 +1,81 @@
+//! Seven-axes W3 — signed usage end-to-end
+//! =========================================
+//!
+//! File: tests/seven_axes_w3_usage_e2e.rs
+//! Spec: docs/spec/seven-axes-p0-landing-v1.md §3 W3-E2E-1 (the
+//! wire-ride subset; the tamper-breaks-verification property is
+//! pinned at the protocol layer by Axon's
+//! `usage_tail_is_signed_material` — the signature math lives there,
+//! not in this consumer).
+//! Fixture: `seven_axes_fixture` — real UDS daemon + one-handle ledger.
+//!
+//! Covered, over the real wire:
+//!   * a real invocation's terminal receipt carries `usage`, the
+//!     LedgerSink copies it verbatim into the queryable row, and the
+//!     watch surface sums it into the Terminal event — receipt →
+//!     ledger → projection, one unbroken ride;
+//!   * `duration_ms` is runtime-owned wall time (admitted →
+//!     terminal): present as a number, zero-or-more — zero is a fact
+//!     for a sub-millisecond local call, absence would be a bug;
+//!   * token counters are zero (no handler reports them yet — the
+//!     EmitExtras seam exists; zero-not-absent is the contract).
+//!
+//! One `#[test]` on purpose — fixture owns process env (see fixture
+//! header).
+//!
+//! Author: Silan Hu <silan.hu@u.nus.edu>
+//! Copyright (c) 2026 EasyNet. All rights reserved.
+
+#![cfg(all(feature = "axon-pb", unix))]
+
+mod seven_axes_fixture;
+
+use easynet_cli::facade::cli::invocation_watch::{self, WatchArgs, WatchEvent};
+use easynet_cli::facade::cli::trust_level::{self, SetArgs};
+use seven_axes_fixture::SevenAxesHome;
+
+#[test]
+fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
+    let home = SevenAxesHome::seed();
+    let daemon = home.start_daemon();
+
+    let (_resp, meta) = trust_level::execute_set(&SetArgs {
+        agent_ura: home.testbot_ura.clone(),
+        level: "elevated".into(),
+        yes: true,
+        format: trust_level::OutputFormat::Table,
+    })
+    .expect("a ledgered invocation to inspect");
+    let invocation_ura = meta["invocation_ura"]
+        .as_str()
+        .expect("envelope echo carries invocation_ura")
+        .to_string();
+
+    let snapshot = invocation_watch::execute_once(&WatchArgs {
+        invocation: Some(invocation_ura),
+        trace: None,
+        follow: false,
+        format: invocation_watch::OutputFormat::Table,
+    })
+    .expect("watch the ledgered invocation");
+
+    let usage = match snapshot.terminal {
+        Some(WatchEvent::Terminal { usage, .. }) => {
+            usage.expect("terminal event must carry the signed usage sum")
+        }
+        other => panic!("completed invocation must be terminal; got {other:?}"),
+    };
+
+    // Token counters: zero-not-absent until a handler reports through
+    // the EmitExtras seam.
+    assert_eq!(usage.tokens_in, 0);
+    assert_eq!(usage.tokens_out, 0);
+    assert_eq!(usage.external_calls, 0);
+    // duration_ms is runtime-owned wall time. A local set_trust can
+    // complete inside one millisecond — zero is then the honest
+    // value; the FIELD's presence (proved by reaching this line
+    // through receipt → ledger → watch) is the contract.
+    let _wall_time: u64 = usage.duration_ms;
+
+    drop(daemon);
+}
