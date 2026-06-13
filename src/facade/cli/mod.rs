@@ -146,6 +146,7 @@ pub(crate) mod start;
 pub(crate) mod start_boot_watcher;
 pub(crate) mod status;
 pub(crate) mod stop;
+pub mod teach;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod think;

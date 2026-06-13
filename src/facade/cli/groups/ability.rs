@@ -19,6 +19,9 @@
 //   invoke <ability-ura>       Call a public ability by canonical URA      (-> cli::invoke)
 //          [--node <id>]       --node pins to a specific remote device
 //   exec <node> -- <cmd>        One-shot remote shell (ad-hoc ability)     (-> cli::exec)
+//   teach <agent.name> --to U   Confer learnability to ONE agent           (-> cli::teach)
+//   learn <ability-ura> --as A  Acquire a taught ability (new owner: A)    (-> cli::teach)
+//   forget <name> --agent A     Unlearn a LEARNED ability                  (-> cli::teach)
 //
 // Verbs DELIBERATELY ABSENT:
 //
@@ -34,6 +37,15 @@
 //               the ability graph trace, which lives at a layer this PR
 //               does not yet model. A naive stdout tail would teach the
 //               wrong thing.
+//
+//   pull      — capability transfer is owner-initiated, never consumer-
+//               initiated: an ability is *taught* by its owner
+//               (`teach`/`learn`, gated by InstallPolicy with
+//               `allow_transferred_code = false` by default), not pulled
+//               like a file. A `pull` verb would contradict "the
+//               capability never leaves its owner's machine" — the
+//               default GET route is remote `invoke`. See
+//               docs/spec/seven-axes-p0-landing-v1.md §2.5 / §0.1-6.
 //
 // Routing note (transitional misalignment):
 //   `deploy --node <id>` currently takes a *device node id*, not an
@@ -51,7 +63,7 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::Value;
 
-use crate::facade::cli::{abilities, ability_scaffold, deploy, discover, exec, invoke};
+use crate::facade::cli::{abilities, ability_scaffold, deploy, discover, exec, invoke, teach};
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
 
@@ -85,6 +97,12 @@ pub enum AbilityAction {
     Invoke(invoke::InvokeArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
+    /// Make an ability learnable by ONE agent (owner-initiated; GET route B).
+    Teach(teach::TeachArgs),
+    /// Acquire a taught ability — the learner becomes the copy's owner.
+    Learn(teach::LearnArgs),
+    /// Drop a LEARNED ability (native abilities are not forgettable).
+    Forget(teach::ForgetArgs),
 }
 
 #[derive(Debug, Args)]
@@ -134,6 +152,9 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::Uninstall(a) => run_uninstall(a),
         AbilityAction::Invoke(a) => invoke::run(a),
         AbilityAction::Exec(a) => exec::run(a),
+        AbilityAction::Teach(a) => teach::run_teach(a),
+        AbilityAction::Learn(a) => teach::run_learn(a),
+        AbilityAction::Forget(a) => teach::run_forget(a),
     }
 }
 

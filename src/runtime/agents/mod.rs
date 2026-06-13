@@ -222,6 +222,7 @@ pub mod skill_install_ability;
 /// skill (lives in the agent's own skill pool). The judge's
 /// `value_kind` field picks between the two.
 pub mod skill_publish_ability;
+pub mod teach_ability;
 /// `{{ var }}` template substitution shared by every executor that
 /// consumes `[exec]`-bound ability manifests (shell argv, EAL
 /// source, …). Pulled out so the substitution model — including

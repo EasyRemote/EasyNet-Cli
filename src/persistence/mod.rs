@@ -65,5 +65,6 @@ pub(crate) mod policy_rules;
 /// layer; the runtime side reads it through this module's public
 /// API.
 pub mod resources;
+pub(crate) mod teach_grants;
 pub(crate) mod tenant_paths;
 pub(crate) mod trust_levels;
