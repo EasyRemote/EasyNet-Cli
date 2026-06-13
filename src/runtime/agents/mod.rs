@@ -234,6 +234,7 @@ pub mod template;
 /// independent judge session emitting a memory-classification
 /// verdict per cycle (consumed by the Phase 5 curator).
 pub mod think_ability;
+pub mod trust_ability;
 /// voice.* call signaling abilities backing the `easynet call …`
 /// subcommand surface (create, show, join, leave, end, watch,
 /// report_metrics). v1 stores call state in-process; persistence

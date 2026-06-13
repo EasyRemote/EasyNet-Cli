@@ -2,18 +2,28 @@
 // ============================
 //
 // File: src/facade/cli/groups/trust.rs
-// Description: `easynet trust …` — read the realm trust plane
-//              (commit-plan-2 D3 / Gate D). Trust answers "whose keys
-//              does this daemon's admission gate accept, and in what
-//              role" — it deliberately does NOT answer "what may they
-//              call"; that is permission/policy (D4), a separate
-//              product question per commit-plan-2 invariant 8.
+// Description: `easynet trust …` — the trust surface, two planes
+//              under one noun (seven-axes D10 ruling):
 //
-//              Read-only by design. The trust anchor has two write
-//              paths already — the pairing flow and the
+//              ANCHOR plane (`trust show`, read-only): whose keys
+//              does this daemon's admission gate accept, and in what
+//              role (commit-plan-2 D3 / Gate D). The anchor has two
+//              write paths already — the pairing flow and the
 //              `<self>.register_device_pubkey` protocol ability — and
 //              a third CLI write path would need its own DEC against
 //              admission-truth ownership before it exists.
+//
+//              LEVEL plane (`trust level show|set` → cli::trust_level):
+//              once a key is accepted, how far do we trust the
+//              identity behind it (Axon `TrustLevel`, the attribute
+//              the resilience gate consumes). Backed by the
+//              `identity.get_trust`/`set_trust` abilities — a `set`
+//              is an ordinary ledgered invocation, so the level plane
+//              needs no separate DEC: the receipt chain is the audit.
+//
+//              Neither plane answers "what may they call" — that is
+//              permission/policy (D4), a separate product question
+//              per commit-plan-2 invariant 8.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -38,6 +48,8 @@ pub enum TrustAction {
     /// Show the realm trust anchor: every key the admission gate
     /// accepts, or one subject's entries when a URA is given.
     Show(ShowArgs),
+    /// Trust-level plane: how far an accepted identity is trusted.
+    Level(crate::facade::cli::trust_level::LevelArgs),
 }
 
 #[derive(Debug, Args)]
@@ -53,6 +65,7 @@ pub struct ShowArgs {
 pub fn run(args: TrustArgs) -> anyhow::Result<()> {
     match args.action {
         TrustAction::Show(a) => run_show(a),
+        TrustAction::Level(a) => crate::facade::cli::trust_level::run(a),
     }
 }
 

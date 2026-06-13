@@ -16,7 +16,7 @@ use super::{
     permission_ability, ping, plugin_lifecycle_ability, policy_ability, process_exec_ability,
     profiles, pty_attach_ability, pty_io_ability, pty_lifecycle_ability, schedule_ability,
     session_ability, shell_run_ability, skill_install_ability, skill_publish_ability,
-    think_ability, voice_call_ability, PagesIdentity,
+    think_ability, trust_ability, voice_call_ability, PagesIdentity,
 };
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
@@ -847,6 +847,11 @@ fn build_registry_with_services_result_inner(
     agent_list_ability::register(&mut reg, move || {
         crate::registry::agents::load_agents().unwrap_or_else(|_| agents_for_device_view.clone())
     });
+    // identity.get_trust / identity.set_trust — the trust-level
+    // directory (seven-axes T2.1; RFC-001 restatement of
+    // GetNodeTrust/SetNodeTrust). Anchor (keys) and level (degree)
+    // stay two planes; this is the level plane.
+    trust_ability::register(&mut reg);
     // admin.status — operator-facing component snapshot. The
     // ability-count provider reads through the same OnceLock the
     // bridge handlers use, so the count is accurate at call time

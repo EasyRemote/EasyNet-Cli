@@ -65,3 +65,4 @@ pub(crate) mod owner_projections;
 /// API.
 pub mod resources;
 pub(crate) mod tenant_paths;
+pub(crate) mod trust_levels;

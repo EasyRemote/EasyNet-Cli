@@ -63,6 +63,10 @@ pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + S
 /// the way for handlers to opt into envelope access.
 #[derive(Debug, Clone, Default)]
 pub struct EnvelopeContext {
+    /// Runtime-assigned invocation id for THIS ability call. This is
+    /// not an eighth input to the invocation axiom; it is the runtime
+    /// identity of the receipt-bearing execution record.
+    pub invocation_id: Option<String>,
     /// AXIOM 7-tuple `caller`.
     pub caller: Option<String>,
     /// AXIOM 7-tuple `callee`.
@@ -329,6 +333,7 @@ async fn envelope_context_from_axon(ctx: &Arc<AbilityContext>) -> EnvelopeContex
         .axiom_envelope_of(&ctx.invocation_id)
         .await
         .map(|signed| EnvelopeContext {
+            invocation_id: Some(ctx.invocation_id.clone()),
             caller: Some(signed.envelope.caller.ura),
             callee: Some(signed.envelope.callee.ura),
             ability: Some(signed.envelope.ability),

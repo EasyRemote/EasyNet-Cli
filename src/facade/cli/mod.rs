@@ -148,6 +148,7 @@ pub(crate) mod stop;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod think;
+pub mod trust_level;
 
 use clap::builder::styling::{AnsiColor, Effects, Style, Styles};
 use clap::{Parser, Subcommand};
