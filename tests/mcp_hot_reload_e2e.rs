@@ -128,12 +128,14 @@ async fn list_changed_push_triggers_dynamic_refresh() {
         // `register_one_tool_dynamic`). For the diff to detect the
         // unchanged-vs-removed split we don't actually need the
         // handler to run — just the registry membership.
-        registry.hot_register_stream_with_spec(
-            "tool_a",
-            OwnerKind::Device,
-            manifest,
-            Arc::new(|_args| anyhow::bail!("tool_a handler not expected to run in this test")),
-        );
+        registry
+            .hot_register_stream_with_spec(
+                "tool_a",
+                OwnerKind::Device,
+                manifest,
+                Arc::new(|_args| anyhow::bail!("tool_a handler not expected to run in this test")),
+            )
+            .expect("preload tool_a stream ability");
     }
     assert!(registry.has_stream("tool_a"));
     assert!(!registry.has_stream("tool_b"));

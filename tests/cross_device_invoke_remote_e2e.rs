@@ -47,18 +47,25 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::invocation::LocalRuntime;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use easynet_axon::invocation::{
+    sign_descriptor_bound_invocation, AgentIdentity as AxiomAgentIdentity, CausalContext,
+    DescriptorBoundEnvelope, InvocationEnvelope, LocalRuntime,
+    SubjectIdentity as AxiomSubjectIdentity, UraProfile,
+};
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
-    bidi_control, AgentIdentity, BidiControl, BinaryChunk, Envelope, EnvelopeOpen,
+    bidi_control, AgentIdentity, BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen,
     InvocationTarget, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeServerStreamRequest,
-    StreamDescriptor,
+    StreamDescriptor, SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
 use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::services::invocation_transport::invocation_wire::ProtoEnvelope;
 use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
     InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
@@ -70,8 +77,10 @@ use easynet_cli::services::invocation_transport::session_initiator::{
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
 use easynet_cli::services::presence_registry::{OfflineReason, PresenceEvent, PresenceRegistry};
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
+use ed25519_dalek::SigningKey;
 use futures::StreamExt;
 use serde_json::json;
+use sha2::Digest as _;
 use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -83,8 +92,10 @@ const DEVICE_A_URI: &str = "easynet:///r/test-realm/device/device-a";
 const DEVICE_B_URI: &str = "easynet:///r/test-realm/device/device-b";
 const DEVICE_B_ECHO_ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-b.test.echo";
 const DEVICE_B_ECHO_PUBLIC_NAME: &str = "test.echo";
-const DEVICE_B_ECHO_REGISTRY_ABILITY: &str = DEVICE_B_ECHO_PUBLIC_NAME;
 const ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
+const DEVICE_A_SIGNING_SEED: [u8; 32] = [0xA1; 32];
+const DEVICE_B_SIGNING_SEED: [u8; 32] = [0xB2; 32];
+const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 
 /// 5-second bound on every blocking await in the test. Real
 /// transport plane round-trips finish in milliseconds; any test
@@ -96,6 +107,77 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 /// the bytes that come out of the originating invoke_remote
 /// stream.
 const REPLY_MARKER: &[u8] = b"hello-from-device-b";
+
+fn signing_key_for(caller_ura: &str) -> SigningKey {
+    match caller_ura {
+        DEVICE_A_URI => SigningKey::from_bytes(&DEVICE_A_SIGNING_SEED),
+        DEVICE_B_URI => SigningKey::from_bytes(&DEVICE_B_SIGNING_SEED),
+        other => panic!("no test signing key configured for {other}"),
+    }
+}
+
+fn public_key_b64_for(caller_ura: &str) -> String {
+    BASE64_STANDARD.encode(signing_key_for(caller_ura).verifying_key().to_bytes())
+}
+
+fn signed_envelope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    args: &[u8],
+) -> Envelope {
+    let signing_key = signing_key_for(caller_ura);
+    let mut envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
+        .expect("valid descriptor-bound test envelope")
+        .into_inner();
+    let nonce: [u8; 16] = envelope
+        .invocation_nonce
+        .as_slice()
+        .try_into()
+        .expect("ProtoEnvelope emits a 16-byte nonce");
+
+    let subject = AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
+    let ability_ref = format!(
+        "{}@{}",
+        easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+            .expect("callee-owned descriptor ability"),
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    );
+    let axiom_env = InvocationEnvelope {
+        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+        subject: subject.clone(),
+        ability: ability_ref,
+        args_digest: sha2::Sha256::digest(args).into(),
+        invocation_nonce: nonce,
+        causal_context: CausalContext::None,
+    };
+    let descriptor_bound =
+        DescriptorBoundEnvelope::new(axiom_env).expect("descriptor-bound test envelope");
+    let key_id_hint = public_key_b64_for(caller_ura);
+    let signature =
+        sign_descriptor_bound_invocation(&signing_key, &descriptor_bound, key_id_hint.as_str());
+
+    envelope.caller = Some(AgentIdentity {
+        ura: caller_ura.to_string(),
+        profile: DEFAULT_URA_PROFILE.to_string(),
+    });
+    envelope.callee = Some(AgentIdentity {
+        ura: callee_ura.to_string(),
+        profile: DEFAULT_URA_PROFILE.to_string(),
+    });
+    envelope.subject = Some(PbSubjectIdentity {
+        ura: subject_ura.to_string(),
+        profile: DEFAULT_URA_PROFILE.to_string(),
+    });
+    envelope.caller_signature = Some(CallerSignature {
+        algorithm: signature.algorithm,
+        signature: signature.signature,
+        key_id_hint: signature.key_id_hint,
+    });
+    envelope
+}
 
 /// Owns every resource the in-process hub holds open so the test
 /// can deterministically tear them down before the tokio runtime
@@ -163,17 +245,19 @@ async fn start_in_process_hub() -> TestHub {
     // loading it via the production loader path. Both devices
     // admitted; empty anchor would reject everyone external.
     let trust_path = tempdir.path().join("realm-trust.toml");
+    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URI);
+    let device_b_public_key_b64 = public_key_b64_for(DEVICE_B_URI);
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
 agent_ura = "{DEVICE_A_URI}"
-public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+public_key_b64 = "{device_a_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
 
 [[trusted_agent]]
 agent_ura = "{DEVICE_B_URI}"
-public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+public_key_b64 = "{device_b_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
         "#,
@@ -225,11 +309,12 @@ async fn start_in_process_local_device() -> TestHub {
     let socket_path = tempdir.path().join("local-device.sock");
 
     let trust_path = tempdir.path().join("realm-trust.toml");
+    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URI);
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
 agent_ura = "{DEVICE_A_URI}"
-public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+public_key_b64 = "{device_a_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
         "#,
@@ -242,8 +327,13 @@ added_at_unix_ms = 0
     let presence = Arc::new(PresenceRegistry::new());
     let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_A_URI.to_string()));
     let runtime = LocalRuntime::new();
-    let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(
+    let authority_context =
+        easynet_cli::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+            DEVICE_A_URI,
+        );
+    let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
+        authority_context,
     );
     easynet_cli::runtime::agents::file_transfer_ability::register(&mut catalog);
     let service =
@@ -291,13 +381,13 @@ async fn connect_to_hub(socket_path: &std::path::Path) -> Channel {
 
 fn subscribe_directory_request(caller_ura: &str) -> Request<InvokeServerStreamRequest> {
     Request::new(InvokeServerStreamRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: caller_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            ..Envelope::default()
-        }),
+        envelope: Some(signed_envelope(
+            caller_ura,
+            caller_ura,
+            caller_ura,
+            "federation.subscribe_directory",
+            b"",
+        )),
         function_name: "federation.subscribe_directory".to_string(),
         ..InvokeServerStreamRequest::default()
     })
@@ -309,21 +399,17 @@ fn unary_invoke(
     function_name: &str,
     args: serde_json::Value,
 ) -> Request<InvokeRequest> {
+    let arguments = args.to_string().into_bytes();
     Request::new(InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: caller_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            callee: Some(AgentIdentity {
-                ura: callee_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            invocation_nonce: vec![0x22; 16],
-            ..Envelope::default()
-        }),
+        envelope: Some(signed_envelope(
+            caller_ura,
+            callee_ura,
+            callee_ura,
+            function_name,
+            &arguments,
+        )),
         function_name: function_name.to_string(),
-        arguments: args.to_string().into_bytes(),
+        arguments,
         ..InvokeRequest::default()
     })
 }
@@ -387,10 +473,10 @@ async fn publish_device_b_echo_projection(socket_path: &std::path::Path) {
 fn build_test_echo_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
     let runtime = easynet_axon::invocation::LocalRuntime::new();
     futures::executor::block_on(runtime.register_ability(
-        DEVICE_B_ECHO_REGISTRY_ABILITY,
+        DEVICE_B_ECHO_ABILITY_URA,
         easynet_axon::invocation::make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
     ))
-    .expect("register device-owned echo ability in LocalRuntime");
+    .expect("register canonical device-owned echo Ability URA in LocalRuntime");
     runtime
 }
 
@@ -449,13 +535,13 @@ async fn open_device_session(channel: Channel, caller_ura: &str) -> DeviceSessio
     let envelope_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: caller_ura.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            envelope: Some(signed_envelope(
+                caller_ura,
+                caller_ura,
+                caller_ura,
+                ABILITY_SELF_SESSION,
+                b"",
+            )),
             target: Some(InvocationTarget {
                 ability_name: ABILITY_SELF_SESSION.to_string(),
                 ..InvocationTarget::default()
@@ -506,13 +592,13 @@ async fn open_device_session_with_drain(
     let envelope_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: caller_ura.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            envelope: Some(signed_envelope(
+                caller_ura,
+                caller_ura,
+                caller_ura,
+                ABILITY_SELF_SESSION,
+                b"",
+            )),
             target: Some(InvocationTarget {
                 ability_name: ABILITY_SELF_SESSION.to_string(),
                 ..InvocationTarget::default()
@@ -864,22 +950,13 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
             .send(InvokeBidiUp {
                 sequence: 0,
                 payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-                    envelope: Some(Envelope {
-                        caller: Some(AgentIdentity {
-                            ura: DEVICE_A_URI.to_string(),
-                            ..AgentIdentity::default()
-                        }),
-                        callee: Some(AgentIdentity {
-                            ura: DEVICE_A_URI.to_string(),
-                            ..AgentIdentity::default()
-                        }),
-                        subject: Some(easynet_axon::pb::axon::v1::SubjectIdentity {
-                            ura: DEVICE_A_URI.to_string(),
-                            ..Default::default()
-                        }),
-                        invocation_nonce: (1_u8..=16).collect(),
-                        ..Envelope::default()
-                    }),
+                    envelope: Some(signed_envelope(
+                        DEVICE_A_URI,
+                        DEVICE_A_URI,
+                        DEVICE_A_URI,
+                        easynet_cli::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
+                        &args,
+                    )),
                     target: Some(InvocationTarget {
                         ability_name:
                             easynet_cli::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
@@ -1039,7 +1116,7 @@ async fn run_round_trip() {
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: DEVICE_B_URI.to_string(),
         ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1051,13 +1128,13 @@ async fn run_round_trip() {
     let invoke_remote_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: DEVICE_A_URI.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            envelope: Some(signed_envelope(
+                DEVICE_A_URI,
+                DEVICE_A_URI,
+                DEVICE_A_URI,
+                ABILITY_INVOKE_REMOTE,
+                &initial_args,
+            )),
             target: Some(InvocationTarget {
                 ability_name: ABILITY_INVOKE_REMOTE.to_string(),
                 ..InvocationTarget::default()
@@ -1128,8 +1205,8 @@ async fn run_round_trip() {
         .expect("reply task completes within bound")
         .expect("reply task did not panic");
     assert_eq!(
-        ability, DEVICE_B_ECHO_REGISTRY_ABILITY,
-        "device B must see the resolver-selected local dispatch ability derived from the Ability URA"
+        ability, DEVICE_B_ECHO_PUBLIC_NAME,
+        "v0 SessionDispatch delivers the owner-local public ability name; LocalAxonSessionDispatcher separately proves canonical runtime dispatch"
     );
 }
 
@@ -1163,7 +1240,7 @@ async fn run_round_trip_via_local_dispatcher() {
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: DEVICE_B_URI.to_string(),
         ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1175,13 +1252,13 @@ async fn run_round_trip_via_local_dispatcher() {
     let invoke_remote_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: DEVICE_A_URI.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            envelope: Some(signed_envelope(
+                DEVICE_A_URI,
+                DEVICE_A_URI,
+                DEVICE_A_URI,
+                ABILITY_INVOKE_REMOTE,
+                &initial_args,
+            )),
             target: Some(InvocationTarget {
                 ability_name: ABILITY_INVOKE_REMOTE.to_string(),
                 ..InvocationTarget::default()

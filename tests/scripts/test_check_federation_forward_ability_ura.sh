@@ -57,6 +57,33 @@ RS
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "old target-owner helper should exit 1 (got $rc)"
+[[ "$rc" == "0" ]] || fail "retired helper-name sentinel should no longer be policy (got $rc)"
+
+SB="$(make_sandbox)"
+mkdir -p "$SB/src/facade/cli"
+cat >"$SB/src/facade/cli/probe.rs" <<'RS'
+pub fn probe() {
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
+        "easynet:///r/acme/ability/device.dev.fs.read",
+        serde_json::json!({}),
+        "easynet:///r/acme/device/dev",
+        None,
+    );
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "callers bypassing RemoteAbilityInvocationTarget should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >>"$SB/src/services/invocation_transport/federation_invoke.rs" <<'RS'
+
+type TargetOwnedAbilityUra = RemoteAbilityInvocationTarget;
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "old compatibility type should exit 1 (got $rc)"
 
 echo "test_check_federation_forward_ability_ura.sh: all cases passed"

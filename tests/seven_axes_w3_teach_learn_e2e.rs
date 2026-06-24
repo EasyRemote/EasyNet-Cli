@@ -36,11 +36,14 @@ use easynet_cli::facade::cli::discover::{self, DiscoverArgs, OutputFormat};
 use easynet_cli::facade::cli::teach::{self, ForgetArgs, LearnArgs, TeachArgs};
 use seven_axes_fixture::SevenAxesHome;
 
+const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_system.local";
+
 fn discover_weather() -> DiscoverArgs {
     DiscoverArgs {
         intent: "weather forecast".into(),
         limit: 15,
         local_only: true,
+        as_agent: None,
         tree: false,
         format: OutputFormat::Table,
     }
@@ -90,7 +93,36 @@ fn teach_learn_e2e_owner_initiative_and_independent_ownership() {
         "the copy's owner is the learner"
     );
     assert_ne!(new_ura, taught_ura, "two abilities, two identities");
-    assert!(meta.is_object(), "the transfer is a ledgered invocation");
+    assert_eq!(
+        meta["caller_ura"], LOCAL_SYSTEM_AGENT_URA,
+        "local daemon IPC calls use the process-local system caller"
+    );
+    assert_eq!(
+        meta["callee_ura"], home.loopback_caller,
+        "meta.acquire is a device-owned mutation surface"
+    );
+    assert_eq!(
+        meta["delegation"]["kind"], "hosted_agent",
+        "hosted-agent delegation must be explicit, not encoded by rewriting caller identity"
+    );
+    assert_eq!(
+        meta["delegation"]["agent_ura"], home.zlearner_ura,
+        "the learner rides as the delegated hosted agent"
+    );
+    assert_eq!(
+        meta["subject_ura"], taught_ura,
+        "the taught ability is the subject of the transfer"
+    );
+    assert_eq!(
+        resp["mutated_by"], home.loopback_caller,
+        "hosted_by authority should be explicit rather than hidden"
+    );
+    assert!(
+        meta.pointer("/receipt/anchor/receipt_ura")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        "learn must return a receipt anchor for downstream causal references"
+    );
 
     // ③ Declared execution posture (InstallPolicy default).
     assert_eq!(resp["execution_mode"], "sandbox_first");

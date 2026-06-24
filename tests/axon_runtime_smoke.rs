@@ -7,8 +7,9 @@
 //!
 //!   * `LocalRuntime` + `register_*_ability` (call-mode taxonomy)
 //!   * `KeyResolver` trait for callee-side admission
-//!   * `invoke_externally_signed_bidi_async` (the entry CLI's
-//!     `<self>.invoke_remote` will route through)
+//!   * `invoke_descriptor_bound_bidi_request_async` with an externally-signed
+//!     descriptor-bound request (the entry CLI's `<self>.invoke_remote` will
+//!     route through the same request-level shape)
 //!   * `LedgerSink` auto-persistence (the entry that replaces CLI's
 //!     in-memory `SharedReceiptStore`)
 //!
@@ -20,10 +21,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use easynet_axon::invocation::{
-    fresh_nonce, make_ability, sha256, sign_invocation, signing_key_from_bytes, AbilityOptions,
-    AgentIdentity, AxonError, BidiInputFrame, CallerSignature, CausalContext, InvocationEnvelope,
-    InvocationLedger, KeyResolver, LedgerSink, LocalRuntime, SubjectIdentity, UraProfile,
+    fresh_nonce, make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes,
+    AbilityOptions, AgentIdentity, AxonError, BidiInputFrame, CallMode, CallerSignature,
+    CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts,
+    DescriptorBoundInvocationRequest, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
+    SubjectIdentity, UraProfile,
 };
+use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 const REALM: &str = "cli-smoke";
@@ -38,6 +42,10 @@ fn caller_ura() -> String {
 
 fn callee_ura() -> String {
     format!("easynet:///r/{REALM}/device/host")
+}
+
+fn runtime_ability_ura(ability: &str) -> String {
+    easynet_cli::ura::owner_ability_ura(&callee_ura(), ability).expect("callee-owned ability URA")
 }
 
 /// Trust anchor stand-in: returns one known key for every URA.
@@ -80,17 +88,26 @@ fn build_signed_envelope(
     signing_key: &SigningKey,
     ability: &str,
     payload: &[u8],
-) -> (InvocationEnvelope, CallerSignature) {
-    let envelope = InvocationEnvelope {
+) -> (DescriptorBoundEnvelope, CallerSignature) {
+    let callee = agent(&callee_ura());
+    let subject = SubjectIdentity::from_callee(&callee);
+    let ability_ref = format!(
+        "{}@{}",
+        easynet_cli::ura::owner_ability_ura(&callee.ura, ability)
+            .expect("callee-owned ability URA"),
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    );
+    let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller: agent(&caller_ura()),
-        callee: agent(&callee_ura()),
-        subject: SubjectIdentity::from_callee(&agent(&callee_ura())),
-        ability: ability.to_string(),
-        args_digest: sha256(payload),
+        callee,
+        ability: ability_ref,
+        subject,
         invocation_nonce: fresh_nonce(),
         causal_context: CausalContext::None,
-    };
-    let signature = sign_invocation(signing_key, &envelope, "smoke-test-key");
+        args_bytes: payload,
+    })
+    .expect("descriptor-bound envelope");
+    let signature = sign_descriptor_bound_invocation(signing_key, &envelope, "smoke-test-key");
     (envelope, signature)
 }
 
@@ -105,7 +122,7 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
     //   - emits one progress frame,
     //   - returns terminal payload echoing what it received.
     rt.register_bidi_ability(
-        "test.echo_bidi",
+        runtime_ability_ura("test.echo_bidi"),
         make_ability(|ctx| async move {
             let msg = ctx
                 .recv_message(Some(Duration::from_secs(5)))
@@ -123,10 +140,16 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
     let payload = b"hello-from-cli".to_vec();
     let (envelope, signature) = build_signed_envelope(&signing_key, "test.echo_bidi", &payload);
 
+    let request = DescriptorBoundInvocationRequest::externally_signed(
+        CallMode::Bidi,
+        envelope,
+        signature,
+        payload.clone(),
+    );
     let (mut handle, _signed) = rt
-        .invoke_externally_signed_bidi_async(envelope, signature, payload.clone(), None, None)
+        .invoke_descriptor_bound_bidi_request_async(request)
         .await
-        .expect("invoke_externally_signed_bidi_async returns Ok");
+        .expect("invoke_descriptor_bound_bidi_request_async returns Ok");
 
     // Push one input frame in (the handler is blocked on recv_message
     // until this arrives).
@@ -171,8 +194,16 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
         "exactly one terminal record persisted by LedgerSink"
     );
     let r = &records[0];
-    assert_eq!(r.ability_name, "test.echo_bidi");
-    assert_eq!(r.state, "COMPLETED");
+    assert_eq!(
+        r.ability_name,
+        format!(
+            "{}@{}",
+            easynet_cli::ura::owner_ability_ura(&callee_ura(), "test.echo_bidi")
+                .expect("callee-owned ability URA"),
+            DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        )
+    );
+    assert_eq!(r.state, "completed");
     assert!(r.result.is_some(), "completed terminal carries result");
     assert!(r.error.is_none(), "completed terminal has no error");
     assert!(
@@ -188,7 +219,7 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
 async fn axon_externally_signed_rejects_args_digest_mismatch() {
     let (rt, ledger, _temp, signing_key) = build_runtime().await;
     rt.register_ability(
-        "test.echo",
+        runtime_ability_ura("test.echo"),
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
     )
     .await
@@ -198,7 +229,7 @@ async fn axon_externally_signed_rejects_args_digest_mismatch() {
     let (envelope, signature) = build_signed_envelope(&signing_key, "test.echo", &payload_original);
 
     // Wire-tamper: caller signed over `payload_original` but the
-    // daemon receives a different body. `invoke_externally_signed_*`
+    // daemon receives a different body. `invoke_descriptor_bound_externally_signed_*`
     // hashes the received payload and rejects on mismatch BEFORE
     // burning the nonce or running the handler.
     //
@@ -206,7 +237,13 @@ async fn axon_externally_signed_rejects_args_digest_mismatch() {
     // `InvocationHandle` doesn't implement Debug, so we match
     // by hand instead.
     let outcome = rt
-        .invoke_externally_signed_async(envelope, signature, b"tampered".to_vec(), None, None)
+        .invoke_descriptor_bound_externally_signed_async(
+            envelope,
+            signature,
+            b"tampered".to_vec(),
+            None,
+            None,
+        )
         .await;
     let err = match outcome {
         Err(e) => e,
@@ -231,7 +268,7 @@ async fn axon_externally_signed_rejects_args_digest_mismatch() {
 async fn axon_call_mode_gate_rejects_rpc_call_to_bidi_ability() {
     let (rt, _ledger, _temp, signing_key) = build_runtime().await;
     rt.register_ability_with_options(
-        "test.bidi_only",
+        runtime_ability_ura("test.bidi_only"),
         make_ability(|_| async move { Ok(Vec::new()) }),
         AbilityOptions::bidi(),
     )
@@ -245,7 +282,7 @@ async fn axon_call_mode_gate_rejects_rpc_call_to_bidi_ability() {
     // BEFORE admission — so the nonce is never recorded and a
     // subsequent BIDI call with the same nonce would still succeed.
     let outcome = rt
-        .invoke_externally_signed_async(envelope, signature, payload, None, None)
+        .invoke_descriptor_bound_externally_signed_async(envelope, signature, payload, None, None)
         .await;
     let err = match outcome {
         Err(e) => e,
