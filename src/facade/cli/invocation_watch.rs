@@ -110,7 +110,7 @@ pub enum WatchEvent {
     Terminal {
         trace: String,
         status: String,
-        ledger_receipt_chain_verified: bool,
+        ledger_reported_receipt_chain_verified: bool,
         cli_receipt_chain_verification: CliReceiptChainVerification,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<InvocationUsage>,
@@ -138,7 +138,7 @@ pub struct RecordView<'a> {
     pub ability_name: &'a str,
     pub state: &'a str,
     pub usage: InvocationUsage,
-    pub ledger_receipt_chain_verified: bool,
+    pub ledger_reported_receipt_chain_verified: bool,
 }
 
 impl<'a> From<&'a Record> for RecordView<'a> {
@@ -148,7 +148,7 @@ impl<'a> From<&'a Record> for RecordView<'a> {
             ability_name: &r.ability_name,
             state: &r.state,
             usage: r.usage,
-            ledger_receipt_chain_verified: r.receipt_chain.verified,
+            ledger_reported_receipt_chain_verified: r.receipt_chain.verified,
         }
     }
 }
@@ -224,13 +224,13 @@ impl WatchEngine {
         total
     }
 
-    pub fn ledger_receipt_chain_verified<'a>(
+    pub fn ledger_reported_receipt_chain_verified<'a>(
         records: impl IntoIterator<Item = RecordView<'a>>,
     ) -> bool {
         let mut any = false;
         for r in records {
             any = true;
-            if !r.ledger_receipt_chain_verified {
+            if !r.ledger_reported_receipt_chain_verified {
                 return false;
             }
         }
@@ -391,7 +391,7 @@ impl FollowEngine {
                 events.push(WatchEvent::Terminal {
                     trace: self.trace_id().to_string(),
                     status,
-                    ledger_receipt_chain_verified: false,
+                    ledger_reported_receipt_chain_verified: false,
                     cli_receipt_chain_verification: cli_receipt_chain_verification(),
                     usage: None,
                 });
@@ -569,7 +569,7 @@ fn mission_terminal_for_empty_trace(trace_id: &str, nodes: &[Record]) -> Option<
     Some(WatchEvent::Terminal {
         trace: trace_id.to_string(),
         status: mission_terminal_status(summary.meta.status).to_string(),
-        ledger_receipt_chain_verified: false,
+        ledger_reported_receipt_chain_verified: false,
         cli_receipt_chain_verification: cli_receipt_chain_verification(),
         usage: None,
     })
@@ -617,7 +617,7 @@ pub struct WatchRow {
     pub subject: String,
     pub elapsed_ms: Option<u64>,
     pub usage: InvocationUsage,
-    pub ledger_receipt_chain_verified: bool,
+    pub ledger_reported_receipt_chain_verified: bool,
     pub cli_receipt_chain_verification: CliReceiptChainVerification,
     pub authority_form: String,
 }
@@ -633,7 +633,7 @@ impl From<&Record> for WatchRow {
             subject: record.subject_ura.clone(),
             elapsed_ms: record.elapsed_ms,
             usage: record.usage,
-            ledger_receipt_chain_verified: record.receipt_chain.verified,
+            ledger_reported_receipt_chain_verified: record.receipt_chain.verified,
             cli_receipt_chain_verification: cli_receipt_chain_verification(),
             authority_form: record.authority_form.clone(),
         }
@@ -659,7 +659,7 @@ fn terminal_event_for_nodes(engine: &WatchEngine, nodes: &[Record]) -> WatchEven
     WatchEvent::Terminal {
         trace: engine.trace_id().to_string(),
         status: WatchEngine::terminal_status(nodes.iter().map(RecordView::from)).to_string(),
-        ledger_receipt_chain_verified: WatchEngine::ledger_receipt_chain_verified(
+        ledger_reported_receipt_chain_verified: WatchEngine::ledger_reported_receipt_chain_verified(
             nodes.iter().map(RecordView::from),
         ),
         cli_receipt_chain_verification: cli_receipt_chain_verification(),
@@ -777,7 +777,7 @@ fn render_human(event: &WatchEvent) {
         WatchEvent::Terminal {
             trace,
             status,
-            ledger_receipt_chain_verified,
+            ledger_reported_receipt_chain_verified,
             cli_receipt_chain_verification,
             usage,
         } => {
@@ -790,7 +790,7 @@ fn render_human(event: &WatchEvent) {
                 })
                 .unwrap_or_default();
             output::success(&format!(
-                "trace {trace} → {status}{cost} · ledger_receipt_chain_verified={ledger_receipt_chain_verified} · cli_receipt_chain_verification={cli_receipt_chain_verification}"
+                "trace {trace} → {status}{cost} · ledger_reported_receipt_chain_verified={ledger_reported_receipt_chain_verified} · cli_receipt_chain_verification={cli_receipt_chain_verification}"
             ))
         }
         WatchEvent::Pending {
@@ -887,11 +887,11 @@ fn render_receipt_panel(snapshot: &WatchSnapshot, area: Rect, buffer: &mut Buffe
     let usage = terminal_usage(snapshot.terminal.as_ref())
         .or_else(|| row.map(|r| r.usage))
         .unwrap_or_default();
-    let (ledger_receipt_chain_verified, cli_receipt_chain_verification) =
+    let (ledger_reported_receipt_chain_verified, cli_receipt_chain_verification) =
         terminal_attestation(snapshot.terminal.as_ref()).unwrap_or_else(|| {
             row.map(|r| {
                 (
-                    r.ledger_receipt_chain_verified,
+                    r.ledger_reported_receipt_chain_verified,
                     r.cli_receipt_chain_verification,
                 )
             })
@@ -924,8 +924,8 @@ fn render_receipt_panel(snapshot: &WatchSnapshot, area: Rect, buffer: &mut Buffe
             usage.tokens_in, usage.tokens_out, usage.external_calls
         ),
         format!("duration_ms: {}", usage.duration_ms),
-        format!("ledger_receipt_chain_verified: {ledger_receipt_chain_verified}"),
-        format!("cli_receipt_verification: {cli_receipt_chain_verification}"),
+        format!("ledger_reported_chain_verified: {ledger_reported_receipt_chain_verified}"),
+        format!("cli_chain_verification: {cli_receipt_chain_verification}"),
         format!(
             "elapsed_ms: {}",
             row.and_then(|r| r.elapsed_ms)
@@ -962,11 +962,11 @@ fn terminal_usage(event: Option<&WatchEvent>) -> Option<InvocationUsage> {
 fn terminal_attestation(event: Option<&WatchEvent>) -> Option<(bool, CliReceiptChainVerification)> {
     match event {
         Some(WatchEvent::Terminal {
-            ledger_receipt_chain_verified,
+            ledger_reported_receipt_chain_verified,
             cli_receipt_chain_verification,
             ..
         }) => Some((
-            *ledger_receipt_chain_verified,
+            *ledger_reported_receipt_chain_verified,
             *cli_receipt_chain_verification,
         )),
         _ => None,
@@ -1010,7 +1010,7 @@ mod tests {
             ability_name: ability,
             state,
             usage: Default::default(),
-            ledger_receipt_chain_verified: true,
+            ledger_reported_receipt_chain_verified: true,
         }
     }
 
@@ -1099,7 +1099,7 @@ mod tests {
             vec![WatchEvent::Terminal {
                 trace: "trace-zero".into(),
                 status: "ok".into(),
-                ledger_receipt_chain_verified: false,
+                ledger_reported_receipt_chain_verified: false,
                 cli_receipt_chain_verification: CliReceiptChainVerification::not_performed(),
                 usage: None,
             }]
@@ -1140,7 +1140,7 @@ mod tests {
             Some(WatchEvent::Terminal {
                 trace: trace_id.to_string(),
                 status: "ok".to_string(),
-                ledger_receipt_chain_verified: false,
+                ledger_reported_receipt_chain_verified: false,
                 cli_receipt_chain_verification: CliReceiptChainVerification::not_performed(),
                 usage: None,
             })
@@ -1161,19 +1161,19 @@ mod tests {
         let t = WatchEvent::Terminal {
             trace: "t-1".into(),
             status: "ok".into(),
-            ledger_receipt_chain_verified: true,
+            ledger_reported_receipt_chain_verified: true,
             cli_receipt_chain_verification: CliReceiptChainVerification::not_performed(),
             usage: None,
         };
         assert_eq!(
             serde_json::to_string(&t).unwrap(),
-            r#"{"event":"terminal","trace":"t-1","status":"ok","ledger_receipt_chain_verified":true,"cli_receipt_chain_verification":"not_performed"}"#,
+            r#"{"event":"terminal","trace":"t-1","status":"ok","ledger_reported_receipt_chain_verified":true,"cli_receipt_chain_verification":"not_performed"}"#,
             "absent usage keeps the terminal event explicit about attestation"
         );
         let t = WatchEvent::Terminal {
             trace: "t-1".into(),
             status: "ok".into(),
-            ledger_receipt_chain_verified: true,
+            ledger_reported_receipt_chain_verified: true,
             cli_receipt_chain_verification: CliReceiptChainVerification::not_performed(),
             usage: Some(InvocationUsage {
                 tokens_in: 7,
@@ -1230,14 +1230,14 @@ mod tests {
                     duration_ms: 12,
                     external_calls: 0,
                 },
-                ledger_receipt_chain_verified: true,
+                ledger_reported_receipt_chain_verified: true,
                 cli_receipt_chain_verification: CliReceiptChainVerification::not_performed(),
                 authority_form: "self".into(),
             }],
             terminal: Some(WatchEvent::Terminal {
                 trace: "trace-1".into(),
                 status: "ok".into(),
-                ledger_receipt_chain_verified: true,
+                ledger_reported_receipt_chain_verified: true,
                 cli_receipt_chain_verification: CliReceiptChainVerification::not_performed(),
                 usage: Some(InvocationUsage {
                     tokens_in: 0,
@@ -1254,11 +1254,11 @@ mod tests {
         assert!(frame.contains("Receipt"), "{frame}");
         assert!(frame.contains("testbot.echo"), "{frame}");
         assert!(
-            frame.contains("ledger_receipt_chain_verified: true"),
+            frame.contains("ledger_reported_chain_verified: true"),
             "{frame}"
         );
         assert!(
-            frame.contains("cli_receipt_verification: not_performed"),
+            frame.contains("cli_chain_verification: not_performed"),
             "{frame}"
         );
         assert!(

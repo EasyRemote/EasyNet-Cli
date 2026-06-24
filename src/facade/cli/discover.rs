@@ -472,7 +472,7 @@ impl<'a> DiscoverRuntimeService<'a> {
                 .cloned()
                 .context("local discover tier did not produce invocation metadata")?;
             let causal_parents =
-                self.realm_causal_parents_from_local_invocation(&local_invocation_meta);
+                self.realm_causal_parents_from_local_invocation(&local_invocation_meta)?;
             let trace_id = self
                 .invocations
                 .first()
@@ -570,18 +570,16 @@ impl<'a> DiscoverRuntimeService<'a> {
         });
     }
 
-    fn realm_causal_parents_from_local_invocation(&mut self, meta: &Value) -> Vec<Value> {
-        match receipt_parent_from_invocation_meta(meta) {
-            Ok(parent) => vec![parent],
-            Err(err) => {
-                self.diagnostics.push(DiscoverDiagnostic {
-                    scope: "device".to_string(),
-                    code: "local_receipt_anchor_missing",
-                    message: format!("{err}; continuing realm discovery without a causal parent"),
-                });
-                Vec::new()
-            }
-        }
+    fn realm_causal_parents_from_local_invocation(
+        &self,
+        meta: &Value,
+    ) -> anyhow::Result<Vec<Value>> {
+        let parent = receipt_parent_from_invocation_meta(meta).map_err(|err| {
+            anyhow::anyhow!(
+                "{err}; refusing realm discovery without the local receipt anchor causal parent"
+            )
+        })?;
+        Ok(vec![parent])
     }
 }
 
@@ -959,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_local_receipt_anchor_degrades_realm_walk_to_parentless() {
+    fn missing_local_receipt_anchor_refuses_realm_walk() {
         let args = DiscoverArgs {
             intent: "chat".to_string(),
             limit: 5,
@@ -968,19 +966,19 @@ mod tests {
             tree: false,
             format: OutputFormat::Json,
         };
-        let mut service = DiscoverRuntimeService::new(&args);
-        let parents = service.realm_causal_parents_from_local_invocation(&json!({
-            "metadata_state": "missing_receipt_anchor",
-            "trace_id": "trace-1",
-        }));
+        let service = DiscoverRuntimeService::new(&args);
+        let err = service
+            .realm_causal_parents_from_local_invocation(&json!({
+                "metadata_state": "missing_receipt_anchor",
+                "trace_id": "trace-1",
+            }))
+            .expect_err("realm discovery must not run without local receipt anchor");
 
-        assert!(parents.is_empty());
-        assert_eq!(service.diagnostics.len(), 1);
-        assert_eq!(service.diagnostics[0].code, "local_receipt_anchor_missing");
-        assert_eq!(service.diagnostics[0].scope, "device");
-        assert!(service.diagnostics[0]
-            .message
-            .contains("continuing realm discovery without a causal parent"));
+        assert!(
+            format!("{err}").contains("refusing realm discovery without the local receipt anchor"),
+            "{err}"
+        );
+        assert!(service.diagnostics.is_empty());
     }
 
     #[test]

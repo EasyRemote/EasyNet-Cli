@@ -93,13 +93,13 @@ fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
         Some(WatchEvent::Terminal {
             ref trace,
             ref status,
-            ledger_receipt_chain_verified,
+            ledger_reported_receipt_chain_verified,
             cli_receipt_chain_verification,
             ..
         }) => {
             assert_eq!(trace, &snapshot.trace_id);
             assert_eq!(status, "ok");
-            assert!(ledger_receipt_chain_verified);
+            assert!(ledger_reported_receipt_chain_verified);
             assert_eq!(
                 cli_receipt_chain_verification,
                 CliReceiptChainVerification::not_performed()
@@ -161,13 +161,13 @@ mission "watch-stream" {
         Some(WatchEvent::Terminal {
             ref trace,
             ref status,
-            ledger_receipt_chain_verified,
+            ledger_reported_receipt_chain_verified,
             cli_receipt_chain_verification,
             ref usage,
         }) => {
             assert_eq!(trace, &run.meta.trace_id);
             assert_eq!(status, "ok");
-            assert!(ledger_receipt_chain_verified);
+            assert!(ledger_reported_receipt_chain_verified);
             assert_eq!(
                 cli_receipt_chain_verification,
                 CliReceiptChainVerification::not_performed()

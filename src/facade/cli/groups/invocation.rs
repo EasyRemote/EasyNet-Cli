@@ -202,7 +202,8 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let tokens_out = record.usage.tokens_out.to_string();
     let duration_ms = record.usage.duration_ms.to_string();
     let external_calls = record.usage.external_calls.to_string();
-    let ledger_receipt_chain_verified = ledger_receipt_chain_verified(&record).to_string();
+    let ledger_reported_receipt_chain_verified =
+        ledger_reported_receipt_chain_verified(&record).to_string();
     let cli_receipt_chain_verification = cli_receipt_chain_verification().to_string();
     let ability = public_ability_label(&record);
     output::kv_section_stdout(&[
@@ -224,8 +225,8 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         ("usage_duration_ms", &duration_ms),
         ("usage_external_calls", &external_calls),
         (
-            "ledger_receipt_chain_verified",
-            &ledger_receipt_chain_verified,
+            "ledger_reported_receipt_chain_verified",
+            &ledger_reported_receipt_chain_verified,
         ),
         (
             "cli_receipt_chain_verification",
@@ -249,8 +250,8 @@ fn show_record_json(record: &InvocationRecord) -> anyhow::Result<Value> {
         .as_object_mut()
         .context("serialized invocation record must be a JSON object")?;
     object.insert(
-        "ledger_receipt_chain_verified".to_string(),
-        Value::Bool(ledger_receipt_chain_verified(record)),
+        "ledger_reported_receipt_chain_verified".to_string(),
+        Value::Bool(ledger_reported_receipt_chain_verified(record)),
     );
     object.insert(
         "cli_receipt_chain_verification".to_string(),
@@ -259,7 +260,7 @@ fn show_record_json(record: &InvocationRecord) -> anyhow::Result<Value> {
     Ok(value)
 }
 
-fn ledger_receipt_chain_verified(record: &InvocationRecord) -> bool {
+fn ledger_reported_receipt_chain_verified(record: &InvocationRecord) -> bool {
     record.receipt_chain.verified
 }
 
@@ -720,7 +721,7 @@ mod tests {
         let value = show_record_json(&record).expect("json projection");
         assert_eq!(value["usage"]["tokens_in"], 11);
         assert_eq!(value["usage"]["tokens_out"], 7);
-        assert_eq!(value["ledger_receipt_chain_verified"], true);
+        assert_eq!(value["ledger_reported_receipt_chain_verified"], true);
         assert_eq!(value["cli_receipt_chain_verification"], "not_performed");
     }
 
