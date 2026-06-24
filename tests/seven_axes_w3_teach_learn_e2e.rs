@@ -29,7 +29,7 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::discover::{self, DiscoverArgs, OutputFormat};
+use easynet_cli::facade::cli::discover::{self, DiscoverArgs, OutputFormat, SourceWindowMode};
 use easynet_cli::facade::cli::teach::{self, ForgetArgs, LearnArgs, TeachArgs};
 use seven_axes_fixture::SevenAxesHome;
 
@@ -42,6 +42,7 @@ fn discover_weather() -> DiscoverArgs {
         local_only: true,
         as_agent: None,
         tree: false,
+        source_window: SourceWindowMode::Bounded,
         format: OutputFormat::Table,
     }
 }

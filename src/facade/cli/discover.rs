@@ -47,7 +47,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
-use clap::Args;
+use clap::{Args, ValueEnum};
 use console::style;
 use serde_json::{json, Value};
 
@@ -60,6 +60,28 @@ use crate::ura::AbilitySelector;
 /// of this module) can name the flag type without opening the whole
 /// `support::output` leaf layer.
 pub use crate::support::output::OutputFormat;
+
+/// Default bounded source window for each runtime ladder tier.
+///
+/// The CLI ranker needs a wide source set because it intentionally owns
+/// final intent scoring, but the daemon must still receive a bounded
+/// request by default. Ten thousand keeps ordinary catalogs effectively
+/// complete while preserving a concrete memory and latency ceiling.
+const DEFAULT_SOURCE_CANDIDATE_LIMIT: usize = 10_000;
+
+/// Caller-selected source window sent to the runtime discover ability.
+///
+/// This is a CLI policy type, not the runtime's internal source-window
+/// state. `Bounded` is the product default because discovery must stay
+/// responsive as catalogs grow; `All` is an explicit operator request
+/// for exhaustive inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SourceWindowMode {
+    /// Ask each ladder tier for at most a wide bounded source set.
+    Bounded,
+    /// Ask each ladder tier for every available source candidate.
+    All,
+}
 
 #[derive(Debug, Args)]
 pub struct DiscoverArgs {
@@ -82,6 +104,9 @@ pub struct DiscoverArgs {
     /// with `--format json`, which already carries owner fields.
     #[arg(long)]
     pub tree: bool,
+    /// Candidate source window requested from each runtime ladder tier.
+    #[arg(long, value_enum, default_value_t = SourceWindowMode::Bounded)]
+    pub source_window: SourceWindowMode,
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
@@ -400,134 +425,155 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
 /// Compute the discover report without rendering it — the typed
 /// surface e2e tests and future renderers consume.
 pub fn execute(args: &DiscoverArgs) -> anyhow::Result<DiscoverReport> {
-    DiscoverRuntimeService::new(args).execute()
+    DiscoverRuntimeService::new(DiscoverExecutionPlan::from_args(args)?).execute()
 }
 
-struct DiscoverRuntimeService<'a> {
-    args: &'a DiscoverArgs,
+/// Immutable execution plan for one CLI discover run.
+///
+/// Invariant 1: `tokens` is non-empty and `limit` is positive, so the
+/// executor never has to handle a degenerate ranking state.
+/// Invariant 2: `ladder` is already resolved to either the daemon
+/// aggregate owner or a registered hosted-agent owner; its ability name
+/// is always owner-local.
+/// Invariant 3: default source reads are bounded; exhaustive reads only
+/// happen when the user selected `--source-window all`.
+struct DiscoverExecutionPlan {
+    query: String,
+    limit: usize,
     tokens: Vec<String>,
     self_projection: LocalSelfProjection,
-    ladder: String,
-    skipped: usize,
-    invocations: Vec<Value>,
-    diagnostics: Vec<DiscoverDiagnostic>,
+    ladder: DiscoverLadderTarget,
+    source_window: SourceWindowMode,
+    source_limit: usize,
+    include_realm: bool,
 }
 
-impl<'a> DiscoverRuntimeService<'a> {
-    fn new(args: &'a DiscoverArgs) -> Self {
-        Self {
-            args,
-            tokens: Vec::new(),
-            self_projection: LocalSelfProjection::DeviceAggregate,
-            ladder: String::new(),
-            skipped: 0,
-            invocations: Vec::new(),
-            diagnostics: Vec::new(),
-        }
-    }
-
-    fn execute(mut self) -> anyhow::Result<DiscoverReport> {
-        if self.args.limit == 0 {
+impl DiscoverExecutionPlan {
+    fn from_args(args: &DiscoverArgs) -> anyhow::Result<Self> {
+        if args.limit == 0 {
             anyhow::bail!("limit must be positive; omit it or pass a value greater than zero");
         }
-        self.tokens = tokenize(&self.args.intent);
-        if self.tokens.is_empty() {
+        let tokens = tokenize(&args.intent);
+        if tokens.is_empty() {
             anyhow::bail!("intent is empty after tokenization; describe what you want done");
         }
-
-        self.self_projection = if self.args.as_agent.as_deref().is_some() {
+        let self_projection = if args.as_agent.as_deref().is_some() {
             LocalSelfProjection::Preserve
         } else {
             LocalSelfProjection::DeviceAggregate
         };
-        self.ladder = resolve_ladder_entry(self.args.as_agent.as_deref())?;
-
-        let (local_value, invocation_meta) = self.walk_tier("device", &[])?;
-        self.invocations.push(invocation_meta);
-        self.record_source_diagnostic(&local_value);
-        let mut candidates = project_rows(
-            &local_value,
-            &self.tokens,
-            &mut self.skipped,
-            self.self_projection,
-        );
-        let mut tiers_searched = if self.self_projection == LocalSelfProjection::Preserve {
-            vec!["self", "device"]
-        } else {
-            vec!["device"]
-        };
-
-        let mut federation = None;
-        if !self.args.local_only {
-            let local_invocation_meta = self
-                .invocations
-                .last()
-                .cloned()
-                .context("local discover tier did not produce invocation metadata")?;
-            let causal_parents =
-                self.realm_causal_parents_from_local_invocation(&local_invocation_meta)?;
-            let trace_id = self
-                .invocations
-                .first()
-                .and_then(|meta| meta.get("trace_id"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            let (realm_value, realm_invocation_meta) =
-                self.walk_tier_with_trace("user", causal_parents.as_slice(), trace_id)?;
-            self.invocations.push(realm_invocation_meta);
-            self.record_source_diagnostic(&realm_value);
-            match FederationStatus::from_envelope(&realm_value) {
-                Some(status) => federation = Some(status),
-                None => {
-                    candidates.extend(project_rows(
-                        &realm_value,
-                        &self.tokens,
-                        &mut self.skipped,
-                        LocalSelfProjection::Preserve,
-                    ));
-                    tiers_searched.push("user");
-                }
-            }
-        }
-
-        candidates = rank_and_deduplicate_candidates(candidates, self.args.limit);
-
-        Ok(DiscoverReport {
-            query: self.args.intent.clone(),
-            tiers_searched,
-            federation,
-            invocations: self.invocations,
-            diagnostics: self.diagnostics,
-            skipped_unparseable: self.skipped,
-            candidates,
+        Ok(Self {
+            query: args.intent.clone(),
+            limit: args.limit,
+            tokens,
+            self_projection,
+            ladder: resolve_ladder_target(args.as_agent.as_deref())?,
+            source_window: args.source_window,
+            source_limit: DEFAULT_SOURCE_CANDIDATE_LIMIT.max(args.limit),
+            include_realm: !args.local_only,
         })
     }
 
-    fn walk_tier(
-        &self,
-        scope: &'static str,
-        causal_parents: &[Value],
-    ) -> anyhow::Result<(Value, Value)> {
-        self.walk_tier_with_trace(scope, causal_parents, None)
+    fn local_tiers(&self) -> Vec<&'static str> {
+        if self.self_projection == LocalSelfProjection::Preserve {
+            vec!["self", "device"]
+        } else {
+            vec!["device"]
+        }
+    }
+}
+
+/// Wire-level target for one discover ladder invocation.
+///
+/// Invariant 1: `ability` is the owner-local public ability name that
+/// belongs in the Axon descriptor ref. It is never the legacy dotted
+/// `<agent>.discover` registry key.
+/// Invariant 2: `callee_agent` is present only for hosted-agent ladders;
+/// the daemon route resolver is responsible for mapping
+/// `(callee_agent, ability=discover)` to the local registry key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscoverLadderTarget {
+    ability: String,
+    callee_agent: Option<String>,
+}
+
+impl DiscoverLadderTarget {
+    fn device_aggregate() -> Self {
+        Self {
+            ability: crate::runtime::agents::discover_ability::DEVICE_DISCOVER_ABILITY.to_string(),
+            callee_agent: None,
+        }
     }
 
-    fn walk_tier_with_trace(
-        &self,
-        scope: &'static str,
-        causal_parents: &[Value],
-        trace_id: Option<&str>,
-    ) -> anyhow::Result<(Value, Value)> {
-        invoke_local_ability_with_invocation_meta(
-            &self.ladder,
-            json!({ "scope": scope, "source_window": "all" }),
-            None,
-            causal_parents,
-            None,
-            trace_id,
-            self.args.as_agent.as_deref(),
-        )
-        .with_context(|| format!("walk discover tier {scope:?}"))
+    fn hosted_agent(agent: impl Into<String>) -> Self {
+        Self {
+            ability: crate::runtime::agents::discover_ability::ABILITY_VERB.to_string(),
+            callee_agent: Some(agent.into()),
+        }
+    }
+
+    fn ability(&self) -> &str {
+        &self.ability
+    }
+
+    fn callee_agent(&self) -> Option<&str> {
+        self.callee_agent.as_deref()
+    }
+}
+
+impl SourceWindowMode {
+    fn runtime_args(self, scope: &'static str, source_limit: usize) -> Value {
+        match self {
+            SourceWindowMode::Bounded => {
+                json!({
+                    "scope": scope,
+                    "source_window": "bounded",
+                    "top_k": source_limit,
+                })
+            }
+            SourceWindowMode::All => {
+                json!({
+                    "scope": scope,
+                    "source_window": "all",
+                })
+            }
+        }
+    }
+}
+
+/// Mutable state for the discover execution state machine.
+///
+/// The executor moves through `local -> optional realm -> rank` exactly
+/// once. Keeping all mutation here prevents the plan, rendering model,
+/// and causal-anchor decision from smuggling half-updated state across
+/// phase boundaries.
+#[derive(Debug, Default)]
+struct DiscoverExecutionState {
+    skipped: usize,
+    invocations: Vec<Value>,
+    diagnostics: Vec<DiscoverDiagnostic>,
+    candidates: Vec<Candidate>,
+    tiers_searched: Vec<&'static str>,
+    federation: Option<FederationStatus>,
+}
+
+impl DiscoverExecutionState {
+    fn record_invocation(&mut self, meta: Value) {
+        self.invocations.push(meta);
+    }
+
+    fn extend_candidates(
+        &mut self,
+        value: &Value,
+        tokens: &[String],
+        self_projection: LocalSelfProjection,
+    ) {
+        self.candidates.extend(project_rows(
+            value,
+            tokens,
+            &mut self.skipped,
+            self_projection,
+        ));
     }
 
     fn record_source_diagnostic(&mut self, value: &Value) {
@@ -566,17 +612,157 @@ impl<'a> DiscoverRuntimeService<'a> {
         });
     }
 
-    fn realm_causal_parents_from_local_invocation(
-        &self,
-        meta: &Value,
-    ) -> anyhow::Result<Vec<Value>> {
-        let parent = receipt_parent_from_invocation_meta(meta).map_err(|err| {
-            anyhow::anyhow!(
-                "{err}; refusing realm discovery without the local receipt anchor causal parent"
-            )
-        })?;
-        Ok(vec![parent])
+    fn finish(mut self, plan: &DiscoverExecutionPlan) -> DiscoverReport {
+        self.candidates = rank_and_deduplicate_candidates(self.candidates, plan.limit);
+        DiscoverReport {
+            query: plan.query.clone(),
+            tiers_searched: self.tiers_searched,
+            federation: self.federation,
+            invocations: self.invocations,
+            diagnostics: self.diagnostics,
+            skipped_unparseable: self.skipped,
+            candidates: self.candidates,
+        }
     }
+}
+
+struct DiscoverRuntimeService {
+    plan: DiscoverExecutionPlan,
+    state: DiscoverExecutionState,
+}
+
+impl DiscoverRuntimeService {
+    fn new(plan: DiscoverExecutionPlan) -> Self {
+        Self {
+            plan,
+            state: DiscoverExecutionState::default(),
+        }
+    }
+
+    fn execute(mut self) -> anyhow::Result<DiscoverReport> {
+        self.walk_local_tier()?;
+        if self.plan.include_realm {
+            self.walk_realm_tier()?;
+        }
+        Ok(self.state.finish(&self.plan))
+    }
+
+    fn walk_local_tier(&mut self) -> anyhow::Result<()> {
+        let (local_value, invocation_meta) = self.walk_tier("device", &[])?;
+        self.state.record_invocation(invocation_meta);
+        self.state.record_source_diagnostic(&local_value);
+        self.state
+            .extend_candidates(&local_value, &self.plan.tokens, self.plan.self_projection);
+        self.state.tiers_searched = self.plan.local_tiers();
+        Ok(())
+    }
+
+    fn walk_realm_tier(&mut self) -> anyhow::Result<()> {
+        let local_invocation_meta = self
+            .state
+            .invocations
+            .last()
+            .cloned()
+            .context("local discover tier did not produce invocation metadata")?;
+        let causal_state = RealmCausalState::from_local_invocation(&local_invocation_meta);
+        if let Some(diagnostic) = causal_state.diagnostic() {
+            self.state.diagnostics.push(diagnostic);
+        }
+        let trace_id = trace_id_from_invocation_meta(&local_invocation_meta);
+        let (realm_value, realm_invocation_meta) =
+            self.walk_tier_with_trace("user", causal_state.parents(), trace_id.as_deref())?;
+        self.state.record_invocation(realm_invocation_meta);
+        self.state.record_source_diagnostic(&realm_value);
+        match FederationStatus::from_envelope(&realm_value) {
+            Some(status) => self.state.federation = Some(status),
+            None => {
+                self.state.extend_candidates(
+                    &realm_value,
+                    &self.plan.tokens,
+                    LocalSelfProjection::Preserve,
+                );
+                self.state.tiers_searched.push("user");
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_tier(
+        &self,
+        scope: &'static str,
+        causal_parents: &[Value],
+    ) -> anyhow::Result<(Value, Value)> {
+        self.walk_tier_with_trace(scope, causal_parents, None)
+    }
+
+    fn walk_tier_with_trace(
+        &self,
+        scope: &'static str,
+        causal_parents: &[Value],
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<(Value, Value)> {
+        invoke_local_ability_with_invocation_meta(
+            self.plan.ladder.ability(),
+            self.plan
+                .source_window
+                .runtime_args(scope, self.plan.source_limit),
+            None,
+            causal_parents,
+            None,
+            trace_id,
+            self.plan.ladder.callee_agent(),
+        )
+        .with_context(|| format!("walk discover tier {scope:?}"))
+    }
+}
+
+/// Causal-anchor state for the realm tier.
+///
+/// Local discovery always runs first. Realm discovery should use that
+/// local receipt anchor when the daemon returned one, but an absent
+/// anchor is not a terminal discover state: it means the realm tier runs
+/// unanchored and the report carries a typed diagnostic.
+#[derive(Debug, Clone)]
+enum RealmCausalState {
+    Anchored(Vec<Value>),
+    Unanchored { reason: String },
+}
+
+impl RealmCausalState {
+    fn from_local_invocation(meta: &Value) -> Self {
+        match receipt_parent_from_invocation_meta(meta) {
+            Ok(parent) => Self::Anchored(vec![parent]),
+            Err(err) => Self::Unanchored {
+                reason: err.to_string(),
+            },
+        }
+    }
+
+    fn parents(&self) -> &[Value] {
+        match self {
+            Self::Anchored(parents) => parents.as_slice(),
+            Self::Unanchored { .. } => &[],
+        }
+    }
+
+    fn diagnostic(&self) -> Option<DiscoverDiagnostic> {
+        match self {
+            Self::Anchored(_) => None,
+            Self::Unanchored { reason } => Some(DiscoverDiagnostic {
+                scope: "device".to_string(),
+                code: "local_receipt_anchor_missing",
+                message: format!("{reason}; continuing realm discovery without a causal parent"),
+            }),
+        }
+    }
+}
+
+fn trace_id_from_invocation_meta(meta: &Value) -> Option<String> {
+    meta.get("trace_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn receipt_parent_from_invocation_meta(meta: &Value) -> anyhow::Result<Value> {
@@ -628,14 +814,16 @@ fn rank_and_deduplicate_candidates(mut candidates: Vec<Candidate>, limit: usize)
     candidates
 }
 
-/// Resolve the daemon's discover entry point.
+/// Resolve the daemon's discover ladder target.
 ///
 /// Default top-level discovery uses the daemon-owned aggregate discover
-/// entry. `--as-agent` intentionally opts into one concrete
-/// `<agent>.discover` self tier and is validated against `agent.list`.
-fn resolve_ladder_entry(as_agent: Option<&str>) -> anyhow::Result<String> {
+/// entry. `--as-agent` intentionally opts into one concrete hosted
+/// agent self tier, validates the owner against `agent.list`, and keeps
+/// the wire ability owner-local (`discover`) instead of reusing the
+/// daemon's historical `<agent>.discover` registry key.
+fn resolve_ladder_target(as_agent: Option<&str>) -> anyhow::Result<DiscoverLadderTarget> {
     let Some(requested_agent) = as_agent.map(str::trim).filter(|agent| !agent.is_empty()) else {
-        return Ok(crate::runtime::agents::discover_ability::DEVICE_DISCOVER_ABILITY.to_string());
+        return Ok(DiscoverLadderTarget::device_aggregate());
     };
     let value = invoke_local_ability("agent.list", json!({}))
         .context("resolve discover entry from the agent registry")?;
@@ -656,10 +844,7 @@ fn resolve_ladder_entry(as_agent: Option<&str>) -> anyhow::Result<String> {
              `easynet agent list`"
         );
     }
-    Ok(format!(
-        "{requested_agent}.{}",
-        crate::runtime::agents::discover_ability::ABILITY_VERB
-    ))
+    Ok(DiscoverLadderTarget::hosted_agent(requested_agent))
 }
 
 /// Project every ladder row into a scored candidate; count rows whose
@@ -799,6 +984,7 @@ mod tests {
             local_only: true,
             as_agent: None,
             tree: false,
+            source_window: SourceWindowMode::Bounded,
             format: OutputFormat::Table,
         })
         .unwrap_err();
@@ -928,16 +1114,8 @@ mod tests {
 
     #[test]
     fn source_truncation_is_reported_before_cli_ranking() {
-        let args = DiscoverArgs {
-            intent: "chat".to_string(),
-            limit: 5,
-            local_only: true,
-            as_agent: None,
-            tree: false,
-            format: OutputFormat::Json,
-        };
-        let mut service = DiscoverRuntimeService::new(&args);
-        service.record_source_diagnostic(&json!({
+        let mut state = DiscoverExecutionState::default();
+        state.record_source_diagnostic(&json!({
             "scope": "device",
             "source": {
                 "available": 12000,
@@ -947,34 +1125,56 @@ mod tests {
             }
         }));
 
-        assert_eq!(service.diagnostics.len(), 1);
-        assert_eq!(service.diagnostics[0].code, "source_truncated");
-        assert!(service.diagnostics[0].message.contains("12000"));
+        assert_eq!(state.diagnostics.len(), 1);
+        assert_eq!(state.diagnostics[0].code, "source_truncated");
+        assert!(state.diagnostics[0].message.contains("12000"));
     }
 
     #[test]
-    fn missing_local_receipt_anchor_refuses_realm_walk() {
-        let args = DiscoverArgs {
-            intent: "chat".to_string(),
-            limit: 5,
-            local_only: false,
-            as_agent: None,
-            tree: false,
-            format: OutputFormat::Json,
-        };
-        let service = DiscoverRuntimeService::new(&args);
-        let err = service
-            .realm_causal_parents_from_local_invocation(&json!({
+    fn missing_local_receipt_anchor_degrades_realm_walk() {
+        let causal_state = RealmCausalState::from_local_invocation(&json!({
                 "metadata_state": "missing_receipt_anchor",
                 "trace_id": "trace-1",
-            }))
-            .expect_err("realm discovery must not run without local receipt anchor");
+        }));
 
+        assert!(causal_state.parents().is_empty());
+        let diagnostic = causal_state
+            .diagnostic()
+            .expect("missing anchor must surface as a typed diagnostic");
+        assert_eq!(diagnostic.code, "local_receipt_anchor_missing");
         assert!(
-            format!("{err}").contains("refusing realm discovery without the local receipt anchor"),
-            "{err}"
+            diagnostic
+                .message
+                .contains("continuing realm discovery without a causal parent"),
+            "{}",
+            diagnostic.message
         );
-        assert!(service.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn bounded_source_window_sends_runtime_top_k() {
+        let args = SourceWindowMode::Bounded.runtime_args("device", 123);
+
+        assert_eq!(args["scope"], json!("device"));
+        assert_eq!(args["source_window"], json!("bounded"));
+        assert_eq!(args["top_k"], json!(123));
+    }
+
+    #[test]
+    fn exhaustive_source_window_omits_top_k() {
+        let args = SourceWindowMode::All.runtime_args("user", 123);
+
+        assert_eq!(args["scope"], json!("user"));
+        assert_eq!(args["source_window"], json!("all"));
+        assert!(args.get("top_k").is_none());
+    }
+
+    #[test]
+    fn hosted_ladder_target_uses_owner_local_discover_ability() {
+        let target = DiscoverLadderTarget::hosted_agent("testbot");
+
+        assert_eq!(target.ability(), "discover");
+        assert_eq!(target.callee_agent(), Some("testbot"));
     }
 
     #[test]

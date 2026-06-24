@@ -8,7 +8,7 @@
 //!
 //! Covered here (W1-E2E-2 in full; W1-E2E-1 single-daemon subset):
 //!   * ladder-entry resolution over the wire
-//!     (`agent.list` → `testbot.discover`);
+//!     (`agent.list` → `discover` with `testbot` as selected callee);
 //!   * typed degradation: an unjoined daemon answers
 //!     `federation_not_joined` — never an error — local tiers intact;
 //!   * candidate projection: URA round-trips the Axon parser,
@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::facade::cli::discover::{self, DiscoverArgs, OutputFormat};
+use easynet_cli::facade::cli::discover::{self, DiscoverArgs, OutputFormat, SourceWindowMode};
 use easynet_cli::persistence::config;
 use seven_axes_fixture::SevenAxesHome;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -51,6 +51,7 @@ fn args(intent: &str) -> DiscoverArgs {
         local_only: false,
         as_agent: None,
         tree: false,
+        source_window: SourceWindowMode::Bounded,
         format: OutputFormat::Table,
     }
 }
