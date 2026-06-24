@@ -299,25 +299,18 @@ fn start_agent_handler(
 
     // ── Phase 5c runtime registration ─────────────────────────────
     //
-    // The runtime registration invariant: every name in
-    // `agents.json` must own its `<name>.{chat,discover,invoke}`
-    // triple in `LocalRuntime`. Without this, dispatch on a
-    // hot-added agent is not visible to Axon's dispatch table and
-    // `invocations.redb` never grows even though chat completes.
-    //
-    // The registrar produces byte-identical handlers to the
-    // fallback (they share the same `build_*_handler_for`
-    // factory closures in `chat_ability`), so the two paths are
-    // observably equivalent for dispatch. Axon's `LocalRuntime`
-    // owns the live call path and ledger write; the catalogue side
-    // remains registration metadata.
+    // The dynamic registration invariant: every hosted agent in
+    // `agents.json` must have its executable `<name>.*` abilities
+    // committed through HotAgentRegistrar. That single transaction
+    // writes catalogue metadata, control-plane facts, dynamic side
+    // tables, and the Axon `LocalRuntime` handler row.
     //
     // If the OnceLock is empty (boot not done) we log + skip.
     // The agent still lands in `agents.json`, so a daemon
-    // restart picks it up via the boot-time
-    // `chat_ability::register_for_agent` path. The window is small and only matters for the very
-    // first agent added during boot - operators normally run
-    // `agent add` post-boot.
+    // restart replays it through the same dynamic registrar after
+    // the catalogue OnceLock is set. The window is small and only
+    // matters for the very first agent added during boot; operators
+    // normally run `agent add` post-boot.
     // Test path: tests in this file construct the handler with an
     // `empty_hot_registrar()` whose `OnceLock` is unset; the outer
     // `else` here emits a `hot_registrar_not_yet_wired_at_boot`
@@ -353,14 +346,30 @@ fn start_agent_handler(
             reason = "hot_registrar_not_yet_wired_at_boot",
             message = "agent landed in agents.json but `LocalRuntime` did not get \
                        <agent>.{chat,discover,invoke} — daemon restart or next \
-                       boot will pick it up via the static registration path",
+                       boot will replay it through the dynamic registrar",
         );
         None
     };
 
-    let (runtime_registered, runtime_failed) = runtime_sync_outcome
-        .map(|o| (o.registered, o.failed))
-        .unwrap_or((0, 0));
+    let (
+        runtime_registered,
+        runtime_replaced,
+        runtime_failed,
+        runtime_removed,
+        runtime_not_ready,
+        runtime_catalog_not_ready,
+    ) = runtime_sync_outcome
+        .map(|o| {
+            (
+                o.registered,
+                o.replaced,
+                o.failed,
+                o.removed,
+                o.runtime_not_ready,
+                o.catalog_not_ready,
+            )
+        })
+        .unwrap_or((0, 0, 0, 0, true, false));
 
     // ISS-002 closed loop: persist this hot-added agent's owner
     // projection into the cursor file NOW. Previously agent.start only
@@ -451,7 +460,11 @@ fn start_agent_handler(
         "agent_ura": agent_ura,
         "replaced_prior": replaced_prior,
         "runtime_registered": runtime_registered,
+        "runtime_replaced": runtime_replaced,
         "runtime_failed": runtime_failed,
+        "runtime_removed": runtime_removed,
+        "runtime_not_ready": runtime_not_ready,
+        "runtime_catalog_not_ready": runtime_catalog_not_ready,
         "hub_advertised": hub_advertise_outcome
             .as_ref()
             .map(|outcome| outcome.advertised)
@@ -562,17 +575,12 @@ fn stop_agent_handler(
         remove_hosted_llm_agent(&name)?;
     }
 
-    // Phase 5c runtime-sync reverse: tear down every LocalRuntime
-    // ability whose canonical local-device Ability URA decodes back
-    // to a `<name>.*` public ability. Ordering is "persist then
-    // update runtime" on the create side, so we follow the same
-    // shape here: persist the removal first, then drop the runtime
-    // rows. Doing it that way means a crash between
-    // steps leaves the runtime in a "host registered but
-    // agents.json doesn't know" state — equivalent to a stale
-    // boot-time registration, which is harmless and self-heals
-    // on next daemon restart (the boot path only registers
-    // agents present in agents.json).
+    // Runtime-sync reverse: persist the registry removal first, then
+    // tear down every dynamic hosted-agent row whose decoded
+    // owner-local public name is `<name>.*`. A crash between the two
+    // steps can leave stale live rows for the current process, but the
+    // next boot replay only installs agents still present in
+    // `agents.json`.
     // Symmetric to `start_agent_handler`: an unset registrar cell
     // is the documented test seam (with a warn-level event so a
     // production occurrence is operator-visible); a wired registrar
@@ -762,6 +770,7 @@ fn refresh_agents_handler(
         return Ok(json!({
             "ok": false,
             "runtime_not_ready": true,
+            "runtime_catalog_not_ready": false,
             "agents_scanned": rows.len(),
             "runtime_registered": 0,
             "runtime_failed": 0,
@@ -785,6 +794,7 @@ fn refresh_agents_handler(
                 "runtime_failed": outcome.failed,
                 "runtime_removed": outcome.removed,
                 "runtime_not_ready": outcome.runtime_not_ready,
+                "runtime_catalog_not_ready": outcome.catalog_not_ready,
             }));
         }
         agent_results
@@ -813,9 +823,15 @@ fn refresh_agents_handler(
             .and_then(Value::as_bool)
             .unwrap_or(false)
     });
+    let runtime_catalog_not_ready = agent_results.iter().any(|row| {
+        row.get("runtime_catalog_not_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
     Ok(json!({
-        "ok": !runtime_not_ready && runtime_failed == 0,
+        "ok": !runtime_not_ready && !runtime_catalog_not_ready && runtime_failed == 0,
         "runtime_not_ready": runtime_not_ready,
+        "runtime_catalog_not_ready": runtime_catalog_not_ready,
         "agents_scanned": agent_results.len(),
         "runtime_registered": runtime_registered,
         "runtime_failed": runtime_failed,

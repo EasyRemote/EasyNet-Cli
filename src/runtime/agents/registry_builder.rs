@@ -10,9 +10,9 @@ use super::{
     agent_lifecycle_ability, agent_list_ability, api_key_ability, browser_session_ability,
     chat_ability, chat_history_ability, context_ability, context_loaders, device_ops_ability,
     discover_ability, discuss_ability, file_transfer_ability, files, fs_ability, fs_edit_ability,
-    http_request_ability, invocation_history_ability, invoke_ability, list_resources_ability,
-    loop_ability, mcp_bridge_ability, mcp_client_ability, media, media_abilities, meta_ability,
-    mission_ability, network_health_ability, openai_compat_ability, orchestration_ability, pages,
+    http_request_ability, invocation_history_ability, list_resources_ability, loop_ability,
+    mcp_bridge_ability, mcp_client_ability, media, media_abilities, meta_ability, mission_ability,
+    network_health_ability, openai_compat_ability, orchestration_ability, pages,
     permission_ability, ping, plugin_lifecycle_ability, process_exec_ability, profiles,
     pty_attach_ability, pty_io_ability, pty_lifecycle_ability, schedule_ability, session_ability,
     shell_run_ability, skill_install_ability, skill_publish_ability, teach_ability, think_ability,
@@ -95,19 +95,18 @@ pub fn build_registry_with_runtime(
 /// in. The daemon bin calls this with the Kernel's actual handles
 /// at boot; tests construct a fresh registry per case.
 ///
-/// `agents` and `loaders` were added when chat became a first-class
-/// system-registered ability: a `<agent>.chat` handler is registered
-/// per agent (see `chat_ability::register`). `loaders` is the seam
-/// for pluggable context loaders — empty in v1, populated in
-/// subsequent PRs without touching the daemon's startup code.
-/// **Phase 5c**. `hot_agent_registrar_cell` is a late-wired
-/// `OnceLock<Arc<HotAgentRegistrar>>`. Empty at registry-build
-/// time; the boot path populates it AFTER `LocalRuntime` +
-/// `dispatch_handle` are wired. The `agent.start` handler
-/// reads through this cell at dispatch time to register hot-added
-/// agents into `LocalRuntime`. Tests pass an empty cell —
-/// `agent.start` then writes `agents.json` and op_events
-/// `hot_agent_runtime_sync_skipped` instead of also touching the runtime.
+/// `agents` and `loaders` feed hosted-agent dynamic replay:
+/// `<agent>.chat`, `<agent>.discover`, `<agent>.invoke`, and
+/// executable TOML abilities are not static catalogue rows. They are
+/// installed through `HotAgentRegistrar` after the catalogue is wrapped
+/// in `Arc`, so boot replay, `agent.start`, `agent.refresh`, and
+/// `agent.stop` share the same control-plane/runtime transaction.
+///
+/// `hot_agent_registrar_cell` is a late-wired
+/// `OnceLock<Arc<HotAgentRegistrar>>`. The lifecycle handlers read
+/// through this cell at dispatch time. If a call lands before the
+/// registrar is available, durable agent state still wins and the
+/// handler emits an op_event with runtime sync skipped.
 /// Result of constructing the daemon's local ability registry.
 ///
 /// What this is NOT: a runtime executor. `catalog` owns handler metadata and
@@ -348,8 +347,10 @@ fn build_registry_with_services_result_inner(
 
     let authority_context = authority_context.unwrap_or_default();
     let runtime = local_runtime.unwrap_or_else(easynet_axon::invocation::LocalRuntime::new);
-    let mut reg =
-        AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority_context);
+    let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        Arc::clone(&runtime),
+        authority_context,
+    );
     ping::register(&mut reg);
     network_health_ability::register(&mut reg);
     // AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
@@ -432,17 +433,10 @@ fn build_registry_with_services_result_inner(
     // ~/.easynet/agents.json and return the canonical URA;
     // stop ≡ delete the row (idempotent).
     //
-    // Phase 5c: passes a `OnceLock<Arc<HotAgentRegistrar>>` the
-    // boot path populates after `LocalRuntime` is wired. On
-    // `agent.start`, the handler reads the
-    // OnceLock and registers the new agent's
-    // `<agent>.{chat,discover,invoke}` into `LocalRuntime` so
-    // dispatch goes through the Axon path (which writes ledger
-    // rows). The OnceLock is empty during the brief
-    // window between this `register` call and the boot path's
-    // `.set(...)` call — handlers invoked in that window skip
-    // runtime sync, log via op_event, and the agent gets picked
-    // up by the static registration path on next boot.
+    // The lifecycle handler receives the shared dynamic registrar cell.
+    // `agent.start` / `agent.refresh` replay the hosted agent through
+    // HotAgentRegistrar; `agent.stop` removes the same dynamic catalogue
+    // rows. There is no static hosted-agent fallback path.
     agent_lifecycle_ability::register(&mut reg, Arc::clone(&hot_agent_registrar_cell));
     // device-hosted node/ability operations (list_nodes, describe_node,
     // remove_node, deploy_ability, uninstall_ability). These are the
@@ -522,16 +516,11 @@ fn build_registry_with_services_result_inner(
         Arc::clone(&plugin_runtime_manager),
     );
 
-    // Phase 5c. Construct the hot runtime registrar HERE so it can
-    // close over the exact same `loaders` Arc + `local_registry_handle`
-    // OnceLock that `chat_ability::register` /
-    // `discover_ability::register_for_agent` close over below. That
-    // guarantees a hot-added agent's `<agent>.chat`/`<agent>.discover`/
-    // `<agent>.invoke` handlers produced by the registrar are
-    // byte-identical to the boot-time handlers built from
-    // `agents.json`. The registrar's internal `runtime` OnceLock is
-    // left empty here — boot attaches the `LocalRuntime` later, before
-    // any `agent.start` call could land.
+    // Construct the hot hosted-agent registrar HERE so it can close over
+    // the exact `loaders` Arc + `local_registry_handle` OnceLock used by
+    // invoke/discover recursion. Boot replay below and every post-boot
+    // lifecycle mutation use this same object; hosted-agent abilities are
+    // never written directly into the static catalogue.
     //
     // We stash the constructed registrar into the shared
     // `hot_agent_registrar_cell` immediately so the
@@ -544,6 +533,7 @@ fn build_registry_with_services_result_inner(
                 Arc::clone(&local_registry_handle),
                 Arc::clone(&discover_federation_resolver),
             );
+        hot_registrar.set_runtime(Arc::clone(&runtime));
         // Mirror ProcessSingleton::once()::set's diagnostic: a
         // second writer on this `OnceLock` is a boot-wiring bug
         // (`build_registry` is supposed to run exactly once per
@@ -570,12 +560,12 @@ fn build_registry_with_services_result_inner(
         Arc::clone(&discuss),
         Arc::clone(&local_registry_handle),
     );
-    chat_ability::register(
-        &mut reg,
-        agents,
-        loaders,
-        Arc::clone(&local_registry_handle),
-    );
+    // Hosted-agent abilities are deliberately NOT registered into the static
+    // boot maps. Static maps cannot be removed through `agent.stop` after the
+    // catalog is wrapped in `Arc`, which previously left catalog/control-plane
+    // residue after the runtime row was removed. The current agents are
+    // replayed through `HotAgentRegistrar` after `local_registry_handle` is set
+    // below, so boot-time and post-boot lifecycle use one dynamic transaction.
     // RFC-006-B v0.6 — Pages reference system. Management verbs are
     // registered directly into the daemon-hosted Axon LocalRuntime;
     // per-project fetch/API verbs are hot-registered at publish or
@@ -661,8 +651,8 @@ fn build_registry_with_services_result_inner(
     // and an in-process Invoke caller see one catalog.
     //
     // call_tool invokes the named local ability in-process. The
-    // shared OnceLock (declared above
-    // before chat_ability::register) is the chicken-and-egg fix:
+    // shared OnceLock (declared before the dynamic hosted-agent
+    // registrar is constructed) is the chicken-and-egg fix:
     // every consumer needs an `Arc` to the registry being built,
     // but the registry isn't yet wrapped in an `Arc` at
     // registration time. Set the lock once after `Arc::new(reg)`
@@ -685,45 +675,17 @@ fn build_registry_with_services_result_inner(
     // — otherwise the LLM's discovery flow would not see this
     // ability and would fall back to fabricating answers.
     mission_ability::register(&mut reg);
-    // Per-agent self-bundle: `<agent>.discover` and `<agent>.invoke`.
-    //
-    // Why here and not inside `chat_ability::register`: invoke needs
-    // the dispatch registry handle (`local_registry_handle` above) to
-    // resolve the target ability through the live registry — including
-    // entries registered AFTER chat_ability runs (mission.run,
-    // meta.list_abilities, hot-materialized agent abilities). The handle
-    // is in scope here, so wiring sits next to the other consumers
-    // (mcp_bridge / meta / a2a_bridge).
-    //
     // The device-owned aggregate `discover` owns the top-level view and
     // reloads `agents.json` per call, so it never chooses a random first
     // agent as a synthetic self. Per-agent `<agent>.discover` /
-    // `<agent>.invoke` keep their snapshot semantics because they are
-    // owner-specific bundle entries installed at boot.
+    // `<agent>.invoke` are hosted-agent lifecycle rows; they are replayed
+    // through HotAgentRegistrar after `Arc::new(reg)` below.
     discover_ability::register_device_aggregate_with_resolver(
         &mut reg,
         || crate::registry::agents::load_agents().unwrap_or_default(),
         Arc::clone(&local_registry_handle),
         Arc::clone(&discover_federation_resolver),
     );
-
-    for agent_name in agents.agents.keys() {
-        let snapshot_for_discover = agents.clone();
-        discover_ability::register_for_agent_with_resolver(
-            &mut reg,
-            agent_name.clone(),
-            move || snapshot_for_discover.clone(),
-            Arc::clone(&local_registry_handle),
-            Arc::clone(&discover_federation_resolver),
-        );
-        let snapshot_for_invoke = agents.clone();
-        invoke_ability::register_for_agent(
-            &mut reg,
-            agent_name.clone(),
-            move || snapshot_for_invoke.clone(),
-            Arc::clone(&local_registry_handle),
-        );
-    }
 
     // RFC-002 §3.3: register `device.keyring.*` for the daemon's
     // own self-bundle, scoped under the literal owner `device`.
@@ -915,6 +877,30 @@ fn build_registry_with_services_result_inner(
             level = "warn",
             cell = "local_registry_handle",
         );
+    }
+
+    if let Some(hot_registrar) = hot_agent_registrar_cell.get().cloned() {
+        for (agent_name, entry) in agents.agents.iter() {
+            let outcome = crate::support::async_bridge::run_blocking(
+                hot_registrar.register_agent(agent_name, entry),
+                crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+            );
+            if outcome.runtime_not_ready || outcome.catalog_not_ready || outcome.failed > 0 {
+                let failed = outcome.failed.to_string();
+                let runtime_not_ready = outcome.runtime_not_ready.to_string();
+                let catalog_not_ready = outcome.catalog_not_ready.to_string();
+                crate::op_event!(
+                    component = agents_boot,
+                    kind = hosted_agent_dynamic_replay_failed,
+                    level = "warn",
+                    agent = agent_name.as_str(),
+                    failed = failed.as_str(),
+                    runtime_not_ready = runtime_not_ready.as_str(),
+                    catalog_not_ready = catalog_not_ready.as_str(),
+                    message = "hosted-agent ability replay did not fully register",
+                );
+            }
+        }
     }
 
     // Hot-reload sinks. Wired after Arc::new(reg) so each sink can

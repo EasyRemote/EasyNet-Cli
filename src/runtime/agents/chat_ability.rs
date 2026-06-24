@@ -290,6 +290,20 @@ pub(crate) fn build_host_stream_handler(
     )
 }
 
+/// Build the server-stream `<agent>.chat` handler used by both
+/// boot-time and hot lifecycle registration.
+///
+/// This is intentionally a handler factory rather than a registration
+/// helper: lifecycle registration owns the catalogue transaction, while
+/// this module owns only chat execution semantics.
+pub(crate) fn build_chat_stream_handler_for(
+    agent_name: String,
+    entry: AgentEntry,
+    loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
+) -> crate::runtime::ability_dispatch::LocalStreamHandler {
+    Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args))
+}
+
 /// Build one executor-bound RPC handler for an agent's
 /// non-`chat` ability. Pulled out as a free fn so both the
 /// boot-time pre-registration loop in `register_for_agent` and

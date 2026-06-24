@@ -243,9 +243,10 @@ async fn main() -> anyhow::Result<()> {
     //
     // Pre-set, dispatches of `agent.start` see an empty
     // cell and skip runtime registration (logged via op_event); the
-    // agent still lands on disk so a daemon restart picks it up via
-    // the static registration path. Post-set, every subsequent
-    // dispatch registers into `LocalRuntime` and ledger writes start
+    // agent still lands on disk so a daemon restart replays it through
+    // the dynamic registrar after the catalogue is wired. Post-set,
+    // every subsequent dispatch registers catalogue/control-plane and
+    // `LocalRuntime` rows in one transaction, so ledger writes start
     // landing.
     let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
         Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
