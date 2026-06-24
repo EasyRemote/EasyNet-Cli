@@ -466,12 +466,13 @@ impl<'a> DiscoverRuntimeService<'a> {
 
         let mut federation = None;
         if !self.args.local_only {
-            let causal_parent = receipt_parent_from_invocation_meta(
-                self.invocations
-                    .last()
-                    .context("local discover tier did not produce invocation metadata")?,
-            )
-            .context("local discover tier did not produce receipt-backed causal metadata")?;
+            let local_invocation_meta = self
+                .invocations
+                .last()
+                .cloned()
+                .context("local discover tier did not produce invocation metadata")?;
+            let causal_parents =
+                self.realm_causal_parents_from_local_invocation(&local_invocation_meta);
             let trace_id = self
                 .invocations
                 .first()
@@ -480,7 +481,7 @@ impl<'a> DiscoverRuntimeService<'a> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
             let (realm_value, realm_invocation_meta) =
-                self.walk_tier_with_trace("user", &[causal_parent], trace_id)?;
+                self.walk_tier_with_trace("user", causal_parents.as_slice(), trace_id)?;
             self.invocations.push(realm_invocation_meta);
             self.record_source_diagnostic(&realm_value);
             match FederationStatus::from_envelope(&realm_value) {
@@ -567,6 +568,20 @@ impl<'a> DiscoverRuntimeService<'a> {
                 "runtime returned {limit} of {available} source candidates before CLI ranking"
             ),
         });
+    }
+
+    fn realm_causal_parents_from_local_invocation(&mut self, meta: &Value) -> Vec<Value> {
+        match receipt_parent_from_invocation_meta(meta) {
+            Ok(parent) => vec![parent],
+            Err(err) => {
+                self.diagnostics.push(DiscoverDiagnostic {
+                    scope: "device".to_string(),
+                    code: "local_receipt_anchor_missing",
+                    message: format!("{err}; continuing realm discovery without a causal parent"),
+                });
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -941,6 +956,31 @@ mod tests {
         assert_eq!(service.diagnostics.len(), 1);
         assert_eq!(service.diagnostics[0].code, "source_truncated");
         assert!(service.diagnostics[0].message.contains("12000"));
+    }
+
+    #[test]
+    fn missing_local_receipt_anchor_degrades_realm_walk_to_parentless() {
+        let args = DiscoverArgs {
+            intent: "chat".to_string(),
+            limit: 5,
+            local_only: false,
+            as_agent: None,
+            tree: false,
+            format: OutputFormat::Json,
+        };
+        let mut service = DiscoverRuntimeService::new(&args);
+        let parents = service.realm_causal_parents_from_local_invocation(&json!({
+            "metadata_state": "missing_receipt_anchor",
+            "trace_id": "trace-1",
+        }));
+
+        assert!(parents.is_empty());
+        assert_eq!(service.diagnostics.len(), 1);
+        assert_eq!(service.diagnostics[0].code, "local_receipt_anchor_missing");
+        assert_eq!(service.diagnostics[0].scope, "device");
+        assert!(service.diagnostics[0]
+            .message
+            .contains("continuing realm discovery without a causal parent"));
     }
 
     #[test]
