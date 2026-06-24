@@ -734,9 +734,9 @@ fn stream_env_handler_to_ability_fn(handler: LocalStreamHandlerWithEnvelope) -> 
 /// Project an envelope-aware stream handler into the `(AbilityFn,
 /// AbilityOptions)` pair a direct `LocalRuntime::replace_ability` call
 /// needs, with `modes.stream = true` so locality and dispatch treat it
-/// as a server-stream. The hot-agent registrar uses this for
-/// `host_stream` abilities, which (unlike the catalog boot path) talk to
-/// the runtime directly rather than through `AxonAbilityCatalog`.
+/// as a server-stream. This is for lower-level registrars that already
+/// own their control-plane transaction and need only the Axon runtime
+/// adapter pair.
 pub(crate) fn stream_env_ability_with_options(
     handler: LocalStreamHandlerWithEnvelope,
 ) -> (AbilityFn, AbilityOptions) {
@@ -2278,7 +2278,7 @@ impl AxonAbilityCatalog {
         if modes.is_empty() {
             return self.unregister_runtime_ability(name);
         }
-        let options = self.runtime_options_for(name, modes);
+        let options = self.runtime_options_for(name, modes)?;
         self.replace_runtime_ability(
             name,
             runtime_handler_set_to_ability_fn(name.to_string(), handlers),
@@ -2286,9 +2286,60 @@ impl AxonAbilityCatalog {
         )
     }
 
-    fn runtime_options_for(&self, name: &str, modes: AbilityCallModes) -> AbilityOptions {
-        let _ = name;
-        AbilityOptions::default().with_modes(modes)
+    fn runtime_options_for(
+        &self,
+        name: &str,
+        modes: AbilityCallModes,
+    ) -> anyhow::Result<AbilityOptions> {
+        let mut options = AbilityOptions::default().with_modes(modes);
+        if modes.rpc {
+            options = self.bind_runtime_proof_for_mode(
+                name,
+                options,
+                DescriptorCallMode::Rpc,
+                AxonCallMode::Rpc,
+            )?;
+        }
+        if modes.stream {
+            options = self.bind_runtime_proof_for_mode(
+                name,
+                options,
+                DescriptorCallMode::Stream,
+                AxonCallMode::Stream,
+            )?;
+        }
+        if modes.bidi {
+            options = self.bind_runtime_proof_for_mode(
+                name,
+                options,
+                DescriptorCallMode::Bidi,
+                AxonCallMode::Bidi,
+            )?;
+        }
+        Ok(options)
+    }
+
+    fn bind_runtime_proof_for_mode(
+        &self,
+        name: &str,
+        options: AbilityOptions,
+        descriptor_mode: DescriptorCallMode,
+        axon_mode: AxonCallMode,
+    ) -> anyhow::Result<AbilityOptions> {
+        let record = self
+            .control_plane_record_for_mode(name, descriptor_mode)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "ability {name:?} has a {:?} runtime handler without a control-plane record",
+                    descriptor_mode
+                )
+            })?;
+        Ok(options.with_mode_descriptor_proof(
+            axon_mode,
+            record.descriptor().version().as_str(),
+            record.descriptor().schema_hash().0,
+            record.implementation().impl_hash(),
+        ))
     }
 
     fn assert_static_handler_slot_available(&self, name: &str, target_slot: &'static str) {
@@ -4311,20 +4362,27 @@ mod tests {
     }
 
     #[test]
-    fn runtime_registration_keeps_protocol_proof_unbound() {
+    fn runtime_registration_binds_control_plane_proof_facts() {
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
 
+        let record = reg
+            .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("control-plane lookup is unambiguous")
+            .expect("control-plane record");
         let runtime = reg.runtime().expect("registry owns LocalRuntime");
         let runtime_key = reg.runtime_ability_key("fs.read").expect("runtime key");
         let options =
             block_on_runtime_sync(runtime.ability_options(&runtime_key)).expect("runtime options");
         let proof = options.proof_for_mode(AxonCallMode::Rpc);
 
-        assert!(
-            proof.is_unbound(),
-            "CLI daemon must not inject product-computed descriptor or impl hashes into Axon proof binding"
+        assert_eq!(
+            proof.descriptor_version,
+            record.descriptor().version().as_str()
         );
+        assert_eq!(proof.schema_hash, record.descriptor().schema_hash().0);
+        assert_eq!(proof.impl_hash, record.implementation().impl_hash());
+        assert!(!proof.is_unbound());
     }
 
     #[test]
@@ -4372,8 +4430,25 @@ mod tests {
         let rpc_proof = options.proof_for_mode(AxonCallMode::Rpc);
         let stream_proof = options.proof_for_mode(AxonCallMode::Stream);
 
-        assert!(rpc_proof.is_unbound());
-        assert!(stream_proof.is_unbound());
+        assert_eq!(
+            rpc_proof.descriptor_version,
+            rpc.descriptor().version().as_str()
+        );
+        assert_eq!(rpc_proof.schema_hash, rpc.descriptor().schema_hash().0);
+        assert_eq!(rpc_proof.impl_hash, rpc.implementation().impl_hash());
+        assert_eq!(
+            stream_proof.descriptor_version,
+            stream.descriptor().version().as_str()
+        );
+        assert_eq!(
+            stream_proof.schema_hash,
+            stream.descriptor().schema_hash().0
+        );
+        assert_eq!(stream_proof.impl_hash, stream.implementation().impl_hash());
+        assert_ne!(
+            rpc_proof.impl_hash, stream_proof.impl_hash,
+            "per-mode runtime proof bindings must not collapse RPC and Stream records"
+        );
     }
 
     #[test]

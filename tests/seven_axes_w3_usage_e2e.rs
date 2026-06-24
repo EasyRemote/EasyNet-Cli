@@ -15,8 +15,9 @@
 //!     watch surface sums it into the Terminal event — receipt →
 //!     ledger → projection, one unbroken ride;
 //!   * the same terminal receipt exposes descriptor/runtime proof
-//!     facts: descriptor version, explicit unbound descriptor-package
-//!     hashes, input hash, output hash, and runtime environment;
+//!     facts: descriptor version, descriptor-package schema and
+//!     implementation hashes, input hash, output hash, and runtime
+//!     environment;
 //!   * `duration_ms` is runtime-owned wall time (admitted →
 //!     terminal): present as a number, zero-or-more — zero is a fact
 //!     for a sub-millisecond local call, absence would be a bug;
@@ -92,8 +93,8 @@ fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
         proof["ability_binding"].as_str(),
         Some(expected_echo_ability_ref.as_str())
     );
-    assert_zero_hex32(proof["schema_hash"].as_str().expect("schema hash"));
-    assert_zero_hex32(proof["impl_hash"].as_str().expect("impl hash"));
+    assert_nonzero_hex32(proof["schema_hash"].as_str().expect("schema hash"));
+    assert_nonzero_hex32(proof["impl_hash"].as_str().expect("impl hash"));
     assert_nonzero_hex32(proof["input_hash"].as_str().expect("input hash"));
     assert_nonzero_hex32(proof["output_hash"].as_str().expect("output hash"));
 
@@ -109,17 +110,5 @@ fn assert_nonzero_hex32(value: &str) {
     assert_ne!(
         value, "0000000000000000000000000000000000000000000000000000000000000000",
         "descriptor-bound receipt proof hash must not be the default zero hash"
-    );
-}
-
-fn assert_zero_hex32(value: &str) {
-    assert_eq!(value.len(), 64, "hash must be 32 bytes of lowercase hex");
-    assert!(
-        value.chars().all(|ch| ch.is_ascii_hexdigit()),
-        "hash must be hex: {value}"
-    );
-    assert_eq!(
-        value, "0000000000000000000000000000000000000000000000000000000000000000",
-        "descriptor-package hash must stay explicitly unbound until Axon supplies proof material"
     );
 }
