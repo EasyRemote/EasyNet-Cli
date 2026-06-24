@@ -353,14 +353,14 @@ pub(crate) fn status_from_axon_invoke_error(
 }
 
 /// Explain why a descriptor-bound request cannot be routed through a
-/// different local runtime key than the ability identity signed in the
+/// different dispatch identity than the ability identity signed in the
 /// envelope.
 ///
 /// Axon `LocalRuntime` intentionally resolves descriptor-bound handlers by
-/// the signed `ability` field. EasyNet-Cli may choose locality and reject a
-/// route, but it must not rewrite the signed callable identity at dispatch
-/// time because that would split the receipt's governed descriptor from the
-/// executed implementation.
+/// the selected canonical ability identity. EasyNet-Cli may choose
+/// locality and reject a route, but it must not rewrite the signed
+/// callable identity at dispatch time because that would split the
+/// receipt's governed descriptor from the executed implementation.
 pub(crate) fn dispatch_key_mismatch_message(
     surface: &str,
     signed_ability: &str,
@@ -368,7 +368,7 @@ pub(crate) fn dispatch_key_mismatch_message(
     route_ura: &str,
 ) -> String {
     format!(
-        "{surface}: selected route `{route_ura}` resolves to local dispatch key \
+        "{surface}: selected route `{route_ura}` resolves to dispatch identity \
          `{dispatch_ability}`, but the descriptor-bound envelope signs ability \
          `{signed_ability}`; Axon LocalRuntime can only execute the signed \
          ability identity"

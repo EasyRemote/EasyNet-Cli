@@ -295,28 +295,38 @@ impl StreamDispatcher {
                  is not wired at boot"
             )));
         };
-        let dispatch_ability = selected_route.ability_ura.clone();
-        let public_ability = selected_route.dispatch_name.as_str();
-        let runtime_ability = dispatch_ability.clone();
+        let selected_ability_ura = selected_route.ability_ura.clone();
+        let runtime_ability = selected_ability_ura.clone();
         let Some(options) = runtime.ability_options(&runtime_ability).await else {
             return Err(Status::not_found(format!(
                 "InvokeStream: selected route `{}` dispatches `{}` but that ability is not \
                  registered in Axon LocalRuntime as `{}`",
-                selected_route.route_ura, dispatch_ability, runtime_ability
+                selected_route.route_ura, selected_ability_ura, runtime_ability
             )));
         };
         if !options.modes.stream {
             return Err(Status::invalid_argument(format!(
                 "InvokeStream: selected route `{}` dispatches `{}` but it does not support \
                  server-stream Invoke",
-                selected_route.route_ura, dispatch_ability
+                selected_route.route_ura, selected_ability_ura
             )));
         }
-        if public_ability != ability {
+        let signed_ability_ura =
+            crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(
+                &selected_route.callee_ura,
+                ability,
+            )
+            .map_err(|err| {
+                Status::invalid_argument(format!(
+                    "InvokeStream: signed ability `{ability}` is not valid for callee `{}`: {err}",
+                    selected_route.callee_ura
+                ))
+            })?;
+        if signed_ability_ura != selected_ability_ura {
             return Err(status_from_dispatch_key_mismatch(
                 "InvokeStream",
                 ability,
-                public_ability,
+                &selected_ability_ura,
                 &selected_route.route_ura,
             ));
         }
@@ -324,7 +334,7 @@ impl StreamDispatcher {
             Some(envelope) => {
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
-                    dispatch_ability.clone(),
+                    selected_ability_ura.clone(),
                     request.arguments.clone(),
                     request.metadata.clone(),
                 )
@@ -342,7 +352,7 @@ impl StreamDispatcher {
                 .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
 
         let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
-        let ability_name = dispatch_ability;
+        let ability_name = selected_ability_ura;
         tokio::spawn(async move {
             while let Some(frame_result) = handle.next_frame().await {
                 match frame_result {

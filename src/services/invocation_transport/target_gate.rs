@@ -64,12 +64,12 @@ impl TargetGate {
     /// Build the RFC-005 route resolver wired with every authority this
     /// daemon owns: local presence, hosted-agent placement, owner
     /// projection, optional peer delegation, and — when the daemon runs as
-    /// a device with a live `LocalRuntime` — this device's own namespace
-    /// authority (RFC-005 §4 / D105).
+    /// a device with a live `LocalRuntime` — the daemon's local runtime
+    /// namespace authority (RFC-005 §4 / D105).
     ///
-    /// The device-local authority is a snapshot of the runtime dispatch
-    /// table captured here, so a route for this device's own ability is
-    /// proven from the live local bindings rather than the hub projection
+    /// The local runtime authority is a snapshot of the dispatch table
+    /// captured here, so routes for this device and its hosted agents are
+    /// proven from live local bindings rather than the hub projection
     /// cache. Capturing the snapshot is the only async step; the resolver
     /// itself stays synchronous.
     pub(crate) async fn route_resolver(&self) -> DaemonRouteResolver<'_> {
@@ -97,7 +97,7 @@ impl TargetGate {
         ) {
             let snapshot = LocalRuntimeAuthoritySnapshot::capture(runtime).await;
             resolver =
-                resolver.with_device_local_authority(device_ura.to_string(), Box::new(snapshot));
+                resolver.with_local_runtime_authority(device_ura.to_string(), Box::new(snapshot));
         }
         resolver
     }

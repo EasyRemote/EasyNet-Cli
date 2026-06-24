@@ -328,15 +328,14 @@ impl UnaryDispatcher {
                 false,
             );
         };
-        let dispatch_ability = selected_route.ability_ura.clone();
-        let public_ability = selected_route.dispatch_name.as_str();
-        let runtime_ability = dispatch_ability.clone();
+        let selected_ability_ura = selected_route.ability_ura.clone();
+        let runtime_ability = selected_ability_ura.clone();
         let Some(options) = runtime.ability_options(&runtime_ability).await else {
             return (
                 Err(Status::not_found(format!(
                     "easynet-daemon: selected route `{}` dispatches `{}` but that ability is not \
                      registered in Axon LocalRuntime as `{}`",
-                    selected_route.route_ura, dispatch_ability, runtime_ability
+                    selected_route.route_ura, selected_ability_ura, runtime_ability
                 ))),
                 false,
             );
@@ -354,17 +353,34 @@ impl UnaryDispatcher {
             component = daemon_invocation,
             kind = dispatch_local_rpc_selected_route,
             ability = ability,
-            dispatch_ability = dispatch_ability.as_str(),
+            dispatch_ability = selected_ability_ura.as_str(),
+            local_dispatch_key = selected_route.dispatch_name.as_str(),
             callee_ura = selected_route.callee_ura.as_str(),
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             route_ura = selected_route.route_ura.as_str(),
         );
-        if public_ability != ability {
+        let signed_ability_ura =
+            match crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(
+                &selected_route.callee_ura,
+                ability,
+            ) {
+                Ok(ability_ura) => ability_ura,
+                Err(err) => {
+                    return (
+                        Err(Status::invalid_argument(format!(
+                            "Invoke: signed ability `{ability}` is not valid for callee `{}`: {err}",
+                            selected_route.callee_ura
+                        ))),
+                        false,
+                    );
+                }
+            };
+        if signed_ability_ura != selected_ability_ura {
             return (
                 Err(status_from_dispatch_key_mismatch(
                     "Invoke",
                     ability,
-                    public_ability,
+                    &selected_ability_ura,
                     &selected_route.route_ura,
                 )),
                 false,
@@ -374,7 +390,7 @@ impl UnaryDispatcher {
             Some(envelope) => {
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
-                    dispatch_ability.clone(),
+                    selected_ability_ura.clone(),
                     arguments.to_vec(),
                     request.metadata.clone(),
                 )

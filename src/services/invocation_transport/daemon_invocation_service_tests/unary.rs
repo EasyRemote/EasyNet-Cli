@@ -1422,17 +1422,19 @@ async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
     use easynet_axon::invocation::{make_ability, LocalRuntime};
 
     let rt = LocalRuntime::new();
+    let ability = "test.fallback.echo";
+    let ability_ura = crate::ura::owner_ability_ura(TEST_DAEMON_URI, ability).unwrap();
     rt.register_ability(
-        "test.fallback.echo",
+        ability_ura,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
     )
     .await
     .unwrap();
 
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "test.fallback.echo");
+    publish_test_route(&svc, TEST_DAEMON_URI, ability);
     let resp = svc
-        .invoke(invoke_request("test.fallback.echo", r#"{"hello":"world"}"#))
+        .invoke(invoke_request(ability, r#"{"hello":"world"}"#))
         .await
         .expect("selected-route dispatch succeeds");
     let body: serde_json::Value = parse_response_body(resp);
