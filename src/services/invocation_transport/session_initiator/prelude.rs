@@ -2,9 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use tonic::transport::Channel;
+use easynet_axon::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
+use tonic::{transport::Channel, Status};
 
+use super::envelope::{sign_envelope_with_seed, SessionSigningSeed};
 use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
@@ -49,6 +50,7 @@ pub(super) struct SessionPreludeRun<'a> {
     pub(super) phase: &'a mut SessionPhaseTracker,
     pub(super) hub_endpoint: &'a str,
     pub(super) caller_ura: &'a str,
+    pub(super) signing_seed: Option<SessionSigningSeed>,
     pub(super) inputs: SessionPreludeInputs<'a>,
     pub(super) user_trust_sync: Option<&'a UserTrustSync>,
     pub(super) channels: SessionPreludeChannels,
@@ -67,6 +69,7 @@ pub(super) async fn run_session_preludes(
         phase,
         hub_endpoint,
         caller_ura,
+        signing_seed,
         inputs,
         user_trust_sync,
         channels,
@@ -79,26 +82,36 @@ pub(super) async fn run_session_preludes(
         phase,
         hub_endpoint,
         caller_ura,
+        signing_seed,
         &hub_published_abilities,
     )
     .await;
-    run_owner_projection_prelude(client, phase, hub_endpoint, caller_ura, ability_descriptors)
-        .await?;
+    run_owner_projection_prelude(
+        client,
+        phase,
+        hub_endpoint,
+        caller_ura,
+        signing_seed,
+        ability_descriptors,
+    )
+    .await?;
 
     let user_trust_resync = spawn_user_trust_resync(
         client,
         channels.user_trust_resync,
         caller_ura,
+        signing_seed,
         user_trust_sync,
     )
     .await;
     let federation_heartbeat = spawn_federation_heartbeat(
         channels.federation_heartbeat,
         caller_ura.to_string(),
+        signing_seed,
         Arc::clone(&hub_published_abilities),
     );
 
-    run_hosted_agent_advertise_prelude(client, phase, caller_ura).await;
+    run_hosted_agent_advertise_prelude(client, phase, caller_ura, signing_seed).await;
 
     Ok(SessionPreludeGuards {
         _user_trust_resync: user_trust_resync,
@@ -111,6 +124,7 @@ async fn run_join_prelude(
     phase: &mut SessionPhaseTracker,
     hub_endpoint: &str,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) {
     phase.transition(
@@ -123,7 +137,9 @@ async fn run_join_prelude(
         caller_ura = caller_ura,
         hub_endpoint = hub_endpoint,
     );
-    match send_federation_join_prelude(client, caller_ura, hub_published_abilities).await {
+    match send_federation_join_prelude(client, caller_ura, signing_seed, hub_published_abilities)
+        .await
+    {
         Ok(()) => {
             crate::op_event!(
                 component = session,
@@ -150,6 +166,7 @@ async fn run_owner_projection_prelude(
     phase: &mut SessionPhaseTracker,
     hub_endpoint: &str,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     ability_descriptors: &[AbilityDescriptor],
 ) -> Result<(), SessionError> {
     phase.transition(
@@ -171,6 +188,7 @@ async fn run_owner_projection_prelude(
         caller_ura,
         caller_ura,
         caller_ura,
+        signing_seed,
         ability_descriptors,
     )
     .await
@@ -202,17 +220,19 @@ async fn spawn_user_trust_resync(
     client: &mut InvocationClient<Channel>,
     resync_channel: Channel,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     user_trust_sync: Option<&UserTrustSync>,
 ) -> Option<AbortOnDrop> {
     let sync = user_trust_sync?;
-    sync_paired_user_trust_prelude(client, caller_ura, sync).await;
+    sync_paired_user_trust_prelude(client, caller_ura, signing_seed, sync).await;
     let sync = sync.clone();
     let resync_caller = caller_ura.to_string();
     Some(AbortOnDrop(tokio::spawn(async move {
         let mut resync_client = InvocationClient::new(resync_channel);
         loop {
             tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
-            sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, &sync).await;
+            sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
+                .await;
         }
     })))
 }
@@ -221,6 +241,7 @@ async fn run_hosted_agent_advertise_prelude(
     client: &mut InvocationClient<Channel>,
     phase: &mut SessionPhaseTracker,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
 ) {
     let realm = crate::ura::parse_ura(caller_ura)
         .map(|parsed| parsed.realm)
@@ -272,6 +293,7 @@ async fn run_hosted_agent_advertise_prelude(
             &agent_registry,
             &live_registry,
             entry,
+            signing_seed,
         )
         .await;
     }
@@ -340,6 +362,7 @@ async fn advertise_hosted_agent_entry(
     agent_registry: &crate::registry::agents::AgentRegistry,
     live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
     entry: &AdvertiseEntry,
+    signing_seed: Option<SessionSigningSeed>,
 ) {
     let agent_id = crate::ura::parse_ura(&entry.agent_ura)
         .ok()
@@ -351,9 +374,14 @@ async fn advertise_hosted_agent_entry(
     } else {
         caller_node_id.as_deref()
     };
-    let advertise_agent_result =
-        send_advertise_agent_prelude(client, caller_ura, &entry.agent_ura, host_for_advertise)
-            .await;
+    let advertise_agent_result = send_advertise_agent_prelude(
+        client,
+        caller_ura,
+        &entry.agent_ura,
+        host_for_advertise,
+        signing_seed,
+    )
+    .await;
     match advertise_agent_result {
         Ok(()) => {
             advertise_hosted_agent_abilities(
@@ -364,6 +392,7 @@ async fn advertise_hosted_agent_entry(
                 live_registry,
                 entry,
                 &agent_id,
+                signing_seed,
             )
             .await;
         }
@@ -394,6 +423,7 @@ async fn advertise_hosted_agent_abilities(
     live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
     entry: &AdvertiseEntry,
     agent_id: &str,
+    signing_seed: Option<SessionSigningSeed>,
 ) {
     let descriptors = match entry.hosted_agent_name.as_deref() {
         Some(agent_name) => {
@@ -427,6 +457,7 @@ async fn advertise_hosted_agent_abilities(
         caller_ura,
         &entry.agent_ura,
         caller_ura,
+        signing_seed,
         &descriptors,
     )
     .await
@@ -453,6 +484,7 @@ async fn advertise_hosted_agent_abilities(
 async fn send_federation_join_prelude(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     let realm = crate::ura::parse_ura(caller_ura)
@@ -466,9 +498,13 @@ async fn send_federation_join_prelude(
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
 
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.join", arguments))
-        .map_err(|e| tonic::Status::invalid_argument(format!("federation.join prelude: {e}")))?;
+    let request = signed_prelude_request(
+        caller_ura,
+        caller_ura,
+        "federation.join",
+        arguments,
+        signing_seed,
+    )?;
 
     match client.invoke(request).await {
         Ok(reply) => {
@@ -511,6 +547,7 @@ async fn send_advertise_agent_prelude(
     caller_ura: &str,
     agent_ura: &str,
     host_node_id: Option<&str>,
+    signing_seed: Option<SessionSigningSeed>,
 ) -> Result<(), tonic::Status> {
     let mut body = serde_json::json!({
         "agent_ura": agent_ura,
@@ -531,11 +568,13 @@ async fn send_advertise_agent_prelude(
         tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
     })?;
 
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.advertise_agent", arguments))
-        .map_err(|e| {
-            tonic::Status::invalid_argument(format!("federation.advertise_agent prelude: {e}"))
-        })?;
+    let request = signed_prelude_request(
+        caller_ura,
+        agent_ura,
+        "federation.advertise_agent",
+        arguments,
+        signing_seed,
+    )?;
 
     invoke_prelude_unary(client, request, "federation.advertise_agent")
         .await
@@ -547,6 +586,7 @@ async fn send_advertise_abilities_prelude(
     caller_ura: &str,
     owner_ura: &str,
     host_device_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     descriptors: &[AbilityDescriptor],
 ) -> Result<(), tonic::Status> {
     let projection = crate::runtime::owner_projection::prepare_and_persist(
@@ -574,15 +614,73 @@ async fn send_advertise_abilities_prelude(
         ))
     })?;
 
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.advertise_abilities", arguments))
-        .map_err(|e| {
-            tonic::Status::invalid_argument(format!("federation.advertise_abilities prelude: {e}"))
-        })?;
+    let request = signed_prelude_request(
+        caller_ura,
+        owner_ura,
+        "federation.advertise_abilities",
+        arguments,
+        signing_seed,
+    )?;
 
     invoke_prelude_unary(client, request, "federation.advertise_abilities")
         .await
         .map(|_| ())
+}
+
+pub(super) fn signed_prelude_request(
+    caller_ura: &str,
+    subject_ura: &str,
+    function_name: &str,
+    arguments: Vec<u8>,
+    signing_seed: Option<SessionSigningSeed>,
+) -> Result<InvokeRequest, Status> {
+    let hub_ura = session_hub_ura(caller_ura)?;
+    let descriptor_subject_ura =
+        descriptor_prelude_subject_ura(&hub_ura, subject_ura, function_name)?;
+    let mut request = crate::services::invocation_transport::ProtoEnvelope::targeted(
+        caller_ura,
+        hub_ura,
+        descriptor_subject_ura,
+    )
+    .and_then(|env| env.invoke_request(function_name, arguments))
+    .map_err(|e| Status::invalid_argument(format!("{function_name} prelude: {e}")))?;
+    if let Some(seed) = signing_seed {
+        let envelope = request.envelope.as_mut().ok_or_else(|| {
+            Status::internal(format!("{function_name} prelude request missing envelope"))
+        })?;
+        sign_envelope_with_seed(envelope, function_name, &request.arguments, &seed)?;
+    }
+    Ok(request)
+}
+
+fn descriptor_prelude_subject_ura(
+    hub_ura: &str,
+    subject_ura: &str,
+    function_name: &str,
+) -> Result<String, Status> {
+    if crate::services::invocation_transport::invocation_wire::try_entity_ref(
+        subject_ura.to_string(),
+    )
+    .is_ok()
+    {
+        return Ok(subject_ura.to_string());
+    }
+    crate::ura::owner_ability_ura(hub_ura, function_name).ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "{function_name} prelude: subject `{subject_ura}` is not descriptor-bound \
+             and hub `{hub_ura}` cannot own the ability"
+        ))
+    })
+}
+
+fn session_hub_ura(caller_ura: &str) -> Result<String, Status> {
+    crate::ura::parse_ura(caller_ura)
+        .map(|parsed| crate::ura::hub_ura(&parsed.realm))
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "session prelude caller URA `{caller_ura}` is invalid: {err}"
+            ))
+        })
 }
 
 #[derive(Clone)]
@@ -597,6 +695,7 @@ const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
 async fn sync_paired_user_trust_prelude(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     sync: &UserTrustSync,
 ) {
     let Ok(creds) = crate::persistence::config::load_credentials() else {
@@ -620,15 +719,13 @@ async fn sync_paired_user_trust_prelude(
         Ok(v) => v,
         Err(_) => return,
     };
-    let request = match crate::services::invocation_transport::ProtoEnvelope::caller_only(
+    let request = match signed_prelude_request(
         caller_ura,
-    )
-    .and_then(|env| {
-        env.invoke_request(
-            crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
-            args,
-        )
-    }) {
+        &user_ura,
+        crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+        args,
+        signing_seed,
+    ) {
         Ok(req) => req,
         Err(_) => return,
     };

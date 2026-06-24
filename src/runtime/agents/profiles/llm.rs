@@ -1,17 +1,17 @@
 //! llm profile — RFC-001 §1.
 //!
-//! An Agent advertising conversation.* + session.* +
-//! per-skill abilities. One per registered AI sub-agent (claude /
-//! codex / future). Per RFC §1.1 + §A15: each LLM sub-agent's
-//! installed skills are PRIVATE abilities owned by that sub-agent.
+//! An Agent advertising conversation.* plus per-skill abilities. One per
+//! registered AI sub-agent (claude / codex / future). Per RFC §1.1 + §A15:
+//! each LLM sub-agent's installed skills are PRIVATE abilities advertised by
+//! that sub-agent projection.
 //!
-//! Descriptor ownership
-//! --------------------
+//! Descriptor projection
+//! ---------------------
 //! LLM profile descriptors are dynamic because each registered AI sub-agent has
 //! its own `<agent>.chat` and manifest-provided abilities. Static system-registry
-//! ownership is therefore not enough for this profile. This module keeps the
+//! projection is therefore not enough for this profile. This module keeps the
 //! dynamic LLM ability-shape filter private; no other module may use it as a
-//! generic ownership classifier.
+//! generic projection classifier.
 //!
 //! Currently wired in agents/chat_ability.rs (which renames to
 //! conversation_ability.rs in a follow-up cleanup). The chat handler
@@ -19,9 +19,9 @@
 
 const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // RFC-005 owner-local catalogue names: `meta.*` and the built-in
-    // `skill.<operation>` abilities are device-profile-owned. LLM profile's
-    // dynamic surface is `conversation.*` / `session.*` / private per-skill
-    // `skill.<skill-name>` entries.
+    // `session.*` and `skill.<operation>` abilities are device-profile-owned.
+    // LLM profile's dynamic surface is `conversation.*` plus private
+    // per-skill `skill.<skill-name>` entries.
     //
     // `voice.*` was previously listed here on the
     // assumption that voice signaling is an LLM-owned ability
@@ -38,7 +38,6 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // hardware lives on the device) and is now described through
     // registry `OwnerKind::Device`, not through an LLM prefix claim.
     "conversation.",
-    "session.",
     "skill.",
 ];
 
@@ -62,12 +61,10 @@ fn is_llm_dynamic_ability(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
-/// AbilityDescriptors for every conversation.* / session.* /
-/// skill.* in the live registry, anchored to the LLM-profile
-/// Agent's URA. Per RFC §1.1 + §18:
+/// AbilityDescriptors for every conversation.* / private skill.* in the live
+/// registry, anchored to the LLM-profile Agent's URA. Per RFC §1.1 + §18:
 ///   * skill.*         → PRIVATE (per-skill, owner-only by default)
 ///   * conversation.*  → SCOPED  (default per [P8] correction)
-///   * session.*       → SCOPED
 ///
 /// P4.7 narrows the SCOPED axes.
 pub fn descriptors_for(
@@ -127,11 +124,11 @@ mod tests {
     fn dynamic_filter_recognizes_llm_namespaces() {
         // Q3 of truth-table spec: meta.* and skill.* are
         // device-profile-owned, NOT llm-profile. The LLM surface is
-        // conversation.*, session.*, and private skill.*.
+        // conversation.* and private skill.*.
         assert!(is_llm_dynamic_ability("conversation.send"));
         assert!(is_llm_dynamic_ability("conversation.stream"));
-        assert!(is_llm_dynamic_ability("session.create"));
-        assert!(is_llm_dynamic_ability("session.resume"));
+        assert!(!is_llm_dynamic_ability("session.list"));
+        assert!(!is_llm_dynamic_ability("session.attach"));
         assert!(is_llm_dynamic_ability("skill.alive-video"));
         assert!(is_llm_dynamic_ability("skill.design"));
         assert!(!is_llm_dynamic_ability("skill.list"));
@@ -147,7 +144,6 @@ mod tests {
     fn dynamic_filter_rejects_other_profiles() {
         assert!(!is_llm_dynamic_ability("skill.list"));
         assert!(!is_llm_dynamic_ability("consent.subscribe"));
-        assert!(!is_llm_dynamic_ability("policy.evaluate"));
     }
 
     #[test]

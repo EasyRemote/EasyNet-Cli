@@ -101,8 +101,8 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // Joint-plan unified path (phase 1.4): when the daemon is still
     // alive (the `--force` path bypasses guard 1, so this is the only
     // condition that lands here) call `federation.revoke` against
-    // this device's URA. The legacy `node.deregister` ability
-    // was an ack-only no-op — the hub never learned the device went
+    // this device's URA. The former local deregistration shim
+    // was ack-only — the hub never learned the device went
     // away, so directory entries lingered until the keepalive sweep.
     // The new path reaches `PresenceRegistry::force_revoke` and the
     // advertised-agent store immediately, so a downstream

@@ -247,14 +247,14 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         }
         let metadata: Option<std::collections::HashMap<String, String>> = Some(map);
         self.bridge
-            .ability_call_raw(
+            .ability_call_raw(easynet_axon::dendrite_bridge::AbilityRawCallOptions {
                 tenant_id,
                 resource_ura,
                 payload_json,
-                subject_id.as_deref(),
-                metadata.as_ref(),
-                self.timeout_ms,
-            )
+                subject_id: subject_id.as_deref(),
+                metadata: metadata.as_ref(),
+                timeout_ms: self.timeout_ms,
+            })
             .map_err(|e| format!("{e}"))
     }
 }

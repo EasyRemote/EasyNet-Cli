@@ -36,15 +36,15 @@
 // surfaced as a `federation` status object while the local tiers
 // still print, exit code 0 (spec D9).
 //
-// The seven-tuple is auditable: the tier-1/2 call goes through
-// `invoke_local_ability_with_invocation_meta`, and the envelope echo
-// (caller / callee / ability / subject / …) is included verbatim in
-// `--format json` output as `invocation` (spec 0.1-7, W1-E2E-1 ⑤).
+// The seven-tuple is auditable: each daemon discover call goes through
+// `invoke_local_ability_with_invocation_meta`, and the envelope echoes
+// (caller / callee / ability / subject / …) are included verbatim in
+// `--format json` output as `invocations` (spec 0.1-7, W1-E2E-1 ⑤).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
 use clap::Args;
@@ -61,11 +61,12 @@ use crate::ura::AbilitySelector;
 /// `support::output` leaf layer.
 pub use crate::support::output::OutputFormat;
 
-/// Candidates requested from each ladder scope. Deliberately far
-/// above the runtime's `DEFAULT_TOP_K = 20`: the ladder is our
-/// candidate *source*, and ranking happens here — a source that
-/// pre-truncates would silently hide rows the scorer wants.
-const SOURCE_TOP_K: usize = 200;
+/// Candidates requested from each ladder scope.
+///
+/// The CLI still ranks locally, so it asks the runtime for a wide source
+/// window and surfaces runtime-reported truncation as a diagnostic. This is
+/// deliberately a named boundary, not a hidden completeness claim.
+const SOURCE_CANDIDATE_LIMIT: usize = 10_000;
 
 #[derive(Debug, Args)]
 pub struct DiscoverArgs {
@@ -79,6 +80,10 @@ pub struct DiscoverArgs {
     /// realm directory.
     #[arg(long)]
     pub local_only: bool,
+    /// Agent name whose own ladder should define the `self` tier.
+    /// Omit for a device aggregate view with no implicit self agent.
+    #[arg(long, value_name = "AGENT")]
+    pub as_agent: Option<String>,
     /// Group the human-readable listing as an owner tree (display
     /// projection only — never an address; spec §0.1-5). Ignored
     /// with `--format json`, which already carries owner fields.
@@ -93,7 +98,8 @@ pub struct DiscoverArgs {
 ///
 /// `owner_ura` stays unserialized (tree grouping key); the serialized
 /// shape is the frozen W1-E2E-1 contract: score / name / ura /
-/// owner_kind / scope / trust_level / description.
+/// owner_kind / scope / description / callable / identity_state,
+/// with diagnostic emitted only for non-callable rows.
 #[derive(Debug, serde::Serialize)]
 pub struct Candidate {
     pub score: u32,
@@ -101,10 +107,11 @@ pub struct Candidate {
     pub ura: String,
     pub owner_kind: &'static str,
     pub scope: String,
-    /// Always `null` until W2 wires `identity.get_trust` — the
-    /// column renders `–` so the surface says what it doesn't know.
-    pub trust_level: Option<String>,
     pub description: String,
+    pub callable: bool,
+    pub identity_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
     #[serde(skip)]
     pub owner_ura: String,
 }
@@ -119,13 +126,22 @@ impl Candidate {
         let ura = row
             .get("qualified_name")
             .and_then(Value::as_str)
-            .ok_or(())?;
-        let selector = AbilitySelector::parse(ura).map_err(|_| ())?;
+            .unwrap_or_default();
+        let identity_state = row
+            .get("identity_state")
+            .and_then(Value::as_str)
+            .unwrap_or("minted");
         let owner = row.get("owner").and_then(Value::as_str).unwrap_or_default();
+        let selector = if ura.is_empty() {
+            None
+        } else {
+            Some(AbilitySelector::parse(ura).map_err(|_| ())?)
+        };
         let ability = row
             .get("ability")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| selector.public_name());
+            .or_else(|| selector.as_ref().map(AbilitySelector::public_name))
+            .unwrap_or_default();
         let description = row
             .get("description")
             .and_then(Value::as_str)
@@ -140,19 +156,46 @@ impl Candidate {
         } else {
             format!("{owner}.{ability}")
         };
-        let score = score_candidate(tokens, &name, description, Some(ura));
+        let owner_signal = if ura.is_empty() { owner } else { ura };
+        let score = score_candidate(tokens, &name, description, Some(owner_signal));
         if score == 0 {
             return Ok(None);
         }
+        let mut diagnostic = row
+            .get("diagnostic")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let (owner_kind, owner_ura, callable) = match selector.as_ref() {
+            Some(selector) => {
+                let callable = row.get("callable").and_then(Value::as_bool);
+                if callable.is_none() {
+                    diagnostic.get_or_insert_with(|| {
+                        "callable status missing from discovery row; treating as non-callable"
+                            .to_string()
+                    });
+                }
+                (
+                    selector.owner_kind(),
+                    selector.owner_ura().to_string(),
+                    callable.unwrap_or(false),
+                )
+            }
+            None if identity_state != "minted" => {
+                ("agent", format!("unminted-agent:{owner}"), false)
+            }
+            None => return Err(()),
+        };
         Ok(Some(Candidate {
             score,
             name,
             ura: ura.to_string(),
-            owner_kind: selector.owner_kind(),
+            owner_kind,
             scope: scope.to_string(),
-            trust_level: None,
             description: description.to_string(),
-            owner_ura: selector.owner_ura().to_string(),
+            callable,
+            identity_state: identity_state.to_string(),
+            diagnostic,
+            owner_ura,
         }))
     }
 }
@@ -161,6 +204,13 @@ impl Candidate {
 #[derive(Debug, serde::Serialize)]
 pub struct FederationStatus {
     pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DiscoverDiagnostic {
+    pub scope: String,
+    pub code: &'static str,
     pub message: String,
 }
 
@@ -185,6 +235,12 @@ impl FederationStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalSelfProjection {
+    Preserve,
+    DeviceAggregate,
+}
+
 /// The full result of one discover run — owns its renderings.
 ///
 /// `execute` returns this typed report so integration tests (and any
@@ -196,10 +252,12 @@ pub struct DiscoverReport {
     pub tiers_searched: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub federation: Option<FederationStatus>,
-    /// Envelope echo of the tier-1/2 invocation (seven-tuple audit
-    /// surface; spec 0.1-7).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub invocation: Option<Value>,
+    /// Envelope echoes of every daemon discover invocation in execution order
+    /// (seven-tuple audit surface; spec 0.1-7).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub invocations: Vec<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<DiscoverDiagnostic>,
     #[serde(skip_serializing_if = "is_zero")]
     pub skipped_unparseable: usize,
     pub candidates: Vec<Candidate>,
@@ -236,6 +294,16 @@ impl DiscoverReport {
                 .dim()
             );
         }
+        for diagnostic in &self.diagnostics {
+            eprintln!(
+                "{}",
+                style(format!(
+                    "note: discover {} ({}): {}",
+                    diagnostic.scope, diagnostic.code, diagnostic.message
+                ))
+                .dim()
+            );
+        }
         if self.candidates.is_empty() {
             println!(
                 "{}",
@@ -255,26 +323,31 @@ impl DiscoverReport {
         }
         println!(
             "\n{}",
-            style("invoke one with: easynet ability invoke <URA> [args…]").dim()
+            style("invoke callable rows with: easynet ability invoke <URA> [args…]").dim()
         );
     }
 
     fn render_table(&self) {
         println!(
-            "{:>5}  {:<34} {:<7} {:<6} {}",
+            "{:>5}  {:<34} {:<7} {:<38} {}",
             style("SCORE").bold(),
             style("ABILITY").bold(),
             style("TIER").bold(),
-            style("TRUST").bold(),
+            style("URA").bold(),
             style("DESCRIPTION").bold()
         );
         for c in &self.candidates {
+            let ura = if c.callable {
+                truncate(&c.ura, 38)
+            } else {
+                format!("not callable: {}", c.identity_state)
+            };
             println!(
-                "{:>5}  {:<34} {:<7} {:<6} {}",
+                "{:>5}  {:<34} {:<7} {:<38} {}",
                 c.score,
                 truncate(&c.name, 34),
                 c.scope,
-                c.trust_level.as_deref().unwrap_or("–"),
+                truncate(&ura, 38),
                 truncate(&c.description, 44),
             );
         }
@@ -297,7 +370,11 @@ impl DiscoverReport {
                 println!(
                     "  {branch} {:<30} {:<7} {:>4}  {}",
                     truncate(&c.name, 30),
-                    c.scope,
+                    if c.callable {
+                        c.scope.as_str()
+                    } else {
+                        "unminted"
+                    },
                     c.score,
                     truncate(&c.description, 40),
                 );
@@ -330,44 +407,197 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
 /// Compute the discover report without rendering it — the typed
 /// surface e2e tests and future renderers consume.
 pub fn execute(args: &DiscoverArgs) -> anyhow::Result<DiscoverReport> {
-    let tokens = tokenize(&args.intent);
-    if tokens.is_empty() {
-        anyhow::bail!("intent is empty after tokenization; describe what you want done");
-    }
+    DiscoverRuntimeService::new(args).execute()
+}
 
-    let ladder = resolve_ladder_entry()?;
-    let mut skipped = 0_usize;
+struct DiscoverRuntimeService<'a> {
+    args: &'a DiscoverArgs,
+    tokens: Vec<String>,
+    self_projection: LocalSelfProjection,
+    ladder: String,
+    skipped: usize,
+    invocations: Vec<Value>,
+    diagnostics: Vec<DiscoverDiagnostic>,
+}
 
-    // Tiers 1+2 — local registry walk, with the envelope echo kept
-    // for the audit surface.
-    let (local_value, invocation_meta) = invoke_local_ability_with_invocation_meta(
-        &ladder,
-        json!({ "scope": "device", "top_k": SOURCE_TOP_K }),
-        None,
-        &[],
-        None,
-        None,
-        None,
-    )
-    .context("walk local discover tiers (self + device)")?;
-    let mut candidates = project_rows(&local_value, &tokens, &mut skipped);
-    let mut tiers_searched = vec!["self", "device"];
-
-    // Tier 3 — realm directory, typed degradation on failure.
-    let mut federation = None;
-    if !args.local_only {
-        let realm_value =
-            invoke_local_ability(&ladder, json!({ "scope": "user", "top_k": SOURCE_TOP_K }))
-                .context("walk realm discover tier (user)")?;
-        match FederationStatus::from_envelope(&realm_value) {
-            Some(status) => federation = Some(status),
-            None => {
-                candidates.extend(project_rows(&realm_value, &tokens, &mut skipped));
-                tiers_searched.push("user");
-            }
+impl<'a> DiscoverRuntimeService<'a> {
+    fn new(args: &'a DiscoverArgs) -> Self {
+        Self {
+            args,
+            tokens: Vec::new(),
+            self_projection: LocalSelfProjection::DeviceAggregate,
+            ladder: String::new(),
+            skipped: 0,
+            invocations: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
+    fn execute(mut self) -> anyhow::Result<DiscoverReport> {
+        if self.args.limit == 0 {
+            anyhow::bail!("limit must be positive; omit it or pass a value greater than zero");
+        }
+        self.tokens = tokenize(&self.args.intent);
+        if self.tokens.is_empty() {
+            anyhow::bail!("intent is empty after tokenization; describe what you want done");
+        }
+
+        self.self_projection = if self.args.as_agent.as_deref().is_some() {
+            LocalSelfProjection::Preserve
+        } else {
+            LocalSelfProjection::DeviceAggregate
+        };
+        self.ladder = resolve_ladder_entry(self.args.as_agent.as_deref())?;
+
+        let (local_value, invocation_meta) = self.walk_tier("device", &[])?;
+        self.invocations.push(invocation_meta);
+        self.record_source_diagnostic(&local_value);
+        let mut candidates = project_rows(
+            &local_value,
+            &self.tokens,
+            &mut self.skipped,
+            self.self_projection,
+        );
+        let mut tiers_searched = if self.self_projection == LocalSelfProjection::Preserve {
+            vec!["self", "device"]
+        } else {
+            vec!["device"]
+        };
+
+        let mut federation = None;
+        if !self.args.local_only {
+            let causal_parent = receipt_parent_from_invocation_meta(
+                self.invocations
+                    .last()
+                    .context("local discover tier did not produce invocation metadata")?,
+            )
+            .context("local discover tier did not produce receipt-backed causal metadata")?;
+            let trace_id = self
+                .invocations
+                .first()
+                .and_then(|meta| meta.get("trace_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let (realm_value, realm_invocation_meta) =
+                self.walk_tier_with_trace("user", &[causal_parent], trace_id)?;
+            self.invocations.push(realm_invocation_meta);
+            self.record_source_diagnostic(&realm_value);
+            match FederationStatus::from_envelope(&realm_value) {
+                Some(status) => federation = Some(status),
+                None => {
+                    candidates.extend(project_rows(
+                        &realm_value,
+                        &self.tokens,
+                        &mut self.skipped,
+                        LocalSelfProjection::Preserve,
+                    ));
+                    tiers_searched.push("user");
+                }
+            }
+        }
+
+        candidates = rank_and_deduplicate_candidates(candidates, self.args.limit);
+
+        Ok(DiscoverReport {
+            query: self.args.intent.clone(),
+            tiers_searched,
+            federation,
+            invocations: self.invocations,
+            diagnostics: self.diagnostics,
+            skipped_unparseable: self.skipped,
+            candidates,
+        })
+    }
+
+    fn walk_tier(
+        &self,
+        scope: &'static str,
+        causal_parents: &[Value],
+    ) -> anyhow::Result<(Value, Value)> {
+        self.walk_tier_with_trace(scope, causal_parents, None)
+    }
+
+    fn walk_tier_with_trace(
+        &self,
+        scope: &'static str,
+        causal_parents: &[Value],
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<(Value, Value)> {
+        invoke_local_ability_with_invocation_meta(
+            &self.ladder,
+            json!({ "scope": scope, "top_k": SOURCE_CANDIDATE_LIMIT }),
+            None,
+            causal_parents,
+            None,
+            trace_id,
+            self.args.as_agent.as_deref(),
+        )
+        .with_context(|| format!("walk discover tier {scope:?}"))
+    }
+
+    fn record_source_diagnostic(&mut self, value: &Value) {
+        let Some(source) = value.get("source") else {
+            return;
+        };
+        let truncated = source
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !truncated {
+            return;
+        }
+        let scope = value
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let available = source
+            .get("available")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let limit = source
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(SOURCE_CANDIDATE_LIMIT as u64);
+        self.diagnostics.push(DiscoverDiagnostic {
+            scope,
+            code: "source_truncated",
+            message: format!(
+                "runtime returned {limit} of {available} source candidates before CLI ranking"
+            ),
+        });
+    }
+}
+
+fn receipt_parent_from_invocation_meta(meta: &Value) -> anyhow::Result<Value> {
+    let anchor = meta
+        .get("receipt")
+        .and_then(|receipt| receipt.get("anchor"))
+        .ok_or_else(|| anyhow::anyhow!("invocation metadata is missing receipt.anchor"))?;
+    let receipt_ura = anchor
+        .get("receipt_ura")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("invocation metadata receipt.anchor is missing receipt_ura")
+        })?;
+    let receipt_hash = anchor
+        .get("receipt_hash")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("invocation metadata receipt.anchor is missing receipt_hash")
+        })?;
+    Ok(json!({
+        "receipt_ura": receipt_ura,
+        "receipt_hash": receipt_hash,
+    }))
+}
+
+fn rank_and_deduplicate_candidates(mut candidates: Vec<Candidate>, limit: usize) -> Vec<Candidate> {
     // Highest score first; ties resolve by name, then URA, so output
     // is stable. One ability appears once: the URA is the identity.
     candidates.sort_by(|a, b| {
@@ -376,32 +606,28 @@ pub fn execute(args: &DiscoverArgs) -> anyhow::Result<DiscoverReport> {
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.ura.cmp(&b.ura))
     });
-    candidates.dedup_by(|a, b| a.ura == b.ura);
-    candidates.truncate(args.limit);
-
-    Ok(DiscoverReport {
-        query: args.intent.clone(),
-        tiers_searched,
-        federation,
-        invocation: Some(invocation_meta),
-        skipped_unparseable: skipped,
-        candidates,
-    })
+    let mut seen_uras = BTreeSet::new();
+    candidates.retain(|candidate| {
+        let identity = if candidate.ura.is_empty() {
+            format!("{}:{}", candidate.owner_ura, candidate.name)
+        } else {
+            candidate.ura.clone()
+        };
+        seen_uras.insert(identity)
+    });
+    candidates.truncate(limit);
+    candidates
 }
 
-/// Resolve the daemon's discover entry point from the agent registry.
+/// Resolve the daemon's discover entry point.
 ///
-/// The ladder is registered per agent (`<agent>.discover`,
-/// `discover_ability::register_for_agent`), so "whose ladder" is a
-/// question for the agent registry — `agent.list` — not for the
-/// ability catalogue. The CLI hardcodes no agent name: it takes the
-/// lexically first registered agent so the choice is deterministic.
-/// Any agent's ladder walks the same device registry; only the
-/// self-tier attribution differs, and the tiers merge in our output
-/// anyway. The dispatch key mirrors the registration site's
-/// `format!("{agent}.{ABILITY_VERB}")` — one shared verb constant,
-/// no second spelling.
-fn resolve_ladder_entry() -> anyhow::Result<String> {
+/// Default top-level discovery uses the daemon-owned aggregate discover
+/// entry. `--as-agent` intentionally opts into one concrete
+/// `<agent>.discover` self tier and is validated against `agent.list`.
+fn resolve_ladder_entry(as_agent: Option<&str>) -> anyhow::Result<String> {
+    let Some(requested_agent) = as_agent.map(str::trim).filter(|agent| !agent.is_empty()) else {
+        return Ok(crate::runtime::agents::discover_ability::DEVICE_DISCOVER_ABILITY.to_string());
+    };
     let value = invoke_local_ability("agent.list", json!({}))
         .context("resolve discover entry from the agent registry")?;
     let mut names: Vec<String> = value
@@ -415,42 +641,61 @@ fn resolve_ladder_entry() -> anyhow::Result<String> {
         })
         .unwrap_or_default();
     names.sort();
-    names
-        .into_iter()
-        .next()
-        .map(|agent| {
-            format!(
-                "{agent}.{}",
-                crate::runtime::agents::discover_ability::ABILITY_VERB
-            )
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no agents are registered on this daemon, so no \
-                 `<agent>.discover` ladder exists; add one with \
-                 `easynet agent add`, then retry"
-            )
-        })
+    if !names.iter().any(|name| name == requested_agent) {
+        anyhow::bail!(
+            "agent {requested_agent:?} is not registered on this daemon; choose one from \
+             `easynet agent list`"
+        );
+    }
+    Ok(format!(
+        "{requested_agent}.{}",
+        crate::runtime::agents::discover_ability::ABILITY_VERB
+    ))
 }
 
 /// Project every ladder row into a scored candidate; count rows whose
 /// URA does not parse instead of dropping them silently.
-fn project_rows(value: &Value, tokens: &[String], skipped: &mut usize) -> Vec<Candidate> {
+fn project_rows(
+    value: &Value,
+    tokens: &[String],
+    skipped: &mut usize,
+    self_projection: LocalSelfProjection,
+) -> Vec<Candidate> {
     value
         .get("candidates")
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
-                .filter_map(|row| match Candidate::from_ladder_row(row, tokens) {
-                    Ok(candidate) => candidate,
-                    Err(()) => {
-                        *skipped += 1;
-                        None
+                .filter_map(|row| {
+                    let row = normalize_self_projection(row, self_projection)?;
+                    match Candidate::from_ladder_row(&row, tokens) {
+                        Ok(candidate) => candidate,
+                        Err(()) => {
+                            *skipped += 1;
+                            None
+                        }
                     }
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn normalize_self_projection(row: &Value, projection: LocalSelfProjection) -> Option<Value> {
+    if projection == LocalSelfProjection::Preserve {
+        return Some(row.clone());
+    }
+    if row.get("scope_matched").and_then(Value::as_str) != Some("self") {
+        return Some(row.clone());
+    }
+    if row.get("visibility").and_then(Value::as_str) == Some("self") {
+        return None;
+    }
+    let mut normalized = row.clone();
+    if let Some(object) = normalized.as_object_mut() {
+        object.insert("scope_matched".to_string(), json!("device"));
+    }
+    Some(normalized)
 }
 
 fn tokenize(intent: &str) -> Vec<String> {
@@ -537,6 +782,21 @@ mod tests {
         assert_eq!(tokenize("read a file, now!"), vec!["read", "file", "now"]);
     }
 
+    #[test]
+    fn execute_rejects_zero_limit_before_daemon_invocation() {
+        let err = execute(&DiscoverArgs {
+            intent: "read file".to_string(),
+            limit: 0,
+            local_only: true,
+            as_agent: None,
+            tree: false,
+            format: OutputFormat::Table,
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("limit must be positive"), "{err}");
+    }
+
     // ── Ladder-row projection ──────────────────────────────────────────
 
     /// Fixture URAs come from the Axon builders re-exported through
@@ -548,6 +808,7 @@ mod tests {
             "ability": "chat",
             "description": "chat with the codex agent",
             "scope_matched": "self",
+            "callable": true,
         })
     }
 
@@ -558,6 +819,7 @@ mod tests {
             "ability": "fs.read",
             "description": "read a file from disk",
             "scope_matched": "device",
+            "callable": true,
         })
     }
 
@@ -569,7 +831,6 @@ mod tests {
             .expect("scores > 0");
         assert_eq!(c.owner_kind, "agent");
         assert_eq!(c.scope, "self");
-        assert!(c.trust_level.is_none(), "trust is W2; must be null today");
 
         let toks = vec!["read".to_string(), "file".to_string()];
         let c = Candidate::from_ladder_row(&device_row("acme"), &toks)
@@ -588,7 +849,12 @@ mod tests {
         assert!(Candidate::from_ladder_row(&row, &toks).is_err());
 
         let mut skipped = 0;
-        let out = project_rows(&json!({ "candidates": [row] }), &toks, &mut skipped);
+        let out = project_rows(
+            &json!({ "candidates": [row] }),
+            &toks,
+            &mut skipped,
+            LocalSelfProjection::Preserve,
+        );
         assert!(out.is_empty());
         assert_eq!(skipped, 1);
     }
@@ -601,8 +867,146 @@ mod tests {
             &json!({ "candidates": [device_row("acme")] }),
             &toks,
             &mut skipped,
+            LocalSelfProjection::Preserve,
         );
         assert!(out.is_empty());
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn unminted_identity_rows_are_not_counted_as_unparseable() {
+        let toks = vec!["weather".to_string()];
+        let mut skipped = 0;
+        let out = project_rows(
+            &json!({
+                "candidates": [{
+                    "qualified_name": "",
+                    "owner": "apprentice",
+                    "ability": "weather",
+                    "description": "weather lookup",
+                    "scope_matched": "device",
+                    "identity_state": "identity_not_minted",
+                    "callable": false,
+                    "diagnostic": "agent has no hosted URA"
+                }]
+            }),
+            &toks,
+            &mut skipped,
+            LocalSelfProjection::Preserve,
+        );
+        assert_eq!(skipped, 0);
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].callable);
+        assert_eq!(out[0].identity_state, "identity_not_minted");
+    }
+
+    #[test]
+    fn minted_rows_without_callable_are_fail_closed() {
+        let toks = vec!["chat".to_string()];
+        let mut row = agent_row("acme");
+        row.as_object_mut().expect("row object").remove("callable");
+
+        let c = Candidate::from_ladder_row(&row, &toks)
+            .unwrap()
+            .expect("scores > 0");
+
+        assert!(!c.callable, "missing callability must not fail open");
+        assert_eq!(
+            c.diagnostic.as_deref(),
+            Some("callable status missing from discovery row; treating as non-callable")
+        );
+    }
+
+    #[test]
+    fn source_truncation_is_reported_before_cli_ranking() {
+        let args = DiscoverArgs {
+            intent: "chat".to_string(),
+            limit: 5,
+            local_only: true,
+            as_agent: None,
+            tree: false,
+            format: OutputFormat::Json,
+        };
+        let mut service = DiscoverRuntimeService::new(&args);
+        service.record_source_diagnostic(&json!({
+            "scope": "device",
+            "source": {
+                "available": 12000,
+                "returned": SOURCE_CANDIDATE_LIMIT,
+                "limit": SOURCE_CANDIDATE_LIMIT,
+                "truncated": true,
+            }
+        }));
+
+        assert_eq!(service.diagnostics.len(), 1);
+        assert_eq!(service.diagnostics[0].code, "source_truncated");
+        assert!(service.diagnostics[0].message.contains("12000"));
+    }
+
+    #[test]
+    fn rank_and_deduplicate_removes_non_adjacent_duplicate_uras() {
+        fn candidate(score: u32, name: &str, ura: &str) -> Candidate {
+            Candidate {
+                score,
+                name: name.to_string(),
+                ura: ura.to_string(),
+                owner_kind: "agent",
+                scope: "device".to_string(),
+                description: String::new(),
+                callable: true,
+                identity_state: "minted".to_string(),
+                diagnostic: None,
+                owner_ura: "owner".to_string(),
+            }
+        }
+
+        let out = rank_and_deduplicate_candidates(
+            vec![
+                candidate(
+                    10,
+                    "alpha.chat",
+                    "easynet:///r/acme/user/u/agent/a/ability/chat",
+                ),
+                candidate(9, "beta.read", "easynet:///r/acme/device/d/ability/read"),
+                candidate(
+                    8,
+                    "gamma.chat",
+                    "easynet:///r/acme/user/u/agent/a/ability/chat",
+                ),
+            ],
+            10,
+        );
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].score, 10);
+        assert_eq!(out[0].name, "alpha.chat");
+        assert_eq!(out[1].name, "beta.read");
+    }
+
+    #[test]
+    fn device_aggregate_projection_does_not_invent_self_identity() {
+        let toks = vec!["chat".to_string()];
+        let mut public_self = agent_row("acme");
+        public_self["visibility"] = json!("public");
+        let private_self = json!({
+            "qualified_name": crate::ura::ability_ura("acme", "user-1", "codex", "private_chat"),
+            "owner": "codex",
+            "ability": "private_chat",
+            "description": "chat privately",
+            "scope_matched": "self",
+            "visibility": "self",
+        });
+
+        let mut skipped = 0;
+        let out = project_rows(
+            &json!({ "candidates": [public_self, private_self] }),
+            &toks,
+            &mut skipped,
+            LocalSelfProjection::DeviceAggregate,
+        );
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].scope, "device");
         assert_eq!(skipped, 0);
     }
 
@@ -621,6 +1025,33 @@ mod tests {
         assert!(FederationStatus::from_envelope(&ok).is_none());
     }
 
+    #[test]
+    fn receipt_parent_projection_requires_receipt_anchor() {
+        let backed = json!({
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/invocations/req-1",
+                    "receipt_hash": "abc123",
+                }
+            },
+            "metadata_state": "receipt_backed",
+        });
+        assert_eq!(
+            receipt_parent_from_invocation_meta(&backed).expect("receipt parent"),
+            json!({
+                "receipt_ura": "easynet:///r/acme/resource/invocations/req-1",
+                "receipt_hash": "abc123",
+            })
+        );
+
+        let missing_anchor = json!({ "metadata_state": "missing_receipt_anchor" });
+        let err = receipt_parent_from_invocation_meta(&missing_anchor).unwrap_err();
+        assert!(
+            err.to_string().contains("receipt.anchor"),
+            "missing receipt metadata must fail before a child invocation is built: {err}"
+        );
+    }
+
     // ── JSON contract freeze (spec §0.2-9: asserted names never change) ──
 
     #[test]
@@ -633,6 +1064,7 @@ mod tests {
             &json!({ "candidates": [agent_row("acme")] }),
             &toks,
             &mut skipped,
+            LocalSelfProjection::Preserve,
         );
         let report = DiscoverReport {
             query: "chat".into(),
@@ -641,7 +1073,8 @@ mod tests {
                 status: "federation_not_joined".into(),
                 message: "no credentials".into(),
             }),
-            invocation: None,
+            invocations: Vec::new(),
+            diagnostics: Vec::new(),
             skipped_unparseable: 0,
             candidates,
         };
@@ -668,13 +1101,10 @@ mod tests {
                 "ura",
                 "owner_kind",
                 "scope",
-                "trust_level",
-                "description"
+                "description",
+                "callable",
+                "identity_state",
             ])
-        );
-        assert!(
-            v["candidates"][0]["trust_level"].is_null(),
-            "trust column is present-and-null until W2 wires identity.get_trust"
         );
         assert_eq!(v["federation"]["status"], "federation_not_joined");
     }
@@ -689,12 +1119,14 @@ mod tests {
             &json!({ "candidates": [agent_row("acme"), device_row("acme")] }),
             &toks,
             &mut skipped,
+            LocalSelfProjection::Preserve,
         );
         let report = DiscoverReport {
             query: "read chat".into(),
             tiers_searched: vec!["self", "device"],
             federation: None,
-            invocation: None,
+            invocations: Vec::new(),
+            diagnostics: Vec::new(),
             skipped_unparseable: 0,
             candidates,
         };

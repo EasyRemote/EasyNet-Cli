@@ -17,6 +17,7 @@
 //   deploy <path> --node <id>   Publish a new ability version              (-> cli::deploy)
 //   uninstall <ability-ura>     Remove a deployed ability                  (NEW)
 //   invoke <ability-ura>       Call a public ability by canonical URA      (-> cli::invoke)
+//   stream <ability-ura>       Call a server-stream ability locally        (-> cli::ability_stream)
 //          [--node <id>]       --node pins to a specific remote device
 //   exec <node> -- <cmd>        One-shot remote shell (ad-hoc ability)     (-> cli::exec)
 //   teach <agent.name> --to U   Confer learnability to ONE agent           (-> cli::teach)
@@ -63,7 +64,9 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::Value;
 
-use crate::facade::cli::{abilities, ability_scaffold, deploy, discover, exec, invoke, teach};
+use crate::facade::cli::{
+    abilities, ability_scaffold, ability_stream, deploy, discover, exec, invoke, teach,
+};
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
 
@@ -95,6 +98,8 @@ pub enum AbilityAction {
     Uninstall(UninstallArgs),
     /// Invoke a public ability by canonical Ability URA.
     Invoke(invoke::InvokeArgs),
+    /// Invoke a public server-stream ability by canonical Ability URA.
+    Stream(ability_stream::StreamArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
     /// Make an ability learnable by ONE agent (owner-initiated; GET route B).
@@ -110,11 +115,9 @@ pub struct ShowArgs {
     /// Canonical Ability URA (e.g.
     /// `easynet:///r/localhost/ability/alice.claude.weather`).
     pub ability_ura: String,
-    /// ⚠ Reserved for federation-tier resolution. Today this CLI
-    /// pulls metadata from the local daemon's catalogue (post
-    /// AXON-RFC-001 P1.5 there is no remote 'list_mcp_tools'
-    /// surface). Passing '--node' returns a precise error rather
-    /// than silently auto-resolving locally.
+    /// Target node id or canonical device URA. Omit, or pass `local`,
+    /// to inspect this daemon; any other value is resolved through the
+    /// federation forward-invoke catalogue path.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
     /// Output format. 'table' emits the human-readable contract view;
@@ -128,12 +131,13 @@ pub struct ShowArgs {
 pub struct UninstallArgs {
     /// Canonical Ability URA to uninstall.
     pub ability_ura: String,
-    /// Reserved for federation-tier uninstall. See '--node' on
-    /// 'ability show'.
+    /// Target node id. `local` or this device id uninstall locally;
+    /// remote uninstall keeps this CLI shape but currently returns the
+    /// daemon's typed `federation_not_wired` error.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
-    /// Install id from the deploy receipt. Reserved for the
-    /// federation-tier uninstall surface; not consumed today.
+    /// Install id from the deploy receipt. Narrows uninstall to one
+    /// deployed bundle when multiple rows share the same ability URA.
     #[arg(long, value_name = "INSTALL_ID")]
     pub install_id: Option<String>,
     /// Skip the interactive confirmation.
@@ -151,6 +155,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::Deploy(a) => deploy::run(a),
         AbilityAction::Uninstall(a) => run_uninstall(a),
         AbilityAction::Invoke(a) => invoke::run(a),
+        AbilityAction::Stream(a) => ability_stream::run(a),
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
         AbilityAction::Learn(a) => teach::run_learn(a),
@@ -223,7 +228,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let state = entry
         .get("state")
         .and_then(Value::as_str)
-        .unwrap_or("ACTIVE");
+        .unwrap_or("UNKNOWN");
     let owner = entry
         .get("owner_ura")
         .and_then(Value::as_str)
@@ -274,10 +279,8 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     ensure_ability_ura(&args.ability_ura)?;
     if !args.yes {
-        let prompt = format!(
-            "Uninstall ability '{}' from this device set?",
-            args.ability_ura
-        );
+        let target = args.node.as_deref().unwrap_or("local");
+        let prompt = format!("Uninstall ability '{}' from {target}?", args.ability_ura);
         if !output::confirm(&prompt)? {
             output::info("aborted");
             return Ok(());
@@ -320,14 +323,13 @@ fn ensure_ability_ura(value: &str) -> anyhow::Result<()> {
 fn invoke_remote_list_abilities(node: &str) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
+    let target_call = crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
         &target_ura,
         "meta.list_abilities",
     )?;
-    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-        ability_ura.as_str(),
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target(
+        &target_call,
         serde_json::json!({}),
-        &target_ura,
         caller_ura.as_deref(),
     )
     .with_context(|| format!("forward meta.list_abilities to target={target_ura}"))

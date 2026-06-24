@@ -45,17 +45,20 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
-use crate::persistence::resources::{self, lookup_by_ura, ResourceEntry, ResourceType};
+use crate::persistence::resources::{ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
-use crate::runtime::agents::media::resource_subject;
-use crate::runtime::agents::media_abilities::{ABILITY_MIC_SUBSCRIBE, REASON_SUBJECT_IN_ARGS};
+use crate::runtime::agents::media::resource_subject::{
+    self, resolve_required_resource_subject, ResourceSubjectSpec,
+};
+use crate::runtime::agents::media_abilities::ABILITY_MIC_SUBSCRIBE;
 
-pub const REASON_SUBJECT_REQUIRED: &str = "subject_required";
-pub const REASON_RESOURCE_NOT_FOUND: &str = "resource_not_found";
+pub const REASON_SUBJECT_REQUIRED: &str = resource_subject::REASON_SUBJECT_REQUIRED;
+pub const REASON_SUBJECT_IN_ARGS: &str = resource_subject::REASON_SUBJECT_IN_ARGS;
+pub const REASON_RESOURCE_NOT_FOUND: &str = resource_subject::REASON_RESOURCE_NOT_FOUND;
 pub const REASON_RESOURCE_TABLE_UNAVAILABLE: &str =
     resource_subject::REASON_RESOURCE_TABLE_UNAVAILABLE;
-pub const REASON_RESOURCE_TYPE_MISMATCH: &str = "resource_type_mismatch";
+pub const REASON_RESOURCE_TYPE_MISMATCH: &str = resource_subject::REASON_RESOURCE_TYPE_MISMATCH;
 pub const REASON_RESOURCE_UNAVAILABLE: &str = "resource_unavailable";
 
 /// Broadcast channel depth. 256 frames at ~20ms per frame ≈ 5s
@@ -322,44 +325,20 @@ fn handler(
     env: EnvelopeContext,
     args: Value,
 ) -> anyhow::Result<StreamSource> {
-    if let Value::Object(map) = &args {
-        if map.contains_key("subject") {
-            anyhow::bail!(
-                "{ABILITY_MIC_SUBSCRIBE}: `subject` MUST come from the \
-                 invocation envelope, not from args (INV-SUBJECT-ENVELOPE; \
-                 reason={REASON_SUBJECT_IN_ARGS})"
-            );
-        }
-    }
-    let subject = env.subject.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "{ABILITY_MIC_SUBSCRIBE}: subject required (resource_ura of a \
-             mic); reason={REASON_SUBJECT_REQUIRED}"
-        )
-    })?;
-    let file = resources::load().map_err(|err| {
-        anyhow::anyhow!(
-            "{ABILITY_MIC_SUBSCRIBE}: local resources table could not be loaded; \
-             reason={REASON_RESOURCE_TABLE_UNAVAILABLE}; source={err}"
-        )
-    })?;
-    let entry = lookup_by_ura(&file, subject).ok_or_else(|| {
-        anyhow::anyhow!(
-            "{ABILITY_MIC_SUBSCRIBE}: subject {subject} not found in local \
-             resources table; reason={REASON_RESOURCE_NOT_FOUND}"
-        )
-    })?;
-    if entry.kind != ResourceType::Mic {
-        anyhow::bail!(
-            "{ABILITY_MIC_SUBSCRIBE}: subject {subject} resolves to a {}, \
-             not a mic; reason={REASON_RESOURCE_TYPE_MISMATCH}",
-            entry.kind.as_str()
-        );
-    }
-    let rx = backend.open(entry)?;
+    let entry = resolve_required_resource_subject(
+        &env,
+        &args,
+        ResourceSubjectSpec {
+            ability: ABILITY_MIC_SUBSCRIBE,
+            required_subject: "a mic",
+            allowed_kinds: &[ResourceType::Mic],
+            allowed_label: "mic",
+        },
+    )?;
+    let rx = backend.open(&entry)?;
     Ok(StreamSource::Live(tee_recording(
         rx,
-        env.callee.unwrap_or_default(),
+        env.callee().to_string(),
     )))
 }
 
@@ -486,7 +465,7 @@ fn wav_from_s16le(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::persistence::resources::{
-        upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
+        self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
@@ -554,10 +533,18 @@ mod tests {
     }
 
     #[test]
-    fn handler_rejects_missing_subject() {
+    fn handler_rejects_non_resource_subject() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let backend: Arc<dyn MicBackend> = Arc::new(SyntheticMicBackend);
-        let err = handler(&backend, EnvelopeContext::default(), json!({})).unwrap_err();
+        let err = handler(
+            &backend,
+            EnvelopeContext::for_test(
+                "easynet:///r/acme/user/alice",
+                "easynet:///r/acme/user/alice",
+            ),
+            json!({}),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_REQUIRED));
     }
 

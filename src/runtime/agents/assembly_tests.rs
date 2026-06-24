@@ -126,11 +126,14 @@ fn build_registry_is_non_empty_and_includes_ping() {
 
 #[test]
 fn published_ability_names_matches_live_registry() {
-    // The label-publishing helper and the dispatch registry
-    // must agree byte-for-byte. A regression that returned a
-    // hard-coded list would let the publisher advertise
-    // abilities the dispatcher cannot route.
-    let live = build_registry().list_abilities();
+    // The label-publishing helper and the publishable subset of the dispatch
+    // registry must agree byte-for-byte. Local-only front doors may still live
+    // in the registry for CLI/runtime calls, but must not be advertised.
+    let live: Vec<String> = build_registry()
+        .list_abilities()
+        .into_iter()
+        .filter(|name| is_publishable_catalog_name(name))
+        .collect();
     let advertised = published_ability_names();
     assert_eq!(live, advertised);
 }

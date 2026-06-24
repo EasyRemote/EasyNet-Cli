@@ -13,9 +13,9 @@
 //
 // - Configuration parsing — that lives in `persistence::daemon_config`
 //   and is loaded in the daemon binary's `main` and threaded down
-// - Admission gate semantics — those live in `easynet-axon`'s
-//   `domain::admission` helpers; this module *invokes* them at the
-//   start of every RPC method but never re-implements them
+// - Transport policy gate semantics — this module owns daemon/product
+//   routing checks, while descriptor-bound Axon runtime admission
+//   remains inside `easynet-axon::invocation::LocalRuntime`
 // - Ability dispatch — `runtime::ability_dispatch` continues to own
 //   the AxonAbilityCatalog and the registered handler set; this
 //   module routes inbound RPC calls into that runtime surface
@@ -30,7 +30,7 @@
 //    `tonic` trait impl
 // 2. The boundary error mapping from internal typed errors to
 //    `tonic::Status`
-// 3. The construction recipe that wires admission gate, presence
+// 3. The construction recipe that wires transport policy, presence
 //    registry, Axon LocalRuntime, plugin runtime manager, invocation
 //    ledger, federation dialers, and local session dispatch together
 //    at daemon boot
@@ -73,16 +73,6 @@ pub mod federated_key_resolver;
 /// T4.1 pre-move b — it consumes this module's ProtoEnvelope).
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_invoke;
-/// Feature-agnostic shim over [`federation_invoke`]. Callers in the
-/// hot path (ability discovery, federation surfaces) depend on this
-/// module instead of `federation_invoke` directly so they remain
-/// compilable under default features (axon-pb off). With axon-pb on,
-/// the shim re-exports the real implementation; with axon-pb off, it
-/// returns empty/typed-error responses so the caller's logic stays
-/// uniform and degrades to a local-only view. One shim, one place
-/// that knows the feature exists — the alternative scatters a
-/// transport-layer flag through product-layer branches.
-pub(crate) mod federation_invoke_shim;
 pub mod federation_wrappers;
 pub mod hub_resolver;
 pub mod invocation_wire;

@@ -61,7 +61,6 @@ pub struct BootstrapPlan {
     /// Whether each hosted profile should have a URA minted +
     /// advertised. Mirrors `[profiles]` config booleans.
     pub consent: bool,
-    pub policy: bool,
     pub mcp: bool,
     /// One entry per LLM sub-agent the daemon supervises.
     /// `(name, agent_type_display)` — `agent_type_display` is
@@ -105,7 +104,6 @@ pub fn build_plan_from_registry(
         user_id: username.to_string(),
         host_device_ura: crate::ura::device_ura(tenant_id, node_id),
         consent: true,
-        policy: false,
         mcp: false,
         llm_sub_agents,
     })
@@ -155,16 +153,15 @@ pub trait UraMinter {
 ///     "not in PresenceRegistry; either offline or never connected
 ///     to this hub" (RFC-006-C v0.1 §INV-2).
 ///
-///   * **System-managed profiles** (`consent`, `policy`, `mcp`):
+///   * **System-managed profiles** (`consent`, `mcp`):
 ///     the name is auto-generated and generic (`default`,
 ///     `fs-bridge`). The bare name would collide across profile
-///     classes (a hypothetical `consent/default` and
-///     `policy/default` would map to `agent/<user>.default`),
-///     which violates URA uniqueness. Keep the `<profile>-<name>`
+///     classes (for example `consent/default` and `mcp/default`
+///     would map to `agent/<user>.default`), which violates URA
+///     uniqueness. Keep the `<profile>-<name>`
 ///     prefix so each profile carves its own agent-id space:
 ///
 ///       consent / default      → `consent-default`
-///       policy  / default      → `policy-default`
 ///       mcp     / fs-bridge    → `mcp-fs-bridge`
 ///
 /// Why encode the name (vs. the prior `a-<uuid>` style): the
@@ -260,9 +257,6 @@ pub fn bootstrap_local_agents<M: UraMinter>(
     if plan.consent {
         process("consent", "default", &mut outcomes);
     }
-    if plan.policy {
-        process("policy", "default", &mut outcomes);
-    }
     if plan.mcp {
         process("mcp", "default", &mut outcomes);
     }
@@ -344,13 +338,12 @@ mod tests {
         }
     }
 
-    fn plan_with(consent: bool, policy: bool, mcp: bool, llms: &[(&str, &str)]) -> BootstrapPlan {
+    fn plan_with(consent: bool, mcp: bool, llms: &[(&str, &str)]) -> BootstrapPlan {
         BootstrapPlan {
             realm: "acme".into(),
             user_id: "u1".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent,
-            policy,
             mcp,
             llm_sub_agents: llms
                 .iter()
@@ -365,12 +358,12 @@ mod tests {
 
     #[test]
     fn bootstrap_mints_ura_for_each_enabled_profile() {
-        let plan = plan_with(true, true, true, &[("claude", "claude-code")]);
+        let plan = plan_with(true, true, &[("claude", "claude-code")]);
         let mut file = LocalAgentsFile::default();
         let minter = CountingMinter::new();
         let outcomes = bootstrap_local_agents(&plan, &mut file, &minter);
 
-        assert_eq!(outcomes.len(), 4); // consent + policy + mcp + 1 llm
+        assert_eq!(outcomes.len(), 3); // consent + mcp + 1 llm
         for o in &outcomes {
             assert!(
                 !o.reused,
@@ -385,12 +378,12 @@ mod tests {
         }
         // The daemon's own self-URA uses the device segment.
         assert_eq!(file.host_device_agent_ura, "easynet:///r/acme/device/01DEV");
-        assert_eq!(file.hosted_agents.len(), 4);
+        assert_eq!(file.hosted_agents.len(), 3);
     }
 
     #[test]
     fn second_bootstrap_reuses_existing_uras() {
-        let plan = plan_with(true, false, false, &[]);
+        let plan = plan_with(true, false, &[]);
         let mut file = LocalAgentsFile::default();
         let minter = CountingMinter::new();
         let first = bootstrap_local_agents(&plan, &mut file, &minter);
@@ -407,18 +400,18 @@ mod tests {
 
     #[test]
     fn disabling_a_profile_leaves_existing_ura_intact_in_file() {
-        // Mint consent + policy on first boot. On second boot the
-        // operator turned policy=false; we expect the policy row to
-        // remain in the file (we don't garbage-collect on disable —
-        // operators may toggle profiles temporarily, and we don't
-        // want to mint fresh URAs on every flip).
+        // Mint consent + mcp on first boot. On second boot the operator
+        // turned mcp=false; we expect the mcp row to remain in the file
+        // (we don't garbage-collect on disable — operators may toggle
+        // profiles temporarily, and we don't want to mint fresh URAs on
+        // every flip).
         let mut file = LocalAgentsFile::default();
         let minter = CountingMinter::new();
-        let _ = bootstrap_local_agents(&plan_with(true, true, false, &[]), &mut file, &minter);
+        let _ = bootstrap_local_agents(&plan_with(true, true, &[]), &mut file, &minter);
         assert_eq!(file.hosted_agents.len(), 2);
-        let _ = bootstrap_local_agents(&plan_with(true, false, false, &[]), &mut file, &minter);
-        // policy row still present
-        assert!(file.hosted_agents.iter().any(|e| e.profile == "policy"));
+        let _ = bootstrap_local_agents(&plan_with(true, false, &[]), &mut file, &minter);
+        // mcp row still present
+        assert!(file.hosted_agents.iter().any(|e| e.profile == "mcp"));
     }
 
     #[test]
@@ -426,7 +419,7 @@ mod tests {
         // Without a realm there is no canonical hosted-agent URA.
         // Clean RFC-005 bootstrap skips minting instead of writing
         // fake `<unjoined>` identities and repairing them later.
-        let mut plan = plan_with(true, false, false, &[]);
+        let mut plan = plan_with(true, false, &[]);
         plan.realm = String::new();
         plan.host_device_ura = String::new();
         let mut file = LocalAgentsFile::default();
@@ -455,13 +448,12 @@ mod tests {
         // (`default`, `fs-bridge`); the prefix carves a per-class
         // namespace so they never collide.
         assert_eq!(m.mint_id("consent", "default"), "consent-default");
-        assert_eq!(m.mint_id("policy", "default"), "policy-default");
         assert_eq!(m.mint_id("mcp", "fs-bridge"), "mcp-fs-bridge");
     }
 
     #[test]
     fn agent_type_for_returns_display_string() {
-        let plan = plan_with(false, false, false, &[("claude", "claude-code")]);
+        let plan = plan_with(false, false, &[("claude", "claude-code")]);
         assert_eq!(
             agent_type_for(&plan, "claude").as_deref(),
             Some("claude-code")
@@ -471,7 +463,7 @@ mod tests {
 
     #[test]
     fn outcomes_for_profile_filters_correctly() {
-        let plan = plan_with(true, true, false, &[("claude", "claude-code")]);
+        let plan = plan_with(true, false, &[("claude", "claude-code")]);
         let mut file = LocalAgentsFile::default();
         let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         assert_eq!(outcomes_for_profile(&outcomes, "consent").len(), 1);
@@ -483,7 +475,7 @@ mod tests {
     fn hosted_uras_returns_every_row_after_bootstrap() {
         let mut file = LocalAgentsFile::default();
         let _ = bootstrap_local_agents(
-            &plan_with(true, false, true, &[]),
+            &plan_with(true, true, &[]),
             &mut file,
             &CountingMinter::new(),
         );
@@ -498,7 +490,7 @@ mod tests {
     fn host_device_ura_persists_after_post_join_save() {
         // Pre-join: no canonical realm, so no hosted URA is minted.
         let mut file = LocalAgentsFile::default();
-        let mut plan = plan_with(true, false, false, &[]);
+        let mut plan = plan_with(true, false, &[]);
         plan.realm = String::new();
         plan.host_device_ura = String::new();
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
@@ -527,7 +519,7 @@ mod tests {
                 first_seen_at: String::new(),
             }],
         };
-        let plan = plan_with(false, false, false, &[("claude", "claude-code")]);
+        let plan = plan_with(false, false, &[("claude", "claude-code")]);
         let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
 
         assert_eq!(outcomes.len(), 1);
@@ -553,7 +545,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let plan = plan_with(true, false, false, &[]);
+        let plan = plan_with(true, false, &[]);
         let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         assert_eq!(outcomes.len(), 1);
         assert!(!outcomes[0].reused, "malformed row must NOT be reused");
@@ -586,7 +578,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let plan = plan_with(true, false, false, &[]);
+        let plan = plan_with(true, false, &[]);
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         let names: Vec<_> = file
             .hosted_agents
@@ -618,7 +610,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let mut plan = plan_with(false, false, false, &[]);
+        let mut plan = plan_with(false, false, &[]);
         plan.realm = String::new();
         plan.user_id = String::new();
         plan.host_device_ura = String::new();
@@ -638,7 +630,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let plan = plan_with(false, false, false, &[("claude", "claude-code")]);
+        let plan = plan_with(false, false, &[("claude", "claude-code")]);
         let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         assert_eq!(outcomes.len(), 1);
         assert!(!outcomes[0].reused);

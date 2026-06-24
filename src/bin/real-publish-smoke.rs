@@ -135,7 +135,6 @@ fn main() -> anyhow::Result<()> {
         user_id: "smoke-user".to_string(),
         host_device_ura: node_id.clone(),
         consent: true,
-        policy: false,
         mcp: false,
         llm_sub_agents,
     };

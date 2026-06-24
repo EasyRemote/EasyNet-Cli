@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "meta.acquire"
+description = "Acquire a previously taught ability into a learner agent workspace, minting a separate learner-owned copy under the learner's authority projection."
+
+[input_schema]
+type = "object"
+required = ["ability_ura", "learner"]
+additionalProperties = false
+
+[input_schema.properties.ability_ura]
+type = "string"
+description = "Canonical ability URA previously granted to the learner."
+
+[input_schema.properties.learner]
+type = "string"
+description = "Local learner agent name whose workspace receives the learned copy."

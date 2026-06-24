@@ -4,8 +4,9 @@ use std::time::Duration;
 use easynet_axon::pb::axon::v1::BidiControl;
 use tonic::transport::Channel;
 
-use super::prelude::invoke_prelude_unary;
+use super::prelude::{invoke_prelude_unary, signed_prelude_request};
 use super::tasks::AbortOnDrop;
+use super::SessionSigningSeed;
 use super::{SessionUpSender, SESSION_UP_HEARTBEAT_INTERVAL};
 use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
 
@@ -63,6 +64,7 @@ const MAX_HEARTBEAT_LEASE_REFRESH_OWNERS: usize = 64;
 pub(super) fn spawn_federation_heartbeat(
     channel: Channel,
     caller_ura: String,
+    signing_seed: Option<SessionSigningSeed>,
     hub_published_abilities: Arc<HubPublishedAbilityStore>,
 ) -> AbortOnDrop {
     AbortOnDrop(tokio::spawn(async move {
@@ -74,6 +76,7 @@ pub(super) fn spawn_federation_heartbeat(
             match send_federation_heartbeat(
                 &mut heartbeat_client,
                 &caller_ura,
+                signing_seed,
                 &hub_published_abilities,
             )
             .await
@@ -119,6 +122,7 @@ pub(super) fn spawn_federation_heartbeat(
 async fn send_federation_heartbeat(
     client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     let mut refresh_owner_uras =
@@ -130,9 +134,13 @@ async fn send_federation_heartbeat(
     });
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.heartbeat serialize: {e}")))?;
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.heartbeat", arguments))
-        .map_err(|e| tonic::Status::invalid_argument(format!("federation.heartbeat: {e}")))?;
+    let request = signed_prelude_request(
+        caller_ura,
+        caller_ura,
+        "federation.heartbeat",
+        arguments,
+        signing_seed,
+    )?;
     let response = invoke_prelude_unary(client, request, "federation.heartbeat").await?;
     let body_bytes = response.result;
     if !body_bytes.is_empty() {

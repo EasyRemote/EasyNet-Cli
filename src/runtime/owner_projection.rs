@@ -18,6 +18,7 @@ use crate::persistence::owner_projections::{
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 
 pub(crate) const OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT: usize = 64;
+#[cfg(feature = "axon-pb")]
 const OWNER_PROJECTION_LEASE_TTL_MS: i64 = 60_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -247,6 +248,7 @@ fn heartbeat_refresh_owner_uras_from_file(file: &OwnerProjectionCursorFile) -> V
 /// Lease expiry `OWNER_PROJECTION_LEASE_TTL_MS` after `now_ms`. Shared by
 /// projection publication and `federation.heartbeat` lease refresh so both
 /// renew to the same TTL and the lease window cannot drift between them.
+#[cfg(feature = "axon-pb")]
 pub(crate) fn lease_expiry_from_now(now_ms: i64) -> i64 {
     now_ms.saturating_add(OWNER_PROJECTION_LEASE_TTL_MS)
 }
@@ -275,14 +277,8 @@ pub(crate) fn summary_from_descriptor(
     })?;
     let public_name = descriptor.public_name();
     let (namespace, local_name) = split_public_name(&public_name);
-    let descriptor_revision = hash_json_prefixed(
-        &serde_json::to_value(descriptor)
-            .map_err(|e| format!("serialize descriptor {} failed: {e}", descriptor.name))?,
-    );
-    let schema_hash = Some(hash_json_prefixed(
-        &serde_json::to_value(&descriptor.schema_summary)
-            .map_err(|e| format!("serialize schema summary {} failed: {e}", descriptor.name))?,
-    ));
+    let descriptor_revision = descriptor.descriptor_hash_prefixed();
+    let schema_hash = Some(descriptor.schema_hash_prefixed());
     let mut tags = vec![format!("class:{}", descriptor.ability_class().as_str())];
     if !descriptor.source.trim().is_empty() {
         tags.push(format!("source:{}", bounded_tag_value(&descriptor.source)));
@@ -587,10 +583,6 @@ fn resource_owner_agent_parts(owner: &str) -> Option<(String, String)> {
         return None;
     }
     Some((user_id.to_string(), agent_id.to_string()))
-}
-
-fn hash_json_prefixed(value: &Value) -> String {
-    format!("sha256:{}", hash_value_hex(value))
 }
 
 fn hash_value_hex(value: &Value) -> String {

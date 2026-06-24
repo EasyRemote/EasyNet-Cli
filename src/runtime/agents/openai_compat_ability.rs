@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler};
 use crate::runtime::agents::api_key_ability;
+use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::support::process_singleton::ProcessSingleton;
 
 /// Process-wide handle to the live ability registry. The inner
@@ -60,6 +61,58 @@ struct OpenAICompatIdentity {
     realm: String,
 }
 
+/// Stable OpenAI-compat execution context.
+///
+/// Production installs this context process-wide at daemon boot via
+/// `set_dispatch_handle`/`set_identity`; tests that exercise the HTTP
+/// boundary can carry an explicit copy in the request extensions so
+/// unrelated in-process registry construction cannot swap the backing
+/// handle mid-request.
+#[derive(Debug, Clone)]
+pub(crate) struct OpenAICompatRuntime {
+    dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<OpenAICompatIdentity>,
+}
+
+impl OpenAICompatRuntime {
+    #[cfg(test)]
+    pub(crate) fn from_pages_identity(
+        dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+        identity: crate::runtime::agents::PagesIdentity,
+    ) -> Self {
+        Self {
+            dispatch_handle,
+            identity: Some(OpenAICompatIdentity::from_pages_identity(identity)),
+        }
+    }
+
+    fn current() -> Option<Self> {
+        Some(Self {
+            dispatch_handle: current_dispatch_handle()?,
+            identity: current_identity(),
+        })
+    }
+
+    pub(crate) fn handle_chat_completions(&self, args: Value) -> anyhow::Result<Value> {
+        handle_chat_completions_with_handle(&self.dispatch_handle, args)
+    }
+
+    pub(crate) fn handle_list_models(&self, args: Value) -> anyhow::Result<Value> {
+        handle_list_models_with_context(&self.dispatch_handle, self.identity.as_ref(), args)
+    }
+}
+
+impl OpenAICompatIdentity {
+    fn from_pages_identity(identity: crate::runtime::agents::PagesIdentity) -> Self {
+        Self {
+            user: identity.user,
+            realm: identity
+                .realm
+                .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string()),
+        }
+    }
+}
+
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
     DISPATCH_HANDLE.set(handle);
 }
@@ -69,12 +122,9 @@ fn current_dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
 }
 
 pub(crate) fn set_identity(identity: crate::runtime::agents::PagesIdentity) {
-    OPENAI_IDENTITY.set(Arc::new(OpenAICompatIdentity {
-        user: identity.user,
-        realm: identity
-            .realm
-            .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string()),
-    }));
+    OPENAI_IDENTITY.set(Arc::new(OpenAICompatIdentity::from_pages_identity(
+        identity,
+    )));
 }
 
 fn current_identity() -> Option<OpenAICompatIdentity> {
@@ -163,12 +213,18 @@ fn flatten_messages(messages: &[Value]) -> (String, Option<String>) {
     (prompt, system)
 }
 
-/// Resolve an OpenAI model id to the local dispatch key for an
-/// agent-owned chat ability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedOpenAIModelAbility {
+    local_dispatch_key: String,
+    owner_ura: String,
+}
+
+/// Resolve an OpenAI model id to the local dispatch key and owner URA
+/// for an agent-owned chat ability.
 ///
 /// Required shape: canonical ability URA
 ///   `easynet:///r/<realm>/ability/<user>.<agent>.chat`
-fn resolve_model_to_ability(model: &str) -> anyhow::Result<String> {
+fn resolve_model_to_ability_and_owner(model: &str) -> anyhow::Result<ResolvedOpenAIModelAbility> {
     let parsed = crate::ura::parse_ura(model)
         .map_err(|e| anyhow::anyhow!("model must be a valid canonical Ability URA: {e}"))?;
     if parsed.kind != crate::ura::URAKind::Ability {
@@ -184,7 +240,16 @@ fn resolve_model_to_ability(model: &str) -> anyhow::Result<String> {
         anyhow::bail!("model must point to the canonical agent chat Ability URA");
     }
     let owner_ura = crate::ura::agent_ura(&parsed.realm, &user_id, &agent_id);
-    Ok(crate::ura::local_dispatch_ability_key(&owner_ura, "chat"))
+    Ok(ResolvedOpenAIModelAbility {
+        local_dispatch_key: crate::ura::local_dispatch_ability_key(&owner_ura, "chat"),
+        owner_ura,
+    })
+}
+
+/// Resolve an OpenAI model id to the local dispatch key for an
+/// agent-owned chat ability.
+fn resolve_model_to_ability(model: &str) -> anyhow::Result<String> {
+    resolve_model_to_ability_and_owner(model).map(|resolved| resolved.local_dispatch_key)
 }
 
 /// Validate the public OpenAI-compatible `model` identifier.
@@ -215,6 +280,15 @@ pub(crate) fn validate_chat_model_id(model: &str) -> anyhow::Result<()> {
 ///     "usage": {"prompt_tokens":..., "completion_tokens":..., "total_tokens":...}
 ///   }
 pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
+    let runtime =
+        OpenAICompatRuntime::current().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
+    runtime.handle_chat_completions(args)
+}
+
+fn handle_chat_completions_with_handle(
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    args: Value,
+) -> anyhow::Result<Value> {
     // Unwrap optional auth + request envelope.
     let (request, auth_token) = if args.get("request").is_some() {
         let req = args.get("request").cloned().unwrap_or(Value::Null);
@@ -258,19 +332,18 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     // resolution. RFC-006-C extension: agent inputs may carry
     // EasyNet resource references; the adapter is the single
     // place that turns them into bytes.
-    deref_easynet_uras_in_messages(&mut messages);
+    deref_easynet_uras_in_messages(&mut messages, dispatch_handle);
 
-    let target_ability = resolve_model_to_ability(&model_str)?;
-    if !is_chat_base(&target_ability) {
-        anyhow::bail!("model '{model_str}' resolves to '{target_ability}' which is not chat-base");
+    let target = resolve_model_to_ability_and_owner(&model_str)?;
+    if !is_chat_base(&target.local_dispatch_key) {
+        anyhow::bail!(
+            "model '{model_str}' resolves to '{}' which is not chat-base",
+            target.local_dispatch_key
+        );
     }
 
     // INV-1: forward via standard registry, no own dispatcher.
-    let handle =
-        current_dispatch_handle().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
-    let registry = handle
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("dispatch handle empty"))?;
+    let registry = registry_from_handle(dispatch_handle, "dispatch")?;
 
     let (prompt, system) = flatten_messages(&messages);
     let mut ability_args = json!({ "prompt": prompt });
@@ -278,9 +351,22 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
         ability_args["system"] = json!(s);
     }
 
+    let invocation_target = InvocationTarget {
+        scope: TargetScope::Local,
+        ability: target.local_dispatch_key.clone(),
+        normalized_args: ability_args,
+        call_mode: CallMode::Rpc,
+        subject: Some(target.owner_ura.clone()),
+        causal_context: None,
+    };
     let dispatch_result = registry
-        .invoke_rpc_json(&target_ability, ability_args)
-        .map_err(|e| anyhow::anyhow!("chat-base ability `{target_ability}` failed: {e}"))?;
+        .invoke_rpc_target_json(invocation_target)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "chat-base ability `{}` failed: {e}",
+                target.local_dispatch_key
+            )
+        })?;
 
     // Extract reply text from agent response. Different chat
     // abilities return slightly different shapes; v0.1 supports:
@@ -430,18 +516,24 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
 /// `openai.list_models` — return list of chat-base abilities
 /// available on this daemon, projected as OpenAI-shape models.
 pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
-    let handle =
-        current_dispatch_handle().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
-    let registry = handle
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("dispatch handle empty"))?;
+    let runtime =
+        OpenAICompatRuntime::current().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
+    runtime.handle_list_models(serde_json::json!({}))
+}
+
+fn handle_list_models_with_context(
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
+    _args: Value,
+) -> anyhow::Result<Value> {
+    let registry = registry_from_handle(dispatch_handle, "dispatch")?;
 
     let mut models: Vec<Value> = Vec::new();
     for name in registry.list_rpc_names() {
         if !is_chat_base(&name) {
             continue;
         }
-        if let Some(model_id) = project_model_id(registry.as_ref(), &name) {
+        if let Some(model_id) = project_model_id_with_identity(registry.as_ref(), &name, identity) {
             models.push(json!({
                 "id":       model_id,
                 "object":   "model",
@@ -453,6 +545,16 @@ pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
     }
 
     Ok(json!({ "object": "list", "data": models }))
+}
+
+fn registry_from_handle(
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    context: &str,
+) -> anyhow::Result<Arc<AxonAbilityCatalog>> {
+    dispatch_handle
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("{context} handle empty"))
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
@@ -479,10 +581,6 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         OwnerKind::Device,
         Arc::new(handle_list_models) as LocalRpcHandler,
     );
-}
-
-fn project_model_id(registry: &AxonAbilityCatalog, ability_name: &str) -> Option<String> {
-    project_model_id_with_identity(registry, ability_name, current_identity().as_ref())
 }
 
 fn project_model_id_with_identity(
@@ -525,7 +623,10 @@ fn project_model_id_with_identity(
 // form before forwarding to the chat-base ability. The agent gets
 // bytes, not URAs — it doesn't need protocol awareness.
 
-fn deref_easynet_uras_in_messages(messages: &mut [Value]) {
+fn deref_easynet_uras_in_messages(
+    messages: &mut [Value],
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+) {
     for msg in messages.iter_mut() {
         let Some(content) = msg.get_mut("content") else {
             continue;
@@ -540,7 +641,7 @@ fn deref_easynet_uras_in_messages(messages: &mut [Value]) {
                     if let Some(url) = nested.get_mut("url") {
                         if let Some(s) = url.as_str() {
                             if crate::ura::parse_ura(s).is_ok() {
-                                if let Ok(data_url) = deref_to_data_url(s) {
+                                if let Ok(data_url) = deref_to_data_url(s, dispatch_handle) {
                                     *url = Value::String(data_url);
                                 }
                             }
@@ -554,7 +655,7 @@ fn deref_easynet_uras_in_messages(messages: &mut [Value]) {
                     if let Some(url) = file.get_mut(*url_key) {
                         if let Some(s) = url.as_str() {
                             if crate::ura::parse_ura(s).is_ok() {
-                                if let Ok(data_url) = deref_to_data_url(s) {
+                                if let Ok(data_url) = deref_to_data_url(s, dispatch_handle) {
                                     *url = Value::String(data_url);
                                 }
                             }
@@ -569,7 +670,10 @@ fn deref_easynet_uras_in_messages(messages: &mut [Value]) {
 /// Resolve an `easynet:///r/<realm>/resource/<owner>/<path>` URA
 /// through the local ability dispatcher and return a
 /// `data:<mime>;base64,<...>` URL.
-fn deref_to_data_url(ura: &str) -> anyhow::Result<String> {
+fn deref_to_data_url(
+    ura: &str,
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+) -> anyhow::Result<String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 
@@ -606,11 +710,7 @@ fn deref_to_data_url(ura: &str) -> anyhow::Result<String> {
         }
         None => anyhow::bail!("deref `{ura}`: owner segment lacks dot"),
     };
-    let handle = current_dispatch_handle()
-        .ok_or_else(|| anyhow::anyhow!("deref: dispatch handle not set"))?;
-    let registry = handle
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("deref: dispatch handle empty"))?;
+    let registry = registry_from_handle(dispatch_handle, "deref")?;
     let resp = registry
         .invoke_rpc_json(&ability, args)
         .map_err(|e| anyhow::anyhow!("deref `{ura}`: {ability} failed: {e}"))?;

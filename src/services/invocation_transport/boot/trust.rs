@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -6,44 +6,9 @@ use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 
 use crate::persistence::daemon_config::DaemonConfig;
-use crate::services::realm_trust_anchor::{
-    RealmTrustAnchor, TrustedAgent, TrustedAgentRole, DEFAULT_REALM_TRUST_PATH,
-};
+use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::usage_quota_store::SharedUsageQuotaGate;
-
-use super::paths::expand_home;
-
-/// Resolve the realm-trust file path. Resolution order:
-///
-/// 1. `EASYNET_REALM_TRUST_PATH` env override (PR-7 commit 7/N
-///    test-redirect seam, also used by docker-e2e fixtures).
-/// 2. `/etc/easynet/realm-trust.toml` — production / packaged
-///    deploys where the file is admin-owned. When this file
-///    exists AND is non-empty we always prefer it.
-/// 3. `$HOME/.easynet/realm-trust.toml` — fallback for host-mode
-///    dev / unprivileged installs. `easynet device join` writes
-///    the device + local-hub trust entries here at pairing time
-///    (see `auto_wire_self_realm_trust_from_credentials`); the
-///    daemon picks them up here without needing `sudo` to write
-///    `/etc/easynet/`.
-///
-/// The home-mode fallback closes the operator-visible "I joined,
-/// the daemon's trust file is empty, admission rejects everything"
-/// failure mode that single-user host-mode installs hit when
-/// neither root nor an env override is in play.
-pub(crate) fn trust_anchor_path_from_env_or_default() -> PathBuf {
-    if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
-        return expand_home(override_path.to_string_lossy().as_ref());
-    }
-    let etc = expand_home(DEFAULT_REALM_TRUST_PATH);
-    if let Ok(meta) = std::fs::metadata(&etc) {
-        if meta.is_file() && meta.len() > 0 {
-            return etc;
-        }
-    }
-    expand_home("~/.easynet/realm-trust.toml")
-}
 
 pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
     match RealmTrustAnchor::load_or_empty(path) {

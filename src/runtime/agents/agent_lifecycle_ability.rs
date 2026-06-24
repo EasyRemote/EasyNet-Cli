@@ -3,8 +3,9 @@
 //
 // File: src/runtime/agents/agent_lifecycle_ability.rs
 //
-// Per RFC §18, the device-profile owns these abilities. They match
-// the operator-facing `easynet agent add` / `easynet agent remove`
+// Per RFC §18, the device-profile advertises these abilities under
+// device authority. They match the operator-facing `easynet agent add` /
+// `easynet agent remove`
 // CLI subcommands but reach the same registry through Invoke instead
 // of stdin parsing — so a remote operator (or another local Agent)
 // can manage the local agent registry without spawning a shell.
@@ -61,7 +62,9 @@ use crate::registry::agents::{
 };
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::agents::profiles::bootstrap::{self, BootstrapPlan, LlmSubAgent, UuidMinter};
-use crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest;
+use crate::runtime::axon_bridge::hot_agent_registrar::{
+    block_on_hot_registrar, HotAgentAdvertiseRequest,
+};
 use crate::runtime::directory::{AgentDirectory, Location};
 
 use crate::runtime::ability_dispatch::OwnerKind;
@@ -559,12 +562,12 @@ fn stop_agent_handler(
         remove_hosted_llm_agent(&name)?;
     }
 
-    // Phase 5c runtime-sync reverse: tear down every `<name>.*`
-    // row from `LocalRuntime` in one atomic
-    // `unregister_ability_by_prefix` call. Ordering is
-    // "persist then update runtime" on the create side, so we follow the
-    // same shape here: persist the removal first, then drop the
-    // runtime rows. Doing it that way means a crash between
+    // Phase 5c runtime-sync reverse: tear down every LocalRuntime
+    // ability whose canonical local-device Ability URA decodes back
+    // to a `<name>.*` public ability. Ordering is "persist then
+    // update runtime" on the create side, so we follow the same
+    // shape here: persist the removal first, then drop the runtime
+    // rows. Doing it that way means a crash between
     // steps leaves the runtime in a "host registered but
     // agents.json doesn't know" state — equivalent to a stale
     // boot-time registration, which is harmless and self-heals
@@ -821,14 +824,6 @@ fn refresh_agents_handler(
     }))
 }
 
-fn block_on_hot_registrar<F, T>(future: F) -> Option<T>
-where
-    F: std::future::Future<Output = T> + Send,
-    T: Send,
-{
-    crate::support::async_bridge::try_run_blocking_in_tokio(future)
-}
-
 fn sync_hosted_agents_for_registry(
     registry: &AgentRegistry,
 ) -> anyhow::Result<local_agents::LocalAgentsFile> {
@@ -866,7 +861,6 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> BootstrapPlan {
         user_id,
         host_device_ura,
         consent: true,
-        policy: false,
         mcp: false,
         llm_sub_agents: registry
             .agents
@@ -1161,6 +1155,9 @@ mod tests {
             crate::runtime::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
                 Arc::new(Vec::new()),
                 Arc::new(std::sync::OnceLock::new()),
+                Arc::new(
+                    crate::runtime::agents::discover_ability::BridgeDiscoverFederationResolver,
+                ),
             );
         let advertiser: Arc<
             dyn crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
@@ -1221,11 +1218,10 @@ mod tests {
                     "error names the reserved-owner semantics: {msg}"
                 );
                 assert!(
-                    agents::load_agents()
+                    !agents::load_agents()
                         .unwrap_or_default()
                         .agents
-                        .get(name)
-                        .is_none(),
+                        .contains_key(name),
                     "rejected name must not persist an agents.json row"
                 );
             }
@@ -1249,11 +1245,10 @@ mod tests {
                 "error should surface credentials prerequisite: {err}"
             );
             assert!(
-                agents::load_agents()
+                !agents::load_agents()
                     .unwrap_or_default()
                     .agents
-                    .get("claude")
-                    .is_none(),
+                    .contains_key("claude"),
                 "unjoined failure must not persist a half-valid hosted agent row"
             );
         });

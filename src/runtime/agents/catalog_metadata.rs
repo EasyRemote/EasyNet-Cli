@@ -8,27 +8,27 @@
 use super::{
     a2a_bridge_ability, a2a_client_ability, ability_publish_ability, ability_toml,
     admin_status_ability, agent_lifecycle_ability, agent_list_ability, browser_session_ability,
-    build_registry, chat_history_ability, context_ability, device_ops_ability, discuss_ability,
-    file_transfer_ability, fs_ability, fs_edit_ability, http_request_ability,
+    build_registry, chat_history_ability, context_ability, device_ops_ability, discover_ability,
+    discuss_ability, file_transfer_ability, fs_ability, fs_edit_ability, http_request_ability,
     invocation_history_ability, list_resources_ability, loop_ability, mcp_bridge_ability,
     mcp_client_ability, media_abilities, meta_ability, mission_ability, network_health_ability,
-    orchestration_ability, permission_ability, ping, plugin_lifecycle_ability, policy_ability,
+    orchestration_ability, permission_ability, ping, plugin_lifecycle_ability,
     process_exec_ability, pty_attach_ability, pty_io_ability, pty_lifecycle_ability,
     registry_builder::build_system_registry, schedule_ability, session_ability, shell_run_ability,
-    skill_install_ability, skill_publish_ability, think_ability, voice_call_ability,
+    skill_install_ability, skill_publish_ability, teach_ability, think_ability, voice_call_ability,
 };
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Public list of every v1 system-ability *name*. Used by
 /// `registry::a2a_labels` to populate the top-level
 /// `system_skills[]` field of the node-roster v2 envelope so peers
-/// discover what device-level abilities this daemon offers without
-/// invoking anything.
+/// discover what device-profile abilities this daemon offers without invoking
+/// anything.
 ///
 /// The list is built from the live registry to avoid name drift
 /// between the publisher and the runtime catalogue.
 ///
-/// RFC-005 public catalogue names are owner-local names. Device-owned
+/// RFC-005 public catalogue names are owner-local names. Device-profile-owned
 /// handlers may still use implementation-local registry keys while routing,
 /// but public discovery must expose `fs.read`, `skill.list`, `agent.list`,
 /// etc.; the owner is carried by `owner_ura` / `ability_ura`, not duplicated
@@ -47,8 +47,12 @@ pub fn published_ability_names() -> Vec<String> {
 /// the two catalogue builders share the same surface and because future
 /// non-publishable synthetic rows should be excluded here, not by ad-hoc
 /// prefix checks in callers.
-pub fn is_publishable_catalog_name(_name: &str) -> bool {
-    true
+pub fn is_publishable_catalog_name(name: &str) -> bool {
+    // Local front door only. The daemon registers this key so the CLI can
+    // call aggregate discovery without picking an arbitrary self agent, but
+    // it is not a public/federated capability. Publishing it would duplicate
+    // the device owner prefix and break RFC-005 owner-local names.
+    name != discover_ability::DEVICE_DISCOVER_ABILITY
 }
 
 /// One row of a system ability's discovery + registration metadata.
@@ -95,14 +99,15 @@ pub fn published_system_abilities() -> Vec<SystemAbilityMetadata> {
     published_abilities_from_registry(&registry)
 }
 
-/// Published system abilities whose owner was declared as `owner` in the
-/// registry.
+/// Published system abilities whose authority/projection class was declared as
+/// `owner` in the registry.
 ///
-/// This is the descriptor-generation path for implementation profiles. Owner
-/// membership comes from `AxonAbilityCatalog::lookup_owner`, not from ability
-/// name prefixes. That keeps the profile catalogue aligned with the handler
-/// registration truth table and prevents broad namespaces such as `device.*`
-/// from accidentally stealing sub-profile abilities.
+/// This is the descriptor-generation path for implementation profiles.
+/// Projection membership comes from `AxonAbilityCatalog::lookup_owner`, not
+/// from ability name prefixes. That keeps the profile catalogue aligned with
+/// the handler registration truth table and prevents broad namespaces such as
+/// `device.*` from accidentally stealing abilities advertised by the
+/// device-profile Agent or any hosted sub-profile Agent.
 pub fn published_system_abilities_for_owner(
     owner: crate::runtime::ability_dispatch::OwnerKind,
 ) -> Vec<SystemAbilityMetadata> {
@@ -232,8 +237,6 @@ pub fn description_for(name: &str) -> &'static str {
     match name {
         "observe.health" => ping::description(),
         "observe.network_health" => network_health_ability::description(),
-        "policy.evaluate" => policy_ability::evaluate_description(),
-        "policy.simulate" => policy_ability::simulate_description(),
         "session.list" => session_ability::list_description(),
         "session.attach" => session_ability::attach_description(),
         "chat.history.list" => chat_history_ability::list_description(),
@@ -271,6 +274,9 @@ pub fn description_for(name: &str) -> &'static str {
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_description(),
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
+        teach_ability::TEACH => teach_ability::teach_description(),
+        teach_ability::ACQUIRE => teach_ability::acquire_description(),
+        teach_ability::FORGET => teach_ability::forget_description(),
         "mission.run" => mission_ability::run_description(),
         "mission.track" => mission_ability::track_description(),
         "mission.cancel" => mission_ability::cancel_description(),
@@ -303,9 +309,6 @@ pub fn description_for(name: &str) -> &'static str {
         "node.remove" => device_ops_ability::remove_node_description(),
         "ability.deploy" => device_ops_ability::deploy_ability_description(),
         "ability.uninstall" => device_ops_ability::uninstall_ability_description(),
-        "remote.exec" => device_ops_ability::exec_remote_description(),
-        "node.register" => device_ops_ability::register_self_description(),
-        "node.deregister" => device_ops_ability::deregister_self_description(),
         "mission.discuss_round" => orchestration_ability::discuss_round_description(),
         "voice.create_call" => voice_call_ability::create_call_description(),
         "voice.show_call" => voice_call_ability::show_call_description(),
@@ -415,8 +418,6 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
     match name {
         "observe.health" => ping::input_schema(),
         "observe.network_health" => network_health_ability::input_schema(),
-        "policy.evaluate" => policy_ability::evaluate_input_schema(),
-        "policy.simulate" => policy_ability::simulate_input_schema(),
         "session.list" => session_ability::list_input_schema(),
         "session.attach" => session_ability::attach_input_schema(),
         "chat.history.list" => chat_history_ability::list_input_schema(),
@@ -453,6 +454,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_input_schema(),
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
+        teach_ability::TEACH => teach_ability::teach_input_schema(),
+        teach_ability::ACQUIRE => teach_ability::acquire_input_schema(),
+        teach_ability::FORGET => teach_ability::forget_input_schema(),
         "mission.run" => mission_ability::run_input_schema(),
         "mission.track" => mission_ability::track_input_schema(),
         "mission.cancel" => mission_ability::cancel_input_schema(),
@@ -485,9 +489,6 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "node.remove" => device_ops_ability::remove_node_input_schema(),
         "ability.deploy" => device_ops_ability::deploy_ability_input_schema(),
         "ability.uninstall" => device_ops_ability::uninstall_ability_input_schema(),
-        "remote.exec" => device_ops_ability::exec_remote_input_schema(),
-        "node.register" => device_ops_ability::register_self_input_schema(),
-        "node.deregister" => device_ops_ability::deregister_self_input_schema(),
         "mission.discuss_round" => orchestration_ability::discuss_round_input_schema(),
         "voice.create_call" => voice_call_ability::create_call_input_schema(),
         "voice.show_call" => voice_call_ability::show_call_input_schema(),
@@ -730,9 +731,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | "context.captures.list"
         | "context.captures.get" => Some(AbilityLayer::Introspection),
         // ── Control / decision ──────────────────────────────
-        "policy.evaluate"
-        | "policy.simulate"
-        | "consent.decide"
+        "consent.decide"
         // context mutations — flip clipboard tracking, delete a
         // clip, add / remove favorites: device-context
         // configuration writes, same decision class as
@@ -762,17 +761,13 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // intent, mirroring how schedule.list / loop.status
         // got bumped into the introspection layer because they
         // describe daemon-managed state. The remaining
-        // verbs (remove_node, deploy_ability, uninstall_ability,
-        // exec_remote, register_self, deregister_self)
+        // verbs (remove_node, deploy_ability, uninstall_ability)
         // mutate state — Operational unambiguous.
         | "node.list"
         | "node.describe"
         | "node.remove"
         | "ability.deploy"
         | "ability.uninstall"
-        | "remote.exec"
-        | "node.register"
-        | "node.deregister"
         // terminal.* shell-session lifecycle abilities.
         // create / close mutate session state; input / read /
         // resize push or pull data over an established session;
@@ -848,6 +843,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // skill.install.
         | "ability.publish"
         | "ability.unpublish"
+        | "meta.teach"
+        | "meta.acquire"
+        | "meta.forget"
         | "skill.publish"
         | "skill.unpublish"
         | "skill.write_file"

@@ -400,14 +400,13 @@ fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Valu
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
 
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
+    let target_call = crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
         &target_ura,
         "node.describe",
     )?;
-    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-        ability_ura.as_str(),
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target(
+        &target_call,
         serde_json::json!({"node_id": "local"}),
-        &target_ura,
         caller_ura.as_deref(),
     )
     .with_context(|| format!("forward node.describe to target={target_ura}"))

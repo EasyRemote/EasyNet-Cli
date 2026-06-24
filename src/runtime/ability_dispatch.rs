@@ -25,7 +25,13 @@ use easynet_axon::invocation::{
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
+use crate::runtime::ability::{
+    AbilityControlPlaneError, AbilityControlPlaneLookupError, AbilityControlPlaneRecord,
+    AbilityControlPlaneRegistry, AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
+    HostedAgentDelegationContext, RuntimeEnv,
+};
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use crate::services::invocation_transport::invocation_wire::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 
 /// Module-local sync→async bridge for the ability-dispatch registry
 /// path. These calls sit on catalogue construction and discovery,
@@ -53,37 +59,225 @@ where
 /// hold heterogeneous handlers behind a uniform key.
 pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + Sync>;
 
-/// Slice of the AXIOM 7-tuple that an envelope-aware handler needs
-/// access to. Sidecar plugins consume this whole value to avoid creating
-/// a second, incomplete `ability + args` invoke primitive outside Axon.
+/// Error raised when constructing an envelope-aware handler context.
 ///
-/// Per **INV-SUBJECT-ENVELOPE**: this is the ONLY way a handler
-/// reads its `subject`. Handlers MUST NOT accept `subject` in
-/// `args`; the `register_*_with_envelope` family of methods is
-/// the way for handlers to opt into envelope access.
-#[derive(Debug, Clone, Default)]
+/// What this is NOT: an Axon admission error. Axon has already accepted and
+/// stored the invocation envelope before this projection is built. These
+/// variants mean the daemon is trying to project an incomplete or malformed
+/// runtime envelope into product handlers, which is a host boundary bug.
+#[derive(Debug, thiserror::Error)]
+pub enum EnvelopeContextError {
+    #[error("EnvelopeContext.{field} must not be empty")]
+    EmptyField { field: &'static str },
+    #[error("EnvelopeContext.invocation_nonce must be exactly 16 bytes, got {got}")]
+    InvalidNonceLength { got: usize },
+}
+
+/// Complete AXIOM invocation context exposed to envelope-aware handlers.
+///
+/// Invariant 1: every instance contains caller, callee, ability, subject,
+/// nonce, causal context, and runtime invocation id. There is no default
+/// constructor and no public field mutation path; handlers cannot observe a
+/// half-populated tuple.
+///
+/// Invariant 2: `subject` is an explicit envelope field. The valid self-target
+/// case is represented as `subject == callee`, never as `None` plus an
+/// interpretation rule.
+///
+/// Invariant 3: hosted-agent delegation is optional EasyNet product metadata,
+/// not an eighth Invocation tuple parameter. It is attached only after the
+/// signed envelope tuple has been projected.
+#[derive(Debug, Clone)]
 pub struct EnvelopeContext {
-    /// Runtime-assigned invocation id for THIS ability call. This is
-    /// not an eighth input to the invocation axiom; it is the runtime
-    /// identity of the receipt-bearing execution record.
-    pub invocation_id: Option<String>,
-    /// AXIOM 7-tuple `caller`.
-    pub caller: Option<String>,
-    /// AXIOM 7-tuple `callee`.
-    pub callee: Option<String>,
-    /// AXIOM 7-tuple `ability`.
-    pub ability: Option<String>,
-    /// AXIOM 7-tuple `subject`. `None` for legacy abilities and
-    /// for the degenerate `subject = callee` case (per
-    /// INV-META-SUBJECT-EXEMPT). Resource handlers MUST treat
-    /// `None` as a missing-subject failure (`resource_not_found`
-    /// or InvalidArgument).
-    pub subject: Option<String>,
-    /// AXIOM 7-tuple `nonce`.
-    pub invocation_nonce: Option<Vec<u8>>,
-    /// Host-side projection of AXIOM `causal_context`. This is not a
-    /// canonical encoder; canonical receipt semantics stay in Axon.
-    pub causal_context: Option<Value>,
+    invocation_id: String,
+    caller: String,
+    callee: String,
+    ability: String,
+    subject: String,
+    invocation_nonce: Vec<u8>,
+    causal_context: Value,
+    hosted_agent_delegation: Option<HostedAgentDelegationContext>,
+}
+
+impl EnvelopeContext {
+    /// Build a complete handler context from an Axon runtime envelope.
+    ///
+    /// The constructor validates tuple completeness but does not perform
+    /// admission or receipt verification; those remain Axon responsibilities.
+    pub fn new(
+        invocation_id: impl Into<String>,
+        caller: impl Into<String>,
+        callee: impl Into<String>,
+        ability: impl Into<String>,
+        subject: impl Into<String>,
+        invocation_nonce: Vec<u8>,
+        causal_context: Value,
+    ) -> Result<Self, EnvelopeContextError> {
+        let invocation_id = required_context_field("invocation_id", invocation_id.into())?;
+        let caller = required_context_field("caller", caller.into())?;
+        let callee = required_context_field("callee", callee.into())?;
+        let ability = required_context_field("ability", ability.into())?;
+        let subject = required_context_field("subject", subject.into())?;
+        if invocation_nonce.len() != 16 {
+            return Err(EnvelopeContextError::InvalidNonceLength {
+                got: invocation_nonce.len(),
+            });
+        }
+        Ok(Self {
+            invocation_id,
+            caller,
+            callee,
+            ability,
+            subject,
+            invocation_nonce,
+            causal_context,
+            hosted_agent_delegation: None,
+        })
+    }
+
+    /// Attach verified hosted-agent delegation metadata to this context.
+    #[must_use]
+    pub fn with_hosted_agent_delegation(
+        mut self,
+        hosted_agent_delegation: Option<HostedAgentDelegationContext>,
+    ) -> Self {
+        self.hosted_agent_delegation = hosted_agent_delegation;
+        self
+    }
+
+    /// Replace the projected causal context while preserving tuple completeness.
+    #[must_use]
+    pub fn with_causal_context(mut self, causal_context: Value) -> Self {
+        self.causal_context = causal_context;
+        self
+    }
+
+    /// Build a deterministic complete context for unit tests.
+    ///
+    /// Tests must still state the subject they mean; there is intentionally no
+    /// "empty context" helper because production cannot dispatch one.
+    #[cfg(test)]
+    pub fn for_test(caller: impl Into<String>, subject: impl Into<String>) -> Self {
+        let caller = caller.into();
+        let subject = subject.into();
+        Self::new(
+            "test-invocation",
+            caller,
+            "easynet:///r/test/device/local",
+            "test.ability",
+            subject,
+            vec![0xA5; 16],
+            serde_json::json!({"kind": "none"}),
+        )
+        .expect("test EnvelopeContext must be complete")
+    }
+
+    #[must_use]
+    pub fn invocation_id(&self) -> &str {
+        &self.invocation_id
+    }
+
+    #[must_use]
+    pub fn caller(&self) -> &str {
+        &self.caller
+    }
+
+    #[must_use]
+    pub fn callee(&self) -> &str {
+        &self.callee
+    }
+
+    #[must_use]
+    pub fn ability(&self) -> &str {
+        &self.ability
+    }
+
+    #[must_use]
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
+    #[must_use]
+    pub fn invocation_nonce(&self) -> &[u8] {
+        &self.invocation_nonce
+    }
+
+    #[must_use]
+    pub fn causal_context(&self) -> &Value {
+        &self.causal_context
+    }
+
+    #[must_use]
+    pub fn hosted_agent_delegation(&self) -> Option<&HostedAgentDelegationContext> {
+        self.hosted_agent_delegation.as_ref()
+    }
+}
+
+fn required_context_field(
+    field: &'static str,
+    value: String,
+) -> Result<String, EnvelopeContextError> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(EnvelopeContextError::EmptyField { field });
+    }
+    Ok(value)
+}
+
+/// Executable implementation facts written with one control-plane
+/// registration.
+///
+/// Invariant 1: the descriptor/authority/implementation record is written
+/// exactly once for a registration attempt. Dynamic plugin and MCP abilities
+/// must not first masquerade as native daemon code and then patch the record.
+///
+/// Invariant 2: `impl_content_hash` is optional but, when present, belongs to
+/// the implementation binding, not to discovery metadata or handler maps.
+#[derive(Debug, Clone)]
+pub struct ControlPlaneImplementation {
+    impl_source: AbilityImplSource,
+    runtime_env: RuntimeEnv,
+    impl_content_hash: Option<String>,
+}
+
+impl ControlPlaneImplementation {
+    /// Build an implementation binding for a non-native registration path.
+    #[must_use]
+    pub fn new(impl_source: AbilityImplSource, runtime_env: RuntimeEnv) -> Self {
+        Self {
+            impl_source,
+            runtime_env,
+            impl_content_hash: None,
+        }
+    }
+
+    /// Build the canonical binding for daemon-native registrations.
+    #[must_use]
+    pub fn native_daemon() -> Self {
+        Self::new(AbilityImplSource::NativeDaemon, RuntimeEnv::daemon_native())
+    }
+
+    /// Attach an immutable implementation content hash.
+    #[must_use]
+    pub fn with_content_hash(mut self, impl_content_hash: impl Into<String>) -> Self {
+        self.impl_content_hash = Some(impl_content_hash.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeBindingFacts {
+    pub descriptor_version: String,
+    pub call_mode: DescriptorCallMode,
+    pub schema_hash: String,
+    pub descriptor_hash: Option<String>,
+    pub implementation_source: String,
+    pub implementation_content_hash: Option<String>,
+    pub runtime_env: String,
+    pub authority_owner_projection: String,
+    pub authority_root: String,
+    pub governs_advertise: bool,
+    pub governs_invoke: bool,
 }
 
 /// Envelope-aware RPC handler. The runtime adapter passes a snapshot of
@@ -328,20 +522,67 @@ pub(crate) fn rpc_handler_to_ability_fn(handler: LocalRpcHandler) -> AbilityFn {
     })
 }
 
-async fn envelope_context_from_axon(ctx: &Arc<AbilityContext>) -> EnvelopeContext {
-    ctx.runtime
+fn parse_hosted_agent_delegation_context(
+    metadata: &std::collections::HashMap<String, String>,
+    envelope_caller: &str,
+    envelope_callee: &str,
+    envelope_subject: &str,
+    envelope_ability: &str,
+) -> Result<Option<HostedAgentDelegationContext>, AxonError> {
+    let Some(raw) = metadata.get(HOSTED_AGENT_DELEGATION_METADATA_KEY) else {
+        return Ok(None);
+    };
+    HostedAgentDelegationContext::from_signed_metadata(
+        raw,
+        envelope_caller,
+        envelope_callee,
+        envelope_subject,
+        envelope_ability,
+        crate::runtime::local_invocation_identity::system_verifying_key(),
+    )
+    .map(Some)
+    .map_err(|err| AxonError::invalid_argument(format!("hosted_agent_delegation: {err}")))
+}
+
+async fn envelope_context_from_axon(
+    ctx: &Arc<AbilityContext>,
+) -> Result<EnvelopeContext, AxonError> {
+    let signed = ctx
+        .runtime
         .axiom_envelope_of(&ctx.invocation_id)
         .await
-        .map(|signed| EnvelopeContext {
-            invocation_id: Some(ctx.invocation_id.clone()),
-            caller: Some(signed.envelope.caller.ura),
-            callee: Some(signed.envelope.callee.ura),
-            ability: Some(signed.envelope.ability),
-            subject: Some(signed.envelope.subject.ura),
-            invocation_nonce: Some(signed.envelope.invocation_nonce.to_vec()),
-            causal_context: Some(causal_context_to_json(&signed.envelope.causal_context)),
-        })
-        .unwrap_or_default()
+        .ok_or_else(|| {
+            AxonError::internal(format!(
+                "local_runtime_adapter: missing Axon envelope for invocation {}",
+                ctx.invocation_id
+            ))
+        })?;
+    let caller = signed.envelope.caller.ura;
+    let callee = signed.envelope.callee.ura;
+    let envelope_subject = signed.envelope.subject.ura;
+    let ability = signed.envelope.ability;
+    let hosted_agent_delegation = parse_hosted_agent_delegation_context(
+        &ctx.request_metadata,
+        &caller,
+        &callee,
+        &envelope_subject,
+        &ability,
+    )?;
+    EnvelopeContext::new(
+        ctx.invocation_id.clone(),
+        caller,
+        callee,
+        ability,
+        envelope_subject,
+        signed.envelope.invocation_nonce.to_vec(),
+        causal_context_to_json(&signed.envelope.causal_context),
+    )
+    .map(|context| context.with_hosted_agent_delegation(hosted_agent_delegation))
+    .map_err(|err| {
+        AxonError::internal(format!(
+            "local_runtime_adapter: incomplete Axon envelope projection: {err}"
+        ))
+    })
 }
 
 fn causal_context_to_json(causal: &easynet_axon::invocation::CausalContext) -> serde_json::Value {
@@ -381,7 +622,7 @@ fn rpc_env_handler_to_ability_fn(handler: LocalRpcHandlerWithEnvelope) -> Abilit
         let handler = Arc::clone(&handler);
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
-            let env = envelope_context_from_axon(&ctx).await;
+            let env = envelope_context_from_axon(&ctx).await?;
             let result = tokio::task::spawn_blocking(move || handler(env, value))
                 .await
                 .map_err(|err| {
@@ -472,7 +713,7 @@ fn stream_env_handler_to_ability_fn(handler: LocalStreamHandlerWithEnvelope) -> 
         let handler = Arc::clone(&handler);
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
-            let env = envelope_context_from_axon(&ctx).await;
+            let env = envelope_context_from_axon(&ctx).await?;
             let source = tokio::task::spawn_blocking(move || handler(env, value))
                 .await
                 .map_err(|err| {
@@ -488,6 +729,26 @@ fn stream_env_handler_to_ability_fn(handler: LocalStreamHandlerWithEnvelope) -> 
             emit_stream_source(ctx, source).await
         }
     })
+}
+
+/// Project an envelope-aware stream handler into the `(AbilityFn,
+/// AbilityOptions)` pair a direct `LocalRuntime::replace_ability` call
+/// needs, with `modes.stream = true` so locality and dispatch treat it
+/// as a server-stream. The hot-agent registrar uses this for
+/// `host_stream` abilities, which (unlike the catalog boot path) talk to
+/// the runtime directly rather than through `AxonAbilityCatalog`.
+pub(crate) fn stream_env_ability_with_options(
+    handler: LocalStreamHandlerWithEnvelope,
+) -> (AbilityFn, AbilityOptions) {
+    let modes = AbilityCallModes {
+        rpc: false,
+        stream: true,
+        bidi: false,
+    };
+    (
+        stream_env_handler_to_ability_fn(handler),
+        AbilityOptions::default().with_modes(modes),
+    )
 }
 
 async fn run_bidi_source(
@@ -559,7 +820,7 @@ fn bidi_env_handler_to_ability_fn(handler: LocalBidiHandlerWithEnvelope) -> Abil
         let handler = Arc::clone(&handler);
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
-            let env = envelope_context_from_axon(&ctx).await;
+            let env = envelope_context_from_axon(&ctx).await?;
             let source = handler(env, value).map_err(|err| {
                 AxonError::internal(format!(
                     "local_runtime_adapter: env bidi handler returned error: {err}"
@@ -621,9 +882,16 @@ fn runtime_handler_set_to_ability_fn(name: String, handlers: RuntimeHandlerSet) 
 /// fix — owner is declared at registration, not inferred from name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnerKind {
-    /// Hosted by THIS device's daemon directly. Examples (terminal
-    /// state): `fs.read`, `node.list`,
-    /// `device.keyring.sign`, `device.session`, `device.invoke_remote`.
+    /// Governed by this daemon's device authority.
+    ///
+    /// The physical device is only the hosting substrate: disk, PTY,
+    /// keyring, screen, microphone, and local daemon process. The
+    /// device-profile Agent is the control-plane projection that
+    /// advertises these abilities; the authority binding remains
+    /// anchored to the device URA.
+    ///
+    /// Examples: `fs.read`, `terminal.create`, `session.list`,
+    /// `node.list`, `skill.list`, `device.keyring.sign`.
     Device,
     /// Hosted by the realm hub (federation-tier). Examples (terminal
     /// state): `hub.openai.chat_completions`, `hub.openai.list_models`.
@@ -636,13 +904,173 @@ pub enum OwnerKind {
     /// `easynet:///r/<realm>/agent/<user-uuid>.<agent_id>`; the
     /// realm + user are read from credentials at advertise time.
     Agent(String),
-    /// Hosted by a user (the daemon's pages-user / canonical user).
-    /// The contained string is the user-id slot used at registration
-    /// time — the slug from `credentials.username` today; will
-    /// transition to `credentials.user_id` (UUID) per Q4 of the
-    /// truth-table spec. Example (terminal state):
-    /// `<user-uuid>.api_key.create`.
+    /// Hosted by the user's account agent. Axon Ability URA ownership
+    /// has Hub, Device, and Agent branches, but no raw User branch; the
+    /// contained string is therefore projected to
+    /// `agent/<user-id>.account` at the protocol boundary while the
+    /// product owner projection remains `user:<id>`.
     User(String),
+}
+
+impl OwnerKind {
+    fn authority_scope(
+        &self,
+        context: &AbilityAuthorityContext,
+    ) -> Result<AuthorityScope, AbilityControlPlaneError> {
+        match self {
+            OwnerKind::Device => {
+                AuthorityScope::new("device", context.device_authority_root.clone())
+            }
+            OwnerKind::Hub => AuthorityScope::new("hub", context.hub_authority_root.clone()),
+            OwnerKind::Agent(agent_id) => AuthorityScope::new(
+                format!("agent:{agent_id}"),
+                context.agent_authority_root(agent_id),
+            ),
+            OwnerKind::User(user_id) => AuthorityScope::new(
+                format!("user:{user_id}"),
+                context.user_authority_root(user_id),
+            ),
+        }
+    }
+}
+
+/// Process-local authority roots used when projecting owner kinds into
+/// descriptor authority records and Axon `LocalRuntime` ability keys.
+///
+/// Production registries build this from the local daemon environment.
+/// Embedded/test daemons can inject the concrete device URA they serve so
+/// registration, control-plane lookup, and carrier-v1 dispatch all resolve
+/// the same owner identity instead of drifting through global config.
+#[derive(Debug, Clone)]
+pub struct AbilityAuthorityContext {
+    device_authority_root: String,
+    hub_authority_root: String,
+    source: AbilityAuthoritySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AbilityAuthoritySource {
+    LocalEnvironment,
+    FixedDevice,
+}
+
+impl Default for AbilityAuthorityContext {
+    fn default() -> Self {
+        Self::from_local_environment()
+    }
+}
+
+impl AbilityAuthorityContext {
+    pub fn from_local_environment() -> Self {
+        Self {
+            device_authority_root: local_device_authority_root(),
+            hub_authority_root: local_hub_authority_root(),
+            source: AbilityAuthoritySource::LocalEnvironment,
+        }
+    }
+
+    pub fn for_device_authority_root(device_authority_root: impl Into<String>) -> Self {
+        let device_authority_root = device_authority_root.into();
+        let parsed = crate::ura::parse_ura(&device_authority_root).unwrap_or_else(|error| {
+            panic!(
+                "AbilityAuthorityContext requires a canonical device URA, got {device_authority_root:?}: {error}"
+            )
+        });
+        assert_eq!(
+            parsed.kind,
+            crate::ura::URAKind::Device,
+            "AbilityAuthorityContext device authority must be a /device/ URA, got {device_authority_root:?}"
+        );
+        Self {
+            device_authority_root,
+            hub_authority_root: crate::ura::hub_ura(&parsed.realm),
+            source: AbilityAuthoritySource::FixedDevice,
+        }
+    }
+
+    fn agent_authority_root(&self, agent_id: &str) -> String {
+        if self.source == AbilityAuthoritySource::FixedDevice {
+            return self.device_scoped_agent_authority_root(agent_id);
+        }
+        if let Ok(local_agents) = crate::persistence::local_agents::load() {
+            if let Ok(Some(entry)) = crate::persistence::local_agents::lookup_hosted_agent_by_name(
+                &local_agents,
+                agent_id,
+            ) {
+                return entry.agent_ura.clone();
+            }
+        }
+        match crate::persistence::config::load_credentials() {
+            Ok(creds) => match creds.username_slug() {
+                Ok(user_id) => crate::ura::agent_ura(&creds.realm, user_id, agent_id),
+                Err(_) => crate::ura::device_agent_ura(&creds.realm, &creds.node_id, agent_id),
+            },
+            Err(_) => self.device_scoped_agent_authority_root(agent_id),
+        }
+    }
+
+    fn user_authority_root(&self, user_id: &str) -> String {
+        if self.source == AbilityAuthoritySource::FixedDevice {
+            return self.device_scoped_user_authority_root(user_id);
+        }
+        let realm = crate::persistence::config::load_credentials()
+            .ok()
+            .map(|creds| creds.realm)
+            .or_else(|| {
+                crate::ura::parse_ura(&self.device_authority_root)
+                    .ok()
+                    .map(|ura| ura.realm)
+            })
+            .unwrap_or_else(|| {
+                crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM.to_string()
+            });
+        crate::ura::agent_ura(&realm, user_id, "account")
+    }
+
+    fn device_scoped_agent_authority_root(&self, agent_id: &str) -> String {
+        let parsed = crate::ura::parse_ura(&self.device_authority_root).ok();
+        let realm = parsed
+            .as_ref()
+            .map(|ura| ura.realm.as_str())
+            .unwrap_or(crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM);
+        let device_id = parsed
+            .as_ref()
+            .and_then(|ura| ura.device_id())
+            .unwrap_or(crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_DEVICE_ID);
+        crate::ura::device_agent_ura(realm, device_id, agent_id)
+    }
+
+    fn device_scoped_user_authority_root(&self, user_id: &str) -> String {
+        let parsed = crate::ura::parse_ura(&self.device_authority_root).ok();
+        let realm = parsed
+            .as_ref()
+            .map(|ura| ura.realm.as_str())
+            .unwrap_or(crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM);
+        crate::ura::agent_ura(realm, user_id, "account")
+    }
+}
+
+fn local_device_authority_root() -> String {
+    crate::runtime::local_invocation_identity::local_device_ura()
+}
+
+fn local_hub_authority_root() -> String {
+    let realm = crate::persistence::config::load_credentials()
+        .ok()
+        .map(|creds| creds.realm)
+        .unwrap_or_else(|| {
+            crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM.to_string()
+        });
+    crate::ura::hub_ura(&realm)
+}
+
+fn local_runtime_ability_key_for_authority(
+    authority_root: &str,
+    ability: &str,
+) -> anyhow::Result<String> {
+    let public_name = crate::ura::owner_local_ability_name(authority_root, ability);
+    crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(authority_root, &public_name)
+        .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
 /// Axon ability catalogue. Keyed by full ability name. v1 shape is
@@ -693,11 +1121,16 @@ pub struct AxonAbilityCatalog {
     /// downstream consumers stop sniffing the name string. Legacy
     /// `register_rpc` / `register_stream` / `register_bidi` /
     /// `register_*_with_envelope` shims default to `OwnerKind::Device`
-    /// — the safe choice for the bulk of today's catalogue, since
-    /// 80%+ of system abilities are device-bundle. Per-call sites
-    /// migrate to the `_with_owner` variants commit-by-commit; the
-    /// shims are deleted at M0 commit 6.
+    /// — the safe choice for daemon-local host abilities advertised
+    /// through the device-profile Agent while governed by device
+    /// authority. Per-call sites migrate to the `_with_owner` variants
+    /// commit-by-commit; the shims are deleted at M0 commit 6.
     owner: BTreeMap<String, OwnerKind>,
+    /// Authority roots for projecting owner kinds into protocol and runtime
+    /// identities. This is a catalog property, not a global lookup, so an
+    /// embedded daemon's runtime surface is bound to the device identity it
+    /// actually serves.
+    authority_context: AbilityAuthorityContext,
     /// Optional `AbilityManifest` per registered ability — the
     /// authoritative description + JSON Schema for the verb. Set
     /// only by the `_with_spec` register family; legacy
@@ -711,6 +1144,12 @@ pub struct AxonAbilityCatalog {
     /// for "no declared schema" appearing on abilities that DO
     /// have a manifest in `core::ability_spec`.
     manifests: BTreeMap<String, Arc<crate::core::ability_spec::AbilityManifest>>,
+    /// Descriptor/authority/implementation binding records keyed by
+    /// ability name. This is the structural control-plane split:
+    /// `owner` and `manifests` remain compatibility side tables, but
+    /// new code should read this registry when it needs governed
+    /// interface versioning or executable binding facts.
+    control_plane: std::sync::RwLock<AbilityControlPlaneRegistry>,
     /// Hot-reload side table. Populated by `RegistryRefreshSink` when
     /// an upstream MCP server pushes `notifications/tools/list_changed`.
     /// Lookups fall through here on static-map miss; `list_abilities`
@@ -761,6 +1200,43 @@ impl DynamicCatalogue {
         present
     }
 
+    fn remove_mode(&mut self, ability: &str, call_mode: DescriptorCallMode) -> bool {
+        let removed = match call_mode {
+            DescriptorCallMode::Rpc => {
+                self.rpc.remove(ability).is_some() || self.rpc_with_env.remove(ability).is_some()
+            }
+            DescriptorCallMode::Stream => {
+                self.stream.remove(ability).is_some()
+                    || self.stream_with_env.remove(ability).is_some()
+            }
+            DescriptorCallMode::Bidi => {
+                self.bidi.remove(ability).is_some() || self.bidi_with_env.remove(ability).is_some()
+            }
+        };
+        if !self.contains_handler(ability) {
+            self.owner.remove(ability);
+            self.manifests.remove(ability);
+        }
+        removed
+    }
+
+    fn install(&mut self, registration: DynamicRegistration) {
+        let DynamicRegistration {
+            ability,
+            owner,
+            manifest,
+            handler,
+            implementation: _,
+        } = registration;
+        let call_mode = handler.call_mode();
+        self.remove_mode(&ability, call_mode);
+        self.owner.insert(ability.clone(), owner);
+        if let Some(manifest) = manifest {
+            self.manifests.insert(ability.clone(), manifest);
+        }
+        handler.install(&ability, self);
+    }
+
     /// Handler-only presence test (excludes `owner` and `manifests`
     /// because those are metadata side-tables — they exist iff a
     /// handler exists, but a stale row in either should not pin
@@ -784,6 +1260,320 @@ impl DynamicCatalogue {
     }
 }
 
+enum DynamicRegistrationHandler {
+    Rpc(LocalRpcHandler),
+    Stream(LocalStreamHandler),
+    RpcWithEnvelope(LocalRpcHandlerWithEnvelope),
+    StreamWithEnvelope(LocalStreamHandlerWithEnvelope),
+    BidiWithEnvelope(LocalBidiHandlerWithEnvelope),
+}
+
+impl DynamicRegistrationHandler {
+    fn call_mode(&self) -> DescriptorCallMode {
+        match self {
+            Self::Rpc(_) | Self::RpcWithEnvelope(_) => DescriptorCallMode::Rpc,
+            Self::Stream(_) | Self::StreamWithEnvelope(_) => DescriptorCallMode::Stream,
+            Self::BidiWithEnvelope(_) => DescriptorCallMode::Bidi,
+        }
+    }
+
+    fn install(self, ability: &str, catalog: &mut DynamicCatalogue) {
+        match self {
+            Self::Rpc(handler) => {
+                catalog.rpc.insert(ability.to_string(), handler);
+            }
+            Self::Stream(handler) => {
+                catalog.stream.insert(ability.to_string(), handler);
+            }
+            Self::RpcWithEnvelope(handler) => {
+                catalog.rpc_with_env.insert(ability.to_string(), handler);
+            }
+            Self::StreamWithEnvelope(handler) => {
+                catalog.stream_with_env.insert(ability.to_string(), handler);
+            }
+            Self::BidiWithEnvelope(handler) => {
+                catalog.bidi_with_env.insert(ability.to_string(), handler);
+            }
+        }
+    }
+}
+
+struct DynamicRegistration {
+    ability: String,
+    owner: OwnerKind,
+    manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+    implementation: ControlPlaneImplementation,
+    handler: DynamicRegistrationHandler,
+}
+
+impl DynamicRegistration {
+    fn new(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+        implementation: ControlPlaneImplementation,
+        handler: DynamicRegistrationHandler,
+    ) -> Self {
+        Self {
+            ability: ability.into(),
+            owner,
+            manifest,
+            implementation,
+            handler,
+        }
+    }
+
+    fn rpc(ability: impl Into<String>, owner: OwnerKind, handler: LocalRpcHandler) -> Self {
+        Self::new(
+            ability,
+            owner,
+            None,
+            ControlPlaneImplementation::native_daemon(),
+            DynamicRegistrationHandler::Rpc(handler),
+        )
+    }
+
+    fn rpc_with_spec(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandler,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            Some(Arc::new(manifest)),
+            ControlPlaneImplementation::native_daemon(),
+            DynamicRegistrationHandler::Rpc(handler),
+        )
+    }
+
+    fn stream_with_spec_and_impl(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandler,
+        implementation: ControlPlaneImplementation,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            Some(Arc::new(manifest)),
+            implementation,
+            DynamicRegistrationHandler::Stream(handler),
+        )
+    }
+
+    fn rpc_with_envelope(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            None,
+            ControlPlaneImplementation::native_daemon(),
+            DynamicRegistrationHandler::RpcWithEnvelope(handler),
+        )
+    }
+
+    fn rpc_with_envelope_and_spec_and_impl(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            Some(Arc::new(manifest)),
+            implementation,
+            DynamicRegistrationHandler::RpcWithEnvelope(handler),
+        )
+    }
+
+    fn stream_with_envelope(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            None,
+            ControlPlaneImplementation::native_daemon(),
+            DynamicRegistrationHandler::StreamWithEnvelope(handler),
+        )
+    }
+
+    fn stream_with_envelope_and_spec_and_impl(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            Some(Arc::new(manifest)),
+            implementation,
+            DynamicRegistrationHandler::StreamWithEnvelope(handler),
+        )
+    }
+
+    fn bidi_with_envelope(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            None,
+            ControlPlaneImplementation::native_daemon(),
+            DynamicRegistrationHandler::BidiWithEnvelope(handler),
+        )
+    }
+
+    fn bidi_with_envelope_and_spec_and_impl(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalBidiHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> Self {
+        Self::new(
+            ability,
+            owner,
+            Some(Arc::new(manifest)),
+            implementation,
+            DynamicRegistrationHandler::BidiWithEnvelope(handler),
+        )
+    }
+
+    fn ability(&self) -> &str {
+        &self.ability
+    }
+
+    fn call_mode(&self) -> DescriptorCallMode {
+        self.handler.call_mode()
+    }
+
+    fn manifest_ref(&self) -> Option<&crate::core::ability_spec::AbilityManifest> {
+        self.manifest.as_ref().map(Arc::as_ref)
+    }
+
+    fn commit(self, catalog: &AxonAbilityCatalog) -> anyhow::Result<()> {
+        let ability = self.ability().to_string();
+        let call_mode = self.call_mode();
+        if catalog.reject_dynamic_shadow_of_static(&ability) {
+            anyhow::bail!("dynamic ability {ability:?} shadows a static ability");
+        }
+        catalog.register_dynamic_control_plane_result(
+            &ability,
+            &self.owner,
+            self.manifest_ref(),
+            call_mode,
+            &self.implementation,
+        )?;
+        let mut txn = DynamicRegistrationTxn::after_control_plane(catalog, ability, call_mode);
+        {
+            let mut dyn_ext = catalog
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.install(self);
+        }
+        txn.mark_side_table_committed()?;
+        txn.sync_runtime_or_rollback()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DynamicRegistrationPhase {
+    ControlPlaneAccepted,
+    SideTableCommitted,
+    RuntimeSynced,
+    RolledBack,
+}
+
+struct DynamicRegistrationTxn<'a> {
+    catalog: &'a AxonAbilityCatalog,
+    ability: String,
+    call_mode: DescriptorCallMode,
+    phase: DynamicRegistrationPhase,
+}
+
+impl<'a> DynamicRegistrationTxn<'a> {
+    fn after_control_plane(
+        catalog: &'a AxonAbilityCatalog,
+        ability: impl Into<String>,
+        call_mode: DescriptorCallMode,
+    ) -> Self {
+        Self {
+            catalog,
+            ability: ability.into(),
+            call_mode,
+            phase: DynamicRegistrationPhase::ControlPlaneAccepted,
+        }
+    }
+
+    fn mark_side_table_committed(&mut self) -> anyhow::Result<()> {
+        if self.phase != DynamicRegistrationPhase::ControlPlaneAccepted {
+            let phase = self.phase;
+            self.rollback();
+            anyhow::bail!(
+                "dynamic ability {:?} cannot commit side table from phase {:?}",
+                self.ability,
+                phase
+            );
+        }
+        self.phase = DynamicRegistrationPhase::SideTableCommitted;
+        Ok(())
+    }
+
+    fn sync_runtime_or_rollback(&mut self) -> anyhow::Result<()> {
+        if self.phase != DynamicRegistrationPhase::SideTableCommitted {
+            let phase = self.phase;
+            self.rollback();
+            anyhow::bail!(
+                "dynamic ability {:?} cannot sync runtime from phase {:?}",
+                self.ability,
+                phase
+            );
+        }
+        match self.catalog.sync_runtime_ability(&self.ability) {
+            Ok(()) => {
+                self.phase = DynamicRegistrationPhase::RuntimeSynced;
+                Ok(())
+            }
+            Err(error) => {
+                self.rollback();
+                Err(error)
+            }
+        }
+    }
+
+    fn rollback(&mut self) {
+        let mut dyn_ext = self
+            .catalog
+            .dynamic_ext
+            .write()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.remove_mode(&self.ability, self.call_mode);
+        drop(dyn_ext);
+        self.catalog
+            .control_plane
+            .write()
+            .expect("control_plane RwLock poisoned")
+            .remove_for_mode(&self.ability, self.call_mode);
+        self.phase = DynamicRegistrationPhase::RolledBack;
+    }
+}
+
 impl std::fmt::Debug for AxonAbilityCatalog {
     /// Manual impl because the handler types are `Arc<dyn Fn>`
     /// trait objects which do not implement `Debug`. Surfaces just
@@ -796,6 +1586,11 @@ impl std::fmt::Debug for AxonAbilityCatalog {
             .read()
             .map(|g| g.rpc.len() + g.stream.len() + g.bidi.len())
             .unwrap_or(0);
+        let control_plane_count = self
+            .control_plane
+            .read()
+            .map(|registry| registry.names().len())
+            .unwrap_or(0);
         f.debug_struct("AxonAbilityCatalog")
             .field("rpc_count", &self.rpc.len())
             .field("stream_count", &self.stream.len())
@@ -805,6 +1600,7 @@ impl std::fmt::Debug for AxonAbilityCatalog {
             .field("bidi_with_env_count", &self.bidi_with_env.len())
             .field("owner_count", &self.owner.len())
             .field("manifest_count", &self.manifests.len())
+            .field("control_plane_count", &control_plane_count)
             .field("dynamic_ext_count", &dynamic_count)
             .finish()
     }
@@ -820,8 +1616,19 @@ impl AxonAbilityCatalog {
     /// module-level `register(&mut reg)` call sites intact while
     /// making `LocalRuntime` the live source of truth.
     pub fn new_with_runtime(runtime: Arc<LocalRuntime>) -> Self {
+        Self::new_with_runtime_and_authority_context(
+            runtime,
+            AbilityAuthorityContext::from_local_environment(),
+        )
+    }
+
+    pub fn new_with_runtime_and_authority_context(
+        runtime: Arc<LocalRuntime>,
+        authority_context: AbilityAuthorityContext,
+    ) -> Self {
         Self {
             runtime: Some(runtime),
+            authority_context,
             ..Self::default()
         }
     }
@@ -832,95 +1639,541 @@ impl AxonAbilityCatalog {
         self.runtime.as_ref().map(Arc::clone)
     }
 
-    /// Invoke an RPC ability through Axon's `LocalRuntime`. The
-    /// handler maps are retained as catalogue metadata and for
-    /// descriptor synthesis, but runtime execution is the authoritative
-    /// path.
+    fn register_control_plane(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        impl_source: AbilityImplSource,
+        runtime_env: RuntimeEnv,
+    ) -> anyhow::Result<()> {
+        self.register_control_plane_with_impl_content_hash(
+            ability,
+            owner,
+            manifest,
+            call_mode,
+            impl_source,
+            runtime_env,
+            None,
+        )
+    }
+
+    fn register_control_plane_with_implementation(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        implementation: &ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        self.register_control_plane_with_impl_content_hash(
+            ability,
+            owner,
+            manifest,
+            call_mode,
+            implementation.impl_source.clone(),
+            implementation.runtime_env.clone(),
+            implementation.impl_content_hash.clone(),
+        )
+    }
+
+    fn register_control_plane_with_impl_content_hash(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        impl_source: AbilityImplSource,
+        runtime_env: RuntimeEnv,
+        impl_content_hash: Option<String>,
+    ) -> anyhow::Result<()> {
+        let owner_label = format!("{owner:?}");
+        let authority_scope = match owner.authority_scope(&self.authority_context) {
+            Ok(scope) => scope,
+            Err(error) => {
+                let error_message = error.to_string();
+                crate::op_event!(
+                    component = ability_dispatch,
+                    kind = control_plane_register_rejected,
+                    ability = ability,
+                    owner = owner_label,
+                    error = error_message,
+                    message = "ability control-plane record rejected before registry write",
+                );
+                return Err(anyhow::anyhow!(
+                    "ability {ability:?} control-plane owner scope rejected: {error}"
+                ));
+            }
+        };
+        self.write_control_plane_record(
+            ability,
+            authority_scope,
+            manifest,
+            call_mode,
+            impl_source,
+            runtime_env,
+            impl_content_hash,
+            owner_label,
+        )
+    }
+
+    fn write_control_plane_record(
+        &self,
+        ability: &str,
+        authority_scope: AuthorityScope,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        impl_source: AbilityImplSource,
+        runtime_env: RuntimeEnv,
+        impl_content_hash: Option<String>,
+        owner_label: String,
+    ) -> anyhow::Result<()> {
+        let result = self
+            .control_plane
+            .write()
+            .expect("control_plane RwLock poisoned")
+            .register_with_impl_content_hash(
+                ability.to_string(),
+                call_mode,
+                manifest,
+                authority_scope,
+                runtime_env,
+                impl_source,
+                impl_content_hash,
+            );
+        if let Err(error) = result {
+            let error_message = error.to_string();
+            crate::op_event!(
+                component = ability_dispatch,
+                kind = control_plane_register_rejected,
+                ability = ability,
+                owner = owner_label,
+                error = error_message,
+                message = "ability control-plane record rejected by typed constructor",
+            );
+            return Err(anyhow::anyhow!(
+                "ability {ability:?} control-plane typed constructor rejected: {error}"
+            ));
+        }
+        Ok(())
+    }
+
+    fn try_register_native_control_plane(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+    ) -> anyhow::Result<()> {
+        self.register_control_plane(
+            ability,
+            owner,
+            manifest,
+            call_mode,
+            AbilityImplSource::NativeDaemon,
+            RuntimeEnv::daemon_native(),
+        )
+    }
+
+    fn register_native_control_plane(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+    ) {
+        self.try_register_native_control_plane(ability, owner, manifest, call_mode)
+            .unwrap_or_else(|error| {
+                panic!("native control-plane registration failed for {ability:?}: {error}")
+            });
+    }
+
+    fn register_dynamic_control_plane_result(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        implementation: &ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        match self.register_control_plane_with_implementation(
+            ability,
+            owner,
+            manifest,
+            call_mode,
+            implementation,
+        ) {
+            Ok(()) => (),
+            Err(error) => {
+                let error_message = error.to_string();
+                crate::op_event!(
+                    component = ability_dispatch,
+                    kind = hot_register_control_plane_rejected,
+                    ability = ability,
+                    error = error_message.as_str(),
+                    message = "dynamic ability rejected by control-plane validation",
+                );
+                return Err(error);
+            }
+        };
+        Ok(())
+    }
+
+    /// Test-only diagnostic for mode-agnostic lookup semantics.
+    ///
+    /// Product code must use [`Self::control_plane_record_for_mode`] or
+    /// [`Self::control_plane_record_for_authority_mode`]. An ability name is
+    /// not a complete control-plane key once the same descriptor publishes
+    /// multiple call modes or authority roots.
+    #[cfg(test)]
+    pub(crate) fn control_plane_record(
+        &self,
+        ability: &str,
+    ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
+        self.control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .get(ability)
+    }
+
+    /// Return the split descriptor/authority/implementation record
+    /// for the concrete execution mode. Same ability name + same
+    /// descriptor version may legitimately publish multiple modes
+    /// (`agent.chat` RPC and Stream), so protocol-facing callers
+    /// should use this API whenever the requested mode is known.
+    pub fn control_plane_record_for_mode(
+        &self,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
+        self.control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .get_for_mode(ability, call_mode)
+    }
+
+    pub fn control_plane_record_for_authority_mode(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> Option<AbilityControlPlaneRecord> {
+        self.control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .get_for_authority_mode(authority_root, ability, call_mode)
+    }
+
+    pub fn rebind_control_plane_record(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        impl_source: AbilityImplSource,
+        runtime_env: RuntimeEnv,
+    ) -> anyhow::Result<()> {
+        self.register_control_plane(
+            ability,
+            owner,
+            manifest,
+            call_mode,
+            impl_source,
+            runtime_env,
+        )
+    }
+
+    pub fn rebind_control_plane_record_with_impl_content_hash(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        impl_source: AbilityImplSource,
+        runtime_env: RuntimeEnv,
+        impl_content_hash: String,
+    ) -> anyhow::Result<()> {
+        self.register_control_plane_with_impl_content_hash(
+            ability,
+            owner,
+            manifest,
+            call_mode,
+            impl_source,
+            runtime_env,
+            Some(impl_content_hash),
+        )
+    }
+
+    pub fn rebind_control_plane_record_with_authority_scope_and_impl_content_hash(
+        &self,
+        ability: &str,
+        authority_scope: AuthorityScope,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        impl_source: AbilityImplSource,
+        runtime_env: RuntimeEnv,
+        impl_content_hash: String,
+    ) -> anyhow::Result<()> {
+        let owner_label = format!(
+            "{}@{}",
+            authority_scope.owner_projection(),
+            authority_scope.authority_root()
+        );
+        self.write_control_plane_record(
+            ability,
+            authority_scope,
+            manifest,
+            call_mode,
+            impl_source,
+            runtime_env,
+            Some(impl_content_hash),
+            owner_label,
+        )
+    }
+
+    /// Remove only descriptor/authority/implementation facts for a
+    /// runtime-owned dynamic binding. Device-deployed abilities are
+    /// registered directly into LocalRuntime by `DeviceAbilityRegistrar`,
+    /// so uninstall must clear control-plane facts without mutating the
+    /// boot-time handler maps.
+    pub fn remove_control_plane_record_for_mode(
+        &self,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> bool {
+        self.control_plane
+            .write()
+            .expect("control_plane RwLock poisoned")
+            .remove_for_mode(ability, call_mode)
+    }
+
+    pub fn remove_control_plane_record_for_authority_mode(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> bool {
+        self.control_plane
+            .write()
+            .expect("control_plane RwLock poisoned")
+            .remove_for_authority_mode(authority_root, ability, call_mode)
+    }
+
+    /// Return daemon-local runtime binding facts for this ability.
+    ///
+    /// This is deliberately not an Axon proof payload. Axon owns canonical
+    /// receipt proof normalization; this projection only explains which
+    /// daemon registration supplied the handler and authority metadata.
+    pub fn runtime_binding_facts_for(
+        &self,
+        ability: &str,
+    ) -> Result<Vec<RuntimeBindingFacts>, AbilityControlPlaneLookupError> {
+        let mut facts = Vec::new();
+        for call_mode in [
+            DescriptorCallMode::Rpc,
+            DescriptorCallMode::Stream,
+            DescriptorCallMode::Bidi,
+        ] {
+            if let Some(mode_facts) = self.runtime_binding_facts_for_mode(ability, call_mode)? {
+                facts.push(mode_facts);
+            }
+        }
+        Ok(facts)
+    }
+
+    pub fn runtime_binding_facts_for_mode(
+        &self,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> Result<Option<RuntimeBindingFacts>, AbilityControlPlaneLookupError> {
+        let Some(record) = self.control_plane_record_for_mode(ability, call_mode)? else {
+            return Ok(None);
+        };
+        Ok(Some(self.runtime_binding_facts_from_record(record)))
+    }
+
+    fn runtime_binding_facts_from_record(
+        &self,
+        record: AbilityControlPlaneRecord,
+    ) -> RuntimeBindingFacts {
+        let descriptor = record.descriptor();
+        let authority = record.authority();
+        let implementation_record = record.implementation();
+        let descriptor_version = descriptor.version().to_string();
+        let runtime_env = implementation_record.runtime_env().label().to_string();
+        let descriptor_hash = Some(descriptor.descriptor_hash().prefixed_hex());
+        RuntimeBindingFacts {
+            descriptor_version,
+            call_mode: descriptor.call_mode(),
+            schema_hash: descriptor.schema_hash().prefixed_hex(),
+            descriptor_hash,
+            implementation_source: implementation_record.source().as_str().to_string(),
+            implementation_content_hash: implementation_record.content_hash().map(str::to_string),
+            runtime_env,
+            authority_owner_projection: authority.scope().owner_projection().to_string(),
+            authority_root: authority.scope().authority_root().to_string(),
+            governs_advertise: authority.predicate().governs_advertise(),
+            governs_invoke: authority.predicate().governs_invoke(),
+        }
+    }
+
+    fn unique_runtime_authority_root(&self, ability: &str) -> anyhow::Result<String> {
+        let roots = self
+            .control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .authority_roots_for_ability(ability);
+        match roots.as_slice() {
+            [root] => Ok(root.clone()),
+            [] => anyhow::bail!(
+                "ability {ability:?} has no control-plane authority root; register it before syncing LocalRuntime"
+            ),
+            _ => anyhow::bail!(
+                "ability {ability:?} is ambiguous across authority roots {}; product callers must choose an authority",
+                roots.join(", ")
+            ),
+        }
+    }
+
+    fn runtime_ability_key(&self, ability: &str) -> anyhow::Result<String> {
+        let authority_root = self.unique_runtime_authority_root(ability)?;
+        local_runtime_ability_key_for_authority(&authority_root, ability)
+    }
+
+    fn runtime_ability_key_for_mode(
+        &self,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(record) = self.control_plane_record_for_mode(ability, call_mode)? else {
+            return Ok(None);
+        };
+        Ok(Some(local_runtime_ability_key_for_authority(
+            record.authority().scope().authority_root(),
+            ability,
+        )?))
+    }
+
+    fn bind_invocation_target_to_control_plane(
+        &self,
+        mut target: InvocationTarget,
+        call_mode: DescriptorCallMode,
+    ) -> anyhow::Result<InvocationTarget> {
+        if crate::ura::AbilitySelector::parse(&target.ability).is_ok() {
+            return Ok(target);
+        }
+        let Some(record) = self.control_plane_record_for_mode(&target.ability, call_mode)? else {
+            anyhow::bail!(
+                "ability {:?} is not registered in the control plane for {:?}",
+                target.ability,
+                call_mode
+            );
+        };
+        let authority_root = record.authority().scope().authority_root();
+        let public_name = crate::ura::owner_local_ability_name(authority_root, &target.ability);
+        let ability_ura =
+            crate::ura::owner_ability_ura(authority_root, &public_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "derive canonical ability URA for authority {authority_root:?} ability {:?}",
+                    target.ability
+                )
+            })?;
+        target.ability = ability_ura;
+        Ok(target)
+    }
+
+    /// Invoke an RPC ability through Axon's `LocalRuntime` as a local-system
+    /// call. Use `invoke_rpc_target_json` when the caller has an envelope
+    /// subject or causal context; this shorthand is only for daemon-internal
+    /// calls that genuinely have no upstream invocation envelope.
     pub fn invoke_rpc_json(&self, ability: &str, args: Value) -> anyhow::Result<Value> {
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args: args,
+            call_mode: CallMode::Rpc,
+            subject: None,
+            causal_context: None,
+        };
+        self.invoke_rpc_target_json(target)
+    }
+
+    /// Invoke an RPC ability with an explicit resolved target. This is the
+    /// required path for in-process forwarders that know the AXIOM subject or
+    /// causal context.
+    pub fn invoke_rpc_target_json(&self, target: InvocationTarget) -> anyhow::Result<Value> {
+        if target.call_mode != CallMode::Rpc {
+            anyhow::bail!(
+                "invoke_rpc_target_json requires RPC call mode, got {:?}",
+                target.call_mode
+            );
+        }
         let runtime = self.runtime().ok_or_else(|| {
             anyhow::anyhow!(
                 "AxonAbilityCatalog has no LocalRuntime attached; use new() or new_with_runtime()"
             )
         })?;
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ability.to_string(),
-            normalized_args: args.clone(),
-            call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
-        };
-        match crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(
-            Arc::clone(&runtime),
-            target,
-        ) {
-            Ok(value) => Ok(value),
-            Err(err) if crate::runtime::local_runtime_invoker::is_not_found_error(&err) => {
-                if let Some(handler) = self.resolve_rpc(ability) {
-                    // Self-heal: the handler exists in the catalogue
-                    // but was not synced into LocalRuntime at boot.
-                    // We register lazily and retry, but the bug is in
-                    // boot: every handler that lives in the catalogue
-                    // should be in LocalRuntime by the time we serve
-                    // an Invoke. Surface a warn so SRE notices when
-                    // this path fires — silent self-heal would mask
-                    // a real wiring regression.
-                    crate::op_event!(
-                        component = ability_dispatch,
-                        kind = late_bound_rpc_handler,
-                        ability = ability,
-                        message = "RPC handler resolved from catalogue but missing from \
-                                   LocalRuntime; lazily synced. Boot should have wired \
-                                   this; investigate the registration path.",
-                    );
-                    self.register_runtime_rpc(ability, handler);
-                    let target = InvocationTarget {
-                        scope: TargetScope::Local,
-                        ability: ability.to_string(),
-                        normalized_args: args,
-                        call_mode: CallMode::Rpc,
-                        subject: None,
-                        causal_context: None,
-                    };
-                    return crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(
-                        runtime, target,
-                    )
-                    .map_err(|err| anyhow::anyhow!("{err}"));
-                }
-                Err(anyhow::anyhow!("{err}"))
-            }
-            Err(err) => Err(anyhow::anyhow!("{err}")),
-        }
+        let target = self
+            .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Rpc)
+            .map_err(|err| anyhow::anyhow!("{err}; local Axon runtime loopback path"))?;
+        crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(runtime, target)
+            .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
-    fn replace_runtime_ability(&self, name: &str, ability_fn: AbilityFn, options: AbilityOptions) {
+    fn replace_runtime_ability(
+        &self,
+        name: &str,
+        ability_fn: AbilityFn,
+        options: AbilityOptions,
+    ) -> anyhow::Result<()> {
         let Some(runtime) = self.runtime.as_ref() else {
-            return;
+            return Ok(());
         };
-        let result =
-            block_on_runtime_sync(runtime.replace_ability(name.to_string(), ability_fn, options));
+        let runtime_key = self.runtime_ability_key(name)?;
+        let result = block_on_runtime_sync(runtime.replace_ability(
+            runtime_key.clone(),
+            ability_fn,
+            options,
+        ));
         if let Err(err) = result {
             let err_msg = format!("{err}");
             crate::op_event!(
                 component = axon_bridge,
                 kind = local_runtime_register_failed,
                 ability = name,
+                runtime_key = runtime_key.as_str(),
                 error = err_msg.as_str(),
             );
+            return Err(anyhow::anyhow!(
+                "LocalRuntime rejected ability {name:?} as {runtime_key:?}: {err_msg}"
+            ));
         }
+        Ok(())
     }
 
-    fn unregister_runtime_ability(&self, name: &str) {
+    fn unregister_runtime_ability(&self, name: &str) -> anyhow::Result<()> {
         let Some(runtime) = self.runtime.as_ref() else {
-            return;
+            return Ok(());
         };
-        let _ = block_on_runtime_sync(runtime.unregister_ability(name));
+        let runtime_key = self.runtime_ability_key(name)?;
+        self.unregister_runtime_ability_by_key(runtime, name, &runtime_key)
     }
 
-    fn register_runtime_rpc(&self, name: &str, handler: LocalRpcHandler) {
-        let mut handlers = self.runtime_handlers_for(name);
-        handlers.rpc = Some(handler);
-        self.sync_runtime_ability_from_handlers(name, handlers);
+    fn unregister_runtime_ability_by_key(
+        &self,
+        runtime: &Arc<LocalRuntime>,
+        name: &str,
+        runtime_key: &str,
+    ) -> anyhow::Result<()> {
+        let _removed = block_on_runtime_sync(runtime.unregister_ability(runtime_key));
+        crate::op_event!(
+            component = axon_bridge,
+            kind = local_runtime_unregister,
+            ability = name,
+            runtime_key = runtime_key,
+        );
+        Ok(())
     }
 
     fn runtime_handlers_for(&self, name: &str) -> RuntimeHandlerSet {
@@ -965,9 +2218,15 @@ impl AxonAbilityCatalog {
         handlers
     }
 
-    fn sync_runtime_ability(&self, name: &str) {
+    fn sync_runtime_ability(&self, name: &str) -> anyhow::Result<()> {
         let handlers = self.runtime_handlers_for(name);
-        self.sync_runtime_ability_from_handlers(name, handlers);
+        self.sync_runtime_ability_from_handlers(name, handlers)
+    }
+
+    fn sync_static_runtime_ability_or_panic(&self, name: &str) {
+        self.sync_runtime_ability(name).unwrap_or_else(|error| {
+            panic!("static ability {name:?} failed to sync into LocalRuntime: {error}")
+        });
     }
 
     /// True when `ability` is present in the boot-time static catalogue.
@@ -997,20 +2256,84 @@ impl AxonAbilityCatalog {
             ability = ability,
             message = "dynamic ability registration attempted to shadow a boot-time ability",
         );
-        self.sync_runtime_ability(ability);
+        if let Err(error) = self.sync_runtime_ability(ability) {
+            let error_message = error.to_string();
+            crate::op_event!(
+                component = ability_dispatch,
+                kind = static_collision_resync_failed,
+                ability = ability,
+                error = error_message.as_str(),
+                message = "static ability collision was rejected, but restoring the static runtime binding failed",
+            );
+        }
         true
     }
 
-    fn sync_runtime_ability_from_handlers(&self, name: &str, handlers: RuntimeHandlerSet) {
+    fn sync_runtime_ability_from_handlers(
+        &self,
+        name: &str,
+        handlers: RuntimeHandlerSet,
+    ) -> anyhow::Result<()> {
         let modes = handlers.modes();
         if modes.is_empty() {
-            self.unregister_runtime_ability(name);
-            return;
+            return self.unregister_runtime_ability(name);
         }
+        let options = self.runtime_options_for(name, modes);
         self.replace_runtime_ability(
             name,
             runtime_handler_set_to_ability_fn(name.to_string(), handlers),
-            AbilityOptions::default().with_modes(modes),
+            options,
+        )
+    }
+
+    fn runtime_options_for(&self, name: &str, modes: AbilityCallModes) -> AbilityOptions {
+        let _ = name;
+        AbilityOptions::default().with_modes(modes)
+    }
+
+    fn assert_static_handler_slot_available(&self, name: &str, target_slot: &'static str) {
+        let mut conflicts = Vec::new();
+        if target_slot == "rpc" && self.rpc.contains_key(name) {
+            conflicts.push("rpc");
+        }
+        if target_slot == "rpc_with_env" && self.rpc.contains_key(name) {
+            conflicts.push("rpc");
+        }
+        if target_slot == "rpc_with_env" && self.rpc_with_env.contains_key(name) {
+            conflicts.push("rpc_with_env");
+        }
+        if target_slot == "rpc" && self.rpc_with_env.contains_key(name) {
+            conflicts.push("rpc_with_env");
+        }
+        if target_slot == "stream" && self.stream.contains_key(name) {
+            conflicts.push("stream");
+        }
+        if target_slot == "stream_with_env" && self.stream.contains_key(name) {
+            conflicts.push("stream");
+        }
+        if target_slot == "stream_with_env" && self.stream_with_env.contains_key(name) {
+            conflicts.push("stream_with_env");
+        }
+        if target_slot == "stream" && self.stream_with_env.contains_key(name) {
+            conflicts.push("stream_with_env");
+        }
+        if target_slot == "bidi" && self.bidi.contains_key(name) {
+            conflicts.push("bidi");
+        }
+        if target_slot == "bidi_with_env" && self.bidi.contains_key(name) {
+            conflicts.push("bidi");
+        }
+        if target_slot == "bidi_with_env" && self.bidi_with_env.contains_key(name) {
+            conflicts.push("bidi_with_env");
+        }
+        if target_slot == "bidi" && self.bidi_with_env.contains_key(name) {
+            conflicts.push("bidi_with_env");
+        }
+        assert!(
+            conflicts.is_empty(),
+            "ability {name:?} is already registered in static handler slot(s) {}; \
+             one call mode must have exactly one handler family",
+            conflicts.join(", ")
         );
     }
 
@@ -1031,9 +2354,16 @@ impl AxonAbilityCatalog {
         handler: LocalRpcHandler,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "rpc");
         self.owner.insert(name.clone(), owner);
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            None,
+            DescriptorCallMode::Rpc,
+        );
         self.rpc.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register an RPC handler with explicit owner AND a manifest
@@ -1056,19 +2386,25 @@ impl AxonAbilityCatalog {
         handler: LocalRpcHandler,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "rpc");
         self.owner.insert(name.clone(), owner);
-        self.manifests.insert(name.clone(), Arc::new(manifest));
+        let manifest = Arc::new(manifest);
+        self.manifests.insert(name.clone(), Arc::clone(&manifest));
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            Some(manifest.as_ref()),
+            DescriptorCallMode::Rpc,
+        );
         self.rpc.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Companion to [`register_rpc_with_spec`] for stream
     /// handlers. The manifest is shared between RPC + Stream
-    /// surfaces of the same ability — registering the manifest on
-    /// both call sites is allowed (last writer wins; in practice
-    /// both register the same `AbilityManifest` constant) so
-    /// callers can pick whichever register site they reach first
-    /// without having to coordinate ordering.
+    /// surfaces of the same ability. The control-plane record is
+    /// keyed by `(ability, descriptor_version, call_mode)`, so both
+    /// modes remain visible instead of overwriting one another.
     pub fn register_stream_with_spec(
         &mut self,
         ability: impl Into<String>,
@@ -1077,10 +2413,43 @@ impl AxonAbilityCatalog {
         handler: LocalStreamHandler,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "stream");
         self.owner.insert(name.clone(), owner);
-        self.manifests.insert(name.clone(), Arc::new(manifest));
+        let manifest = Arc::new(manifest);
+        self.manifests.insert(name.clone(), Arc::clone(&manifest));
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            Some(manifest.as_ref()),
+            DescriptorCallMode::Stream,
+        );
         self.stream.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
+    }
+
+    pub fn register_stream_with_spec_and_impl(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandler,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "stream");
+        self.owner.insert(name.clone(), owner);
+        let manifest = Arc::new(manifest);
+        self.manifests.insert(name.clone(), Arc::clone(&manifest));
+        self.register_control_plane_with_implementation(
+            &name,
+            &self.owner[&name],
+            Some(manifest.as_ref()),
+            DescriptorCallMode::Stream,
+            &implementation,
+        )?;
+        self.stream.insert(name.clone(), handler);
+        self.sync_static_runtime_ability_or_panic(&name);
+        Ok(())
     }
 
     /// Lookup the registered manifest, if any. Returns `None`
@@ -1119,10 +2488,10 @@ impl AxonAbilityCatalog {
     }
 
     /// Register an RPC handler under `ability`. Owner defaults to
-    /// [`OwnerKind::Device`] — the safe choice for the bulk of
-    /// today's catalogue (80%+ of system abilities are device-
-    /// bundle). New call sites should use [`register_rpc_with_owner`]
-    /// to declare the actual owner explicitly.
+    /// [`OwnerKind::Device`] — the safe choice for daemon-local host
+    /// abilities advertised by the device-profile Agent under device
+    /// authority. New call sites should use [`register_rpc_with_owner`]
+    /// to declare the actual authority projection explicitly.
     ///
     /// As of M0 commit 5 of the system-namespace migration, every
     /// production register site has migrated to the `_with_owner`
@@ -1145,9 +2514,16 @@ impl AxonAbilityCatalog {
         handler: LocalStreamHandler,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "stream");
         self.owner.insert(name.clone(), owner);
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            None,
+            DescriptorCallMode::Stream,
+        );
         self.stream.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register a stream handler under `ability`. Same single-
@@ -1166,9 +2542,16 @@ impl AxonAbilityCatalog {
         handler: LocalBidiHandler,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "bidi");
         self.owner.insert(name.clone(), owner);
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            None,
+            DescriptorCallMode::Bidi,
+        );
         self.bidi.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register a bidi handler under `ability`. Same single-writer
@@ -1199,9 +2582,16 @@ impl AxonAbilityCatalog {
         handler: LocalRpcHandlerWithEnvelope,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "rpc_with_env");
         self.owner.insert(name.clone(), owner);
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            None,
+            DescriptorCallMode::Rpc,
+        );
         self.rpc_with_env.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register an envelope-aware RPC handler with explicit owner and manifest.
@@ -1219,10 +2609,18 @@ impl AxonAbilityCatalog {
         handler: LocalRpcHandlerWithEnvelope,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "rpc_with_env");
         self.owner.insert(name.clone(), owner);
-        self.manifests.insert(name.clone(), Arc::new(manifest));
+        let manifest = Arc::new(manifest);
+        self.manifests.insert(name.clone(), Arc::clone(&manifest));
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            Some(manifest.as_ref()),
+            DescriptorCallMode::Rpc,
+        );
         self.rpc_with_env.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register an envelope-aware RPC handler. Used by abilities
@@ -1255,9 +2653,16 @@ impl AxonAbilityCatalog {
         handler: LocalStreamHandlerWithEnvelope,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "stream_with_env");
         self.owner.insert(name.clone(), owner);
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            None,
+            DescriptorCallMode::Stream,
+        );
         self.stream_with_env.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register an envelope-aware stream handler with explicit owner and
@@ -1270,10 +2675,18 @@ impl AxonAbilityCatalog {
         handler: LocalStreamHandlerWithEnvelope,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "stream_with_env");
         self.owner.insert(name.clone(), owner);
-        self.manifests.insert(name.clone(), Arc::new(manifest));
+        let manifest = Arc::new(manifest);
+        self.manifests.insert(name.clone(), Arc::clone(&manifest));
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            Some(manifest.as_ref()),
+            DescriptorCallMode::Stream,
+        );
         self.stream_with_env.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Envelope-aware stream variant. See `register_rpc_with_envelope`
@@ -1296,9 +2709,16 @@ impl AxonAbilityCatalog {
         handler: LocalBidiHandlerWithEnvelope,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "bidi_with_env");
         self.owner.insert(name.clone(), owner);
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            None,
+            DescriptorCallMode::Bidi,
+        );
         self.bidi_with_env.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register an envelope-aware bidi handler with explicit owner and
@@ -1311,10 +2731,18 @@ impl AxonAbilityCatalog {
         handler: LocalBidiHandlerWithEnvelope,
     ) {
         let name = ability.into();
+        self.assert_static_handler_slot_available(&name, "bidi_with_env");
         self.owner.insert(name.clone(), owner);
-        self.manifests.insert(name.clone(), Arc::new(manifest));
+        let manifest = Arc::new(manifest);
+        self.manifests.insert(name.clone(), Arc::clone(&manifest));
+        self.register_native_control_plane(
+            &name,
+            &self.owner[&name],
+            Some(manifest.as_ref()),
+            DescriptorCallMode::Bidi,
+        );
         self.bidi_with_env.insert(name.clone(), handler);
-        self.sync_runtime_ability(&name);
+        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
@@ -1385,9 +2813,25 @@ impl AxonAbilityCatalog {
     /// the only writer; B4 will introduce a process-wide
     /// `Arc<Mutex<AxonAbilityCatalog>>` if hot-reload lands).
     pub fn unregister(&mut self, ability: &str) -> bool {
+        let runtime_key = if self.has_static_ability(ability) {
+            Some(self.runtime_ability_key(ability).unwrap_or_else(|error| {
+                panic!(
+                    "static ability {ability:?} has no unique LocalRuntime key before unregister: {error}"
+                )
+            }))
+        } else {
+            None
+        };
         let present = self.drain_static(ability);
         if present {
-            self.sync_runtime_ability(ability);
+            if let (Some(runtime), Some(runtime_key)) =
+                (self.runtime.as_ref(), runtime_key.as_ref())
+            {
+                self.unregister_runtime_ability_by_key(runtime, ability, runtime_key)
+                    .unwrap_or_else(|error| {
+                        panic!("static ability {ability:?} failed to unregister from LocalRuntime: {error}")
+                    });
+            }
         }
         present
     }
@@ -1414,6 +2858,10 @@ impl AxonAbilityCatalog {
         self.bidi_with_env.remove(ability);
         self.owner.remove(ability);
         self.manifests.remove(ability);
+        self.control_plane
+            .write()
+            .expect("control_plane RwLock poisoned")
+            .remove(ability);
         present
     }
 
@@ -1438,22 +2886,8 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalRpcHandler,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
-            dyn_ext.rpc.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::rpc_with_spec(ability, owner, manifest, handler).commit(self)
     }
 
     /// Hot-register an RPC handler without a manifest. Used by
@@ -1465,21 +2899,8 @@ impl AxonAbilityCatalog {
         ability: impl Into<String>,
         owner: OwnerKind,
         handler: LocalRpcHandler,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.rpc.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::rpc(ability, owner, handler).commit(self)
     }
 
     /// Hot-register a STREAM handler with a manifest. The reflective
@@ -1494,22 +2915,32 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalStreamHandler,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
-            dyn_ext.stream.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        self.hot_register_stream_with_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            ControlPlaneImplementation::native_daemon(),
+        )
+    }
+
+    pub fn hot_register_stream_with_spec_and_impl(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandler,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::stream_with_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            implementation,
+        )
+        .commit(self)
     }
 
     /// Hot-register an envelope-aware RPC handler in the dynamic side table.
@@ -1520,21 +2951,8 @@ impl AxonAbilityCatalog {
         ability: impl Into<String>,
         owner: OwnerKind,
         handler: LocalRpcHandlerWithEnvelope,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.rpc_with_env.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::rpc_with_envelope(ability, owner, handler).commit(self)
     }
 
     /// Hot-register an envelope-aware RPC handler with explicit owner and
@@ -1545,22 +2963,32 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
-            dyn_ext.rpc_with_env.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        self.hot_register_rpc_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            ControlPlaneImplementation::native_daemon(),
+        )
+    }
+
+    pub fn hot_register_rpc_with_envelope_and_spec_and_impl(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::rpc_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            implementation,
+        )
+        .commit(self)
     }
 
     /// Hot-register an envelope-aware stream handler in the dynamic side table.
@@ -1569,21 +2997,8 @@ impl AxonAbilityCatalog {
         ability: impl Into<String>,
         owner: OwnerKind,
         handler: LocalStreamHandlerWithEnvelope,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.stream_with_env.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::stream_with_envelope(ability, owner, handler).commit(self)
     }
 
     /// Hot-register an envelope-aware stream handler with explicit owner and
@@ -1594,22 +3009,32 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
-            dyn_ext.stream_with_env.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        self.hot_register_stream_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            ControlPlaneImplementation::native_daemon(),
+        )
+    }
+
+    pub fn hot_register_stream_with_envelope_and_spec_and_impl(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::stream_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            implementation,
+        )
+        .commit(self)
     }
 
     /// Hot-register an envelope-aware bidi handler in the dynamic side table.
@@ -1618,21 +3043,8 @@ impl AxonAbilityCatalog {
         ability: impl Into<String>,
         owner: OwnerKind,
         handler: LocalBidiHandlerWithEnvelope,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.bidi_with_env.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::bidi_with_envelope(ability, owner, handler).commit(self)
     }
 
     /// Hot-register an envelope-aware bidi handler with explicit owner and
@@ -1643,22 +3055,32 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
-    ) {
-        let name = ability.into();
-        if self.reject_dynamic_shadow_of_static(&name) {
-            return;
-        }
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(&name);
-            dyn_ext.owner.insert(name.clone(), owner);
-            dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
-            dyn_ext.bidi_with_env.insert(name.clone(), handler);
-        }
-        self.sync_runtime_ability(&name);
+    ) -> anyhow::Result<()> {
+        self.hot_register_bidi_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            ControlPlaneImplementation::native_daemon(),
+        )
+    }
+
+    pub fn hot_register_bidi_with_envelope_and_spec_and_impl(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalBidiHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::bidi_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            implementation,
+        )
+        .commit(self)
     }
 
     /// Remove every dynamic-side trace of `ability` (the parallel
@@ -1667,24 +3089,63 @@ impl AxonAbilityCatalog {
     /// **not** touched — the hot-reload sink writes exclusively
     /// through the dynamic surface, so the static side is the
     /// boot-time truth and must not be re-mutated post-boot.
-    pub fn hot_unregister(&self, ability: &str) -> bool {
-        let mut dyn_ext = self
+    pub fn hot_unregister(&self, ability: &str) -> anyhow::Result<bool> {
+        let present = self
             .dynamic_ext
-            .write()
-            .expect("dynamic_ext RwLock poisoned");
-        let present = dyn_ext.drain(ability);
-        if present {
-            drop(dyn_ext);
-            self.sync_runtime_ability(ability);
+            .read()
+            .expect("dynamic_ext RwLock poisoned")
+            .contains(ability);
+        if !present {
+            return Ok(false);
         }
-        present
+        let runtime_key = self.runtime_ability_key(ability)?;
+        {
+            let mut dyn_ext = self
+                .dynamic_ext
+                .write()
+                .expect("dynamic_ext RwLock poisoned");
+            if !dyn_ext.drain(ability) {
+                return Ok(false);
+            }
+        }
+        self.control_plane
+            .write()
+            .expect("control_plane RwLock poisoned")
+            .remove(ability);
+        if let Some(runtime) = self.runtime.as_ref() {
+            self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)?;
+        }
+        Ok(true)
     }
 
     /// Remove a post-boot ability from the dynamic side and from
-    /// LocalRuntime even when the name was originally boot-registered in the
-    /// static maps. Plugin package reload uses this to make remove/update
-    /// visible without mutating the boot-time metadata maps behind `Arc`.
-    pub fn hot_remove_runtime_ability(&self, ability: &str) {
+    /// LocalRuntime.
+    ///
+    /// Static boot abilities are immutable catalogue facts. This API is the
+    /// dynamic package/MCP removal path; if a static name reaches it, the call
+    /// is rejected as a no-op so boot metadata, control-plane records, and
+    /// LocalRuntime cannot be desynchronised.
+    #[must_use]
+    pub fn hot_remove_runtime_ability(&self, ability: &str) -> anyhow::Result<bool> {
+        if self.has_static_ability(ability) {
+            return Ok(false);
+        }
+        let present = {
+            let dyn_ext = self
+                .dynamic_ext
+                .read()
+                .expect("dynamic_ext RwLock poisoned");
+            dyn_ext.contains(ability)
+                || self
+                    .control_plane
+                    .read()
+                    .expect("control_plane RwLock poisoned")
+                    .contains(ability)
+        };
+        if !present {
+            return Ok(false);
+        }
+        let runtime_key = self.runtime_ability_key(ability)?;
         {
             let mut dyn_ext = self
                 .dynamic_ext
@@ -1692,7 +3153,14 @@ impl AxonAbilityCatalog {
                 .expect("dynamic_ext RwLock poisoned");
             dyn_ext.drain(ability);
         }
-        self.unregister_runtime_ability(ability);
+        self.control_plane
+            .write()
+            .expect("control_plane RwLock poisoned")
+            .remove(ability);
+        if let Some(runtime) = self.runtime.as_ref() {
+            self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)?;
+        }
+        Ok(true)
     }
 
     /// True iff the dynamic side currently holds an entry for
@@ -1757,26 +3225,15 @@ impl AxonAbilityCatalog {
     /// honest if a future ability legitimately exposes both shapes).
     pub fn list_abilities(&self) -> Vec<String> {
         let mut names = BTreeSet::new();
-        if let Some(runtime) = self.runtime() {
-            names.extend(
-                block_on_runtime_sync(runtime.list_abilities())
-                    .into_iter()
-                    .map(|descriptor| descriptor.name),
-            );
-        } else {
-            names.extend(self.rpc.keys().cloned());
-            // Envelope-aware variants are part of the same discovery
-            // surface — meta.list_abilities should not care which
-            // signature an ability registered under.
-            names.extend(self.rpc_with_env.keys().cloned());
-            names.extend(self.stream.keys().cloned());
-            names.extend(self.stream_with_env.keys().cloned());
-            names.extend(self.bidi.keys().cloned());
-            names.extend(self.bidi_with_env.keys().cloned());
-        }
-        // Hot-reload side: union dynamic names even when LocalRuntime
-        // is attached. Runtime metadata covers boot-registered
-        // abilities; `dynamic_ext` is the post-boot extension plane.
+        names.extend(self.rpc.keys().cloned());
+        // Envelope-aware variants are part of the same discovery
+        // surface — meta.list_abilities should not care which
+        // signature an ability registered under.
+        names.extend(self.rpc_with_env.keys().cloned());
+        names.extend(self.stream.keys().cloned());
+        names.extend(self.stream_with_env.keys().cloned());
+        names.extend(self.bidi.keys().cloned());
+        names.extend(self.bidi_with_env.keys().cloned());
         names.extend(self.list_dynamic_abilities());
         names.into_iter().collect()
     }
@@ -1792,7 +3249,13 @@ impl AxonAbilityCatalog {
     /// as registered.
     pub fn has_rpc(&self, ability: &str) -> bool {
         if let Some(runtime) = self.runtime() {
-            if block_on_runtime_sync(runtime.ability_options(ability))
+            if self
+                .runtime_ability_key_for_mode(ability, DescriptorCallMode::Rpc)
+                .ok()
+                .flatten()
+                .and_then(|runtime_key| {
+                    block_on_runtime_sync(runtime.ability_options(&runtime_key))
+                })
                 .map(|options| options.modes.rpc)
                 .unwrap_or(false)
             {
@@ -1815,17 +3278,8 @@ impl AxonAbilityCatalog {
     /// miss.
     pub fn list_rpc_names(&self) -> Vec<String> {
         let mut names = BTreeSet::new();
-        if let Some(runtime) = self.runtime() {
-            names.extend(
-                block_on_runtime_sync(runtime.list_abilities())
-                    .into_iter()
-                    .filter(|descriptor| descriptor.options.modes.rpc)
-                    .map(|descriptor| descriptor.name),
-            );
-        } else {
-            names.extend(self.rpc.keys().cloned());
-            names.extend(self.rpc_with_env.keys().cloned());
-        }
+        names.extend(self.rpc.keys().cloned());
+        names.extend(self.rpc_with_env.keys().cloned());
         {
             let dyn_ext = self
                 .dynamic_ext
@@ -1937,7 +3391,13 @@ impl AxonAbilityCatalog {
     /// side table on static-map miss.
     pub fn has_stream(&self, ability: &str) -> bool {
         if let Some(runtime) = self.runtime() {
-            if block_on_runtime_sync(runtime.ability_options(ability))
+            if self
+                .runtime_ability_key_for_mode(ability, DescriptorCallMode::Stream)
+                .ok()
+                .flatten()
+                .and_then(|runtime_key| {
+                    block_on_runtime_sync(runtime.ability_options(&runtime_key))
+                })
                 .map(|options| options.modes.stream)
                 .unwrap_or(false)
             {
@@ -1964,7 +3424,13 @@ impl AxonAbilityCatalog {
     /// the dynamic side table on static-map miss.
     pub fn has_bidi(&self, ability: &str) -> bool {
         if let Some(runtime) = self.runtime() {
-            if block_on_runtime_sync(runtime.ability_options(ability))
+            if self
+                .runtime_ability_key_for_mode(ability, DescriptorCallMode::Bidi)
+                .ok()
+                .flatten()
+                .and_then(|runtime_key| {
+                    block_on_runtime_sync(runtime.ability_options(&runtime_key))
+                })
                 .map(|options| options.modes.bidi)
                 .unwrap_or(false)
             {
@@ -2003,6 +3469,9 @@ impl AxonAbilityCatalog {
                 "AxonAbilityCatalog has no LocalRuntime attached; use new() or new_with_runtime()"
             )
         })?;
+        let target = self
+            .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Rpc)
+            .map_err(|err| anyhow::anyhow!("{err}; local Axon runtime loopback path"))?;
         crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(runtime, target).map_err(
             |err| {
                 if crate::runtime::local_runtime_invoker::is_not_found_error(&err) {
@@ -2034,6 +3503,13 @@ impl AxonAbilityCatalog {
             )
         })?;
         let ability = target.ability.clone();
+        let target = self
+            .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Stream)
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "no local stream handler registered for ability {ability} (local Axon runtime): {err}"
+                )
+            })?;
         runtime_stream_source(runtime, target).map_err(|err| {
             let msg = err.to_string();
             if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
@@ -2066,6 +3542,13 @@ impl AxonAbilityCatalog {
             )
         })?;
         let ability = target.ability.clone();
+        let target = self
+            .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Bidi)
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "no local bidi handler registered for ability {ability} (local Axon runtime): {err}"
+                )
+            })?;
         runtime_bidi_source(runtime, target).map_err(|err| {
             let msg = err.to_string();
             if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
@@ -2373,7 +3856,7 @@ mod tests {
             "media.x.snapshot",
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 Ok(json!({
-                    "saw_subject": env.subject,
+                    "saw_subject": env.subject(),
                     "args_subject_was_present": false,
                 }))
             }),
@@ -2395,12 +3878,10 @@ mod tests {
     }
 
     #[test]
-    fn envelope_aware_handler_takes_precedence_over_legacy_handler() {
-        // If an ability is mistakenly registered under both shapes
-        // (a programming error), the envelope-aware path wins. Pin
-        // this so a future refactor that flipped precedence would
-        // surface here rather than silently routing media handlers
-        // through the args-only path that drops subject.
+    #[should_panic(expected = "one call mode must have exactly one handler family")]
+    fn duplicate_rpc_handler_family_fails_at_registration() {
+        // A programming error must fail at boot instead of silently
+        // choosing whichever handler family the dispatcher checks first.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc(
             "x.dual",
@@ -2410,30 +3891,22 @@ mod tests {
             "x.dual",
             Arc::new(|_env: EnvelopeContext, _args: Value| Ok(json!({"path": "envelope"}))),
         );
-        let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "x.dual".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
-        };
-        let resp = dispatcher.execute_rpc(target).unwrap();
-        assert_eq!(resp, json!({"path": "envelope"}));
     }
 
     #[test]
-    fn envelope_aware_handler_with_degenerate_subject_still_dispatches() {
-        // Legacy callers that don't set an explicit resource subject still
-        // reach the envelope-aware handler. Through LocalRuntime they receive
-        // the degenerate Axon subject (`subject = callee`); handlers that need
-        // a real resource URA must reject that at their own boundary.
+    fn envelope_aware_handler_without_subject_still_dispatches() {
+        // Callers that do not set an explicit resource subject still carry a
+        // complete AXIOM tuple. The local runtime sets subject=callee for root
+        // calls, and envelope-aware handlers must see that value instead of an
+        // erased `None`.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_envelope(
             "x.optional",
             Arc::new(|env: EnvelopeContext, _args: Value| {
-                Ok(json!({"subject_was_none": env.subject.is_none()}))
+                Ok(json!({
+                    "subject_present": true,
+                    "subject_eq_callee": env.subject() == env.callee(),
+                }))
             }),
         );
         let dispatcher = Arc::new(reg);
@@ -2446,7 +3919,10 @@ mod tests {
             causal_context: None,
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
-        assert_eq!(resp, json!({"subject_was_none": false}));
+        assert_eq!(
+            resp,
+            json!({"subject_present": true, "subject_eq_callee": true})
+        );
     }
 
     #[test]
@@ -2455,7 +3931,7 @@ mod tests {
         reg.register_stream_with_envelope(
             "x.subscribe",
             Arc::new(|env: EnvelopeContext, _args: Value| {
-                let frame = json!({"subject_seen": env.subject});
+                let frame = json!({"subject_seen": env.subject()});
                 Ok(StreamSource::Snapshot(vec![frame]))
             }),
         );
@@ -2808,6 +4284,170 @@ mod tests {
     }
 
     #[test]
+    fn register_rpc_writes_control_plane_record() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
+
+        let record = reg
+            .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("control-plane lookup is unambiguous")
+            .expect("control-plane record");
+        assert_eq!(record.descriptor().name(), "fs.read");
+        assert_eq!(record.descriptor().version().as_str(), "1.0.0");
+        assert_eq!(record.descriptor().call_mode(), DescriptorCallMode::Rpc);
+        assert!(record.authority().predicate().governs_advertise());
+        assert!(record.authority().predicate().governs_invoke());
+        assert_eq!(record.authority().scope().owner_projection(), "device");
+        assert_eq!(
+            *record.implementation().source(),
+            AbilityImplSource::NativeDaemon
+        );
+        assert_eq!(
+            record.implementation().runtime_env().label(),
+            RuntimeEnv::daemon_native().label()
+        );
+        assert_ne!(record.descriptor().schema_hash().0, [0u8; 32]);
+        assert_ne!(record.implementation().impl_hash(), [0u8; 32]);
+    }
+
+    #[test]
+    fn runtime_registration_keeps_protocol_proof_unbound() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
+
+        let runtime = reg.runtime().expect("registry owns LocalRuntime");
+        let runtime_key = reg.runtime_ability_key("fs.read").expect("runtime key");
+        let options =
+            block_on_runtime_sync(runtime.ability_options(&runtime_key)).expect("runtime options");
+        let proof = options.proof_for_mode(AxonCallMode::Rpc);
+
+        assert!(
+            proof.is_unbound(),
+            "CLI daemon must not inject product-computed descriptor or impl hashes into Axon proof binding"
+        );
+    }
+
+    #[test]
+    fn control_plane_keeps_rpc_and_stream_records_for_same_ability() {
+        let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev"),
+        );
+        let stream_handler: LocalStreamHandler =
+            Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
+
+        reg.register_rpc_with_owner(
+            "agent.chat",
+            OwnerKind::Agent("agent".to_string()),
+            ok_handler(),
+        );
+        reg.register_stream_with_owner(
+            "agent.chat",
+            OwnerKind::Agent("agent".to_string()),
+            stream_handler,
+        );
+
+        let rpc = reg
+            .control_plane_record_for_mode("agent.chat", DescriptorCallMode::Rpc)
+            .expect("rpc control-plane lookup is unambiguous")
+            .expect("rpc control-plane record");
+        let stream = reg
+            .control_plane_record_for_mode("agent.chat", DescriptorCallMode::Stream)
+            .expect("stream control-plane lookup is unambiguous")
+            .expect("stream control-plane record");
+
+        assert_eq!(rpc.descriptor().call_mode(), DescriptorCallMode::Rpc);
+        assert_eq!(stream.descriptor().call_mode(), DescriptorCallMode::Stream);
+        let err = reg
+            .control_plane_record("agent.chat")
+            .expect_err("mode-agnostic lookup must not collapse same ability/version modes");
+        assert_eq!(err.matches.len(), 2);
+
+        let runtime = reg.runtime().expect("registry owns LocalRuntime");
+        let rpc_key = reg
+            .runtime_ability_key("agent.chat")
+            .expect("runtime rpc key");
+        let options =
+            block_on_runtime_sync(runtime.ability_options(&rpc_key)).expect("runtime options");
+        let rpc_proof = options.proof_for_mode(AxonCallMode::Rpc);
+        let stream_proof = options.proof_for_mode(AxonCallMode::Stream);
+
+        assert!(rpc_proof.is_unbound());
+        assert!(stream_proof.is_unbound());
+    }
+
+    #[test]
+    fn runtime_binding_facts_describe_daemon_binding_only() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
+
+        let record = reg
+            .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("control-plane lookup is unambiguous")
+            .expect("control-plane record");
+        let facts = reg
+            .runtime_binding_facts_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("runtime binding lookup is unambiguous")
+            .expect("runtime binding facts");
+
+        assert_eq!(
+            facts.descriptor_version,
+            record.descriptor().version().to_string()
+        );
+        assert_eq!(facts.call_mode, DescriptorCallMode::Rpc);
+        assert_eq!(
+            facts.schema_hash,
+            record.descriptor().schema_hash().prefixed_hex()
+        );
+        let descriptor_hash = record.descriptor().descriptor_hash().prefixed_hex();
+        assert_eq!(
+            facts.descriptor_hash.as_deref(),
+            Some(descriptor_hash.as_str())
+        );
+        assert_eq!(facts.implementation_source, "native_daemon");
+        assert_eq!(
+            facts.runtime_env,
+            record.implementation().runtime_env().label()
+        );
+        assert_eq!(facts.authority_owner_projection, "device");
+        assert!(facts.governs_advertise);
+        assert!(facts.governs_invoke);
+    }
+
+    #[test]
+    fn runtime_binding_facts_return_every_registered_mode() {
+        let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev"),
+        );
+        let stream_handler: LocalStreamHandler =
+            Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
+        reg.register_rpc_with_owner(
+            "agent.chat",
+            OwnerKind::Agent("agent".to_string()),
+            ok_handler(),
+        );
+        reg.register_stream_with_owner(
+            "agent.chat",
+            OwnerKind::Agent("agent".to_string()),
+            stream_handler,
+        );
+
+        let facts = reg
+            .runtime_binding_facts_for("agent.chat")
+            .expect("runtime binding lookups are unambiguous");
+        let modes = facts
+            .iter()
+            .map(|facts| facts.call_mode)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(facts.len(), 2);
+        assert_eq!(
+            modes,
+            BTreeSet::from([DescriptorCallMode::Rpc, DescriptorCallMode::Stream])
+        );
+    }
+
+    #[test]
     fn owner_round_trips_for_representative_samples_via_register_with_owner() {
         // Pin the contract: every ability registered via the
         // `_with_owner` family round-trips through `lookup_owner`
@@ -3003,47 +4643,19 @@ mod tests {
     }
 
     #[test]
-    fn last_writer_wins_on_duplicate_canonical_registration() {
-        // Pin: registering `device.foo` twice with different
-        // handlers produces "last write wins" semantics. The
-        // single-writer model documents this; the test makes
-        // sure no future change accidentally fan-outs the
-        // dispatch (e.g. a bag-of-handlers + walk-and-pick
-        // shape). Replaces the M1-era
-        // `aliased_canonical_does_not_collide_with_existing_registrations`
-        // test which exercised the same invariant against the
-        // `_aliased` family.
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let first_calls = Arc::new(AtomicUsize::new(0));
-        let second_calls = Arc::new(AtomicUsize::new(0));
+    #[should_panic(expected = "already registered")]
+    fn duplicate_canonical_registration_is_rejected() {
         let mut reg = AxonAbilityCatalog::new();
-        let f = Arc::clone(&first_calls);
         reg.register_rpc_with_owner(
             "device.x.foo",
             OwnerKind::Device,
-            Arc::new(move |_args| {
-                f.fetch_add(1, Ordering::SeqCst);
-                Ok(json!({"who": "first"}))
-            }),
+            Arc::new(|_| Ok(json!({"who": "first"}))),
         );
-        let s = Arc::clone(&second_calls);
         reg.register_rpc_with_owner(
             "device.x.foo",
             OwnerKind::Device,
-            Arc::new(move |_args| {
-                s.fetch_add(1, Ordering::SeqCst);
-                Ok(json!({"who": "second"}))
-            }),
+            Arc::new(|_| Ok(json!({"who": "second"}))),
         );
-        let dispatcher = Arc::new(reg);
-        let mut t = ping_target_local();
-        t.ability = "device.x.foo".into();
-        let resp = dispatcher.execute_rpc(t).unwrap();
-        // The aliased registration replaced the prior entry —
-        // single-writer "last write wins" semantics.
-        assert_eq!(resp, json!({"who": "second"}));
-        assert_eq!(first_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(second_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -3186,7 +4798,8 @@ mod tests {
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::json!({"hot": true}))),
-        );
+        )
+        .expect("dynamic RPC registers");
 
         assert!(reg.has_rpc("mcp_wikipedia__search"));
         let handler = reg
@@ -3213,7 +4826,8 @@ mod tests {
             OwnerKind::Agent("mcp".to_string()),
             manifest,
             Arc::new(|_args| Ok(serde_json::json!({}))),
-        );
+        )
+        .expect("dynamic RPC with manifest registers");
 
         // Static `manifest_for` is intentionally unchanged — the
         // distinction matters because some callers want strict
@@ -3226,13 +4840,44 @@ mod tests {
     }
 
     #[test]
-    fn hot_register_replaces_prior_dynamic_call_mode() {
+    fn hot_register_stream_with_explicit_impl_writes_control_plane_once() {
+        let reg = Arc::new(AxonAbilityCatalog::new());
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "search",
+            "Search Wikipedia.",
+            serde_json::json!({"type": "object"}),
+        )
+        .unwrap();
+
+        reg.hot_register_stream_with_spec_and_impl(
+            "mcp_wikipedia__search",
+            OwnerKind::Agent("mcp".to_string()),
+            manifest,
+            Arc::new(|_args| Ok(StreamSource::Snapshot(Vec::new()))),
+            ControlPlaneImplementation::new(AbilityImplSource::Mcp, RuntimeEnv::mcp("wikipedia")),
+        )
+        .expect("dynamic MCP stream registers");
+
+        let record = reg
+            .control_plane_record_for_mode("mcp_wikipedia__search", DescriptorCallMode::Stream)
+            .expect("stream control-plane lookup is unambiguous")
+            .expect("stream control-plane record");
+        assert_eq!(*record.implementation().source(), AbilityImplSource::Mcp);
+        assert_eq!(
+            record.implementation().runtime_env().label(),
+            RuntimeEnv::mcp("wikipedia").label()
+        );
+    }
+
+    #[test]
+    fn hot_register_preserves_prior_dynamic_call_modes() {
         let reg = Arc::new(AxonAbilityCatalog::new());
         reg.hot_register_rpc(
             "plugin.mode_shift",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"mode": "rpc"}))),
-        );
+        )
+        .expect("dynamic RPC registers");
         assert!(reg.has_rpc("plugin.mode_shift"));
         assert!(!reg.has_stream("plugin.mode_shift"));
 
@@ -3247,13 +4892,26 @@ mod tests {
             OwnerKind::Device,
             manifest,
             Arc::new(|_args| Ok(StreamSource::Snapshot(Vec::new()))),
-        );
+        )
+        .expect("dynamic stream registers");
 
         assert!(
-            !reg.has_rpc("plugin.mode_shift"),
-            "hot-registering a stream handler must drain the stale dynamic RPC mode"
+            reg.has_rpc("plugin.mode_shift"),
+            "hot-registering a stream handler must preserve the existing dynamic RPC mode"
         );
         assert!(reg.has_stream("plugin.mode_shift"));
+        assert!(
+            reg.control_plane_record_for_mode("plugin.mode_shift", DescriptorCallMode::Rpc)
+                .expect("RPC control-plane lookup is unambiguous")
+                .is_some(),
+            "RPC control-plane record must survive stream registration"
+        );
+        assert!(
+            reg.control_plane_record_for_mode("plugin.mode_shift", DescriptorCallMode::Stream)
+                .expect("stream control-plane lookup is unambiguous")
+                .is_some(),
+            "stream control-plane record must be present"
+        );
         assert_eq!(
             reg.list_dynamic_abilities(),
             vec!["plugin.mode_shift".to_string()]
@@ -3279,11 +4937,14 @@ mod tests {
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::Value::Null)),
-        );
+        )
+        .expect("dynamic RPC registers");
         assert!(reg.has_rpc("mcp_wikipedia__search"));
         assert!(reg.has_rpc("fs.read"));
 
-        let removed = reg.hot_unregister("mcp_wikipedia__search");
+        let removed = reg
+            .hot_unregister("mcp_wikipedia__search")
+            .expect("dynamic RPC unregisters");
         assert!(removed, "hot_unregister reports the entry was present");
         assert!(!reg.has_rpc("mcp_wikipedia__search"));
         // Static entry untouched.
@@ -3291,7 +4952,9 @@ mod tests {
 
         // Calling hot_unregister on a static name is a silent no-op
         // (returns false) — the static side is the boot-time truth.
-        let static_removed = reg.hot_unregister("fs.read");
+        let static_removed = reg
+            .hot_unregister("fs.read")
+            .expect("static hot-unregister is a no-op");
         assert!(
             !static_removed,
             "hot_unregister does not touch the static map"
@@ -3317,7 +4980,8 @@ mod tests {
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::Value::Null)),
-        );
+        )
+        .expect("dynamic RPC registers");
         let names = reg.list_abilities();
         assert!(names.contains(&"fs.read".to_string()));
         assert!(names.contains(&"mcp_wikipedia__search".to_string()));
@@ -3341,10 +5005,16 @@ mod tests {
             Arc::new(|_args| Ok(serde_json::json!({"from": "static"}))),
         );
         let reg = Arc::new(reg);
-        reg.hot_register_rpc(
-            "fs.read",
-            OwnerKind::Agent("mcp".to_string()),
-            Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic"}))),
+        let err = reg
+            .hot_register_rpc(
+                "fs.read",
+                OwnerKind::Agent("mcp".to_string()),
+                Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic"}))),
+            )
+            .expect_err("static collision is rejected");
+        assert!(
+            err.to_string().contains("shadows a static ability"),
+            "{err}"
         );
         assert!(
             !reg.has_dynamic("fs.read"),
@@ -3372,10 +5042,16 @@ mod tests {
         );
         let reg = Arc::new(reg);
 
-        reg.hot_register_rpc(
-            "device.keyring.sign",
-            OwnerKind::Agent("malicious-plugin".to_string()),
-            Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic-runtime"}))),
+        let err = reg
+            .hot_register_rpc(
+                "device.keyring.sign",
+                OwnerKind::Agent("malicious-plugin".to_string()),
+                Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic-runtime"}))),
+            )
+            .expect_err("static collision is rejected");
+        assert!(
+            err.to_string().contains("shadows a static ability"),
+            "{err}"
         );
 
         assert!(
@@ -3389,6 +5065,31 @@ mod tests {
             out,
             serde_json::json!({"from": "static-runtime"}),
             "LocalRuntime must continue routing to the boot-registered handler"
+        );
+    }
+
+    #[test]
+    fn hot_remove_runtime_ability_rejects_static_catalog_names() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner(
+            "device.keyring.sign",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::json!({"from": "static-runtime"}))),
+        );
+        let reg = Arc::new(reg);
+
+        assert!(
+            !reg.hot_remove_runtime_ability("device.keyring.sign")
+                .expect("static hot-remove is a no-op"),
+            "dynamic removal API must reject static catalogue names"
+        );
+        let out = reg
+            .invoke_rpc_json("device.keyring.sign", serde_json::json!({}))
+            .expect("static runtime handler remains invokable after rejected hot remove");
+        assert_eq!(
+            out,
+            serde_json::json!({"from": "static-runtime"}),
+            "static catalogue and LocalRuntime must stay in sync"
         );
     }
 }

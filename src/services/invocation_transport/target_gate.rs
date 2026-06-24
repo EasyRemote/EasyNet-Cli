@@ -30,7 +30,7 @@ use crate::services::invocation_transport::deps::{
 use crate::services::invocation_transport::route_resolver::{
     DaemonRouteResolver, LocalRuntimeAuthoritySnapshot, ResolveRouteFailure, SelectedInvokeRoute,
 };
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, EnvelopeOpen};
+use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope};
 
 /// Resolve-first gate over the daemon's routing authorities. Cheap to
 /// construct (every plane is `Arc`-shaped); the service builds one per
@@ -340,21 +340,4 @@ pub(crate) fn envelope_with_selected_callee(
         profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
     });
     envelope
-}
-
-/// Apply the selected route to a bidi frame-0 `EnvelopeOpen`:
-/// selected callee on the envelope, selected dispatch key as the
-/// target ability name.
-pub(crate) fn envelope_open_with_selected_route(
-    envelope_open: &EnvelopeOpen,
-    selected_route: &SelectedInvokeRoute,
-) -> EnvelopeOpen {
-    let mut selected = envelope_open.clone();
-    if let Some(envelope) = selected.envelope.take() {
-        selected.envelope = Some(envelope_with_selected_callee(envelope, selected_route));
-    }
-    if let Some(target) = selected.target.as_mut() {
-        target.ability_name = selected_route.dispatch_key();
-    }
-    selected
 }

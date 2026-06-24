@@ -3,7 +3,7 @@
 //
 // File: src/services/invocation_transport/stream_dispatcher.rs
 // Description: Owns every `InvokeStream` routing decision the daemon
-//              makes after admission (commit-plan-2 Axis E / E2):
+//              makes after transport policy (commit-plan-2 Axis E / E2):
 //
 //                * `federation.subscribe_directory`     — v1 presence pump
 //                * `federation.subscribe_directory_v2`  — DirectoryEvent
@@ -30,13 +30,13 @@ use easynet_axon::pb::axon::v1::{InvokeServerStreamRequest, InvokeStreamChunk};
 use crate::services::invocation_transport::deps::{DirectoryPlane, RuntimePlane};
 use crate::services::invocation_transport::federation_wrappers;
 use crate::services::invocation_transport::invocation_wire::{
-    status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
-    FEDERATION_RESULT_CONTENT_TYPE,
+    status_from_axon_invoke_error, status_from_dispatch_key_mismatch, target_ura_from_envelope,
+    BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::services::invocation_transport::route_resolver::SelectedInvokeRoute;
 use crate::services::invocation_transport::target_gate::{
-    envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
-    route_selected_remote_host_status, TargetGate,
+    route_negative_status, route_profile_blocked_status, route_selected_remote_host_status,
+    TargetGate,
 };
 
 /// `InvokeStream` routing surface. Cheap per-call construction: both
@@ -295,12 +295,14 @@ impl StreamDispatcher {
                  is not wired at boot"
             )));
         };
-        let dispatch_ability = selected_route.dispatch_key();
-        let Some(options) = runtime.ability_options(&dispatch_ability).await else {
+        let dispatch_ability = selected_route.ability_ura.clone();
+        let public_ability = selected_route.dispatch_name.as_str();
+        let runtime_ability = dispatch_ability.clone();
+        let Some(options) = runtime.ability_options(&runtime_ability).await else {
             return Err(Status::not_found(format!(
                 "InvokeStream: selected route `{}` dispatches `{}` but that ability is not \
-                 registered in Axon LocalRuntime",
-                selected_route.route_ura, dispatch_ability
+                 registered in Axon LocalRuntime as `{}`",
+                selected_route.route_ura, dispatch_ability, runtime_ability
             )));
         };
         if !options.modes.stream {
@@ -310,13 +312,21 @@ impl StreamDispatcher {
                 selected_route.route_ura, dispatch_ability
             )));
         }
+        if public_ability != ability {
+            return Err(status_from_dispatch_key_mismatch(
+                "InvokeStream",
+                ability,
+                public_ability,
+                &selected_route.route_ura,
+            ));
+        }
         let wire = match request.envelope.clone() {
             Some(envelope) => {
-                let envelope = envelope_with_selected_callee(envelope, &selected_route);
-                crate::runtime::axon_bridge::dispatch_shim::admitted_from_wire_parts(
+                crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
                     dispatch_ability.clone(),
                     request.arguments.clone(),
+                    request.metadata.clone(),
                 )
             }
             None => Err(Box::new(

@@ -36,6 +36,88 @@
 use crate::core::domain::NodeId;
 use serde_json::Value;
 
+/// Descriptor-bound local invocation target for a canonical Ability URA.
+///
+/// This value object keeps the daemon-local dispatch key separate from the
+/// protocol owner that advertises the AbilityDescriptor. A caller may execute
+/// `claude.chat` through the local registry while the signed Axon invocation
+/// names `easynet:///r/<realm>/agent/<user>.claude` as `callee`.
+///
+/// It is not a route resolver: code still runs in this daemon. It only binds
+/// the tuple fields needed to construct one descriptor-bound local invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalAbilityTarget {
+    dispatch_name: String,
+    callee_ura: String,
+    default_subject_ura: String,
+}
+
+impl LocalAbilityTarget {
+    /// Build a local target from a canonical Ability URA selector.
+    ///
+    /// Invariant 1: `dispatch_name` is the daemon registry key.
+    /// Invariant 2: `callee_ura` is the Ability owner identity.
+    /// Invariant 3: `default_subject_ura` is descriptor-bound. Agent/device
+    /// owners can be subjects directly; hub owners use the Ability URA because
+    /// Axon's descriptor-bound subject set intentionally excludes Hub.
+    #[must_use]
+    pub fn from_selector(selector: &crate::ura::AbilitySelector) -> Self {
+        let default_subject_ura = if selector.owner_kind() == "hub" {
+            selector.ability_ura()
+        } else {
+            selector.owner_ura()
+        };
+        Self {
+            dispatch_name: selector.local_registry_ability().to_string(),
+            callee_ura: selector.owner_ura().to_string(),
+            default_subject_ura: default_subject_ura.to_string(),
+        }
+    }
+
+    /// Build from already-resolved protocol identities.
+    pub fn new(
+        dispatch_name: impl Into<String>,
+        callee_ura: impl Into<String>,
+        default_subject_ura: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let dispatch_name = dispatch_name.into();
+        let callee_ura = callee_ura.into();
+        let default_subject_ura = default_subject_ura.into();
+        if dispatch_name.trim().is_empty() {
+            anyhow::bail!("local ability target dispatch_name must not be empty");
+        }
+        if callee_ura.trim().is_empty() {
+            anyhow::bail!("local ability target callee_ura must not be empty");
+        }
+        if default_subject_ura.trim().is_empty() {
+            anyhow::bail!("local ability target default_subject_ura must not be empty");
+        }
+        Ok(Self {
+            dispatch_name,
+            callee_ura,
+            default_subject_ura,
+        })
+    }
+
+    /// Daemon `AxonAbilityCatalog` key used for local dispatch.
+    #[must_use]
+    pub fn dispatch_name(&self) -> &str {
+        &self.dispatch_name
+    }
+
+    /// Canonical Agent/Device/Hub identity that advertises the ability.
+    #[must_use]
+    pub fn callee_ura(&self) -> &str {
+        &self.callee_ura
+    }
+
+    /// Subject used when the caller did not provide an explicit subject.
+    #[must_use]
+    pub fn default_subject_ura(&self) -> &str {
+        &self.default_subject_ura
+    }
+}
+
 /// Caller's request *before* the resolver has decided scope or
 /// call mode. Built by the IPC layer (or by a future planner) from
 /// Client-supplied parameters.
@@ -86,9 +168,10 @@ pub struct InvocationTarget {
     /// need a subject MUST consume it from this field; they MUST
     /// NOT accept a `subject` key in `normalized_args`. The
     /// `reject_subject_in_args` guard in media_abilities enforces
-    /// the negative half. Default `None` still produces a signed
-    /// local envelope with `subject = callee`; explicit subjects are
-    /// required only for resource-scoped abilities.
+    /// the negative half. `None` is not an implicit missing tuple:
+    /// the LocalRuntime adapter resolves it through its typed
+    /// `LocalRuntimeSubjectPolicy` as a descriptor default. Resource
+    /// scoped abilities must still provide an explicit subject.
     pub subject: Option<String>,
     /// Optional AXIOM causal context for local/runtime calls that need to bind
     /// the invocation to a prior receipt. This is how local callers represent
@@ -101,7 +184,7 @@ impl InvocationTarget {
     /// callers that have envelope context (the IPC translator, or a
     /// future planner). In-process tests construct the literal
     /// directly with `subject: None`; the LocalRuntime adapter maps
-    /// that to the degenerate `subject = callee` envelope shape.
+    /// that through a typed descriptor-default policy.
     pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
         self.subject = Some(subject.into());
         self

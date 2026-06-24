@@ -52,7 +52,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn handle(
     let session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
         session_id: session_id.clone(),
         session_token,
-        creator_caller_ura: env.caller.clone(),
+        creator_caller_ura: Some(env.caller().to_string()),
         consent,
         subject_ura: entry.resource_ura.clone(),
         subject_type: entry.kind,
@@ -107,7 +107,15 @@ mod tests {
         let _lock = test_lock();
         let plugin = test_plugin();
         reset_store(&plugin);
-        let err = handle(Arc::clone(&plugin), EnvelopeContext::default(), json!({})).unwrap_err();
+        let err = handle(
+            Arc::clone(&plugin),
+            EnvelopeContext::for_test(
+                "easynet:///r/acme/user/alice",
+                "easynet:///r/acme/user/alice",
+            ),
+            json!({}),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("subject_required"));
     }
 
@@ -118,10 +126,10 @@ mod tests {
         reset_store(&plugin);
         let err = handle(
             Arc::clone(&plugin),
-            EnvelopeContext {
-                subject: Some("easynet:///r/acme/resource/01".into()),
-                ..EnvelopeContext::default()
-            },
+            EnvelopeContext::for_test(
+                "easynet:///r/acme/user/alice",
+                "easynet:///r/acme/resource/01",
+            ),
             json!({"subject": "bad"}),
         )
         .unwrap_err();
@@ -139,11 +147,7 @@ mod tests {
         resources::save(&file).unwrap();
         let err = handle(
             Arc::clone(&plugin),
-            EnvelopeContext {
-                caller: Some("easynet:///r/acme/user/alice".into()),
-                subject: Some(ura),
-                ..EnvelopeContext::default()
-            },
+            EnvelopeContext::for_test("easynet:///r/acme/user/alice", ura),
             json!({"session_id": "rd-no-consent"}),
         )
         .unwrap_err();

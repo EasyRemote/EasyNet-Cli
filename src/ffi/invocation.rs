@@ -61,11 +61,18 @@ pub type InvocationStreamId = u64;
 /// process-local handles, not protocol identifiers.
 pub type InvocationBidiId = u64;
 
-/// Callback invoked once per decoded `InvokeStreamChunk` summary.
+/// Callback invoked once per decoded `InvokeStreamChunk` summary, then
+/// ONCE MORE with a null `chunk_json` to mark end-of-stream.
 ///
 /// `chunk_json` is borrowed for the duration of the callback. A
 /// binding that wants to retain the frame must copy it before the
 /// callback returns.
+///
+/// **End-of-stream contract:** when the stream finishes (terminal frame
+/// delivered, or the transport closed), the callback fires exactly one
+/// final time with `chunk_json == null`. Bindings MUST treat a null
+/// `chunk_json` as "no more frames", not as a data frame — it is the
+/// only unambiguous EOF signal for a queue-backed consumer.
 pub type InvocationStreamCallback =
     unsafe extern "C" fn(user_data: *mut c_void, chunk_json: *const c_char);
 
@@ -1083,6 +1090,15 @@ fn dispatch_stream_callbacks(
         unsafe {
             on_chunk(raw_user_data, cstr.as_ptr());
         }
+    }
+    // End-of-stream signal: the daemon stream closed (terminal frame
+    // delivered, or transport ended). Deliver ONE final callback with a
+    // null `chunk_json` so the consumer has an unambiguous EOF marker —
+    // without it a queue-backed consumer blocks forever waiting on a
+    // frame that will never arrive. Bindings treat a null chunk as
+    // "stream finished", never as a data frame.
+    unsafe {
+        on_chunk(raw_user_data, std::ptr::null());
     }
 }
 

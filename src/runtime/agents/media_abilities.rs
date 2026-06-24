@@ -25,11 +25,15 @@
 //
 // PR2 scope (this file)
 // ---------------------
-// All eight handlers are stubbed (`unimplemented!()` for the
-// device IO portion). What ships in PR2:
+// This module owns the metadata for all eight handlers and the
+// temporary stubs for abilities that still have no real module in
+// `media/`. What ships in PR2:
 //
-//   - registration of all eight names into the local registry, so
-//     `meta.list_abilities` and `gen-ability-tomls` see them
+//   - metadata for all eight names, so `meta.list_abilities` and
+//     `gen-ability-tomls` see them
+//   - registration of only the still-unwired stubs; real media
+//     modules register their own envelope-aware handlers and must
+//     not share the same dispatch slot with an args-only stub
 //   - description / input_schema / rfc006 metadata so each TOML
 //     materialises with the correct RFC-006 class
 //   - validation skeleton enforcing **INV-SUBJECT-ENVELOPE**: the
@@ -263,15 +267,20 @@ fn row(name: &str) -> Option<&'static AbilityRow> {
 
 // ── Registration ─────────────────────────────────────────────
 
-/// Register all eight media abilities on the local registry by
-/// iterating `ABILITIES`. PR3 replaces the per-shape stubs with
-/// real cpal/nokhwa/screen-crate backends.
+/// Register only media abilities that still do not have a real
+/// envelope-aware handler module. The full eight-ability metadata
+/// remains in `ABILITIES`; handler registration is intentionally
+/// narrower so the registry never relies on "real handler overrides
+/// stub" precedence.
 ///
 /// Each closure captures `row: &'static AbilityRow` by value
 /// (the reference is `Copy + 'static`); no rebinding to `let
 /// name = row.name;` is needed.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     for row in ABILITIES {
+        if has_real_media_handler(row.name) {
+            continue;
+        }
         // Post-M3 of the system-namespace migration: `row.name` is
         // already canonical (`device.<segment>.<verb>`). Earlier
         // revisions stored the legacy form in the table and
@@ -302,6 +311,17 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
             }
         }
     }
+}
+
+fn has_real_media_handler(name: &str) -> bool {
+    matches!(
+        name,
+        ABILITY_MIC_SUBSCRIBE
+            | ABILITY_CAMERA_SUBSCRIBE
+            | ABILITY_CAMERA_SNAPSHOT
+            | ABILITY_SCREEN_SUBSCRIBE
+            | ABILITY_SCREEN_SNAPSHOT
+    )
 }
 
 // ── INV-SUBJECT-ENVELOPE enforcement ─────────────────────────
@@ -495,15 +515,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registration_dispatches_every_row_to_the_shape_it_declares() {
-        // Two-way pin between the `ABILITIES` table and the
-        // registered handlers: every row's `shape` field must
-        // resolve to a registered handler of that exact dispatch
-        // type. Catches both "row added but not registered" and
-        // "row's shape field changed but register() not updated".
+    fn registration_dispatches_unwired_stubs_to_the_shape_they_declare() {
+        // Two-way pin between the `ABILITIES` table and stub
+        // registration: rows without real modules must resolve to
+        // a registered handler of their declared dispatch type;
+        // rows with real modules must remain unregistered here so
+        // one dispatch slot never has both an args-only stub and an
+        // envelope-aware handler.
         let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         for row in ABILITIES {
+            if has_real_media_handler(row.name) {
+                assert!(
+                    reg.get_rpc(row.name).is_none()
+                        && reg.get_stream(row.name).is_none()
+                        && reg.get_bidi(row.name).is_none(),
+                    "{} has a real media module and must not also be stub-registered",
+                    row.name
+                );
+                continue;
+            }
             match row.shape {
                 DispatchShape::Rpc => assert!(
                     reg.get_rpc(row.name).is_some(),

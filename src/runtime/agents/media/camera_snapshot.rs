@@ -62,7 +62,7 @@ use serde_json::{json, Value};
 use crate::persistence::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use crate::persistence::resources::{ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::runtime::agents::media::resource_subject::{
     self, resolve_required_resource_subject, ResourceSubjectSpec,
 };
@@ -369,12 +369,11 @@ impl SnapshotBackend for SyntheticBackend {
 /// backend; a future bin may swap in a real one by calling this
 /// with a different `Arc<dyn SnapshotBackend>`.
 ///
-/// **Important**: this MUST be called AFTER `media_abilities::register`
-/// because the registry is replace-on-write — registering the
-/// envelope-aware variant after the args-only stub means the
-/// dispatcher's "envelope-first" lookup picks this one up and the
-/// stub becomes unreachable. Reversing the order silently leaves
-/// the stub in place.
+/// `media_abilities::register` deliberately skips the camera names
+/// once this real module exists, so each dispatch slot has one
+/// handler family. `camera.subscribe` is still backed by a single
+/// captured preview frame for now, but it is registered as Stream
+/// to match its RFC-006 class and generated descriptor.
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn SnapshotBackend>) {
     let subscribe_preview_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_owner(
@@ -384,7 +383,7 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
             handler(ABILITY_CAMERA_SNAPSHOT, &backend, env, args)
         }),
     );
-    reg.register_rpc_with_envelope_and_owner(
+    reg.register_stream_with_envelope_and_owner(
         ABILITY_CAMERA_SUBSCRIBE,
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| {
@@ -402,7 +401,7 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
                     json!(ABILITY_CAMERA_SUBSCRIBE),
                 );
             }
-            Ok(value)
+            Ok(StreamSource::Snapshot(vec![value]))
         }),
     );
 }
@@ -416,8 +415,9 @@ fn rewrite_subscribe_preview_error(err: anyhow::Error) -> anyhow::Error {
 }
 
 /// Register with the real `NokhwaBackend` (PR3 default). The
-/// daemon boot path calls this after `media_abilities::register`
-/// so the envelope-aware variant supersedes the args-only stub.
+/// daemon boot path calls this after `media_abilities::register`,
+/// which now skips camera names to keep registration ownership
+/// explicit.
 /// Tests that need a hardware-free path call
 /// `register_with_backend(reg, Arc::new(SyntheticBackend))`
 /// instead — the trait keeps the dispatch / receipt code
@@ -469,7 +469,7 @@ fn handler(
     // resource and consumed by the CLI; this one feeds the UI index.
     if let Err(err) = crate::persistence::context_store::record_capture(
         crate::persistence::context_store::CaptureRecord {
-            device: env.callee.as_deref().unwrap_or_default(),
+            device: env.callee(),
             ability: ABILITY_CAMERA_SNAPSHOT,
             ext: "jpg",
             bytes: &jpeg_bytes,
@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn camera_subscribe_unary_preview_returns_one_snapshot_receipt() {
+    fn camera_subscribe_stream_preview_returns_one_snapshot_frame() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_camera(&mut file, "h-cam-preview");
@@ -666,11 +666,13 @@ mod tests {
             scope: TargetScope::Local,
             ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
             normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
+            call_mode: CallMode::Stream,
             subject: Some(ura),
             causal_context: None,
         };
-        let resp = dispatcher.execute_rpc(target).unwrap();
+        let frames = dispatcher.execute_stream(target).unwrap().into_snapshot();
+        assert_eq!(frames.len(), 1);
+        let resp = &frames[0];
 
         assert_eq!(resp["preview"], true);
         assert_eq!(resp["source_ability"], ABILITY_CAMERA_SUBSCRIBE);
@@ -680,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn camera_subscribe_unary_preview_errors_name_subscribe_ability() {
+    fn camera_subscribe_stream_preview_errors_name_subscribe_ability() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
@@ -689,11 +691,11 @@ mod tests {
             scope: TargetScope::Local,
             ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
             normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
+            call_mode: CallMode::Stream,
             subject: None,
             causal_context: None,
         };
-        let err = dispatcher.execute_rpc(target).unwrap_err().to_string();
+        let err = dispatcher.execute_stream(target).unwrap_err().to_string();
 
         assert!(
             err.contains(ABILITY_CAMERA_SUBSCRIBE),

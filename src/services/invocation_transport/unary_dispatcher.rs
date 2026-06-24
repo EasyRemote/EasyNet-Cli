@@ -3,7 +3,7 @@
 //
 // File: src/services/invocation_transport/unary_dispatcher.rs
 // Description: Owns every unary `Invoke` routing arm the daemon serves
-//              after admission + quota (commit-plan-2 Axis E / E2):
+//              after transport policy + quota (commit-plan-2 Axis E / E2):
 //
 //                * federation prelude writes — join / advertise_agent /
 //                  advertise_abilities / heartbeat
@@ -53,7 +53,8 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_NAMESPACE_RESOLVE,
 };
 use crate::services::invocation_transport::invocation_wire::{
-    parse_json_args, status_from_axon_invoke_error, target_ura_from_envelope, wrap_json_response,
+    dispatch_key_mismatch_message, parse_json_args, status_from_axon_invoke_error,
+    status_from_dispatch_key_mismatch, target_ura_from_envelope, wrap_json_response,
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::services::invocation_transport::invoke_remote_initiator::{
@@ -80,6 +81,53 @@ use crate::services::invocation_transport::target_gate::{
 use crate::services::pending_dispatch::DispatchResult;
 use crate::services::session_failure::SessionFailure;
 use tokio_stream::wrappers::ReceiverStream;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UnarySelfTargetSubject {
+    Explicit(String),
+    DescriptorDefault(String),
+}
+
+impl UnarySelfTargetSubject {
+    fn from_optional(
+        explicit_subject_ura: Option<&str>,
+        descriptor_default_subject_ura: String,
+    ) -> Result<Self, Status> {
+        match explicit_subject_ura
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(subject) => {
+                Self::validate(subject).map_err(|err| {
+                    Status::invalid_argument(format!(
+                        "self-targeted dispatch subject `{subject}` is not a valid URA: {err}"
+                    ))
+                })?;
+                Ok(Self::Explicit(subject.to_string()))
+            }
+            None => {
+                Self::validate(&descriptor_default_subject_ura).map_err(|err| {
+                    Status::failed_precondition(format!(
+                        "self-targeted dispatch descriptor default subject `{descriptor_default_subject_ura}` is invalid: {err}"
+                    ))
+                })?;
+                Ok(Self::DescriptorDefault(descriptor_default_subject_ura))
+            }
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Explicit(subject) | Self::DescriptorDefault(subject) => subject,
+        }
+    }
+
+    fn validate(subject_ura: &str) -> Result<(), String> {
+        crate::ura::parse_ura(subject_ura)
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+}
 
 /// Hard ceiling on one presence-dispatch round-trip: the time between
 /// pushing a `Dispatch` frame down a device's `<self>.session` and
@@ -124,6 +172,40 @@ impl UnaryDispatcher {
             runtime,
             gate,
         }
+    }
+
+    /// Axon descriptor subjects are concrete executors/resources, not
+    /// namespace owners. A selected hub route is still addressed to the
+    /// hub URA on the EasyNet routing plane, but local Axon admission must
+    /// be anchored to this daemon's concrete device identity.
+    fn default_self_target_subject_ura(&self, callee_ura: &str) -> Result<String, Status> {
+        let parsed = crate::ura::parse_ura(callee_ura).map_err(|err| {
+            Status::invalid_argument(format!(
+                "self-targeted dispatch callee `{callee_ura}` is not a valid URA: {err}"
+            ))
+        })?;
+        if parsed.kind == crate::ura::URAKind::Hub {
+            let daemon_ura = self.admission.daemon_ura().ok_or_else(|| {
+                Status::failed_precondition(
+                    "self-targeted hub dispatch requires this daemon's concrete device URA",
+                )
+            });
+            let daemon_ura = daemon_ura?;
+            let daemon_ref = crate::ura::parse_ura(daemon_ura).map_err(|err| {
+                Status::failed_precondition(format!(
+                    "self-targeted hub dispatch daemon URA `{daemon_ura}` is invalid: {err}"
+                ))
+            })?;
+            if daemon_ref.kind != crate::ura::URAKind::Device {
+                return Err(Status::failed_precondition(format!(
+                    "self-targeted hub dispatch daemon URA `{daemon_ura}` must be a device URA, \
+                     got {:?}",
+                    daemon_ref.kind
+                )));
+            }
+            return Ok(daemon_ura.to_string());
+        }
+        Ok(callee_ura.to_string())
     }
 
     pub(crate) fn dispatch_federation_join(
@@ -246,13 +328,15 @@ impl UnaryDispatcher {
                 false,
             );
         };
-        let dispatch_ability = selected_route.dispatch_key();
-        let Some(options) = runtime.ability_options(&dispatch_ability).await else {
+        let dispatch_ability = selected_route.ability_ura.clone();
+        let public_ability = selected_route.dispatch_name.as_str();
+        let runtime_ability = dispatch_ability.clone();
+        let Some(options) = runtime.ability_options(&runtime_ability).await else {
             return (
                 Err(Status::not_found(format!(
                     "easynet-daemon: selected route `{}` dispatches `{}` but that ability is not \
-                     registered in Axon LocalRuntime",
-                    selected_route.route_ura, dispatch_ability
+                     registered in Axon LocalRuntime as `{}`",
+                    selected_route.route_ura, dispatch_ability, runtime_ability
                 ))),
                 false,
             );
@@ -275,13 +359,24 @@ impl UnaryDispatcher {
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             route_ura = selected_route.route_ura.as_str(),
         );
+        if public_ability != ability {
+            return (
+                Err(status_from_dispatch_key_mismatch(
+                    "Invoke",
+                    ability,
+                    public_ability,
+                    &selected_route.route_ura,
+                )),
+                false,
+            );
+        }
         let wire = match request.envelope.clone() {
             Some(envelope) => {
-                let envelope = envelope_with_selected_callee(envelope, &selected_route);
-                crate::runtime::axon_bridge::dispatch_shim::admitted_from_wire_parts(
+                crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
                     dispatch_ability.clone(),
                     arguments.to_vec(),
+                    request.metadata.clone(),
                 )
             }
             None => Err(Box::new(
@@ -305,6 +400,8 @@ impl UnaryDispatcher {
             invocation_id,
             payload_bytes,
             error,
+            admission_receipt,
+            terminal_receipt,
             ..
         } = outcome;
         let axon_started = invocation_id.is_some();
@@ -318,6 +415,12 @@ impl UnaryDispatcher {
                 result: payload_bytes,
                 result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                 state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+                admission_receipt: admission_receipt
+                    .as_ref()
+                    .map(easynet_axon::invocation::wire::receipt_to_wire),
+                terminal_receipt: terminal_receipt
+                    .as_ref()
+                    .map(easynet_axon::invocation::wire::receipt_to_wire),
                 ..InvokeResponse::default()
             })),
             Some(err) => Err(Status::failed_precondition(format!(
@@ -362,18 +465,22 @@ impl UnaryDispatcher {
                 "easynet-daemon: runtime admin ability `{ability}` request missing envelope"
             ))
         })?;
-        let wire = crate::runtime::axon_bridge::dispatch_shim::admitted_from_wire_parts(
+        let wire = crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
             envelope,
             ability.to_string(),
             request.arguments.clone(),
+            request.metadata.clone(),
         )
         .map_err(|err| status_from_axon_invoke_error("Invoke", ability, *err))?;
         let outcome =
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_admitted(runtime, wire).await;
+            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_system(runtime, wire)
+                .await;
         let crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome {
             invocation_id,
             payload_bytes,
             error,
+            admission_receipt,
+            terminal_receipt,
             ..
         } = outcome;
         match error {
@@ -386,6 +493,12 @@ impl UnaryDispatcher {
                 result: payload_bytes,
                 result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                 state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+                admission_receipt: admission_receipt
+                    .as_ref()
+                    .map(easynet_axon::invocation::wire::receipt_to_wire),
+                terminal_receipt: terminal_receipt
+                    .as_ref()
+                    .map(easynet_axon::invocation::wire::receipt_to_wire),
                 ..InvokeResponse::default()
             })),
             Some(err) => Err(Status::failed_precondition(format!(
@@ -580,10 +693,9 @@ impl UnaryDispatcher {
     /// admission filter: only callers whose URA is in the local
     /// trust anchor with `role = Hub` may invoke this. Other
     /// roles (Backend, Device) are rejected with
-    /// `Status::permission_denied`. The general admission gate
-    /// has already accepted the call (caller URA is signed,
-    /// non-replayed, in trust set); this filter narrows to the
-    /// hub-only sub-surface.
+    /// `Status::permission_denied`. The general transport policy gate
+    /// has already accepted the call for routing; this filter narrows
+    /// to the hub-only sub-surface.
     ///
     /// Loopback bypass: the daemon's own URA is admitted into
     /// every dispatch arm regardless of role, so a hub-mode
@@ -1511,13 +1623,21 @@ impl UnaryDispatcher {
         // The resolver's verdict is authoritative: send the SELECTED
         // callee downstream, not the caller-supplied one.
         let envelope = envelope_with_selected_callee(envelope, selected_route);
-        let dispatch_ability = selected_route.dispatch_key();
+        let dispatch_ability = selected_route.ability_ura.clone();
         let target_contract_v1 = self
             .directory
             .presence
             .dispatch_contract_version(&selected_route.execution_host_ura)
             .unwrap_or(0)
             >= 1;
+        if target_contract_v1 && dispatch_ability != selected_route.dispatch_name {
+            return Err(status_from_dispatch_key_mismatch(
+                "Invoke",
+                &selected_route.dispatch_name,
+                &dispatch_ability,
+                &selected_route.route_ura,
+            ));
+        }
         crate::op_event!(
             component = daemon_invocation,
             kind = remote_rpc_selected_route_dispatch,
@@ -1536,7 +1656,7 @@ impl UnaryDispatcher {
                         call_id,
                         easynet_axon::pb::axon::v1::InvokeRequest {
                             envelope: Some(envelope.clone()),
-                            function_name: dispatch_ability.clone(),
+                            function_name: selected_route.dispatch_name.clone(),
                             arguments: arguments.clone(),
                             ..easynet_axon::pb::axon::v1::InvokeRequest::default()
                         },
@@ -1552,10 +1672,19 @@ impl UnaryDispatcher {
                     // additive, never gating — v0 devices execute
                     // with the trust-domain identity.
                     let subject_ura = envelope.subject.as_ref().map(|s| s.ura.clone());
+                    let Some(subject_ura) = subject_ura
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    else {
+                        return Err(Status::invalid_argument(
+                            "federation.forward_invoke: missing inner subject_ura",
+                        ));
+                    };
                     build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
                         call_id,
                         callee_ura: &selected_route.callee_ura,
-                        subject_ura: subject_ura.as_deref(),
+                        subject_ura,
                         ability: &dispatch_ability,
                         args: &arguments,
                         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1644,6 +1773,16 @@ impl UnaryDispatcher {
             .dispatch_contract_version(&selected_route.execution_host_ura)
             .unwrap_or(0)
             >= 1;
+        if target_contract_v1 && caller_envelope.is_some() && origin_caller.is_none() {
+            if dispatch_ability != selected_route.dispatch_name {
+                return Err(Status::failed_precondition(dispatch_key_mismatch_message(
+                    "federation.forward_invoke",
+                    &selected_route.dispatch_name,
+                    &dispatch_ability,
+                    &selected_route.route_ura,
+                )));
+            }
+        }
         let (call_id, dispatch_result) = self
             .dispatch_frame_to_presence(selected_route, "federation.forward_invoke", |call_id| {
                 match (target_contract_v1, caller_envelope, &origin_caller) {
@@ -1651,7 +1790,7 @@ impl UnaryDispatcher {
                         call_id,
                         easynet_axon::pb::axon::v1::InvokeRequest {
                             envelope: Some(envelope.clone()),
-                            function_name: dispatch_ability.clone(),
+                            function_name: selected_route.dispatch_name.clone(),
                             arguments: inner_payload.args_bytes.clone(),
                             ..easynet_axon::pb::axon::v1::InvokeRequest::default()
                         },
@@ -1660,10 +1799,7 @@ impl UnaryDispatcher {
                     _ => build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
                         call_id,
                         callee_ura: &selected_route.callee_ura,
-                        // No explicit subject: the executing device defaults the
-                        // inner subject to the callee — the same rule the
-                        // origin-caller claim signs over.
-                        subject_ura: None,
+                        subject_ura: &selected_route.callee_ura,
                         ability: &dispatch_ability,
                         args: &inner_payload.args_bytes,
                         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1756,18 +1892,23 @@ impl UnaryDispatcher {
             ));
         };
 
-        let dispatch_ability = selected_route.dispatch_key();
-        if !runtime.has_ability(&dispatch_ability).await {
+        let dispatch_ability = selected_route.ability_ura.clone();
+        let runtime_ability = dispatch_ability.clone();
+        if !runtime.has_ability(&runtime_ability).await {
             return Err(Status::not_found(format!(
                 "federation.forward_invoke: self-targeted ability `{dispatch_ability}` is not \
-                 registered in Axon LocalRuntime"
+                 registered in Axon LocalRuntime as `{runtime_ability}`"
             )));
         }
+
+        let descriptor_subject_ura =
+            self.default_self_target_subject_ura(&selected_route.callee_ura)?;
 
         crate::op_event!(
             component = daemon_invocation,
             kind = forward_invoke_self_target_dispatch,
             callee_ura = selected_route.callee_ura.as_str(),
+            descriptor_subject_ura = descriptor_subject_ura.as_str(),
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             ability = selected_route.dispatch_name.as_str(),
             route_ura = selected_route.route_ura.as_str(),
@@ -1775,8 +1916,10 @@ impl UnaryDispatcher {
             call_id = correlation_call_id,
         );
 
-        let outcome = crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
+        let outcome = crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
             runtime,
+            &selected_route.callee_ura,
+            &descriptor_subject_ura,
             &dispatch_ability,
             inner_payload.args_bytes.clone(),
         )
@@ -1844,7 +1987,7 @@ impl UnaryDispatcher {
         selected_route: &SelectedInvokeRoute,
         subject_ura: Option<&str>,
         args: &[u8],
-        metadata: &std::collections::HashMap<String, String>,
+        _metadata: &std::collections::HashMap<String, String>,
         origin_claim: Option<
             &crate::services::invocation_transport::origin_caller::OriginCallerClaim,
         >,
@@ -1865,23 +2008,18 @@ impl UnaryDispatcher {
             ));
         };
 
-        let dispatch_ability = selected_route.dispatch_key();
-        let inner_subject = subject_ura
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(selected_route.callee_ura.as_str());
+        let dispatch_ability = selected_route.ability_ura.clone();
+        let default_subject_ura =
+            self.default_self_target_subject_ura(&selected_route.callee_ura)?;
+        let inner_subject =
+            UnarySelfTargetSubject::from_optional(subject_ura, default_subject_ura)?;
 
         // Inner user-caller pass-through: when the hub/backend attached a
-        // browser-signed user claim (typed `origin_caller` field, with the
-        // legacy metadata item as rolling-upgrade fallback), dispatch the
-        // inner ability with the REAL user as caller via
-        // `invoke_externally_signed_*` (cryptographic admission against
-        // the user's registered pubkey). This is what lets fail-closed
-        // abilities (remote desktop consent) see the user instead of the
-        // `_system` trust-domain placeholder. Absent → existing path.
+        // typed browser-signed user claim, dispatch the inner ability with
+        // the real user as caller via descriptor-bound Axon admission.
         let origin_caller =
             match crate::services::invocation_transport::origin_caller::OriginCaller::resolve(
                 origin_claim,
-                metadata,
             ) {
                 Ok(oc) => oc,
                 Err(err) => {
@@ -1908,43 +2046,36 @@ impl UnaryDispatcher {
             if let Some(sync) = self.sessions.device_trust_sync.as_ref() {
                 sync.ensure_caller_key(&origin.caller_ura).await;
             }
-            // Signature verifies against the signed PUBLIC name; the
-            // handler resolves under the route's dispatch key when the
-            // two differ (agent-owned abilities).
-            let dispatch_key = if dispatch_ability == origin.public_ability() {
-                None
-            } else {
-                Some(dispatch_ability.clone())
+            if selected_route.dispatch_name != origin.public_ability() {
+                return invoke_remote_inband_error_response(dispatch_key_mismatch_message(
+                    "<self>.invoke_remote",
+                    origin.public_ability(),
+                    &selected_route.dispatch_name,
+                    &selected_route.route_ura,
+                ));
+            }
+            let wire = match origin.into_wire_dispatch(
+                &selected_route.callee_ura,
+                inner_subject.as_str(),
+                args.to_vec(),
+            ) {
+                Ok(wire) => wire,
+                Err(err) => {
+                    return invoke_remote_inband_error_response(format!(
+                        "<self>.invoke_remote: invalid origin caller dispatch: {err}"
+                    ));
+                }
             };
-            let wire =
-                origin.into_wire_dispatch(&selected_route.callee_ura, inner_subject, args.to_vec());
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_with_dispatch_key(
+            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc(runtime, wire).await
+        } else {
+            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
                 runtime,
-                wire,
-                dispatch_key,
+                &selected_route.callee_ura,
+                inner_subject.as_str(),
+                &dispatch_ability,
+                args.to_vec(),
             )
             .await
-        } else {
-            match subject_ura {
-                Some(subject) if !subject.trim().is_empty() => {
-                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
-                        runtime,
-                        &selected_route.callee_ura,
-                        subject,
-                        &dispatch_ability,
-                        args.to_vec(),
-                    )
-                    .await
-                }
-                _ => {
-                    crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
-                        runtime,
-                        &dispatch_ability,
-                        args.to_vec(),
-                    )
-                    .await
-                }
-            }
         };
         let request_id = outcome.invocation_id.clone();
         let (payload, error) =

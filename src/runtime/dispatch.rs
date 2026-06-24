@@ -81,14 +81,35 @@ pub struct DriverOverrides {
 
 /// One tool call the LLM made during a run. Lifted from the driver
 /// layer's tool-use observability so the chat ability can surface
-/// `tool_calls` in its structured response. Does not carry the
-/// tool's result — claude-code feeds results back to the LLM
-/// internally via subsequent stream blocks; capturing them is a
-/// separate piece of work.
+/// `tool_calls` in its structured response. Result fields are
+/// populated when the driver exposes them as structured stream
+/// events; absent fields mean the driver did not provide them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolCall {
     pub ability: String,
     pub args: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ability_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callee_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_ura: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1495,10 +1516,12 @@ mod tests {
                 ToolCall {
                     ability: "alice.voice".into(),
                     args: serde_json::json!({"text": "hi"}),
+                    ..Default::default()
                 },
                 ToolCall {
                     ability: "alice.exec".into(),
                     args: serde_json::json!({"cmd": "ls"}),
+                    ..Default::default()
                 },
             ],
         };

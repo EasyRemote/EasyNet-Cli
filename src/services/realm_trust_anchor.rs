@@ -81,6 +81,45 @@ use thiserror::Error;
 /// default).
 pub const DEFAULT_REALM_TRUST_PATH: &str = "/etc/easynet/realm-trust.toml";
 
+/// Resolve the realm trust anchor path for both daemon boot and
+/// local inspection commands.
+///
+/// Resolution order:
+/// 1. `EASYNET_REALM_TRUST_PATH` test/operator override.
+/// 2. `/etc/easynet/realm-trust.toml` when it exists and is non-empty.
+/// 3. `$HOME/.easynet/realm-trust.toml` for unprivileged host-mode installs.
+///
+/// This belongs with the anchor data model, not with the Axon gRPC
+/// transport. `--no-default-features` builds still need to inspect
+/// local trust state even though they cannot host or dial the
+/// invocation transport.
+pub fn trust_anchor_path_from_env_or_default() -> PathBuf {
+    if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
+        return expand_home(override_path.to_string_lossy().as_ref());
+    }
+    let etc = expand_home(DEFAULT_REALM_TRUST_PATH);
+    if let Ok(meta) = std::fs::metadata(&etc) {
+        if meta.is_file() && meta.len() > 0 {
+            return etc;
+        }
+    }
+    expand_home("~/.easynet/realm-trust.toml")
+}
+
+fn expand_home(raw: &str) -> PathBuf {
+    if raw == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(raw)
+}
+
 /// Role a trusted agent plays in the realm. Used by audit log
 /// formatters and by PR-7's pairing-flow validation; the admission
 /// gate itself does not branch on role today.

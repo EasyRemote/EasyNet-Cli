@@ -1,20 +1,20 @@
 //! mcp profile — RFC-001 §1 [P6].
 //!
 //! Per restatement-mapping decision P6: a single mcp-profile Agent
-//! owns BOTH inbound and outbound MCP — `mcp.bridge.*` (incoming MCP
-//! tools/list + tools/call) and `mcp.client.*` (outgoing MCP calls
-//! to external servers). They share one Agent identity rather than
-//! splitting into two profiles.
+//! advertises BOTH inbound and outbound MCP — `mcp.bridge.*` (incoming
+//! MCP tools/list + tools/call) and `mcp.client.*` (outgoing MCP calls
+//! to external servers). They share one Agent identity projection rather
+//! than splitting into two profiles.
 //!
 //! This is the ONLY place MCP awareness is permitted in the CLI per
 //! RFC-001 §A3 (MCP only at edge adapters; everywhere else is
 //! Invocation-only). The conformance script enforces this.
 //!
-//! Descriptor ownership
-//! --------------------
-//! MCP descriptors are generated from the dispatch registry entries whose owner
-//! is `OwnerKind::Agent(DEFAULT_MCP_AGENT_ID)`. This file does not infer
-//! ownership from ability name prefixes.
+//! Descriptor projection
+//! ---------------------
+//! MCP descriptors are generated from the dispatch registry entries whose
+//! projection class is `OwnerKind::Agent(DEFAULT_MCP_AGENT_ID)`. This file does
+//! not infer ownership from ability name prefixes.
 //!
 //! What this file provides today
 //! -----------------------------
@@ -423,6 +423,10 @@ fn metadata_for_agent_ability(
             metadata.push(("exec_kind", "eal".to_string()));
             ("unknown", "composed ability cost depends on steps")
         }
+        Some(crate::core::ability_spec::AbilityExec::HostStream(_)) => {
+            metadata.push(("exec_kind", "host_stream".to_string()));
+            ("free", "free/local")
+        }
         None => {
             metadata.push(("exec_kind", "agent_chat".to_string()));
             ("llm_metered", "LLM token billing may apply")
@@ -674,9 +678,9 @@ fn per_agent_workspace_descriptors(
     // missing from `tools/list` after the ability-only refactor.
     //
     // The two descriptors are intentionally per-agent: every agent
-    // owns its own discover / invoke (the discovery ladder is
-    // owner-scoped). Source = `kernel:built-in:self-bundle` so an
-    // operator inspecting the descriptor catalogue can tell at a
+    // projection advertises its own discover / invoke (the discovery
+    // ladder is projection-scoped). Source = `kernel:built-in:self-bundle`
+    // so an operator inspecting the descriptor catalogue can tell at a
     // glance the entry came from a synth path, not a TOML.
     {
         let discover_name = format!(
@@ -1015,6 +1019,45 @@ mod tests {
         let names: Vec<&str> = specs.iter().map(|s| s["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"observe_health"));
         assert!(names.contains(&"agent_list"));
+    }
+
+    #[test]
+    fn mcp_provider_advertises_and_routes_agent_discover() {
+        let desc = AbilityDescriptor::new("claude.discover", "agent://claude", Visibility::Scoped)
+            .unwrap()
+            .with_source("kernel:built-in:self-bundle")
+            .with_input_schema(crate::runtime::agents::discover_ability::input_schema())
+            .with_description(crate::runtime::agents::discover_ability::description());
+        let invoker = RecordingInvoker::new(Ok(serde_json::json!({
+            "candidates": [],
+            "scope": "device",
+            "query": "weather"
+        })));
+        let p = InvokeMcpProvider::new(invoker, vec![desc]);
+
+        let specs = p.tool_specs();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0]["name"], "claude_discover");
+        assert_eq!(specs[0]["x-easynet"]["ability"], "claude.discover");
+        assert_eq!(
+            specs[0]["inputSchema"]["properties"]["scope"]["enum"],
+            serde_json::json!(["self", "device", "user", "public"])
+        );
+
+        let mut args = serde_json::Map::new();
+        args.insert("scope".into(), serde_json::json!("device"));
+        args.insert("query".into(), serde_json::json!("weather"));
+        let result = p.handle_tool_call("claude_discover", &args);
+        assert!(!result.is_error);
+        assert_eq!(result.payload["scope"], "device");
+        assert_eq!(
+            p.invoker.last_ability.borrow().as_deref(),
+            Some("claude.discover")
+        );
+        assert_eq!(
+            p.invoker.last_args.borrow().as_ref().unwrap()["query"],
+            serde_json::json!("weather")
+        );
     }
 
     #[test]

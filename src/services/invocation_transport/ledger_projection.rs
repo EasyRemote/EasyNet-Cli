@@ -5,7 +5,7 @@
 // Description: Builds the Axon `InvocationLedgerRecord` for unary
 //              invokes (commit-plan-2 E5): caller/callee/ability URAs,
 //              typed error projection from tonic Status / in-band
-//              InvokeResponse errors, authority-binding classification,
+//              InvokeResponse errors, authority-form classification,
 //              causal links recovered from the envelope, and the
 //              invocation resource URA helpers. Axon stays the verifier
 //              owner; this module only projects wire outcomes into
@@ -25,7 +25,7 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::services::invocation_transport::invocation_wire::{
-    DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
+    DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
 };
 use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
@@ -39,33 +39,34 @@ pub(crate) fn build_unary_ledger_record(
     completed_unix_ms: i64,
     result: &Result<Response<InvokeResponse>, Status>,
 ) -> Result<easynet_axon::invocation::InvocationLedgerRecord, anyhow::Error> {
-    let envelope = request.envelope.as_ref();
-    let caller_ura = envelope
-        .and_then(|env| env.caller.as_ref())
-        .map(|identity| identity.ura.clone())
-        .filter(|ura| !ura.trim().is_empty())
-        .unwrap_or_else(|| crate::ura::hub_ura("localhost"));
-    let realm = parse_realm_from_ura(&caller_ura).unwrap_or_else(|| "localhost".to_string());
-    let callee_ura = envelope
-        .and_then(|env| env.callee.as_ref())
-        .map(|identity| identity.ura.clone())
-        .filter(|ura| !ura.trim().is_empty())
-        .unwrap_or_else(|| crate::ura::hub_ura(&realm));
-    let subject_ura = envelope
-        .and_then(|env| env.subject.as_ref())
-        .map(|identity| identity.ura.clone())
-        .filter(|ura| !ura.trim().is_empty())
-        .unwrap_or_else(|| caller_ura.clone());
-    let request_id = envelope
-        .map(|env| env.request_id.clone())
-        .filter(|id| !id.trim().is_empty())
-        .unwrap_or_else(|| format!("req-{}", short_hash(request.function_name.as_bytes())));
-    let trace_id = envelope.map(|env| env.trace_id.clone()).unwrap_or_default();
-    let span_id = envelope.map(|env| env.span_id.clone()).unwrap_or_default();
+    let envelope = required_envelope(request)?;
+    let caller_ura = required_ura(
+        envelope
+            .caller
+            .as_ref()
+            .map(|identity| identity.ura.as_str()),
+        "envelope.caller.ura",
+    )?;
+    let realm = parse_realm_from_ura(&caller_ura).ok_or_else(|| {
+        anyhow::anyhow!("envelope.caller.ura does not carry a parseable realm: {caller_ura}")
+    })?;
+    let callee_ura = required_ura(
+        envelope
+            .callee
+            .as_ref()
+            .map(|identity| identity.ura.as_str()),
+        "envelope.callee.ura",
+    )?;
+    let subject_ura = ledger_subject_ura(envelope)?;
+    require_invocation_nonce(envelope)?;
+    let request_id = ledger_request_id(envelope)?;
+    let trace_id = envelope.trace_id.clone();
+    let span_id = envelope.span_id.clone();
     let invocation_ura =
         invocation_resource_ura(&realm, &request_id, &subject_ura, &callee_ura, &caller_ura)?;
     let elapsed_ms = completed_unix_ms.saturating_sub(started_unix_ms) as u64;
-    let authority_binding = ledger_authority_binding_for_request(request);
+    let authority_form = ledger_authority_form_for_request(request);
+    let ability_ura = ledger_ability_ura(&callee_ura, &request.function_name)?;
 
     let mut builder = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
         .invocation_ura(invocation_ura)
@@ -75,13 +76,13 @@ pub(crate) fn build_unary_ledger_record(
         .caller_ura(caller_ura)
         .callee_ura(callee_ura)
         .subject_ura(subject_ura)
-        .ability_ura(ability_ura_for_name(&realm, &request.function_name))
+        .ability_ura(ability_ura)
         .ability_name(request.function_name.clone())
         .started_unix_ms(started_unix_ms)
         .completed_unix_ms(completed_unix_ms)
         .elapsed_ms(elapsed_ms)
-        .causal_links(causal_links_from_envelope(envelope))
-        .authority_binding(authority_binding)
+        .causal_links(causal_links_from_envelope(Some(envelope)))
+        .authority_form(authority_form)
         .args(easynet_axon::invocation::LedgerEventPayload::digest(
             "application/octet-stream",
             &request.arguments,
@@ -130,6 +131,63 @@ pub(crate) fn build_unary_ledger_record(
     }
 
     Ok(builder.build()?)
+}
+
+fn ledger_subject_ura(envelope: &Envelope) -> Result<String, anyhow::Error> {
+    required_ura(
+        envelope
+            .subject
+            .as_ref()
+            .map(|identity| identity.ura.as_str()),
+        "envelope.subject.ura",
+    )
+}
+
+fn ledger_request_id(envelope: &Envelope) -> Result<String, anyhow::Error> {
+    match envelope.request_id.trim() {
+        "" => Ok(format!(
+            "legacy-{}",
+            hex::encode(&envelope.invocation_nonce)
+        )),
+        request_id => Ok(request_id.to_string()),
+    }
+}
+
+fn required_envelope(request: &InvokeRequest) -> Result<&Envelope, anyhow::Error> {
+    request
+        .envelope
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("InvokeRequest.envelope is required for ledger projection"))
+}
+
+fn required_ura(value: Option<&str>, field: &str) -> Result<String, anyhow::Error> {
+    let value = required_optional_non_empty(value, field)?;
+    crate::ura::parse_ura(&value)
+        .map_err(|err| anyhow::anyhow!("{field} is not a valid URA: {err}"))?;
+    Ok(value)
+}
+
+fn required_optional_non_empty(value: Option<&str>, field: &str) -> Result<String, anyhow::Error> {
+    let value = value.ok_or_else(|| anyhow::anyhow!("{field} is required"))?;
+    required_non_empty(value, field)
+}
+
+fn required_non_empty(value: &str, field: &str) -> Result<String, anyhow::Error> {
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("{field} must not be empty");
+    }
+    Ok(value.to_string())
+}
+
+fn require_invocation_nonce(envelope: &Envelope) -> Result<(), anyhow::Error> {
+    if envelope.invocation_nonce.len() != 16 {
+        anyhow::bail!(
+            "envelope.invocation_nonce must be exactly 16 bytes, got {}",
+            envelope.invocation_nonce.len()
+        );
+    }
+    Ok(())
 }
 
 fn ledger_error_from_status(
@@ -268,9 +326,16 @@ fn status_code_retryable(code: tonic::Code) -> bool {
     )
 }
 
-pub(crate) fn ledger_authority_binding_for_request(request: &InvokeRequest) -> &'static str {
+pub(crate) fn ledger_authority_form_for_request(request: &InvokeRequest) -> &'static str {
     if bootstrap_authority_ability_for_ledger(&request.function_name) {
         "bootstrap"
+    } else if request
+        .metadata
+        .get(HOSTED_AGENT_DELEGATION_METADATA_KEY)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        "delegated"
     } else if request
         .metadata
         .get(DELEGATION_METADATA_KEY)
@@ -428,12 +493,13 @@ fn safe_resource_path_segment(raw: &str) -> String {
     }
 }
 
-fn ability_ura_for_name(realm: &str, ability_name: &str) -> String {
-    if ability_name.split_once('.').is_some() {
-        crate::ura::hub_ability_ura(realm, ability_name)
-    } else {
-        crate::ura::ability_ura(realm, "hub", "runtime", ability_name)
-    }
+fn ledger_ability_ura(callee_ura: &str, ability_name: &str) -> anyhow::Result<String> {
+    let public_name = crate::ura::owner_local_ability_name(callee_ura, ability_name);
+    crate::ura::owner_ability_ura(callee_ura, &public_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "derive ledger ability URA for callee {callee_ura:?} ability {ability_name:?}"
+        )
+    })
 }
 
 fn short_hash(bytes: &[u8]) -> String {
@@ -493,6 +559,8 @@ pub(crate) fn ledger_record_from_remote_receipt(
                 .to_string()
         })
         .unwrap_or_else(|_| format!("state_{}", receipt.state));
+    let proof_diagnostics = remote_receipt_proof_diagnostics(receipt);
+    let ability_ura = ledger_ability_ura(&callee_ura, ability_name)?;
     Ok(InvocationLedgerRecord {
         invocation_ura,
         // Signed usage rides the wire receipt verbatim into the row —
@@ -513,7 +581,7 @@ pub(crate) fn ledger_record_from_remote_receipt(
         callee_ura,
         ability_name: ability_name.to_string(),
         state,
-        ability_ura: String::new(),
+        ability_ura,
         trace_id: String::new(),
         span_id: String::new(),
         started_unix_ms,
@@ -525,10 +593,55 @@ pub(crate) fn ledger_record_from_remote_receipt(
         args: LedgerEventPayload::digest("application/octet-stream", &[]),
         result: None,
         error: None,
-        diagnostics: Vec::new(),
+        diagnostics: proof_diagnostics,
         causal_links: Vec::new(),
         receipt_chain: Default::default(),
         visibility: Default::default(),
-        authority_binding: String::new(),
+        authority_form: "delegated".to_string(),
     })
+}
+
+fn remote_receipt_proof_diagnostics(
+    receipt: &easynet_axon::pb::axon::v1::InvocationReceipt,
+) -> Vec<easynet_axon::invocation::LedgerDiagnosticRecord> {
+    let descriptor_version = receipt.descriptor_version.trim();
+    let schema_hash = proof_hash_label(&receipt.schema_hash);
+    let impl_hash = proof_hash_label(&receipt.impl_hash);
+    let runtime_env = receipt.runtime_env.trim();
+    if descriptor_version.is_empty()
+        && schema_hash.is_empty()
+        && impl_hash.is_empty()
+        && runtime_env.is_empty()
+    {
+        return Vec::new();
+    }
+    let payload = serde_json::json!({
+        "descriptor_version": descriptor_version,
+        "schema_hash": schema_hash,
+        "impl_hash": impl_hash,
+        "runtime_env": runtime_env,
+    });
+    vec![easynet_axon::invocation::LedgerDiagnosticRecord {
+        timestamp_unix_ms: receipt.timestamp_unix_ms,
+        level: "info".to_string(),
+        source: "remote_receipt".to_string(),
+        code: "REMOTE_RECEIPT_PROOF_FACTS".to_string(),
+        message: format!(
+            "remote receipt proof facts: descriptor_version={descriptor_version:?}, \
+             schema_hash={schema_hash:?}, impl_hash={impl_hash:?}, runtime_env={runtime_env:?}"
+        ),
+        retryable: false,
+        payload: Some(easynet_axon::invocation::LedgerEventPayload::digest(
+            "application/json",
+            payload.to_string().as_bytes(),
+        )),
+    }]
+}
+
+fn proof_hash_label(bytes: &[u8]) -> String {
+    if bytes.is_empty() || bytes.iter().all(|byte| *byte == 0) {
+        String::new()
+    } else {
+        format!("sha256:{}", hex::encode(bytes))
+    }
 }

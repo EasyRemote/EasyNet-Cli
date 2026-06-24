@@ -42,8 +42,11 @@ use anyhow::{bail, Context};
 use clap::Args;
 use serde_json::Value;
 
-use crate::support::local_invoke::invoke_local_ability_with_subject;
+use crate::support::local_invoke::{
+    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget,
+};
 use crate::support::{output, timeouts};
+use crate::ura::AbilitySelector;
 
 #[derive(Debug, Args)]
 pub struct InvokeArgs {
@@ -93,8 +96,8 @@ pub struct InvokeArgs {
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
-    let ability_selector = crate::ura::AbilitySelector::parse(&invoke_args.ability_ura)
-        .with_context(|| "parse <ability-ura>")?;
+    let ability_selector =
+        AbilitySelector::parse(&invoke_args.ability_ura).with_context(|| "parse <ability-ura>")?;
 
     // PR-N1 commit 8/N: `--node` is now wired against the local
     // daemon's `federation.forward_invoke` ability via the
@@ -136,7 +139,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // invoke surface does, so the operator-visible behaviour around
     // `--timeout 0` (inherit default) and "value too large" matches
     // what `easynet mission run` / `agent send` already enforce.
-    let _timeout_ms = timeouts::effective_ms(invoke_args.timeout).map_err(anyhow::Error::msg)?;
+    let timeout_ms = timeouts::effective_ms(invoke_args.timeout)
+        .map_err(anyhow::Error::msg)?
+        .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
+    let timeout = std::time::Duration::from_millis(timeout_ms);
 
     // Cross-hub dispatch when `--node` is set; local dispatch
     // otherwise. Both paths surface the same unwrap-or-raw result
@@ -151,10 +157,9 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // it runs against is paired (the daemon's realm-trust
             // anchor knows about its own device URA but not about
             // the generic CLI placeholder). Pass-through to
-            // `invoke_via_federation_forward_ability_ura`'s
-            // `caller_ura` surface. None there uses the CLI device
-            // placeholder for fixture scripts that have no
-            // credentials.json.
+            // The forward target call signs with the daemon's device URA when
+            // credentials are present. None keeps fixture scripts working when
+            // they run without credentials.json.
             // URA v4.1.4 Phase 2F: caller URA for an `easynet
             // ability invoke --node ...` originating from a daemon
             // is the daemon's *device* URA, not an agent URA. The
@@ -165,17 +170,17 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .ok()
                 .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
                 .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-            let ability_ura =
-                crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_ability_ura(
+            let target_call =
+                crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::from_ability_ura(
                     target,
                     ability_selector.ability_ura(),
                 )?;
             let value =
-                crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-                    ability_ura.as_str(),
+                crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target_with_timeout(
+                    &target_call,
                     arguments,
-                    target,
                     caller_ura.as_deref(),
+                    timeout,
                 )?;
             (value, format!("federation.forward_invoke target={target}"))
         }
@@ -196,10 +201,11 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            let value = invoke_local_ability_with_subject(
-                ability_selector.local_registry_ability(),
-                arguments,
-                subject,
+            let dispatch_name = ability_selector.local_registry_ability();
+            let target = LocalAbilityTarget::from_selector(&ability_selector);
+            debug_assert_eq!(target.dispatch_name(), dispatch_name);
+            let value = invoke_local_ability_target_with_subject_timeout(
+                &target, arguments, subject, timeout,
             )?;
             (value, "local daemon".to_string())
         }

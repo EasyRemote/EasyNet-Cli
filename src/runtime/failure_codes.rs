@@ -34,6 +34,7 @@ const SPECIFIC_PREFIXES: &[&str] = &[
     "RESOLVE_",
     "ROUTE_",
     "INVOCATION_",
+    "POLICY_",
     "DENDRITE_",
     "BRIDGE_",
 ];

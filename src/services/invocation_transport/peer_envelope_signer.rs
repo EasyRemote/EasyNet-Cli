@@ -17,6 +17,10 @@ use tonic::Status;
 
 use easynet_axon::pb::axon::v1::{AgentIdentity, CallerSignature, Envelope, SubjectIdentity};
 
+use crate::runtime::axon_bridge::wire_descriptor::{
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
+};
+use crate::services::invocation_transport::invocation_wire::try_entity_ref;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 
@@ -25,8 +29,10 @@ use crate::services::invocation_transport::session_initiator::SessionSigningSeed
 ///
 /// This is a new hub-to-hub invocation, not a verbatim re-send:
 /// `caller = local hub`, `callee = target hub`, and `subject =
-/// original caller` when present. Every URA must parse through the
-/// canonical URA parser before the peer request is sent.
+/// original caller` when present. Signing normalizes the subject to a
+/// descriptor-bound EntityRef when the original caller is a Hub/User URA.
+/// Every URA must parse through the canonical URA parser before the peer
+/// request is sent.
 pub(crate) fn build_peer_envelope(
     caller_envelope: Option<&Envelope>,
     target_ura: &str,
@@ -76,9 +82,12 @@ pub(crate) fn build_peer_envelope(
         profile: profile.clone(),
     });
     forwarded.subject = Some(SubjectIdentity {
-        ura: subject_ura,
+        ura: subject_ura.clone(),
         profile,
     });
+    try_entity_ref(subject_ura).map_err(|err| {
+        Status::invalid_argument(format!("peer envelope subject is invalid: {err}"))
+    })?;
 
     if forwarded.invocation_nonce.len() != 16 {
         let mut nonce = vec![0u8; 16];
@@ -100,16 +109,9 @@ pub(crate) fn sign_peer_request_envelope(
         return Ok(());
     };
 
-    use easynet_axon::invocation::axiom::{
-        canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-        InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UraProfile,
-    };
     use ed25519_dalek::{Signer as _, SigningKey};
-    use sha2::{Digest, Sha256};
 
-    envelope.causal_context = None;
-
-    let caller_ura = envelope
+    envelope
         .caller
         .as_ref()
         .map(|caller| caller.ura.trim())
@@ -124,7 +126,8 @@ pub(crate) fn sign_peer_request_envelope(
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: callee URA missing after rewrite")
-        })?;
+        })?
+        .to_string();
     let subject_ura = envelope
         .subject
         .as_ref()
@@ -132,21 +135,45 @@ pub(crate) fn sign_peer_request_envelope(
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: subject URA missing after rewrite")
+        })?
+        .to_string();
+    let descriptor_subject_ura = descriptor_subject_ura_for(&callee_ura, &subject_ura, ability)
+        .map_err(|err| {
+            Status::internal(format!(
+                "cross-hub forward_invoke signing: derive descriptor subject: {err}"
+            ))
         })?;
-    let invocation_nonce: [u8; 16] =
-        envelope
-            .invocation_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                Status::internal(
-                    "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
-                )
-            })?;
+    if descriptor_subject_ura != subject_ura {
+        let profile = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.profile.clone())
+            .filter(|profile| !profile.trim().is_empty())
+            .unwrap_or_else(|| {
+                crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string()
+            });
+        envelope.subject = Some(SubjectIdentity {
+            ura: descriptor_subject_ura.clone(),
+            profile,
+        });
+    }
+    if envelope.invocation_nonce.len() != 16 {
+        return Err(Status::internal(
+            "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
+        ));
+    }
 
-    let mut hasher = Sha256::new();
-    hasher.update(arguments);
-    let args_digest: [u8; 32] = hasher.finalize().into();
+    let descriptor_bound = descriptor_bound_from_wire_parts(
+        envelope.clone(),
+        ability.to_string(),
+        arguments,
+        WireCallerIdentity::FromEnvelope,
+    )
+    .map_err(|err| {
+        Status::internal(format!(
+            "cross-hub forward_invoke signing: build descriptor-bound envelope: {err}"
+        ))
+    })?;
 
     // Hub identity is a fresh-random Ed25519 seed minted by
     // backend's `LoadOrInitHubIdentity` at first boot and persisted
@@ -173,22 +200,29 @@ pub(crate) fn sign_peer_request_envelope(
         })?,
     };
     let signing_key = SigningKey::from_bytes(&hub_seed);
-    let axiom_envelope = InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-        subject: AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2),
-        ability: ability.to_string(),
-        args_digest,
-        invocation_nonce,
-        causal_context: CausalContext::None,
-    };
-    let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_envelope));
+    let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
     envelope.caller_signature = Some(CallerSignature {
         algorithm: "ed25519".to_string(),
         signature: signature.to_bytes().to_vec(),
         ..CallerSignature::default()
     });
     Ok(())
+}
+
+fn descriptor_subject_ura_for(
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+) -> anyhow::Result<String> {
+    if try_entity_ref(subject_ura.to_string()).is_ok() {
+        return Ok(subject_ura.to_string());
+    }
+    crate::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
+        anyhow::anyhow!(
+            "subject `{subject_ura}` is not descriptor-bound and callee `{callee_ura}` \
+             cannot own ability `{ability}`"
+        )
+    })
 }
 
 /// Decode the base64-encoded inner envelope carried by
@@ -334,5 +368,49 @@ mod tests {
     fn build_peer_envelope_rejects_bad_target_ura() {
         let err = build_peer_envelope(None, "agent://dev-b", Some("local")).unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn sign_peer_request_preserves_causal_context() {
+        let mut env = Envelope {
+            caller: Some(AgentIdentity {
+                ura: crate::ura::hub_ura("local"),
+                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            callee: Some(AgentIdentity {
+                ura: crate::ura::hub_ura("peer"),
+                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/local/device/dev-a".to_string(),
+                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            invocation_nonce: vec![9u8; 16],
+            causal_context: Some(easynet_axon::pb::axon::v1::CausalContext {
+                form: Some(easynet_axon::pb::axon::v1::causal_context::Form::Scalar(
+                    easynet_axon::pb::axon::v1::ReceiptRef {
+                        receipt_hash: vec![7u8; 32],
+                        receipt_ura: "easynet:///r/local/resource/invocations/parent/receipt"
+                            .to_string(),
+                    },
+                )),
+            }),
+            ..Envelope::default()
+        };
+
+        sign_peer_request_envelope(
+            &mut env,
+            "discover",
+            br#"{"q":"chat"}"#,
+            Some("local"),
+            Some(&[3u8; 32]),
+        )
+        .unwrap();
+
+        assert!(env.caller_signature.is_some());
+        assert!(matches!(
+            env.causal_context.and_then(|ctx| ctx.form),
+            Some(easynet_axon::pb::axon::v1::causal_context::Form::Scalar(_))
+        ));
     }
 }

@@ -2,28 +2,12 @@
 // ============================
 //
 // File: src/facade/cli/groups/trust.rs
-// Description: `easynet trust …` — the trust surface, two planes
-//              under one noun (seven-axes D10 ruling):
-//
-//              ANCHOR plane (`trust show`, read-only): whose keys
-//              does this daemon's admission gate accept, and in what
-//              role (commit-plan-2 D3 / Gate D). The anchor has two
-//              write paths already — the pairing flow and the
-//              `<self>.register_device_pubkey` protocol ability — and
-//              a third CLI write path would need its own DEC against
-//              admission-truth ownership before it exists.
-//
-//              LEVEL plane (`trust level show|set` → cli::trust_level):
-//              once a key is accepted, how far do we trust the
-//              identity behind it (Axon `TrustLevel`, the attribute
-//              the resilience gate consumes). Backed by the
-//              `identity.get_trust`/`set_trust` abilities — a `set`
-//              is an ordinary ledgered invocation, so the level plane
-//              needs no separate DEC: the receipt chain is the audit.
-//
-//              Neither plane answers "what may they call" — that is
-//              permission/policy (D4), a separate product question
-//              per commit-plan-2 invariant 8.
+// Description: `easynet trust …` — read-only view of the realm trust
+//              anchor: whose keys this daemon's admission gate accepts
+//              and in what role (commit-plan-2 D3 / Gate D). The anchor
+//              has write paths through pairing and protocol key
+//              registration; this CLI noun does not define a separate
+//              ability-permission system.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -33,7 +17,7 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::json;
 
-use crate::services::invocation_transport::boot::trust_anchor_path_from_env_or_default;
+use crate::services::realm_trust_anchor::trust_anchor_path_from_env_or_default;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::support::output::OutputFormat;
 
@@ -48,8 +32,6 @@ pub enum TrustAction {
     /// Show the realm trust anchor: every key the admission gate
     /// accepts, or one subject's entries when a URA is given.
     Show(ShowArgs),
-    /// Trust-level plane: how far an accepted identity is trusted.
-    Level(crate::facade::cli::trust_level::LevelArgs),
 }
 
 #[derive(Debug, Args)]
@@ -65,7 +47,6 @@ pub struct ShowArgs {
 pub fn run(args: TrustArgs) -> anyhow::Result<()> {
     match args.action {
         TrustAction::Show(a) => run_show(a),
-        TrustAction::Level(a) => crate::facade::cli::trust_level::run(a),
     }
 }
 
@@ -181,7 +162,7 @@ fn print_trust_is_not_permission() {
         "\n{}",
         style(
             "trust = whose signatures admission accepts; it does not grant any ability \
-             permission (that is `policy`, a separate surface)"
+             permission (that belongs to ability access/permission)"
         )
         .dim()
     );

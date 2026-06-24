@@ -2,53 +2,35 @@
 // ===========================================================
 //
 // File: src/services/invocation_transport/origin_caller.rs
-// Description: Parse the `x-easynet-origin-caller` metadata item that
-//              a hub/backend attaches to an `<self>.invoke_remote`
-//              Request when the inner ability was triggered by a
-//              browser-signed user. The receiving daemon uses it to
-//              reconstruct the INNER invocation envelope with the real
-//              user as caller and dispatch via
-//              `invoke_externally_signed_async` (cryptographic
-//              admission against the user's registered pubkey) instead
-//              of the `_system` trust-domain fallback.
+// Description: Validate the typed origin-caller claim attached to an
+//              `<self>.invoke_remote` request and rebuild the
+//              descriptor-bound inner invocation envelope with the real
+//              originating principal as caller.
 //
 // Why this exists
 // ---------------
-// The outer `<self>.invoke_remote` frame-0 envelope is signed by the
-// backend over the AXIOM-7 tuple (caller=backend/hub, callee=device,
-// subject=device, ability="<self>.invoke_remote"). That is correct and
-// stays as-is. The USER's identity belongs to the inner ability call
-// (e.g. `remote_desktop.create_session`), which previously had no wire
-// carrier — so the inner dispatch defaulted to a fabricated `_system`
-// caller and fail-closed abilities (remote desktop consent) rejected.
-//
-// This module is the additive, optional carrier: when present and the
-// inner signature verifies, the inner ability sees the real user as
-// `EnvelopeContext.caller`. When absent (older backend) the caller
-// falls back to the existing path. A forged value fails signature
-// verification in `invoke_externally_signed_async` → falls closed.
+// The outer `<self>.invoke_remote` envelope is the transport request.
+// The origin-caller claim is the authority material for the inner
+// descriptor-bound invocation. When present, the executing daemon
+// verifies the claim against Axon descriptor-bound canonical bytes and
+// runs the inner ability with the real caller. A forged value fails
+// Axon admission.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
-
 use base64::Engine as _;
 use easynet_axon::invocation::{
-    AgentIdentity, CallerSignature, CausalContext, InvocationEnvelope, SubjectIdentity, UraProfile,
+    AgentIdentity, CallerSignature, CausalContext, DescriptorBoundEnvelope,
+    DescriptorBoundEnvelopeParts, EntityRef, SubjectIdentity, UraProfile,
 };
 
-use crate::runtime::axon_bridge::dispatch_shim::WireDispatch;
-
-/// LEGACY metadata key carrying the inner user envelope + browser
-/// signature. The canonical carrier is the typed
-/// [`OriginCallerClaim`] field on `InvokeRemoteUp::Request` /
-/// `SessionDispatch::Dispatch`; this key is read as a fallback during
-/// the rolling upgrade and will be removed once the fleet dual-writes
-/// the field.
-pub const ORIGIN_CALLER_METADATA_KEY: &str = "x-easynet-origin-caller";
+use crate::runtime::axon_bridge::dispatch_shim::{WireDispatch, WireDispatchIngress};
+use crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire;
 
 const ED25519_ALGORITHM: &str = "ed25519";
+const ED25519_SIGNATURE_LEN: usize = 64;
+const ED25519_PUBLIC_KEY_LEN: usize = 32;
 
 /// The claim's wire shape is protocol material and lives in the Axon
 /// SDK (it rides `ForwardInvokeRequest` as well as the CLI-owned
@@ -62,67 +44,71 @@ pub struct OriginCaller {
     pub caller_ura: String,
     /// Public ability name the browser signed (canonical `ability` field).
     pub ability: String,
+    pub descriptor_version: String,
     pub signature: Vec<u8>,
     pub signer_pubkey: Vec<u8>,
     pub nonce: [u8; 16],
 }
 
 impl OriginCaller {
-    /// Resolve the origin-caller authority for one dispatch: prefer
-    /// the typed first-class `claim` field; fall back to the legacy
-    /// metadata item during the rolling upgrade. Returns `None` when
-    /// neither is present (the common, non-user path). Returns `Err`
-    /// when a claim IS present but malformed — a present-but-broken
-    /// authority must not silently degrade to `_system`.
-    pub fn resolve(
-        claim: Option<&OriginCallerClaim>,
-        metadata: &HashMap<String, String>,
-    ) -> anyhow::Result<Option<Self>> {
+    /// Resolve the origin-caller authority for one dispatch. Only the typed
+    /// first-class `claim` field is authoritative; ordinary metadata never
+    /// carries caller identity. Returns `None` when no typed claim is present
+    /// (the common, non-user path). Returns `Err` when a claim IS present but
+    /// malformed — a present-but-broken authority must not silently degrade to
+    /// `_system`.
+    pub fn resolve(claim: Option<&OriginCallerClaim>) -> anyhow::Result<Option<Self>> {
         if let Some(claim) = claim {
             return Self::from_claim(claim.clone()).map(Some);
         }
-        Self::from_metadata(metadata)
-    }
-
-    /// Extract + decode the origin-caller item from the LEGACY
-    /// invoke_remote metadata. Kept for one release while the fleet
-    /// upgrades to the typed `origin_caller` wire field.
-    pub fn from_metadata(metadata: &HashMap<String, String>) -> anyhow::Result<Option<Self>> {
-        let Some(raw) = metadata.get(ORIGIN_CALLER_METADATA_KEY) else {
-            return Ok(None);
-        };
-        let claim: OriginCallerClaim = serde_json::from_str(raw)
-            .map_err(|e| anyhow::anyhow!("{ORIGIN_CALLER_METADATA_KEY}: invalid JSON: {e}"))?;
-        Self::from_claim(claim).map(Some)
+        Ok(None)
     }
 
     /// Validate + decode a typed claim into the dispatchable form.
     pub fn from_claim(wire: OriginCallerClaim) -> anyhow::Result<Self> {
         if wire.caller_ura.trim().is_empty() {
-            anyhow::bail!("{ORIGIN_CALLER_METADATA_KEY}: empty caller_ura");
+            anyhow::bail!("origin_caller: empty caller_ura");
         }
+        crate::ura::parse_ura(wire.caller_ura.trim())
+            .map_err(|e| anyhow::anyhow!("origin_caller: invalid caller_ura: {e}"))?;
         if wire.ability.trim().is_empty() {
-            anyhow::bail!("{ORIGIN_CALLER_METADATA_KEY}: empty ability");
+            anyhow::bail!("origin_caller: empty ability");
+        }
+        if wire.descriptor_version.trim().is_empty() {
+            anyhow::bail!("origin_caller: empty descriptor_version");
         }
         let b64 = base64::engine::general_purpose::STANDARD;
         let signature = b64
             .decode(wire.signature_b64.trim())
-            .map_err(|e| anyhow::anyhow!("{ORIGIN_CALLER_METADATA_KEY}: bad signature_b64: {e}"))?;
-        let signer_pubkey = b64.decode(wire.signer_pubkey_b64.trim()).map_err(|e| {
-            anyhow::anyhow!("{ORIGIN_CALLER_METADATA_KEY}: bad signer_pubkey_b64: {e}")
-        })?;
+            .map_err(|e| anyhow::anyhow!("origin_caller: bad signature_b64: {e}"))?;
+        if signature.len() != ED25519_SIGNATURE_LEN {
+            anyhow::bail!(
+                "origin_caller: signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+                signature.len()
+            );
+        }
+        let signer_pubkey = b64
+            .decode(wire.signer_pubkey_b64.trim())
+            .map_err(|e| anyhow::anyhow!("origin_caller: bad signer_pubkey_b64: {e}"))?;
+        if signer_pubkey.len() != ED25519_PUBLIC_KEY_LEN {
+            anyhow::bail!(
+                "origin_caller: signer_pubkey must be {ED25519_PUBLIC_KEY_LEN} bytes, got {}",
+                signer_pubkey.len()
+            );
+        }
         let nonce_vec = b64
             .decode(wire.nonce_b64.trim())
-            .map_err(|e| anyhow::anyhow!("{ORIGIN_CALLER_METADATA_KEY}: bad nonce_b64: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("origin_caller: bad nonce_b64: {e}"))?;
         let nonce: [u8; 16] = nonce_vec.as_slice().try_into().map_err(|_| {
             anyhow::anyhow!(
-                "{ORIGIN_CALLER_METADATA_KEY}: nonce must be 16 bytes, got {}",
+                "origin_caller: nonce must be 16 bytes, got {}",
                 nonce_vec.len()
             )
         })?;
         Ok(Self {
             caller_ura: wire.caller_ura,
             ability: wire.ability,
+            descriptor_version: wire.descriptor_version,
             signature,
             signer_pubkey,
             nonce,
@@ -137,15 +123,17 @@ impl OriginCaller {
         &self.ability
     }
 
-    /// Build the inner `WireDispatch` (envelope + signature + payload)
-    /// for `invoke_externally_signed_async`. The envelope MUST reproduce
-    /// the exact AXIOM-7 tuple the browser signed:
+    /// Build the inner descriptor-bound `WireDispatch` (envelope +
+    /// signature + payload) for Axon external signed dispatch. The
+    /// envelope MUST reproduce the exact invocation object the browser
+    /// signed:
     ///   caller   = the user URA
     ///   callee   = the device (route's callee_ura)
-    ///   subject  = inner subject
+    ///   subject  = inner subject EntityRef
     ///   ability  = `self.ability` — the PUBLIC ability name the browser
     ///              signed (NOT the daemon-local dispatch key); a mismatch
     ///              changes the canonical bytes and fails verification
+    ///   descriptor_version = the governed descriptor version the signer used
     ///   args     = payload
     ///   nonce    = the user's nonce
     ///
@@ -157,30 +145,43 @@ impl OriginCaller {
         callee_ura: &str,
         subject_ura: &str,
         payload: Vec<u8>,
-    ) -> WireDispatch {
+    ) -> anyhow::Result<WireDispatch> {
         let caller = AgentIdentity::new(self.caller_ura, UraProfile::EasynetStrictV2);
         let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
-        let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
-        let envelope = InvocationEnvelope::from_wire_parts(
+        let (subject, _subject_ref) = descriptor_subject_identity(subject_ura)?;
+        let ability =
+            ability_descriptor_ref_for_wire(callee_ura, &self.ability, &self.descriptor_version)
+                .map_err(|err| anyhow::anyhow!("origin_caller: descriptor-bound ability: {err}"))?;
+        let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
             caller,
             callee,
+            ability,
             subject,
-            self.nonce,
-            CausalContext::None,
-            self.ability,
-            &payload,
-        );
+            invocation_nonce: self.nonce,
+            causal_context: CausalContext::None,
+            args_bytes: &payload,
+        })
+        .map_err(|err| anyhow::anyhow!("origin_caller: descriptor-bound envelope: {err}"))?;
         let signature = CallerSignature {
             algorithm: ED25519_ALGORITHM.to_string(),
             signature: self.signature,
             key_id_hint: base64::engine::general_purpose::STANDARD.encode(self.signer_pubkey),
         };
-        WireDispatch {
+        Ok(WireDispatch {
             envelope,
-            signature,
+            ingress: WireDispatchIngress::ExternalSigned(signature),
             payload,
-        }
+            request_metadata: Default::default(),
+            trace_id: String::new(),
+        })
     }
+}
+
+fn descriptor_subject_identity(subject_ura: &str) -> anyhow::Result<(SubjectIdentity, EntityRef)> {
+    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
+    let subject_ref = EntityRef::try_from_subject_identity(&subject)
+        .map_err(|err| anyhow::anyhow!("origin_caller: invalid descriptor subject: {err}"))?;
+    Ok((subject, subject_ref))
 }
 
 #[cfg(test)]
@@ -191,16 +192,11 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
-    #[test]
-    fn absent_key_returns_none() {
-        let md = HashMap::new();
-        assert!(OriginCaller::from_metadata(&md).unwrap().is_none());
-    }
-
     fn sample_claim(ability: &str) -> OriginCallerClaim {
         OriginCallerClaim {
             caller_ura: "easynet:///r/localhost/user/dev".into(),
             ability: ability.into(),
+            descriptor_version: crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.into(),
             signature_b64: b64(&[9u8; 64]),
             signer_pubkey_b64: b64(&[8u8; 32]),
             nonce_b64: b64(&[7u8; 16]),
@@ -208,119 +204,130 @@ mod tests {
     }
 
     #[test]
-    fn resolve_prefers_typed_claim_over_legacy_metadata() {
-        // Dual-write window: when BOTH carriers are present, the typed
-        // field wins — it is the canonical carrier; the metadata item
-        // exists only for pre-field receivers.
-        let mut md = HashMap::new();
-        md.insert(
-            ORIGIN_CALLER_METADATA_KEY.to_string(),
-            serde_json::to_string(&sample_claim("legacy.name")).unwrap(),
-        );
-        let claim = sample_claim("typed.name");
-        let oc = OriginCaller::resolve(Some(&claim), &md).unwrap().unwrap();
-        assert_eq!(oc.ability, "typed.name");
-
-        // Field absent → metadata fallback still works.
-        let oc = OriginCaller::resolve(None, &md).unwrap().unwrap();
-        assert_eq!(oc.ability, "legacy.name");
-
-        // Neither present → None.
-        assert!(OriginCaller::resolve(None, &HashMap::new())
-            .unwrap()
-            .is_none());
+    fn absent_claim_returns_none() {
+        assert!(OriginCaller::resolve(None).unwrap().is_none());
     }
 
     #[test]
-    fn claim_field_round_trips_and_old_json_decodes_without_it() {
-        // Wire compat: a claim survives JSON round-trip, and frames
-        // serialized by pre-field senders (no `origin_caller` key)
-        // decode with the field defaulting to None.
+    fn typed_claim_decodes() {
+        let claim = sample_claim("typed.name");
+        let oc = OriginCaller::resolve(Some(&claim)).unwrap().unwrap();
+        assert_eq!(oc.caller_ura, "easynet:///r/localhost/user/dev");
+        assert_eq!(oc.ability, "typed.name");
+        assert_eq!(
+            oc.descriptor_version,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        );
+        assert_eq!(oc.signature.len(), 64);
+        assert_eq!(oc.signer_pubkey.len(), 32);
+        assert_eq!(oc.nonce, [7u8; 16]);
+    }
+
+    #[test]
+    fn resolve_uses_only_typed_claim() {
+        let claim = sample_claim("typed.name");
+        let oc = OriginCaller::resolve(Some(&claim)).unwrap().unwrap();
+        assert_eq!(oc.ability, "typed.name");
+        assert_eq!(
+            oc.descriptor_version,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        );
+    }
+
+    #[test]
+    fn claim_field_round_trips() {
         let claim = sample_claim("remote_desktop.create_session");
         let json = serde_json::to_string(&claim).unwrap();
         let back: OriginCallerClaim = serde_json::from_str(&json).unwrap();
         assert_eq!(claim, back);
-
-        #[derive(serde::Deserialize)]
-        struct Holder {
-            #[serde(default)]
-            origin_caller: Option<OriginCallerClaim>,
-        }
-        let holder: Holder = serde_json::from_str("{}").unwrap();
-        assert!(holder.origin_caller.is_none());
     }
 
     #[test]
-    fn valid_item_decodes() {
-        let mut md = HashMap::new();
-        md.insert(
-            ORIGIN_CALLER_METADATA_KEY.to_string(),
-            serde_json::json!({
-                "caller_ura": "easynet:///r/localhost/user/dev",
-                "ability": "remote_desktop.create_session",
-                "signature_b64": b64(&[1u8; 64]),
-                "signer_pubkey_b64": b64(&[2u8; 32]),
-                "nonce_b64": b64(&[3u8; 16]),
-            })
-            .to_string(),
-        );
-        let oc = OriginCaller::from_metadata(&md).unwrap().unwrap();
-        assert_eq!(oc.caller_ura, "easynet:///r/localhost/user/dev");
-        assert_eq!(oc.ability, "remote_desktop.create_session");
-        assert_eq!(oc.signature.len(), 64);
-        assert_eq!(oc.signer_pubkey.len(), 32);
-        assert_eq!(oc.nonce, [3u8; 16]);
+    fn present_but_malformed_is_error() {
+        let mut bad_nonce = sample_claim("remote_desktop.create_session");
+        bad_nonce.nonce_b64 = b64(&[3u8; 8]);
+        assert!(OriginCaller::from_claim(bad_nonce).is_err());
+
+        let mut bad_version = sample_claim("remote_desktop.create_session");
+        bad_version.descriptor_version.clear();
+        assert!(OriginCaller::from_claim(bad_version).is_err());
+
+        let mut bad_caller = sample_claim("remote_desktop.create_session");
+        bad_caller.caller_ura = "not-a-ura".to_string();
+        assert!(OriginCaller::from_claim(bad_caller)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid caller_ura"));
+
+        let mut bad_signature = sample_claim("remote_desktop.create_session");
+        bad_signature.signature_b64 = b64(&[1u8; 63]);
+        assert!(OriginCaller::from_claim(bad_signature)
+            .unwrap_err()
+            .to_string()
+            .contains("signature must be 64 bytes"));
+
+        let mut bad_pubkey = sample_claim("remote_desktop.create_session");
+        bad_pubkey.signer_pubkey_b64 = b64(&[2u8; 31]);
+        assert!(OriginCaller::from_claim(bad_pubkey)
+            .unwrap_err()
+            .to_string()
+            .contains("signer_pubkey must be 32 bytes"));
     }
 
     #[test]
-    fn present_but_malformed_is_error_not_silent_fallback() {
-        let mut md = HashMap::new();
-        // bad nonce length
-        md.insert(
-            ORIGIN_CALLER_METADATA_KEY.to_string(),
-            serde_json::json!({
-                "caller_ura": "easynet:///r/localhost/user/dev",
-                "ability": "remote_desktop.create_session",
-                "signature_b64": b64(&[1u8; 64]),
-                "signer_pubkey_b64": b64(&[2u8; 32]),
-                "nonce_b64": b64(&[3u8; 8]),
-            })
-            .to_string(),
+    fn origin_dispatch_rejects_invalid_subject_without_fallback() {
+        let claim = sample_claim("chat");
+        let err = OriginCaller::from_claim(claim)
+            .unwrap()
+            .into_wire_dispatch(
+                "easynet:///r/localhost/agent/dev.assistant",
+                "not-a-subject-ura",
+                b"{}".to_vec(),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid descriptor subject"),
+            "subject must fail at the supplied value, got {err}"
         );
-        assert!(OriginCaller::from_metadata(&md).is_err());
-
-        // non-JSON
-        let mut md2 = HashMap::new();
-        md2.insert(
-            ORIGIN_CALLER_METADATA_KEY.to_string(),
-            "not json".to_string(),
-        );
-        assert!(OriginCaller::from_metadata(&md2).is_err());
     }
 
     #[test]
     fn wire_dispatch_carries_user_caller_and_pubkey_hint() {
-        let mut md = HashMap::new();
-        md.insert(
-            ORIGIN_CALLER_METADATA_KEY.to_string(),
-            serde_json::json!({
-                "caller_ura": "easynet:///r/localhost/user/dev",
-                "ability": "remote_desktop.create_session",
-                "signature_b64": b64(&[7u8; 64]),
-                "signer_pubkey_b64": b64(&[9u8; 32]),
-                "nonce_b64": b64(&[3u8; 16]),
-            })
-            .to_string(),
+        let mut claim = sample_claim("remote_desktop.create_session");
+        claim.signature_b64 = b64(&[7u8; 64]);
+        claim.signer_pubkey_b64 = b64(&[9u8; 32]);
+        claim.nonce_b64 = b64(&[3u8; 16]);
+
+        let oc = OriginCaller::from_claim(claim).unwrap();
+        let wire = oc
+            .into_wire_dispatch(
+                "easynet:///r/localhost/device/d1",
+                "easynet:///r/localhost/resource/device.d1/streams/display.x",
+                b"{}".to_vec(),
+            )
+            .unwrap();
+        assert_eq!(
+            wire.envelope.envelope().caller.ura,
+            "easynet:///r/localhost/user/dev"
         );
-        let oc = OriginCaller::from_metadata(&md).unwrap().unwrap();
-        let wire = oc.into_wire_dispatch(
-            "easynet:///r/localhost/device/d1",
-            "easynet:///r/localhost/resource/device.d1/streams/display.x",
-            b"{}".to_vec(),
+        let expected_ability = format!(
+            "{}@{}",
+            crate::ura::owner_ability_ura(
+                "easynet:///r/localhost/device/d1",
+                "remote_desktop.create_session"
+            )
+            .expect("ability URA"),
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
-        assert_eq!(wire.envelope.caller.ura, "easynet:///r/localhost/user/dev");
-        assert_eq!(wire.envelope.ability, "remote_desktop.create_session");
-        assert_eq!(wire.signature.algorithm, "ed25519");
-        assert_eq!(wire.signature.key_id_hint, b64(&[9u8; 32]));
+        assert_eq!(wire.envelope.envelope().ability, expected_ability);
+        let WireDispatchIngress::ExternalSigned(signature) = &wire.ingress else {
+            panic!("origin caller dispatch must preserve external signed ingress");
+        };
+        assert_eq!(signature.algorithm, "ed25519");
+        assert_eq!(signature.key_id_hint, b64(&[9u8; 32]));
+        assert_eq!(
+            wire.envelope.envelope().subject.ura,
+            "easynet:///r/localhost/resource/device.d1/streams/display.x"
+        );
     }
 }

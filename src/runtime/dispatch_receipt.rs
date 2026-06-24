@@ -4,8 +4,9 @@
 // File: src/runtime/dispatch_receipt.rs
 //
 // When the IPC dispatcher returns a result for a local ability, it
-// must attach a §A12 receipt header so the caller can verify which
-// Agent the result came from. This module centralises the
+// may attach a legacy §A12 hosted-agent receipt header so older
+// callers can verify the local authority projection behind the result.
+// This module centralises the
 // "ability_name + local-agents.json + host_device_ura →
 // HostedAgentReceiptHeader" lookup that the proxy needs on every
 // successful dispatch.
@@ -14,7 +15,7 @@
 // ----------------------
 // The mapping has three inputs that must agree:
 //
-//   1. The owner classification for the ability.
+//   1. The authority/projection classification for the ability.
 //   2. The hosted Agent URA recorded in `local-agents.json`.
 //   3. The host device-profile URA from the same file.
 //
@@ -25,7 +26,7 @@
 // What this module DOES
 // ---------------------
 // `header_for_ability(ability_name, &local_agents_file)` returns
-// the right header for an ability whose owner the file knows about.
+// the right header for an ability whose authority projection the file knows about.
 // Returns `None` for abilities the file cannot map (e.g. before
 // the daemon has joined a realm); the dispatcher then omits the
 // optional `receipt_header` field and the wire is unchanged from
@@ -47,9 +48,7 @@ use easynet_axon::invocation::audit::HostedAgentReceiptHeader;
 
 use crate::persistence::local_agents::{lookup_hosted_ura, LocalAgentsFile};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::agents::profiles::{
-    DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID, DEFAULT_POLICY_AGENT_ID,
-};
+use crate::runtime::agents::profiles::{DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID};
 
 pub trait HostAttestationProvider {
     fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>>;
@@ -75,17 +74,17 @@ impl HostAttestationProvider for NoHostAttestation {
 /// Build a receipt header for the given ability, given the daemon's
 /// local-agents.json snapshot. Returns:
 ///
-///   * `Some(Selfsigned)` when the ability is owned by the device-
-///     profile and the file has the host URA.
-///   * `Some(HostedBy)` when the ability is owned by a hosted
-///     profile (consent / policy / mcp / llm) and the file has both
+///   * `Some(Selfsigned)` when the ability is governed by device
+///     authority and the file has the host URA.
+///   * `Some(HostedBy)` when the ability is dispatched through a hosted
+///     profile projection (consent / mcp / llm) and the file has both
 ///     the hosted URA and the host URA.
 ///   * `None` otherwise — the dispatcher omits the receipt_header
 ///     field and the wire is unchanged from pre-RFC behaviour.
 ///
 /// The caller may also pass `Some(sub_agent_name)` when the ability
 /// is in the `skill.*` / `conversation.*` namespace and the
-/// dispatch context knows which sub-agent owns it (chat dispatch
+/// dispatch context knows which sub-agent projected it (chat dispatch
 /// has this context; static system abilities don't).
 pub fn header_for_ability(
     ability_name: &str,
@@ -108,7 +107,7 @@ pub fn header_for_ability_with_attestation(
 
     let (profile_key, name) = match crate::runtime::agents::system_ability_owner(ability_name) {
         Some(OwnerKind::Device) => {
-            // Self-signed: the device-profile dispatched its own ability.
+            // Self-signed: device authority projected through the host profile.
             return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();
         }
         Some(OwnerKind::Agent(agent_id)) => hosted_system_profile_for_agent_id(&agent_id)?,
@@ -125,7 +124,6 @@ pub fn header_for_ability_with_attestation(
 fn hosted_system_profile_for_agent_id(agent_id: &str) -> Option<(&'static str, &'static str)> {
     match agent_id {
         DEFAULT_CONSENT_AGENT_ID => Some(("consent", "default")),
-        DEFAULT_POLICY_AGENT_ID => Some(("policy", "default")),
         DEFAULT_MCP_AGENT_ID => Some(("mcp", "default")),
         _ => None,
     }

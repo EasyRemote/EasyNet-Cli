@@ -27,6 +27,7 @@
 
 pub(crate) mod claude_code;
 pub(crate) mod codex;
+pub(crate) mod invocation_trace;
 
 use super::adapter::AgentAdapter;
 use crate::registry::agents::AgentType;

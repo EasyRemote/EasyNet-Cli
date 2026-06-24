@@ -23,7 +23,7 @@
 //   - `Invoke`:   federation.{join, advertise_agent, heartbeat,
 //                 resolve, revoke, forward_invoke} → federation
 //                 wrappers; anything else returns Unimplemented
-//                 with a follow-up commit (admission gate facade,
+//                 with a follow-up commit (transport policy facade,
 //                 AxonAbilityCatalog forwarding) note
 //   - `InvokeStream`: `federation.subscribe_directory` →
 //                 initial-snapshot frame from
@@ -37,8 +37,8 @@
 //
 // What the dispatcher does NOT yet do
 // -----------------------------------
-// - Run the admission gate (commit 7/9, alongside the realm-trust
-//   loader and `easynet-axon` admission helpers integration)
+// - Run the transport policy gate (commit 7/9, alongside the
+//   realm-trust loader and `easynet-axon` policy helpers integration)
 // - Forward unmatched abilities to AxonAbilityCatalog (commit 7/9)
 // - Push frames down `<self>.session` reverse channels for
 //   `federation.forward_invoke` (commit 8/9)
@@ -171,9 +171,8 @@ use easynet_axon::pb::axon::v1::{
 ///   wrappers (resolve / forward_invoke / revoke / heartbeat /
 ///   subscribe_directory) and by the future `<self>.session` accept
 ///   path in PR-2
-/// - `admission` — the `AdmissionFacade` consulted at the start of
-///   every RPC method, before any dispatch. Rejects callers whose
-///   URA is not in the realm trust anchor (per spec §5)
+/// - `admission` — the transport policy facade consulted at the start
+///   of every RPC method, before any dispatch.
 ///
 /// Future-shape (commit 8/9 onward) will add:
 /// `ability_dispatch: Arc<AxonAbilityCatalog>` for the unmatched-
@@ -186,9 +185,8 @@ use easynet_axon::pb::axon::v1::{
 /// `Option<String>`; clone is cheap.
 #[derive(Clone)]
 pub struct DaemonInvocationService {
-    /// Admission gate consulted at the start of every RPC method,
-    /// before any plane is touched. Rejects callers whose URA is not
-    /// in the realm trust anchor (per spec §5).
+    /// Transport policy gate consulted at the start of every RPC method,
+    /// before any plane is touched.
     admission: AdmissionFacade,
     /// Directory read plane: presence, hosted-agent rows, ability
     /// catalogs, federated directory view. See [`DirectoryPlane`].
@@ -257,10 +255,10 @@ impl std::fmt::Debug for DaemonInvocationService {
 
 impl DaemonInvocationService {
     /// Construct a service against the supplied presence registry
-    /// and admission facade. Production callers wire one registry
+    /// and transport policy facade. Production callers wire one registry
     /// per daemon process and share it via `Arc` between the
     /// service, the `<self>.session` accept loop (PR-2), and any
-    /// audit-log subscriber. The admission facade is constructed
+    /// audit-log subscriber. The policy facade is constructed
     /// from `RealmTrustAnchor::load_or_empty(...)` at daemon boot.
     ///
     /// `<self>.invoke_remote` requires an additional
@@ -306,6 +304,23 @@ impl DaemonInvocationService {
                 ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
             },
         }
+    }
+
+    /// Attach the hosted-agent and owner-projection read models used
+    /// by federation directory abilities.
+    ///
+    /// Registry-built `<agent>.discover` handlers can hold the same
+    /// `Arc` stores, so `federation.advertise_*` writes and discover's
+    /// user/public tiers observe one daemon-owned directory state.
+    #[must_use]
+    pub fn with_directory_read_models(
+        mut self,
+        advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
+        ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
+    ) -> Self {
+        self.directory.advertised_agents = advertised_agents;
+        self.directory.ability_catalog = ability_catalog;
+        self
     }
 
     fn record_unary_invocation(
@@ -495,6 +510,7 @@ impl DaemonInvocationService {
     /// `HOME`.
     #[must_use]
     pub fn with_hub_signing_seed(mut self, seed: SessionSigningSeed) -> Self {
+        self.admission = self.admission.with_hub_signing_seed(seed);
         self.federation.hub_signing_seed = Some(seed);
         self
     }
@@ -538,7 +554,7 @@ impl DaemonInvocationService {
         self
     }
 
-    /// Set whether this service's admission gate honours the loopback
+    /// Set whether this service's transport policy gate honours the loopback
     /// bypass. Boot serves the *same* service over a loopback-only UDS
     /// and an off-box TCP+TLS socket; the TCP-fed clone is given
     /// `false` so a daemon-URA spoofer reaching the TCP port still
@@ -713,12 +729,11 @@ impl Invocation for DaemonInvocationService {
             return result;
         }
         let function = inner.function_name.as_str();
-        // #185: meter the already-admitted caller. A throttled caller
-        // is rejected here with `ResourceExhausted` before any dispatch
-        // work; the post-decrement status (when metered) rides the
-        // successful response below. Federation and daemon-local
-        // `<self>` calls are control-plane traffic; throttling them
-        // would break liveness and key-discovery paths.
+        // #185: meter the caller after the transport policy gate. This
+        // is not an Axon runtime-admitted token; descriptor-bound local
+        // dispatch still enters LocalRuntime through public Axon
+        // admission below. A throttled caller is rejected here with
+        // `ResourceExhausted` before any dispatch work.
         let rate_limit = match quota_metered_ability_for_request(&inner) {
             Ok(Some(ability)) => match self.admission.check_quota_for_ability(&inner, &ability) {
                 Ok(info) => info,

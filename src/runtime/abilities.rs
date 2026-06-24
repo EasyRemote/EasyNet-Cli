@@ -306,10 +306,10 @@ pub fn public_agent_ability_name(
 ///
 /// The dispatch path needs more than the discovery shape: when a
 /// manifest pins an executor binding (`[exec]`) the handler must see
-/// the executor config to route the call to a real subprocess
-/// instead of the chat-translation fallback. `abilities_for` strips
-/// that field on its way to the wire-level spec; this helper keeps
-/// it.
+/// the executor config to route the call to the correct runtime. A
+/// manifest without `[exec]` is discoverable metadata, not an invocable
+/// route. `abilities_for` strips the executor field on its way to the
+/// wire-level spec; this helper keeps it.
 ///
 /// Returns one entry per on-disk `<verb>.ability.toml` in the
 /// agent's root, in the same order as `abilities_for`. Invalid

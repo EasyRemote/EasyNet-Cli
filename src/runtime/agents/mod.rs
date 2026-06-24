@@ -72,6 +72,8 @@ pub mod chat_ability;
 pub mod chat_history_ability;
 pub mod context_ability;
 pub mod context_loaders;
+pub mod device_ability_registrar;
+pub mod device_ability_store;
 pub mod device_ops_ability;
 pub mod discover_ability;
 pub mod discuss_ability;
@@ -81,10 +83,9 @@ pub mod discuss_ability;
 /// shell_executor; both consume `template` for `{{ var }}`
 /// substitution before dispatching.
 pub mod eal_executor;
-/// device-hosted node/ability/remote operations: list_nodes, describe_node,
-/// remove_node, deploy_ability, uninstall_ability, exec_remote,
-/// register_self, deregister_self. The CLI side
-/// (`easynet device …`, `easynet ability deploy / uninstall / exec`)
+/// device-hosted node/ability operations: list_nodes, describe_node,
+/// remove_node, deploy_ability, uninstall_ability. The CLI side
+/// (`easynet device …`, `easynet ability deploy / uninstall`)
 /// reaches these through `support::local_invoke::invoke_local_ability`,
 /// the same path every other CLI surface uses.
 pub(crate) mod federation_probe;
@@ -120,6 +121,7 @@ pub mod fs_edit_ability;
 /// from every receipt the auditor may persist. Schemes
 /// restricted to http / https; CR/LF in header values
 /// rejected; redirect / timeout / body caps enforced.
+pub mod host_stream_executor;
 pub mod http_executor;
 pub mod http_request_ability;
 pub mod invocation_history_ability;
@@ -164,7 +166,6 @@ pub mod pages;
 pub mod permission_ability;
 pub mod ping;
 pub mod plugin_lifecycle_ability;
-pub mod policy_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile,
 /// structured-execution member. `process.exec` spawns one
 /// process via OS-level argv (NO shell interpretation);
@@ -235,7 +236,6 @@ pub mod template;
 /// independent judge session emitting a memory-classification
 /// verdict per cycle (consumed by the Phase 5 curator).
 pub mod think_ability;
-pub mod trust_ability;
 /// voice.* call signaling abilities backing the `easynet call …`
 /// subcommand surface (create, show, join, leave, end, watch,
 /// report_metrics). v1 stores call state in-process; persistence

@@ -115,10 +115,10 @@
 /// `runtime/local_runtime_invoker.rs`.
 pub mod async_bridge;
 
-// federation_invoke + federation_invoke_shim moved to
-// services::invocation_transport (T4.1 pre-move b): they import the
-// transport's ProtoEnvelope, which made `support` reach upward into
-// `services` — the one production back-edge in this module.
+// federation_invoke moved under services::invocation_transport and
+// federation_invoke_shim moved under services::federation_invoke_shim.
+// Keeping both out of support prevents this module from reaching upward into
+// services — the production back-edge this split removed.
 
 /// Transport plumbing for the local daemon's Invocation gRPC
 /// surface — socket resolution, UDS / named-pipe connect, tonic

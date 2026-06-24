@@ -17,9 +17,9 @@
 // LLM may reach for the wrong tool), and forces the ability author
 // to write English instructions instead of the actual command.
 //
-// `[exec] kind = "shell"` short-circuits that: the daemon spawns the
-// argv directly. The chat fallback remains for abilities that
-// genuinely need LLM-driven fulfilment (no `[exec]` field set).
+// `[exec] kind = "shell"` makes that binding explicit: the daemon
+// spawns the argv directly. A manifest without `[exec]` is not
+// invocable until the author binds a concrete executor.
 //
 // Substitution model
 // ------------------

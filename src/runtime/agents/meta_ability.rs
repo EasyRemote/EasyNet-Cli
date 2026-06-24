@@ -64,8 +64,8 @@ pub const ABILITY_LIST_ABILITIES: &str = "meta.list_abilities";
 /// AFTER `Arc::new(reg)`. The list_abilities handler reads through
 /// it to enumerate every CURRENTLY-REGISTERED ability — including
 /// abilities registered AFTER `meta_ability::register` ran (e.g.
-/// `mission.run`, per-agent `<agent>.<verb>` chat-translation
-/// handlers, hot-materialized agent abilities). The static profile
+/// `mission.run`, per-agent executor-bound handlers, hot-materialized
+/// agent abilities). The static profile
 /// descriptor catalogue is merged on top so first-class abilities
 /// (fs.read, http.request, ...) keep their full schemas;
 /// runtime-only entries (mission.run, hot-reloaded agent abilities)
@@ -1099,27 +1099,29 @@ mod tests {
             OwnerKind::Agent("alice".to_string()),
             Arc::new(|_args| Ok(json!({}))),
         );
-        live_reg.hot_register_stream_with_spec(
-            "alice.mcp_search",
-            OwnerKind::Agent("alice".to_string()),
-            crate::core::ability_spec::AbilityManifest::new(
-                "mcp_search",
-                "Search reflected MCP content",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" }
-                    },
-                    "required": ["query"]
+        live_reg
+            .hot_register_stream_with_spec(
+                "alice.mcp_search",
+                OwnerKind::Agent("alice".to_string()),
+                crate::core::ability_spec::AbilityManifest::new(
+                    "mcp_search",
+                    "Search reflected MCP content",
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string" }
+                        },
+                        "required": ["query"]
+                    }),
+                )
+                .expect("valid MCP manifest"),
+                Arc::new(|_args| {
+                    Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                        Vec::new(),
+                    ))
                 }),
             )
-            .expect("valid MCP manifest"),
-            Arc::new(|_args| {
-                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
-                    Vec::new(),
-                ))
-            }),
-        );
+            .expect("dynamic stream manifest registers");
         handle.set(Arc::new(live_reg)).expect("set OnceLock");
 
         register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
@@ -1271,12 +1273,14 @@ mod tests {
             }),
         )
         .expect("valid manifest");
-        live_reg.hot_register_rpc_with_spec(
-            "device.hot.echo",
-            OwnerKind::Device,
-            manifest,
-            Arc::new(|_args| Ok(json!({}))),
-        );
+        live_reg
+            .hot_register_rpc_with_spec(
+                "device.hot.echo",
+                OwnerKind::Device,
+                manifest,
+                Arc::new(|_args| Ok(json!({}))),
+            )
+            .expect("dynamic RPC manifest registers");
 
         let mut reg = AxonAbilityCatalog::new();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());

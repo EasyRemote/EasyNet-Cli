@@ -781,10 +781,10 @@ pub fn register_with_backend(
     );
 }
 
-/// Default registration uses the real `XcapBackend`. The daemon
-/// boot path calls this after `media_abilities::register` so the
-/// envelope-aware variant takes precedence over the args-only
-/// stub. Tests that need a hardware-free path call
+/// Default registration uses the real `XcapBackend`.
+/// `media_abilities::register` skips screen names once this module
+/// exists, so the screen dispatch slots are single-owner. Tests
+/// that need a hardware-free path call
 /// `register_with_backend(reg, Arc::new(SyntheticScreenBackend))`
 /// instead.
 pub fn register(reg: &mut AxonAbilityCatalog) {
@@ -824,7 +824,7 @@ fn snapshot_handler(
     // the caller is waiting on.
     if let Err(err) = crate::persistence::context_store::record_capture(
         crate::persistence::context_store::CaptureRecord {
-            device: env.callee.as_deref().unwrap_or_default(),
+            device: env.callee(),
             ability: ABILITY_SCREEN_SNAPSHOT,
             ext: "jpg",
             bytes: &jpeg_bytes,

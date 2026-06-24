@@ -51,6 +51,39 @@ use easynet_cli::services::control::{discovery, runtime_dispatch, server};
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
+fn device_ability_replay_fatal_message(
+    report: &easynet_cli::runtime::agents::device_ability_registrar::ReplayReport,
+) -> Option<String> {
+    if report.runtime_not_ready || report.store_unreadable || report.stale > 0 || report.errored > 0
+    {
+        return Some(format!(
+            "device ability replay failed before daemon start: runtime_not_ready={}, \
+             store_unreadable={}, stale={}, errored={}",
+            report.runtime_not_ready, report.store_unreadable, report.stale, report.errored
+        ));
+    }
+    None
+}
+
+fn report_device_ability_replay(
+    report: &easynet_cli::runtime::agents::device_ability_registrar::ReplayReport,
+) -> anyhow::Result<()> {
+    if let Some(message) = device_ability_replay_fatal_message(report) {
+        anyhow::bail!(message);
+    }
+    eprintln!(
+        "[device-ability] replay: {} registered, {} stale, {} errored, \
+         runtime_not_ready={}, store_unreadable={}, outcomes={}",
+        report.registered,
+        report.stale,
+        report.errored,
+        report.runtime_not_ready,
+        report.store_unreadable,
+        report.outcomes_json()
+    );
+    Ok(())
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     // Refuse non-empty argv. `easynet-daemon` does not parse
@@ -216,6 +249,10 @@ async fn main() -> anyhow::Result<()> {
     // landing.
     let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
         Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
+    let discover_federation_resolver_cell =
+        Arc::new(agents::discover_ability::DeferredDiscoverFederationResolver::new());
+    let discover_federation_resolver: agents::discover_ability::SharedDiscoverFederationResolver =
+        discover_federation_resolver_cell.clone();
     let built_registry =
         agents::build_registry_for_daemon_result(agents::RegistryDaemonBuildConfig {
             services: agents::RegistryBuildServices::new(
@@ -224,11 +261,13 @@ async fn main() -> anyhow::Result<()> {
                 kernel.discuss_service(),
                 kernel.schedule_service(),
                 kernel.loop_service(),
-            ),
+            )
+            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver)),
             invocation_ledger: invocation_ledger.clone(),
             loaders: None,
             pages_identity,
             local_runtime: Some(Arc::clone(&local_runtime)),
+            authority_context: None,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
             shared_stores: agents::RegistrySharedStores::new(Arc::clone(&hub_published_abilities)),
         });
@@ -236,10 +275,26 @@ async fn main() -> anyhow::Result<()> {
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
 
+    // Attach the live runtime to the device-ability registrar and replay
+    // any durably-installed device abilities back into it. This is the
+    // boot half of the `ability.deploy` install transaction: without it
+    // the registrar's runtime cell stays empty and deploy fails honestly
+    // ("registrar not wired"); with it, every previously-deployed device
+    // ability (host_stream generators, shell forwarders) is re-bound and
+    // routable before the first invocation can land. Boot replay is
+    // idempotent and reports stale/errored rows rather than skipping
+    // silently (plan invariant 7).
+    if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
+        device_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
+        device_registrar.set_runtime(Arc::clone(&local_runtime))?;
+        let report = device_registrar.replay_from_store().await;
+        report_device_ability_replay(&report)?;
+    }
+
     // Keep the registry object alive for dynamic side tables whose
     // handlers were installed while building the Axon runtime. Runtime
     // execution itself goes through `local_runtime`.
-    let _registry = registry;
+    let _registry = Arc::clone(&registry);
 
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
@@ -267,6 +322,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&hot_agent_registrar_cell),
             Some(Arc::clone(&built_registry.plugin_runtime_manager)),
             Arc::clone(&hub_published_abilities),
+            Some(Arc::clone(&discover_federation_resolver_cell)),
         ) {
             Ok(handle) => {
                 boot_bus.emit_ok("daemon-invocation-transport");
@@ -626,4 +682,35 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use easynet_cli::runtime::agents::device_ability_registrar::ReplayReport;
+
+    #[test]
+    fn device_replay_boot_policy_rejects_stale_rows() {
+        let report = ReplayReport {
+            stale: 1,
+            errored: 1,
+            ..ReplayReport::default()
+        };
+
+        assert!(device_ability_replay_fatal_message(&report)
+            .unwrap()
+            .contains("stale=1"));
+    }
+
+    #[test]
+    fn device_replay_boot_policy_still_rejects_runtime_wiring_bug() {
+        let report = ReplayReport {
+            runtime_not_ready: true,
+            ..ReplayReport::default()
+        };
+
+        assert!(device_ability_replay_fatal_message(&report)
+            .unwrap()
+            .contains("runtime_not_ready=true"));
+    }
 }

@@ -182,10 +182,9 @@ pub struct AbilityManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     output_schema: Option<Value>,
     /// Optional executor binding. When present, the daemon dispatches
-    /// the ability to the named executor directly, bypassing the
-    /// chat-translation fallback. Absence preserves the legacy "fulfil
-    /// via the owning agent's chat handler" behaviour, so existing
-    /// manifests keep working unchanged.
+    /// the ability to the named executor directly. Absence means the
+    /// manifest is discoverable metadata only; it is not an invocable
+    /// route.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     exec: Option<AbilityExec>,
     /// Optional access policy. Drives `<self>.discover` filtering and
@@ -472,6 +471,92 @@ pub enum AbilityExec {
     /// CLI. It preserves the MCP `tools/call` response shape and
     /// avoids routing through shell or chat translation.
     Mcp(McpExec),
+    /// Stream frames from an external warm host over a Unix socket.
+    /// The daemon opens `host_socket`, sends one request line, then
+    /// reads many JSON frame lines until an explicit terminal — letting
+    /// an external resident process (e.g. an easyremote Python host
+    /// running a generator) stream frames without re-spawning per
+    /// frame. Unlike `Shell` (one bounded result, RPC-only), this is
+    /// the sole external-process *server-stream* path: an ability with
+    /// this exec registers as stream-mode. The wire protocol is the
+    /// single source of truth in `HostStreamExec`'s doc comment.
+    HostStream(HostStreamExec),
+}
+
+/// Configuration for the `host_stream` executor.
+///
+/// **Wire protocol (newline-delimited UTF-8 JSON over `host_socket`),
+/// the single source of truth for both the daemon executor and the
+/// external host:**
+///
+/// ```text
+/// daemon → host:  {"request":{"fn":"<function>","args":{...},"call_id":"<id>"}}
+/// host → daemon:  {"stream_item":<value>,"seq":0}
+///                 {"stream_item":<value>,"seq":1}
+///                 {"terminal":{"output_hash":"sha256:<hex>","frames":2}}
+///   — OR (mutually exclusive with terminal, at most once) —
+///                 {"error":{"kind":"<KIND>","message":"...","recoverable":false}}
+/// ```
+///
+/// Invariants:
+/// 1. `seq` is monotonically increasing from 0; a gap or reorder is a
+///    truncation failure (frame reorder must not be invisible).
+/// 2. `output_hash = H(prev_hash || seq || canonical_json(frame))`,
+///    seeded with the empty hash, folded over every emitted frame in
+///    `seq` order. The host sends the final rolling hash on `terminal`;
+///    the daemon recomputes and a mismatch is a truncation failure.
+/// 3. `terminal` and `error` are mutually exclusive and each may appear
+///    at most once; whichever arrives first ends the stream.
+/// 4. EOF (socket close) before `terminal`/`error` is `STREAM_TRUNCATED`,
+///    NOT a clean terminal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostStreamExec {
+    /// AF_UNIX path to the external warm host's stream socket.
+    pub host_socket: String,
+    /// The resident function name to invoke on the host.
+    pub function: String,
+}
+
+impl HostStreamExec {
+    fn validate(&self) -> anyhow::Result<()> {
+        let host_socket = self.host_socket.trim();
+        if host_socket.is_empty() {
+            anyhow::bail!("host_stream exec: host_socket must not be empty");
+        }
+        let socket_path = std::path::Path::new(host_socket);
+        if !socket_path.is_absolute() {
+            anyhow::bail!("host_stream exec: host_socket must be an absolute Unix socket path");
+        }
+        if socket_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            anyhow::bail!("host_stream exec: host_socket must not contain `..` components");
+        }
+
+        let function = self.function.trim();
+        if function.is_empty() {
+            anyhow::bail!("host_stream exec: function must not be empty");
+        }
+        if !is_host_stream_function_token(function) {
+            anyhow::bail!(
+                "host_stream exec: function must contain only ASCII letters, digits, `_`, `-`, \
+                 `.`, or `:` and must start with a letter or `_`"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn is_host_stream_function_token(function: &str) -> bool {
+    let mut chars = function.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'))
 }
 
 /// Configuration for the `shell` executor.
@@ -698,8 +783,7 @@ impl AbilityManifest {
         self.cost.as_ref()
     }
 
-    /// Attach an executor binding. Optional; absence keeps the legacy
-    /// chat-translation fallback. Returns the manifest for builder
+    /// Attach an executor binding. Returns the manifest for builder
     /// chaining.
     pub fn with_exec(mut self, exec: AbilityExec) -> anyhow::Result<Self> {
         self.exec = Some(exec);
@@ -741,6 +825,19 @@ impl AbilityManifest {
     pub fn from_toml_str(toml: &str) -> anyhow::Result<Self> {
         let m: Self = ::toml::from_str(toml)
             .map_err(|e| anyhow::anyhow!("failed to parse ability.toml: {e}"))?;
+        m.validate()?;
+        Ok(m)
+    }
+
+    /// Parse from JSON. This is the canonical entry point for deployed
+    /// `ability.json` bundles and boot replay.
+    ///
+    /// JSON deployment uses the same semantic validation as TOML manifests:
+    /// private fields alone are not a construction boundary because serde can
+    /// deserialize them directly inside this module's crate.
+    pub fn from_json_slice(bytes: &[u8]) -> anyhow::Result<Self> {
+        let m: Self = serde_json::from_slice(bytes)
+            .map_err(|e| anyhow::anyhow!("failed to parse ability.json: {e}"))?;
         m.validate()?;
         Ok(m)
     }
@@ -916,6 +1013,7 @@ impl AbilityExec {
             AbilityExec::Http(h) => h.validate(),
             AbilityExec::Eal(e) => e.validate(),
             AbilityExec::Mcp(m) => m.validate(),
+            AbilityExec::HostStream(h) => h.validate(),
         }
     }
 }
@@ -1349,9 +1447,17 @@ pub fn default_chat_manifest() -> AbilityManifest {
                         "args": {},
                         "result": {},
                         "error": {"type": "string"},
-                        "elapsed_ms": {"type": "integer", "minimum": 0}
+                        "elapsed_ms": {"type": "integer", "minimum": 0},
+                        "tool_use_id": {"type": "string"},
+                        "mcp_tool_name": {"type": "string"},
+                        "request_id": {"type": "string"},
+                        "ability_ura": {"type": "string"},
+                        "invocation_ura": {"type": "string"},
+                        "caller_ura": {"type": "string"},
+                        "callee_ura": {"type": "string"},
+                        "subject_ura": {"type": "string"}
                     },
-                    "required": ["ability", "elapsed_ms"]
+                    "required": ["ability"]
                 }
             },
             "context_used": {
@@ -1374,6 +1480,11 @@ pub fn default_chat_manifest() -> AbilityManifest {
                 "properties": {
                     "input_tokens": {"type": "integer", "minimum": 0},
                     "output_tokens": {"type": "integer", "minimum": 0},
+                    "cache_read_tokens": {"type": "integer", "minimum": 0},
+                    "cached_input_tokens": {"type": "integer", "minimum": 0},
+                    "cache_creation_tokens": {"type": "integer", "minimum": 0},
+                    "num_turns": {"type": "integer", "minimum": 0},
+                    "total_cost_usd": {"type": "number", "minimum": 0},
                     "model": {"type": "string"}
                 }
             },
@@ -1434,6 +1545,20 @@ mod tests {
         assert!(m.input_schema().is_object());
         assert!(m.output_schema().is_none());
         assert_eq!(m.timeout_seconds(), None);
+    }
+
+    #[test]
+    fn from_json_slice_rejects_semantically_invalid_manifest() {
+        let raw = serde_json::to_vec(&json!({
+            "schema_version": "1",
+            "name": "bad.name",
+            "description": "invalid dotted verb",
+            "input_schema": {"type": "object"},
+        }))
+        .unwrap();
+
+        let err = AbilityManifest::from_json_slice(&raw).unwrap_err();
+        assert!(format!("{err}").contains("must not contain `.`"));
     }
 
     #[test]
@@ -2296,6 +2421,61 @@ result_binding = ""
 "#;
         let err = AbilityManifest::from_toml_str(toml).unwrap_err();
         assert!(format!("{err}").contains("result_binding"));
+    }
+
+    #[test]
+    fn host_stream_exec_accepts_absolute_socket_and_function_token() {
+        let toml = r#"
+schema_version = "1"
+name = "weather"
+description = "stream weather frames"
+[input_schema]
+type = "object"
+[exec]
+kind = "host_stream"
+host_socket = "/tmp/easynet-weather.sock"
+function = "er.weather:forecast_v1"
+"#;
+
+        let m = AbilityManifest::from_toml_str(toml).expect("host_stream manifest must parse");
+        match m.exec() {
+            Some(AbilityExec::HostStream(exec)) => {
+                assert_eq!(exec.host_socket, "/tmp/easynet-weather.sock");
+                assert_eq!(exec.function, "er.weather:forecast_v1");
+            }
+            other => panic!("expected HostStream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_stream_exec_rejects_relative_socket_and_invalid_function() {
+        let relative_socket = r#"
+schema_version = "1"
+name = "weather"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "host_stream"
+host_socket = "tmp/easynet-weather.sock"
+function = "er.weather"
+"#;
+        let err = AbilityManifest::from_toml_str(relative_socket).unwrap_err();
+        assert!(format!("{err}").contains("absolute Unix socket path"));
+
+        let invalid_function = r#"
+schema_version = "1"
+name = "weather"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "host_stream"
+host_socket = "/tmp/easynet-weather.sock"
+function = "1;rm -rf"
+"#;
+        let err = AbilityManifest::from_toml_str(invalid_function).unwrap_err();
+        assert!(format!("{err}").contains("function"));
     }
 
     #[test]

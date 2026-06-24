@@ -44,8 +44,9 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
+use crate::runtime::ability::{AbilityImplSource, RuntimeEnv};
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
 use crate::runtime::execution::mcp_client::McpClientService;
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
@@ -69,7 +70,9 @@ pub const MCP_UPSTREAM_SOURCE_PREFIX: &str = "mcp_upstream:";
 /// raw input so `from_env` can log exactly what the operator typed
 /// (F-034: data-bearing typed error, not a message string).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unrecognized MCP reflection mode `{0}`; expected lazy|background|off|disabled|0|false|eager|sync|blocking")]
+#[error(
+    "unrecognized MCP reflection mode `{0}`; expected lazy|background|off|disabled|0|false|eager|sync|blocking"
+)]
 pub struct UnknownReflectionMode(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -951,8 +954,16 @@ async fn refresh_server_inner<W: RegistryWriter>(
     // `hot_unregister_removes_dynamic_entry_without_touching_static`
     // pin in `ability_dispatch`).
     for prev in previously_reflected {
-        if !new_local_names.contains(prev) && writer.unregister(prev) {
-            diff.removed.push(prev.clone());
+        if !new_local_names.contains(prev) {
+            match writer.unregister(prev) {
+                Ok(true) => diff.removed.push(prev.clone()),
+                Ok(false) => {}
+                Err(error) => diff.failed.push(ReflectFailure {
+                    server: server_name.to_string(),
+                    tool: Some(prev.clone()),
+                    reason: format!("unregister stale reflected ability failed: {error}"),
+                }),
+            }
         }
     }
 
@@ -1068,12 +1079,13 @@ trait RegistryWriter {
         owner: OwnerKind,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
-    );
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()>;
 
     /// Remove every trace of `name`. Returns `true` when something
     /// was actually removed. Static writers touch the boot maps;
     /// dynamic writers touch only the hot-reload side table.
-    fn unregister(&mut self, name: &str) -> bool;
+    fn unregister(&mut self, name: &str) -> anyhow::Result<bool>;
 
     /// Discriminator shown to operators in the collision error
     /// message so they can tell whether the prior registration came
@@ -1115,13 +1127,14 @@ impl RegistryWriter for StaticWriter<'_> {
         owner: OwnerKind,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
-    ) {
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
         self.reg
-            .register_stream_with_spec(name, owner, manifest, handler);
+            .register_stream_with_spec_and_impl(name, owner, manifest, handler, implementation)
     }
 
-    fn unregister(&mut self, name: &str) -> bool {
-        self.reg.unregister(name)
+    fn unregister(&mut self, name: &str) -> anyhow::Result<bool> {
+        Ok(self.reg.unregister(name))
     }
 
     const COLLISION_KIND_HINT: Option<&'static str> = None;
@@ -1153,12 +1166,18 @@ impl RegistryWriter for DynamicWriter<'_> {
         owner: OwnerKind,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
-    ) {
-        self.reg
-            .hot_register_stream_with_spec(name, owner, manifest, handler);
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        self.reg.hot_register_stream_with_spec_and_impl(
+            name,
+            owner,
+            manifest,
+            handler,
+            implementation,
+        )
     }
 
-    fn unregister(&mut self, name: &str) -> bool {
+    fn unregister(&mut self, name: &str) -> anyhow::Result<bool> {
         self.reg.hot_unregister(name)
     }
 
@@ -1299,7 +1318,19 @@ fn register_one_tool<W: RegistryWriter>(
         },
     );
 
-    writer.register_stream(local_name.clone(), owner_kind, manifest, handler);
+    writer
+        .register_stream(
+            local_name.clone(),
+            owner_kind,
+            manifest,
+            handler,
+            ControlPlaneImplementation::new(AbilityImplSource::Mcp, RuntimeEnv::mcp(server_name)),
+        )
+        .map_err(|e| ReflectFailure {
+            server: server_name.to_string(),
+            tool: Some(upstream_tool.clone()),
+            reason: format!("control-plane registration failed: {e}"),
+        })?;
 
     // Build the descriptor that downstream `meta.list_abilities`
     // and `federation.advertise_abilities` will surface. CRITICAL:

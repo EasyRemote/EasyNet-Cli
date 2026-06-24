@@ -170,10 +170,8 @@ pub enum InvokeRemoteUp {
         subject_device: String,
         /// Inner ability subject. Resource-backed abilities use this
         /// as their envelope subject after the target daemon dispatches
-        /// through its LocalRuntime. Older callers omit it and the
-        /// target falls back to `subject_device`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        subject_ura: Option<String>,
+        /// through its LocalRuntime.
+        subject_ura: String,
         /// Canonical Ability URA the remote owner should run.
         ability_ura: String,
         /// Opaque payload bytes the remote ability consumes. The
@@ -187,9 +185,8 @@ pub enum InvokeRemoteUp {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
         /// Typed browser-signed user identity (DEC-EU user-caller
-        /// pass-through). First-class field per invocation-unity
-        /// §22.2; the legacy `x-easynet-origin-caller` metadata item
-        /// is its rolling-upgrade fallback.
+        /// pass-through). This first-class field is the only authority
+        /// carrier for origin-caller dispatch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin_caller:
             Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
@@ -419,8 +416,8 @@ pub async fn invoke_remote(
     args: Vec<u8>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<InvokeRemoteFrame, Status>> + Send>>, Status> {
     let request = InvokeRemoteUp::Request {
+        subject_ura: subject_device.clone(),
         subject_device,
-        subject_ura: None,
         ability_ura,
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -459,10 +456,11 @@ pub async fn invoke_remote(
 }
 
 /// Build the EnvelopeOpen frame-0 carrying `initial_args` for the
-/// `<self>.invoke_remote` ability. AXIOM admission fields stay empty
-/// at this layer; the daemon's `AdmissionFacade::verify_envelope`
-/// (PR-1 commit 7b/9) gates membership, and PR-7 will add the
-/// signature path that fills `mac` in.
+/// `<self>.invoke_remote` ability. This client-side session bootstrap
+/// frame does not manufacture Axon runtime admission state. The receiving
+/// daemon may run its transport policy gate for wrapper compatibility, but
+/// descriptor-bound user calls still enter LocalRuntime through Axon's
+/// public signed/external-signed request constructors.
 fn build_envelope_open_frame(initial_args: &[u8]) -> InvokeBidiUp {
     let envelope_open = EnvelopeOpen {
         envelope: None,
@@ -741,7 +739,7 @@ pub(crate) fn build_carrier_v1_dispatch_frame(
 pub(crate) struct InvokeRemoteDispatchFrameRequest<'a> {
     pub(crate) call_id: u64,
     pub(crate) callee_ura: &'a str,
-    pub(crate) subject_ura: Option<&'a str>,
+    pub(crate) subject_ura: &'a str,
     pub(crate) ability: &'a str,
     pub(crate) args: &'a [u8],
     pub(crate) args_content_envelope: SessionContentEnvelope,
@@ -764,12 +762,17 @@ pub(crate) fn build_invoke_remote_dispatch_frame(
         origin_caller,
     } = request;
 
+    let subject_ura = subject_ura.trim();
+    if subject_ura.is_empty() {
+        return Err(Status::invalid_argument(
+            "<self>.invoke_remote: missing inner subject_ura",
+        ));
+    }
+
     let payload = SessionDispatch::Dispatch {
         call_id,
         callee_ura: Some(callee_ura.to_string()),
-        subject_ura: subject_ura
-            .filter(|subject| !subject.trim().is_empty())
-            .map(ToOwned::to_owned),
+        subject_ura: Some(subject_ura.to_string()),
         ability: ability.to_string(),
         args: args.to_vec(),
         args_content_envelope,
@@ -865,7 +868,7 @@ mod tests {
     fn frame_zero_carries_ability_name_and_one_stream_descriptor() {
         let request_json = serde_json::to_vec(&InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
-            subject_ura: None,
+            subject_ura: "easynet:///r/realm/device/dev-B".into(),
             ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -903,7 +906,7 @@ mod tests {
     fn invoke_remote_up_request_serde_round_trip() {
         let original = InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-X".into(),
-            subject_ura: Some("easynet:///r/realm/resource/camera-1".into()),
+            subject_ura: "easynet:///r/realm/resource/camera-1".into(),
             ability_ura: "easynet:///r/realm/ability/device.dev-X.fs.read".into(),
             args: vec![1, 2, 3, 255],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1348,7 +1351,7 @@ mod hub_frame_tests {
         let frame = build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
             call_id: 42,
             callee_ura: "easynet:///r/realm/device/dev",
-            subject_ura: Some("easynet:///r/realm/resource/camera-1"),
+            subject_ura: "easynet:///r/realm/resource/camera-1",
             ability: "echo",
             args: b"hello",
             args_content_envelope: SessionContentEnvelope::plaintext_json(),

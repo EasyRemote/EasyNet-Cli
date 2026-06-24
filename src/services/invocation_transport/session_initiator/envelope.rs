@@ -10,6 +10,7 @@ use easynet_axon::pb::axon::v1::{
 use ed25519_dalek::{Signer as _, SigningKey};
 use rand::RngCore as _;
 use sha2::{Digest, Sha256};
+use tonic::Status;
 
 use super::{
     claimant_boot_nonce, ABILITY_SELF_SESSION, DEVICE_DISPATCH_CONTRACT_VERSION, SESSION_STREAM_ID,
@@ -37,7 +38,6 @@ pub fn build_session_envelope_open_with_seed(
     signing_seed: Option<SessionSigningSeed>,
 ) -> InvokeBidiUp {
     let initial_args = Vec::new();
-    let args_digest: [u8; 32] = Sha256::digest(&initial_args).into();
 
     let mut envelope = Envelope {
         caller: Some(AgentIdentity {
@@ -59,30 +59,12 @@ pub fn build_session_envelope_open_with_seed(
         ..Envelope::default()
     };
 
-    let mut mac = Vec::new();
-    if let Some(seed) = signing_seed {
-        let mut nonce = [0_u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        envelope.invocation_nonce = nonce.to_vec();
-
-        let axiom_env = InvocationEnvelope {
-            caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-            callee: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-            subject: AxiomSubjectIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-            ability: ABILITY_SELF_SESSION.to_string(),
-            args_digest,
-            invocation_nonce: nonce,
-            causal_context: CausalContext::None,
-        };
-        let signing_key = SigningKey::from_bytes(&seed);
-        let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_env));
-        mac = signature.to_bytes().to_vec();
-        envelope.caller_signature = Some(CallerSignature {
-            algorithm: "ed25519".to_string(),
-            signature: mac.clone(),
-            ..CallerSignature::default()
-        });
-    }
+    let mac = if let Some(seed) = signing_seed {
+        sign_envelope_with_seed(&mut envelope, ABILITY_SELF_SESSION, &initial_args, &seed)
+            .expect("self.session frame-0 envelope is complete")
+    } else {
+        Vec::new()
+    };
 
     InvokeBidiUp {
         sequence: 0,
@@ -110,4 +92,66 @@ pub fn build_session_envelope_open_with_seed(
             ..EnvelopeOpen::default()
         })),
     }
+}
+
+pub(super) fn sign_envelope_with_seed(
+    envelope: &mut Envelope,
+    ability: &str,
+    arguments: &[u8],
+    seed: &SessionSigningSeed,
+) -> Result<Vec<u8>, Status> {
+    if ability.trim().is_empty() {
+        return Err(Status::invalid_argument("session signing ability is empty"));
+    }
+    if envelope.invocation_nonce.len() != 16 {
+        let mut nonce = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        envelope.invocation_nonce = nonce.to_vec();
+    }
+    let invocation_nonce: [u8; 16] =
+        envelope
+            .invocation_nonce
+            .as_slice()
+            .try_into()
+            .map_err(|_| {
+                Status::internal("session signing nonce must be exactly 16 bytes after refresh")
+            })?;
+    let caller_ura = envelope
+        .caller
+        .as_ref()
+        .map(|caller| caller.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| Status::invalid_argument("session signing caller URA missing"))?;
+    let callee_ura = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| Status::invalid_argument("session signing callee URA missing"))?;
+    let subject_ura = envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| Status::invalid_argument("session signing subject URA missing"))?;
+
+    let args_digest: [u8; 32] = Sha256::digest(arguments).into();
+    let axiom_env = InvocationEnvelope {
+        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+        subject: AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2),
+        ability: ability.to_string(),
+        args_digest,
+        invocation_nonce,
+        causal_context: CausalContext::None,
+    };
+    let signing_key = SigningKey::from_bytes(seed);
+    let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_env));
+    let signature_bytes = signature.to_bytes().to_vec();
+    envelope.caller_signature = Some(CallerSignature {
+        algorithm: "ed25519".to_string(),
+        signature: signature_bytes.clone(),
+        key_id_hint: caller_ura.to_string(),
+    });
+    Ok(signature_bytes)
 }

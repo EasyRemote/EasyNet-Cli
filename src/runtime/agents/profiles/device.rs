@@ -1,30 +1,35 @@
-//! device profile — RFC-001 §1.
+//! Device profile — RFC-001 §1.
 //!
-//! An Agent advertising device-hosted operational abilities plus observe,
-//! admin, meta,
-//! schedule.* + loop.* + discuss.* abilities. Default-on; one per
-//! easynet-daemon instance. Represents the local host's
-//! operational surface.
+//! The daemon-hosted Agent anchored at the local device URA. This is not the
+//! physical device object itself. The physical device hosts resources and the
+//! daemon; the device-profile Agent advertises the public abilities that
+//! operate on those resources under device authority.
+//!
+//! Default-on; one per `easynet-daemon` instance. It advertises the local
+//! host's operational surface: filesystem, process, terminal, session,
+//! browser/media/voice, skill package management, observe/admin/meta, and
+//! schedule/loop/discuss abilities that run in the daemon.
 //!
 //! Per RFC §A4: "device" is an implementation profile, NOT a
 //! protocol type. The Agent has no `kind` field on the wire.
 //!
-//! Descriptor ownership
-//! --------------------
+//! Descriptor projection
+//! ---------------------
 //! The dispatch registry stores an `OwnerKind` for every ability at
 //! registration time. Device profile descriptors are generated from entries
-//! whose owner is exactly `OwnerKind::Device`; this module does not infer
-//! ownership from ability name prefixes.
+//! whose authority/projection class is exactly `OwnerKind::Device`; this module
+//! does not infer ownership from ability name prefixes.
 
 /// Build AbilityDescriptors for every system ability the registry flags as
-/// owned by the device profile, with the visibility + scope defaults from RFC
-/// plan §18.
+/// advertised by the device-profile Agent under device authority, with the
+/// visibility + scope defaults from RFC plan §18.
 ///
 /// Wire shape — for each name in the registry whose owner is
 /// `OwnerKind::Device`:
 ///   * observe.*  → PUBLIC
-///   * everything else (device/admin/schedule/loop/discuss/meta) →
-///     SCOPED with scope_subjects/scope_agents = Any (P4.1 default).
+///   * everything else (fs/process/terminal/session/device/admin/
+///     schedule/loop/discuss/meta/skill/media/etc.) → SCOPED with
+///     scope_subjects/scope_agents = Any (P4.1 default).
 ///     P4.7 narrows the SCOPED axes to the host operator URA on
 ///     daemon boot.
 ///
@@ -94,15 +99,21 @@ mod tests {
             "terminal.input",
             "terminal.read",
             "terminal.resize",
-            // Device agent lifecycle is also device-owned. These abilities
+            // Device agent lifecycle is device-profile-owned. These abilities
             // must be advertised by the device projection before RFC-005
             // resolve-before-invoke can start or refresh hosted agents.
             "agent.start",
             "agent.stop",
             "agent.refresh",
             "meta.list_resources",
+            // Session timeline state is daemon-local and therefore belongs
+            // to the device-profile Agent, not the LLM sub-agent whose run
+            // produced a given event.
+            "session.list",
+            "session.attach",
             // Skill management and skill package file browsing are
-            // device-owned because the package tree lives on this host.
+            // device-profile-owned because the package tree lives on this
+            // host.
             "skill.install",
             "skill.remove",
             "skill.upgrade",
@@ -130,7 +141,6 @@ mod tests {
 
         for name in [
             "consent.subscribe",
-            "policy.evaluate",
             "mcp.bridge.call_tool",
             "conversation.send",
             "federation.join",

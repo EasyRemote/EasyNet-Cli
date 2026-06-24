@@ -332,10 +332,10 @@ fn install_h264_preview_session_for_test(
                 session_token: "token".to_string(),
                 creator_caller_ura: Some("easynet:///r/acme/user/test-caller".to_string()),
                 consent: crate::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant::from_envelope_for_test(
-                    &crate::runtime::ability_dispatch::EnvelopeContext {
-                        caller: Some("easynet:///r/acme/user/test-caller".to_string()),
-                        ..Default::default()
-                    },
+                    &crate::runtime::ability_dispatch::EnvelopeContext::for_test(
+                        "easynet:///r/acme/user/test-caller",
+                        "easynet:///r/acme/resource/display.01",
+                    ),
                 ),
                 subject_ura: "easynet:///r/acme/resource/display.01".to_string(),
                 subject_type: crate::persistence::resources::ResourceType::Display,

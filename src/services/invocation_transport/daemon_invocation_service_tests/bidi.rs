@@ -11,10 +11,10 @@ fn remote_bidi_target_ura_preserves_canonical_device_ura() {
 
 #[test]
 fn remote_bidi_target_ura_preserves_non_device_callee_for_rejection() {
-    let open = make_envelope_open_with_callee("easynet:///r/test-realm/agent/dev-B");
+    let open = make_envelope_open_with_callee("easynet:///r/test-realm/agent/alice.dev-B");
     assert_eq!(
         remote_bidi_target_ura(&open).as_deref(),
-        Some("easynet:///r/test-realm/agent/dev-B"),
+        Some("easynet:///r/test-realm/agent/alice.dev-B"),
         "remote bidi target extraction must preserve non-device callee URAs so \
          self-target and presence lookup reject unsupported targets naturally"
     );
@@ -702,7 +702,7 @@ fn build_remote_bidi_open_dispatch_frame_carries_resource_binding() {
 /// slot fallback); a v0 host keeps JSON for the deletion window.
 #[tokio::test]
 async fn remote_bidi_open_frame_rides_carrier_by_negotiated_contract() {
-    use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, EnvelopeOpen};
+    use easynet_axon::pb::axon::v1::EnvelopeOpen;
 
     let svc = make_service().with_session_realm("test-realm");
     let target_ura = "easynet:///r/test-realm/device/bidi-target";
@@ -715,18 +715,15 @@ async fn remote_bidi_open_frame_rides_carrier_by_negotiated_contract() {
         .expect("published route resolves");
 
     let envelope_open = EnvelopeOpen {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: "easynet:///r/test-realm/user/alice".into(),
-                profile: "easynet-strict-v2".into(),
-            }),
-            callee: Some(AgentIdentity {
-                ura: "easynet:///r/test-realm/device/caller-supplied".into(),
-                profile: "easynet-strict-v2".into(),
-            }),
-            invocation_nonce: vec![3; 16],
-            ..Default::default()
-        }),
+        envelope: Some(
+            crate::services::invocation_transport::ProtoEnvelope::targeted(
+                "easynet:///r/test-realm/user/alice",
+                "easynet:///r/test-realm/device/caller-supplied",
+                "easynet:///r/test-realm/device/caller-supplied",
+            )
+            .expect("valid remote bidi open envelope")
+            .into_inner(),
+        ),
         initial_args: br#"{"session_id":"rd-9"}"#.to_vec(),
         ..Default::default()
     };
@@ -794,7 +791,7 @@ fn invoke_remote_up_request_serde_round_trip_via_session_dispatch_pin() {
     // test asserts they don't.
     let req_json = serde_json::to_vec(&InvokeRemoteUp::Request {
         subject_device: "easynet:///r/realm/device/dev-B".into(),
-        subject_ura: None,
+        subject_ura: "easynet:///r/realm/device/dev-B".into(),
         ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
         args: b"hi".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),

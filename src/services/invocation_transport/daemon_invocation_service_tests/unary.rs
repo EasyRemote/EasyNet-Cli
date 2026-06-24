@@ -366,7 +366,7 @@ async fn invoke_writes_success_record_to_invocation_ledger() {
         "easynet:///r/test-realm/ability/hub.federation.resolve"
     );
     assert_eq!(record.state, "completed");
-    assert_eq!(record.authority_binding, "self");
+    assert_eq!(record.authority_form, "self");
     assert!(matches!(
         record.args,
         easynet_axon::invocation::LedgerEventPayload::Digest { .. }
@@ -451,6 +451,28 @@ fn unary_ledger_projects_failed_invoke_response_error() {
     );
 }
 
+#[test]
+fn unary_ledger_rejects_missing_subject_identity() {
+    let mut request = invoke_request("terminal.fs.read", "{}").into_inner();
+    request
+        .envelope
+        .as_mut()
+        .expect("test request carries envelope")
+        .subject = None;
+    let response = InvokeResponse {
+        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+        ..InvokeResponse::default()
+    };
+    let result = Ok(Response::new(response));
+    let err = build_unary_ledger_record(&request, 10, 15, &result)
+        .expect_err("ledger projection must reject incomplete invocation tuples");
+
+    assert!(
+        err.to_string().contains("envelope.subject.ura is required"),
+        "{err}"
+    );
+}
+
 #[tokio::test]
 async fn malformed_forward_invoke_quota_parse_error_is_audited() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -495,35 +517,33 @@ async fn malformed_forward_invoke_quota_parse_error_is_audited() {
 }
 
 #[test]
-fn ledger_authority_binding_classifies_bootstrap_delegated_session_and_self() {
+fn ledger_authority_form_classifies_bootstrap_delegated_session_and_self() {
     let bootstrap = invoke_request(ABILITY_SELF_REGISTER_DEVICE_PUBKEY, "{}").into_inner();
-    assert_eq!(
-        ledger_authority_binding_for_request(&bootstrap),
-        "bootstrap"
-    );
+    assert_eq!(ledger_authority_form_for_request(&bootstrap), "bootstrap");
 
     let mut delegated = invoke_request("demo.delegated", "{}").into_inner();
     delegated.metadata.insert(
         DELEGATION_METADATA_KEY.to_string(),
         "serialized-proof".to_string(),
     );
-    assert_eq!(
-        ledger_authority_binding_for_request(&delegated),
-        "delegated"
+    assert_eq!(ledger_authority_form_for_request(&delegated), "delegated");
+
+    let mut hosted = invoke_request("demo.hosted_delegated", "{}").into_inner();
+    hosted.metadata.insert(
+        HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
+        r#"{"kind":"hosted_agent"}"#.to_string(),
     );
+    assert_eq!(ledger_authority_form_for_request(&hosted), "delegated");
 
     let mut session = invoke_request("demo.session", "{}").into_inner();
     session.metadata.insert(
         SESSION_AUTHORITY_METADATA_KEY.to_string(),
         "serialized-session-authority".to_string(),
     );
-    assert_eq!(ledger_authority_binding_for_request(&session), "session");
+    assert_eq!(ledger_authority_form_for_request(&session), "session");
 
     let self_authority = invoke_request("demo.self", "{}").into_inner();
-    assert_eq!(
-        ledger_authority_binding_for_request(&self_authority),
-        "self"
-    );
+    assert_eq!(ledger_authority_form_for_request(&self_authority), "self");
 }
 
 #[test]
@@ -556,6 +576,66 @@ fn invocation_resource_ura_maps_agent_to_user_owned_namespace() {
         "easynet:///r/test-realm/resource/alice.invocations/agents/frontend/invocations/req-with-spaces-"
     ));
     assert!(!ura.contains("/resource/invocation."));
+}
+
+#[test]
+fn remote_receipt_projection_preserves_ability_identity_authority_and_proof_facts() {
+    let receipt = InvocationReceipt {
+        invocation_id: "remote-req-1".to_string(),
+        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+        timestamp_unix_ms: 1_200,
+        caller_binding: Some(AgentIdentity {
+            ura: crate::ura::agent_ura("caller-realm", "alice", "frontend"),
+            profile: "easynet-strict-v2".to_string(),
+        }),
+        callee_binding: Some(AgentIdentity {
+            ura: crate::ura::device_ura("peer-realm", "device-b"),
+            profile: "easynet-strict-v2".to_string(),
+        }),
+        subject_binding: Some(SubjectIdentity {
+            ura: crate::ura::user_ura("peer-realm", "bob"),
+            profile: "easynet-strict-v2".to_string(),
+        }),
+        usage: Some(InvocationUsage {
+            tokens_in: 5,
+            tokens_out: 7,
+            duration_ms: 200,
+            external_calls: 1,
+        }),
+        descriptor_version: "descriptor.remote.v1".to_string(),
+        schema_hash: vec![0x11; 32],
+        impl_hash: vec![0x22; 32],
+        runtime_env: "remote-runtime".to_string(),
+        ..InvocationReceipt::default()
+    };
+
+    let record = ledger_record_from_remote_receipt(&receipt, "demo.echo", 1_000)
+        .expect("remote receipt projects");
+    assert_eq!(
+        record.ability_ura,
+        crate::ura::hub_ability_ura("peer-realm", "demo.echo"),
+        "remote rows must not leave ability_ura empty"
+    );
+    assert_eq!(record.authority_form, "delegated");
+    assert_eq!(record.usage.tokens_in, 5);
+    assert_eq!(record.usage.tokens_out, 7);
+    assert_eq!(record.elapsed_ms, Some(200));
+    assert_eq!(record.diagnostics.len(), 1);
+    let diagnostic = &record.diagnostics[0];
+    assert_eq!(diagnostic.source, "remote_receipt");
+    assert_eq!(diagnostic.code, "REMOTE_RECEIPT_PROOF_FACTS");
+    assert!(
+        diagnostic.message.contains("descriptor.remote.v1"),
+        "{diagnostic:?}"
+    );
+    assert!(
+        diagnostic.message.contains("remote-runtime"),
+        "{diagnostic:?}"
+    );
+    assert!(
+        diagnostic.payload.is_some(),
+        "proof facts must be digest-addressable in the local ledger projection"
+    );
 }
 
 #[tokio::test]
@@ -857,26 +937,24 @@ async fn invoke_dispatches_federation_list_user_devices_admits_loopback_caller()
 
 #[tokio::test]
 async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller() {
-    // PR-N3 N3-5: caller URA is in trust set but as Backend
+    // PR-N3 N3-5: caller URA is in trust set but as Device
     // role → admission filter rejects. PermissionDenied is
     // the wire-stable rejection; the message mentions the
     // caller URA for operator audit grep.
-    //
-    // Build the test through the URA-only Device admission
-    // arm: we register the caller as a Device-role entry so
-    // the general admission gate's URA-only no-op admits
-    // (DEC-013 Device path doesn't require a signed envelope).
-    // The dispatch arm then runs the N3-5 admission filter,
-    // which reads the trust anchor again and finds the role
-    // is Device, not Hub — reject.
+    // The request is signed so the general admission gate passes;
+    // the dispatch arm then reads the trust anchor again and finds
+    // the role is Device, not Hub.
     use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+    use ed25519_dalek::SigningKey;
 
     let device_caller_ura = "easynet:///r/realm-b/device/device-not-hub";
+    let signing_key = SigningKey::from_bytes(&[0x77; 32]);
     let mut anchor_inner = RealmTrustAnchor::default();
     anchor_inner
         .append_agent(TrustedAgent {
             agent_ura: device_caller_ura.to_string(),
-            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: None,
@@ -887,17 +965,20 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
     let admission = AdmissionFacade::new(Arc::new(anchor_inner), Some(TEST_DAEMON_URI.to_string()));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
 
-    let envelope = Envelope {
-        caller: Some(easynet_axon::pb::axon::v1::AgentIdentity {
-            ura: device_caller_ura.to_string(),
-            profile: "easynet-strict-v2".to_string(),
-        }),
-        ..Envelope::default()
-    };
+    let function_name = ABILITY_FEDERATION_LIST_USER_DEVICES;
+    let arguments = br#"{"realm":"realm-x"}"#.to_vec();
+    let envelope = signed_test_envelope(
+        device_caller_ura,
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        function_name,
+        &arguments,
+        &signing_key,
+    );
     let req = Request::new(InvokeRequest {
         envelope: Some(envelope),
-        function_name: ABILITY_FEDERATION_LIST_USER_DEVICES.to_string(),
-        arguments: br#"{"realm":"realm-x"}"#.to_vec(),
+        function_name: function_name.to_string(),
+        arguments,
         ..InvokeRequest::default()
     });
 
@@ -1040,6 +1121,11 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         .with_session_realm("local-realm");
 
     let args = br#"{"realm":"user-realm","peer_hub_urls":["https://peer-hub.example:50443"]}"#;
+    let descriptor_subject_ura = crate::ura::owner_ability_ura(
+        &crate::ura::hub_ura("local-realm"),
+        ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+    )
+    .expect("hub proxy ability subject");
     let mut envelope = Envelope {
         caller: Some(AgentIdentity {
             ura: caller_ura.clone(),
@@ -1050,7 +1136,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
             profile: "easynet-strict-v2".to_string(),
         }),
         subject: Some(SubjectIdentity {
-            ura: "easynet:///r/local-realm/user/alice".to_string(),
+            ura: descriptor_subject_ura.clone(),
             profile: "easynet-strict-v2".to_string(),
         }),
         invocation_nonce: vec![7; 16],
@@ -1076,7 +1162,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         signed_delegation_metadata_for_test(
             &caller_signing_key,
             &caller_ura,
-            "easynet:///r/local-realm/user/alice",
+            &descriptor_subject_ura,
             &caller_ura,
             &crate::ura::hub_ura("local-realm"),
             &[ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES],
@@ -1377,12 +1463,10 @@ async fn invoke_selected_route_unknown_runtime_handler_surfaces_not_found() {
 
 #[tokio::test]
 async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
-    use easynet_axon::invocation::LocalRuntime;
-
     // No SDK admin installed: the runtime admin path must report the
     // missing handler, never fabricate a CLI-side ack. No catalog
     // route is published — `runtime.*` bypasses owner resolution.
-    let rt = LocalRuntime::new();
+    let rt = crate::runtime::axon_bridge::runtime_factory::build_local_runtime(None, None);
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     let args = r#"{
         "tenant_id":"tenant-a",
@@ -1416,14 +1500,13 @@ async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
 #[tokio::test]
 async fn invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installed() {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-    use easynet_axon::invocation::LocalRuntime;
     use ed25519_dalek::SigningKey;
 
     // Admin installed, NO catalog route published: `runtime.*`
     // dispatches directly on the LocalRuntime, proving it bypasses
     // owner-presence resolution (the production bug was a hub-owner
     // callee resolving to NXDOMAIN on the device daemon).
-    let rt = LocalRuntime::new();
+    let rt = crate::runtime::axon_bridge::runtime_factory::build_local_runtime(None, None);
     rt.install_bootstrap_self_identity_admin().await.unwrap();
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     let key = SigningKey::from_bytes(&[0x44; 32]);

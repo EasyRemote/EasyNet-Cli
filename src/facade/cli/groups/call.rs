@@ -167,14 +167,13 @@ fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
         if !realm.is_empty() && !node_id.is_empty() {
             let hub_ura = crate::ura::hub_ura(realm);
             let caller_ura = crate::ura::device_ura(realm, node_id);
-            let ability_ura =
-                crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
+            let target_call =
+                crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
                     &hub_ura, ability,
                 )?;
-            return crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-                ability_ura.as_str(),
+            return crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target(
+                &target_call,
                 args,
-                &hub_ura,
                 Some(&caller_ura),
             )
             .with_context(|| format!("invoke {ability} against realm hub"));

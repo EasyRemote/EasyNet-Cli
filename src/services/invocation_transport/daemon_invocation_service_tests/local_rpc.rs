@@ -114,24 +114,21 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
     // execution is selected by `namespace.resolve`, then
     // dispatched through Axon LocalRuntime using the selected
     // route's callee + dispatch key.
-    use easynet_axon::invocation::{
-        make_ability, AbilityCallModes, AbilityOptions, BackpressurePolicy, LocalRuntime,
-    };
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
     use futures::StreamExt;
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
 
+    let owner_ura = "easynet:///r/test-realm/agent/dev.liangbing";
+    let ability_ura = crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
     let rt = LocalRuntime::new();
     rt.register_ability_with_options(
-        "liangbing.chat",
+        ability_ura.clone(),
         make_ability(|ctx| async move {
             // Echo: terminal payload is the inbound `args`.
             Ok(ctx.payload.clone())
         }),
-        AbilityOptions {
-            modes: AbilityCallModes::RPC,
-            backpressure: BackpressurePolicy::Unbounded,
-        },
+        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
     )
     .await
     .unwrap();
@@ -141,10 +138,8 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    let owner_ura = "easynet:///r/test-realm/agent/dev.liangbing";
     publish_test_route(&svc, owner_ura, "chat");
 
-    let ability_ura = crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
     let selected_route = svc
         .target_gate()
         .route_resolver()
@@ -154,7 +149,7 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
     assert_eq!(selected_route.owner_ura, owner_ura);
     assert_eq!(selected_route.callee_ura, owner_ura);
     assert_eq!(selected_route.execution_host_ura, TEST_DAEMON_URI);
-    assert_eq!(selected_route.dispatch_key(), "liangbing.chat");
+    assert_eq!(selected_route.ability_ura, ability_ura);
 
     let response = svc
         .unary_dispatcher()
@@ -201,9 +196,7 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     // first-contact cross-device callers warm the anchor instead
     // of failing closed on a cold one. Admission itself must STAY
     // fail-closed: the fabricated signature below cannot admit.
-    use easynet_axon::invocation::{
-        make_ability, AbilityCallModes, AbilityOptions, BackpressurePolicy, LocalRuntime,
-    };
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -216,14 +209,13 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     }
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
+    let owner_ura = "easynet:///r/test-realm/agent/dev.liangbing";
+    let ability_ura = crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
     let rt = LocalRuntime::new();
     rt.register_ability_with_options(
-        "liangbing.chat",
+        ability_ura.clone(),
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
-        AbilityOptions {
-            modes: AbilityCallModes::RPC,
-            backpressure: BackpressurePolicy::Unbounded,
-        },
+        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
     )
     .await
     .unwrap();
@@ -246,9 +238,7 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt))
         .with_device_trust_sync(sync);
-    let owner_ura = "easynet:///r/test-realm/agent/dev.liangbing";
     publish_test_route(&svc, owner_ura, "chat");
-    let ability_ura = crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
     let selected_route = svc
         .target_gate()
         .route_resolver()
@@ -259,6 +249,7 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     let claim = crate::services::invocation_transport::origin_caller::OriginCallerClaim {
         caller_ura: "easynet:///r/test-realm/device/first-contact".into(),
         ability: "chat".into(),
+        descriptor_version: crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.into(),
         signature_b64: B64.encode([0_u8; 64]),
         signer_pubkey_b64: B64.encode([0_u8; 32]),
         nonce_b64: B64.encode([0_u8; 16]),
@@ -331,9 +322,7 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     // predicate layer; the full bidi exercise lives in
     // integration tests where a real grpc Streaming can be
     // constructed.
-    use easynet_axon::invocation::{
-        make_ability, AbilityCallModes, AbilityOptions, BackpressurePolicy, LocalRuntime,
-    };
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
     let rt = LocalRuntime::new();
@@ -345,10 +334,7 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     rt.register_ability_with_options(
         "agent.list",
         make_ability(|_| async move { Ok(Vec::new()) }),
-        AbilityOptions {
-            modes: AbilityCallModes::RPC,
-            backpressure: BackpressurePolicy::Unbounded,
-        },
+        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
     )
     .await
     .unwrap();
@@ -398,8 +384,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     // `invoke()` skips the manual `record_unary_invocation`
     // write (avoiding the duplicate row keyed by `request_id`).
     use easynet_axon::invocation::{
-        make_ability, AbilityCallModes, AbilityOptions, BackpressurePolicy, InvocationLedger,
-        LedgerSink, LocalRuntime,
+        make_ability, AbilityCallModes, AbilityOptions, InvocationLedger, LedgerSink, LocalRuntime,
     };
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
@@ -407,8 +392,10 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
     let rt = LocalRuntime::new();
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, "demo.unary_via_axon").unwrap();
     rt.register_ability_with_options(
-        "demo.unary_via_axon",
+        runtime_ability.clone(),
         make_ability(|ctx| async move {
             let subject = ctx
                 .runtime
@@ -422,10 +409,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
             }))
             .map_err(|err| easynet_axon::invocation::AxonError::internal(err.to_string()))
         }),
-        AbilityOptions {
-            modes: AbilityCallModes::RPC,
-            backpressure: BackpressurePolicy::Unbounded,
-        },
+        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
     )
     .await
     .unwrap();
@@ -436,10 +420,15 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     publish_test_route(&svc, TEST_DAEMON_URI, "demo.unary_via_axon");
 
     let mut request = invoke_request("demo.unary_via_axon", r#"{"k":"v"}"#).into_inner();
-    request.envelope.as_mut().unwrap().subject = Some(SubjectIdentity {
-        ura: "easynet:///r/test-realm/resource/camera-1".to_string(),
-        ..SubjectIdentity::default()
-    });
+    let signing_key = test_device_signing_key();
+    request.envelope = Some(signed_test_envelope(
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        "easynet:///r/test-realm/resource/camera-1",
+        &request.function_name,
+        &request.arguments,
+        &signing_key,
+    ));
     let (result, axon_took_it) = svc
         .unary_dispatcher()
         .dispatch_local_rpc_selected_route(&request)
@@ -447,7 +436,8 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
 
     assert!(
         axon_took_it,
-        "runtime hosts the ability ⇒ Axon path must take it"
+        "runtime hosts the ability ⇒ Axon path must take it; result={:?}",
+        result.as_ref().err()
     );
     let response = result.expect("axon dispatch returns Ok");
     let body = response.into_inner();
@@ -456,7 +446,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     assert_eq!(decoded["payload"], serde_json::json!({"k": "v"}));
     assert_eq!(
         decoded["subject"], "easynet:///r/test-realm/resource/camera-1",
-        "admitted Axon dispatch must preserve the wire envelope subject"
+        "external-signed Axon dispatch must preserve the wire envelope subject"
     );
     let header_request_id = body
         .header
@@ -477,19 +467,25 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         1,
         "Axon-routed unary call must land exactly one ledger row"
     );
-    assert_eq!(records[0].ability_name, "demo.unary_via_axon");
-    assert_eq!(records[0].state, "COMPLETED");
+    assert_eq!(
+        records[0].ability_name,
+        format!(
+            "{runtime_ability}@{}",
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        )
+    );
+    assert_eq!(records[0].state, "completed");
     assert_eq!(
         records[0].caller_ura, TEST_DAEMON_URI,
-        "Axon-routed unary ledger row must preserve the admitted wire caller"
+        "Axon-routed unary ledger row must preserve the external-signed wire caller"
     );
     assert_eq!(
         records[0].callee_ura, TEST_DAEMON_URI,
-        "Axon-routed unary ledger row must preserve the admitted wire callee"
+        "Axon-routed unary ledger row must preserve the external-signed wire callee"
     );
     assert_eq!(
         records[0].subject_ura, "easynet:///r/test-realm/resource/camera-1",
-        "Axon-routed unary ledger row must preserve the admitted wire subject"
+        "Axon-routed unary ledger row must preserve the external-signed wire subject"
     );
     assert_eq!(header_request_id, Some(records[0].request_id.as_str()));
 }
@@ -541,8 +537,10 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
     let rt = LocalRuntime::new();
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, "demo.stream_only").unwrap();
     rt.register_ability_with_options(
-        "demo.stream_only",
+        runtime_ability,
         make_ability(|_ctx| async { Ok(Vec::new()) }),
         AbilityOptions::streaming(),
     )

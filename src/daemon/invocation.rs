@@ -98,25 +98,26 @@ impl DaemonInvocation {
     }
 
     fn envelope(&self) -> easynet_axon::pb::axon::v1::Envelope {
-        use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, SubjectIdentity};
-        Envelope {
-            caller: Some(AgentIdentity {
-                ura: self.caller_ura.clone(),
-                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
-            }),
-            callee: Some(AgentIdentity {
-                ura: self.callee_ura.clone(),
-                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
-            }),
-            subject: Some(SubjectIdentity {
-                ura: self.subject_ura.clone(),
-                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
-            }),
-            invocation_nonce: self.nonce.to_vec(),
-            causal_context: Some(self.causal_context.clone()),
-            caller_signature: self.caller_signature.clone(),
-            ..Envelope::default()
-        }
+        let mut envelope = crate::services::invocation_transport::ProtoEnvelope::targeted(
+            self.caller_ura.clone(),
+            self.callee_ura.clone(),
+            self.subject_ura.clone(),
+        )
+        .expect("DaemonInvocation builder validates caller/callee/subject URAs")
+        .into_inner();
+        envelope.invocation_nonce = self.nonce.to_vec();
+        envelope.causal_context = Some(self.causal_context.clone());
+        envelope.caller_signature = self.caller_signature.clone();
+        envelope
+    }
+
+    fn ability_descriptor_ref(&self) -> Result<String> {
+        crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire(
+            &self.callee_ura,
+            &self.ability,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        )
+        .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
     }
 
     fn content_envelope(&self) -> easynet_axon::pb::axon::v1::ContentEnvelope {
@@ -129,11 +130,12 @@ impl DaemonInvocation {
 
     pub(crate) fn into_request(self) -> Result<easynet_axon::pb::axon::v1::InvokeRequest> {
         use easynet_axon::pb::axon::v1::InvokeRequest;
+        let function_name = self.ability_descriptor_ref()?;
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
         Ok(InvokeRequest {
             envelope: Some(envelope),
-            function_name: self.ability,
+            function_name,
             arguments: self.args,
             content_type: self.content_type,
             metadata: self.metadata,
@@ -147,11 +149,12 @@ impl DaemonInvocation {
         self,
     ) -> Result<easynet_axon::pb::axon::v1::InvokeServerStreamRequest> {
         use easynet_axon::pb::axon::v1::InvokeServerStreamRequest;
+        let function_name = self.ability_descriptor_ref()?;
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
         Ok(InvokeServerStreamRequest {
             envelope: Some(envelope),
-            function_name: self.ability,
+            function_name,
             arguments: self.args,
             content_type: self.content_type,
             metadata: self.metadata,
@@ -173,6 +176,7 @@ impl DaemonInvocation {
             ));
         }
         validate_bidi_streams(&streams)?;
+        let ability_name = self.ability_descriptor_ref()?;
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
         let mac = envelope
@@ -186,7 +190,7 @@ impl DaemonInvocation {
             payload: Some(invoke_bidi_up::Payload::EnvelopeOpen(EnvelopeOpen {
                 envelope: Some(envelope),
                 target: Some(InvocationTarget {
-                    ability_name: self.ability,
+                    ability_name,
                     ..InvocationTarget::default()
                 }),
                 initial_args: self.args,
@@ -231,6 +235,12 @@ impl DaemonInvocationBuilder {
         let caller_ura = checked_ura(caller_ura.into(), "caller_ura")?;
         let callee_ura = checked_ura(callee_ura.into(), "callee_ura")?;
         let subject_ura = checked_ura(subject_ura.into(), "subject_ura")?;
+        crate::services::invocation_transport::invocation_wire::try_entity_ref(subject_ura.clone())
+            .map_err(|err| {
+                DaemonError::InvalidInvocation(format!(
+                    "subject_ura must be descriptor-bound: {err}"
+                ))
+            })?;
         let ability = ability.into();
         if ability.trim().is_empty() {
             return Err(DaemonError::InvalidInvocation(
@@ -442,7 +452,14 @@ mod tests {
         let envelope = request
             .envelope
             .expect("stream request must carry envelope");
-        assert_eq!(request.function_name, "device.watch.health");
+        let expected_ability = crate::ura::owner_ability_ura(&hub, "device.watch.health").unwrap();
+        assert_eq!(
+            request.function_name,
+            format!(
+                "{expected_ability}@{}",
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            )
+        );
         assert_eq!(request.content_type, "application/json");
         assert_eq!(request.arguments, br#"{"interval_ms":1000}"#);
         assert_eq!(envelope.invocation_nonce, vec![0x24; 16]);
@@ -507,7 +524,11 @@ mod tests {
         );
         assert_eq!(
             open.target.expect("target required").ability_name,
-            "device.pty.attach"
+            format!(
+                "{}@{}",
+                crate::ura::owner_ability_ura(&hub, "device.pty.attach").unwrap(),
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            )
         );
         assert_eq!(open.initial_args, br#"{"session_id":"pty-1"}"#);
         assert_eq!(open.args_content_type, "application/json");

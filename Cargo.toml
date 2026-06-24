@@ -163,6 +163,7 @@ flate2 = "1"
 gethostname = "0.5"
 hex = "0.4"
 tar = "0.4"
+fs2 = "0.4"
 indicatif = "0.17"
 num_cpus = "1"
 rayon = "1"
@@ -247,6 +248,11 @@ serde_yaml = "0.9"
 # is omitted. POSIX-only; on Windows rpassword falls back to
 # stdin echo. Pinning v7 (matches ratatui's MSRV in the workspace).
 rpassword = "7"
+# Snapshot renderer for `easynet invocation watch --format tui`.
+# We use ratatui's buffer/widget model without taking over the
+# terminal event loop yet; the watch engine remains the single data
+# source for table/json/tui.
+ratatui = { version = "0.29", default-features = false }
 # Percent-encoding for HTTP-executor URL templating. The `[exec]
 # kind = "http"` path encodes substituted values automatically so
 # an arg containing a space or non-ASCII char doesn't break the URL.

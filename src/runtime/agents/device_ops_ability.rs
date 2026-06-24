@@ -18,9 +18,6 @@
 //   node.remove       Remove a node from the realm device registry.
 //   ability.deploy    Publish an ability bundle to a target node.
 //   ability.uninstall Uninstall a previously deployed ability.
-//   remote.exec       One-shot command execution on a target node.
-//   node.register     Register THIS device with the realm (lifecycle).
-//   node.deregister   Inverse of register_self at shutdown.
 //
 // Routing model
 // -------------
@@ -36,28 +33,52 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
+use crate::runtime::agents::device_ability_registrar::{
+    DeviceAbilityInstall, DeviceAbilityRegistrar, DeviceAbilityUninstall,
+};
+use crate::runtime::agents::device_ability_store::manifest_digest;
 use crate::runtime::agents::federation_probe;
+use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
 use crate::runtime::resources::filesystem::{self, FilesystemResourceCapability};
+use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
+
+/// Shared, late-wired cell holding the device-ability registrar.
+/// Constructed pending at registry-build time; boot attaches the live
+/// `LocalRuntime` via `set_runtime`. `ability.deploy`'s handler reads
+/// it to run the install transaction. Mirrors
+/// `agent_lifecycle_ability::SharedHotRegistrarCell`.
+pub type SharedDeviceRegistrarCell = OnceLock<Arc<DeviceAbilityRegistrar>>;
 
 pub const ABILITY_LIST_NODES: &str = "node.list";
 pub const ABILITY_DESCRIBE_NODE: &str = "node.describe";
 pub const ABILITY_REMOVE_NODE: &str = "node.remove";
 pub const ABILITY_DEPLOY_ABILITY: &str = "ability.deploy";
 pub const ABILITY_UNINSTALL_ABILITY: &str = "ability.uninstall";
-pub const ABILITY_EXEC_REMOTE: &str = "remote.exec";
-pub const ABILITY_REGISTER_SELF: &str = "node.register";
-pub const ABILITY_DEREGISTER_SELF: &str = "node.deregister";
+
+const RESERVED_DEVICE_ABILITY_NAMESPACES: &[&str] = &[
+    "ability", "device", "hub", "meta", "node", "remote", "system",
+];
+
+trait DeviceOpsClock {
+    fn now_unix_ms(&self) -> u64;
+}
+
+struct SystemDeviceOpsClock;
+
+impl DeviceOpsClock for SystemDeviceOpsClock {
+    fn now_unix_ms(&self) -> u64 {
+        chrono::Utc::now().timestamp_millis().max(0) as u64
+    }
+}
 
 /// Register every device operation handler on `reg`. Called once
 /// at daemon boot from `runtime::agents::build_registry_with_services`.
-pub fn register(reg: &mut AxonAbilityCatalog) {
+pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDeviceRegistrarCell>) {
     reg.register_rpc_with_owner("node.list", OwnerKind::Device, Arc::new(list_nodes_handler));
     reg.register_rpc_with_owner(
         "node.describe",
@@ -69,31 +90,16 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         OwnerKind::Device,
         Arc::new(remove_node_handler),
     );
-    reg.register_rpc_with_owner(
-        "ability.deploy",
-        OwnerKind::Device,
-        Arc::new(deploy_ability_handler),
-    );
-    reg.register_rpc_with_owner(
-        "ability.uninstall",
-        OwnerKind::Device,
-        Arc::new(uninstall_ability_handler),
-    );
-    reg.register_rpc_with_owner(
-        "remote.exec",
-        OwnerKind::Device,
-        Arc::new(exec_remote_handler),
-    );
-    reg.register_rpc_with_owner(
-        "node.register",
-        OwnerKind::Device,
-        Arc::new(register_self_handler),
-    );
-    reg.register_rpc_with_owner(
-        "node.deregister",
-        OwnerKind::Device,
-        Arc::new(deregister_self_handler),
-    );
+    reg.register_rpc_with_envelope_and_owner("ability.deploy", OwnerKind::Device, {
+        let cell = Arc::clone(&device_registrar);
+        Arc::new(move |env: EnvelopeContext, args: Value| deploy_ability_handler(env, args, &cell))
+    });
+    reg.register_rpc_with_envelope_and_owner("ability.uninstall", OwnerKind::Device, {
+        let cell = Arc::clone(&device_registrar);
+        Arc::new(move |env: EnvelopeContext, args: Value| {
+            uninstall_ability_handler(env, args, &cell)
+        })
+    });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -121,6 +127,21 @@ fn local_identity() -> (String, String, Option<String>, bool) {
 fn is_local_target(node_id: &str, local_node_id: &str) -> bool {
     let trimmed = node_id.trim();
     trimmed.is_empty() || trimmed == "local" || trimmed == local_node_id
+}
+
+fn require_local_device_authority(
+    env: &EnvelopeContext,
+    expected_device_ura: &str,
+    surface: &str,
+) -> anyhow::Result<String> {
+    let caller = env.caller();
+    if caller != expected_device_ura && caller != LOCAL_SYSTEM_AGENT_URA {
+        anyhow::bail!(
+            "{surface}: caller {caller:?} is not authorized to mutate local device abilities; \
+             expected local device authority {expected_device_ura:?}"
+        );
+    }
+    Ok(caller.to_string())
 }
 
 /// Surface the canonical "federation not wired" error from an
@@ -243,9 +264,67 @@ fn remove_node_handler(args: Value) -> anyhow::Result<Value> {
 
 // ── ability.deploy ─────────────────────────────────────────
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AbilityNamespace(String);
+
+impl AbilityNamespace {
+    fn parse(raw: Option<&str>) -> anyhow::Result<Self> {
+        let raw = raw
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "ability.deploy: ability.json must declare non-empty `namespace`; \
+                     deployed device abilities are always registered as `<namespace>.<name>`"
+                )
+            })?;
+        if RESERVED_DEVICE_ABILITY_NAMESPACES
+            .iter()
+            .any(|reserved| raw == *reserved)
+        {
+            anyhow::bail!(
+                "ability.deploy: namespace {raw:?} is reserved for daemon-owned ability surfaces"
+            );
+        }
+        let mut chars = raw.chars();
+        let first = chars
+            .next()
+            .expect("namespace was checked non-empty before validation");
+        if !first.is_ascii_alphabetic() {
+            anyhow::bail!("ability.deploy: namespace {raw:?} must start with an ASCII letter");
+        }
+        if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            anyhow::bail!(
+                "ability.deploy: namespace {raw:?} may contain only ASCII letters, digits, `_`, or `-`"
+            );
+        }
+        Ok(Self(raw.to_string()))
+    }
+
+    fn wire_key(&self, public_name: &str) -> String {
+        format!("{}.{public_name}", self.0)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 struct AbilityBundle {
     display_path: String,
+    /// Absolute path to the bundle's `ability.json` (durable store key).
+    manifest_path: String,
+    /// Raw manifest bytes (for the durable manifest_hash).
+    manifest_bytes: Vec<u8>,
+    /// The deserialized manifest. EasyRemote writes extra fields
+    /// (`category`, `command`, `tool_name`, …); `AbilityManifest` has no
+    /// `deny_unknown_fields`, so they are ignored, and the canonical
+    /// `name` / `input_schema` / `exec` come through typed.
+    manifest: crate::core::ability_spec::AbilityManifest,
+    /// Verb-only local name (`generate`); namespace is separate.
     public_name: String,
+    /// Namespace segment (`er`) when the manifest declares one.
+    namespace: AbilityNamespace,
 }
 
 impl AbilityBundle {
@@ -258,72 +337,149 @@ impl AbilityBundle {
             anyhow::bail!("ability.deploy: resource_ref {display_path:?} is not a directory");
         }
 
-        let manifest = dir.join("ability.json");
-        if !manifest.is_file() {
+        let manifest_file = dir.join("ability.json");
+        if !manifest_file.is_file() {
             anyhow::bail!(
                 "ability.deploy: resource_ref {display_path:?} does not contain an ability.json"
             );
         }
 
-        let body = std::fs::read_to_string(&manifest)?;
-        let parsed: Value = serde_json::from_str(&body).map_err(|e| {
-            anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}")
-        })?;
-        let public_name = parsed
-            .get("name")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("ability.json missing required `name` field"))?;
+        let manifest_bytes = std::fs::read(&manifest_file)?;
+        let manifest = crate::core::ability_spec::AbilityManifest::from_json_slice(&manifest_bytes)
+            .map_err(|e| {
+                anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}")
+            })?;
+
+        // EasyRemote may carry the namespace separately; the manifest
+        // `name` is the verb only (AbilityManifest.name forbids dots).
+        let namespace = AbilityNamespace::parse(
+            serde_json::from_slice::<Value>(&manifest_bytes)
+                .ok()
+                .and_then(|v| {
+                    v.get("namespace")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .as_deref(),
+        )?;
 
         Ok(Self {
             display_path,
-            public_name,
+            manifest_path: manifest_file.to_string_lossy().into_owned(),
+            manifest_bytes,
+            public_name: manifest.name().to_string(),
+            namespace,
+            manifest,
         })
+    }
+
+    /// Wire dispatch key: `namespace.verb` when a namespace is present,
+    /// else the bare verb. This is the registry key the route resolver
+    /// will see (`er.generate`).
+    fn wire_key(&self) -> String {
+        self.namespace.wire_key(&self.public_name)
     }
 }
 
-fn deploy_ability_handler(args: Value) -> anyhow::Result<Value> {
+fn deploy_ability_handler(
+    env: EnvelopeContext,
+    args: Value,
+    device_registrar: &SharedDeviceRegistrarCell,
+) -> anyhow::Result<Value> {
+    deploy_ability_handler_with_clock(env, args, device_registrar, &SystemDeviceOpsClock)
+}
+
+fn deploy_ability_handler_with_clock(
+    env: EnvelopeContext,
+    args: Value,
+    device_registrar: &SharedDeviceRegistrarCell,
+    clock: &dyn DeviceOpsClock,
+) -> anyhow::Result<Value> {
     let node_id = args
         .get("node_id")
         .and_then(Value::as_str)
         .unwrap_or("local")
         .trim();
     let (local_id, tenant, _hub, _paired) = local_identity();
+    let owner_ura = crate::ura::device_ura(&tenant, &local_id);
+    let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.deploy")?;
     if !is_local_target(node_id, &local_id) {
         return Err(federation_not_wired(&format!(
             "deploying an ability to remote node {node_id:?}"
         )));
     }
-    // Local deploy: validate the bundle exists. v1 stops there —
-    // hot-reloading on the local daemon is already covered by the
-    // workspace-abilities loop (drop a TOML into
-    // `<agent-root>/abilities/`). The `easynet ability deploy`
-    // surface stays intact for future use; today it is documentation
-    // for the operator that the ability they pointed at is well-formed.
+
+    // ── manifest materialization ────────────────────────────────────
     let bundle = AbilityBundle::from_resource_ref(&args)?;
-    let owner_ura = crate::ura::device_ura(&tenant, &local_id);
-    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, &bundle.public_name)
+    let key = bundle.wire_key();
+    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, &key)
         .ok_or_else(|| anyhow::anyhow!("ability.deploy: cannot derive ability_ura"))?;
-    let install_id = format!("local-{}", bundle.public_name);
+    let install_id =
+        crate::runtime::agents::device_ability_store::DeviceAbilityRecord::derive_install_id(
+            &ability_ura,
+            &manifest_digest(&bundle.manifest_bytes),
+        );
+
+    // The registrar (runtime binding + durable commit) must be wired.
+    let Some(registrar) = device_registrar.get().cloned() else {
+        anyhow::bail!(
+            "ability.deploy: device registrar not wired yet (daemon still booting); \
+             retry once the runtime is up"
+        );
+    };
+
+    // Operator-facing store timestamp. The cryptographic execution
+    // timeline remains the Axon receipt chain; this field is for deploy
+    // listing, replay diagnostics, and deterministic sorting.
+    let install = DeviceAbilityInstall::new(
+        key.clone(),
+        bundle.namespace.as_str(),
+        ability_ura.clone(),
+        bundle.manifest_path.clone(),
+        bundle.manifest_bytes.clone(),
+        bundle.manifest.clone(),
+        clock.now_unix_ms(),
+    )?;
+
+    // ── runtime binding + route check + durable commit (transaction) ─
+    let state = block_on_install(registrar, install)?;
+
     Ok(json!({
         "public_name": bundle.public_name,
+        "namespace": bundle.namespace.as_str(),
         "ability_ura": ability_ura,
         "node_id": local_id,
+        "mutated_by": mutated_by,
         "install_id": install_id,
         "bundle": bundle.display_path,
-        "state": "ACTIVE",
-        "note":
-            "Single-node deploy verified the manifest and acknowledged the \
-             local registration intent. The federation publish/install/activate \
-             saga lights up when the federation Invoke transport returns; until \
-             then place agent-owned abilities directly under \
-             <agent-root>/abilities/<verb>.ability.toml — the daemon hot-reloads.",
+        // ACTIVE iff route resolver confirms the key is routable with
+        // the expected call mode AND the durable commit succeeded.
+        // Otherwise INSTALLED — never a false ACTIVE.
+        "state": state.as_wire(),
     }))
+}
+
+/// Drive the registrar's async install from this sync handler. Spawns
+/// onto the ambient runtime's workers (not `block_in_place`) so the
+/// stream-source IO registers on the live driver — same rationale as
+/// `mcp_executor::block_on_async`.
+fn block_on_install(
+    registrar: Arc<DeviceAbilityRegistrar>,
+    install: DeviceAbilityInstall,
+) -> anyhow::Result<crate::runtime::agents::device_ability_registrar::InstallState> {
+    block_on_device_transaction(
+        "ability.deploy",
+        async move { registrar.install(install).await },
+    )
 }
 
 // ── ability.uninstall ──────────────────────────────────────
 
-fn uninstall_ability_handler(args: Value) -> anyhow::Result<Value> {
+fn uninstall_ability_handler(
+    env: EnvelopeContext,
+    args: Value,
+    device_registrar: &SharedDeviceRegistrarCell,
+) -> anyhow::Result<Value> {
     let ability_ura = args
         .get("ability_ura")
         .and_then(Value::as_str)
@@ -336,23 +492,64 @@ fn uninstall_ability_handler(args: Value) -> anyhow::Result<Value> {
         .and_then(Value::as_str)
         .unwrap_or("local")
         .trim();
-    let (local_id, _tenant, _hub, _paired) = local_identity();
+    let (local_id, tenant, _hub, _paired) = local_identity();
+    let owner_ura = crate::ura::device_ura(&tenant, &local_id);
+    let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.uninstall")?;
     if !is_local_target(node_id, &local_id) {
         return Err(federation_not_wired(&format!(
             "uninstalling ability {ability_ura:?} from remote node {node_id:?}"
         )));
     }
+
+    let Some(registrar) = device_registrar.get().cloned() else {
+        anyhow::bail!(
+            "ability.uninstall: device registrar not wired yet (daemon still booting); \
+             retry once the runtime is up"
+        );
+    };
+    let install_id = args
+        .get("install_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let outcome = block_on_uninstall(
+        registrar,
+        DeviceAbilityUninstall {
+            ability_ura: ability_ura.to_string(),
+            install_id,
+        },
+    )?;
+
     Ok(json!({
         "public_name": public_name,
         "ability_ura": ability_ura,
         "node_id": local_id,
+        "mutated_by": mutated_by,
+        "install_ids": outcome.install_ids,
+        "runtime_removed": outcome.runtime_removed,
+        "control_plane_removed": outcome.control_plane_removed,
         "state": "REMOVED",
-        "note":
-            "Single-node uninstall acknowledges the request. For agent-owned \
-             abilities, delete the corresponding \
-             <agent-root>/abilities/<verb>.ability.toml — the daemon hot-reloads. \
-             A future federation surface will fan this call out to remote nodes.",
     }))
+}
+
+fn block_on_uninstall(
+    registrar: Arc<DeviceAbilityRegistrar>,
+    uninstall: DeviceAbilityUninstall,
+) -> anyhow::Result<crate::runtime::agents::device_ability_registrar::DeviceAbilityUninstallOutcome>
+{
+    block_on_device_transaction("ability.uninstall", async move {
+        registrar.uninstall(uninstall).await
+    })
+}
+
+fn block_on_device_transaction<T, F>(surface: &'static str, fut: F) -> anyhow::Result<T>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = anyhow::Result<T>> + Send + 'static,
+{
+    run_blocking(fut, NoRuntimeFallback::BuildCurrentThreadTokio)
+        .map_err(|e| anyhow::anyhow!("{surface}: {e}"))
 }
 
 fn ability_public_name(ability_ura: &str) -> anyhow::Result<String> {
@@ -364,101 +561,6 @@ fn ability_public_name(ability_ura: &str) -> anyhow::Result<String> {
     crate::ura::ability_name_from_parts(&parsed).ok_or_else(|| {
         anyhow::anyhow!("ability.uninstall: ability_ura `{ability_ura}` has no public ability name")
     })
-}
-
-// ── remote.exec ────────────────────────────────────────────
-
-fn exec_remote_handler(args: Value) -> anyhow::Result<Value> {
-    let node_id = args
-        .get("node_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if node_id.is_empty() {
-        anyhow::bail!("remote.exec: `node_id` is required");
-    }
-    let (local_id, _tenant, _hub, _paired) = local_identity();
-    if !is_local_target(node_id, &local_id) {
-        return Err(federation_not_wired(&format!(
-            "running a one-shot command on remote node {node_id:?}"
-        )));
-    }
-    let argv: Vec<String> = args
-        .get("command")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    if argv.is_empty() {
-        anyhow::bail!("remote.exec: `command` must be a non-empty array of strings");
-    }
-    let timeout_ms = args
-        .get("timeout_ms")
-        .and_then(Value::as_u64)
-        .filter(|&n| n > 0)
-        .unwrap_or(60_000);
-
-    // Dispatch through std::process::Command directly. This is
-    // structurally argv (no shell interpretation) — the same
-    // injection-safety property `process.exec` and the shell
-    // executor enforce. A future refactor can route through
-    // `process.exec` instead so policy lives in one place.
-    let started = std::time::Instant::now();
-    let output = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .output()
-        .map_err(|e| anyhow::anyhow!("spawn {:?}: {e}", argv[0]))?;
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    let _ = Duration::from_millis(timeout_ms); // accepted for forward-compat; not enforced here in v1
-    Ok(json!({
-        "node_id": local_id,
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
-        "exit_code": output.status.code().unwrap_or(-1),
-        "elapsed_ms": elapsed_ms,
-    }))
-}
-
-// ── node.register / node.deregister ──────────────────
-//
-// Boot/shutdown lifecycle. The ability invocation is the canonical
-// entry point per the ontology; the actual transport work — whether
-// a Hub register call, a federation announce, or both — lives
-// behind these names. v1 acknowledges the intent and reports the
-// current pairing state without performing the legacy
-// `bridge.register_node` / `bridge.deregister_node` calls (those
-// were P1.5 victims). The federation Invoke replacement, when it
-// lands, will populate these handlers without changing the
-// ability surface.
-
-fn register_self_handler(_args: Value) -> anyhow::Result<Value> {
-    let (node_id, tenant_id, hub, paired) = local_identity();
-    Ok(json!({
-        "node_id": node_id,
-        "tenant_id": tenant_id,
-        "hub_endpoint": hub,
-        "paired": paired,
-        "state": if paired { "REGISTERED" } else { "STANDALONE" },
-        "note":
-            "Acknowledged. Federation register transport awaits the AXON-RFC-001 \
-             P1.5 follow-up; this call is a no-op when no federation peers exist.",
-    }))
-}
-
-fn deregister_self_handler(_args: Value) -> anyhow::Result<Value> {
-    let (node_id, _tenant, _hub, paired) = local_identity();
-    Ok(json!({
-        "node_id": node_id,
-        "paired": paired,
-        "state": "DEREGISTERED",
-        "note":
-            "Acknowledged. `easynet device reset` clears local credentials; the \
-             federation deregister fan-out will re-light when the Invoke \
-             replacement ships.",
-    }))
 }
 
 // ── Discovery surfaces ───────────────────────────────────────────
@@ -507,9 +609,11 @@ pub fn remove_node_input_schema() -> Value {
 }
 
 pub fn deploy_ability_description() -> &'static str {
-    "Publish an ability bundle ResourceRef to a node. Local target validates \
-     the manifest and acknowledges the registration intent. Remote targets \
-     defer to the federation Invoke replacement."
+    "Publish a host_stream device ability bundle ResourceRef to a node. Local \
+     target validates the manifest, durably installs it, binds the runtime, \
+     and registers the control-plane record. Remote targets defer to the \
+     federation Invoke replacement. Shell and arbitrary host-command exec kinds \
+     are rejected until a permission broker exists."
 }
 
 pub fn deploy_ability_input_schema() -> Value {
@@ -526,7 +630,8 @@ pub fn deploy_ability_input_schema() -> Value {
 
 pub fn uninstall_ability_description() -> &'static str {
     "Uninstall an ability from a node. Mirrors `ability.deploy`: \
-     local target acknowledged in v1, remote targets queued for the \
+     local target removes the durable row, runtime binding, and \
+     control-plane record; remote targets are queued for the \
      federation Invoke replacement."
 }
 
@@ -541,49 +646,6 @@ pub fn uninstall_ability_input_schema() -> Value {
             "install_id":   { "type": "string" }
         }
     })
-}
-
-pub fn exec_remote_description() -> &'static str {
-    "Run a one-shot command on a node. Local target dispatches \
-     through std::process::Command (argv-only — no shell interpretation). \
-     Remote targets defer to the federation Invoke replacement."
-}
-
-pub fn exec_remote_input_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["node_id", "command"],
-        "properties": {
-            "node_id":    { "type": "string" },
-            "command":    { "type": "array", "items": { "type": "string" } },
-            "timeout_ms": { "type": "integer", "minimum": 0 }
-        }
-    })
-}
-
-pub fn register_self_description() -> &'static str {
-    "Acknowledge this device's pairing state. v1 returns the \
-     credentials snapshot without performing the legacy \
-     `bridge.register_node` call (P1.5 victim); the federation \
-     Invoke replacement will populate the handler in place."
-}
-
-pub fn deregister_self_description() -> &'static str {
-    "Inverse of node.register at shutdown. v1 acknowledges \
-     intent; federation fan-out lands with the Invoke replacement."
-}
-
-pub fn register_self_input_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {}
-    })
-}
-
-pub fn deregister_self_input_schema() -> Value {
-    register_self_input_schema()
 }
 
 #[cfg(test)]
@@ -631,9 +693,22 @@ mod tests {
         );
     }
 
+    /// An unpopulated registrar cell — exercises the pre-binding
+    /// validation path (resource_ref / manifest parse) without needing
+    /// a live runtime. The install transaction itself is covered by the
+    /// negative-test matrix with a wired runtime.
+    fn empty_device_cell() -> SharedDeviceRegistrarCell {
+        std::sync::OnceLock::new()
+    }
+
+    fn local_device_env() -> EnvelopeContext {
+        EnvelopeContext::for_test(LOCAL_SYSTEM_AGENT_URA, "easynet:///r/test/device/local")
+    }
+
     #[test]
     fn deploy_ability_rejects_missing_resource_ref() {
-        let err = deploy_ability_handler(json!({})).unwrap_err();
+        let err = deploy_ability_handler(local_device_env(), json!({}), &empty_device_cell())
+            .unwrap_err();
         assert!(format!("{err}").contains("resource_ref"));
     }
 
@@ -643,82 +718,158 @@ mod tests {
         let resource_ref =
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
-        let err = deploy_ability_handler(json!({
-            "resource_ref": resource_ref,
-            "node_id": "local"
-        }))
+        let err = deploy_ability_handler(
+            local_device_env(),
+            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            &empty_device_cell(),
+        )
         .unwrap_err();
         assert!(format!("{err}").contains("ability.json"));
     }
 
     #[test]
-    fn deploy_ability_local_accepts_resource_ref_bundle() {
+    fn deploy_ability_parses_canonical_manifest_then_needs_registrar() {
+        // New contract: a well-formed manifest parses (verb-only name,
+        // schema, exec), then the transaction needs a wired registrar.
+        // With an empty cell the handler fails honestly at the binding
+        // step — it does NOT report a false ACTIVE.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
-            r#"{"name":"alice.claude.weather"}"#,
+            r#"{"name":"weather","namespace":"er","description":"w",
+                "input_schema":{"type":"object"},
+                "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
         .unwrap();
         let resource_ref =
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
-        let resp = deploy_ability_handler(json!({
-            "resource_ref": resource_ref,
-            "node_id": "local"
-        }))
-        .unwrap();
-        assert_eq!(
-            resp.get("public_name").and_then(Value::as_str),
-            Some("alice.claude.weather")
-        );
-        assert_eq!(resp.get("state").and_then(Value::as_str), Some("ACTIVE"));
-        assert!(resp.get("bundle").and_then(Value::as_str).is_some());
-    }
-
-    #[test]
-    fn exec_remote_local_runs_argv_and_returns_envelope() {
-        // Use printf — POSIX, deterministic, available on macOS + Linux.
-        let resp = exec_remote_handler(json!({
-            "node_id": "local",
-            "command": ["printf", "%s", "hello"],
-        }))
-        .unwrap();
-        assert_eq!(resp.get("stdout").and_then(Value::as_str), Some("hello"));
-        assert_eq!(resp.get("exit_code"), Some(&json!(0)));
-    }
-
-    #[test]
-    fn exec_remote_remote_returns_federation_not_wired() {
-        let err = exec_remote_handler(json!({
-            "node_id": "some-remote",
-            "command": ["true"],
-        }))
+        let err = deploy_ability_handler(
+            local_device_env(),
+            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            &empty_device_cell(),
+        )
         .unwrap_err();
-        assert!(format!("{err}").contains("federation"));
+        // Honest failure (registrar not wired), never a fake ACTIVE.
+        assert!(
+            format!("{err}").contains("registrar not wired"),
+            "expected an honest not-wired failure, got: {err}"
+        );
     }
 
     #[test]
-    fn uninstall_ability_local_acknowledges_intent() {
-        let resp = uninstall_ability_handler(json!({
-            "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
-            "node_id": "local",
-        }))
+    fn deploy_ability_rejects_missing_namespace_before_registrar() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ability.json"),
+            r#"{"name":"weather","description":"w",
+                "input_schema":{"type":"object"},
+                "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
+        )
         .unwrap();
-        assert_eq!(resp.get("state").and_then(Value::as_str), Some("REMOVED"));
-        assert_eq!(
-            resp.get("ability_ura").and_then(Value::as_str),
-            Some("easynet:///r/localhost/ability/alice.claude.weather")
+        let resource_ref =
+            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+                .unwrap();
+        let err = deploy_ability_handler(
+            local_device_env(),
+            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            &empty_device_cell(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("must declare non-empty `namespace`"),
+            "{err}"
         );
     }
 
     #[test]
-    fn register_and_deregister_self_acknowledge() {
-        let r1 = register_self_handler(json!({})).unwrap();
-        assert!(r1.get("state").is_some());
-        let r2 = deregister_self_handler(json!({})).unwrap();
-        assert_eq!(
-            r2.get("state").and_then(Value::as_str),
-            Some("DEREGISTERED")
-        );
+    fn deploy_ability_rejects_reserved_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ability.json"),
+            r#"{"name":"weather","namespace":"device","description":"w",
+                "input_schema":{"type":"object"},
+                "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
+        )
+        .unwrap();
+        let resource_ref =
+            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+                .unwrap();
+        let err = deploy_ability_handler(
+            local_device_env(),
+            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            &empty_device_cell(),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("reserved"), "{err}");
+    }
+
+    #[test]
+    fn uninstall_ability_needs_wired_registrar() {
+        let err = uninstall_ability_handler(
+            local_device_env(),
+            json!({
+                "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
+                "node_id": "local",
+            }),
+            &empty_device_cell(),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("registrar not wired"));
+    }
+
+    #[test]
+    fn deploy_ability_wired_transaction_completes_inside_current_thread_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ability.json"),
+            r#"{"name":"weather","namespace":"er","description":"w",
+                "input_schema":{"type":"object"},
+                "exec":{"kind":"host_stream","host_socket":"/tmp/er-host.sock","function":"er.weather"}}"#,
+        )
+        .unwrap();
+        let resource_ref =
+            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+                .unwrap();
+        let store_path = dir.path().join("device-abilities.json");
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let dir_path = dir.path().to_path_buf();
+
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(async move {
+                let registrar = DeviceAbilityRegistrar::new_pending_with_store(
+                    crate::runtime::agents::device_ability_store::DeviceAbilityStore::open_at(
+                        store_path,
+                    ),
+                );
+                let local_runtime = easynet_axon::invocation::LocalRuntime::new();
+                let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(
+                    &local_runtime,
+                )));
+                registrar.set_runtime(local_runtime).unwrap();
+                registrar
+                    .set_control_plane_catalog(Arc::downgrade(&catalog))
+                    .unwrap();
+                let cell = SharedDeviceRegistrarCell::new();
+                assert!(cell.set(registrar).is_ok());
+                deploy_ability_handler(
+                    local_device_env(),
+                    json!({ "resource_ref": resource_ref, "node_id": "local" }),
+                    &cell,
+                )
+            });
+            let _ = tx.send(result);
+            let _ = dir_path;
+        });
+
+        let resp = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("deploy transaction must not park the current-thread runtime")
+            .unwrap();
+        assert_eq!(resp.get("state").and_then(Value::as_str), Some("ACTIVE"));
     }
 }

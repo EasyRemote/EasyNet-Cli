@@ -8,12 +8,13 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::core::ability_spec::{EalExec, McpExec};
+use crate::runtime::ability::{AbilityImplSource, RuntimeEnv};
 use crate::runtime::ability_dispatch::{
-    AxonAbilityCatalog, EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
-    LocalStreamHandlerWithEnvelope, OwnerKind,
+    AxonAbilityCatalog, ControlPlaneImplementation, EnvelopeContext, LocalBidiHandlerWithEnvelope,
+    LocalRpcHandlerWithEnvelope, LocalStreamHandlerWithEnvelope, OwnerKind,
 };
 use crate::runtime::context::ParentInvocationContext;
 use crate::runtime::plugin_host::errors::{PluginHostError, Result};
@@ -64,12 +65,18 @@ impl PluginRuntimeHost {
                 }
                 PluginKind::Sidecar => {
                     let command = SidecarCommand::from_package(package);
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
+                    let mut sink = CatalogRegistrationSink::dynamic(
+                        reg,
+                        package,
+                        AbilityImplSource::SidecarPlugin,
+                    );
                     register_json_frame_process_package(package, &mut sink, command)?;
                     self.remember_runtime_plugin_package(package);
                 }
                 PluginKind::Declarative => {
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
+                    let impl_source =
+                        declarative_impl_source(package.manifest().declarative_binding());
+                    let mut sink = CatalogRegistrationSink::dynamic(reg, package, impl_source);
                     register_declarative_package(package, &mut sink)?;
                     self.remember_runtime_plugin_package(package);
                 }
@@ -95,13 +102,19 @@ impl PluginRuntimeHost {
                 PluginKind::Sidecar => {
                     reject_static_catalog_collisions(package, reg)?;
                     let command = SidecarCommand::from_package(package);
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
+                    let mut sink = CatalogRegistrationSink::dynamic(
+                        reg,
+                        package,
+                        AbilityImplSource::SidecarPlugin,
+                    );
                     register_json_frame_process_package(package, &mut sink, command)?;
                     self.remember_runtime_plugin_package(package);
                 }
                 PluginKind::Declarative => {
                     reject_static_catalog_collisions(package, reg)?;
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
+                    let impl_source =
+                        declarative_impl_source(package.manifest().declarative_binding());
+                    let mut sink = CatalogRegistrationSink::dynamic(reg, package, impl_source);
                     register_declarative_package(package, &mut sink)?;
                     self.remember_runtime_plugin_package(package);
                 }
@@ -138,12 +151,18 @@ impl PluginRuntimeHost {
                 PluginKind::Sidecar => {
                     reject_static_catalog_collisions(package, reg)?;
                     let command = SidecarCommand::from_package(package);
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
+                    let mut sink = CatalogRegistrationSink::dynamic(
+                        reg,
+                        package,
+                        AbilityImplSource::SidecarPlugin,
+                    );
                     register_json_frame_process_package(package, &mut sink, command)?;
                 }
                 PluginKind::Declarative => {
                     reject_static_catalog_collisions(package, reg)?;
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
+                    let impl_source =
+                        declarative_impl_source(package.manifest().declarative_binding());
+                    let mut sink = CatalogRegistrationSink::dynamic(reg, package, impl_source);
                     register_declarative_package(package, &mut sink)?;
                 }
             }
@@ -158,8 +177,14 @@ impl PluginRuntimeHost {
             .cloned()
             .collect::<Vec<String>>();
         for ability in stale {
-            reg.hot_remove_runtime_ability(&ability);
-            report.unregistered_abilities.push(ability);
+            if reg.hot_remove_runtime_ability(&ability).map_err(|error| {
+                PluginHostError::ControlPlaneRegistrationFailed {
+                    ability: ability.clone(),
+                    reason: error.to_string(),
+                }
+            })? {
+                report.unregistered_abilities.push(ability);
+            }
         }
         *tracked = current;
         report.registered_abilities = tracked.iter().cloned().collect();
@@ -239,13 +264,34 @@ fn reject_static_catalog_collisions(
     Ok(())
 }
 
-enum CatalogRegistrationSink<'a> {
-    Dynamic(&'a AxonAbilityCatalog),
+fn declarative_impl_source(binding: Option<&PluginDeclarativeBinding>) -> AbilityImplSource {
+    match binding {
+        Some(PluginDeclarativeBinding::Eal { .. }) => AbilityImplSource::Eal,
+        Some(PluginDeclarativeBinding::Mcp { .. }) => AbilityImplSource::Mcp,
+        Some(PluginDeclarativeBinding::Exec { .. }) | None => AbilityImplSource::DeclarativePlugin,
+    }
+}
+
+struct CatalogRegistrationSink<'a> {
+    reg: &'a AxonAbilityCatalog,
+    impl_source: AbilityImplSource,
+    runtime_env: RuntimeEnv,
 }
 
 impl<'a> CatalogRegistrationSink<'a> {
-    fn dynamic(reg: &'a AxonAbilityCatalog) -> Self {
-        Self::Dynamic(reg)
+    fn dynamic(
+        reg: &'a AxonAbilityCatalog,
+        package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+        impl_source: AbilityImplSource,
+    ) -> Self {
+        Self {
+            reg,
+            impl_source,
+            runtime_env: RuntimeEnv::plugin_sidecar(
+                package.id().as_str(),
+                package.version().as_str(),
+            ),
+        }
     }
 
     fn register_rpc(
@@ -253,17 +299,20 @@ impl<'a> CatalogRegistrationSink<'a> {
         ability: String,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
-    ) {
-        match self {
-            Self::Dynamic(reg) => {
-                reg.hot_register_rpc_with_envelope_and_spec(
-                    ability,
-                    OwnerKind::Device,
-                    manifest,
-                    handler,
-                );
-            }
-        }
+    ) -> Result<()> {
+        self.reg
+            .hot_register_rpc_with_envelope_and_spec_and_impl(
+                ability.clone(),
+                OwnerKind::Device,
+                manifest,
+                handler,
+                ControlPlaneImplementation::new(self.impl_source.clone(), self.runtime_env.clone()),
+            )
+            .map_err(|error| PluginHostError::ControlPlaneRegistrationFailed {
+                ability,
+                reason: error.to_string(),
+            })?;
+        Ok(())
     }
 
     fn register_stream(
@@ -271,17 +320,20 @@ impl<'a> CatalogRegistrationSink<'a> {
         ability: String,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
-    ) {
-        match self {
-            Self::Dynamic(reg) => {
-                reg.hot_register_stream_with_envelope_and_spec(
-                    ability,
-                    OwnerKind::Device,
-                    manifest,
-                    handler,
-                );
-            }
-        }
+    ) -> Result<()> {
+        self.reg
+            .hot_register_stream_with_envelope_and_spec_and_impl(
+                ability.clone(),
+                OwnerKind::Device,
+                manifest,
+                handler,
+                ControlPlaneImplementation::new(self.impl_source.clone(), self.runtime_env.clone()),
+            )
+            .map_err(|error| PluginHostError::ControlPlaneRegistrationFailed {
+                ability,
+                reason: error.to_string(),
+            })?;
+        Ok(())
     }
 
     fn register_bidi(
@@ -289,17 +341,20 @@ impl<'a> CatalogRegistrationSink<'a> {
         ability: String,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
-    ) {
-        match self {
-            Self::Dynamic(reg) => {
-                reg.hot_register_bidi_with_envelope_and_spec(
-                    ability,
-                    OwnerKind::Device,
-                    manifest,
-                    handler,
-                );
-            }
-        }
+    ) -> Result<()> {
+        self.reg
+            .hot_register_bidi_with_envelope_and_spec_and_impl(
+                ability.clone(),
+                OwnerKind::Device,
+                manifest,
+                handler,
+                ControlPlaneImplementation::new(self.impl_source.clone(), self.runtime_env.clone()),
+            )
+            .map_err(|error| PluginHostError::ControlPlaneRegistrationFailed {
+                ability,
+                reason: error.to_string(),
+            })?;
+        Ok(())
     }
 }
 
@@ -359,7 +414,7 @@ fn register_eal_declarative_package(
             ability_name.clone(),
             package.ability_registry_manifest(&ability_name)?,
             eal_rpc_handler(spec.clone()),
-        );
+        )?;
     }
     Ok(())
 }
@@ -381,7 +436,7 @@ fn register_mcp_declarative_package(
             ability_name.clone(),
             package.ability_registry_manifest(&ability_name)?,
             mcp_rpc_handler(spec.clone()),
-        );
+        )?;
     }
     Ok(())
 }
@@ -420,21 +475,21 @@ fn register_json_frame_process_package(
                     ability_name.clone(),
                     manifest,
                     rpc_process_handler(command.clone(), ability_name),
-                );
+                )?;
             }
             PluginCallMode::Stream => {
                 sink.register_stream(
                     ability_name.clone(),
                     manifest,
                     stream_process_handler(command.clone(), ability_name),
-                );
+                )?;
             }
             PluginCallMode::Bidi => {
                 sink.register_bidi(
                     ability_name.clone(),
                     manifest,
                     bidi_process_handler(command.clone(), ability_name),
-                );
+                )?;
             }
         }
     }
@@ -476,16 +531,12 @@ fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
 
 fn invocation_context_from_envelope(env: &EnvelopeContext) -> ParentInvocationContext {
     ParentInvocationContext {
-        caller: env.caller.clone(),
-        callee: env.callee.clone(),
-        ability: env.ability.clone(),
-        subject: env.subject.clone(),
-        invocation_nonce: env.invocation_nonce.clone(),
-        causal_context: Some(
-            env.causal_context
-                .clone()
-                .unwrap_or_else(|| json!({"kind": "none"})),
-        ),
+        caller: Some(env.caller().to_string()),
+        callee: Some(env.callee().to_string()),
+        ability: Some(env.ability().to_string()),
+        subject: Some(env.subject().to_string()),
+        invocation_nonce: Some(env.invocation_nonce().to_vec()),
+        causal_context: Some(env.causal_context().clone()),
     }
 }
 
@@ -521,6 +572,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::runtime::ability::CallMode as DescriptorCallMode;
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
     use crate::runtime::plugin_host::package::PluginPackage;
     use crate::runtime::plugin_host::{PluginLoadPlanner, PluginPackageIndex};
@@ -547,6 +599,20 @@ mod tests {
             "test descriptor for test.declarative_echo"
         );
         assert_eq!(manifest.input_schema()["type"], "object");
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_echo", DescriptorCallMode::Rpc)
+            .expect("plugin control-plane lookup is unambiguous")
+            .expect("plugin control-plane record");
+        assert_eq!(
+            *record.implementation().source(),
+            AbilityImplSource::DeclarativePlugin
+        );
+        assert!(record
+            .implementation()
+            .runtime_env()
+            .label()
+            .contains("plugin:"));
+        assert_eq!(record.authority().scope().owner_projection(), "device");
         let result = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
@@ -594,7 +660,9 @@ mod tests {
             .expect("hot declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hot"}));
 
-        assert!(catalog.hot_unregister("test.declarative_echo"));
+        assert!(catalog
+            .hot_unregister("test.declarative_echo")
+            .expect("hot declarative unregister"));
         assert!(!catalog.has_dynamic("test.declarative_echo"));
         assert!(!catalog.has_rpc("test.declarative_echo"));
         catalog
@@ -661,6 +729,11 @@ mod tests {
             .expect("register declarative eal");
 
         assert!(catalog.has_rpc("test.declarative_eal"));
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_eal", DescriptorCallMode::Rpc)
+            .expect("EAL plugin control-plane lookup is unambiguous")
+            .expect("EAL plugin control-plane record");
+        assert_eq!(*record.implementation().source(), AbilityImplSource::Eal);
         let err = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
@@ -690,6 +763,11 @@ mod tests {
             .expect("hot register declarative mcp");
 
         assert!(catalog.has_dynamic("test.declarative_mcp"));
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_mcp", DescriptorCallMode::Rpc)
+            .expect("MCP plugin control-plane lookup is unambiguous")
+            .expect("MCP plugin control-plane record");
+        assert_eq!(*record.implementation().source(), AbilityImplSource::Mcp);
         let manifest = catalog
             .manifest_for_dynamic("test.declarative_mcp")
             .expect("hot registered MCP plugin ability manifest");

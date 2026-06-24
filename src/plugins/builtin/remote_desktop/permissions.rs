@@ -11,7 +11,9 @@ use crate::plugins::remote_desktop::input::{
     input_injection_available, request_input_injection_permission,
 };
 use crate::runtime::ability_dispatch::EnvelopeContext;
-use crate::runtime::agents::media::resource_subject::reject_subject_in_args;
+use crate::runtime::agents::media::resource_subject::{
+    is_resource_ura_subject, reject_subject_in_args,
+};
 
 pub(in crate::plugins::builtin::remote_desktop) fn ensure_permission_probe_access(
     ability: &str,
@@ -19,12 +21,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn ensure_permission_probe_acces
     args: &Value,
 ) -> anyhow::Result<()> {
     reject_subject_in_args(ability, args)?;
-    let resource_scoped = env
-        .subject
-        .as_deref()
-        .and_then(|subject| crate::ura::parse_ura(subject).ok())
-        .map(|parsed| parsed.kind == crate::ura::URAKind::Resource)
-        .unwrap_or(false);
+    let resource_scoped = is_resource_ura_subject(env.subject());
     if resource_scoped {
         anyhow::bail!(
             "{ability}: screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject; reason={REASON_INVALID_ARGUMENT}"

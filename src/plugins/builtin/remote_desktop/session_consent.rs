@@ -104,21 +104,17 @@ impl RemoteDesktopConsentGrant {
         session_id: &str,
         env: &EnvelopeContext,
     ) -> RemoteDesktopResult<Self> {
-        if let Some(approval_receipt) = env
-            .causal_context
-            .as_ref()
-            .and_then(first_receipt_from_causal_context)
-        {
+        if let Some(approval_receipt) = first_receipt_from_causal_context(env.causal_context()) {
             return Ok(Self {
                 policy: POLICY_LOCAL_USER_CONSENT,
-                approval_actor_ura: env.caller.clone(),
+                approval_actor_ura: Some(env.caller().to_string()),
                 approval_receipt: Some(approval_receipt),
             });
         }
-        if caller_is_device_owner(env.caller.as_deref()) {
+        if caller_is_device_owner(Some(env.caller())) {
             return Ok(Self {
                 policy: POLICY_OWNER_SELF_CONSENT,
-                approval_actor_ura: env.caller.clone(),
+                approval_actor_ura: Some(env.caller().to_string()),
                 approval_receipt: None,
             });
         }
@@ -134,11 +130,8 @@ impl RemoteDesktopConsentGrant {
     ) -> Self {
         Self {
             policy: POLICY_LOCAL_USER_CONSENT,
-            approval_actor_ura: env.caller.clone(),
-            approval_receipt: env
-                .causal_context
-                .as_ref()
-                .and_then(first_receipt_from_causal_context),
+            approval_actor_ura: Some(env.caller().to_string()),
+            approval_receipt: first_receipt_from_causal_context(env.causal_context()),
         }
     }
 
@@ -236,10 +229,10 @@ mod tests {
     fn owner_user_caller_grants_self_consent_without_receipt() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
-        let env = EnvelopeContext {
-            caller: Some("easynet:///r/acme/user/alice".into()),
-            ..EnvelopeContext::default()
-        };
+        let env = EnvelopeContext::for_test(
+            "easynet:///r/acme/user/alice",
+            "easynet:///r/acme/user/alice",
+        );
         let grant =
             RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s1", &env).unwrap();
         assert_eq!(grant.policy, POLICY_OWNER_SELF_CONSENT);
@@ -250,10 +243,10 @@ mod tests {
     fn owner_device_caller_grants_self_consent_without_receipt() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
-        let env = EnvelopeContext {
-            caller: Some("easynet:///r/acme/device/dev-1".into()),
-            ..EnvelopeContext::default()
-        };
+        let env = EnvelopeContext::for_test(
+            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/device/dev-1",
+        );
         let grant =
             RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s2", &env).unwrap();
         assert_eq!(grant.policy, POLICY_OWNER_SELF_CONSENT);
@@ -269,10 +262,7 @@ mod tests {
             "easynet:///r/acme/device/dev-2",       // different device
             "easynet:///r/acme/agent/alice.helper", // agents never self-consent
         ] {
-            let env = EnvelopeContext {
-                caller: Some(caller.into()),
-                ..EnvelopeContext::default()
-            };
+            let env = EnvelopeContext::for_test(caller, "easynet:///r/acme/device/dev-1");
             let err = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s3", &env)
                 .unwrap_err();
             assert!(
@@ -286,15 +276,15 @@ mod tests {
     fn receipt_still_wins_over_owner_self_consent() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
-        let env = EnvelopeContext {
-            caller: Some("easynet:///r/acme/user/alice".into()),
-            causal_context: Some(json!({
-                "kind": "scalar",
-                "receipt_ura": "easynet:///r/acme/resource/alice.invocations/1",
-                "receipt_hash": "ab",
-            })),
-            ..EnvelopeContext::default()
-        };
+        let env = EnvelopeContext::for_test(
+            "easynet:///r/acme/user/alice",
+            "easynet:///r/acme/user/alice",
+        )
+        .with_causal_context(json!({
+            "kind": "scalar",
+            "receipt_ura": "easynet:///r/acme/resource/alice.invocations/1",
+            "receipt_hash": "ab",
+        }));
         let grant =
             RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s4", &env).unwrap();
         assert_eq!(grant.policy, POLICY_LOCAL_USER_CONSENT);

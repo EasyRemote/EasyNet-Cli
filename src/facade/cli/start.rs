@@ -1200,7 +1200,6 @@ mod tests {
             "easynet:///r/tenant-test/device/node-test"
         );
         assert!(plan.consent, "consent default-on per plan §1");
-        assert!(!plan.policy);
         assert!(!plan.mcp);
         assert!(plan.llm_sub_agents.is_empty());
     }

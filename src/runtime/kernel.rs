@@ -23,12 +23,16 @@
 
 use std::sync::{Arc, OnceLock};
 
+use easynet_axon::invocation::{CallMode as AxonInvocationCallMode, CallerSignature};
 use serde_json::json;
 
 use crate::core::domain::{
     AgentId, DiscussRoom, LoopId, LoopInstance, NodeId, PermissionDecision, PermissionId,
     PermissionRequest, PermissionSensitivity, RoomId, ScheduleEntry, ScheduleId, Session,
     SessionId, TenantId,
+};
+use crate::runtime::axon_bridge::local_runtime_request::{
+    LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
 use crate::runtime::execution::{
     discuss::DiscussService,
@@ -42,6 +46,7 @@ use crate::runtime::invocation::{
     runtime_invocation_id, PriorChain, Receipt, RuntimeInvocation, TerminalState,
 };
 use crate::runtime::kernel_api::KernelApi;
+use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
 
 /// The runtime kernel. Holds one sub-service per feature and one
 /// Gateway handle for federation calls. Feature PRs extend the
@@ -223,30 +228,20 @@ impl Kernel {
         decision
     }
 
-    /// Dispatch an admitted invocation through Axon's LocalRuntime.
-    ///
-    /// Returns `Ok(Value::Null)` when no dispatcher is wired (tests
-    /// that build a Kernel without a daemon, or callers that want
-    /// admission + permission + terminal events without a real
-    /// dispatch). The pre-refactor "no-op kernel.invoke for
-    /// non-agent ability" semantic is preserved by this fall-through.
+    /// Dispatch a daemon runtime invocation through Axon's public
+    /// descriptor-bound LocalRuntime path.
     fn dispatch_via_local_runtime(
         &self,
         session_id: &SessionId,
-        ability: &str,
-        args: serde_json::Value,
+        invocation: &RuntimeInvocation,
     ) -> anyhow::Result<serde_json::Value> {
         let runtime = match self.local_runtime.get() {
             Some(runtime) => runtime,
             None => {
-                // No runtime wired — the kernel is being used in
-                // isolation (test fixture or pre-PR-4 caller). Behave
-                // as the pre-refactor non-agent path did: succeed
-                // with a marker payload so terminal state is `Succeeded`.
-                return Ok(json!({
-                    "note": "kernel has no LocalRuntime wired; ability would have routed through Axon",
-                    "ability": ability,
-                }));
+                return Err(anyhow::anyhow!(
+                    "kernel LocalRuntime is not wired; refusing to mark `{}` as succeeded",
+                    invocation.ability
+                ));
             }
         };
         // Surface a 200-char preview of the prompt for chat-style
@@ -255,7 +250,8 @@ impl Kernel {
         // arguments have a string `prompt`; for non-chat abilities
         // the event simply records the dispatch start without
         // peeking at the args' shape.
-        let preview: String = args
+        let preview: String = invocation
+            .args
             .get("prompt")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("")
@@ -266,19 +262,52 @@ impl Kernel {
             session_id,
             json!({
                 "kind": "ability_dispatch_starting",
-                "ability": ability,
+                "ability": invocation.ability,
                 "prompt_preview": preview,
             }),
         );
 
-        let payload = serde_json::to_vec(&args)
-            .map_err(|err| anyhow::anyhow!("encode args for ability {ability}: {err}"))?;
-        let ability_name = ability.to_string();
+        let (envelope, payload) = invocation.axon_descriptor_bound_envelope(
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        )?;
+        let caller_signature =
+            invocation
+                .caller_signature
+                .clone()
+                .map(|signature| CallerSignature {
+                    algorithm: "ed25519".to_string(),
+                    signature,
+                    key_id_hint: invocation.caller.clone(),
+                });
+        if caller_signature.is_none() && invocation.caller.as_str() != LOCAL_SYSTEM_AGENT_URA {
+            return Err(anyhow::anyhow!(
+                "runtime invocation from `{}` is missing caller_signature; only daemon-local `{}` calls may use the synthetic LocalRuntime signer",
+                invocation.caller,
+                LOCAL_SYSTEM_AGENT_URA
+            ));
+        }
+        let ability_name = invocation.ability.to_string();
+        let trace_id = session_id.as_ref().to_string();
         let runtime = Arc::clone(runtime);
         let result = block_on_axon_dispatch(move || async move {
+            let ingress = match caller_signature {
+                Some(signature) => LocalRuntimeIngress::ExternalSigned {
+                    envelope,
+                    signature,
+                    payload,
+                },
+                None => LocalRuntimeIngress::LocalSystem { envelope, payload },
+            };
+            let request = LocalRuntimeRequestFactory::request_for(
+                AxonInvocationCallMode::Rpc,
+                ingress,
+                LocalRuntimeRequestOptions::default().with_trace_id(trace_id),
+            )
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
             let handle = runtime
-                .invoke_async(&ability_name, payload, None, None)
+                .invoke_descriptor_bound_request_async(request)
                 .await
+                .map(|(handle, _signed)| handle)
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
             let state = handle.wait().await;
             let events = handle.core().snapshot_events().await;
@@ -306,7 +335,7 @@ impl Kernel {
                     session_id,
                     json!({
                         "kind": "ability_response",
-                        "ability": ability,
+                        "ability": invocation.ability,
                         "result": value,
                     }),
                 );
@@ -316,7 +345,7 @@ impl Kernel {
                     session_id,
                     json!({
                         "kind": "ability_error",
-                        "ability": ability,
+                        "ability": invocation.ability,
                         "error": format!("{e}"),
                     }),
                 );
@@ -470,8 +499,9 @@ impl KernelApi for Kernel {
         let outcome: anyhow::Result<serde_json::Value> = if should_gate(&invocation.ability) {
             let agent_label = agent_portion(&invocation.ability);
             match self.gate_permission(&session_id, agent_label, &invocation.args) {
-                PermissionDecision::Allow | PermissionDecision::AllowOnce => self
-                    .dispatch_via_local_runtime(&session_id, &invocation.ability, invocation.args),
+                PermissionDecision::Allow | PermissionDecision::AllowOnce => {
+                    self.dispatch_via_local_runtime(&session_id, &invocation)
+                }
                 PermissionDecision::Deny => {
                     let _ = self.session.emit_event(
                         &session_id,
@@ -488,7 +518,7 @@ impl KernelApi for Kernel {
                 }
             }
         } else {
-            self.dispatch_via_local_runtime(&session_id, &invocation.ability, invocation.args)
+            self.dispatch_via_local_runtime(&session_id, &invocation)
         };
 
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -613,9 +643,11 @@ mod tests {
     }
 
     #[test]
-    fn kernel_invoke_returns_receipt_with_matching_id_for_same_invocation() {
-        // The v1 stub must at minimum return a Receipt whose
-        // invocation_id matches `runtime_invocation_id(&inv)`.
+    fn kernel_invoke_without_runtime_keeps_receipt_id_and_fails_closed() {
+        // Even when dispatch cannot run, the receipt must keep the
+        // deterministic invocation id. What must not survive is the
+        // old false success marker: an unwired LocalRuntime is a
+        // failed invocation, not a successful no-op.
         let k = Kernel::new(Arc::new(NoopGateway));
         let caller = crate::ura::device_ura("localhost", "a");
         let callee = crate::ura::device_ura("localhost", "b");
@@ -632,7 +664,15 @@ mod tests {
         let expected_id = runtime_invocation_id(&inv).unwrap();
         let r = k.invoke(inv).unwrap();
         assert_eq!(r.invocation_id, expected_id);
-        assert!(matches!(r.terminal, TerminalState::Succeeded));
+        match r.terminal {
+            TerminalState::Failed { reason } => {
+                assert!(
+                    reason.contains("LocalRuntime is not wired"),
+                    "expected missing LocalRuntime reason; got {reason}"
+                );
+            }
+            other => panic!("expected Failed receipt, got {other:?}"),
+        }
     }
 
     #[test]
@@ -751,7 +791,7 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let device_ura = crate::ura::device_ura("localhost", "a");
         let inv = RuntimeInvocation {
-            caller: device_ura.clone(),
+            caller: LOCAL_SYSTEM_AGENT_URA.to_string(),
             callee: device_ura.clone(),
             ability: "ghost-agent.chat".into(),
             subject: device_ura,
@@ -773,13 +813,40 @@ mod tests {
     }
 
     #[test]
-    fn invoke_without_dispatcher_falls_through_to_succeeded_receipt() {
-        // The OnceLock fall-through is the test-friendly escape
-        // hatch: a Kernel built in isolation (no daemon, no
-        // registry) admits the session, runs the permission gate
-        // (AllowAll auto-allows), then returns a no-op marker
-        // payload. Pinning this lets a future test that builds
-        // Kernel directly know the safe shape to expect.
+    fn invoke_user_without_signature_rejects_before_local_runtime_dispatch() {
+        let k = Kernel::new(Arc::new(NoopGateway));
+        k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let caller_ura = crate::ura::user_ura("localhost", "alice");
+        let device_ura = crate::ura::device_ura("localhost", "a");
+        let inv = RuntimeInvocation {
+            caller: caller_ura,
+            callee: device_ura.clone(),
+            ability: "ghost-agent.chat".into(),
+            subject: device_ura,
+            nonce_hex: "22".repeat(16),
+            causal_context: RuntimeCausalContext::Null,
+            args: json!({"prompt": "hi"}),
+            caller_signature: None,
+        };
+        let r = k.invoke(inv).unwrap();
+        match r.terminal {
+            TerminalState::Failed { reason } => {
+                assert!(
+                    reason.contains("missing caller_signature"),
+                    "expected external unsigned rejection; got {reason}"
+                );
+            }
+            other => panic!("expected Failed receipt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invoke_without_dispatcher_fails_closed() {
+        // A Kernel built in isolation can still admit the session
+        // and run the permission gate, but dispatch must fail closed.
+        // Returning Succeeded here would turn a daemon boot wiring
+        // regression into a false-positive invocation receipt.
         let k = Kernel::new(Arc::new(NoopGateway));
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let device_ura = crate::ura::device_ura("localhost", "a");
@@ -794,7 +861,15 @@ mod tests {
             caller_signature: None,
         };
         let r = k.invoke(inv).unwrap();
-        assert!(matches!(r.terminal, TerminalState::Succeeded));
+        match r.terminal {
+            TerminalState::Failed { reason } => {
+                assert!(
+                    reason.contains("LocalRuntime is not wired"),
+                    "expected missing LocalRuntime reason; got {reason}"
+                );
+            }
+            other => panic!("expected Failed receipt, got {other:?}"),
+        }
     }
 
     #[test]

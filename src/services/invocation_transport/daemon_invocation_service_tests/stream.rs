@@ -232,8 +232,11 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     use futures::StreamExt;
 
     let rt = LocalRuntime::new();
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, "browser.capture_viewport")
+            .expect("device stream ability URA");
     rt.register_streaming_ability(
-        "browser.capture_viewport",
+        runtime_ability,
         make_ability(|ctx| async move {
             let args: serde_json::Value =
                 serde_json::from_slice(&ctx.payload).unwrap_or(serde_json::Value::Null);
@@ -249,12 +252,21 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     publish_test_route(&svc, TEST_DAEMON_URI, "browser.capture_viewport");
 
+    let function_name = "browser.capture_viewport".to_string();
+    let arguments = br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#.to_vec();
+    let signing_key = test_device_signing_key();
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
-            envelope: Some(test_envelope()),
-            function_name: "browser.capture_viewport".to_string(),
-            arguments: br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#
-                .to_vec(),
+            envelope: Some(signed_test_envelope(
+                TEST_DAEMON_URI,
+                TEST_DAEMON_URI,
+                TEST_DAEMON_URI,
+                &function_name,
+                &arguments,
+                &signing_key,
+            )),
+            function_name,
+            arguments,
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -286,24 +298,29 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn admitted_bidi_file_transfer_download_emits_business_frames() {
+async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     use base64::Engine as _;
     use easynet_axon::invocation::LocalRuntime;
 
     let rt = LocalRuntime::new();
     let mut catalog =
-        crate::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt));
+        crate::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            Arc::clone(&rt),
+            crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+                TEST_DAEMON_URI,
+            ),
+        );
     crate::runtime::agents::file_transfer_ability::register(&mut catalog);
 
     let path = std::env::temp_dir().join(format!(
-        "easynet-admitted-bidi-download-{}-{}.bin",
+        "easynet-external-signed-bidi-download-{}-{}.bin",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0)
     ));
-    let bytes = b"admitted-bidi-download-proof";
+    let bytes = b"external-signed-bidi-download-proof";
     std::fs::write(&path, bytes).unwrap();
 
     let args = serde_json::to_vec(&serde_json::json!({
@@ -319,11 +336,12 @@ async fn admitted_bidi_file_transfer_download_emits_business_frames() {
         crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
         args,
     );
-    let wire = crate::runtime::axon_bridge::dispatch_shim::admitted_from_envelope_open(&open)
-        .expect("wire dispatch");
-    let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_admitted(&rt, wire)
+    let wire =
+        crate::runtime::axon_bridge::dispatch_shim::external_signed_from_envelope_open(&open)
+            .expect("wire dispatch");
+    let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_external_signed(&rt, wire)
         .await
-        .expect("open admitted bidi");
+        .expect("open external-signed bidi");
     let (input, mut output) = handle.split();
 
     input
@@ -372,7 +390,7 @@ async fn admitted_bidi_file_transfer_download_emits_business_frames() {
     }
     assert!(
         got_complete,
-        "admitted file_transfer download must emit complete"
+        "external-signed file_transfer download must emit complete"
     );
     assert_eq!(downloaded, bytes);
     let _ = std::fs::remove_file(&path);
@@ -403,12 +421,9 @@ async fn invoke_stream_unknown_function_returns_resolver_negative() {
 
 #[tokio::test]
 async fn invoke_rejects_caller_not_in_trust_anchor() {
-    // PR-7 commit 4/N (DEC-013 Option D): trust-anchor membership
-    // is the first non-loopback check. A URA absent from the
-    // anchor short-circuits to `permission_denied` before any
-    // §5.2 work — the gating reject, identical to the PR-1 URA-
-    // only behaviour for unknown callers. Same `PermissionDenied`
-    // wire code as before, refreshed message text.
+    // Trust-anchor membership is the first non-loopback check. A
+    // URA absent from the anchor short-circuits to
+    // `permission_denied` before any signature or replay work.
     let svc = DaemonInvocationService::new(
         Arc::new(PresenceRegistry::new()),
         AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),
@@ -442,8 +457,7 @@ async fn invoke_rejects_caller_not_in_trust_anchor() {
 
 #[tokio::test]
 async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
-    // Same DEC-013 dispatch as `invoke_rejects_caller_not_in_trust_anchor`.
-    // Stream surface shares the same membership check.
+    // Stream surface shares the same membership check as unary.
     let svc = DaemonInvocationService::new(
         Arc::new(PresenceRegistry::new()),
         AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),

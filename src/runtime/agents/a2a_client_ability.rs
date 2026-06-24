@@ -135,18 +135,17 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let ability_ura =
-            match crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        let target_call =
+            match crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
                 &target_ura,
                 &ability,
             ) {
-                Ok(ability_ura) => ability_ura,
+                Ok(target_call) => target_call,
                 Err(e) => return Ok(error_response(&format!("{e}"))),
             };
-        match crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-            ability_ura.as_str(),
+        match crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target(
+            &target_call,
             task_args,
-            &target_ura,
             caller_ura.as_deref(),
         ) {
             Ok(value) => Ok(json!({ "ok": true, "result": value })),

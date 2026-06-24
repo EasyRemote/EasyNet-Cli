@@ -4,7 +4,7 @@
 // File: src/runtime/invocation.rs
 // Description: Daemon-local adapter record for scheduled/loop/kernel
 //              execution, plus the Receipt terminal record used by
-//              legacy runtime services.
+//              daemon-internal runtime services.
 //
 // Why this module is the root of runtime types
 // --------------------------------------------
@@ -15,27 +15,18 @@
 // ability/subject/nonce/args into `Kernel::invoke`.
 //
 // The runtime id for this adapter is derived by converting the record
-// into Axon's `InvocationEnvelope` and calling
-// `easynet_axon::invocation::canonical_invocation_bytes`. That keeps
-// byte layout ownership in Axon while preserving the daemon's current
-// session/receipt indexing model during the Step 7 migration.
+// into Axon's `DescriptorBoundEnvelope` and calling Axon's canonical
+// descriptor-bound encoder. That keeps byte layout ownership in Axon
+// while giving daemon-internal Kernel calls the same versioned subject
+// semantics as transport invocations.
 //
-// v1 vs v2 signature status
-// -------------------------
-// `caller_signature` and `callee_signature` are Option<Vec<u8>> and
-// always None in v1 (AXIOM §6.3 signed-invocation is not enabled;
-// federation trust still rides Axon mTLS). The fields exist on the
-// wire so v2 can start populating them without a schema migration.
-// See docs/design/formal-model-v1.md for the C1/C2 non-repudiation
-// invariants that these fields will eventually satisfy.
-//
-// v1 classification (v10.5 R1)
-// ----------------------------
-// The type system here describes *structural* invariants (shape of a
-// runtime invocation record, shape of a Receipt, shape of a causal context). The
-// *semantic* invariants S1–S4 (receipts as runtime inputs) are
-// explicitly not in scope for v1 — v1 is a record system, not a
-// computation system. docs/design/formal-model-v1.md pins this.
+// Signature status
+// ----------------
+// `caller_signature` is optional only for daemon-local `_system.local`
+// loopback calls. Kernel turns those into Axon public signed requests with
+// the synthetic system key; every public transport caller, including Device,
+// User, Agent, Hub, and Backend, must carry the caller signature and Axon
+// remains the owner of verification, replay, and receipt proof semantics.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -61,7 +52,7 @@ pub type Ura = String;
 /// envelope/registry layers, not by this dispatch key.
 pub type AbilityName = String;
 
-/// The four legacy daemon-local causal-context shapes.
+/// Daemon-local causal-context adapter shapes.
 ///
 /// - `Null`   — a freshly-initiated runtime invocation with no prior receipt
 ///              in its causal past (e.g. a user-initiated Client FFI
@@ -71,7 +62,7 @@ pub type AbilityName = String;
 /// - `List`   — multiple prior invocation ids forming a set causal
 ///              parent. This is also not sufficient for Axon canonical
 ///              causal encoding.
-/// - `Merkle` — a legacy Merkle root placeholder without an Axon proof
+/// - `Merkle` — a Merkle root placeholder without an Axon proof
 ///              URA.
 ///
 /// v1 emits `Null` and `Scalar` only (schedule tick / loop controller
@@ -80,11 +71,11 @@ pub type AbilityName = String;
 /// scheduling can populate them without a schema migration.
 ///
 /// This is retained for daemon-internal records only. Axon's canonical
-/// causal context requires receipt hashes and receipt URAs; the legacy
+/// causal context requires receipt hashes and receipt URAs; the
 /// `Scalar`/`List` variants here carry only prior invocation ids and
 /// therefore cannot be encoded into Axon canonical bytes without
 /// losing verification semantics. `runtime_invocation_id` rejects
-/// those variants until callers migrate to Axon `ReceiptRef`.
+/// those variants until callers supply Axon `ReceiptRef`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimeCausalContext {
@@ -120,8 +111,8 @@ pub struct RuntimeInvocation {
     pub nonce_hex: String,
     pub causal_context: RuntimeCausalContext,
     pub args: Value,
-    /// Caller-produced signature over canonical bytes. v1 = None;
-    /// v2 mandatory (AXIOM §6.3 C1).
+    /// Caller-produced signature over canonical bytes. Optional only for
+    /// daemon-local system calls; public transport callers must provide it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_signature: Option<Vec<u8>>,
 }
@@ -158,14 +149,25 @@ impl RuntimeInvocation {
         Ok(())
     }
 
-    /// Convert the daemon-local record into Axon's canonical envelope
-    /// and return Axon-owned canonical bytes.
+    /// Convert the daemon-local record into Axon's descriptor-bound
+    /// canonical envelope and return Axon-owned canonical bytes.
     ///
     /// The adapter intentionally accepts only `RuntimeCausalContext::Null`.
     /// Legacy scalar/list/merkle variants do not carry enough receipt
     /// material to build Axon `ReceiptRef`s, so accepting them would
     /// create a false proof of canonical equivalence.
     pub fn axon_canonical_bytes(&self) -> Result<Vec<u8>, RuntimeInvocationError> {
+        let (envelope, _args_bytes) = self.axon_descriptor_bound_envelope(
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        )?;
+        Ok(envelope.canonical_bytes())
+    }
+
+    pub fn axon_descriptor_bound_envelope(
+        &self,
+        descriptor_version: &str,
+    ) -> Result<(easynet_axon::invocation::DescriptorBoundEnvelope, Vec<u8>), RuntimeInvocationError>
+    {
         self.validate()?;
         let nonce = decode_nonce_hex(&self.nonce_hex)?;
         let args_bytes =
@@ -188,27 +190,36 @@ impl RuntimeInvocation {
                 ));
             }
         };
-        let envelope = easynet_axon::invocation::InvocationEnvelope::from_wire_parts(
-            easynet_axon::invocation::AgentIdentity::new(
-                self.caller.clone(),
-                easynet_axon::invocation::UraProfile::EasynetStrictV2,
-            ),
-            easynet_axon::invocation::AgentIdentity::new(
-                self.callee.clone(),
-                easynet_axon::invocation::UraProfile::EasynetStrictV2,
-            ),
-            easynet_axon::invocation::SubjectIdentity::new(
-                self.subject.clone(),
-                easynet_axon::invocation::UraProfile::EasynetStrictV2,
-            ),
-            nonce,
-            causal_context,
-            self.ability.clone(),
-            &args_bytes,
+        let subject = easynet_axon::invocation::SubjectIdentity::new(
+            self.subject.clone(),
+            easynet_axon::invocation::UraProfile::EasynetStrictV2,
         );
-        Ok(easynet_axon::invocation::canonical_invocation_bytes(
-            &envelope,
-        ))
+        let ability =
+            crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire(
+                &self.callee,
+                &self.ability,
+                descriptor_version,
+            )
+            .map_err(|err| RuntimeInvocationError::AxonDescriptorBound(err.to_string()))?;
+        let envelope = easynet_axon::invocation::DescriptorBoundEnvelope::from_parts(
+            easynet_axon::invocation::DescriptorBoundEnvelopeParts {
+                caller: easynet_axon::invocation::AgentIdentity::new(
+                    self.caller.clone(),
+                    easynet_axon::invocation::UraProfile::EasynetStrictV2,
+                ),
+                callee: easynet_axon::invocation::AgentIdentity::new(
+                    self.callee.clone(),
+                    easynet_axon::invocation::UraProfile::EasynetStrictV2,
+                ),
+                ability,
+                subject,
+                invocation_nonce: nonce,
+                causal_context,
+                args_bytes: &args_bytes,
+            },
+        )
+        .map_err(|err| RuntimeInvocationError::AxonDescriptorBound(err.to_string()))?;
+        Ok((envelope, args_bytes))
     }
 }
 
@@ -235,6 +246,8 @@ pub enum RuntimeInvocationError {
     NonceLength,
     #[error("args JSON serialization failed: {0}")]
     ArgsJson(serde_json::Error),
+    #[error("Axon descriptor-bound envelope failed: {0}")]
+    AxonDescriptorBound(String),
     #[error("legacy causal context cannot be converted to Axon canonical bytes: {0}")]
     LegacyCausalContext(&'static str),
 }

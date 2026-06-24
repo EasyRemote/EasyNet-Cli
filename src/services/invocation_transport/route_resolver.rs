@@ -93,19 +93,19 @@ pub(crate) struct DeviceLocalAbility {
 /// runtime-local dispatch binding" gate.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LocalRuntimeAuthoritySnapshot {
-    dispatch_keys: std::collections::HashSet<String>,
+    ability_uras: std::collections::HashSet<String>,
 }
 
 impl LocalRuntimeAuthoritySnapshot {
     /// Snapshot every registered dispatch key from the local runtime.
     pub(crate) async fn capture(runtime: &easynet_axon::invocation::LocalRuntime) -> Self {
-        let dispatch_keys = runtime
+        let ability_uras = runtime
             .list_abilities()
             .await
             .into_iter()
             .map(|descriptor| descriptor.name)
             .collect();
-        Self { dispatch_keys }
+        Self { ability_uras }
     }
 }
 
@@ -115,8 +115,12 @@ impl DeviceLocalAuthority for LocalRuntimeAuthoritySnapshot {
         device_ura: &str,
         public_name: &str,
     ) -> Option<DeviceLocalAbility> {
+        let runtime_key = crate::ura::owner_ability_ura(device_ura, public_name)?;
+        if !self.ability_uras.contains(&runtime_key) {
+            return None;
+        }
         let dispatch_name = crate::ura::local_dispatch_ability_key(device_ura, public_name);
-        if dispatch_name.is_empty() || !self.dispatch_keys.contains(&dispatch_name) {
+        if dispatch_name.is_empty() {
             return None;
         }
         Some(DeviceLocalAbility { dispatch_name })
@@ -592,14 +596,6 @@ impl<'a> DaemonRouteResolver<'a> {
         device_local: &DeviceLocalAuthoritySource,
         authority_ura: String,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
-        if !self.registry.contains(&authority_ura) {
-            return Err(ResolveRouteFailure {
-                query_name: selector.query_name.clone(),
-                reason: axon_pb::NegativeReason::Noroute,
-                detail: "device is not online in the local presence registry".to_string(),
-            });
-        }
-
         let ability = device_local
             .authority
             .resolve_device_ability(&authority_ura, &selector.public_name)
@@ -1651,21 +1647,24 @@ mod tests {
     }
 
     #[test]
-    fn device_offline_resolves_noroute_even_with_local_authority() {
-        // Authority injected, runtime has the binding, but the device is
-        // absent from presence → NOROUTE (placement gate), not a route.
+    fn device_local_authority_resolves_without_presence_projection() {
+        // Device-local authority is captured from the live LocalRuntime.
+        // That runtime snapshot is the local liveness/execution proof for
+        // this daemon; it must not require a hub-style presence row.
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let owner_ura = device_owner_ura();
         let authority = FakeDeviceAuthority::with_keys(&["agent.start"]);
 
-        let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .with_device_local_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.start")
-            .expect_err("offline device must resolve negative");
+            .expect("device-local authority must not depend on projection presence");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Noroute);
+        assert_eq!(route.reason, axon_pb::RouteReason::LocalDevice);
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.execution_host_ura, owner_ura);
     }
 
     #[test]

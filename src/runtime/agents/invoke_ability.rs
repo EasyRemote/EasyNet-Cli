@@ -61,6 +61,7 @@ use serde_json::{json, Value};
 use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::runtime::local_runtime_invoker::is_not_found_error;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
@@ -234,19 +235,25 @@ pub fn dispatch(
                  this is a daemon boot ordering bug, not a caller-side issue"
             )
         })?;
-        registry
-            .invoke_rpc_json(qualified, parsed.args.clone())
-            .map_err(|err| {
-                let msg = format!("{err}");
-                if is_not_found_error(&msg) {
-                    anyhow::anyhow!(
-                        "ability_not_found: no handler registered for {qualified}; \
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: qualified.to_string(),
+            normalized_args: parsed.args.clone(),
+            call_mode: CallMode::Rpc,
+            subject: Some(parsed.owner_ura.clone()),
+            causal_context: None,
+        };
+        registry.invoke_rpc_target_json(target).map_err(|err| {
+            let msg = format!("{err}");
+            if is_not_found_error(&msg) {
+                anyhow::anyhow!(
+                    "ability_not_found: no handler registered for {qualified}; \
                          call <self>.discover to see what's available ({msg})"
-                    )
-                } else {
-                    anyhow::anyhow!("{msg}")
-                }
-            })
+                )
+            } else {
+                anyhow::anyhow!("{msg}")
+            }
+        })
     })();
     let elapsed_ms = started.elapsed().as_millis() as u64;
 

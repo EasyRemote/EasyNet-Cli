@@ -551,6 +551,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         phase,
         hub_endpoint: &hub_endpoint,
         caller_ura: &caller_ura,
+        signing_seed,
         inputs: preludes,
         user_trust_sync,
         channels: prelude_channels,
@@ -793,10 +794,9 @@ mod tests {
     /// This is NOT a product SLA — it only guards against a genuine hang.
     /// Kept generous because the full `cargo test --lib` run (3000+ tests)
     /// saturates the scheduler and an in-process loopback bidi handshake
-    /// can take well over a second under that contention; a 2 s bound
-    /// flaked here as `Elapsed`. The supervisor's own connect timeout is
-    /// 10 s, so 10 s still fails fast on a real stall.
-    const TEST_SUPERVISOR_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
+    /// can spend most of the old 10 s budget in prelude reflection before
+    /// reporting admission. This remains a hang guard, not a product SLA.
+    const TEST_SUPERVISOR_PROGRESS_TIMEOUT: Duration = Duration::from_secs(30);
 
     fn hub_store() -> Arc<HubPublishedAbilityStore> {
         HubPublishedAbilityStore::new()

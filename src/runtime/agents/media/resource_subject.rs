@@ -9,19 +9,13 @@ use serde_json::Value;
 
 use crate::persistence::resources::{self, lookup_by_ura, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::EnvelopeContext;
+use crate::ura::URAKind;
 
 pub const REASON_SUBJECT_REQUIRED: &str = "subject_required";
 pub const REASON_SUBJECT_IN_ARGS: &str = "subject_in_args";
 pub const REASON_RESOURCE_NOT_FOUND: &str = "resource_not_found";
 pub const REASON_RESOURCE_TABLE_UNAVAILABLE: &str = "resource_table_unavailable";
 pub const REASON_RESOURCE_TYPE_MISMATCH: &str = "resource_type_mismatch";
-const DEFAULT_LOCAL_RUNTIME_SUBJECT: &str = "easynet:///r/_system/agent/_system.local";
-
-/// True when Axon's local runtime supplied its process-local default subject
-/// because the caller did not provide an explicit resource subject.
-pub fn is_default_local_runtime_subject(subject: &str) -> bool {
-    subject == DEFAULT_LOCAL_RUNTIME_SUBJECT
-}
 
 /// Contract for resolving one envelope subject into a resource row.
 pub struct ResourceSubjectSpec<'a> {
@@ -50,20 +44,8 @@ pub fn resolve_required_resource_subject(
     spec: ResourceSubjectSpec<'_>,
 ) -> anyhow::Result<ResourceEntry> {
     reject_subject_in_args(spec.ability, args)?;
-    let subject = env.subject.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "{}: subject required (resource_ura of {}); reason={REASON_SUBJECT_REQUIRED}",
-            spec.ability,
-            spec.required_subject
-        )
-    })?;
-    if is_default_local_runtime_subject(subject) {
-        anyhow::bail!(
-            "{}: subject required (resource_ura of {}); reason={REASON_SUBJECT_REQUIRED}",
-            spec.ability,
-            spec.required_subject
-        );
-    }
+    let subject =
+        require_resource_ura_subject(spec.ability, Some(env.subject()), spec.required_subject)?;
     resolve_resource_ura_subject(subject, spec)
 }
 
@@ -72,6 +54,7 @@ pub fn resolve_resource_ura_subject(
     subject: &str,
     spec: ResourceSubjectSpec<'_>,
 ) -> anyhow::Result<ResourceEntry> {
+    let subject = require_resource_ura_subject(spec.ability, Some(subject), spec.required_subject)?;
     let file = resources::load().map_err(|err| {
         anyhow::anyhow!(
             "{}: local resources table could not be loaded; \
@@ -94,6 +77,41 @@ pub fn resolve_resource_ura_subject(
         );
     }
     Ok(entry.clone())
+}
+
+/// Validate and return the envelope subject as a resource URA.
+///
+/// Resource-scoped abilities are not allowed to fall back to the
+/// caller/callee/device subject that local dispatch may provide. Only a
+/// canonical `URAKind::Resource` subject means the caller selected a concrete
+/// media resource.
+pub fn require_resource_ura_subject<'a>(
+    ability: &str,
+    subject: Option<&'a str>,
+    required_subject: &str,
+) -> anyhow::Result<&'a str> {
+    let subject = subject
+        .map(str::trim)
+        .filter(|subject| !subject.is_empty())
+        .ok_or_else(|| subject_required_error(ability, required_subject))?;
+    if !is_resource_ura_subject(subject) {
+        return Err(subject_required_error(ability, required_subject));
+    }
+    Ok(subject)
+}
+
+/// True only for canonical resource URAs. Invalid URAs and non-resource URAs
+/// are both false because neither can identify a media resource.
+pub fn is_resource_ura_subject(subject: &str) -> bool {
+    crate::ura::parse_ura(subject.trim())
+        .map(|parsed| parsed.kind == URAKind::Resource)
+        .unwrap_or(false)
+}
+
+fn subject_required_error(ability: &str, required_subject: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{ability}: subject required (resource_ura of {required_subject}); reason={REASON_SUBJECT_REQUIRED}"
+    )
 }
 
 #[cfg(test)]
@@ -128,6 +146,33 @@ mod tests {
         assert!(
             !message.contains(REASON_RESOURCE_NOT_FOUND),
             "corrupt table must not be misreported as a missing resource: {message}"
+        );
+    }
+
+    #[test]
+    fn non_resource_subject_is_subject_required_not_resource_not_found() {
+        let _home = HomeGuard::new();
+        resources::save(&resources::ResourcesFile::default()).expect("save empty resources table");
+
+        let err = resolve_resource_ura_subject(
+            "easynet:///r/default/device/local",
+            ResourceSubjectSpec {
+                ability: "device.test.media",
+                required_subject: "display",
+                allowed_kinds: &[ResourceType::Display],
+                allowed_label: "display",
+            },
+        )
+        .expect_err("device subject must not be treated as a resource lookup");
+
+        let message = err.to_string();
+        assert!(
+            message.contains(REASON_SUBJECT_REQUIRED),
+            "expected reason={REASON_SUBJECT_REQUIRED}; got: {message}"
+        );
+        assert!(
+            !message.contains(REASON_RESOURCE_NOT_FOUND),
+            "non-resource subjects must not hit the resources table: {message}"
         );
     }
 }

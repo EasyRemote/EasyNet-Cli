@@ -91,6 +91,7 @@
 pub mod ability_health;
 pub mod clipboard_tracker;
 pub mod control;
+pub(crate) mod federation_invoke_shim;
 pub mod session_failure;
 
 /// Daemon-owned Axon `Invocation` transport hosted by

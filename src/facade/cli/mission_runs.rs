@@ -620,13 +620,6 @@ fn find_implicit_agent_fallback(
 
 /// THE single in-process entry point for executing an EAL mission source
 /// string. See module-level comment above for the load-bearing invariant.
-///
-/// TODO(layering): when this function grows past ~150 lines, split into:
-///   compile_source(source) -> MissionIr
-///   execute_ir(ir, opts)   -> MissionRunResult
-///   dispatch_step(step)     -> StepResult (already in interpreter)
-/// The single-entry contract still holds at the level of
-/// `run_mission_inproc`; the split is purely internal.
 pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<MissionRunResult> {
     // Compile.
     let program = crate::eal::parser::parse(source)?;
@@ -701,7 +694,12 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
     let started = std::time::Instant::now();
     let started_at = chrono::Local::now().to_rfc3339();
 
-    let exec = crate::eal::interpreter::execute_with_endpoint(&state.endpoint, tenant, &ir);
+    let exec = crate::eal::interpreter::execute_with_endpoint_for_trace(
+        &state.endpoint,
+        tenant,
+        &ir,
+        run_id.clone(),
+    );
 
     let duration_ms = started.elapsed().as_millis() as u64;
 

@@ -44,6 +44,9 @@ use crate::support::output;
 pub struct DeployArgs {
     /// Path to the ability directory (must contain `ability.json`).
     /// The CLI converts it to a short-lived ResourceRef before invocation.
+    /// Current device deployment accepts executable manifests whose `[exec]`
+    /// binding is `kind = "host_stream"`; other exec kinds are rejected by
+    /// the daemon until their runtime boundaries are implemented.
     pub path: String,
     /// Target device node id. Use 'local' to deploy onto this
     /// device's own ability registry; any other node id requires
@@ -82,13 +85,22 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     if let Some(install_id) = result.get("install_id").and_then(|v| v.as_str()) {
         output::step(&format!("install_id: {install_id}"));
     }
-    if let Some(ability_ura) = result.get("ability_ura").and_then(|v| v.as_str()) {
-        output::success(&format!(
-            "activated — {ability_ura} is live on {}",
-            args.node
-        ));
-    } else {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+    match (
+        result.get("state").and_then(|v| v.as_str()),
+        result.get("ability_ura").and_then(|v| v.as_str()),
+    ) {
+        (Some("ACTIVE"), Some(ability_ura)) => {
+            output::success(&format!("{ability_ura} is active on {}", args.node));
+        }
+        (Some("INSTALLED"), Some(ability_ura)) => {
+            output::step(&format!(
+                "{ability_ura} installed on {}; activation is pending route availability",
+                args.node
+            ));
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
     }
     Ok(())
 }

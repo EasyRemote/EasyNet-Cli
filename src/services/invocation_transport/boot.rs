@@ -104,6 +104,7 @@ mod paths;
 mod presence_seed;
 mod trust;
 
+use crate::services::realm_trust_anchor::trust_anchor_path_from_env_or_default;
 #[cfg(test)]
 use identity::{
     canonical_caller_ura_from_stored_identity, daemon_identity_from_stored, StoredDeviceIdentity,
@@ -114,7 +115,6 @@ use paths::expand_home;
 use presence_seed::seed_boot_presence;
 #[cfg(test)]
 use trust::read_backend_identity_record;
-pub(crate) use trust::trust_anchor_path_from_env_or_default;
 use trust::{
     load_trust_anchor_from, reload_daemon_config_cells_from, reload_trust_anchor_cell_from,
     upsert_backend_identity_from_disk,
@@ -187,6 +187,9 @@ pub fn start_daemon_invocation_transport(
     hub_published_abilities: Arc<
         crate::services::hub_published_ability_store::HubPublishedAbilityStore,
     >,
+    discover_federation_resolver: Option<
+        Arc<crate::runtime::agents::discover_ability::DeferredDiscoverFederationResolver>,
+    >,
 ) -> anyhow::Result<SessionShutdown> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
@@ -247,6 +250,28 @@ pub fn start_daemon_invocation_transport(
     // restart.
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
     let presence = Arc::new(PresenceRegistry::new());
+    let advertised_agents =
+        Arc::new(crate::services::advertised_agent_store::AdvertisedAgentStore::new());
+    let ability_catalog =
+        Arc::new(crate::services::ability_catalog_store::AbilityCatalogStore::new());
+    if let Some(resolver_cell) = discover_federation_resolver {
+        let resolver = Arc::new(
+            crate::runtime::agents::discover_ability::LocalDirectoryDiscoverFederationResolver::new(
+                Arc::clone(&presence),
+                Arc::clone(&advertised_agents),
+                Arc::clone(&ability_catalog),
+                daemon_ura.clone(),
+            ),
+        );
+        if resolver_cell.set(resolver).is_err() {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = discover_federation_resolver_second_writer,
+                level = "warn",
+                message = "discover federation resolver was already attached; keeping first writer",
+            );
+        }
+    }
     let pending = Arc::new(PendingDispatchMap::new());
     let pending_stream =
         Arc::new(crate::services::pending_dispatch::PendingStreamDispatchMap::new());
@@ -280,7 +305,7 @@ pub fn start_daemon_invocation_transport(
 
     // PR-N1 commit 9/N + PR-N2 commit 1/N: hub-mode daemons
     // construct one CrossHubDialer that backs both the daemon's
-    // outbound `forward_invoke` routing AND the admission gate's
+    // outbound `forward_invoke` routing AND the transport policy gate's
     // `FederatedKeyResolver` so a cross-realm caller's URA can be
     // resolved via `federation.resolve_key` against the peer hub.
     // Device-mode daemons never originate federation calls, so
@@ -295,11 +320,19 @@ pub fn start_daemon_invocation_transport(
         } else {
             None
         };
+    let hub_signing_seed =
+        crate::services::invocation_transport::peer_envelope_signer::read_hub_identity_seed(
+            config.realm(),
+        )
+        .ok();
 
     let mut admission =
         AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_ura.clone());
     if let Some(client) = dialer.clone() {
         admission = admission.with_federation(client, federated_peers_cell.clone());
+    }
+    if let Some(seed) = hub_signing_seed {
+        admission = admission.with_hub_signing_seed(seed);
     }
     // #185: one hot-swappable quota gate is shared by both listeners.
     // The gate exists even when quota starts disabled so SIGHUP can
@@ -329,6 +362,7 @@ pub fn start_daemon_invocation_transport(
         federated_key_cache,
     );
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
+        .with_directory_read_models(advertised_agents, ability_catalog)
         .with_pending(Arc::clone(&pending))
         .with_pending_stream(Arc::clone(&pending_stream))
         .with_session_realm(config.realm().to_string())
@@ -394,8 +428,8 @@ pub fn start_daemon_invocation_transport(
     // This transport only installs transport-plane configuration:
     //   * a `RealmTrustAnchorKeyResolver` over the SAME
     //     `trust_anchor_cell` admission uses, so signature
-    //     verification inside `invoke_externally_signed_*` sees
-    //     hot-reload edits immediately;
+    //     verification inside Axon's descriptor-bound request
+    //     admission sees hot-reload edits immediately;
     //   * a `LedgerSink` over the SAME ledger handle the dispatch
     //     service already writes to, so once Phase 4 routes
     //     through Axon, terminal records get persisted via the
@@ -489,11 +523,7 @@ pub fn start_daemon_invocation_transport(
     service = service.with_local_runtime(Arc::clone(&local_runtime));
     service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
 
-    if let Ok(seed) =
-        crate::services::invocation_transport::peer_envelope_signer::read_hub_identity_seed(
-            config.realm(),
-        )
-    {
+    if let Some(seed) = hub_signing_seed {
         service = service.with_hub_signing_seed(seed);
     }
 
@@ -934,7 +964,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
     } else {
-        "legacy unsigned frame0"
+        "unsigned session prelude frame0"
     };
     let ca_state = match hub_ca_pem_path.as_deref() {
         Some(path) => format!("pinned CA `{}`", path.display()),
@@ -1774,6 +1804,7 @@ mod tests {
             ),
             None,
             crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
+            None,
         )
         .expect("missing config is a soft skip");
     }
@@ -1803,6 +1834,7 @@ mod tests {
             ),
             None,
             crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
+            None,
         );
         assert!(
             result.is_err(),
@@ -1948,6 +1980,7 @@ tls_key_pem = {key:?}
                 ),
                 None,
                 crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
+                None,
             );
         }));
         // futures::FutureExt::catch_unwind would be nicer; we

@@ -29,34 +29,37 @@ use crate::services::invocation_transport::bidi_dispatcher::{
 use crate::services::invocation_transport::federation_wrappers;
 use crate::services::invocation_transport::invocation_wire::FEDERATION_RESULT_CONTENT_TYPE;
 use crate::services::invocation_transport::invocation_wire::{
-    DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
+    DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
 };
 use crate::services::invocation_transport::invoke_remote_initiator::{
     InvokeRemoteDown, RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,
     INVOKE_REMOTE_STREAM_ID,
 };
 use crate::services::invocation_transport::ledger_projection::{
-    invocation_resource_ura, ledger_authority_binding_for_request,
+    invocation_resource_ura, ledger_authority_form_for_request, ledger_record_from_remote_receipt,
 };
 use crate::services::invocation_transport::peer_envelope_signer::sign_peer_request_envelope;
 use crate::services::invocation_transport::quota_meter::quota_meters_function;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
 use crate::services::invocation_transport::session_initiator::ABILITY_SELF_SESSION;
 use crate::services::invocation_transport::target_gate::ROUTE_NEGATIVE_CODE;
+use crate::services::invocation_transport::ProtoEnvelope;
 use crate::services::pending_dispatch::DispatchResult;
 use crate::services::session_failure::SessionFailure;
 use easynet_axon::invocation::{AbilityFrame, BidiInputFrame};
 use easynet_axon::pb::axon::v1::Error;
 use easynet_axon::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, BinaryChunk, ErrorStage, SecurityClass,
-    StreamDescriptor, SubjectIdentity,
+    StreamDescriptor,
 };
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::services::usage_quota_store::SharedUsageQuotaGate;
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope};
+use easynet_axon::pb::axon::v1::{
+    AgentIdentity, CallerSignature, Envelope, InvocationReceipt, InvocationUsage, SubjectIdentity,
+};
 
 /// Test helper daemon URA — admitted by the test admission
 /// facade via the loopback bypass. Tests that exercise
@@ -65,6 +68,7 @@ use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope};
 // canonical shape because forward_invoke no longer repairs legacy
 // `agent/<bare-id>` device aliases at the request boundary.
 const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/device/test-daemon";
+const TEST_DEVICE_SIGNING_SEED: [u8; 32] = [0x33; 32];
 
 fn make_service() -> DaemonInvocationService {
     let admission = AdmissionFacade::new(
@@ -176,20 +180,23 @@ fn signed_delegation_metadata_for_test(
         issued_at_ms: 1_700_000_000_000,
         expires_at_ms: 4_102_444_800_000,
     };
-    let payload_bytes = serde_json::to_vec(&payload).expect("delegation payload");
+    let payload_value = serde_json::to_value(&payload).expect("delegation payload");
+    let payload_bytes = crate::runtime::ability::canonical_json_bytes(&payload_value);
     let signature = signer.sign(&payload_bytes);
     let raw = serde_json::json!({
-        "payload": serde_json::from_slice::<serde_json::Value>(&payload_bytes)
-            .expect("payload JSON value"),
+        "payload": payload_value,
         "signature": BASE64_STANDARD.encode(signature.to_bytes()),
     });
     BASE64_STANDARD.encode(serde_json::to_vec(&raw).expect("delegation proof"))
 }
 
 fn make_quota_service_for_device_caller(caller_ura: &str, cap: i32) -> DaemonInvocationService {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let signing_key = test_device_signing_key();
     let anchor = RealmTrustAnchor::from_entries(vec![TrustedAgent {
         agent_ura: caller_ura.to_string(),
-        public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+        public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
         role: TrustedAgentRole::Device,
         added_at_unix_ms: 1_700_000_000_000,
         origin_realm: None,
@@ -234,29 +241,72 @@ async fn runtime_with_json_echo(
 }
 
 fn test_envelope() -> Envelope {
-    Envelope {
-        caller: Some(AgentIdentity {
-            ura: TEST_DAEMON_URI.to_string(),
-            ..AgentIdentity::default()
-        }),
-        callee: Some(AgentIdentity {
-            ura: TEST_DAEMON_URI.to_string(),
-            ..AgentIdentity::default()
-        }),
-        subject: Some(SubjectIdentity {
-            ura: TEST_DAEMON_URI.to_string(),
-            ..SubjectIdentity::default()
-        }),
-        invocation_nonce: vec![0x11u8; 16],
-        ..Envelope::default()
-    }
+    ProtoEnvelope::targeted(TEST_DAEMON_URI, TEST_DAEMON_URI, TEST_DAEMON_URI)
+        .expect("valid test envelope")
+        .into_inner()
+}
+
+fn test_device_signing_key() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&TEST_DEVICE_SIGNING_SEED)
+}
+
+fn next_test_invocation_nonce() -> [u8; 16] {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
+    let n = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut nonce = [0u8; 16];
+    nonce[..8].copy_from_slice(&n.to_be_bytes());
+    nonce[8..].copy_from_slice(&(!n).to_be_bytes());
+    nonce
+}
+
+fn signed_test_envelope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    arguments: &[u8],
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Envelope {
+    use ed25519_dalek::Signer as _;
+
+    let nonce = next_test_invocation_nonce();
+    let mut envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
+        .expect("valid signed test envelope")
+        .into_inner();
+    envelope.invocation_nonce = nonce.to_vec();
+    let descriptor_bound =
+        crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+            envelope.clone(),
+            ability.to_string(),
+            arguments,
+            crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+        )
+        .expect("descriptor-bound signed test envelope");
+    let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
+    envelope.caller_signature = Some(CallerSignature {
+        algorithm: "ed25519".to_string(),
+        signature: signature.to_bytes().to_vec(),
+        key_id_hint: String::new(),
+    });
+    envelope
 }
 
 fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest> {
+    let arguments = args_json.as_bytes().to_vec();
+    let signing_key = test_device_signing_key();
     Request::new(InvokeRequest {
-        envelope: Some(test_envelope()),
+        envelope: Some(signed_test_envelope(
+            TEST_DAEMON_URI,
+            TEST_DAEMON_URI,
+            TEST_DAEMON_URI,
+            function_name,
+            &arguments,
+            &signing_key,
+        )),
         function_name: function_name.to_string(),
-        arguments: args_json.as_bytes().to_vec(),
+        arguments,
         ..InvokeRequest::default()
     })
 }
@@ -266,23 +316,16 @@ fn invoke_request_from_device(
     function_name: &str,
     arguments: Vec<u8>,
 ) -> Request<InvokeRequest> {
+    let signing_key = test_device_signing_key();
     Request::new(InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: caller_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            callee: Some(AgentIdentity {
-                ura: TEST_DAEMON_URI.to_string(),
-                ..AgentIdentity::default()
-            }),
-            subject: Some(SubjectIdentity {
-                ura: TEST_DAEMON_URI.to_string(),
-                ..SubjectIdentity::default()
-            }),
-            invocation_nonce: vec![0x22; 16],
-            ..Envelope::default()
-        }),
+        envelope: Some(signed_test_envelope(
+            caller_ura,
+            TEST_DAEMON_URI,
+            TEST_DAEMON_URI,
+            function_name,
+            &arguments,
+            &signing_key,
+        )),
         function_name: function_name.to_string(),
         arguments,
         ..InvokeRequest::default()
@@ -315,8 +358,16 @@ use crate::services::invocation_transport::invoke_remote_initiator::{
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{BidiControl, EnvelopeOpen, InvocationTarget, InvokeBidiUp};
 fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
+    let signing_key = test_device_signing_key();
     EnvelopeOpen {
-        envelope: Some(test_envelope()),
+        envelope: Some(signed_test_envelope(
+            TEST_DAEMON_URI,
+            TEST_DAEMON_URI,
+            TEST_DAEMON_URI,
+            ability,
+            &initial_args,
+            &signing_key,
+        )),
         target: Some(InvocationTarget {
             ability_name: ability.to_string(),
             ..InvocationTarget::default()
@@ -328,16 +379,19 @@ fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
 }
 
 fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
-    let mut envelope = test_envelope();
-    envelope.callee = Some(AgentIdentity {
-        ura: callee_ura.to_string(),
-        ..AgentIdentity::default()
-    });
+    let ability = crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH;
+    let signing_key = test_device_signing_key();
     EnvelopeOpen {
-        envelope: Some(envelope),
+        envelope: Some(signed_test_envelope(
+            TEST_DAEMON_URI,
+            callee_ura,
+            callee_ura,
+            ability,
+            &[],
+            &signing_key,
+        )),
         target: Some(InvocationTarget {
-            ability_name: crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
-                .to_string(),
+            ability_name: ability.to_string(),
             ..InvocationTarget::default()
         }),
         ..EnvelopeOpen::default()

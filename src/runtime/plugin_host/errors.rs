@@ -59,6 +59,8 @@ pub enum PluginHostError {
     InvalidRuntimeLimit(&'static str),
     #[error("plugin manifest declares invalid declarative binding for {id}: {reason}")]
     InvalidDeclarativeBinding { id: String, reason: String },
+    #[error("plugin ability {ability:?} control-plane registration failed: {reason}")]
+    ControlPlaneRegistrationFailed { ability: String, reason: String },
     #[error(
         "plugin manifest entrypoint {declared:?} does not match compiled binding {expected:?}"
     )]
@@ -86,7 +88,9 @@ pub enum PluginHostError {
     InvalidAbilityDescriptor { path: PathBuf, reason: String },
     #[error("plugin package path {path} escapes package root {root}")]
     PackagePathEscapesRoot { root: PathBuf, path: PathBuf },
-    #[error("plugin ability descriptor for {ability:?} cannot be projected into registry manifest: {reason}")]
+    #[error(
+        "plugin ability descriptor for {ability:?} cannot be projected into registry manifest: {reason}"
+    )]
     DescriptorProjectionFailed { ability: String, reason: String },
     #[error("read plugin package path {path}: {source}")]
     ReadFailed {

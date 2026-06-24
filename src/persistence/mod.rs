@@ -53,9 +53,9 @@ pub mod context_store;
 /// `pr-drafts/PR-0-spec-daemon-invocation-server.md §1` for the
 /// listener invariants this module enforces at load time.
 pub mod daemon_config;
+pub(crate) mod file_lock;
 pub(crate) mod local_agents;
 pub(crate) mod owner_projections;
-pub(crate) mod policy_rules;
 /// Local resources registry — `~/.easynet/resources.json`. Maps a
 /// stable hardware identifier (CoreAudio/PulseAudio device UID, USB
 /// serial, EDID, camera device-path, …) to the canonical resource
@@ -67,4 +67,3 @@ pub(crate) mod policy_rules;
 pub mod resources;
 pub(crate) mod teach_grants;
 pub(crate) mod tenant_paths;
-pub(crate) mod trust_levels;

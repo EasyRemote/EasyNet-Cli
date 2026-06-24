@@ -3,10 +3,11 @@
 //
 // File: src/runtime/agents/media/mod.rs
 //
-// Real-handler home for the eight RFC-005 v3.2 media abilities.
-// PR2 stubbed every media handler in `media_abilities.rs`; PR3a
-// onwards swaps individual stubs out for real implementations one
-// at a time as consumers materialise.
+// Real-handler home for the RFC-005 v3.2 media abilities that
+// have progressed beyond the shared metadata/stub table in
+// `media_abilities.rs`. Real modules own registration for their
+// names; the stub table skips them rather than relying on
+// override precedence.
 //
 // Module layout
 // -------------

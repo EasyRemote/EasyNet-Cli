@@ -11,7 +11,7 @@
 // Why this exists
 // ---------------
 // Per RFC §1.4 the device-profile MUST mint canonical URAs for each
-// hosted Agent (consent, policy, mcp, llm-profile-per-sub-agent) on
+// hosted Agent (consent, mcp, llm-profile-per-sub-agent) on
 // first boot, then reuse them across daemon restarts. Without
 // persistence the device would re-mint URAs on every restart and
 // the hub would accumulate dead-but-present entries — eventually
@@ -24,7 +24,7 @@
 //   "host_device_agent_ura": "easynet:///r/<realm>/agent/<id>",
 //   "hosted_agents": [
 //     {
-//       "profile":            "consent" | "policy" | "mcp" | "llm",
+//       "profile":            "consent" | "mcp" | "llm",
 //       "name":               "default" | "claude" | "codex" | …,
 //       "agent_ura":          "easynet:///r/<realm>/agent/<id>",
 //       "signing_authority":  "hosted_by:<host_device_agent_ura>",
@@ -64,7 +64,7 @@ pub struct LocalAgentsFile {
     /// receipt body.
     #[serde(default)]
     pub host_device_agent_ura: String,
-    /// Hosted Agents (consent / policy / mcp / llm-per-sub-agent).
+    /// Hosted Agents (consent / mcp / llm-per-sub-agent).
     /// Order is insertion order; readers MUST NOT rely on order.
     #[serde(default)]
     pub hosted_agents: Vec<HostedAgentEntry>,
@@ -72,11 +72,11 @@ pub struct LocalAgentsFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostedAgentEntry {
-    /// One of `consent`, `policy`, `mcp`, `llm`. Free-form to allow
+    /// One of `consent`, `mcp`, `llm`. Free-form to allow
     /// future profiles without a schema migration.
     pub profile: String,
     /// Per-profile name. `"default"` for singleton profiles
-    /// (consent, policy, mcp); the sub-agent name for `llm`
+    /// (consent, mcp); the sub-agent name for `llm`
     /// (e.g. `"claude"`, `"codex"`).
     pub name: String,
     /// Canonical URA assigned by `federation.advertise_agent` (or
@@ -125,6 +125,31 @@ pub fn lookup_hosted_ura(file: &LocalAgentsFile, profile: &str, name: &str) -> O
         .iter()
         .find(|e| e.profile == profile && e.name == name)
         .map(|e| e.agent_ura.clone())
+}
+
+/// Resolve a hosted Agent by its display name across all profiles.
+///
+/// This helper is intentionally stricter than [`lookup_hosted_ura`]: CLI
+/// surfaces such as `ability learn --as <agent>` and runtime transfer handlers
+/// receive a human-facing agent name, not a `(profile, name)` pair. Returning an
+/// error on ambiguity prevents two profiles with the same display name from
+/// silently receiving authority for the wrong hosted URA.
+pub fn lookup_hosted_agent_by_name<'a>(
+    file: &'a LocalAgentsFile,
+    name: &str,
+) -> anyhow::Result<Option<&'a HostedAgentEntry>> {
+    let mut matches = file.hosted_agents.iter().filter(|entry| entry.name == name);
+    let Some(entry) = matches.next() else {
+        return Ok(None);
+    };
+    if let Some(other) = matches.next() {
+        anyhow::bail!(
+            "hosted agent name {name:?} is ambiguous across profiles {:?} and {:?}",
+            entry.profile,
+            other.profile
+        );
+    }
+    Ok(Some(entry))
 }
 
 /// Insert or update a hosted Agent entry. Returns `true` when an

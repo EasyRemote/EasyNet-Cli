@@ -176,11 +176,7 @@ mod tests {
 
         let missing = handle(
             Arc::clone(&plugin),
-            EnvelopeContext {
-                caller: Some(caller.to_string()),
-                subject: Some(ura.clone()),
-                ..EnvelopeContext::default()
-            },
+            EnvelopeContext::for_test(caller, ura.clone()),
             json!({"session_id": "rd-consent-bound", "session_token": token}),
         )
         .unwrap_err();

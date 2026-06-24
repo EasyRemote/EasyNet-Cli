@@ -19,12 +19,13 @@ use easynet_axon::invocation::{
     AxiomBinding, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
 };
 
+use crate::runtime::local_invocation_identity::LocalSystemKeyResolver;
+
 /// Construct an `Arc<LocalRuntime>` wired with:
 ///
-/// - the caller-key resolver supplied by the services layer (so
-///   admission inside `invoke_externally_signed_*` verifies caller
-///   signatures against the daemon-owned trust set without runtime
-///   depending on services internals);
+/// - the caller-key resolver supplied by the services layer, wrapped with the
+///   daemon-local `_system.local` resolver branch, so external signed calls
+///   and daemon-internal signed calls both use Axon's public admission path;
 /// - the ledger sink backed by `InvocationLedger` (so every
 ///   terminal invocation persists into `<ledger_dir>/invocations.redb`
 ///   without the dispatch arm needing to manually build a record).
@@ -52,9 +53,7 @@ pub fn configure_local_runtime(
     key_resolver: Option<Arc<dyn KeyResolver>>,
     ledger: Option<Arc<InvocationLedger>>,
 ) {
-    if let Some(key_resolver) = key_resolver {
-        runtime.set_admission_key_resolver(key_resolver);
-    }
+    runtime.set_admission_key_resolver(Arc::new(LocalSystemKeyResolver::new(key_resolver)));
     if let Some(ledger) = ledger {
         runtime.set_ledger_sink(
             LedgerSink::new(ledger)

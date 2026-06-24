@@ -287,9 +287,9 @@ pub(crate) fn register_project_abilities(
     reg: &AxonAbilityCatalog,
     user: &str,
     project_id: &str,
-) -> usize {
-    fetch::register_fetch_ability(reg, user, project_id);
-    1 + api::register_api_abilities_for_project(reg, user, project_id)
+) -> anyhow::Result<usize> {
+    fetch::register_fetch_ability(reg, user, project_id)?;
+    Ok(1 + api::register_api_abilities_for_project(reg, user, project_id)?)
 }
 
 pub(crate) fn registered_project_ability_names(
@@ -312,10 +312,14 @@ pub(crate) fn registered_project_ability_names(
     names
 }
 
-pub(crate) fn unregister_project_abilities(reg: &AxonAbilityCatalog, names: Vec<String>) {
+pub(crate) fn unregister_project_abilities(
+    reg: &AxonAbilityCatalog,
+    names: Vec<String>,
+) -> anyhow::Result<()> {
     for name in names {
-        reg.hot_unregister(&name);
+        reg.hot_unregister(&name)?;
     }
+    Ok(())
 }
 
 fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
@@ -328,7 +332,16 @@ fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
         .collect();
     project_ids.sort();
     for project_id in project_ids {
-        register_project_abilities(reg, user, &project_id);
+        if let Err(error) = register_project_abilities(reg, user, &project_id) {
+            let error_message = error.to_string();
+            crate::op_event!(
+                component = pages,
+                kind = restore_project_abilities_failed,
+                user = user,
+                project_id = project_id.as_str(),
+                error = error_message.as_str(),
+            );
+        }
     }
 }
 

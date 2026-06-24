@@ -176,7 +176,6 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // Lookup tables from bootstrap_outcomes for the descriptor
     // advertise step that follows.
     let consent_ura = first_ura(&bootstrap_outcomes, "consent", "default");
-    let policy_ura = first_ura(&bootstrap_outcomes, "policy", "default");
     let mcp_ura = first_ura(&bootstrap_outcomes, "mcp", "default");
     let llm_uras: Vec<(String, String)> = bootstrap_outcomes
         .iter()
@@ -206,7 +205,6 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     let mut descriptors = profiles_mod::all_descriptors_for_host(
         &plan.host_device_ura,
         consent_ura.as_deref(),
-        policy_ura.as_deref(),
         mcp_ura.as_deref(),
         &llm_uras,
     );
@@ -608,7 +606,7 @@ fn build_register_args(
 /// `published_ability_names` + per-agent abilities.
 fn collect_daemon_owned_ability_names() -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    // Device-profile + consent + policy + mcp + llm published
+    // Device-profile + consent + mcp + llm published
     // names — these are the names `meta.list_abilities` would
     // surface to a remote caller. Driven by the same source the
     // runtime-local registry surfaces via list_tools.
@@ -786,7 +784,6 @@ mod tests {
             user_id: "test-user".into(),
             host_device_ura: host.into(),
             consent: true,
-            policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "claude".into(),
@@ -994,7 +991,6 @@ mod tests {
             user_id: "alice".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
-            policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "alice".into(),
@@ -1106,7 +1102,6 @@ mod tests {
             user_id: "alice".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
-            policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "alice".into(),

@@ -57,12 +57,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn env_for_caller(
     subject: &str,
     caller: &str,
 ) -> EnvelopeContext {
-    EnvelopeContext {
-        caller: Some(caller.to_string()),
-        subject: Some(subject.to_string()),
-        causal_context: Some(default_consent_receipt()),
-        ..EnvelopeContext::default()
-    }
+    EnvelopeContext::for_test(caller, subject).with_causal_context(default_consent_receipt())
 }
 
 pub(in crate::plugins::builtin::remote_desktop) fn env_for_caller_with_causal(
@@ -70,10 +65,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn env_for_caller_with_causal(
     caller: &str,
     causal_context: serde_json::Value,
 ) -> EnvelopeContext {
-    EnvelopeContext {
-        causal_context: Some(causal_context),
-        ..env_for_caller(subject, caller)
-    }
+    env_for_caller(subject, caller).with_causal_context(causal_context)
 }
 
 // Borrowed receipt-URA shape (`resource/<owner>.invocations/<id>`, the

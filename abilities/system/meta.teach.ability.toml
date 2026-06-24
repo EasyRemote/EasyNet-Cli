@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "meta.teach"
+description = "Grant one local agent permission to acquire a specific advertised ability. The grant is explicit, same-device, and does not execute transferred code."
+
+[input_schema]
+type = "object"
+required = ["ability", "learner_ura"]
+additionalProperties = false
+
+[input_schema.properties.ability]
+type = "string"
+description = "Owner-local ability name to teach, for example mentor.quote."
+
+[input_schema.properties.learner_ura]
+type = "string"
+description = "Agent URA allowed to acquire the ability."

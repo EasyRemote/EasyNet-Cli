@@ -155,6 +155,8 @@ pub(crate) fn atomic_write_with_permissions(
         let _ = fs::remove_file(&tmp);
         return Err(e.into());
     }
+    let dir_handle = File::open(dir)?;
+    dir_handle.sync_all()?;
     Ok(())
 }
 

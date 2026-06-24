@@ -5,8 +5,9 @@
 // Description: CLI façade for Axon-owned URA builders and parser.
 //
 // URA is protocol state owned by Axon. This file deliberately contains
-// no grammar implementation and no string construction logic; it only
-// re-exports `easynet_axon::ura` so existing CLI modules can keep using
+// no grammar implementation; it re-exports `easynet_axon::ura` and
+// centralizes the few CLI-local projections that sit immediately on top
+// of Axon's canonical builders. Existing CLI modules can keep using
 // `crate::ura::*` while the source of truth remains in Axon SDK.
 //
 // Canonical shapes, all built by Axon:
@@ -36,6 +37,20 @@
 //   to keep that invariant enforceable.
 
 pub use easynet_axon::ura::*;
+
+/// Canonical whole-realm prefix used by directory/federation filters.
+///
+/// Directory queries use prefix matching instead of a concrete role URA.
+/// Axon exposes canonical role builders, so the CLI derives the prefix
+/// from the canonical Hub URA here instead of letting callers assemble
+/// scheme fragments.
+pub fn realm_prefix_ura(realm: &str) -> anyhow::Result<String> {
+    let hub = hub_ura(realm);
+    let prefix = hub.strip_suffix("/hub").ok_or_else(|| {
+        anyhow::anyhow!("Axon hub_ura returned unexpected hub identity shape: {hub:?}")
+    })?;
+    Ok(format!("{prefix}/"))
+}
 
 /// Parsed canonical Ability URA selector.
 ///
@@ -234,6 +249,14 @@ mod tests {
                 "skill/alive-video"
             ),
             "easynet:///r/localhost/resource/agent.dev.frontend-engineer/skill/alive-video"
+        );
+    }
+
+    #[test]
+    fn realm_prefix_ura_is_derived_from_canonical_hub_builder() {
+        assert_eq!(
+            realm_prefix_ura("localhost").expect("realm prefix"),
+            "easynet:///r/localhost/"
         );
     }
 

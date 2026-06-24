@@ -19,13 +19,37 @@
 
 use anyhow::Context;
 use clap::Args;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::runtime::agents::teach_ability::{ACQUIRE, FORGET, TEACH};
-use crate::support::local_invoke::{
-    invoke_local_ability, invoke_local_ability_with_invocation_meta,
-};
+use crate::support::local_invoke::invoke_local_ability_with_hosted_agent_delegation;
 use crate::support::output;
+
+/// Typed projection of the `meta.teach` daemon response. Parsing the
+/// response (rather than reaching into an untyped `Value` with an
+/// `unwrap_or` fallback) means a missing field fails the command
+/// loudly instead of rendering a placeholder success — the CLI never
+/// reports a transfer it cannot describe.
+#[derive(Debug, Deserialize)]
+struct TaughtResponse {
+    taught: String,
+    execution_mode: String,
+}
+
+/// Typed projection of the `meta.acquire` daemon response.
+#[derive(Debug, Deserialize)]
+struct LearnedResponse {
+    new_ura: String,
+    execution_mode: String,
+}
+
+/// Typed projection of the `meta.forget` daemon response.
+#[derive(Debug, Deserialize)]
+struct ForgottenResponse {
+    forgotten: String,
+    had_learned_from: String,
+}
 
 #[derive(Debug, Args)]
 pub struct TeachArgs {
@@ -65,19 +89,33 @@ pub struct ForgetArgs {
 
 /// Compute half of `teach` (e2e surface).
 pub fn execute_teach(args: &TeachArgs) -> anyhow::Result<Value> {
-    invoke_local_ability(
+    let owner_ura = resolve_owner_ura_from_ability(&args.ability)?;
+    invoke_local_ability_with_hosted_agent_delegation(
         TEACH,
         json!({ "ability": args.ability, "learner_ura": args.to }),
+        None,
+        &[],
+        None,
+        None,
+        &owner_ura,
     )
+    .map(|(resp, _meta)| resp)
     .context("confer the teach grant")
 }
 
 /// Compute half of `forget` (e2e surface).
 pub fn execute_forget(args: &ForgetArgs) -> anyhow::Result<Value> {
-    invoke_local_ability(
+    let agent_ura = resolve_learner_ura(&args.agent)?;
+    invoke_local_ability_with_hosted_agent_delegation(
         FORGET,
         json!({ "ability": args.ability, "agent": args.agent }),
+        None,
+        &[],
+        None,
+        None,
+        &agent_ura,
     )
+    .map(|(resp, _meta)| resp)
     .context("forget the learned ability")
 }
 
@@ -90,11 +128,11 @@ pub fn run_teach(args: TeachArgs) -> anyhow::Result<()> {
         );
     }
     let resp = execute_teach(&args)?;
+    let taught: TaughtResponse =
+        serde_json::from_value(resp).context("parse meta.teach response")?;
     output::success(&format!(
         "taught {} → {} (execution_mode: {})",
-        resp["taught"].as_str().unwrap_or("?"),
-        args.to,
-        resp["execution_mode"].as_str().unwrap_or("?"),
+        taught.taught, args.to, taught.execution_mode,
     ));
     Ok(())
 }
@@ -102,16 +140,37 @@ pub fn run_teach(args: TeachArgs) -> anyhow::Result<()> {
 /// Compute half of `learn` (e2e surface): the acquisition response
 /// plus the invocation envelope echo.
 pub fn execute_learn(args: &LearnArgs) -> anyhow::Result<(Value, Value)> {
-    invoke_local_ability_with_invocation_meta(
+    let learner_ura = resolve_learner_ura(&args.learner)?;
+    invoke_local_ability_with_hosted_agent_delegation(
         ACQUIRE,
         json!({ "ability_ura": args.ability_ura, "learner": args.learner }),
         Some(args.ability_ura.clone()),
         &[],
         None,
         None,
-        None,
+        &learner_ura,
     )
     .context("acquire the taught ability")
+}
+
+fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
+    let local = crate::persistence::local_agents::load()
+        .with_context(|| format!("resolve learner {learner:?} from local-agents.json"))?;
+    let entry = crate::persistence::local_agents::lookup_hosted_agent_by_name(&local, learner)?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "learner {learner:?} has no persisted local Agent URA; run agent publish/join \
+                 before acquiring taught abilities"
+            )
+        })?;
+    Ok(entry.agent_ura.clone())
+}
+
+fn resolve_owner_ura_from_ability(ability: &str) -> anyhow::Result<String> {
+    let (owner, _ability_name) = ability
+        .split_once('.')
+        .ok_or_else(|| anyhow::anyhow!("teach ability must be in <agent>.<ability> form"))?;
+    resolve_learner_ura(owner)
 }
 
 pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
@@ -123,14 +182,10 @@ pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
         );
     }
     let (resp, _meta) = execute_learn(&args)?;
-    output::success(&format!(
-        "learned · new ura: {}",
-        resp["new_ura"].as_str().unwrap_or("?"),
-    ));
-    output::detail(
-        "execution_mode",
-        resp["execution_mode"].as_str().unwrap_or("?"),
-    );
+    let learned: LearnedResponse =
+        serde_json::from_value(resp).context("parse meta.acquire response")?;
+    output::success(&format!("learned · new ura: {}", learned.new_ura));
+    output::detail("execution_mode", &learned.execution_mode);
     Ok(())
 }
 
@@ -143,10 +198,11 @@ pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
         );
     }
     let resp = execute_forget(&args)?;
+    let forgotten: ForgottenResponse =
+        serde_json::from_value(resp).context("parse meta.forget response")?;
     output::success(&format!(
         "forgot {} (was learned from {})",
-        resp["forgotten"].as_str().unwrap_or("?"),
-        resp["had_learned_from"].as_str().unwrap_or("?"),
+        forgotten.forgotten, forgotten.had_learned_from,
     ));
     Ok(())
 }

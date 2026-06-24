@@ -10,47 +10,135 @@
 use std::sync::Arc;
 
 use easynet_axon::invocation::{
-    AbilityFrame, AgentIdentity, BidiInputSender, BidiOutputReceiver, CausalContext,
-    InvocationHandle, InvocationState, LocalRuntime, StreamingInvocationHandle, SubjectIdentity,
-    UraProfile,
+    fresh_nonce, AbilityFrame, AgentIdentity, BidiInputSender, BidiOutputReceiver,
+    CallMode as AxonInvocationCallMode, CausalContext, DescriptorBoundEnvelope,
+    DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest, InvocationHandle,
+    InvocationState, LocalRuntime, StreamingInvocationHandle, SubjectIdentity, UraProfile,
 };
-use ed25519_dalek::SigningKey;
 use serde_json::Value;
 
+use crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+use crate::runtime::axon_bridge::local_runtime_request::{
+    LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
+};
+use crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire;
 use crate::runtime::invocation_target::{InvocationTarget, TargetScope};
+use crate::runtime::local_invocation_identity::{
+    agent_identity, local_device_ura, system_agent_identity,
+};
 
 pub struct RuntimeBidiSource {
     pub to_client: BidiInputSender,
     pub from_client: BidiOutputReceiver,
 }
 
-const LOCAL_CALLER_URA: &str = "easynet:///r/_system/agent/_system.local";
-const LOCAL_CALLEE_URA: &str = "easynet:///r/_system/agent/_system.local";
-const LOCAL_SUBJECT_SIGNING_SEED: [u8; 32] = [0x45; 32];
-
 fn local_identity(ura: &str) -> AgentIdentity {
-    AgentIdentity::new(ura, UraProfile::EasynetStrictV2)
+    agent_identity(ura)
 }
 
 fn local_subject(ura: String) -> SubjectIdentity {
     SubjectIdentity::new(ura, UraProfile::EasynetStrictV2)
 }
 
-fn local_invocation_subject(target: &InvocationTarget) -> SubjectIdentity {
-    local_subject(
-        target
-            .subject
-            .clone()
-            .unwrap_or_else(|| LOCAL_CALLEE_URA.to_string()),
-    )
+fn local_invocation_callee_ura(target: &InvocationTarget) -> String {
+    if let Ok(selector) = crate::ura::AbilitySelector::parse(&target.ability) {
+        return selector.owner_ura().to_string();
+    }
+
+    local_device_ura()
 }
 
-fn local_subject_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&LOCAL_SUBJECT_SIGNING_SEED)
+fn explicit_subject_ura(target: &InvocationTarget) -> Option<String> {
+    target
+        .subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|subject| !subject.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalRuntimeSubjectPolicy {
+    Explicit(String),
+    DescriptorDefault(String),
+}
+
+impl LocalRuntimeSubjectPolicy {
+    fn from_target(target: &InvocationTarget, callee_ura: &str) -> Result<Self, String> {
+        if let Some(subject) = explicit_subject_ura(target) {
+            return Self::checked(subject, "InvocationTarget.subject").map(Self::Explicit);
+        }
+        let descriptor_default = crate::ura::AbilitySelector::parse(&target.ability)
+            .ok()
+            .filter(|selector| selector.owner_kind() == "hub")
+            .map(|selector| selector.ability_ura().to_string())
+            .unwrap_or_else(|| callee_ura.to_string());
+        Self::checked(descriptor_default, "descriptor default subject").map(Self::DescriptorDefault)
+    }
+
+    fn into_subject_identity(self) -> SubjectIdentity {
+        match self {
+            Self::Explicit(subject) | Self::DescriptorDefault(subject) => local_subject(subject),
+        }
+    }
+
+    fn checked(value: String, field: &str) -> Result<String, String> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(format!("{field} must not be empty"));
+        }
+        crate::ura::parse_ura(value).map_err(|err| format!("{field} is not a valid URA: {err}"))?;
+        Ok(value.to_string())
+    }
+}
+
+fn local_invocation_subject(
+    target: &InvocationTarget,
+    callee_ura: &str,
+) -> Result<SubjectIdentity, String> {
+    Ok(LocalRuntimeSubjectPolicy::from_target(target, callee_ura)?.into_subject_identity())
 }
 
 fn local_invocation_causal_context(target: &InvocationTarget) -> CausalContext {
     target.causal_context.clone().unwrap_or(CausalContext::None)
+}
+
+fn local_descriptor_bound_envelope(
+    target: &InvocationTarget,
+    payload: &[u8],
+) -> Result<DescriptorBoundEnvelope, String> {
+    let callee_ura = local_invocation_callee_ura(target);
+    let subject = local_invocation_subject(target, &callee_ura)?;
+    let ability = ability_descriptor_ref_for_wire(
+        &callee_ura,
+        &target.ability,
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+    )
+    .map_err(|err| format!("{err}"))?;
+    DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
+        caller: system_agent_identity(),
+        callee: local_identity(&callee_ura),
+        ability,
+        subject,
+        invocation_nonce: fresh_nonce(),
+        causal_context: local_invocation_causal_context(target),
+        args_bytes: payload,
+    })
+    .map_err(|err| format!("{err}"))
+}
+
+fn local_system_request(
+    mode: AxonInvocationCallMode,
+    target: &InvocationTarget,
+    payload: Vec<u8>,
+) -> Result<DescriptorBoundInvocationRequest, String> {
+    let envelope = local_descriptor_bound_envelope(target, &payload)?;
+    LocalRuntimeRequestFactory::request_for(
+        mode,
+        LocalRuntimeIngress::LocalSystem { envelope, payload },
+        LocalRuntimeRequestOptions::default(),
+    )
+    .map_err(|err| format!("{err}"))
 }
 
 pub fn encode_json_payload(value: &Value) -> Result<Vec<u8>, String> {
@@ -125,20 +213,9 @@ pub async fn open_local_stream(
 ) -> Result<StreamingInvocationHandle, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    let signing_key = local_subject_signing_key();
+    let request = local_system_request(AxonInvocationCallMode::Stream, &target, payload)?;
     let (handle, _) = runtime
-        .invoke_signed_stream_async(
-            local_identity(LOCAL_CALLER_URA),
-            local_identity(LOCAL_CALLEE_URA),
-            &target.ability,
-            payload,
-            Some(local_invocation_subject(&target)),
-            local_invocation_causal_context(&target),
-            None,
-            &signing_key,
-            None,
-            None,
-        )
+        .invoke_descriptor_bound_stream_request_async(request)
         .await
         .map_err(|err| format!("{err}"))?;
     Ok(handle)
@@ -150,20 +227,9 @@ pub async fn open_local_bidi(
 ) -> Result<RuntimeBidiSource, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    let signing_key = local_subject_signing_key();
+    let request = local_system_request(AxonInvocationCallMode::Bidi, &target, payload)?;
     let (handle, _) = runtime
-        .invoke_signed_bidi_async(
-            local_identity(LOCAL_CALLER_URA),
-            local_identity(LOCAL_CALLEE_URA),
-            &target.ability,
-            payload,
-            Some(local_invocation_subject(&target)),
-            local_invocation_causal_context(&target),
-            None,
-            &signing_key,
-            None,
-            None,
-        )
+        .invoke_descriptor_bound_bidi_request_async(request)
         .await
         .map_err(|err| format!("{err}"))?;
     let (to_client, from_client) = handle.split();
@@ -189,20 +255,9 @@ pub async fn invoke_local_rpc(
 ) -> Result<Value, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    let signing_key = local_subject_signing_key();
+    let request = local_system_request(AxonInvocationCallMode::Rpc, &target, payload)?;
     let (handle, _) = runtime
-        .invoke_signed_async(
-            local_identity(LOCAL_CALLER_URA),
-            local_identity(LOCAL_CALLEE_URA),
-            &target.ability,
-            payload,
-            Some(local_invocation_subject(&target)),
-            local_invocation_causal_context(&target),
-            None,
-            &signing_key,
-            None,
-            None,
-        )
+        .invoke_descriptor_bound_request_async(request)
         .await
         .map_err(|err| format!("{err}"))?;
     rpc_value_from_handle(handle).await
@@ -250,4 +305,60 @@ pub async fn drain_local_stream_frames(
         }
     }
     Ok(frames)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::invocation_target::CallMode;
+    use serde_json::json;
+
+    fn target(ability: String, subject: Option<String>) -> InvocationTarget {
+        InvocationTarget {
+            scope: TargetScope::Local,
+            ability,
+            normalized_args: json!({}),
+            call_mode: CallMode::Rpc,
+            subject,
+            causal_context: None,
+        }
+    }
+
+    #[test]
+    fn canonical_ability_ura_projects_owner_as_callee() {
+        let owner = crate::ura::device_ura("acme", "dev-a");
+        let ability = crate::ura::owner_ability_ura(&owner, "fs.read").unwrap();
+        let envelope = local_descriptor_bound_envelope(&target(ability.clone(), None), b"{}")
+            .expect("descriptor-bound envelope");
+
+        assert_eq!(envelope.envelope().callee.ura, owner);
+        assert_eq!(envelope.envelope().subject.ura, owner);
+        assert_eq!(envelope.envelope().ability, ability);
+    }
+
+    #[test]
+    fn resource_subject_does_not_become_callee() {
+        let subject = crate::ura::resource_dot_ura("acme", "device.dev-a.files", "tmp/report.txt");
+        let envelope = local_descriptor_bound_envelope(
+            &target("fs.read".to_string(), Some(subject.clone())),
+            b"{}",
+        )
+        .expect("descriptor-bound envelope");
+
+        assert_eq!(envelope.envelope().callee.ura, local_device_ura());
+        assert_eq!(envelope.envelope().subject.ura, subject);
+    }
+
+    #[test]
+    fn explicit_device_subject_is_not_reclassified_as_callee() {
+        let subject = crate::ura::device_ura("acme", "dev-b");
+        let envelope = local_descriptor_bound_envelope(
+            &target("device.inspect".to_string(), Some(subject.clone())),
+            b"{}",
+        )
+        .expect("descriptor-bound envelope");
+
+        assert_eq!(envelope.envelope().callee.ura, local_device_ura());
+        assert_eq!(envelope.envelope().subject.ura, subject);
+    }
 }

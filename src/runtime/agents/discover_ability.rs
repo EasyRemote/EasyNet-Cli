@@ -6,8 +6,8 @@
 // Per-agent ability discovery walking the three-tier ladder taught
 // by the `delegate` SKILL.md:
 //
-//   Tier 1  scope = "self"     — abilities owned by the calling agent
-//   Tier 2  scope = "device"   — abilities published by other agents
+//   Tier 1  scope = "self"     — abilities advertised by the calling agent
+//   Tier 2  scope = "device"   — abilities advertised by other agents
 //                                on this device whose [access].
 //                                visibility ≥ device
 //   Tier 3  scope = "user"     — abilities published within the caller's
@@ -64,7 +64,7 @@
 // Copyright (c) 2026 EasyNet.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
 
@@ -75,6 +75,219 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 /// Verb portion of the per-agent discover ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.discover`.
 pub const ABILITY_VERB: &str = "discover";
+/// Daemon-owned aggregate discover entry used by top-level
+/// `easynet discover` when the caller does not select a self agent.
+/// The owner is already `OwnerKind::Device`, so the dispatch key must
+/// stay owner-local instead of duplicating a `device.` prefix.
+pub const DEVICE_DISCOVER_ABILITY: &str = "discover";
+
+/// Shared resolver object for federation-backed discover tiers.
+///
+/// The discover handler owns the ladder/ranking projection; it does
+/// not own how a daemon reaches the realm directory. Production daemon
+/// boot injects a local read-model resolver so `<agent>.discover`
+/// does not re-enter the daemon over its own UDS. Bridge-only harnesses
+/// use [`BridgeDiscoverFederationResolver`] to preserve the historical
+/// Axon runtime path.
+pub type SharedDiscoverFederationResolver = Arc<dyn DiscoverFederationResolver>;
+
+/// Error classes for the federation tier of `<agent>.discover`.
+#[derive(Debug, thiserror::Error)]
+pub enum DiscoverFederationResolveError {
+    /// The daemon has no usable realm-directory resolver for this
+    /// process. Caller surfaces this as a typed degradation envelope,
+    /// not as a failed discover command.
+    #[error("{0}")]
+    NotJoined(String),
+    /// A configured resolver exists but the lookup failed.
+    #[error("{0}")]
+    Unavailable(String),
+}
+
+/// Dependency boundary between the discover ladder and the realm
+/// directory implementation.
+pub trait DiscoverFederationResolver: Send + Sync {
+    /// Resolve active agents for the supplied tenant/realm scope.
+    fn resolve_agents(
+        &self,
+        tenant: &str,
+        realm: &str,
+        caller_ura: String,
+        tenant_filter: Option<String>,
+    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>;
+}
+
+/// Axon-bridge resolver used by historical bridge runtimes and
+/// narrow unit tests that do not boot the daemon Invocation service.
+#[derive(Debug, Default)]
+pub struct BridgeDiscoverFederationResolver;
+
+impl DiscoverFederationResolver for BridgeDiscoverFederationResolver {
+    fn resolve_agents(
+        &self,
+        tenant: &str,
+        realm: &str,
+        caller_ura: String,
+        tenant_filter: Option<String>,
+    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>
+    {
+        let (bridge, _) = crate::persistence::config::load_and_connect().map_err(|e| {
+            DiscoverFederationResolveError::NotJoined(format!(
+                "no usable Axon bridge runtime ({e}); start the daemon and join a realm before \
+                 scope=\"user\" or scope=\"public\""
+            ))
+        })?;
+        let invoker =
+            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(&bridge, caller_ura);
+        crate::runtime::advertise::resolve_agents_with_filter(
+            &invoker,
+            tenant,
+            realm,
+            "",
+            true,
+            tenant_filter,
+        )
+        .map_err(DiscoverFederationResolveError::Unavailable)
+    }
+}
+
+/// Late-bound resolver cell for boot paths where the agent registry is
+/// built before the daemon Invocation transport constructs its
+/// directory stores.
+#[derive(Default)]
+pub struct DeferredDiscoverFederationResolver {
+    resolver: OnceLock<SharedDiscoverFederationResolver>,
+}
+
+impl DeferredDiscoverFederationResolver {
+    /// Create an empty late-bound resolver.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Attach the concrete resolver exactly once.
+    pub fn set(
+        &self,
+        resolver: SharedDiscoverFederationResolver,
+    ) -> Result<(), SharedDiscoverFederationResolver> {
+        self.resolver.set(resolver)
+    }
+}
+
+impl DiscoverFederationResolver for DeferredDiscoverFederationResolver {
+    fn resolve_agents(
+        &self,
+        tenant: &str,
+        realm: &str,
+        caller_ura: String,
+        tenant_filter: Option<String>,
+    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>
+    {
+        let Some(resolver) = self.resolver.get() else {
+            return Err(DiscoverFederationResolveError::NotJoined(
+                "daemon directory resolver is not attached yet; retry after Invocation transport boot"
+                    .to_string(),
+            ));
+        };
+        resolver.resolve_agents(tenant, realm, caller_ura, tenant_filter)
+    }
+}
+
+/// Daemon-local federation resolver backed by the same read models
+/// that `federation.advertise_agent` and `federation.advertise_abilities`
+/// update.
+#[cfg(feature = "axon-pb")]
+pub struct LocalDirectoryDiscoverFederationResolver {
+    presence: Arc<crate::services::presence_registry::PresenceRegistry>,
+    advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
+    ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
+    self_device_ura: Option<String>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl LocalDirectoryDiscoverFederationResolver {
+    /// Construct a resolver over daemon-owned directory stores.
+    #[must_use]
+    pub fn new(
+        presence: Arc<crate::services::presence_registry::PresenceRegistry>,
+        advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
+        ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
+        self_device_ura: Option<String>,
+    ) -> Self {
+        Self {
+            presence,
+            advertised_agents,
+            ability_catalog,
+            self_device_ura,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
+    fn resolve_agents(
+        &self,
+        tenant: &str,
+        realm: &str,
+        _caller_ura: String,
+        tenant_filter: Option<String>,
+    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>
+    {
+        let ura_prefix = local_resolve_prefix(tenant, realm, tenant_filter.as_deref())?;
+        let request = crate::services::invocation_transport::federation_wrappers::ResolveRequest {
+            ura_prefix,
+            include_abilities: true,
+            filter: None,
+        };
+        let response = crate::services::invocation_transport::federation_wrappers::handle_resolve(
+            &request,
+            &self.presence,
+            Some(self.advertised_agents.as_ref()),
+            Some(self.ability_catalog.as_ref()),
+            self.self_device_ura.as_deref(),
+        );
+        let value = serde_json::to_value(response)
+            .map_err(|e| DiscoverFederationResolveError::Unavailable(e.to_string()))?;
+        let receipt: crate::runtime::federation_client::ResolveReceipt =
+            crate::runtime::federation_client::parse_receipt_value(&value).map_err(|e| {
+                DiscoverFederationResolveError::Unavailable(format!(
+                    "parse local federation.resolve response: {e}"
+                ))
+            })?;
+        Ok(receipt.agents)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn local_resolve_prefix(
+    tenant: &str,
+    realm: &str,
+    tenant_filter: Option<&str>,
+) -> Result<Option<String>, DiscoverFederationResolveError> {
+    let filter = tenant_filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let realm_segment = match filter {
+        Some("*") => return Ok(None),
+        Some(explicit_tenant) => explicit_tenant,
+        None => {
+            if !realm.trim().is_empty() {
+                realm.trim()
+            } else {
+                tenant.trim()
+            }
+        }
+    };
+    if realm_segment.is_empty() {
+        return Err(DiscoverFederationResolveError::Unavailable(
+            "local federation.resolve cannot derive a tenant/realm prefix".to_string(),
+        ));
+    }
+    crate::ura::realm_prefix_ura(realm_segment)
+        .map(Some)
+        .map_err(|err| DiscoverFederationResolveError::Unavailable(err.to_string()))
+}
 
 /// Register `<agent_name>.discover` on the registry. Each agent gets
 /// its own copy of this self-bundle ability — the handler closes over
@@ -92,6 +305,26 @@ pub fn register_for_agent<F>(
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
+    register_for_agent_with_resolver(
+        reg,
+        agent_name,
+        agent_registry_provider,
+        dispatch_registry_handle,
+        Arc::new(BridgeDiscoverFederationResolver),
+    );
+}
+
+/// Same as [`register_for_agent`] with an explicit federation
+/// resolver dependency.
+pub fn register_for_agent_with_resolver<F>(
+    reg: &mut AxonAbilityCatalog,
+    agent_name: String,
+    agent_registry_provider: F,
+    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+    federation_resolver: SharedDiscoverFederationResolver,
+) where
+    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+{
     use crate::runtime::ability_dispatch::OwnerKind;
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
@@ -100,7 +333,48 @@ pub fn register_for_agent<F>(
         &qualified,
         OwnerKind::Agent(agent_name),
         manifest(),
-        Arc::new(move |args: Value| dispatch(&agent, &provider, &dispatch_registry_handle, args)),
+        Arc::new(move |args: Value| {
+            dispatch(
+                &agent,
+                &provider,
+                &dispatch_registry_handle,
+                federation_resolver.as_ref(),
+                args,
+            )
+        }),
+    );
+}
+
+/// Register the daemon-owned device aggregate discover entry.
+///
+/// This is intentionally a thin owner wrapper over [`dispatch`], not a
+/// second discovery implementation. Passing an empty `self_agent` means local
+/// fan-in has no self tier: `visibility = self` helpers stay hidden and the
+/// top-level CLI sees the device aggregate without choosing an arbitrary
+/// first agent as caller identity.
+pub fn register_device_aggregate_with_resolver<F>(
+    reg: &mut AxonAbilityCatalog,
+    agent_registry_provider: F,
+    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+    federation_resolver: SharedDiscoverFederationResolver,
+) where
+    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+{
+    use crate::runtime::ability_dispatch::OwnerKind;
+    let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
+    reg.register_rpc_with_spec(
+        DEVICE_DISCOVER_ABILITY,
+        OwnerKind::Device,
+        manifest(),
+        Arc::new(move |args: Value| {
+            dispatch(
+                "",
+                &provider,
+                &dispatch_registry_handle,
+                federation_resolver.as_ref(),
+                args,
+            )
+        }),
     );
 }
 
@@ -124,6 +398,7 @@ pub fn dispatch(
     self_agent: &str,
     agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+    federation_resolver: &dyn DiscoverFederationResolver,
     args: Value,
 ) -> anyhow::Result<Value> {
     // Provider routing happens BEFORE scope/query parsing because the
@@ -170,11 +445,21 @@ pub fn dispatch(
         //                                  all. Surfaced as ok with
         //                                  `candidates = []`, not as
         //                                  an error.
-        return resolve_via_federation(scope, query.as_deref(), top_k);
+        return resolve_via_federation(federation_resolver, scope, query.as_deref(), top_k);
     }
 
     let agents = agent_registry_provider();
-    let local_agent_uras = LocalAgentAbilityOwners::load();
+    let local_agent_uras = match LocalAgentAbilityOwners::load() {
+        Ok(owners) => owners,
+        Err(error) => {
+            return Ok(error_envelope(
+                "local_agents_unavailable",
+                &format!("cannot read local agent identity projection: {error}"),
+                scope,
+                query.as_deref(),
+            ));
+        }
+    };
     let mut rows: Vec<Candidate> = Vec::new();
     for (peer_name, peer_entry) in agents.agents.iter() {
         let manifests = crate::runtime::abilities::manifests_for_shared(peer_name, peer_entry);
@@ -208,6 +493,8 @@ pub fn dispatch(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.qualified_name.cmp(&b.qualified_name))
     });
+    let source_count = rows.len();
+    let source_truncated = source_count > top_k;
     rows.truncate(top_k);
 
     let candidates: Vec<Value> = rows.iter().map(Candidate::to_json).collect();
@@ -215,6 +502,12 @@ pub fn dispatch(
         "candidates": candidates,
         "scope": scope.as_str(),
         "query": query,
+        "source": {
+            "available": source_count,
+            "returned": rows.len(),
+            "limit": top_k,
+            "truncated": source_truncated,
+        },
     }))
 }
 
@@ -277,25 +570,11 @@ fn strip_provider_field(args: &Value) -> Value {
 /// outweighs the perf win. If realm discovery becomes hot, swap to a
 /// stashed `BridgePool` here without touching callers.
 fn resolve_via_federation(
+    federation_resolver: &dyn DiscoverFederationResolver,
     scope: Scope,
     query: Option<&str>,
     top_k: usize,
 ) -> anyhow::Result<Value> {
-    let (bridge, state) = match crate::persistence::config::load_and_connect() {
-        Ok(pair) => pair,
-        Err(e) => {
-            return Ok(error_envelope(
-                "federation_not_joined",
-                &format!(
-                    "no usable runtime state ({e}); start the daemon and join \
-                     a realm before scope=\"user\" or scope=\"public\""
-                ),
-                scope,
-                query,
-            ));
-        }
-    };
-
     let creds = match crate::persistence::config::load_credentials() {
         Ok(c) => c,
         Err(_) => {
@@ -313,7 +592,6 @@ fn resolve_via_federation(
     // split separates them; until then the same string flows into
     // both fields and `federation.resolve` accepts it as the realm
     // segment.
-    let _ = state;
     let realm = creds.realm.clone();
     let tenant = creds.realm.as_str();
     if realm.is_empty() {
@@ -333,10 +611,6 @@ fn resolve_via_federation(
     // fix we apply at the daemon-boot advertise call site (see
     // `facade::cli::start::republish_via_federation_best_effort`).
     let device_caller_ura = crate::ura::device_ura(tenant, &creds.node_id);
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
-        &bridge,
-        device_caller_ura,
-    );
     // Tenant_filter wire shape mirrors RFC-002 §5 update:
     //   * User scope → None: hub auto-fills caller_tenant.
     //   * Public scope → "*": cross-tenant catalog listing.
@@ -344,16 +618,17 @@ fn resolve_via_federation(
         Scope::Public => Some("*".to_string()),
         _ => None,
     };
-    let resolved = match crate::runtime::advertise::resolve_agents_with_filter(
-        &invoker,
+    let resolved = match federation_resolver.resolve_agents(
         tenant,
         &realm,
-        "",
-        true,
+        device_caller_ura,
         tenant_filter,
     ) {
         Ok(r) => r,
-        Err(e) => {
+        Err(DiscoverFederationResolveError::NotJoined(e)) => {
+            return Ok(error_envelope("federation_not_joined", &e, scope, query));
+        }
+        Err(DiscoverFederationResolveError::Unavailable(e)) => {
             return Ok(error_envelope(
                 "federation_unavailable",
                 &format!("federation.resolve against realm {realm:?} failed: {e}"),
@@ -398,10 +673,17 @@ fn resolve_via_federation(
         // feature off the shim returns `Ok(vec![])`, which is
         // exactly the "no federated entries" case the helper
         // already handles.
-        if let Ok(entries) =
-            crate::services::invocation_transport::federation_invoke_shim::invoke_federation_discover(None, None)
-        {
-            rows.extend(federated_directory_candidates(&entries));
+        match crate::services::federation_invoke_shim::invoke_federation_discover(None, None) {
+            Ok(entries) => rows.extend(federated_directory_candidates(&entries)),
+            Err(error) if rows.is_empty() => {
+                return Ok(error_envelope(
+                    "federation_unavailable",
+                    &format!("federation.discover directory read failed: {error}"),
+                    scope,
+                    query,
+                ));
+            }
+            Err(_) => {}
         }
     }
 
@@ -419,6 +701,8 @@ fn resolve_via_federation(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.qualified_name.cmp(&b.qualified_name))
     });
+    let source_count = rows.len();
+    let source_truncated = source_count > top_k;
     rows.truncate(top_k);
 
     let candidates: Vec<Value> = rows.iter().map(Candidate::to_json).collect();
@@ -426,6 +710,12 @@ fn resolve_via_federation(
         "candidates": candidates,
         "scope": scope.as_str(),
         "query": query,
+        "source": {
+            "available": source_count,
+            "returned": rows.len(),
+            "limit": top_k,
+            "truncated": source_truncated,
+        },
     }))
 }
 
@@ -524,6 +814,8 @@ struct Candidate {
     score: f64,
     reason: String,
     fulfilled_by: Option<&'static str>,
+    identity_state: &'static str,
+    diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -532,10 +824,10 @@ struct LocalAgentAbilityOwners {
 }
 
 impl LocalAgentAbilityOwners {
-    fn load() -> Self {
-        Self {
-            local_agents: crate::persistence::local_agents::load().unwrap_or_default(),
-        }
+    fn load() -> anyhow::Result<Self> {
+        Ok(Self {
+            local_agents: crate::persistence::local_agents::load()?,
+        })
     }
 
     fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
@@ -549,6 +841,10 @@ impl LocalAgentAbilityOwners {
 }
 
 impl Candidate {
+    fn is_callable(&self) -> bool {
+        self.identity_state == "minted" && self.fulfilled_by != Some("unbound_manifest")
+    }
+
     fn to_json(&self) -> Value {
         json!({
             "qualified_name": self.qualified_name,
@@ -561,6 +857,9 @@ impl Candidate {
             "score":          self.score,
             "reason":         self.reason,
             "fulfilled_by":   self.fulfilled_by.map(Value::from).unwrap_or(Value::Null),
+            "identity_state": self.identity_state,
+            "callable":       self.is_callable(),
+            "diagnostic":     self.diagnostic.as_deref().map(Value::from).unwrap_or(Value::Null),
         })
     }
 }
@@ -589,13 +888,15 @@ fn candidate_from_federated_summary(
         qualified_name: ability_ura.to_string(),
         owner: owner.to_string(),
         ability: public_name,
-        description: String::new(),
+        description: summary.callable_summary.description.clone(),
         input_schema,
         visibility: Visibility::Public,
         scope_matched: scope,
         score: 0.0,
         reason: String::new(),
         fulfilled_by: Some("federation"),
+        identity_state: "minted",
+        diagnostic: None,
     })
 }
 
@@ -643,9 +944,26 @@ fn push_candidate(
         return;
     }
 
-    let Some(qualified_name) = local_agent_uras.ability_ura_for(peer_name, manifest.name()) else {
-        return;
-    };
+    let (qualified_name, identity_state, mut diagnostic) =
+        match local_agent_uras.ability_ura_for(peer_name, manifest.name()) {
+            Some(qualified_name) => (qualified_name, "minted", None),
+            None => (
+                String::new(),
+                "identity_not_minted",
+                Some(format!(
+                    "agent {peer_name:?} has no hosted URA in local-agents.json; \
+                     ability exists on disk but is not invocable until identity minting completes"
+                )),
+            ),
+        };
+    let fulfilled_by = classify_fulfilled_by(manifest);
+    if fulfilled_by == Some("unbound_manifest") && diagnostic.is_none() {
+        diagnostic = Some(format!(
+            "ability manifest {peer_name}.{} has no [exec] binding; publish it with a \
+             shell/http/eal/mcp/host_stream executor before invoking",
+            manifest.name()
+        ));
+    }
     out.push(Candidate {
         qualified_name,
         owner: peer_name.to_string(),
@@ -656,17 +974,17 @@ fn push_candidate(
         scope_matched,
         score: 0.0,
         reason: String::new(),
-        fulfilled_by: classify_fulfilled_by(manifest),
+        fulfilled_by,
+        identity_state,
+        diagnostic,
     });
 }
 
 /// Tag a manifest with how the call would actually run, so the LLM can
 /// budget for latency. `shell` (sub-second deterministic) vs
-/// `agent_chat` (LLM-driven, several seconds, non-deterministic) is
-/// the load-bearing distinction; the field is `None` when the manifest
-/// has no `[exec]` block and would route through the legacy chat
-/// fallback (still effectively `agent_chat`, but the legacy path is
-/// labelled separately for diagnostics).
+/// `http` / `mcp` / `host_stream` is the load-bearing distinction. A
+/// manifest without `[exec]` is an unbound declaration, not a callable
+/// route.
 fn classify_fulfilled_by(
     manifest: &crate::core::ability_spec::AbilityManifest,
 ) -> Option<&'static str> {
@@ -676,7 +994,8 @@ fn classify_fulfilled_by(
         Some(AbilityExec::Http(_)) => Some("http"),
         Some(AbilityExec::Eal(_)) => Some("eal"),
         Some(AbilityExec::Mcp(_)) => Some("mcp"),
-        None => Some("agent_chat_fallback"),
+        Some(AbilityExec::HostStream(_)) => Some("host_stream"),
+        None => Some("unbound_manifest"),
     }
 }
 
@@ -708,8 +1027,8 @@ fn federated_directory_candidates(_entries: &[Value]) -> Vec<Candidate> {
 /// may exist). The function is kept private and small so the swap is
 /// a single line in `discover_handler`.
 fn score_against_query(rows: &mut [Candidate], query: &str) {
-    let q = query.to_lowercase();
-    let q_terms: Vec<&str> = q.split_whitespace().collect();
+    let q = query.trim().to_lowercase();
+    let q_terms = tokenize_search_terms(query);
     if q_terms.is_empty() {
         return;
     }
@@ -727,11 +1046,11 @@ fn score_against_query(rows: &mut [Candidate], query: &str) {
             reasons.push("exact name match");
         }
         for term in &q_terms {
-            if name.contains(term) {
+            if name.contains(term.as_str()) {
                 score += 3.0;
                 reasons.push("term in ability name");
             }
-            if description.contains(term) {
+            if description.contains(term.as_str()) {
                 score += 1.0;
                 reasons.push("term in description");
             }
@@ -744,6 +1063,15 @@ fn score_against_query(rows: &mut [Candidate], query: &str) {
         row.score = (score / 10.0_f64).min(1.0);
         row.reason = dedup_reasons(reasons);
     }
+}
+
+fn tokenize_search_terms(input: &str) -> Vec<String> {
+    input
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 fn dedup_reasons(rs: Vec<&str>) -> String {
@@ -1040,6 +1368,23 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn local_resolver_maps_user_scope_to_realm_prefix_and_public_to_wildcard() {
+        assert_eq!(
+            local_resolve_prefix("acme", "acme", None).unwrap(),
+            Some("easynet:///r/acme/".to_string())
+        );
+        assert_eq!(
+            local_resolve_prefix("acme", "acme", Some("*")).unwrap(),
+            None
+        );
+        assert_eq!(
+            local_resolve_prefix("acme", "acme", Some("other")).unwrap(),
+            Some("easynet:///r/other/".to_string())
+        );
+    }
+
     #[test]
     fn user_scope_falls_through_when_not_joined() {
         // The user tier is the canonical same-realm federation scope.
@@ -1137,8 +1482,8 @@ mod tests {
             .iter()
             .filter_map(|c| c["qualified_name"].as_str())
             .collect();
-        // claude's seeded chat manifest plus weather; codex's
-        // summarize must NOT appear.
+        // Claude's own weather manifest appears; Codex's summarize must
+        // NOT appear under self scope.
         let claude_owner = crate::ura::agent_ura("acme", "user-1", "claude");
         assert!(names.iter().all(|n| {
             crate::ura::AbilitySelector::parse(n)
@@ -1149,6 +1494,40 @@ mod tests {
         let codex_summarize = crate::ura::ability_ura("acme", "user-1", "codex", "summarize");
         assert!(names.contains(&claude_weather.as_str()));
         assert!(!names.contains(&codex_summarize.as_str()));
+    }
+
+    #[test]
+    fn discover_marks_manifest_without_exec_as_unbound_and_not_callable() {
+        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
+        let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema()).unwrap();
+        let (_dir, _, entry) = workspace_with_manifests("claude", &[("weather", weather)]);
+        let agents = one_agent("claude", entry);
+        let agents_clone = agents.clone();
+
+        let mut reg = AxonAbilityCatalog::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            move || agents_clone.clone(),
+            Arc::new(std::sync::OnceLock::new()),
+        );
+        let h = reg.get_rpc("claude.discover").unwrap();
+        let resp = h(json!({"scope": "self", "query": "weather"})).unwrap();
+        let candidate = resp["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["ability"] == "weather")
+            .expect("weather candidate");
+        assert_eq!(candidate["fulfilled_by"], "unbound_manifest");
+        assert_eq!(candidate["callable"], false);
+        assert!(
+            candidate["diagnostic"]
+                .as_str()
+                .unwrap_or("")
+                .contains("no [exec] binding"),
+            "{candidate:#?}"
+        );
     }
 
     #[test]
@@ -1265,6 +1644,32 @@ mod tests {
         let resp = h(json!({"scope": "self", "query": "weather"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
         assert_eq!(cands[0]["ability"], "weather");
+    }
+
+    #[test]
+    fn query_tokenization_splits_symbol_separated_terms() {
+        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
+        let screen =
+            AbilityManifest::new("screen_snapshot", "Capture pixels", obj_schema()).unwrap();
+        let (_dir, _, entry) = workspace_with_manifests("claude", &[("screen_snapshot", screen)]);
+        let agents = one_agent("claude", entry);
+        let agents_clone = agents.clone();
+
+        let mut reg = AxonAbilityCatalog::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            move || agents_clone.clone(),
+            Arc::new(std::sync::OnceLock::new()),
+        );
+        let h = reg.get_rpc("claude.discover").unwrap();
+        let resp = h(json!({"scope": "self", "query": "screen-snapshot"})).unwrap();
+        let cands = resp["candidates"].as_array().unwrap();
+
+        assert!(
+            cands.iter().any(|c| c["ability"] == "screen_snapshot"),
+            "symbol-separated query should match underscore-separated ability name: {cands:#?}"
+        );
     }
 
     #[test]
@@ -1437,6 +1842,22 @@ mod tests {
         assert_eq!(candidate.ability, "chat");
         assert_eq!(candidate.visibility, Visibility::Public);
         assert_eq!(candidate.fulfilled_by, Some("federation"));
+    }
+
+    #[test]
+    fn federated_summary_candidate_preserves_description() {
+        let mut summary = federated_summary("easynet:///r/acme/ability/alice.bot.chat");
+        summary.callable_summary.description = "Chat with Alice's assistant".to_string();
+
+        let candidate = candidate_from_federated_summary(
+            "easynet:///r/acme/agent/alice.bot",
+            &summary,
+            "chat".to_string(),
+            Scope::Public,
+        )
+        .expect("complete federated summary should project");
+
+        assert_eq!(candidate.description, "Chat with Alice's assistant");
     }
 
     #[test]

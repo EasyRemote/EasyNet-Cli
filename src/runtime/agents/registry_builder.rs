@@ -13,10 +13,10 @@ use super::{
     http_request_ability, invocation_history_ability, invoke_ability, list_resources_ability,
     loop_ability, mcp_bridge_ability, mcp_client_ability, media, media_abilities, meta_ability,
     mission_ability, network_health_ability, openai_compat_ability, orchestration_ability, pages,
-    permission_ability, ping, plugin_lifecycle_ability, policy_ability, process_exec_ability,
-    profiles, pty_attach_ability, pty_io_ability, pty_lifecycle_ability, schedule_ability,
-    session_ability, shell_run_ability, skill_install_ability, skill_publish_ability,
-    teach_ability, think_ability, trust_ability, voice_call_ability, PagesIdentity,
+    permission_ability, ping, plugin_lifecycle_ability, process_exec_ability, profiles,
+    pty_attach_ability, pty_io_ability, pty_lifecycle_ability, schedule_ability, session_ability,
+    shell_run_ability, skill_install_ability, skill_publish_ability, teach_ability, think_ability,
+    voice_call_ability, PagesIdentity,
 };
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
@@ -117,6 +117,13 @@ pub fn build_registry_with_runtime(
 pub struct BuiltAbilityRegistry {
     pub catalog: Arc<AxonAbilityCatalog>,
     pub plugin_runtime_manager: Arc<crate::runtime::plugin_host::PluginRuntimeManager>,
+    /// Late-wired device-ability registrar cell. Populated during the
+    /// build with a pending registrar; boot calls `set_runtime` on it
+    /// (and may `replay_from_store`) once the `LocalRuntime` exists, so
+    /// `ability.deploy` can run its install transaction. Mirrors
+    /// `hot_agent_registrar_cell` but for device-owned deploys.
+    pub device_registrar_cell:
+        Arc<crate::runtime::agents::device_ops_ability::SharedDeviceRegistrarCell>,
 }
 
 #[derive(Clone)]
@@ -151,6 +158,7 @@ pub struct RegistryBuildServices {
     pub discuss: Arc<DiscussService>,
     pub schedule: Arc<ScheduleService>,
     pub loop_svc: Arc<LoopService>,
+    pub discover_federation_resolver: discover_ability::SharedDiscoverFederationResolver,
 }
 
 impl RegistryBuildServices {
@@ -168,6 +176,9 @@ impl RegistryBuildServices {
             discuss,
             schedule,
             loop_svc,
+            discover_federation_resolver: Arc::new(
+                discover_ability::BridgeDiscoverFederationResolver,
+            ),
         }
     }
 
@@ -181,6 +192,15 @@ impl RegistryBuildServices {
             Arc::new(LoopService::new()),
         )
     }
+
+    #[must_use]
+    pub fn with_discover_federation_resolver(
+        mut self,
+        resolver: discover_ability::SharedDiscoverFederationResolver,
+    ) -> Self {
+        self.discover_federation_resolver = resolver;
+        self
+    }
 }
 
 pub struct RegistryBuildConfig<'a> {
@@ -190,6 +210,7 @@ pub struct RegistryBuildConfig<'a> {
     pub loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
     pub pages_identity: PagesIdentity,
     pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    pub authority_context: Option<crate::runtime::ability_dispatch::AbilityAuthorityContext>,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
 }
@@ -204,6 +225,7 @@ impl<'a> RegistryBuildConfig<'a> {
             loaders: Arc::new(Vec::new()),
             pages_identity: PagesIdentity::default(),
             local_runtime: None,
+            authority_context: None,
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
@@ -218,6 +240,7 @@ pub struct RegistryDaemonBuildConfig {
     pub loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
     pub pages_identity: PagesIdentity,
     pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    pub authority_context: Option<crate::runtime::ability_dispatch::AbilityAuthorityContext>,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
 }
@@ -231,6 +254,7 @@ impl RegistryDaemonBuildConfig {
             loaders: None,
             pages_identity: PagesIdentity::default(),
             local_runtime: None,
+            authority_context: None,
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
@@ -283,8 +307,7 @@ fn build_plugin_runtime_manager(
                         component = plugin_host,
                         kind = deterministic_builtin_index_failed,
                         error = error.as_str(),
-                        message =
-                            "deterministic builtin plugin index failed; daemon core abilities remain registered",
+                        message = "deterministic builtin plugin index failed; daemon core abilities remain registered",
                     );
                     crate::runtime::plugin_host::PluginRuntimeState::from_index(
                         crate::runtime::plugin_host::PluginPackageIndex::default(),
@@ -310,6 +333,7 @@ fn build_registry_with_services_result_inner(
         loaders,
         pages_identity,
         local_runtime,
+        authority_context,
         hot_agent_registrar_cell,
         shared_stores,
     } = config;
@@ -319,12 +343,13 @@ fn build_registry_with_services_result_inner(
         discuss,
         schedule,
         loop_svc,
+        discover_federation_resolver,
     } = services;
 
-    let mut reg = match local_runtime {
-        Some(runtime) => AxonAbilityCatalog::new_with_runtime(runtime),
-        None => AxonAbilityCatalog::new(),
-    };
+    let authority_context = authority_context.unwrap_or_default();
+    let runtime = local_runtime.unwrap_or_else(easynet_axon::invocation::LocalRuntime::new);
+    let mut reg =
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority_context);
     ping::register(&mut reg);
     network_health_ability::register(&mut reg);
     // AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
@@ -390,16 +415,12 @@ fn build_registry_with_services_result_inner(
     // handler opens its own per-session FS handle on each
     // OpenBidi.
     file_transfer_ability::register(&mut reg);
-    // RFC-005 v3.2 — eight physical-channel media abilities (A1–A8)
-    // plus meta.list_resources (A9). The eight A1–A8 stubs are
-    // registered first; PR3a then swaps individual entries
-    // (currently `camera.snapshot`) for real envelope-aware
-    // handlers via `media::*::register`. The order matters: the
-    // real-handler register MUST come after the stub register so
-    // its envelope-aware variant takes precedence at invocation time
-    // (the registry stores stub + env-aware handlers separately
-    // and the runtime adapter's "envelope-first" lookup picks env-aware
-    // when both are present).
+    // RFC-005 v3.2 — physical-channel media abilities (A1–A8)
+    // plus meta.list_resources (A9). `media_abilities` owns the
+    // shared metadata and only registers still-unwired stubs; real
+    // modules own their names directly. This keeps each ability +
+    // call-mode slot single-owner and avoids precedence-based
+    // replacement semantics.
     media_abilities::register(&mut reg);
     media::camera_snapshot::register(&mut reg);
     media::screen_snapshot::register(&mut reg);
@@ -423,11 +444,22 @@ fn build_registry_with_services_result_inner(
     // runtime sync, log via op_event, and the agent gets picked
     // up by the static registration path on next boot.
     agent_lifecycle_ability::register(&mut reg, Arc::clone(&hot_agent_registrar_cell));
-    // device-hosted node/ability/remote operations (list_nodes, describe_node,
-    // remove_node, deploy_ability, uninstall_ability, exec_remote,
-    // register_self, deregister_self). These are the canonical
-    // ability surfaces backing the CLI's device + ability subcommands.
-    device_ops_ability::register(&mut reg);
+    // device-hosted node/ability operations (list_nodes, describe_node,
+    // remove_node, deploy_ability, uninstall_ability). These are the
+    // canonical ability surfaces backing the CLI's device + ability
+    // subcommands.
+    //
+    // Construct the device-ability registrar pending (runtime attached
+    // by boot) and stash it in the cell `ability.deploy`'s handler
+    // closes over — the install transaction reads it. Same late-wiring
+    // pattern as `hot_agent_registrar_cell`.
+    let device_registrar_cell: Arc<
+        crate::runtime::agents::device_ops_ability::SharedDeviceRegistrarCell,
+    > = Arc::new(std::sync::OnceLock::new());
+    let _ = device_registrar_cell.set(
+        crate::runtime::agents::device_ability_registrar::DeviceAbilityRegistrar::new_pending(),
+    );
+    device_ops_ability::register(&mut reg, Arc::clone(&device_registrar_cell));
     // browser.* — RFC-012 §RemoteWebSurface; v0 mock
     // handlers per RFC-013 plan. capture_viewport is a streaming
     // verb; the other three are unary RPC.
@@ -449,8 +481,7 @@ fn build_registry_with_services_result_inner(
                     component = plugin_host,
                     kind = deterministic_builtin_registration_failed,
                     error = error.as_str(),
-                    message =
-                        "deterministic builtin plugin registration failed; daemon core abilities remain registered",
+                    message = "deterministic builtin plugin registration failed; daemon core abilities remain registered",
                 );
             }
         }
@@ -461,17 +492,11 @@ fn build_registry_with_services_result_inner(
                     component = plugin_host,
                     kind = default_registration_failed,
                     error = error.as_str(),
-                    message =
-                        "default plugin host registration failed; daemon core abilities remain registered",
+                    message = "default plugin host registration failed; daemon core abilities remain registered",
                 );
             }
         }
     }
-    // policy.{evaluate,simulate} — admission-gate consumer surface
-    // pinned to the §A6 contract. v1 is allow-all; the gate's
-    // rewiring to actually call this ability lands in a follow-up
-    // (see policy_ability module preamble).
-    policy_ability::register(&mut reg);
     session_ability::register(&mut reg, sessions);
     // chat.history.{list,get} — read-only access to the per-agent
     // chat transcripts the chat ability already persists on disk.
@@ -517,6 +542,7 @@ fn build_registry_with_services_result_inner(
             crate::runtime::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
                 Arc::clone(&loaders),
                 Arc::clone(&local_registry_handle),
+                Arc::clone(&discover_federation_resolver),
             );
         // Mirror ProcessSingleton::once()::set's diagnostic: a
         // second writer on this `OnceLock` is a boot-wiring bug
@@ -669,20 +695,26 @@ fn build_registry_with_services_result_inner(
     // is in scope here, so wiring sits next to the other consumers
     // (mcp_bridge / meta / a2a_bridge).
     //
-    // Both handlers close over a snapshot of `agents`: `<agent>.discover`
-    // enumerates peer manifests for scope-filtered candidates;
-    // `<agent>.invoke` validates that the requested `target` is a known
-    // local agent. The snapshot misses brand-new `easynet agent add`
-    // entries until the next daemon restart — same caveat that applies
-    // to chat_ability's dynamic-fallback snapshot, and tracked by the
-    // same future "runtime.refresh_local_tools" follow-up.
+    // The device-owned aggregate `discover` owns the top-level view and
+    // reloads `agents.json` per call, so it never chooses a random first
+    // agent as a synthetic self. Per-agent `<agent>.discover` /
+    // `<agent>.invoke` keep their snapshot semantics because they are
+    // owner-specific bundle entries installed at boot.
+    discover_ability::register_device_aggregate_with_resolver(
+        &mut reg,
+        || crate::registry::agents::load_agents().unwrap_or_default(),
+        Arc::clone(&local_registry_handle),
+        Arc::clone(&discover_federation_resolver),
+    );
+
     for agent_name in agents.agents.keys() {
         let snapshot_for_discover = agents.clone();
-        discover_ability::register_for_agent(
+        discover_ability::register_for_agent_with_resolver(
             &mut reg,
             agent_name.clone(),
             move || snapshot_for_discover.clone(),
             Arc::clone(&local_registry_handle),
+            Arc::clone(&discover_federation_resolver),
         );
         let snapshot_for_invoke = agents.clone();
         invoke_ability::register_for_agent(
@@ -847,16 +879,11 @@ fn build_registry_with_services_result_inner(
     agent_list_ability::register(&mut reg, move || {
         crate::registry::agents::load_agents().unwrap_or_else(|_| agents_for_device_view.clone())
     });
-    // identity.get_trust / identity.set_trust — the trust-level
-    // directory (seven-axes T2.1; RFC-001 restatement of
-    // GetNodeTrust/SetNodeTrust). Anchor (keys) and level (degree)
-    // stay two planes; this is the level plane.
-    trust_ability::register(&mut reg);
     // meta.teach / meta.acquire / meta.forget — GET route B
     // (seven-axes T3.3): owner-conferred capability transfer.
     // No grant = allow_transferred_code=false, the InstallPolicy
     // default — meta.acquire refuses.
-    teach_ability::register(&mut reg);
+    teach_ability::register(&mut reg, Arc::clone(&hot_agent_registrar_cell));
     // admin.status — operator-facing component snapshot. The
     // ability-count provider reads through the same OnceLock the
     // bridge handlers use, so the count is accurate at call time
@@ -909,6 +936,7 @@ fn build_registry_with_services_result_inner(
     BuiltAbilityRegistry {
         catalog: arc,
         plugin_runtime_manager,
+        device_registrar_cell,
     }
 }
 
@@ -981,6 +1009,7 @@ pub fn build_registry_for_daemon_result(config: RegistryDaemonBuildConfig) -> Bu
         loaders,
         pages_identity,
         local_runtime,
+        authority_context,
         hot_agent_registrar_cell,
         shared_stores,
     } = config;
@@ -1010,6 +1039,7 @@ pub fn build_registry_for_daemon_result(config: RegistryDaemonBuildConfig) -> Bu
         loaders,
         pages_identity,
         local_runtime,
+        authority_context,
         hot_agent_registrar_cell,
         shared_stores,
     })
