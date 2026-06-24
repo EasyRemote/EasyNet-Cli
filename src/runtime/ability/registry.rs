@@ -239,19 +239,25 @@ impl AbilityControlPlaneRegistry {
         Ok(record)
     }
 
-    pub fn remove(&mut self, ability: &str) -> bool {
-        let before = self.records.len();
-        self.records.retain(|key, _| key.ability() != ability);
-        self.records.len() != before
-    }
-
-    pub fn remove_for_mode(&mut self, ability: &str, call_mode: CallMode) -> bool {
+    /// Remove every descriptor-version/call-mode row for one authority-owned
+    /// ability.
+    ///
+    /// What this is NOT: a bare-name delete. Two authority roots may legally
+    /// advertise the same public ability name, so mutation must always name the
+    /// owner root that established the record.
+    pub fn remove_for_authority(&mut self, authority_root: &str, ability: &str) -> bool {
         let before = self.records.len();
         self.records
-            .retain(|key, _| !(key.ability() == ability && key.call_mode() == call_mode));
+            .retain(|key, _| !(key.authority_root == authority_root && key.ability() == ability));
         self.records.len() != before
     }
 
+    /// Remove one authority-owned call-mode row for the default descriptor
+    /// version.
+    ///
+    /// Use this for registration rollback where only the just-written mode is
+    /// known to be part of the failed transaction. Full ability unregister uses
+    /// [`Self::remove_for_authority`] so all modes leave together.
     pub fn remove_for_authority_mode(
         &mut self,
         authority_root: &str,
@@ -389,6 +395,12 @@ impl AbilityControlPlaneRegistry {
 
     pub fn contains(&self, ability: &str) -> bool {
         self.records.keys().any(|key| key.ability() == ability)
+    }
+
+    pub fn contains_for_authority(&self, authority_root: &str, ability: &str) -> bool {
+        self.records
+            .keys()
+            .any(|key| key.authority_root == authority_root && key.ability() == ability)
     }
 
     pub fn names(&self) -> Vec<String> {
@@ -680,6 +692,60 @@ mod tests {
                 .label(),
             "env:b",
             "same public name under a different authority must survive"
+        );
+    }
+
+    #[test]
+    fn exact_authority_remove_clears_all_modes_without_touching_neighbor() {
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let owner_a = "easynet:///r/default/agent/user.a";
+        let owner_b = "easynet:///r/default/agent/user.b";
+        registry
+            .register(
+                "search",
+                CallMode::Rpc,
+                None,
+                AuthorityScope::new("agent:a", owner_a).unwrap(),
+                RuntimeEnv::new("env:a-rpc").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+        registry
+            .register(
+                "search",
+                CallMode::Stream,
+                None,
+                AuthorityScope::new("agent:a", owner_a).unwrap(),
+                RuntimeEnv::new("env:a-stream").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+        registry
+            .register(
+                "search",
+                CallMode::Rpc,
+                None,
+                AuthorityScope::new("agent:b", owner_b).unwrap(),
+                RuntimeEnv::new("env:b-rpc").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+
+        assert!(registry.remove_for_authority(owner_a, "search"));
+
+        assert!(!registry.contains_for_authority(owner_a, "search"));
+        assert!(
+            registry.contains_for_authority(owner_b, "search"),
+            "authority-scoped removal must not delete another owner root"
+        );
+        assert_eq!(
+            registry
+                .get_for_authority_mode(owner_b, "search", CallMode::Rpc)
+                .unwrap()
+                .implementation()
+                .runtime_env()
+                .label(),
+            "env:b-rpc"
         );
     }
 }

@@ -1134,7 +1134,7 @@ impl RegistryWriter for StaticWriter<'_> {
     }
 
     fn unregister(&mut self, name: &str) -> anyhow::Result<bool> {
-        Ok(self.reg.unregister(name))
+        self.reg.unregister(name)
     }
 
     const COLLISION_KIND_HINT: Option<&'static str> = None;

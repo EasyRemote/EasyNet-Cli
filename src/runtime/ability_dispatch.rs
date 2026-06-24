@@ -1073,6 +1073,71 @@ fn local_runtime_ability_key_for_authority(
         .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ControlPlaneAbilityKey {
+    authority_root: String,
+    ability: String,
+}
+
+impl ControlPlaneAbilityKey {
+    fn new(authority_root: impl Into<String>, ability: impl Into<String>) -> Self {
+        Self {
+            authority_root: authority_root.into(),
+            ability: ability.into(),
+        }
+    }
+
+    fn from_record(record: &AbilityControlPlaneRecord) -> Self {
+        Self::new(
+            record.authority().scope().authority_root(),
+            record.descriptor().name(),
+        )
+    }
+
+    fn authority_root(&self) -> &str {
+        &self.authority_root
+    }
+
+    fn ability(&self) -> &str {
+        &self.ability
+    }
+
+    fn runtime_key(&self) -> anyhow::Result<String> {
+        local_runtime_ability_key_for_authority(&self.authority_root, &self.ability)
+    }
+
+    fn for_mode(&self, call_mode: DescriptorCallMode) -> ControlPlaneModeKey {
+        ControlPlaneModeKey {
+            key: self.clone(),
+            call_mode,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ControlPlaneModeKey {
+    key: ControlPlaneAbilityKey,
+    call_mode: DescriptorCallMode,
+}
+
+impl ControlPlaneModeKey {
+    fn from_record(record: &AbilityControlPlaneRecord) -> Self {
+        ControlPlaneAbilityKey::from_record(record).for_mode(record.descriptor().call_mode())
+    }
+
+    fn ability(&self) -> &str {
+        self.key.ability()
+    }
+
+    fn authority_root(&self) -> &str {
+        self.key.authority_root()
+    }
+
+    fn call_mode(&self) -> DescriptorCallMode {
+        self.call_mode
+    }
+}
+
 /// Axon ability catalogue. Keyed by full ability name. v1 shape is
 /// a `BTreeMap` for deterministic iteration order; the catalogue is
 /// read-mostly (built once at daemon start, queried for metadata), so
@@ -1472,14 +1537,14 @@ impl DynamicRegistration {
         if catalog.reject_dynamic_shadow_of_static(&ability) {
             anyhow::bail!("dynamic ability {ability:?} shadows a static ability");
         }
-        catalog.register_dynamic_control_plane_result(
+        let control_plane_key = catalog.register_dynamic_control_plane_result(
             &ability,
             &self.owner,
             self.manifest_ref(),
             call_mode,
             &self.implementation,
         )?;
-        let mut txn = DynamicRegistrationTxn::after_control_plane(catalog, ability, call_mode);
+        let mut txn = DynamicRegistrationTxn::after_control_plane(catalog, control_plane_key);
         {
             let mut dyn_ext = catalog
                 .dynamic_ext
@@ -1502,21 +1567,18 @@ enum DynamicRegistrationPhase {
 
 struct DynamicRegistrationTxn<'a> {
     catalog: &'a AxonAbilityCatalog,
-    ability: String,
-    call_mode: DescriptorCallMode,
+    control_plane_key: ControlPlaneModeKey,
     phase: DynamicRegistrationPhase,
 }
 
 impl<'a> DynamicRegistrationTxn<'a> {
     fn after_control_plane(
         catalog: &'a AxonAbilityCatalog,
-        ability: impl Into<String>,
-        call_mode: DescriptorCallMode,
+        control_plane_key: ControlPlaneModeKey,
     ) -> Self {
         Self {
             catalog,
-            ability: ability.into(),
-            call_mode,
+            control_plane_key,
             phase: DynamicRegistrationPhase::ControlPlaneAccepted,
         }
     }
@@ -1527,7 +1589,7 @@ impl<'a> DynamicRegistrationTxn<'a> {
             self.rollback();
             anyhow::bail!(
                 "dynamic ability {:?} cannot commit side table from phase {:?}",
-                self.ability,
+                self.control_plane_key.ability(),
                 phase
             );
         }
@@ -1541,11 +1603,14 @@ impl<'a> DynamicRegistrationTxn<'a> {
             self.rollback();
             anyhow::bail!(
                 "dynamic ability {:?} cannot sync runtime from phase {:?}",
-                self.ability,
+                self.control_plane_key.ability(),
                 phase
             );
         }
-        match self.catalog.sync_runtime_ability(&self.ability) {
+        match self
+            .catalog
+            .sync_runtime_ability(self.control_plane_key.ability())
+        {
             Ok(()) => {
                 self.phase = DynamicRegistrationPhase::RuntimeSynced;
                 Ok(())
@@ -1563,13 +1628,20 @@ impl<'a> DynamicRegistrationTxn<'a> {
             .dynamic_ext
             .write()
             .expect("dynamic_ext RwLock poisoned");
-        dyn_ext.remove_mode(&self.ability, self.call_mode);
+        dyn_ext.remove_mode(
+            self.control_plane_key.ability(),
+            self.control_plane_key.call_mode(),
+        );
         drop(dyn_ext);
         self.catalog
             .control_plane
             .write()
             .expect("control_plane RwLock poisoned")
-            .remove_for_mode(&self.ability, self.call_mode);
+            .remove_for_authority_mode(
+                self.control_plane_key.authority_root(),
+                self.control_plane_key.ability(),
+                self.control_plane_key.call_mode(),
+            );
         self.phase = DynamicRegistrationPhase::RolledBack;
     }
 }
@@ -1647,7 +1719,7 @@ impl AxonAbilityCatalog {
         call_mode: DescriptorCallMode,
         impl_source: AbilityImplSource,
         runtime_env: RuntimeEnv,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         self.register_control_plane_with_impl_content_hash(
             ability,
             owner,
@@ -1666,7 +1738,7 @@ impl AxonAbilityCatalog {
         manifest: Option<&crate::core::ability_spec::AbilityManifest>,
         call_mode: DescriptorCallMode,
         implementation: &ControlPlaneImplementation,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         self.register_control_plane_with_impl_content_hash(
             ability,
             owner,
@@ -1687,7 +1759,7 @@ impl AxonAbilityCatalog {
         impl_source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         impl_content_hash: Option<String>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         let owner_label = format!("{owner:?}");
         let authority_scope = match owner.authority_scope(&self.authority_context) {
             Ok(scope) => scope,
@@ -1728,7 +1800,7 @@ impl AxonAbilityCatalog {
         runtime_env: RuntimeEnv,
         impl_content_hash: Option<String>,
         owner_label: String,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         let result = self
             .control_plane
             .write()
@@ -1742,21 +1814,23 @@ impl AxonAbilityCatalog {
                 impl_source,
                 impl_content_hash,
             );
-        if let Err(error) = result {
-            let error_message = error.to_string();
-            crate::op_event!(
-                component = ability_dispatch,
-                kind = control_plane_register_rejected,
-                ability = ability,
-                owner = owner_label,
-                error = error_message,
-                message = "ability control-plane record rejected by typed constructor",
-            );
-            return Err(anyhow::anyhow!(
-                "ability {ability:?} control-plane typed constructor rejected: {error}"
-            ));
+        match result {
+            Ok(record) => Ok(record),
+            Err(error) => {
+                let error_message = error.to_string();
+                crate::op_event!(
+                    component = ability_dispatch,
+                    kind = control_plane_register_rejected,
+                    ability = ability,
+                    owner = owner_label,
+                    error = error_message,
+                    message = "ability control-plane record rejected by typed constructor",
+                );
+                Err(anyhow::anyhow!(
+                    "ability {ability:?} control-plane typed constructor rejected: {error}"
+                ))
+            }
         }
-        Ok(())
     }
 
     fn try_register_native_control_plane(
@@ -1765,7 +1839,7 @@ impl AxonAbilityCatalog {
         owner: &OwnerKind,
         manifest: Option<&crate::core::ability_spec::AbilityManifest>,
         call_mode: DescriptorCallMode,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         self.register_control_plane(
             ability,
             owner,
@@ -1796,7 +1870,7 @@ impl AxonAbilityCatalog {
         manifest: Option<&crate::core::ability_spec::AbilityManifest>,
         call_mode: DescriptorCallMode,
         implementation: &ControlPlaneImplementation,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ControlPlaneModeKey> {
         match self.register_control_plane_with_implementation(
             ability,
             owner,
@@ -1804,7 +1878,7 @@ impl AxonAbilityCatalog {
             call_mode,
             implementation,
         ) {
-            Ok(()) => (),
+            Ok(record) => Ok(ControlPlaneModeKey::from_record(&record)),
             Err(error) => {
                 let error_message = error.to_string();
                 crate::op_event!(
@@ -1814,10 +1888,9 @@ impl AxonAbilityCatalog {
                     error = error_message.as_str(),
                     message = "dynamic ability rejected by control-plane validation",
                 );
-                return Err(error);
+                Err(error)
             }
-        };
-        Ok(())
+        }
     }
 
     /// Test-only diagnostic for mode-agnostic lookup semantics.
@@ -1882,6 +1955,7 @@ impl AxonAbilityCatalog {
             impl_source,
             runtime_env,
         )
+        .map(|_| ())
     }
 
     pub fn rebind_control_plane_record_with_impl_content_hash(
@@ -1903,6 +1977,7 @@ impl AxonAbilityCatalog {
             runtime_env,
             Some(impl_content_hash),
         )
+        .map(|_| ())
     }
 
     pub fn rebind_control_plane_record_with_authority_scope_and_impl_content_hash(
@@ -1930,22 +2005,7 @@ impl AxonAbilityCatalog {
             Some(impl_content_hash),
             owner_label,
         )
-    }
-
-    /// Remove only descriptor/authority/implementation facts for a
-    /// runtime-owned dynamic binding. Device-deployed abilities are
-    /// registered directly into LocalRuntime by `DeviceAbilityRegistrar`,
-    /// so uninstall must clear control-plane facts without mutating the
-    /// boot-time handler maps.
-    pub fn remove_control_plane_record_for_mode(
-        &self,
-        ability: &str,
-        call_mode: DescriptorCallMode,
-    ) -> bool {
-        self.control_plane
-            .write()
-            .expect("control_plane RwLock poisoned")
-            .remove_for_mode(ability, call_mode)
+        .map(|_| ())
     }
 
     pub fn remove_control_plane_record_for_authority_mode(
@@ -2018,27 +2078,57 @@ impl AxonAbilityCatalog {
         }
     }
 
-    fn unique_runtime_authority_root(&self, ability: &str) -> anyhow::Result<String> {
-        let roots = self
-            .control_plane
-            .read()
-            .expect("control_plane RwLock poisoned")
-            .authority_roots_for_ability(ability);
-        match roots.as_slice() {
-            [root] => Ok(root.clone()),
-            [] => anyhow::bail!(
-                "ability {ability:?} has no control-plane authority root; register it before syncing LocalRuntime"
-            ),
-            _ => anyhow::bail!(
-                "ability {ability:?} is ambiguous across authority roots {}; product callers must choose an authority",
-                roots.join(", ")
-            ),
-        }
+    fn control_plane_key_for_owner(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+    ) -> anyhow::Result<ControlPlaneAbilityKey> {
+        let authority_scope = owner
+            .authority_scope(&self.authority_context)
+            .map_err(|error| {
+                anyhow::anyhow!("ability {ability:?} owner authority scope rejected: {error}")
+            })?;
+        Ok(ControlPlaneAbilityKey::new(
+            authority_scope.authority_root(),
+            ability,
+        ))
     }
 
-    fn runtime_ability_key(&self, ability: &str) -> anyhow::Result<String> {
-        let authority_root = self.unique_runtime_authority_root(ability)?;
-        local_runtime_ability_key_for_authority(&authority_root, ability)
+    fn static_control_plane_key(
+        &self,
+        ability: &str,
+    ) -> anyhow::Result<Option<ControlPlaneAbilityKey>> {
+        self.owner
+            .get(ability)
+            .map(|owner| self.control_plane_key_for_owner(ability, owner))
+            .transpose()
+    }
+
+    fn dynamic_control_plane_key(
+        &self,
+        ability: &str,
+    ) -> anyhow::Result<Option<ControlPlaneAbilityKey>> {
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext
+            .owner
+            .get(ability)
+            .map(|owner| self.control_plane_key_for_owner(ability, owner))
+            .transpose()
+    }
+
+    fn handler_control_plane_key(&self, ability: &str) -> anyhow::Result<ControlPlaneAbilityKey> {
+        if let Some(key) = self.static_control_plane_key(ability)? {
+            return Ok(key);
+        }
+        if let Some(key) = self.dynamic_control_plane_key(ability)? {
+            return Ok(key);
+        }
+        anyhow::bail!(
+            "ability {ability:?} has handlers but no owner table entry; cannot derive authority-scoped runtime key"
+        )
     }
 
     fn runtime_ability_key_for_mode(
@@ -2123,14 +2213,15 @@ impl AxonAbilityCatalog {
 
     fn replace_runtime_ability(
         &self,
-        name: &str,
+        control_plane_key: &ControlPlaneAbilityKey,
         ability_fn: AbilityFn,
         options: AbilityOptions,
     ) -> anyhow::Result<()> {
         let Some(runtime) = self.runtime.as_ref() else {
             return Ok(());
         };
-        let runtime_key = self.runtime_ability_key(name)?;
+        let name = control_plane_key.ability();
+        let runtime_key = control_plane_key.runtime_key()?;
         let result = block_on_runtime_sync(runtime.replace_ability(
             runtime_key.clone(),
             ability_fn,
@@ -2156,7 +2247,7 @@ impl AxonAbilityCatalog {
         let Some(runtime) = self.runtime.as_ref() else {
             return Ok(());
         };
-        let runtime_key = self.runtime_ability_key(name)?;
+        let runtime_key = self.handler_control_plane_key(name)?.runtime_key()?;
         self.unregister_runtime_ability_by_key(runtime, name, &runtime_key)
     }
 
@@ -2278,9 +2369,10 @@ impl AxonAbilityCatalog {
         if modes.is_empty() {
             return self.unregister_runtime_ability(name);
         }
-        let options = self.runtime_options_for(name, modes)?;
+        let control_plane_key = self.handler_control_plane_key(name)?;
+        let options = self.runtime_options_for(&control_plane_key, modes)?;
         self.replace_runtime_ability(
-            name,
+            &control_plane_key,
             runtime_handler_set_to_ability_fn(name.to_string(), handlers),
             options,
         )
@@ -2288,13 +2380,13 @@ impl AxonAbilityCatalog {
 
     fn runtime_options_for(
         &self,
-        name: &str,
+        control_plane_key: &ControlPlaneAbilityKey,
         modes: AbilityCallModes,
     ) -> anyhow::Result<AbilityOptions> {
         let mut options = AbilityOptions::default().with_modes(modes);
         if modes.rpc {
             options = self.bind_runtime_proof_for_mode(
-                name,
+                control_plane_key,
                 options,
                 DescriptorCallMode::Rpc,
                 AxonCallMode::Rpc,
@@ -2302,7 +2394,7 @@ impl AxonAbilityCatalog {
         }
         if modes.stream {
             options = self.bind_runtime_proof_for_mode(
-                name,
+                control_plane_key,
                 options,
                 DescriptorCallMode::Stream,
                 AxonCallMode::Stream,
@@ -2310,7 +2402,7 @@ impl AxonAbilityCatalog {
         }
         if modes.bidi {
             options = self.bind_runtime_proof_for_mode(
-                name,
+                control_plane_key,
                 options,
                 DescriptorCallMode::Bidi,
                 AxonCallMode::Bidi,
@@ -2321,16 +2413,22 @@ impl AxonAbilityCatalog {
 
     fn bind_runtime_proof_for_mode(
         &self,
-        name: &str,
+        control_plane_key: &ControlPlaneAbilityKey,
         options: AbilityOptions,
         descriptor_mode: DescriptorCallMode,
         axon_mode: AxonCallMode,
     ) -> anyhow::Result<AbilityOptions> {
         let record = self
-            .control_plane_record_for_mode(name, descriptor_mode)?
+            .control_plane_record_for_authority_mode(
+                control_plane_key.authority_root(),
+                control_plane_key.ability(),
+                descriptor_mode,
+            )
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "ability {name:?} has a {:?} runtime handler without a control-plane record",
+                    "ability {:?} under authority {:?} has a {:?} runtime handler without a control-plane record",
+                    control_plane_key.ability(),
+                    control_plane_key.authority_root(),
                     descriptor_mode
                 )
             })?;
@@ -2863,28 +2961,33 @@ impl AxonAbilityCatalog {
     /// synchronisation the daemon imposes (today: build_registry is
     /// the only writer; B4 will introduce a process-wide
     /// `Arc<Mutex<AxonAbilityCatalog>>` if hot-reload lands).
-    pub fn unregister(&mut self, ability: &str) -> bool {
-        let runtime_key = if self.has_static_ability(ability) {
-            Some(self.runtime_ability_key(ability).unwrap_or_else(|error| {
-                panic!(
-                    "static ability {ability:?} has no unique LocalRuntime key before unregister: {error}"
-                )
-            }))
-        } else {
-            None
-        };
+    pub fn unregister(&mut self, ability: &str) -> anyhow::Result<bool> {
+        if !self.has_static_ability(ability) {
+            return Ok(false);
+        }
+        let control_plane_key = self.static_control_plane_key(ability)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "static ability {ability:?} has handler state but no owner table entry; cannot unregister authority-scoped control-plane facts"
+            )
+        })?;
+        let runtime_key = control_plane_key.runtime_key()?;
         let present = self.drain_static(ability);
         if present {
-            if let (Some(runtime), Some(runtime_key)) =
-                (self.runtime.as_ref(), runtime_key.as_ref())
-            {
-                self.unregister_runtime_ability_by_key(runtime, ability, runtime_key)
+            self.control_plane
+                .write()
+                .expect("control_plane RwLock poisoned")
+                .remove_for_authority(
+                    control_plane_key.authority_root(),
+                    control_plane_key.ability(),
+                );
+            if let Some(runtime) = self.runtime.as_ref() {
+                self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)
                     .unwrap_or_else(|error| {
                         panic!("static ability {ability:?} failed to unregister from LocalRuntime: {error}")
                     });
             }
         }
-        present
+        Ok(present)
     }
 
     /// Drop every static-side trace of `ability` across the eight
@@ -2909,10 +3012,6 @@ impl AxonAbilityCatalog {
         self.bidi_with_env.remove(ability);
         self.owner.remove(ability);
         self.manifests.remove(ability);
-        self.control_plane
-            .write()
-            .expect("control_plane RwLock poisoned")
-            .remove(ability);
         present
     }
 
@@ -3134,22 +3233,13 @@ impl AxonAbilityCatalog {
         .commit(self)
     }
 
-    /// Remove every dynamic-side trace of `ability` (the parallel
-    /// to `unregister` for the static maps). Returns `true` if the
-    /// dynamic side actually held the name. Static entries are
-    /// **not** touched — the hot-reload sink writes exclusively
-    /// through the dynamic surface, so the static side is the
-    /// boot-time truth and must not be re-mutated post-boot.
+    /// Remove every dynamic-side trace of `ability` under the dynamic
+    /// entry's recorded authority root. Static entries are not touched.
     pub fn hot_unregister(&self, ability: &str) -> anyhow::Result<bool> {
-        let present = self
-            .dynamic_ext
-            .read()
-            .expect("dynamic_ext RwLock poisoned")
-            .contains(ability);
-        if !present {
+        let Some(control_plane_key) = self.dynamic_control_plane_key(ability)? else {
             return Ok(false);
-        }
-        let runtime_key = self.runtime_ability_key(ability)?;
+        };
+        let runtime_key = control_plane_key.runtime_key()?;
         {
             let mut dyn_ext = self
                 .dynamic_ext
@@ -3162,7 +3252,10 @@ impl AxonAbilityCatalog {
         self.control_plane
             .write()
             .expect("control_plane RwLock poisoned")
-            .remove(ability);
+            .remove_for_authority(
+                control_plane_key.authority_root(),
+                control_plane_key.ability(),
+            );
         if let Some(runtime) = self.runtime.as_ref() {
             self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)?;
         }
@@ -3181,37 +3274,7 @@ impl AxonAbilityCatalog {
         if self.has_static_ability(ability) {
             return Ok(false);
         }
-        let present = {
-            let dyn_ext = self
-                .dynamic_ext
-                .read()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.contains(ability)
-                || self
-                    .control_plane
-                    .read()
-                    .expect("control_plane RwLock poisoned")
-                    .contains(ability)
-        };
-        if !present {
-            return Ok(false);
-        }
-        let runtime_key = self.runtime_ability_key(ability)?;
-        {
-            let mut dyn_ext = self
-                .dynamic_ext
-                .write()
-                .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.drain(ability);
-        }
-        self.control_plane
-            .write()
-            .expect("control_plane RwLock poisoned")
-            .remove(ability);
-        if let Some(runtime) = self.runtime.as_ref() {
-            self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)?;
-        }
-        Ok(true)
+        self.hot_unregister(ability)
     }
 
     /// True iff the dynamic side currently holds an entry for
@@ -4371,7 +4434,11 @@ mod tests {
             .expect("control-plane lookup is unambiguous")
             .expect("control-plane record");
         let runtime = reg.runtime().expect("registry owns LocalRuntime");
-        let runtime_key = reg.runtime_ability_key("fs.read").expect("runtime key");
+        let runtime_key = reg
+            .handler_control_plane_key("fs.read")
+            .expect("handler authority key")
+            .runtime_key()
+            .expect("runtime key");
         let options =
             block_on_runtime_sync(runtime.ability_options(&runtime_key)).expect("runtime options");
         let proof = options.proof_for_mode(AxonCallMode::Rpc);
@@ -4423,7 +4490,9 @@ mod tests {
 
         let runtime = reg.runtime().expect("registry owns LocalRuntime");
         let rpc_key = reg
-            .runtime_ability_key("agent.chat")
+            .handler_control_plane_key("agent.chat")
+            .expect("handler authority key")
+            .runtime_key()
             .expect("runtime rpc key");
         let options =
             block_on_runtime_sync(runtime.ability_options(&rpc_key)).expect("runtime options");
@@ -4815,7 +4884,9 @@ mod tests {
         reg.register_rpc("doomed.tool", Arc::new(|_| Ok(json!("v"))));
         assert!(reg.has_rpc("doomed.tool"));
         assert_eq!(reg.lookup_owner("doomed.tool"), Some(OwnerKind::Device));
-        let was_present = reg.unregister("doomed.tool");
+        let was_present = reg
+            .unregister("doomed.tool")
+            .expect("static RPC unregister succeeds");
         assert!(
             was_present,
             "unregister must report the ability was present"
@@ -4830,7 +4901,9 @@ mod tests {
         // Returns false but does not panic — the contract callers
         // (B4 list_changed refresh diff) rely on for the
         // "tool went away mid-sync" race.
-        assert!(!reg.unregister("never-was-there"));
+        assert!(!reg
+            .unregister("never-was-there")
+            .expect("missing unregister is idempotent"));
     }
 
     #[test]
@@ -4850,8 +4923,10 @@ mod tests {
         );
         assert!(reg.has_stream("doomed.stream"));
         assert!(reg.has_bidi("doomed.bidi"));
-        reg.unregister("doomed.stream");
-        reg.unregister("doomed.bidi");
+        reg.unregister("doomed.stream")
+            .expect("static stream unregister succeeds");
+        reg.unregister("doomed.bidi")
+            .expect("static bidi unregister succeeds");
         assert!(!reg.has_stream("doomed.stream"));
         assert!(!reg.has_bidi("doomed.bidi"));
     }
