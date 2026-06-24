@@ -985,10 +985,14 @@ fn init_keyring_for_daemon(
 /// the `agent.start` / `.stop` handlers so post-boot agent
 /// additions are registered into `LocalRuntime`.
 pub fn build_registry_for_daemon(config: RegistryDaemonBuildConfig) -> Arc<AxonAbilityCatalog> {
-    build_registry_for_daemon_result(config).catalog
+    build_registry_for_daemon_result(config)
+        .expect("build daemon ability registry")
+        .catalog
 }
 
-pub fn build_registry_for_daemon_result(config: RegistryDaemonBuildConfig) -> BuiltAbilityRegistry {
+pub fn build_registry_for_daemon_result(
+    config: RegistryDaemonBuildConfig,
+) -> anyhow::Result<BuiltAbilityRegistry> {
     let RegistryDaemonBuildConfig {
         services,
         invocation_ledger,
@@ -999,6 +1003,7 @@ pub fn build_registry_for_daemon_result(config: RegistryDaemonBuildConfig) -> Bu
         hot_agent_registrar_cell,
         shared_stores,
     } = config;
+    recover_descriptor_import_transactions_before_daemon_registry_boot()?;
     let agents = match crate::registry::agents::load_agents() {
         Ok(r) => r,
         Err(e) => {
@@ -1018,7 +1023,7 @@ pub fn build_registry_for_daemon_result(config: RegistryDaemonBuildConfig) -> Bu
             &services.schedule,
         )))
     });
-    build_registry_with_services_result(RegistryBuildConfig {
+    Ok(build_registry_with_services_result(RegistryBuildConfig {
         services,
         invocation_ledger,
         agents: &agents,
@@ -1028,5 +1033,21 @@ pub fn build_registry_for_daemon_result(config: RegistryDaemonBuildConfig) -> Bu
         authority_context,
         hot_agent_registrar_cell,
         shared_stores,
-    })
+    }))
+}
+
+pub(super) fn recover_descriptor_import_transactions_before_daemon_registry_boot(
+) -> anyhow::Result<usize> {
+    let recovered_descriptor_imports = teach_ability::recover_descriptor_import_transactions()?;
+    if recovered_descriptor_imports > 0 {
+        let recovered = recovered_descriptor_imports.to_string();
+        crate::op_event!(
+            component = agents_boot,
+            kind = descriptor_import_recovery_completed,
+            recovered = recovered.as_str(),
+            message =
+                "recovered descriptor-import acquire transactions before daemon registry boot",
+        );
+    }
+    Ok(recovered_descriptor_imports)
 }

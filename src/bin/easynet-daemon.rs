@@ -271,7 +271,7 @@ async fn main() -> anyhow::Result<()> {
             authority_context: None,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
             shared_stores: agents::RegistrySharedStores::new(Arc::clone(&hub_published_abilities)),
-        });
+        })?;
     let registry = Arc::clone(&built_registry.catalog);
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");

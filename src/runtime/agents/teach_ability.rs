@@ -612,7 +612,7 @@ fn rollback_descriptor_import_manifest(
     remove_file_if_exists(&staged.temp, "remove staged descriptor-import manifest")
 }
 
-fn recover_acquiring_descriptor_import_manifests() -> anyhow::Result<()> {
+pub fn recover_descriptor_import_transactions() -> anyhow::Result<usize> {
     TeachGrantStore::open_default().recover_acquiring(|record| {
         let path = record.acquiring_manifest_path().ok_or_else(|| {
             anyhow::anyhow!("recover acquiring descriptor-import manifest: missing committed path")
@@ -656,8 +656,7 @@ fn recover_acquiring_descriptor_import_manifests() -> anyhow::Result<()> {
             );
         }
         Ok(AcquiringArtifactRecoveryState::Committed)
-    })?;
-    Ok(())
+    })
 }
 
 fn stage_forget_manifest(
@@ -940,7 +939,7 @@ impl AuthorizedAcquire {
     }
 
     fn admit_transfer(self) -> anyhow::Result<AdmittedAcquire> {
-        recover_acquiring_descriptor_import_manifests()?;
+        recover_descriptor_import_transactions()?;
         let store = TeachGrantStore::open_default();
         let grant = store
             .grant_for(
@@ -1150,6 +1149,7 @@ fn forget_handler_with_hot_registrar(
 ) -> anyhow::Result<Value> {
     let ability = required_str(&args, "ability", FORGET)?;
     let agent = required_str(&args, "agent", FORGET)?;
+    recover_descriptor_import_transactions()?;
 
     let agents = crate::registry::agents::load_agents()?;
     let agent_entry_for_runtime = agents.agents.get(agent).cloned();
@@ -1346,6 +1346,27 @@ mod tests {
         fn now_rfc3339(&self) -> String {
             self.0.to_string()
         }
+    }
+
+    fn mark_first_import_as_acquiring_for_test(manifest_path: &Path) {
+        let grants_path = crate::persistence::teach_grants::path();
+        let mut grants: Value =
+            serde_json::from_slice(&std::fs::read(&grants_path).expect("teach grants file"))
+                .expect("teach grants json");
+        let import = grants["imports"]
+            .as_array_mut()
+            .and_then(|imports| imports.first_mut())
+            .expect("one import row");
+        let manifest_hash = import["manifest_hash"].clone();
+        import["state"] = json!("acquiring");
+        import["acquiring_manifest_path"] = json!(manifest_path.to_string_lossy().to_string());
+        import["acquiring_staging_manifest_path"] = Value::Null;
+        import["acquiring_manifest_hash"] = manifest_hash;
+        std::fs::write(
+            grants_path,
+            serde_json::to_vec_pretty(&grants).expect("serialize grants"),
+        )
+        .expect("write acquiring grants fixture");
     }
 
     #[test]
@@ -1720,6 +1741,42 @@ mod tests {
                 .exists(),
             "discovery-only forget must remove the learner artifact even when runtime refresh is unavailable"
         );
+    }
+
+    #[test]
+    fn forget_recovers_committed_acquiring_import_before_removal() {
+        let _g = HomeGuard::new();
+        let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
+        teach_handler(
+            caller_env(mentor_ura),
+            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
+        )
+        .expect("teach");
+        acquire_handler(
+            caller_env(apprentice_ura.clone()),
+            json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+        )
+        .expect("acquire");
+
+        let imported_manifest = std::path::Path::new(&std::env::var("HOME").unwrap())
+            .join("agents/apprentice/abilities/quote.ability.toml");
+        mark_first_import_as_acquiring_for_test(&imported_manifest);
+
+        let resp = forget_handler(
+            caller_env(apprentice_ura),
+            json!({ "ability": "quote", "agent": "apprentice" }),
+        )
+        .expect("forget must recover the committed acquire before removing");
+        assert_eq!(resp["removed_descriptor"], "quote");
+        assert!(
+            !imported_manifest.exists(),
+            "forget must remove the recovered imported descriptor"
+        );
+        let grants: Value = serde_json::from_slice(
+            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+        )
+        .unwrap();
+        assert!(grants["imports"].as_array().unwrap().is_empty());
     }
 
     #[test]

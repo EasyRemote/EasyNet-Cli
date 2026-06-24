@@ -10,6 +10,63 @@ fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_>
     RegistryBuildConfig::new(RegistryBuildServices::fresh(), agents)
 }
 
+fn sha256_hex_for_test(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+#[test]
+fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+
+    let home = std::env::var("HOME").expect("HomeGuard sets HOME");
+    let manifest_path =
+        std::path::Path::new(&home).join("agents/apprentice/abilities/quote.ability.toml");
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+        .expect("create manifest dir");
+    let manifest =
+        b"name = \"quote\"\ndescription = \"imported\"\n\n[input_schema]\ntype = \"object\"\n";
+    std::fs::write(&manifest_path, manifest).expect("write imported descriptor");
+    let manifest_hash = sha256_hex_for_test(manifest);
+
+    let grants_path = crate::persistence::teach_grants::path();
+    std::fs::create_dir_all(grants_path.parent().expect("teach grants parent"))
+        .expect("create state dir");
+    std::fs::write(
+        &grants_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "2",
+            "grants": [],
+            "imports": [{
+                "ability_name": "quote",
+                "learner_agent": "apprentice",
+                "source_descriptor_ura": "easynet:///r/localhost/agent/dev.mentor/ability/quote",
+                "manifest_hash": manifest_hash,
+                "imported_at": "2026-06-23T01:02:03Z",
+                "state": "acquiring",
+                "acquiring_manifest_path": manifest_path.to_string_lossy(),
+                "acquiring_staging_manifest_path": null,
+                "acquiring_manifest_hash": manifest_hash,
+                "pending_grant": null
+            }]
+        }))
+        .expect("serialize grants"),
+    )
+    .expect("write acquiring teach grants fixture");
+
+    let recovered =
+        super::registry_builder::recover_descriptor_import_transactions_before_daemon_registry_boot()
+            .expect("daemon boot recovery hook");
+    assert_eq!(recovered, 1);
+
+    let recovered: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(grants_path).expect("read recovered grants"))
+            .expect("parse recovered grants");
+    assert_eq!(recovered["imports"][0]["state"], "active");
+    assert!(recovered["imports"][0]["acquiring_manifest_path"].is_null());
+    assert!(recovered["imports"][0]["acquiring_manifest_hash"].is_null());
+}
+
 #[test]
 fn published_ability_names_contains_agent_list_and_terminal_list() {
     // Diagnostic for the production NODATA: agent.list resolves but
