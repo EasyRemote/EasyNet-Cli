@@ -34,7 +34,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use anyhow::Context as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -101,7 +100,6 @@ impl AcquiringArtifactTxn for StagedLearnedManifest {
 #[derive(Debug, Clone)]
 struct StagedForgottenManifest {
     temp: Option<PathBuf>,
-    dest: Option<PathBuf>,
 }
 
 pub fn teach_description() -> &'static str {
@@ -664,26 +662,17 @@ fn stage_forget_manifest(
     expected_hash: Option<&str>,
 ) -> anyhow::Result<StagedForgottenManifest> {
     let Some(dest) = path else {
-        return Ok(StagedForgottenManifest {
-            temp: None,
-            dest: None,
-        });
+        return Ok(StagedForgottenManifest { temp: None });
     };
     let temp = stage_path_for(dest, "forget")?;
     if temp.exists() {
         if !dest.exists() {
-            return Ok(StagedForgottenManifest {
-                temp: Some(temp),
-                dest: Some(dest.to_path_buf()),
-            });
+            return Ok(StagedForgottenManifest { temp: Some(temp) });
         }
         remove_file_if_exists(&temp, "remove stale forgotten staging manifest")?;
     }
     if !dest.exists() {
-        return Ok(StagedForgottenManifest {
-            temp: None,
-            dest: Some(dest.to_path_buf()),
-        });
+        return Ok(StagedForgottenManifest { temp: None });
     }
     if let Some(expected_hash) = expected_hash {
         let bytes = std::fs::read(dest).map_err(|e| {
@@ -726,10 +715,7 @@ fn stage_forget_manifest(
             "restore learned manifest after failed forget staging fsync",
         ));
     }
-    Ok(StagedForgottenManifest {
-        temp: Some(temp),
-        dest: Some(dest.to_path_buf()),
-    })
+    Ok(StagedForgottenManifest { temp: Some(temp) })
 }
 
 fn commit_forget_manifest(staged: &StagedForgottenManifest) -> anyhow::Result<()> {
@@ -737,27 +723,6 @@ fn commit_forget_manifest(staged: &StagedForgottenManifest) -> anyhow::Result<()
         return Ok(());
     };
     remove_file_if_exists(temp, "remove staged forgotten manifest")
-}
-
-fn rollback_forget_manifest(staged: &StagedForgottenManifest) -> anyhow::Result<()> {
-    let (Some(temp), Some(dest)) = (staged.temp.as_ref(), staged.dest.as_ref()) else {
-        return Ok(());
-    };
-    if dest.exists() {
-        return rollback_staged_file(temp);
-    }
-    std::fs::rename(temp, dest).map_err(|e| {
-        anyhow::anyhow!(
-            "restore learned manifest {} -> {}: {e}",
-            temp.display(),
-            dest.display()
-        )
-    })?;
-    sync_parent_dir(dest)
-}
-
-fn rollback_staged_file(path: &Path) -> anyhow::Result<()> {
-    remove_file_if_exists(path, "remove stale staged manifest")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -866,7 +831,7 @@ impl<'a> AcquireWorkflow<'a> {
         let authorized = AuthorizedAcquire::from_request(env, request)?;
         let admitted = authorized.admit_transfer()?;
         let committed = admitted.commit(clock)?;
-        committed.sync_runtime(hot_registrar)?.into_response()
+        committed.refresh_runtime(hot_registrar)?.into_response()
     }
 }
 
@@ -1039,34 +1004,18 @@ struct CommittedAcquire {
 }
 
 impl CommittedAcquire {
-    fn sync_runtime(
+    fn refresh_runtime(
         self,
         hot_registrar: Option<&SharedHotRegistrarCell>,
     ) -> anyhow::Result<RuntimeSyncedAcquire> {
         let new_ura =
             crate::ura::owner_ability_ura(&self.plan.learner_ura, &self.plan.request.public_name)
                 .ok_or_else(|| anyhow::anyhow!("could not mint the learner's ability URA"))?;
-        let runtime_sync = match sync_learner_runtime_after_acquire(
+        let runtime_sync = sync_learner_runtime_after_acquire(
             hot_registrar,
             &self.plan.request.learner,
             &self.plan.learner_entry_for_runtime,
-        ) {
-            Ok(value) => value,
-            Err(sync_err) => {
-                let rollback = rollback_acquire_after_runtime_sync_failure(
-                    &self.acquired,
-                    hot_registrar,
-                    &self.plan.request.learner,
-                    &self.plan.dest,
-                    &self.plan.learner_entry_for_runtime,
-                );
-                return Err(append_cleanup_error(
-                    sync_err,
-                    rollback,
-                    "rollback learned ability after runtime sync failure",
-                ));
-            }
-        };
+        );
         Ok(RuntimeSyncedAcquire {
             plan: self.plan,
             acquired: self.acquired,
@@ -1113,27 +1062,6 @@ fn no_teach_grant_error(
     )
 }
 
-fn rollback_acquire_after_runtime_sync_failure(
-    acquired: &crate::persistence::teach_grants::AcquiredTeachGrant,
-    hot_registrar: Option<&SharedHotRegistrarCell>,
-    learner: &str,
-    manifest_path: &Path,
-    entry: &crate::registry::agents::AgentEntry,
-) -> anyhow::Result<()> {
-    TeachGrantStore::open_default().restore_acquired_grant_after_failure(
-        acquired,
-        |_| {
-            stage_forget_manifest(
-                Some(manifest_path),
-                Some(acquired.learned().manifest_hash()),
-            )
-        },
-        commit_forget_manifest,
-        rollback_forget_manifest,
-    )?;
-    sync_learner_runtime_after_forget(hot_registrar, learner, entry).map(|_| ())
-}
-
 fn append_cleanup_error(
     primary: anyhow::Error,
     cleanup: anyhow::Result<()>,
@@ -1151,64 +1079,56 @@ fn sync_learner_runtime_after_acquire(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
     entry: &crate::registry::agents::AgentEntry,
-) -> anyhow::Result<Value> {
+) -> Value {
     let Some(cell) = hot_registrar else {
-        return Ok(json!({
+        return json!({
             "attempted": false,
+            "ok": false,
             "runtime_not_ready": true,
             "reason": "hot_registrar_not_provided",
-        }));
+        });
     };
     let Some(registrar) = cell.get().cloned() else {
-        anyhow::bail!(
-            "{ACQUIRE}: learned manifest landed on disk, but the hot registrar is not \
-             wired; retry after daemon boot completes"
-        );
+        return json!({
+            "attempted": false,
+            "ok": false,
+            "runtime_not_ready": true,
+            "reason": "hot_registrar_not_wired",
+        });
     };
     let learner_name = learner.to_string();
     let entry_for_runtime = entry.clone();
-    let outcome = block_on_hot_registrar(async move {
+    let Some(outcome) = block_on_hot_registrar(async move {
         registrar
             .register_agent(&learner_name, &entry_for_runtime)
             .await
-    })
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "{ACQUIRE}: hot_registrar is wired but no tokio runtime is available on the \
-             calling thread; learned manifest was persisted but not live-registered"
-        )
-    })?;
-    ensure_runtime_sync_succeeded(ACQUIRE, learner, outcome)?;
-    Ok(runtime_sync_value(outcome))
+    }) else {
+        return json!({
+            "attempted": false,
+            "ok": false,
+            "runtime_not_ready": true,
+            "reason": "no_tokio_runtime_for_hot_registrar",
+        });
+    };
+    runtime_sync_value(outcome)
 }
 
 fn runtime_sync_value(outcome: HotAgentRuntimeSyncOutcome) -> Value {
+    let ok = !outcome.runtime_not_ready
+        && !outcome.catalog_not_ready
+        && !outcome.rejected_reserved_owner
+        && outcome.failed == 0;
     json!({
         "attempted": true,
+        "ok": ok,
         "registered": outcome.registered,
         "replaced": outcome.replaced,
         "failed": outcome.failed,
         "removed": outcome.removed,
         "runtime_not_ready": outcome.runtime_not_ready,
+        "catalog_not_ready": outcome.catalog_not_ready,
         "rejected_reserved_owner": outcome.rejected_reserved_owner,
     })
-}
-
-fn ensure_runtime_sync_succeeded(
-    surface: &str,
-    learner: &str,
-    outcome: HotAgentRuntimeSyncOutcome,
-) -> anyhow::Result<()> {
-    if outcome.runtime_not_ready || outcome.rejected_reserved_owner || outcome.failed > 0 {
-        anyhow::bail!(
-            "{surface}: persisted the learned manifest for {learner:?}, but LocalRuntime \
-             reconciliation failed (runtime_not_ready={}, rejected_reserved_owner={}, failed={})",
-            outcome.runtime_not_ready,
-            outcome.rejected_reserved_owner,
-            outcome.failed
-        );
-    }
-    Ok(())
 }
 
 /// `meta.forget { ability, agent }` — drop a LEARNED ability. The
@@ -1249,15 +1169,10 @@ fn forget_handler_with_hot_registrar(
 
     let runtime_pending = store.commit_forget_artifact(&staged, commit_forget_manifest)?;
     let runtime_sync = match agent_entry_for_runtime.as_ref() {
-        Some(entry) => sync_learner_runtime_after_forget(hot_registrar, agent, entry)
-            .with_context(|| {
-                format!(
-                    "{FORGET}: durable tombstone for agent {agent:?} ability {ability:?} is \
-                     still present; retry forget after runtime reconciliation is available"
-                )
-            })?,
+        Some(entry) => sync_learner_runtime_after_forget(hot_registrar, agent, entry),
         None => json!({
             "attempted": false,
+            "ok": false,
             "runtime_not_ready": true,
             "reason": "agent_registry_entry_missing",
         }),
@@ -1279,36 +1194,38 @@ fn sync_learner_runtime_after_forget(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
     entry: &crate::registry::agents::AgentEntry,
-) -> anyhow::Result<Value> {
+) -> Value {
     let Some(cell) = hot_registrar else {
-        return Ok(json!({
+        return json!({
             "attempted": false,
+            "ok": false,
             "runtime_not_ready": true,
             "reason": "hot_registrar_not_provided",
-        }));
+        });
     };
     let Some(registrar) = cell.get().cloned() else {
-        anyhow::bail!(
-            "{FORGET}: learned manifest was removed on disk, but the hot registrar is not \
-             wired; retry after daemon boot completes"
-        );
+        return json!({
+            "attempted": false,
+            "ok": false,
+            "runtime_not_ready": true,
+            "reason": "hot_registrar_not_wired",
+        });
     };
     let learner_name = learner.to_string();
     let entry_for_runtime = entry.clone();
-    let outcome = block_on_hot_registrar(async move {
+    let Some(outcome) = block_on_hot_registrar(async move {
         registrar
             .register_agent(&learner_name, &entry_for_runtime)
             .await
-    })
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "{FORGET}: hot_registrar is wired but no tokio runtime is available on the \
-             calling thread; learned manifest was removed but stale runtime row may \
-             survive until daemon restart"
-        )
-    })?;
-    ensure_runtime_sync_succeeded(FORGET, learner, outcome)?;
-    Ok(runtime_sync_value(outcome))
+    }) else {
+        return json!({
+            "attempted": false,
+            "ok": false,
+            "runtime_not_ready": true,
+            "reason": "no_tokio_runtime_for_hot_registrar",
+        });
+    };
+    runtime_sync_value(outcome)
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -1400,15 +1317,20 @@ mod tests {
     fn hot_registrar_cell_with_runtime(
         runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ) -> SharedHotRegistrarCell {
+        let dispatch_handle = Arc::new(std::sync::OnceLock::new());
         let registrar =
             crate::runtime::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
                 Arc::new(Vec::new()),
-                Arc::new(std::sync::OnceLock::new()),
+                Arc::clone(&dispatch_handle),
                 Arc::new(
                     crate::runtime::agents::discover_ability::BridgeDiscoverFederationResolver,
                 ),
             );
-        registrar.set_runtime(runtime);
+        registrar.set_runtime(Arc::clone(&runtime));
+        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(runtime));
+        dispatch_handle
+            .set(catalog)
+            .expect("test catalog wired exactly once");
         let hot_cell = SharedHotRegistrarCell::new();
         assert!(hot_cell.set(registrar).is_ok());
         hot_cell
@@ -1742,7 +1664,7 @@ mod tests {
     }
 
     #[test]
-    fn forget_runtime_sync_failure_keeps_retryable_tombstone() {
+    fn forget_runtime_sync_unavailable_finishes_discovery_transaction() {
         let _g = HomeGuard::new();
         let (taught_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
@@ -1757,50 +1679,29 @@ mod tests {
         .expect("learner acquires discovery-only manifest");
 
         let unwired_cell = SharedHotRegistrarCell::new();
-        let err = forget_handler_with_hot_registrar(
+        let resp = forget_handler_with_hot_registrar(
             caller_env(apprentice_ura.clone()),
             json!({ "ability": "quote", "agent": "apprentice" }),
             Some(&unwired_cell),
         )
-        .expect_err("unwired runtime reconciliation must not report forget success");
-        let err = err.to_string();
-        assert!(err.contains("durable tombstone"), "{err}");
+        .expect("runtime refresh is diagnostic for discovery-only forget");
+        assert_eq!(resp["resumed"], false);
+        assert_eq!(resp["runtime_sync"]["attempted"], false);
+        assert_eq!(resp["runtime_sync"]["ok"], false);
+        assert_eq!(resp["runtime_sync"]["runtime_not_ready"], true);
+        assert_eq!(resp["runtime_sync"]["reason"], "hot_registrar_not_wired");
 
-        let grants: Value = serde_json::from_slice(
-            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
-        )
-        .unwrap();
-        let learned = grants["learned"].as_array().expect("learned ledger rows");
-        assert_eq!(learned.len(), 1);
-        assert_eq!(learned[0]["state"], "forgetting");
-        assert!(
-            !std::path::Path::new(&std::env::var("HOME").unwrap())
-                .join("agents/apprentice/abilities/quote.ability.toml")
-                .exists(),
-            "artifact cleanup may have committed, but ledger must keep the retryable tombstone"
-        );
-
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
-        let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
-        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test runtime");
-        let resp = tokio_runtime
-            .block_on(async {
-                forget_handler_with_hot_registrar(
-                    caller_env(apprentice_ura),
-                    json!({ "ability": "quote", "agent": "apprentice" }),
-                    Some(&hot_cell),
-                )
-            })
-            .expect("retry finishes runtime cleanup and tombstone finalization");
-        assert_eq!(resp["resumed"], true);
         let grants: Value = serde_json::from_slice(
             &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         assert!(grants["learned"].as_array().unwrap().is_empty());
+        assert!(
+            !std::path::Path::new(&std::env::var("HOME").unwrap())
+                .join("agents/apprentice/abilities/quote.ability.toml")
+                .exists(),
+            "discovery-only forget must remove the learner artifact even when runtime refresh is unavailable"
+        );
     }
 
     #[test]

@@ -554,96 +554,6 @@ impl TeachGrantStore {
         Ok(active)
     }
 
-    pub fn restore_acquired_grant_after_failure<T>(
-        &self,
-        acquired: &AcquiredTeachGrant,
-        stage_remove: impl FnOnce(&LearnedRecord) -> anyhow::Result<T>,
-        commit_remove: impl FnOnce(&T) -> anyhow::Result<()>,
-        rollback_remove: impl FnOnce(&T) -> anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        let learned = {
-            let _guard = self.lock()?;
-            let directory = self.load_unlocked()?;
-            let Some(learned_idx) = directory.learned_by(
-                &acquired.learned.learner_agent,
-                &acquired.learned.ability_name,
-            ) else {
-                anyhow::bail!(
-                    "restore acquired teach grant: learned ledger row for agent {:?} ability {:?} \
-                     is already absent",
-                    acquired.learned.learner_agent,
-                    acquired.learned.ability_name
-                );
-            };
-            let learned = directory.learned[learned_idx].clone();
-            if learned != acquired.learned {
-                anyhow::bail!(
-                    "restore acquired teach grant: learned ledger row changed under rollback; \
-                     refusing to restore grant for {:?}",
-                    acquired.learned.ability_name
-                );
-            }
-            if directory.grant_index_for_record(&acquired.grant).is_some() {
-                anyhow::bail!(
-                    "restore acquired teach grant: grant for {:?} to {:?} is already present",
-                    acquired.grant.ability_ura,
-                    acquired.grant.learner_ura
-                );
-            }
-            learned
-        };
-
-        let staged = stage_remove(&learned)?;
-        let restore_result = (|| {
-            let _guard = self.lock()?;
-            let mut directory = self.load_unlocked()?;
-            let Some(learned_idx) = directory.learned_by_record(&learned) else {
-                anyhow::bail!(
-                    "restore acquired teach grant: learned ledger row changed before restore \
-                     commit for agent {:?} ability {:?}",
-                    learned.learner_agent,
-                    learned.ability_name
-                );
-            };
-            if directory.grant_index_for_record(&acquired.grant).is_some() {
-                anyhow::bail!(
-                    "restore acquired teach grant: grant for {:?} to {:?} is already present",
-                    acquired.grant.ability_ura,
-                    acquired.grant.learner_ura
-                );
-            }
-            directory.learned.remove(learned_idx);
-            directory.grants.push(acquired.grant.clone());
-            self.write_unlocked(&directory)?;
-            Ok(directory)
-        })();
-        let directory = match restore_result {
-            Ok(directory) => directory,
-            Err(write_err) => {
-                return Err(append_cleanup_error(
-                    write_err,
-                    rollback_remove(&staged),
-                    "restore staged learned manifest",
-                ));
-            }
-        };
-        if let Err(commit_err) = commit_remove(&staged) {
-            let artifact_rollback = rollback_remove(&staged);
-            let restore_err =
-                self.restore_acquired_ledger_unlocked(directory, acquired.grant.clone(), learned);
-            return Err(append_cleanup_error(
-                append_cleanup_error(
-                    commit_err,
-                    artifact_rollback,
-                    "restore staged learned manifest",
-                ),
-                restore_err,
-                "restore acquired teach ledger after failed rollback cleanup",
-            ));
-        }
-        Ok(())
-    }
-
     pub fn stage_forget<T>(
         &self,
         learner_agent: &str,
@@ -828,20 +738,6 @@ impl TeachGrantStore {
         })
     }
 
-    fn restore_acquired_ledger_unlocked(
-        &self,
-        mut directory: TeachGrantsFile,
-        grant: TeachGrant,
-        mut learned: LearnedRecord,
-    ) -> anyhow::Result<()> {
-        if let Some(grant_idx) = directory.grant_index_for_record(&grant) {
-            directory.grants.remove(grant_idx);
-        }
-        learned.mark_active();
-        directory.learned.push(learned);
-        self.write_unlocked(&directory)
-    }
-
     fn restore_acquired_ledger_after_artifact_commit_failure(
         &self,
         acquired: &AcquiredTeachGrant,
@@ -907,15 +803,6 @@ impl TeachGrantsFile {
                 && g.ability_ura == ability_ura
                 && g.owner_ura == owner_ura
                 && g.learner_ura == learner_ura
-        })
-    }
-
-    /// Active learned-ledger row for `(learner, ability)`.
-    fn learned_by(&self, learner_agent: &str, ability_name: &str) -> Option<usize> {
-        self.learned.iter().position(|l| {
-            l.learner_agent == learner_agent
-                && l.ability_name == ability_name
-                && l.state == LearnedRecordState::Active
         })
     }
 
@@ -1441,69 +1328,6 @@ mod tests {
             file.learned[0].state(),
             LearnedRecordState::Forgetting,
             "cleanup failure must preserve the durable tombstone for retry"
-        );
-    }
-
-    #[test]
-    fn restore_acquired_grant_after_failure_restores_authorization_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        let store = TeachGrantStore { path: path.clone() };
-        let learner = "easynet:///r/acme/agent/apprentice";
-        let grant = TeachGrant::new(
-            "mentor.quote",
-            "easynet:///r/acme/ability/mentor.quote",
-            "easynet:///r/acme/agent/mentor",
-            "mentor",
-            learner,
-            TEST_MANIFEST_HASH,
-            EXECUTION_MODE_DEFAULT,
-            "t0",
-        );
-        store.grant(grant.clone()).unwrap();
-
-        let acquired = store
-            .acquire_staged(
-                "mentor.quote",
-                "easynet:///r/acme/ability/mentor.quote",
-                "easynet:///r/acme/agent/mentor",
-                learner,
-                &grant,
-                LearnedRecord::new(
-                    "quote",
-                    "apprentice",
-                    "easynet:///r/acme/ability/mentor.quote",
-                    TEST_MANIFEST_HASH,
-                    "t1",
-                ),
-                TestAcquiringArtifact::committed(),
-            )
-            .unwrap();
-
-        store
-            .restore_acquired_grant_after_failure(
-                &acquired,
-                |_| Ok("staged-remove".to_string()),
-                |_| Ok(()),
-                |_| Ok(()),
-            )
-            .unwrap();
-
-        let body = std::fs::read(&path).unwrap();
-        let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
-        assert!(
-            file.learned.is_empty(),
-            "rollback must remove the learned ledger row"
-        );
-        assert!(
-            file.grant_index_for(
-                "mentor.quote",
-                "easynet:///r/acme/ability/mentor.quote",
-                "easynet:///r/acme/agent/mentor",
-                learner
-            )
-            .is_some(),
-            "rollback must restore the consumed teach grant"
         );
     }
 }
