@@ -61,13 +61,6 @@ use crate::ura::AbilitySelector;
 /// `support::output` leaf layer.
 pub use crate::support::output::OutputFormat;
 
-/// Candidates requested from each ladder scope.
-///
-/// The CLI still ranks locally, so it asks the runtime for a wide source
-/// window and surfaces runtime-reported truncation as a diagnostic. This is
-/// deliberately a named boundary, not a hidden completeness claim.
-const SOURCE_CANDIDATE_LIMIT: usize = 10_000;
-
 #[derive(Debug, Args)]
 pub struct DiscoverArgs {
     /// What you want done, in your own words — e.g. "read a file on
@@ -527,7 +520,7 @@ impl<'a> DiscoverRuntimeService<'a> {
     ) -> anyhow::Result<(Value, Value)> {
         invoke_local_ability_with_invocation_meta(
             &self.ladder,
-            json!({ "scope": scope, "top_k": SOURCE_CANDIDATE_LIMIT }),
+            json!({ "scope": scope, "source_window": "all" }),
             None,
             causal_parents,
             None,
@@ -559,8 +552,11 @@ impl<'a> DiscoverRuntimeService<'a> {
             .unwrap_or_default();
         let limit = source
             .get("limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(SOURCE_CANDIDATE_LIMIT as u64);
+            .map(|value| match value {
+                Value::Null => "all".to_string(),
+                other => other.to_string(),
+            })
+            .unwrap_or_else(|| "unknown".to_string());
         self.diagnostics.push(DiscoverDiagnostic {
             scope,
             code: "source_truncated",
@@ -945,8 +941,8 @@ mod tests {
             "scope": "device",
             "source": {
                 "available": 12000,
-                "returned": SOURCE_CANDIDATE_LIMIT,
-                "limit": SOURCE_CANDIDATE_LIMIT,
+                "returned": 20,
+                "limit": 20,
                 "truncated": true,
             }
         }));

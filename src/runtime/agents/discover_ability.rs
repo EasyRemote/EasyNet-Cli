@@ -384,11 +384,11 @@ pub fn register_device_aggregate_with_resolver<F>(
 ///
 /// Provider routing
 /// ----------------
-/// When the call passes `provider = "<owner>.<verb>"`, dispatch
-/// hands off to that ability instead of running the builtin
-/// BM25-lite scorer. The provider must satisfy the same input/
-/// output contract (accepts `{scope, query, top_k}`, returns
-/// `{candidates, scope, query}`). Builtin is the default.
+/// When the call passes `provider = "<agent>.discover"`, dispatch
+/// hands off to that hosted agent's discover ability instead of running
+/// the builtin BM25-lite scorer. The provider must satisfy the same
+/// input/output contract (accepts `{scope, query, top_k, source_window}`,
+/// returns `{candidates, scope, query}`). Builtin is the default.
 ///
 /// Exposed so HotAgentRegistrar can build the same handler for a
 /// hot-added agent and materialise it in LocalRuntime without
@@ -410,6 +410,7 @@ pub fn dispatch(
         if !provider_name.is_empty() {
             return delegate_to_provider(
                 provider_name,
+                agent_registry_provider,
                 dispatch_registry_handle,
                 strip_provider_field(&args),
             );
@@ -418,7 +419,7 @@ pub fn dispatch(
 
     let scope = parse_scope(&args)?;
     let query = parse_query(&args);
-    let top_k = parse_top_k(&args)?;
+    let source_window = parse_source_window(&args)?;
 
     if scope.is_federated() {
         // Tier 3 — federation. Dial the daemon's hub via
@@ -445,7 +446,7 @@ pub fn dispatch(
         //                                  all. Surfaced as ok with
         //                                  `candidates = []`, not as
         //                                  an error.
-        return resolve_via_federation(federation_resolver, scope, query.as_deref(), top_k);
+        return resolve_via_federation(federation_resolver, scope, query.as_deref(), source_window);
     }
 
     let agents = agent_registry_provider();
@@ -493,9 +494,7 @@ pub fn dispatch(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.qualified_name.cmp(&b.qualified_name))
     });
-    let source_count = rows.len();
-    let source_truncated = source_count > top_k;
-    rows.truncate(top_k);
+    let source = source_window.apply(&mut rows);
 
     let candidates: Vec<Value> = rows.iter().map(Candidate::to_json).collect();
     Ok(json!({
@@ -503,26 +502,33 @@ pub fn dispatch(
         "scope": scope.as_str(),
         "query": query,
         "source": {
-            "available": source_count,
+            "available": source.available,
             "returned": rows.len(),
-            "limit": top_k,
-            "truncated": source_truncated,
+            "limit": source.limit,
+            "truncated": source.truncated,
         },
     }))
 }
 
-/// Forward a discover call to a third-party provider ability. The
-/// provider is named in `<owner>.<verb>` form and resolved through
-/// the same dispatch registry every other ability uses; we strip
-/// the `provider` field so the downstream handler sees the args it
-/// declared in its own input_schema, not a recursion-trigger.
+/// Forward a discover call to one hosted agent's discover provider.
+/// The provider is named in `<agent>.discover` form and must map to an
+/// agent registered on this daemon. We strip the `provider` field so the
+/// downstream handler sees the args it declared in its own input_schema, not a
+/// recursion-trigger.
 fn delegate_to_provider(
     provider_name: &str,
+    agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    if !provider_name.contains('.') {
-        anyhow::bail!("discover: provider {provider_name:?} must use the `<owner>.<verb>` form");
+    let provider = DiscoverProviderName::parse(provider_name)?;
+    let agents = agent_registry_provider();
+    if !agents.agents.contains_key(provider.agent) {
+        anyhow::bail!(
+            "discover: provider agent {:?} is not registered on this daemon; choose an \
+             agent from `agent.list` or omit provider",
+            provider.agent
+        );
     }
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
         anyhow::anyhow!(
@@ -530,16 +536,44 @@ fn delegate_to_provider(
              discover provider routing requires the daemon's live registry"
         )
     })?;
+    let provider_registry_name = provider.as_registry_name();
     registry
-        .invoke_rpc_json(provider_name, args)
+        .invoke_rpc_json(&provider_registry_name, args)
         .map_err(|err| {
             anyhow::anyhow!(
-                "discover: provider {provider_name:?} is not registered or failed. Pick from \
-             the abilities your `<self>.discover()` lists with names ending \
-             in `.discover` (or `.semantic_discover` etc), or omit the \
-             `provider` argument to use the builtin BM25 matcher. ({err})"
+                "discover: provider {provider_registry_name:?} is not registered or failed. Pick a registered \
+                 `<agent>.discover` provider, or omit provider to use the builtin matcher. ({err})"
             )
         })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiscoverProviderName<'a> {
+    agent: &'a str,
+}
+
+impl<'a> DiscoverProviderName<'a> {
+    fn parse(raw: &'a str) -> anyhow::Result<Self> {
+        let raw = raw.trim();
+        let Some((agent, verb)) = raw.rsplit_once('.') else {
+            anyhow::bail!("discover: provider {raw:?} must use `<agent>.discover`");
+        };
+        let agent = agent.trim();
+        let verb = verb.trim();
+        if agent.trim().is_empty() || verb.trim().is_empty() {
+            anyhow::bail!("discover: provider {raw:?} must use `<agent>.discover`");
+        }
+        if verb != ABILITY_VERB {
+            anyhow::bail!(
+                "discover: provider {raw:?} is not a discover provider; expected `<agent>.{ABILITY_VERB}`"
+            );
+        }
+        Ok(Self { agent })
+    }
+
+    fn as_registry_name(&self) -> String {
+        format!("{}.{}", self.agent, ABILITY_VERB)
+    }
 }
 
 /// Build a clone of `args` with the top-level `provider` field
@@ -573,7 +607,7 @@ fn resolve_via_federation(
     federation_resolver: &dyn DiscoverFederationResolver,
     scope: Scope,
     query: Option<&str>,
-    top_k: usize,
+    source_window: SourceWindow,
 ) -> anyhow::Result<Value> {
     let creds = match crate::persistence::config::load_credentials() {
         Ok(c) => c,
@@ -701,9 +735,7 @@ fn resolve_via_federation(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.qualified_name.cmp(&b.qualified_name))
     });
-    let source_count = rows.len();
-    let source_truncated = source_count > top_k;
-    rows.truncate(top_k);
+    let source = source_window.apply(&mut rows);
 
     let candidates: Vec<Value> = rows.iter().map(Candidate::to_json).collect();
     Ok(json!({
@@ -711,10 +743,10 @@ fn resolve_via_federation(
         "scope": scope.as_str(),
         "query": query,
         "source": {
-            "available": source_count,
+            "available": source.available,
             "returned": rows.len(),
-            "limit": top_k,
-            "truncated": source_truncated,
+            "limit": source.limit,
+            "truncated": source.truncated,
         },
     }))
 }
@@ -782,6 +814,62 @@ fn parse_query(args: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceWindow {
+    Bounded(usize),
+    All,
+}
+
+#[derive(Debug, Clone)]
+struct AppliedSourceWindow {
+    available: usize,
+    limit: Value,
+    truncated: bool,
+}
+
+impl SourceWindow {
+    fn apply(self, rows: &mut Vec<Candidate>) -> AppliedSourceWindow {
+        let available = rows.len();
+        match self {
+            SourceWindow::Bounded(limit) => {
+                let truncated = available > limit;
+                rows.truncate(limit);
+                AppliedSourceWindow {
+                    available,
+                    limit: json!(limit),
+                    truncated,
+                }
+            }
+            SourceWindow::All => AppliedSourceWindow {
+                available,
+                limit: Value::Null,
+                truncated: false,
+            },
+        }
+    }
+}
+
+fn parse_source_window(args: &Value) -> anyhow::Result<SourceWindow> {
+    let Some(mode) = args.get("source_window") else {
+        return Ok(SourceWindow::Bounded(parse_top_k(args)?));
+    };
+    let mode = mode.as_str().ok_or_else(|| {
+        anyhow::anyhow!("discover: source_window must be \"bounded\" or \"all\"; got {mode}")
+    })?;
+    match mode {
+        "bounded" => Ok(SourceWindow::Bounded(parse_top_k(args)?)),
+        "all" => {
+            if args.get("top_k").is_some() {
+                anyhow::bail!("discover: source_window=\"all\" must omit top_k");
+            }
+            Ok(SourceWindow::All)
+        }
+        other => anyhow::bail!(
+            "discover: unsupported source_window {other:?}; expected \"bounded\" or \"all\""
+        ),
+    }
 }
 
 fn parse_top_k(args: &Value) -> anyhow::Result<usize> {
@@ -1022,10 +1110,9 @@ fn federated_directory_candidates(_entries: &[Value]) -> Vec<Candidate> {
 /// absolute meaning; only the relative ordering matters, and the LLM
 /// reads `reason` for the human story.
 ///
-/// A future PR can replace this with a pluggable scorer (the SKILL.md
-/// already teaches the LLM that `<owner>.semantic_discover` providers
-/// may exist). The function is kept private and small so the swap is
-/// a single line in `discover_handler`.
+/// A future PR can replace this with a richer scorer inside a hosted
+/// agent's `<agent>.discover` implementation. The function is kept
+/// private and small so the swap stays behind the provider boundary.
 fn score_against_query(rows: &mut [Candidate], query: &str) {
     let q = query.trim().to_lowercase();
     let q_terms = tokenize_search_terms(query);
@@ -1138,13 +1225,19 @@ pub fn input_schema() -> Value {
                 "type": "integer",
                 "minimum": 1,
                 "default": 20,
-                "description": "Cap on returned candidates after scoring."
+                "description": "Cap on returned candidates after scoring when source_window is bounded."
+            },
+            "source_window": {
+                "type": "string",
+                "enum": ["bounded", "all"],
+                "default": "bounded",
+                "description": "`bounded` applies top_k in the runtime source. `all` returns the complete source set so a caller-owned ranker can score before truncating."
             },
             "provider": {
                 "type": "string",
-                "description": "Optional discover-provider ability to delegate to \
-                                (e.g. `userx.semantic_discover`). Provider must \
-                                accept the same {scope, query, top_k} args and \
+                "description": "Optional hosted-agent discover provider to delegate to \
+                                in `<agent>.discover` form. Provider must accept \
+                                the same {scope, query, top_k, source_window} args and \
                                 return the same {candidates, scope, query} \
                                 envelope. Omit to use the builtin BM25-lite \
                                 matcher."
@@ -1687,6 +1780,56 @@ mod tests {
     }
 
     #[test]
+    fn source_window_all_returns_complete_source() {
+        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
+        let owned_manifests: Vec<(String, AbilityManifest)> = (0..25)
+            .map(|idx| {
+                let name = format!("ability_{idx:02}");
+                let manifest =
+                    AbilityManifest::new(&name, format!("Ability {idx}"), obj_schema()).unwrap();
+                (name, manifest)
+            })
+            .collect();
+        let manifests: Vec<(&str, AbilityManifest)> = owned_manifests
+            .iter()
+            .map(|(name, manifest)| (name.as_str(), manifest.clone()))
+            .collect();
+        let (_dir, _, entry) = workspace_with_manifests("claude", &manifests);
+        let agents = one_agent("claude", entry);
+        let agents_clone = agents.clone();
+
+        let mut reg = AxonAbilityCatalog::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            move || agents_clone.clone(),
+            Arc::new(std::sync::OnceLock::new()),
+        );
+        let h = reg.get_rpc("claude.discover").unwrap();
+        let resp = h(json!({"scope": "self", "source_window": "all"})).unwrap();
+
+        assert_eq!(resp["candidates"].as_array().unwrap().len(), 25);
+        assert_eq!(resp["source"]["available"], json!(25));
+        assert_eq!(resp["source"]["returned"], json!(25));
+        assert!(resp["source"]["limit"].is_null());
+        assert_eq!(resp["source"]["truncated"], json!(false));
+    }
+
+    #[test]
+    fn source_window_all_rejects_top_k() {
+        let mut reg = AxonAbilityCatalog::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            AgentRegistry::default,
+            Arc::new(std::sync::OnceLock::new()),
+        );
+        let h = reg.get_rpc("claude.discover").unwrap();
+        let err = h(json!({"source_window": "all", "top_k": 1})).unwrap_err();
+        assert!(format!("{err}").contains("must omit top_k"));
+    }
+
+    #[test]
     fn provider_arg_delegates_to_named_handler() {
         // The discover handler routes to the named provider via the
         // dispatch registry. Pin both halves: (a) the provider IS
@@ -1703,7 +1846,7 @@ mod tests {
                     "candidates": [],
                     "scope": "self",
                     "query": null,
-                    "provider": "userx.semantic_discover (mock)"
+                    "provider": "userx.discover (mock)"
                 }))
             });
 
@@ -1711,13 +1854,22 @@ mod tests {
         // discover. Wire the OnceLock to the same registry so the
         // builtin discover can resolve the provider.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("userx.semantic_discover", provider_handler);
+        reg.register_rpc("userx.discover", provider_handler);
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
+        let mut agents = AgentRegistry::default();
+        agents.agents.insert(
+            "claude".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, None),
+        );
+        agents
+            .agents
+            .insert("userx".to_string(), AgentEntry::new(AgentType::Codex, None));
+        let agents_clone = agents.clone();
         register_for_agent(
             &mut reg,
             "claude".into(),
-            AgentRegistry::default,
+            move || agents_clone.clone(),
             Arc::clone(&handle),
         );
         let arc_reg = Arc::new(reg);
@@ -1727,11 +1879,11 @@ mod tests {
         let resp = h(json!({
             "scope": "self",
             "query": "weather",
-            "provider": "userx.semantic_discover"
+            "provider": "userx.discover"
         }))
         .unwrap();
         // Provider's response is returned verbatim.
-        assert_eq!(resp["provider"], "userx.semantic_discover (mock)");
+        assert_eq!(resp["provider"], "userx.discover (mock)");
         // Provider received args without `provider` field.
         let captured_args = captured.lock().unwrap().clone().unwrap();
         assert!(captured_args.get("provider").is_none());
@@ -1749,7 +1901,7 @@ mod tests {
         );
         let h = reg.get_rpc("claude.discover").unwrap();
         let err = h(json!({"provider": "bogus"})).unwrap_err();
-        assert!(format!("{err}").contains("<owner>.<verb>"));
+        assert!(format!("{err}").contains("<agent>.discover"));
     }
 
     #[test]
@@ -1757,16 +1909,21 @@ mod tests {
         let mut reg = AxonAbilityCatalog::new();
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
+        let mut agents = AgentRegistry::default();
+        agents
+            .agents
+            .insert("userx".to_string(), AgentEntry::new(AgentType::Codex, None));
+        let agents_clone = agents.clone();
         register_for_agent(
             &mut reg,
             "claude".into(),
-            AgentRegistry::default,
+            move || agents_clone.clone(),
             Arc::clone(&handle),
         );
         let arc_reg = Arc::new(reg);
         handle.set(Arc::clone(&arc_reg)).expect("set");
         let h = arc_reg.resolve_rpc("claude.discover").unwrap();
-        let err = h(json!({"provider": "ghost.discover"})).unwrap_err();
+        let err = h(json!({"provider": "userx.discover"})).unwrap_err();
         assert!(format!("{err}").contains("not registered"));
     }
 
