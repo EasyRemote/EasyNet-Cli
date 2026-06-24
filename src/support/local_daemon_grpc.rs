@@ -1047,7 +1047,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         .with_context(|| format!("build signed {function_name} Axon InvokeRequest"))?;
     if let Some(delegation) = delegation.as_ref() {
         let envelope_ability =
-            crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire(
+            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 &callee_ura,
                 &function_name,
                 crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
@@ -1063,8 +1063,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             &signer,
         )?;
         request.metadata.insert(
-            crate::services::invocation_transport::invocation_wire::HOSTED_AGENT_DELEGATION_METADATA_KEY
-                .to_string(),
+            crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
             metadata_value,
         );
     }

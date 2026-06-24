@@ -194,13 +194,12 @@ impl RuntimeInvocation {
             self.subject.clone(),
             easynet_axon::invocation::UraProfile::EasynetStrictV2,
         );
-        let ability =
-            crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire(
-                &self.callee,
-                &self.ability,
-                descriptor_version,
-            )
-            .map_err(|err| RuntimeInvocationError::AxonDescriptorBound(err.to_string()))?;
+        let ability = crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            &self.callee,
+            &self.ability,
+            descriptor_version,
+        )
+        .map_err(|err| RuntimeInvocationError::AxonDescriptorBound(err.to_string()))?;
         let envelope = easynet_axon::invocation::DescriptorBoundEnvelope::from_parts(
             easynet_axon::invocation::DescriptorBoundEnvelopeParts {
                 caller: easynet_axon::invocation::AgentIdentity::new(

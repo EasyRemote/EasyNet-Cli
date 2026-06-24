@@ -18,6 +18,13 @@ pub enum AbilityControlPlaneError {
     /// Descriptor version was not a numeric dot-separated protocol version.
     #[error("ability descriptor version has invalid format: {version:?}")]
     InvalidDescriptorVersion { version: String },
+    /// A manifest-declared interface version disagreed with an explicit
+    /// control-plane registration version.
+    #[error("ability manifest descriptor_version {manifest_version:?} does not match registration descriptor_version {registration_version:?}")]
+    DescriptorVersionMismatch {
+        manifest_version: String,
+        registration_version: String,
+    },
     /// Descriptor name was supplied as an empty or whitespace-only string.
     #[error("ability descriptor name must be non-empty")]
     EmptyDescriptorName,

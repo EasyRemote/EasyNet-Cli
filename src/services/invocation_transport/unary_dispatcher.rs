@@ -360,7 +360,7 @@ impl UnaryDispatcher {
             route_ura = selected_route.route_ura.as_str(),
         );
         let signed_ability_ura =
-            match crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(
+            match crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
                 &selected_route.callee_ura,
                 ability,
             ) {

@@ -56,7 +56,6 @@ pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 /// Invocation metadata keys carrying caller-authority proofs
 /// (single wire-contract source; admission verifies, ledger records).
 pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
-pub(crate) const HOSTED_AGENT_DELEGATION_METADATA_KEY: &str = "x-easynet-hosted-agent-delegation";
 pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
 
 #[derive(Debug, Clone)]

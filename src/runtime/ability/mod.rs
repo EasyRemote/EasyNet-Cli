@@ -26,7 +26,7 @@ pub mod registry;
 pub use authority::{
     AuthorityBindingKind, AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityPredicate,
     AuthorityScope, HostedAgentAuthority, HostedAgentDelegationClaims,
-    HostedAgentDelegationContext,
+    HostedAgentDelegationContext, HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 pub use descriptor::{
     canonical_json_bytes, AbilityDescriptorKey, AbilityDescriptorRecord, AbilityDescriptorRegistry,
@@ -36,6 +36,6 @@ pub use descriptor::{
 pub use error::AbilityControlPlaneError;
 pub use impl_binding::{AbilityImplBinding, AbilityImplRegistry, AbilityImplSource, RuntimeEnv};
 pub use registry::{
-    AbilityControlPlaneLookupError, AbilityControlPlaneLookupMatch, AbilityControlPlaneRecord,
-    AbilityControlPlaneRegistry,
+    AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneLookupError,
+    AbilityControlPlaneLookupMatch, AbilityControlPlaneRecord, AbilityControlPlaneRegistry,
 };

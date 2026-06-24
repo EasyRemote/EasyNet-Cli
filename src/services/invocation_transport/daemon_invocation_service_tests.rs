@@ -17,6 +17,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use super::*;
+use crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 use crate::services::invocation_transport::bidi_dispatcher::{
     build_bidi_terminal_receipt, build_remote_bidi_open_dispatch_frame,
     build_remote_bidi_open_frame_for_contract, build_session_request_result_frame,
@@ -29,7 +30,7 @@ use crate::services::invocation_transport::bidi_dispatcher::{
 use crate::services::invocation_transport::federation_wrappers;
 use crate::services::invocation_transport::invocation_wire::FEDERATION_RESULT_CONTENT_TYPE;
 use crate::services::invocation_transport::invocation_wire::{
-    DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
+    DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
 };
 use crate::services::invocation_transport::invoke_remote_initiator::{
     InvokeRemoteDown, RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,

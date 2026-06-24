@@ -311,17 +311,16 @@ impl StreamDispatcher {
                 selected_route.route_ura, selected_ability_ura
             )));
         }
-        let signed_ability_ura =
-            crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(
-                &selected_route.callee_ura,
-                ability,
-            )
-            .map_err(|err| {
-                Status::invalid_argument(format!(
-                    "InvokeStream: signed ability `{ability}` is not valid for callee `{}`: {err}",
-                    selected_route.callee_ura
-                ))
-            })?;
+        let signed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &selected_route.callee_ura,
+            ability,
+        )
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "InvokeStream: signed ability `{ability}` is not valid for callee `{}`: {err}",
+                selected_route.callee_ura
+            ))
+        })?;
         if signed_ability_ura != selected_ability_ura {
             return Err(status_from_dispatch_key_mismatch(
                 "InvokeStream",

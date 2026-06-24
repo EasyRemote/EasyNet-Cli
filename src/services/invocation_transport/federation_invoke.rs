@@ -499,7 +499,7 @@ fn device_origin_claim(
         Err(_) => crate::ura::owner_ability_ura(&callee_ura, &public_ability)?,
     };
     let subject = SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
-    let ability = crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire(
+    let ability = crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         &callee_ura,
         &public_ability,
         descriptor_version,

@@ -41,11 +41,12 @@ use easynet_axon::invocation::{
 
 use easynet_axon::pb::axon::v1 as pb;
 
+use crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire;
 use crate::runtime::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
 use crate::runtime::axon_bridge::wire_descriptor::{
-    ability_descriptor_ref_for_wire, descriptor_bound_from_wire_parts, WireCallerIdentity,
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
 use crate::runtime::local_invocation_identity::system_agent_identity;
 

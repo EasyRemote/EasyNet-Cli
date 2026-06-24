@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 
 use super::AbilityControlPlaneError;
 
-pub const DEFAULT_ABILITY_DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DEFAULT_ABILITY_DESCRIPTOR_VERSION: &str =
+    crate::core::ability_spec::DEFAULT_DESCRIPTOR_VERSION;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AbilityDescriptorVersion(String);
@@ -194,12 +195,10 @@ impl AbilityDescriptorRecord {
         call_mode: CallMode,
         manifest: Option<&crate::core::ability_spec::AbilityManifest>,
     ) -> Result<Self, AbilityControlPlaneError> {
-        Self::new(
-            name,
-            DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            call_mode,
-            manifest,
-        )
+        let version = manifest
+            .map(crate::core::ability_spec::AbilityManifest::descriptor_version)
+            .unwrap_or(DEFAULT_ABILITY_DESCRIPTOR_VERSION);
+        Self::new(name, version, call_mode, manifest)
     }
 
     pub fn new(
@@ -216,6 +215,7 @@ impl AbilityDescriptorRecord {
             return Err(AbilityControlPlaneError::InvalidDescriptorName { name });
         }
         let version = AbilityDescriptorVersion::new(version)?;
+        ensure_manifest_descriptor_version_matches(version.as_str(), manifest)?;
         let schema_hash = schema_hash_for_manifest(manifest);
         let ability_ura = local_control_plane_ability_ura(&name);
         let descriptor_hash = descriptor_hash_for_ability_ura_parts(
@@ -317,25 +317,24 @@ pub(crate) fn is_valid_ability_name(name: &str) -> bool {
 }
 
 pub(crate) fn is_valid_descriptor_version(version: &str) -> bool {
-    if version.trim().is_empty() || version.trim() != version {
-        return false;
+    crate::core::ability_spec::is_valid_descriptor_version(version)
+}
+
+fn ensure_manifest_descriptor_version_matches(
+    registration_version: &str,
+    manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+) -> Result<(), AbilityControlPlaneError> {
+    let Some(manifest) = manifest else {
+        return Ok(());
+    };
+    let manifest_version = manifest.descriptor_version();
+    if manifest_version == registration_version {
+        return Ok(());
     }
-    let mut parts = version.split('.');
-    let Some(major) = parts.next() else {
-        return false;
-    };
-    let Some(minor) = parts.next() else {
-        return false;
-    };
-    let Some(patch) = parts.next() else {
-        return false;
-    };
-    if parts.next().is_some() {
-        return false;
-    }
-    [major, minor, patch]
-        .into_iter()
-        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+    Err(AbilityControlPlaneError::DescriptorVersionMismatch {
+        manifest_version: manifest_version.to_string(),
+        registration_version: registration_version.to_string(),
+    })
 }
 
 #[derive(Debug, Default, Clone)]
@@ -608,6 +607,46 @@ mod tests {
             base_record.descriptor_hash(),
             restricted_record.descriptor_hash(),
             "descriptor_hash must change when ability access policy changes"
+        );
+    }
+
+    #[test]
+    fn descriptor_record_from_manifest_uses_manifest_descriptor_version() {
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "quote",
+            "emit a quotable line",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.0.0")
+        .unwrap();
+
+        let record =
+            AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&manifest))
+                .unwrap();
+        assert_eq!(record.version().as_str(), "2.0.0");
+    }
+
+    #[test]
+    fn descriptor_record_rejects_explicit_version_that_disagrees_with_manifest() {
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "quote",
+            "emit a quotable line",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.0.0")
+        .unwrap();
+
+        let err =
+            AbilityDescriptorRecord::new("mentor.quote", "1.0.0", CallMode::Rpc, Some(&manifest))
+                .unwrap_err();
+        assert_eq!(
+            err,
+            AbilityControlPlaneError::DescriptorVersionMismatch {
+                manifest_version: "2.0.0".to_string(),
+                registration_version: "1.0.0".to_string(),
+            }
         );
     }
 

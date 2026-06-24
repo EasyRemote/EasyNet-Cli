@@ -66,6 +66,38 @@ use serde_json::Value;
 /// `CURRENT_SCHEMA_VERSION` on every file it generates.
 pub const CURRENT_SCHEMA_VERSION: &str = "1";
 
+/// Default governed interface version for ability descriptors. This is not
+/// the TOML file schema version; it is the version that enters descriptor
+/// hashes, authority bindings, implementation bindings, and Axon receipts.
+pub const DEFAULT_DESCRIPTOR_VERSION: &str = "1.0.0";
+
+/// Validate a governed ability descriptor version.
+///
+/// The grammar is intentionally narrower than SemVer: exactly three
+/// dot-separated numeric fields. Capability negotiation belongs one layer up;
+/// this field is a stable control-plane fact, not a range expression.
+pub fn is_valid_descriptor_version(version: &str) -> bool {
+    if version.trim().is_empty() || version.trim() != version {
+        return false;
+    }
+    let mut parts = version.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    let Some(minor) = parts.next() else {
+        return false;
+    };
+    let Some(patch) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    [major, minor, patch]
+        .into_iter()
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// Two kinds of ability the CLI publishes. Introduced by PR-SYS to
 /// disambiguate agent abilities (per-agent `<agent>.chat`-style)
 /// from device-level system abilities (`system.<feature>`).
@@ -128,6 +160,9 @@ pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1"];
 /// * `schema_version` — on-disk schema version; `None` on read is
 ///   treated as the implicit v1 shape (written by a tool that
 ///   predated the stamping rule). Writer always stamps explicitly.
+/// * `descriptor_version` — governed interface version; this is the
+///   version hashed into descriptor proofs and propagated into authority /
+///   implementation bindings. Absence means [`DEFAULT_DESCRIPTOR_VERSION`].
 /// * `name` — the *verb* portion of the ability's name. The wire-
 ///   level name is assembled as `<agent>.<name>` by whoever calls
 ///   `qualified_name` below. Must not contain `.` (that is the
@@ -174,6 +209,8 @@ pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1"];
 pub struct AbilityManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     schema_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    descriptor_version: Option<String>,
     name: String,
     description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -723,6 +760,7 @@ impl AbilityManifest {
     ) -> anyhow::Result<Self> {
         let m = Self {
             schema_version: Some(CURRENT_SCHEMA_VERSION.to_string()),
+            descriptor_version: None,
             name: name.into(),
             description: description.into(),
             timeout_seconds: None,
@@ -800,6 +838,15 @@ impl AbilityManifest {
         Ok(self)
     }
 
+    /// Set the governed interface version for this ability. This value is
+    /// distinct from `schema_version`: changing it changes the descriptor
+    /// hash and the authority / implementation binding key.
+    pub fn with_descriptor_version(mut self, version: impl Into<String>) -> anyhow::Result<Self> {
+        self.descriptor_version = Some(version.into());
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Override the default `None` timeout. Returns `self` for the
     /// builder-style chain a caller of `new(...)` might use.
     pub fn with_timeout_seconds(mut self, seconds: u64) -> anyhow::Result<Self> {
@@ -865,6 +912,14 @@ impl AbilityManifest {
         &self.description
     }
 
+    /// Effective governed interface version. Absent manifest field means the
+    /// default descriptor version, not an unknown version.
+    pub fn descriptor_version(&self) -> &str {
+        self.descriptor_version
+            .as_deref()
+            .unwrap_or(DEFAULT_DESCRIPTOR_VERSION)
+    }
+
     /// Per-ability invocation timeout. `None` means "inherit
     /// runtime default"; see module doc for semantics.
     pub fn timeout_seconds(&self) -> Option<u64> {
@@ -912,6 +967,23 @@ impl AbilityManifest {
                     "ability.toml schema_version = {:?} is not supported (known: {:?})",
                     v,
                     SUPPORTED_SCHEMA_VERSIONS
+                );
+            }
+        }
+        if let Some(version) = &self.descriptor_version {
+            if version.trim().is_empty() {
+                anyhow::bail!("ability.toml `descriptor_version` must not be empty");
+            }
+            if version.trim() != version {
+                anyhow::bail!(
+                    "ability.toml `descriptor_version` must not contain leading/trailing whitespace: {:?}",
+                    version
+                );
+            }
+            if !is_valid_descriptor_version(version) {
+                anyhow::bail!(
+                    "ability.toml `descriptor_version` must use N.N.N numeric form (got {:?})",
+                    version
                 );
             }
         }
@@ -1542,9 +1614,27 @@ mod tests {
         let m = AbilityManifest::new("chat", "hello", object_schema()).unwrap();
         assert_eq!(m.name(), "chat");
         assert_eq!(m.description(), "hello");
+        assert_eq!(m.descriptor_version(), DEFAULT_DESCRIPTOR_VERSION);
         assert!(m.input_schema().is_object());
         assert!(m.output_schema().is_none());
         assert_eq!(m.timeout_seconds(), None);
+    }
+
+    #[test]
+    fn descriptor_version_is_an_interface_fact_not_schema_version() {
+        let m = AbilityManifest::new("chat", "hello", object_schema())
+            .unwrap()
+            .with_descriptor_version("2.1.0")
+            .unwrap();
+        assert_eq!(m.descriptor_version(), "2.1.0");
+
+        let toml = m.to_toml_string().unwrap();
+        assert!(toml.contains(&format!("schema_version = \"{CURRENT_SCHEMA_VERSION}\"")));
+        assert!(
+            toml.contains("descriptor_version = \"2.1.0\""),
+            "writer must persist the governed interface version; got:\n{toml}"
+        );
+        assert_eq!(AbilityManifest::from_toml_str(&toml).unwrap(), m);
     }
 
     #[test]
@@ -1783,6 +1873,25 @@ mod tests {
             .to_string();
         let m = AbilityManifest::from_toml_str(&toml).unwrap();
         assert_eq!(m.name(), "chat");
+    }
+
+    #[test]
+    fn from_toml_str_rejects_invalid_descriptor_version() {
+        for invalid in ["", "  ", "v1", "1", "1.0", "1.0.0.0", "1.0.x", " 1.0.0"] {
+            let toml = format!(
+                "schema_version = \"1\"\n\
+                 descriptor_version = {invalid:?}\n\
+                 name = \"chat\"\n\
+                 description = \"x\"\n\
+                 [input_schema]\n\
+                 type = \"object\"\n"
+            );
+            let err = AbilityManifest::from_toml_str(&toml).unwrap_err();
+            assert!(
+                format!("{err}").contains("descriptor_version"),
+                "{invalid:?} should fail as descriptor_version; got {err}"
+            );
+        }
     }
 
     // ── failure path ────────────────────────────────────────────────────────

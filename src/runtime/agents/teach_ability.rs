@@ -781,7 +781,12 @@ fn ability_exec_kind(exec: &AbilityExec) -> &'static str {
 /// binding.
 #[cfg(test)]
 fn acquire_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
-    acquire_handler_with_hot_registrar(env, args, None)
+    acquire_handler_with_hot_registrar_and_policy(
+        env,
+        args,
+        None,
+        RuntimeSyncPolicy::UnitTestBypass,
+    )
 }
 
 fn acquire_handler_with_hot_registrar(
@@ -789,16 +794,23 @@ fn acquire_handler_with_hot_registrar(
     args: Value,
     hot_registrar: Option<&SharedHotRegistrarCell>,
 ) -> anyhow::Result<Value> {
-    acquire_handler_with_hot_registrar_and_clock(env, args, hot_registrar, &SystemTeachClock)
+    acquire_handler_with_hot_registrar_and_policy(
+        env,
+        args,
+        hot_registrar,
+        RuntimeSyncPolicy::Required,
+    )
 }
 
-fn acquire_handler_with_hot_registrar_and_clock(
+fn acquire_handler_with_hot_registrar_and_policy(
     env: EnvelopeContext,
     args: Value,
     hot_registrar: Option<&SharedHotRegistrarCell>,
-    clock: &dyn TeachClock,
+    runtime_sync_policy: RuntimeSyncPolicy,
 ) -> anyhow::Result<Value> {
-    AcquireWorkflow::new(env, args, hot_registrar, clock).run()
+    AcquireWorkflow::new(env, args, hot_registrar, &SystemTeachClock)
+        .with_runtime_sync_policy(runtime_sync_policy)
+        .run()
 }
 
 struct AcquireWorkflow<'a> {
@@ -806,6 +818,7 @@ struct AcquireWorkflow<'a> {
     args: Value,
     hot_registrar: Option<&'a SharedHotRegistrarCell>,
     clock: &'a dyn TeachClock,
+    runtime_sync_policy: RuntimeSyncPolicy,
 }
 
 impl<'a> AcquireWorkflow<'a> {
@@ -820,7 +833,13 @@ impl<'a> AcquireWorkflow<'a> {
             args,
             hot_registrar,
             clock,
+            runtime_sync_policy: RuntimeSyncPolicy::Required,
         }
+    }
+
+    fn with_runtime_sync_policy(mut self, runtime_sync_policy: RuntimeSyncPolicy) -> Self {
+        self.runtime_sync_policy = runtime_sync_policy;
+        self
     }
 
     fn run(self) -> anyhow::Result<Value> {
@@ -829,12 +848,15 @@ impl<'a> AcquireWorkflow<'a> {
             args,
             hot_registrar,
             clock,
+            runtime_sync_policy,
         } = self;
         let request = AcquireRequest::from_args(&args)?;
         let authorized = AuthorizedAcquire::from_request(env, request)?;
         let admitted = authorized.admit_transfer()?;
         let committed = admitted.commit(clock)?;
-        committed.refresh_runtime(hot_registrar)?.into_response()
+        committed
+            .refresh_runtime(hot_registrar, runtime_sync_policy)?
+            .into_response()
     }
 }
 
@@ -1010,6 +1032,7 @@ impl CommittedAcquire {
     fn refresh_runtime(
         self,
         hot_registrar: Option<&SharedHotRegistrarCell>,
+        runtime_sync_policy: RuntimeSyncPolicy,
     ) -> anyhow::Result<RuntimeSyncedAcquire> {
         let new_descriptor_ura =
             crate::ura::owner_ability_ura(&self.plan.learner_ura, &self.plan.request.public_name)
@@ -1018,7 +1041,8 @@ impl CommittedAcquire {
             hot_registrar,
             &self.plan.request.learner,
             &self.plan.learner_entry_for_runtime,
-        );
+            runtime_sync_policy,
+        )?;
         Ok(RuntimeSyncedAcquire {
             plan: self.plan,
             acquired: self.acquired,
@@ -1078,26 +1102,122 @@ fn append_cleanup_error(
     }
 }
 
-fn sync_learner_runtime_after_acquire(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeSyncPolicy {
+    Required,
+    UnitTestBypass,
+}
+
+impl RuntimeSyncPolicy {
+    fn enforce(self, surface: &str, report: &RuntimeSyncReport) -> anyhow::Result<()> {
+        if report.ok {
+            return Ok(());
+        }
+        if self == Self::UnitTestBypass && !report.attempted {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "{surface} committed durable descriptor state but live runtime sync failed: {}",
+            report.summary()
+        );
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSyncReport {
+    attempted: bool,
+    ok: bool,
+    registered: usize,
+    replaced: usize,
+    failed: usize,
+    removed: usize,
+    runtime_not_ready: bool,
+    catalog_not_ready: bool,
+    rejected_reserved_owner: bool,
+    reason: Option<&'static str>,
+}
+
+impl RuntimeSyncReport {
+    fn not_ready(reason: &'static str) -> Self {
+        Self {
+            attempted: false,
+            ok: false,
+            registered: 0,
+            replaced: 0,
+            failed: 0,
+            removed: 0,
+            runtime_not_ready: true,
+            catalog_not_ready: false,
+            rejected_reserved_owner: false,
+            reason: Some(reason),
+        }
+    }
+
+    fn from_outcome(outcome: HotAgentRuntimeSyncOutcome) -> Self {
+        let ok = !outcome.runtime_not_ready
+            && !outcome.catalog_not_ready
+            && !outcome.rejected_reserved_owner
+            && outcome.failed == 0;
+        Self {
+            attempted: true,
+            ok,
+            registered: outcome.registered,
+            replaced: outcome.replaced,
+            failed: outcome.failed,
+            removed: outcome.removed,
+            runtime_not_ready: outcome.runtime_not_ready,
+            catalog_not_ready: outcome.catalog_not_ready,
+            rejected_reserved_owner: outcome.rejected_reserved_owner,
+            reason: None,
+        }
+    }
+
+    fn summary(&self) -> String {
+        if let Some(reason) = self.reason {
+            return reason.to_string();
+        }
+        format!(
+            "attempted={}, registered={}, replaced={}, failed={}, removed={}, runtime_not_ready={}, catalog_not_ready={}, rejected_reserved_owner={}",
+            self.attempted,
+            self.registered,
+            self.replaced,
+            self.failed,
+            self.removed,
+            self.runtime_not_ready,
+            self.catalog_not_ready,
+            self.rejected_reserved_owner,
+        )
+    }
+
+    fn into_value(self) -> Value {
+        let mut value = json!({
+            "attempted": self.attempted,
+            "ok": self.ok,
+            "registered": self.registered,
+            "replaced": self.replaced,
+            "failed": self.failed,
+            "removed": self.removed,
+            "runtime_not_ready": self.runtime_not_ready,
+            "catalog_not_ready": self.catalog_not_ready,
+            "rejected_reserved_owner": self.rejected_reserved_owner,
+        });
+        if let Some(reason) = self.reason {
+            value["reason"] = Value::String(reason.to_string());
+        }
+        value
+    }
+}
+
+fn collect_learner_runtime_sync(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
     entry: &crate::registry::agents::AgentEntry,
-) -> Value {
+) -> RuntimeSyncReport {
     let Some(cell) = hot_registrar else {
-        return json!({
-            "attempted": false,
-            "ok": false,
-            "runtime_not_ready": true,
-            "reason": "hot_registrar_not_provided",
-        });
+        return RuntimeSyncReport::not_ready("hot_registrar_not_provided");
     };
     let Some(registrar) = cell.get().cloned() else {
-        return json!({
-            "attempted": false,
-            "ok": false,
-            "runtime_not_ready": true,
-            "reason": "hot_registrar_not_wired",
-        });
+        return RuntimeSyncReport::not_ready("hot_registrar_not_wired");
     };
     let learner_name = learner.to_string();
     let entry_for_runtime = entry.clone();
@@ -1106,32 +1226,20 @@ fn sync_learner_runtime_after_acquire(
             .register_agent(&learner_name, &entry_for_runtime)
             .await
     }) else {
-        return json!({
-            "attempted": false,
-            "ok": false,
-            "runtime_not_ready": true,
-            "reason": "no_tokio_runtime_for_hot_registrar",
-        });
+        return RuntimeSyncReport::not_ready("no_tokio_runtime_for_hot_registrar");
     };
-    runtime_sync_value(outcome)
+    RuntimeSyncReport::from_outcome(outcome)
 }
 
-fn runtime_sync_value(outcome: HotAgentRuntimeSyncOutcome) -> Value {
-    let ok = !outcome.runtime_not_ready
-        && !outcome.catalog_not_ready
-        && !outcome.rejected_reserved_owner
-        && outcome.failed == 0;
-    json!({
-        "attempted": true,
-        "ok": ok,
-        "registered": outcome.registered,
-        "replaced": outcome.replaced,
-        "failed": outcome.failed,
-        "removed": outcome.removed,
-        "runtime_not_ready": outcome.runtime_not_ready,
-        "catalog_not_ready": outcome.catalog_not_ready,
-        "rejected_reserved_owner": outcome.rejected_reserved_owner,
-    })
+fn sync_learner_runtime_after_acquire(
+    hot_registrar: Option<&SharedHotRegistrarCell>,
+    learner: &str,
+    entry: &crate::registry::agents::AgentEntry,
+    policy: RuntimeSyncPolicy,
+) -> anyhow::Result<Value> {
+    let report = collect_learner_runtime_sync(hot_registrar, learner, entry);
+    policy.enforce(ACQUIRE, &report)?;
+    Ok(report.into_value())
 }
 
 /// `meta.forget { ability, agent }` — drop an imported descriptor. The
@@ -1139,13 +1247,27 @@ fn runtime_sync_value(outcome: HotAgentRuntimeSyncOutcome) -> Value {
 /// it, so forget can never silently delete what an agent authored.
 #[cfg(test)]
 fn forget_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
-    forget_handler_with_hot_registrar(env, args, None)
+    forget_handler_with_hot_registrar_and_policy(env, args, None, RuntimeSyncPolicy::UnitTestBypass)
 }
 
 fn forget_handler_with_hot_registrar(
     env: EnvelopeContext,
     args: Value,
     hot_registrar: Option<&SharedHotRegistrarCell>,
+) -> anyhow::Result<Value> {
+    forget_handler_with_hot_registrar_and_policy(
+        env,
+        args,
+        hot_registrar,
+        RuntimeSyncPolicy::Required,
+    )
+}
+
+fn forget_handler_with_hot_registrar_and_policy(
+    env: EnvelopeContext,
+    args: Value,
+    hot_registrar: Option<&SharedHotRegistrarCell>,
+    runtime_sync_policy: RuntimeSyncPolicy,
 ) -> anyhow::Result<Value> {
     let ability = required_str(&args, "ability", FORGET)?;
     let agent = required_str(&args, "agent", FORGET)?;
@@ -1173,13 +1295,14 @@ fn forget_handler_with_hot_registrar(
 
     let runtime_pending = store.commit_forget_artifact(&staged, commit_forget_manifest)?;
     let runtime_sync = match agent_entry_for_runtime.as_ref() {
-        Some(entry) => sync_learner_runtime_after_forget(hot_registrar, agent, entry),
-        None => json!({
-            "attempted": false,
-            "ok": false,
-            "runtime_not_ready": true,
-            "reason": "agent_registry_entry_missing",
-        }),
+        Some(entry) => {
+            sync_learner_runtime_after_forget(hot_registrar, agent, entry, runtime_sync_policy)?
+        }
+        None => {
+            let report = RuntimeSyncReport::not_ready("agent_registry_entry_missing");
+            runtime_sync_policy.enforce(FORGET, &report)?;
+            report.into_value()
+        }
     };
     let committed = store.finish_forget(&runtime_pending)?;
     let record = committed.record();
@@ -1198,38 +1321,11 @@ fn sync_learner_runtime_after_forget(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
     entry: &crate::registry::agents::AgentEntry,
-) -> Value {
-    let Some(cell) = hot_registrar else {
-        return json!({
-            "attempted": false,
-            "ok": false,
-            "runtime_not_ready": true,
-            "reason": "hot_registrar_not_provided",
-        });
-    };
-    let Some(registrar) = cell.get().cloned() else {
-        return json!({
-            "attempted": false,
-            "ok": false,
-            "runtime_not_ready": true,
-            "reason": "hot_registrar_not_wired",
-        });
-    };
-    let learner_name = learner.to_string();
-    let entry_for_runtime = entry.clone();
-    let Some(outcome) = block_on_hot_registrar(async move {
-        registrar
-            .register_agent(&learner_name, &entry_for_runtime)
-            .await
-    }) else {
-        return json!({
-            "attempted": false,
-            "ok": false,
-            "runtime_not_ready": true,
-            "reason": "no_tokio_runtime_for_hot_registrar",
-        });
-    };
-    runtime_sync_value(outcome)
+    policy: RuntimeSyncPolicy,
+) -> anyhow::Result<Value> {
+    let report = collect_learner_runtime_sync(hot_registrar, learner, entry);
+    policy.enforce(FORGET, &report)?;
+    Ok(report.into_value())
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -1703,7 +1799,7 @@ mod tests {
     }
 
     #[test]
-    fn forget_runtime_sync_unavailable_finishes_discovery_transaction() {
+    fn forget_runtime_sync_unavailable_leaves_transaction_unfinished() {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
@@ -1718,28 +1814,33 @@ mod tests {
         .expect("learner acquires discovery-only manifest");
 
         let unwired_cell = SharedHotRegistrarCell::new();
-        let resp = forget_handler_with_hot_registrar(
+        let err = forget_handler_with_hot_registrar(
             caller_env(apprentice_ura.clone()),
             json!({ "ability": "quote", "agent": "apprentice" }),
             Some(&unwired_cell),
         )
-        .expect("runtime refresh is diagnostic for discovery-only forget");
-        assert_eq!(resp["resumed"], false);
-        assert_eq!(resp["runtime_sync"]["attempted"], false);
-        assert_eq!(resp["runtime_sync"]["ok"], false);
-        assert_eq!(resp["runtime_sync"]["runtime_not_ready"], true);
-        assert_eq!(resp["runtime_sync"]["reason"], "hot_registrar_not_wired");
+        .expect_err("runtime refresh is required for production forget");
+        assert!(
+            format!("{err}").contains("live runtime sync failed"),
+            "{err}"
+        );
+        assert!(
+            format!("{err}").contains("hot_registrar_not_wired"),
+            "{err}"
+        );
 
         let grants: Value = serde_json::from_slice(
             &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
-        assert!(grants["imports"].as_array().unwrap().is_empty());
+        let imports = grants["imports"].as_array().unwrap();
+        assert_eq!(imports.len(), 1, "{grants}");
+        assert_eq!(imports[0]["state"], "forgetting");
         assert!(
             !std::path::Path::new(&std::env::var("HOME").unwrap())
                 .join("agents/apprentice/abilities/quote.ability.toml")
                 .exists(),
-            "discovery-only forget must remove the learner artifact even when runtime refresh is unavailable"
+            "forget artifact step is complete; ledger remains forgetting until runtime refresh succeeds"
         );
     }
 

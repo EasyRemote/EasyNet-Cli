@@ -73,6 +73,7 @@ impl LocalRuntimeRequestOptions {
     }
 
     #[must_use]
+    #[cfg(feature = "axon-pb")]
     pub(crate) fn with_request_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.request_metadata = metadata;
         self

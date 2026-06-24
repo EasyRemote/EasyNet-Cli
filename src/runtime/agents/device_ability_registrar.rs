@@ -612,7 +612,7 @@ impl DeviceAbilityRegistrar {
                     key.authority_root(),
                     key.public_name(),
                     key.call_mode(),
-                )
+                )?
                 .is_some()
             {
                 control_plane_still_advertised.push(key.label());

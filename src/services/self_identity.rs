@@ -289,11 +289,13 @@ impl SelfIdentity for KeyringClient {
 /// `_system.local` caller is a process-local capability used only for
 /// daemon-internal loopback calls, so it is signed directly by
 /// `runtime::local_invocation_identity`.
+#[cfg(feature = "axon-pb")]
 pub(crate) enum LocalDaemonSigner {
     Keyring(KeyringClient),
     ProcessLocalSystem,
 }
 
+#[cfg(feature = "axon-pb")]
 impl LocalDaemonSigner {
     pub(crate) fn for_caller(caller_ura: &str) -> Self {
         if caller_ura == crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
@@ -304,6 +306,7 @@ impl LocalDaemonSigner {
     }
 }
 
+#[cfg(feature = "axon-pb")]
 impl SelfIdentity for LocalDaemonSigner {
     fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
         match self {

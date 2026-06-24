@@ -686,18 +686,17 @@ impl BidiDispatcher {
             .as_ref()
             .map(|target| target.ability_name.as_str())
             .unwrap_or_default();
-        let signed_ability_ura =
-            crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(
-                &selected_route.callee_ura,
-                signed_ability,
-            )
-            .map_err(|err| {
-                Status::invalid_argument(format!(
-                    "InvokeBidi: signed target ability `{signed_ability}` is not a canonical \
+        let signed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &selected_route.callee_ura,
+            signed_ability,
+        )
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "InvokeBidi: signed target ability `{signed_ability}` is not a canonical \
                      ability for callee `{}`: {err}",
-                    selected_route.callee_ura
-                ))
-            })?;
+                selected_route.callee_ura
+            ))
+        })?;
         if signed_ability_ura != dispatch_ability {
             return Err(status_from_dispatch_key_mismatch(
                 "InvokeBidi",

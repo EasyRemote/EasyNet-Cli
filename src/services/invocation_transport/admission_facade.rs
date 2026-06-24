@@ -100,6 +100,7 @@ use easynet_axon::invocation::{
 };
 
 use crate::runtime::ability::canonical_json_bytes;
+use crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 use crate::runtime::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
@@ -111,7 +112,6 @@ use crate::services::invocation_transport::federated_key_resolver::{
 use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
-use crate::services::invocation_transport::invocation_wire::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
 use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;

@@ -48,6 +48,26 @@ impl fmt::Display for AbilityControlPlaneLookupError {
 
 impl std::error::Error for AbilityControlPlaneLookupError {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbilityControlPlaneAuthorityModeLookupError {
+    pub authority_root: String,
+    pub ability: String,
+    pub call_mode: CallMode,
+    pub descriptor_versions: Vec<String>,
+}
+
+impl fmt::Display for AbilityControlPlaneAuthorityModeLookupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ability {:?} under authority {:?} and call mode {:?} is ambiguous across descriptor versions {:?}",
+            self.ability, self.authority_root, self.call_mode, self.descriptor_versions
+        )
+    }
+}
+
+impl std::error::Error for AbilityControlPlaneAuthorityModeLookupError {}
+
 impl AbilityControlPlaneRecord {
     pub fn descriptor(&self) -> &AbilityDescriptorRecord {
         &self.descriptor
@@ -129,9 +149,10 @@ impl AbilityControlPlaneRegistry {
         runtime_env: RuntimeEnv,
         impl_source: AbilityImplSource,
     ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
+        let descriptor_version = manifest_descriptor_version(manifest);
         self.register_version_with_impl_content_hash(
             ability,
-            DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            descriptor_version,
             call_mode,
             manifest,
             authority_scope,
@@ -151,9 +172,10 @@ impl AbilityControlPlaneRegistry {
         impl_source: AbilityImplSource,
         impl_content_hash: Option<String>,
     ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
+        let descriptor_version = manifest_descriptor_version(manifest);
         self.register_version_with_impl_content_hash(
             ability,
-            DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            descriptor_version,
             call_mode,
             manifest,
             authority_scope,
@@ -252,25 +274,28 @@ impl AbilityControlPlaneRegistry {
         self.records.len() != before
     }
 
-    /// Remove one authority-owned call-mode row for the default descriptor
-    /// version.
+    /// Remove every descriptor-version row for one authority-owned call mode.
     ///
     /// Use this for registration rollback where only the just-written mode is
-    /// known to be part of the failed transaction. Full ability unregister uses
-    /// [`Self::remove_for_authority`] so all modes leave together.
+    /// known to be part of the failed transaction. The descriptor version is
+    /// deliberately not part of this key because dynamic registration and
+    /// device-ability uninstall operate from runtime mode state, where the
+    /// manifest-supplied version has already been folded into the record.
+    /// Full ability unregister uses [`Self::remove_for_authority`] so all
+    /// modes leave together.
     pub fn remove_for_authority_mode(
         &mut self,
         authority_root: &str,
         ability: &str,
         call_mode: CallMode,
     ) -> bool {
-        let key = AbilityControlPlaneRecordKey::new(
-            authority_root,
-            ability,
-            DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            call_mode,
-        );
-        self.records.remove(&key).is_some()
+        let before = self.records.len();
+        self.records.retain(|key, _| {
+            !(key.authority_root == authority_root
+                && key.ability() == ability
+                && key.call_mode() == call_mode)
+        });
+        self.records.len() != before
     }
 
     pub fn get(
@@ -297,13 +322,10 @@ impl AbilityControlPlaneRegistry {
         authority_root: &str,
         ability: &str,
         call_mode: CallMode,
-    ) -> Option<AbilityControlPlaneRecord> {
-        self.get_version_for_authority_mode(
-            authority_root,
-            ability,
-            super::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            call_mode,
-        )
+    ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneAuthorityModeLookupError>
+    {
+        unique_record_for_authority_mode(&self.records, authority_root, ability, call_mode)
+            .map(|record| record.cloned())
     }
 
     pub fn get_version(
@@ -489,9 +511,47 @@ fn unique_record_for_control_plane<'a>(
     }
 }
 
+fn unique_record_for_authority_mode<'a>(
+    records: &'a BTreeMap<AbilityControlPlaneRecordKey, AbilityControlPlaneRecord>,
+    authority_root: &str,
+    ability: &str,
+    call_mode: CallMode,
+) -> Result<Option<&'a AbilityControlPlaneRecord>, AbilityControlPlaneAuthorityModeLookupError> {
+    let matches = records
+        .iter()
+        .filter(|(key, _)| {
+            key.authority_root == authority_root
+                && key.ability() == ability
+                && key.call_mode() == call_mode
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [(_, record)] => Ok(Some(record)),
+        _ => Err(AbilityControlPlaneAuthorityModeLookupError {
+            authority_root: authority_root.to_string(),
+            ability: ability.to_string(),
+            call_mode,
+            descriptor_versions: matches
+                .iter()
+                .map(|(key, _)| key.descriptor_version().to_string())
+                .collect(),
+        }),
+    }
+}
+
+fn manifest_descriptor_version(
+    manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+) -> &str {
+    manifest
+        .map(crate::core::ability_spec::AbilityManifest::descriptor_version)
+        .unwrap_or(DEFAULT_ABILITY_DESCRIPTOR_VERSION)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
     const LOCAL_AGENT_URA: &str = "easynet:///r/default/agent/user.assistant";
@@ -520,6 +580,73 @@ mod tests {
             .get("fs.read")
             .expect("single record lookup is unambiguous")
             .is_some());
+    }
+
+    #[test]
+    fn register_uses_manifest_descriptor_version_as_control_plane_fact() {
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "search",
+            "search local docs",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.3.4")
+        .unwrap();
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let record = registry
+            .register(
+                "agent.search",
+                CallMode::Rpc,
+                Some(&manifest),
+                AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
+                RuntimeEnv::new("env:manifest").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+
+        assert_eq!(record.descriptor().version().as_str(), "2.3.4");
+        assert_eq!(record.authority().descriptor_version(), "2.3.4");
+        assert_eq!(record.implementation().descriptor_version(), "2.3.4");
+        assert!(registry
+            .get_version_for_mode("agent.search", "2.3.4", CallMode::Rpc)
+            .unwrap()
+            .is_some());
+        assert!(registry
+            .get_for_mode("agent.search", CallMode::Rpc)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn register_version_rejects_manifest_descriptor_version_mismatch() {
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "search",
+            "search local docs",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.3.4")
+        .unwrap();
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let err = registry
+            .register_version(
+                "agent.search",
+                "1.0.0",
+                CallMode::Rpc,
+                Some(&manifest),
+                AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
+                RuntimeEnv::new("env:manifest").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            AbilityControlPlaneError::DescriptorVersionMismatch {
+                manifest_version: "2.3.4".to_string(),
+                registration_version: "1.0.0".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -671,6 +798,7 @@ mod tests {
             registry
                 .get_for_authority_mode(owner_a, "search", CallMode::Rpc)
                 .unwrap()
+                .unwrap()
                 .implementation()
                 .runtime_env()
                 .label(),
@@ -680,12 +808,14 @@ mod tests {
         assert!(
             registry
                 .get_for_authority_mode(owner_a, "search", CallMode::Rpc)
+                .unwrap()
                 .is_none(),
             "target authority root should be gone"
         );
         assert_eq!(
             registry
                 .get_for_authority_mode(owner_b, "search", CallMode::Rpc)
+                .unwrap()
                 .unwrap()
                 .implementation()
                 .runtime_env()
@@ -742,10 +872,50 @@ mod tests {
             registry
                 .get_for_authority_mode(owner_b, "search", CallMode::Rpc)
                 .unwrap()
+                .unwrap()
                 .implementation()
                 .runtime_env()
                 .label(),
             "env:b-rpc"
         );
+    }
+
+    #[test]
+    fn authority_mode_lookup_and_remove_are_not_default_version_bound() {
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "search",
+            "search local docs",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.0.0")
+        .unwrap();
+        let mut registry = AbilityControlPlaneRegistry::default();
+        registry
+            .register(
+                "search",
+                CallMode::Rpc,
+                Some(&manifest),
+                AuthorityScope::new("agent:a", LOCAL_AGENT_URA).unwrap(),
+                RuntimeEnv::new("env:v2").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry
+                .get_for_authority_mode(LOCAL_AGENT_URA, "search", CallMode::Rpc)
+                .unwrap()
+                .unwrap()
+                .descriptor()
+                .version()
+                .as_str(),
+            "2.0.0"
+        );
+        assert!(registry.remove_for_authority_mode(LOCAL_AGENT_URA, "search", CallMode::Rpc));
+        assert!(registry
+            .get_for_authority_mode(LOCAL_AGENT_URA, "search", CallMode::Rpc)
+            .unwrap()
+            .is_none());
     }
 }

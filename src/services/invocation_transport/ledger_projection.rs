@@ -20,12 +20,13 @@ use easynet_axon::pb::axon::v1::{causal_context, Envelope, InvokeRequest, Invoke
 
 use std::collections::BTreeMap;
 
+use crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 use crate::services::invocation_transport::bidi_dispatcher::terminal_failure_message;
 use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::services::invocation_transport::invocation_wire::{
-    DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
+    DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
 };
 use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;

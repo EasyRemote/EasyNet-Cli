@@ -49,15 +49,6 @@ pub fn invoke_federation_discover(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub fn invoke_federation_discover_filtered(
-    _agent_ura_filter: Option<&str>,
-    _local_user_id_filter: Option<&str>,
-    _caller_ura: Option<&str>,
-) -> anyhow::Result<Vec<Value>> {
-    Err(feature_unavailable_error("federation.discover filtered"))
-}
-
-#[cfg(not(feature = "axon-pb"))]
 fn feature_unavailable_error(surface: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{surface}: this binary was built without the `axon-pb` feature, so daemon-backed \

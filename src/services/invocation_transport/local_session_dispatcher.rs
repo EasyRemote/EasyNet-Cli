@@ -783,7 +783,7 @@ impl LocalAxonSessionDispatcher {
         let runtime = self.local_runtime.as_ref()?;
         let callee = Self::non_empty_ura(callee_ura)?;
         let runtime_ability =
-            crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(callee, ability)
+            crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee, ability)
                 .ok()?;
         if !runtime.has_ability(&runtime_ability).await {
             return None;
@@ -915,9 +915,8 @@ impl LocalAxonSessionDispatcher {
             Err(err) => return Some(Err(err)),
         };
         let runtime_ability =
-            match crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(
-                callee, ability,
-            ) {
+            match crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee, ability)
+            {
                 Ok(runtime_ability) => runtime_ability,
                 Err(err) => return Some(Err(format!("open_stream_via_axon: {err}"))),
             };
@@ -2005,7 +2004,7 @@ mod tests {
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
 
     fn runtime_ability_for(callee_ura: &str, ability: &str) -> String {
-        crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(callee_ura, ability)
+        crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
             .expect("test ability must resolve to canonical Ability URA")
     }
 

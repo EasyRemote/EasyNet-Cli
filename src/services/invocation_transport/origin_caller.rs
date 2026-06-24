@@ -25,8 +25,8 @@ use easynet_axon::invocation::{
     DescriptorBoundEnvelopeParts, EntityRef, SubjectIdentity, UraProfile,
 };
 
+use crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire;
 use crate::runtime::axon_bridge::dispatch_shim::{WireDispatch, WireDispatchIngress};
-use crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire;
 
 const ED25519_ALGORITHM: &str = "ed25519";
 const ED25519_SIGNATURE_LEN: usize = 64;

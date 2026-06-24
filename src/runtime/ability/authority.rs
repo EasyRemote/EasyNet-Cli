@@ -20,6 +20,7 @@ use super::descriptor::{
 use super::AbilityControlPlaneError;
 
 const DEFAULT_INVOKE_POLICY_REF: &str = "ability_access_policy";
+pub const HOSTED_AGENT_DELEGATION_METADATA_KEY: &str = "x-easynet-hosted-agent-delegation";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityPredicate {

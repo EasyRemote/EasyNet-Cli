@@ -35,6 +35,7 @@
 //!     proto types and is therefore feature-gated with `axon-pb`.
 //!   * Phase 5 — the CLI-side parallel implementations get deleted.
 
+pub(crate) mod descriptor_ref;
 #[cfg(feature = "axon-pb")]
 pub mod dispatch_shim;
 pub mod hot_agent_registrar;

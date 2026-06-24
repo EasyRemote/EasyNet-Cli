@@ -26,12 +26,12 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::runtime::ability::{
-    AbilityControlPlaneError, AbilityControlPlaneLookupError, AbilityControlPlaneRecord,
-    AbilityControlPlaneRegistry, AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
-    HostedAgentDelegationContext, RuntimeEnv,
+    AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneError,
+    AbilityControlPlaneLookupError, AbilityControlPlaneRecord, AbilityControlPlaneRegistry,
+    AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
+    HostedAgentDelegationContext, RuntimeEnv, HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use crate::services::invocation_transport::invocation_wire::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 
 /// Module-local sync→async bridge for the ability-dispatch registry
 /// path. These calls sit on catalogue construction and discovery,
@@ -1069,7 +1069,7 @@ fn local_runtime_ability_key_for_authority(
     ability: &str,
 ) -> anyhow::Result<String> {
     let public_name = crate::ura::owner_local_ability_name(authority_root, ability);
-    crate::runtime::axon_bridge::wire_descriptor::ability_ura_for_wire(authority_root, &public_name)
+    crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(authority_root, &public_name)
         .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
@@ -1931,7 +1931,8 @@ impl AxonAbilityCatalog {
         authority_root: &str,
         ability: &str,
         call_mode: DescriptorCallMode,
-    ) -> Option<AbilityControlPlaneRecord> {
+    ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneAuthorityModeLookupError>
+    {
         self.control_plane
             .read()
             .expect("control_plane RwLock poisoned")
@@ -2423,10 +2424,10 @@ impl AxonAbilityCatalog {
                 control_plane_key.authority_root(),
                 control_plane_key.ability(),
                 descriptor_mode,
-            )
+            )?
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "ability {:?} under authority {:?} has a {:?} runtime handler without a control-plane record",
+                    "ability {:?} under authority {:?} has a {:?} runtime handler without a unique control-plane record",
                     control_plane_key.ability(),
                     control_plane_key.authority_root(),
                     descriptor_mode
@@ -4450,6 +4451,42 @@ mod tests {
         assert_eq!(proof.schema_hash, record.descriptor().schema_hash().0);
         assert_eq!(proof.impl_hash, record.implementation().impl_hash());
         assert!(!proof.is_unbound());
+    }
+
+    #[test]
+    fn runtime_registration_binds_manifest_descriptor_version() {
+        let mut reg = AxonAbilityCatalog::new();
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "read",
+            "read a local file",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.0.0")
+        .unwrap();
+        reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
+
+        let control_plane_key = reg
+            .handler_control_plane_key("fs.read")
+            .expect("handler authority key");
+        let record = reg
+            .control_plane_record_for_authority_mode(
+                control_plane_key.authority_root(),
+                control_plane_key.ability(),
+                DescriptorCallMode::Rpc,
+            )
+            .expect("authority/mode lookup is unambiguous")
+            .expect("control-plane record");
+        let runtime = reg.runtime().expect("registry owns LocalRuntime");
+        let runtime_key = control_plane_key.runtime_key().expect("runtime key");
+        let options =
+            block_on_runtime_sync(runtime.ability_options(&runtime_key)).expect("runtime options");
+        let proof = options.proof_for_mode(AxonCallMode::Rpc);
+
+        assert_eq!(record.descriptor().version().as_str(), "2.0.0");
+        assert_eq!(proof.descriptor_version, "2.0.0");
+        assert_eq!(proof.schema_hash, record.descriptor().schema_hash().0);
+        assert_eq!(proof.impl_hash, record.implementation().impl_hash());
     }
 
     #[test]

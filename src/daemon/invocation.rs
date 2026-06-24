@@ -112,7 +112,7 @@ impl DaemonInvocation {
     }
 
     fn ability_descriptor_ref(&self) -> Result<String> {
-        crate::runtime::axon_bridge::wire_descriptor::ability_descriptor_ref_for_wire(
+        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             &self.callee_ura,
             &self.ability,
             crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
