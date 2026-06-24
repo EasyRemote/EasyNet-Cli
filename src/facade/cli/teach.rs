@@ -1,16 +1,15 @@
-// EasyNet CLI — `easynet ability teach|learn|forget`
-// ====================================================
+// EasyNet CLI - descriptor grant/import/forget commands
+// =====================================================
 //
 // File: src/facade/cli/teach.rs
 // Description: GET route B verbs (seven-axes T3.3) over the
 //              `meta.teach` / `meta.acquire` / `meta.forget`
 //              abilities. Thin wrappers by design: each verb is one
-//              daemon invocation, so every transfer is admitted,
-//              ledgered, and receipted — the receipt chain IS the
-//              audit trail of who conferred what to whom.
+//              daemon invocation, so every descriptor grant/import is
+//              admitted, ledgered, and receipted.
 //
 //              `learn` rides `invoke_local_ability_with_invocation_meta`
-//              with subject = the taught ability's URA: the
+//              with subject = the granted descriptor URA: the
 //              seven-tuple names the thing being transferred
 //              (spec 0.1-7).
 //
@@ -32,23 +31,27 @@ use crate::support::output;
 /// loudly instead of rendering a placeholder success — the CLI never
 /// reports a transfer it cannot describe.
 #[derive(Debug, Deserialize)]
-struct TaughtResponse {
-    taught: String,
+struct DescriptorGrantResponse {
+    granted_descriptor: String,
     execution_mode: String,
+    transfer_kind: String,
+    invokable_after_acquire: bool,
 }
 
 /// Typed projection of the `meta.acquire` daemon response.
 #[derive(Debug, Deserialize)]
-struct LearnedResponse {
-    new_ura: String,
+struct DescriptorImportResponse {
+    new_descriptor_ura: String,
     execution_mode: String,
+    transfer_kind: String,
+    invokable: bool,
 }
 
 /// Typed projection of the `meta.forget` daemon response.
 #[derive(Debug, Deserialize)]
-struct ForgottenResponse {
-    forgotten: String,
-    had_learned_from: String,
+struct DescriptorRemovalResponse {
+    removed_descriptor: String,
+    source_descriptor_ura: String,
 }
 
 #[derive(Debug, Args)]
@@ -65,9 +68,9 @@ pub struct TeachArgs {
 
 #[derive(Debug, Args)]
 pub struct LearnArgs {
-    /// Canonical Ability URA of the taught ability.
+    /// Canonical Ability URA of the granted source descriptor.
     pub ability_ura: String,
-    /// Local agent that learns (becomes the new copy's owner).
+    /// Local agent that imports the descriptor copy.
     #[arg(long = "as", value_name = "AGENT")]
     pub learner: String,
     /// Skip the interactive confirmation.
@@ -79,7 +82,7 @@ pub struct LearnArgs {
 pub struct ForgetArgs {
     /// Public ability name to forget (e.g. `quote`).
     pub ability: String,
-    /// Local agent unlearning it.
+    /// Local agent that owns the imported descriptor.
     #[arg(long, value_name = "AGENT")]
     pub agent: String,
     /// Skip the interactive confirmation.
@@ -116,23 +119,27 @@ pub fn execute_forget(args: &ForgetArgs) -> anyhow::Result<Value> {
         &agent_ura,
     )
     .map(|(resp, _meta)| resp)
-    .context("forget the learned ability")
+    .context("forget the imported descriptor")
 }
 
 pub fn run_teach(args: TeachArgs) -> anyhow::Result<()> {
     if !args.yes {
         anyhow::bail!(
-            "teaching makes {} learnable by {}; re-run with -y to confirm",
+            "granting descriptor {} to {}; re-run with -y to confirm",
             args.ability,
             args.to
         );
     }
     let resp = execute_teach(&args)?;
-    let taught: TaughtResponse =
+    let grant: DescriptorGrantResponse =
         serde_json::from_value(resp).context("parse meta.teach response")?;
     output::success(&format!(
-        "taught {} → {} (execution_mode: {})",
-        taught.taught, args.to, taught.execution_mode,
+        "descriptor grant {} -> {} (execution_mode: {}, transfer_kind: {}, invokable_after_acquire: {})",
+        grant.granted_descriptor,
+        args.to,
+        grant.execution_mode,
+        grant.transfer_kind,
+        grant.invokable_after_acquire,
     ));
     Ok(())
 }
@@ -150,7 +157,7 @@ pub fn execute_learn(args: &LearnArgs) -> anyhow::Result<(Value, Value)> {
         None,
         &learner_ura,
     )
-    .context("acquire the taught ability")
+    .context("import the granted descriptor")
 }
 
 fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
@@ -160,7 +167,7 @@ fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "learner {learner:?} has no persisted local Agent URA; run agent publish/join \
-                 before acquiring taught abilities"
+                 before importing granted descriptors"
             )
         })?;
     Ok(entry.agent_ura.clone())
@@ -176,33 +183,38 @@ fn resolve_owner_ura_from_ability(ability: &str) -> anyhow::Result<String> {
 pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
     if !args.yes {
         anyhow::bail!(
-            "learning installs {} into agent {:?}; re-run with -y to confirm",
+            "importing descriptor {} into agent {:?}; re-run with -y to confirm",
             args.ability_ura,
             args.learner
         );
     }
     let (resp, _meta) = execute_learn(&args)?;
-    let learned: LearnedResponse =
+    let imported: DescriptorImportResponse =
         serde_json::from_value(resp).context("parse meta.acquire response")?;
-    output::success(&format!("learned · new ura: {}", learned.new_ura));
-    output::detail("execution_mode", &learned.execution_mode);
+    output::success(&format!(
+        "descriptor imported · new descriptor ura: {}",
+        imported.new_descriptor_ura
+    ));
+    output::detail("execution_mode", &imported.execution_mode);
+    output::detail("transfer_kind", &imported.transfer_kind);
+    output::detail("invokable", &imported.invokable.to_string());
     Ok(())
 }
 
 pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
     if !args.yes {
         anyhow::bail!(
-            "forgetting removes the learned {} from agent {:?}; re-run with -y to confirm",
+            "forgetting removes imported descriptor {} from agent {:?}; re-run with -y to confirm",
             args.ability,
             args.agent
         );
     }
     let resp = execute_forget(&args)?;
-    let forgotten: ForgottenResponse =
+    let removed: DescriptorRemovalResponse =
         serde_json::from_value(resp).context("parse meta.forget response")?;
     output::success(&format!(
-        "forgot {} (was learned from {})",
-        forgotten.forgotten, forgotten.had_learned_from,
+        "removed imported descriptor {} (source descriptor {})",
+        removed.removed_descriptor, removed.source_descriptor_ura,
     ));
     Ok(())
 }

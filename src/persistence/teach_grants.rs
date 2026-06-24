@@ -3,26 +3,26 @@
 //
 // File: src/persistence/teach_grants.rs
 // Description: The owner-initiative store behind GET route B
-//              (seven-axes T3.3, spec §2.5): which abilities their
-//              owner has explicitly made learnable, and by whom.
+//              (seven-axes T3.3, spec §2.5): which ability descriptors their
+//              owner has explicitly granted for import, and by whom.
 //
 // Ontology (spec §0.1-6, non-negotiable): a capability is CONFERRED
 // by its owner, never pulled by a consumer. Absence of a grant IS
 // the `allow_transferred_code = false` default (capability.proto
-// InstallPolicy) — an ability with no entry here is not learnable,
+// InstallPolicy) — a descriptor with no entry here cannot be imported,
 // full stop. `meta.teach` writes a grant; `meta.acquire` consumes
 // one; both are ordinary ledgered invocations, so the receipt chain
-// records who conferred what to whom.
+// records who granted which descriptor to whom.
 //
-// The file also keeps the LEARNED ledger: which manifests landed in
-// which learner's workspace through `meta.acquire`. `meta.forget`
-// only removes what this ledger names — a learner can unlearn a
-// taught copy, never silently delete a native ability.
+// The file also keeps the descriptor import ledger: which declaration-only
+// manifests landed in which learner's workspace through `meta.acquire`.
+// `meta.forget` only removes what this ledger names; it can never silently
+// delete a native ability authored by the agent.
 //
 // Schema (operator-inspectable)
 // -----------------------------
 // {
-//   "schema_version": "1",
+//   "schema_version": "2",
 //   "grants": [
 //     { "ability": "<owner-local registry name, e.g. testbot.weather-probe>",
 //       "owner_agent": "testbot",
@@ -31,11 +31,11 @@
 //       "granted_at": "<rfc3339>" },
 //     …
 //   ],
-//   "learned": [
+//   "imports": [
 //     { "ability_name": "weather-probe",
 //       "learner_agent": "apprentice",
-//       "learned_from": "<the taught ability's canonical URA>",
-//       "learned_at": "<rfc3339>" },
+//       "source_descriptor_ura": "<the granted descriptor's canonical URA>",
+//       "imported_at": "<rfc3339>" },
 //     …
 //   ]
 // }
@@ -54,10 +54,10 @@ use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use super::file_lock::ExclusiveFileLock;
 
 pub(crate) const FILE_NAME: &str = "teach-grants.json";
-const STORE_SCHEMA_VERSION: &str = "1";
+const STORE_SCHEMA_VERSION: &str = "2";
 static STORE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-/// Default execution posture for transferred code
+/// Default execution posture for future executable descriptor transfer
 /// (capability.proto:238). A string by protocol design — the proto
 /// field is a string with documented values, not an enum.
 pub const EXECUTION_MODE_DEFAULT: &str = "sandbox_first";
@@ -68,7 +68,7 @@ pub struct TeachGrantsFile {
     #[serde(default)]
     grants: Vec<TeachGrant>,
     #[serde(default)]
-    learned: Vec<LearnedRecord>,
+    imports: Vec<DescriptorImportRecord>,
 }
 
 impl Default for TeachGrantsFile {
@@ -76,7 +76,7 @@ impl Default for TeachGrantsFile {
         Self {
             schema_version: STORE_SCHEMA_VERSION.to_string(),
             grants: Vec::new(),
-            learned: Vec::new(),
+            imports: Vec::new(),
         }
     }
 }
@@ -110,14 +110,14 @@ pub struct TeachGrant {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LearnedRecord {
+pub struct DescriptorImportRecord {
     ability_name: String,
     learner_agent: String,
-    learned_from: String,
+    source_descriptor_ura: String,
     manifest_hash: String,
-    learned_at: String,
+    imported_at: String,
     #[serde(default)]
-    state: LearnedRecordState,
+    state: DescriptorImportState,
     #[serde(default)]
     acquiring_manifest_path: Option<String>,
     #[serde(default)]
@@ -130,7 +130,7 @@ pub struct LearnedRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LearnedRecordState {
+pub enum DescriptorImportState {
     Acquiring,
     Active,
     Forgetting,
@@ -154,7 +154,7 @@ pub trait AcquiringArtifactTxn {
     fn rollback(&self) -> anyhow::Result<()>;
 }
 
-impl Default for LearnedRecordState {
+impl Default for DescriptorImportState {
     fn default() -> Self {
         Self::Active
     }
@@ -195,22 +195,22 @@ impl TeachGrant {
     }
 }
 
-impl LearnedRecord {
+impl DescriptorImportRecord {
     #[must_use]
     pub fn new(
         ability_name: impl Into<String>,
         learner_agent: impl Into<String>,
-        learned_from: impl Into<String>,
+        source_descriptor_ura: impl Into<String>,
         manifest_hash: impl Into<String>,
-        learned_at: impl Into<String>,
+        imported_at: impl Into<String>,
     ) -> Self {
         Self {
             ability_name: ability_name.into(),
             learner_agent: learner_agent.into(),
-            learned_from: learned_from.into(),
+            source_descriptor_ura: source_descriptor_ura.into(),
             manifest_hash: manifest_hash.into(),
-            learned_at: learned_at.into(),
-            state: LearnedRecordState::Active,
+            imported_at: imported_at.into(),
+            state: DescriptorImportState::Active,
             acquiring_manifest_path: None,
             acquiring_staging_manifest_path: None,
             acquiring_manifest_hash: None,
@@ -219,8 +219,8 @@ impl LearnedRecord {
     }
 
     #[must_use]
-    pub fn learned_from(&self) -> &str {
-        &self.learned_from
+    pub fn source_descriptor_ura(&self) -> &str {
+        &self.source_descriptor_ura
     }
 
     #[must_use]
@@ -229,7 +229,7 @@ impl LearnedRecord {
     }
 
     #[must_use]
-    pub fn state(&self) -> LearnedRecordState {
+    pub fn state(&self) -> DescriptorImportState {
         self.state
     }
 
@@ -249,7 +249,7 @@ impl LearnedRecord {
     }
 
     fn mark_active(&mut self) {
-        self.state = LearnedRecordState::Active;
+        self.state = DescriptorImportState::Active;
         self.acquiring_manifest_path = None;
         self.acquiring_staging_manifest_path = None;
         self.acquiring_manifest_hash = None;
@@ -263,7 +263,7 @@ impl LearnedRecord {
         manifest_hash: impl Into<String>,
         pending_grant: TeachGrant,
     ) {
-        self.state = LearnedRecordState::Acquiring;
+        self.state = DescriptorImportState::Acquiring;
         self.acquiring_manifest_path = Some(committed_manifest_path.into());
         self.acquiring_staging_manifest_path = staging_manifest_path;
         let manifest_hash = manifest_hash.into();
@@ -273,15 +273,15 @@ impl LearnedRecord {
     }
 
     fn mark_forgetting(&mut self) {
-        self.state = LearnedRecordState::Forgetting;
+        self.state = DescriptorImportState::Forgetting;
     }
 
-    fn same_identity(&self, other: &LearnedRecord) -> bool {
+    fn same_identity(&self, other: &DescriptorImportRecord) -> bool {
         self.ability_name == other.ability_name
             && self.learner_agent == other.learner_agent
-            && self.learned_from == other.learned_from
+            && self.source_descriptor_ura == other.source_descriptor_ura
             && self.manifest_hash == other.manifest_hash
-            && self.learned_at == other.learned_at
+            && self.imported_at == other.imported_at
     }
 }
 
@@ -302,11 +302,11 @@ struct TeachGrantStoreLock {
 ///
 /// The object exists so post-ledger side effects, such as hot runtime
 /// registration, can roll the acquire back without guessing which grant was
-/// consumed or which learned ledger row was written.
+/// consumed or which descriptor-import ledger row was written.
 #[derive(Debug)]
 pub struct AcquiredTeachGrant {
     grant: TeachGrant,
-    learned: LearnedRecord,
+    import_record: DescriptorImportRecord,
 }
 
 impl AcquiredTeachGrant {
@@ -314,26 +314,27 @@ impl AcquiredTeachGrant {
         &self.grant
     }
 
-    pub fn learned(&self) -> &LearnedRecord {
-        &self.learned
+    pub fn import_record(&self) -> &DescriptorImportRecord {
+        &self.import_record
     }
 }
 
 /// Durable `meta.forget` transaction.
 ///
-/// The learned ledger row is marked `forgetting` before runtime cleanup starts.
-/// That tombstone blocks duplicate acquire/forget races and lets a retry finish
-/// the delete instead of replaying an already-staged manifest as active state.
+/// The descriptor-import ledger row is marked `forgetting` before runtime
+/// cleanup starts. That tombstone blocks duplicate acquire/forget races and
+/// lets a retry finish the delete instead of replaying an already-staged
+/// manifest as active state.
 #[derive(Debug)]
-pub struct StagedForgottenTeachGrant<T> {
-    record: LearnedRecord,
+pub struct StagedDescriptorImportRemoval<T> {
+    record: DescriptorImportRecord,
     staged_artifact: T,
     resumed: bool,
 }
 
-impl<T> StagedForgottenTeachGrant<T> {
+impl<T> StagedDescriptorImportRemoval<T> {
     #[must_use]
-    pub fn record(&self) -> &LearnedRecord {
+    pub fn record(&self) -> &DescriptorImportRecord {
         &self.record
     }
 
@@ -349,25 +350,25 @@ impl<T> StagedForgottenTeachGrant<T> {
 }
 
 #[derive(Debug)]
-pub struct RuntimePendingForgottenTeachGrant {
-    record: LearnedRecord,
+pub struct RuntimePendingDescriptorImportRemoval {
+    record: DescriptorImportRecord,
 }
 
-impl RuntimePendingForgottenTeachGrant {
+impl RuntimePendingDescriptorImportRemoval {
     #[must_use]
-    pub fn record(&self) -> &LearnedRecord {
+    pub fn record(&self) -> &DescriptorImportRecord {
         &self.record
     }
 }
 
 #[derive(Debug)]
-pub struct CommittedForgottenTeachGrant {
-    record: LearnedRecord,
+pub struct CommittedDescriptorImportRemoval {
+    record: DescriptorImportRecord,
 }
 
-impl CommittedForgottenTeachGrant {
+impl CommittedDescriptorImportRemoval {
     #[must_use]
-    pub fn record(&self) -> &LearnedRecord {
+    pub fn record(&self) -> &DescriptorImportRecord {
         &self.record
     }
 }
@@ -408,22 +409,22 @@ impl TeachGrantStore {
     pub fn recover_acquiring(
         &self,
         mut recover_artifact: impl FnMut(
-            &LearnedRecord,
+            &DescriptorImportRecord,
         ) -> anyhow::Result<AcquiringArtifactRecoveryState>,
     ) -> anyhow::Result<usize> {
         let _guard = self.lock()?;
         let mut directory = self.load_unlocked()?;
         let mut recovered = 0usize;
         let mut idx = 0usize;
-        while idx < directory.learned.len() {
-            if directory.learned[idx].state() != LearnedRecordState::Acquiring {
+        while idx < directory.imports.len() {
+            if directory.imports[idx].state() != DescriptorImportState::Acquiring {
                 idx += 1;
                 continue;
             }
-            let record = directory.learned[idx].clone();
+            let record = directory.imports[idx].clone();
             match recover_artifact(&record)? {
                 AcquiringArtifactRecoveryState::Committed => {
-                    directory.learned[idx].mark_active();
+                    directory.imports[idx].mark_active();
                     recovered += 1;
                     idx += 1;
                     continue;
@@ -435,7 +436,7 @@ impl TeachGrantStore {
                     directory.grants.push(grant);
                 }
             }
-            directory.learned.remove(idx);
+            directory.imports.remove(idx);
             recovered += 1;
         }
         if recovered > 0 {
@@ -451,7 +452,7 @@ impl TeachGrantStore {
         owner_ura: &str,
         learner_ura: &str,
         expected_grant: &TeachGrant,
-        learned: LearnedRecord,
+        import_record: DescriptorImportRecord,
         staged: T,
     ) -> anyhow::Result<AcquiredTeachGrant>
     where
@@ -464,8 +465,8 @@ impl TeachGrantStore {
                 .grant_index_for(registry_name, ability_ura, owner_ura, learner_ura)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "not teachable (allow_transferred_code=false): the owner has not \
-                     taught {ability_ura:?} ({registry_name:?}) from owner {owner_ura:?} to {learner_ura}"
+                        "descriptor grant missing (allow_transferred_code=false): owner {owner_ura:?} \
+                         has not granted descriptor {ability_ura:?} ({registry_name:?}) to learner {learner_ura}"
                     )
                 })?;
             let grant = directory.grants[grant_idx].clone();
@@ -476,18 +477,21 @@ impl TeachGrantStore {
                 );
             }
             if directory
-                .learned_by_active_or_forgetting(&learned.learner_agent, &learned.ability_name)
+                .import_by_active_or_forgetting(
+                    &import_record.learner_agent,
+                    &import_record.ability_name,
+                )
                 .is_some()
             {
                 anyhow::bail!(
-                    "agent {:?} already learned {:?} or has a forget transaction in progress; \
-                     finish forgetting it first or rename — learning never overwrites",
-                    learned.learner_agent,
-                    learned.ability_name
+                    "agent {:?} already imported descriptor {:?} or has a forget transaction in progress; \
+                     finish forgetting it first or rename; descriptor import never overwrites",
+                    import_record.learner_agent,
+                    import_record.ability_name
                 );
             }
 
-            let mut acquiring = learned;
+            let mut acquiring = import_record;
             acquiring.mark_acquiring(
                 staged.committed_artifact_path(),
                 staged.staging_artifact_path(),
@@ -495,11 +499,11 @@ impl TeachGrantStore {
                 grant.clone(),
             );
             directory.grants.remove(grant_idx);
-            directory.learned.push(acquiring.clone());
+            directory.imports.push(acquiring.clone());
             self.write_unlocked(&directory)?;
             Ok(AcquiredTeachGrant {
                 grant,
-                learned: acquiring,
+                import_record: acquiring,
             })
         })() {
             Ok(acquired) => acquired,
@@ -507,7 +511,7 @@ impl TeachGrantStore {
                 return Err(append_cleanup_error(
                     ledger_err,
                     staged.rollback(),
-                    "rollback staged learned manifest",
+                    "rollback staged descriptor-import manifest",
                 ));
             }
         };
@@ -516,40 +520,44 @@ impl TeachGrantStore {
             let rollback_err = staged.rollback();
             let restore_err = self.restore_acquired_ledger_after_artifact_commit_failure(&acquired);
             return Err(append_cleanup_error(
-                append_cleanup_error(commit_err, rollback_err, "rollback staged learned manifest"),
+                append_cleanup_error(
+                    commit_err,
+                    rollback_err,
+                    "rollback staged descriptor-import manifest",
+                ),
                 restore_err,
-                "restore teach grant ledger after failed learned-manifest commit",
+                "restore teach grant ledger after failed descriptor-import manifest commit",
             ));
         }
-        let active_learned = self.commit_acquired_ledger_after_artifact_commit(&acquired)?;
+        let active_import = self.commit_acquired_ledger_after_artifact_commit(&acquired)?;
         Ok(AcquiredTeachGrant {
             grant: acquired.grant,
-            learned: active_learned,
+            import_record: active_import,
         })
     }
 
     fn commit_acquired_ledger_after_artifact_commit(
         &self,
         acquired: &AcquiredTeachGrant,
-    ) -> anyhow::Result<LearnedRecord> {
+    ) -> anyhow::Result<DescriptorImportRecord> {
         let _guard = self.lock()?;
         let mut directory = self.load_unlocked()?;
-        let Some(learned_idx) = directory.learned_by_record(&acquired.learned) else {
+        let Some(import_idx) = directory.import_by_record(&acquired.import_record) else {
             anyhow::bail!(
                 "commit acquired ledger: acquiring row for agent {:?} ability {:?} is absent",
-                acquired.learned.learner_agent,
-                acquired.learned.ability_name
+                acquired.import_record.learner_agent,
+                acquired.import_record.ability_name
             );
         };
-        if directory.learned[learned_idx].state() != LearnedRecordState::Acquiring {
+        if directory.imports[import_idx].state() != DescriptorImportState::Acquiring {
             anyhow::bail!(
-                "commit acquired ledger: learned row for agent {:?} ability {:?} is not acquiring",
-                acquired.learned.learner_agent,
-                acquired.learned.ability_name
+                "commit acquired ledger: descriptor-import row for agent {:?} ability {:?} is not acquiring",
+                acquired.import_record.learner_agent,
+                acquired.import_record.ability_name
             );
         }
-        directory.learned[learned_idx].mark_active();
-        let active = directory.learned[learned_idx].clone();
+        directory.imports[import_idx].mark_active();
+        let active = directory.imports[import_idx].clone();
         self.write_unlocked(&directory)?;
         Ok(active)
     }
@@ -558,8 +566,8 @@ impl TeachGrantStore {
         &self,
         learner_agent: &str,
         ability_name: &str,
-        stage_remove: impl FnOnce(&LearnedRecord) -> anyhow::Result<T>,
-    ) -> anyhow::Result<StagedForgottenTeachGrant<T>> {
+        stage_remove: impl FnOnce(&DescriptorImportRecord) -> anyhow::Result<T>,
+    ) -> anyhow::Result<StagedDescriptorImportRemoval<T>> {
         let (record, resumed) = self.begin_forget_ledger(learner_agent, ability_name)?;
         let staged = match stage_remove(&record) {
             Ok(staged) => staged,
@@ -572,7 +580,7 @@ impl TeachGrantStore {
             }
             Err(stage_err) => return Err(stage_err),
         };
-        Ok(StagedForgottenTeachGrant {
+        Ok(StagedDescriptorImportRemoval {
             record,
             staged_artifact: staged,
             resumed,
@@ -581,88 +589,87 @@ impl TeachGrantStore {
 
     pub fn commit_forget_artifact<T>(
         &self,
-        staged: &StagedForgottenTeachGrant<T>,
+        staged: &StagedDescriptorImportRemoval<T>,
         commit_remove: impl FnOnce(&T) -> anyhow::Result<()>,
-    ) -> anyhow::Result<RuntimePendingForgottenTeachGrant> {
+    ) -> anyhow::Result<RuntimePendingDescriptorImportRemoval> {
         self.require_forgetting_ledger_row(staged.record())?;
         commit_remove(staged.staged_artifact())?;
         self.require_forgetting_ledger_row(staged.record())?;
-        Ok(RuntimePendingForgottenTeachGrant {
+        Ok(RuntimePendingDescriptorImportRemoval {
             record: staged.record().clone(),
         })
     }
 
     pub fn finish_forget(
         &self,
-        pending: &RuntimePendingForgottenTeachGrant,
-    ) -> anyhow::Result<CommittedForgottenTeachGrant> {
+        pending: &RuntimePendingDescriptorImportRemoval,
+    ) -> anyhow::Result<CommittedDescriptorImportRemoval> {
         let _guard = self.lock()?;
         let mut directory = self.load_unlocked()?;
-        let Some(idx) = directory.learned_by_record(pending.record()) else {
+        let Some(idx) = directory.import_by_record(pending.record()) else {
             anyhow::bail!(
-                "finish forget: learned ledger row for agent {:?} ability {:?} is already absent",
+                "finish forget: descriptor-import ledger row for agent {:?} ability {:?} is already absent",
                 pending.record.learner_agent,
                 pending.record.ability_name
             );
         };
-        if directory.learned[idx].state() != LearnedRecordState::Forgetting {
+        if directory.imports[idx].state() != DescriptorImportState::Forgetting {
             anyhow::bail!(
-                "finish forget: learned ledger row for agent {:?} ability {:?} is not in \
+                "finish forget: descriptor-import ledger row for agent {:?} ability {:?} is not in \
                  forgetting state",
                 pending.record.learner_agent,
                 pending.record.ability_name
             );
         }
-        let record = directory.learned.remove(idx);
+        let record = directory.imports.remove(idx);
         self.write_unlocked(&directory)?;
-        Ok(CommittedForgottenTeachGrant { record })
+        Ok(CommittedDescriptorImportRemoval { record })
     }
 
     fn begin_forget_ledger(
         &self,
         learner_agent: &str,
         ability_name: &str,
-    ) -> anyhow::Result<(LearnedRecord, bool)> {
+    ) -> anyhow::Result<(DescriptorImportRecord, bool)> {
         let _guard = self.lock()?;
         let mut directory = self.load_unlocked()?;
-        let Some(idx) = directory.learned_by_active_or_forgetting(learner_agent, ability_name)
+        let Some(idx) = directory.import_by_active_or_forgetting(learner_agent, ability_name)
         else {
             anyhow::bail!(
-                "agent {learner_agent:?} never learned {ability_name:?} — only learned \
-                 abilities can be forgotten (native abilities are removed by their author, \
-                 not by forget)"
+                "agent {learner_agent:?} has no imported descriptor {ability_name:?}; \
+                 forget only removes descriptor imports, while native abilities are removed by their author"
             );
         };
-        let record = directory.learned[idx].clone();
+        let record = directory.imports[idx].clone();
         match record.state() {
-            LearnedRecordState::Acquiring => {
+            DescriptorImportState::Acquiring => {
                 anyhow::bail!(
                     "agent {learner_agent:?} has an acquire transaction in progress for {ability_name:?}; \
                      finish or recover acquire before forgetting it"
                 );
             }
-            LearnedRecordState::Forgetting => Ok((record, true)),
-            LearnedRecordState::Active => {
-                directory.learned[idx].mark_forgetting();
+            DescriptorImportState::Forgetting => Ok((record, true)),
+            DescriptorImportState::Active => {
+                directory.imports[idx].mark_forgetting();
                 self.write_unlocked(&directory)?;
                 Ok((record, false))
             }
         }
     }
 
-    fn require_forgetting_ledger_row(&self, record: &LearnedRecord) -> anyhow::Result<()> {
+    fn require_forgetting_ledger_row(&self, record: &DescriptorImportRecord) -> anyhow::Result<()> {
         let _guard = self.lock()?;
         let directory = self.load_unlocked()?;
-        let Some(idx) = directory.learned_by_record(record) else {
+        let Some(idx) = directory.import_by_record(record) else {
             anyhow::bail!(
-                "commit forget: learned ledger row for agent {:?} ability {:?} is already absent",
+                "commit forget: descriptor-import ledger row for agent {:?} ability {:?} is already absent",
                 record.learner_agent,
                 record.ability_name
             );
         };
-        if directory.learned[idx].state() != LearnedRecordState::Forgetting {
+        if directory.imports[idx].state() != DescriptorImportState::Forgetting {
             anyhow::bail!(
-                "commit forget: learned ledger row for agent {:?} ability {:?} is not in \
+                "commit forget: descriptor-import ledger row for agent {:?} ability {:?} is not in \
                  forgetting state",
                 record.learner_agent,
                 record.ability_name
@@ -671,18 +678,18 @@ impl TeachGrantStore {
         Ok(())
     }
 
-    fn rollback_forget_ledger(&self, record: &LearnedRecord) -> anyhow::Result<()> {
+    fn rollback_forget_ledger(&self, record: &DescriptorImportRecord) -> anyhow::Result<()> {
         let _guard = self.lock()?;
         let mut directory = self.load_unlocked()?;
-        let Some(idx) = directory.learned_by_record(record) else {
+        let Some(idx) = directory.import_by_record(record) else {
             anyhow::bail!(
-                "rollback forget: learned ledger row for agent {:?} ability {:?} is already absent",
+                "rollback forget: descriptor-import ledger row for agent {:?} ability {:?} is already absent",
                 record.learner_agent,
                 record.ability_name
             );
         };
-        if directory.learned[idx].state() == LearnedRecordState::Forgetting {
-            directory.learned[idx].mark_active();
+        if directory.imports[idx].state() == DescriptorImportState::Forgetting {
+            directory.imports[idx].mark_active();
             self.write_unlocked(&directory)?;
         }
         Ok(())
@@ -744,20 +751,20 @@ impl TeachGrantStore {
     ) -> anyhow::Result<()> {
         let _guard = self.lock()?;
         let mut directory = self.load_unlocked()?;
-        let Some(learned_idx) = directory.learned_by_record(&acquired.learned) else {
+        let Some(import_idx) = directory.import_by_record(&acquired.import_record) else {
             anyhow::bail!(
-                "restore acquired ledger: learned ledger row for agent {:?} ability {:?} \
+                "restore acquired ledger: descriptor-import ledger row for agent {:?} ability {:?} \
                  is already absent",
-                acquired.learned.learner_agent,
-                acquired.learned.ability_name
+                acquired.import_record.learner_agent,
+                acquired.import_record.ability_name
             );
         };
-        let learned = directory.learned[learned_idx].clone();
-        if learned != acquired.learned {
+        let import_record = directory.imports[import_idx].clone();
+        if import_record != acquired.import_record {
             anyhow::bail!(
-                "restore acquired ledger: learned ledger row changed under rollback; \
+                "restore acquired ledger: descriptor-import ledger row changed under rollback; \
                  refusing to restore grant for {:?}",
-                acquired.learned.ability_name
+                acquired.import_record.ability_name
             );
         }
         if directory.grant_index_for_record(&acquired.grant).is_some() {
@@ -767,7 +774,7 @@ impl TeachGrantStore {
                 acquired.grant.learner_ura
             );
         }
-        directory.learned.remove(learned_idx);
+        directory.imports.remove(import_idx);
         directory.grants.push(acquired.grant.clone());
         self.write_unlocked(&directory)
     }
@@ -806,21 +813,21 @@ impl TeachGrantsFile {
         })
     }
 
-    /// Active or tombstoned row for `(learner, ability)`. Used by
+    /// Active or tombstoned import row for `(learner, ability)`. Used by
     /// acquire/forget admission so an in-progress forget cannot be treated as
-    /// free space for a second learned copy.
-    fn learned_by_active_or_forgetting(
+    /// free space for a second descriptor import.
+    fn import_by_active_or_forgetting(
         &self,
         learner_agent: &str,
         ability_name: &str,
     ) -> Option<usize> {
-        self.learned
+        self.imports
             .iter()
             .position(|l| l.learner_agent == learner_agent && l.ability_name == ability_name)
     }
 
-    fn learned_by_record(&self, record: &LearnedRecord) -> Option<usize> {
-        self.learned
+    fn import_by_record(&self, record: &DescriptorImportRecord) -> Option<usize> {
+        self.imports
             .iter()
             .position(|candidate| candidate.same_identity(record))
     }
@@ -911,7 +918,7 @@ mod tests {
     fn load_rejects_unversioned_store_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
-        std::fs::write(&path, br#"{"grants":[],"learned":[]}"#).unwrap();
+        std::fs::write(&path, br#"{"grants":[],"imports":[]}"#).unwrap();
         let store = TeachGrantStore { path };
 
         let err = store.load_unlocked().expect_err("missing schema version");
@@ -987,7 +994,7 @@ mod tests {
                 "easynet:///r/acme/agent/mentor",
                 "easynet:///r/acme/agent/apprentice",
                 &grant,
-                LearnedRecord::new(
+                DescriptorImportRecord::new(
                     "quote",
                     "apprentice",
                     "easynet:///r/acme/ability/mentor.quote",
@@ -1006,8 +1013,8 @@ mod tests {
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
         assert!(
-            file.learned.is_empty(),
-            "failed acquire must not leave a learned ledger row"
+            file.imports.is_empty(),
+            "failed acquire must not leave a descriptor-import ledger row"
         );
         assert!(
             file.grant_index_for(
@@ -1022,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn acquire_staged_success_consumes_grant_and_records_learned() {
+    fn acquire_staged_success_consumes_grant_and_records_import() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let store = TeachGrantStore { path: path.clone() };
@@ -1046,7 +1053,7 @@ mod tests {
                 "easynet:///r/acme/agent/mentor",
                 learner,
                 &grant,
-                LearnedRecord::new(
+                DescriptorImportRecord::new(
                     "quote",
                     "apprentice",
                     "easynet:///r/acme/ability/mentor.quote",
@@ -1069,11 +1076,11 @@ mod tests {
             .is_none(),
             "successful acquire consumes exactly that teach grant"
         );
-        assert_eq!(file.learned.len(), 1);
+        assert_eq!(file.imports.len(), 1);
     }
 
     #[test]
-    fn recover_acquiring_committed_artifact_marks_learned_active() {
+    fn recover_acquiring_committed_artifact_marks_import_active() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let store = TeachGrantStore { path: path.clone() };
@@ -1087,14 +1094,14 @@ mod tests {
             EXECUTION_MODE_DEFAULT,
             "t0",
         );
-        let mut learned = LearnedRecord::new(
+        let mut import_record = DescriptorImportRecord::new(
             "quote",
             "apprentice",
             "easynet:///r/acme/ability/mentor.quote",
             TEST_MANIFEST_HASH,
             "t1",
         );
-        learned.mark_acquiring(
+        import_record.mark_acquiring(
             "/tmp/committed-copy",
             Some("/tmp/staged-copy".to_string()),
             "sha256:test",
@@ -1103,7 +1110,7 @@ mod tests {
         store
             .write_unlocked(&TeachGrantsFile {
                 grants: Vec::new(),
-                learned: vec![learned],
+                imports: vec![import_record],
                 ..TeachGrantsFile::default()
             })
             .unwrap();
@@ -1115,11 +1122,11 @@ mod tests {
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
         assert!(file.grants.is_empty());
-        assert_eq!(file.learned.len(), 1);
-        assert_eq!(file.learned[0].state(), LearnedRecordState::Active);
+        assert_eq!(file.imports.len(), 1);
+        assert_eq!(file.imports[0].state(), DescriptorImportState::Active);
         assert!(
-            file.learned[0].acquiring_manifest_path().is_none(),
-            "active learned row must not retain acquiring metadata"
+            file.imports[0].acquiring_manifest_path().is_none(),
+            "active descriptor-import row must not retain acquiring metadata"
         );
     }
 
@@ -1138,14 +1145,14 @@ mod tests {
             EXECUTION_MODE_DEFAULT,
             "t0",
         );
-        let mut learned = LearnedRecord::new(
+        let mut import_record = DescriptorImportRecord::new(
             "quote",
             "apprentice",
             "easynet:///r/acme/ability/mentor.quote",
             TEST_MANIFEST_HASH,
             "t1",
         );
-        learned.mark_acquiring(
+        import_record.mark_acquiring(
             "/tmp/committed-copy",
             Some("/tmp/staged-copy".to_string()),
             "sha256:test",
@@ -1154,7 +1161,7 @@ mod tests {
         store
             .write_unlocked(&TeachGrantsFile {
                 grants: Vec::new(),
-                learned: vec![learned],
+                imports: vec![import_record],
                 ..TeachGrantsFile::default()
             })
             .unwrap();
@@ -1165,7 +1172,7 @@ mod tests {
         assert_eq!(recovered, 1);
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
-        assert!(file.learned.is_empty());
+        assert!(file.imports.is_empty());
         assert!(file.grant_index_for_record(&grant).is_some());
     }
 
@@ -1177,7 +1184,7 @@ mod tests {
         store
             .write_unlocked(&TeachGrantsFile {
                 grants: Vec::new(),
-                learned: vec![LearnedRecord::new(
+                imports: vec![DescriptorImportRecord::new(
                     "quote",
                     "apprentice",
                     "easynet:///r/acme/ability/mentor.quote",
@@ -1193,32 +1200,32 @@ mod tests {
             .unwrap();
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
-        assert_eq!(file.learned.len(), 1);
-        assert_eq!(file.learned[0].state(), LearnedRecordState::Forgetting);
+        assert_eq!(file.imports.len(), 1);
+        assert_eq!(file.imports[0].state(), DescriptorImportState::Forgetting);
 
         let pending = store.commit_forget_artifact(&staged, |_| Ok(())).unwrap();
         assert_eq!(
-            pending.record().learned_from(),
+            pending.record().source_descriptor_ura(),
             "easynet:///r/acme/ability/mentor.quote"
         );
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
-        assert_eq!(file.learned.len(), 1);
+        assert_eq!(file.imports.len(), 1);
         assert_eq!(
-            file.learned[0].state(),
-            LearnedRecordState::Forgetting,
+            file.imports[0].state(),
+            DescriptorImportState::Forgetting,
             "artifact commit must keep the tombstone until runtime cleanup succeeds"
         );
 
         let committed = store.finish_forget(&pending).unwrap();
         assert_eq!(
-            committed.record().learned_from(),
+            committed.record().source_descriptor_ura(),
             "easynet:///r/acme/ability/mentor.quote"
         );
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
         assert!(
-            file.learned.is_empty(),
+            file.imports.is_empty(),
             "finalization removes the tombstone row"
         );
     }
@@ -1231,7 +1238,7 @@ mod tests {
         store
             .write_unlocked(&TeachGrantsFile {
                 grants: Vec::new(),
-                learned: vec![LearnedRecord::new(
+                imports: vec![DescriptorImportRecord::new(
                     "quote",
                     "apprentice",
                     "easynet:///r/acme/ability/mentor.quote",
@@ -1247,8 +1254,8 @@ mod tests {
                 let body = std::fs::read(&path)?;
                 let file: TeachGrantsFile = serde_json::from_slice(&body)?;
                 assert_eq!(
-                    file.learned[0].state(),
-                    LearnedRecordState::Forgetting,
+                    file.imports[0].state(),
+                    DescriptorImportState::Forgetting,
                     "forget intent must be durable before artifact staging runs"
                 );
                 Ok("staged-remove".to_string())
@@ -1262,18 +1269,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let store = TeachGrantStore { path: path.clone() };
-        let mut learned = LearnedRecord::new(
+        let mut import_record = DescriptorImportRecord::new(
             "quote",
             "apprentice",
             "easynet:///r/acme/ability/mentor.quote",
             TEST_MANIFEST_HASH,
             "t1",
         );
-        learned.mark_forgetting();
+        import_record.mark_forgetting();
         store
             .write_unlocked(&TeachGrantsFile {
                 grants: Vec::new(),
-                learned: vec![learned],
+                imports: vec![import_record],
                 ..TeachGrantsFile::default()
             })
             .unwrap();
@@ -1286,12 +1293,12 @@ mod tests {
         let committed = store.finish_forget(&pending).unwrap();
 
         assert_eq!(
-            committed.record().learned_from(),
+            committed.record().source_descriptor_ura(),
             "easynet:///r/acme/ability/mentor.quote"
         );
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
-        assert!(file.learned.is_empty(), "retry must finish the tombstone");
+        assert!(file.imports.is_empty(), "retry must finish the tombstone");
     }
 
     #[test]
@@ -1302,7 +1309,7 @@ mod tests {
         store
             .write_unlocked(&TeachGrantsFile {
                 grants: Vec::new(),
-                learned: vec![LearnedRecord::new(
+                imports: vec![DescriptorImportRecord::new(
                     "quote",
                     "apprentice",
                     "easynet:///r/acme/ability/mentor.quote",
@@ -1323,10 +1330,10 @@ mod tests {
 
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
-        assert_eq!(file.learned.len(), 1);
+        assert_eq!(file.imports.len(), 1);
         assert_eq!(
-            file.learned[0].state(),
-            LearnedRecordState::Forgetting,
+            file.imports[0].state(),
+            DescriptorImportState::Forgetting,
             "cleanup failure must preserve the durable tombstone for retry"
         );
     }

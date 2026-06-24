@@ -20,9 +20,9 @@
 //   stream <ability-ura>       Call a server-stream ability locally        (-> cli::ability_stream)
 //          [--node <id>]       --node pins to a specific remote device
 //   exec <node> -- <cmd>        One-shot remote shell (ad-hoc ability)     (-> cli::exec)
-//   teach <agent.name> --to U   Confer learnability to ONE agent           (-> cli::teach)
-//   learn <ability-ura> --as A  Acquire a taught ability (new owner: A)    (-> cli::teach)
-//   forget <name> --agent A     Unlearn a LEARNED ability                  (-> cli::teach)
+//   teach <agent.name> --to U   Grant descriptor import to ONE agent       (-> cli::teach)
+//   learn <ability-ura> --as A  Import a granted descriptor into A         (-> cli::teach)
+//   forget <name> --agent A     Remove an imported descriptor              (-> cli::teach)
 //
 // Verbs DELIBERATELY ABSENT:
 //
@@ -39,13 +39,12 @@
 //               does not yet model. A naive stdout tail would teach the
 //               wrong thing.
 //
-//   pull      — capability transfer is owner-initiated, never consumer-
-//               initiated: an ability is *taught* by its owner
-//               (`teach`/`learn`, gated by InstallPolicy with
-//               `allow_transferred_code = false` by default), not pulled
-//               like a file. A `pull` verb would contradict "the
-//               capability never leaves its owner's machine" — the
-//               default GET route is remote `invoke`. See
+//   pull      — descriptor import is owner-initiated, never consumer-
+//               initiated: an owner grants a declaration-only descriptor
+//               (`teach`/`learn`, with `allow_transferred_code = false` by
+//               default), while executable capability remains at the owner.
+//               A `pull` verb would imply code installation; the default GET
+//               route is remote `invoke`. See
 //               docs/spec/seven-axes-p0-landing-v1.md §2.5 / §0.1-6.
 //
 // Routing note (transitional misalignment):
@@ -102,11 +101,11 @@ pub enum AbilityAction {
     Stream(ability_stream::StreamArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
-    /// Make an ability learnable by ONE agent (owner-initiated; GET route B).
+    /// Grant one agent permission to import a declaration-only descriptor.
     Teach(teach::TeachArgs),
-    /// Acquire a taught ability — the learner becomes the copy's owner.
+    /// Import a granted descriptor; this does not install executable code.
     Learn(teach::LearnArgs),
-    /// Drop a LEARNED ability (native abilities are not forgettable).
+    /// Drop an imported descriptor (native abilities are not forgettable).
     Forget(teach::ForgetArgs),
 }
 

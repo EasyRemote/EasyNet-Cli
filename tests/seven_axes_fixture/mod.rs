@@ -523,9 +523,9 @@ added_at_unix_ms = 0
     /// Canonical URA of the seeded `testbot.weather-probe` ability —
     /// minted through the same owner projection the ladder uses.
     #[allow(dead_code)]
-    pub fn taught_ability_ura(&self) -> String {
+    pub fn source_descriptor_ura(&self) -> String {
         easynet_cli::ura::owner_ability_ura(&self.testbot_ura, "weather-probe")
-            .expect("mint taught ability URA")
+            .expect("mint source descriptor URA")
     }
 
     /// Drive a real `testbot.echo` unary invocation through the daemon
