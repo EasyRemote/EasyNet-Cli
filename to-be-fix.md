@@ -578,7 +578,7 @@
   续传只用已绑 UUID(哨兵不再发)/ 显式新会话逃逸不污染 lifelong 指针。S 级。
 - **占用注记**:AskToDoPage.tsx 在前端在制波前中(未提交修改),修复须等释放或由占用会话搭车。
 
-### F-057 `--no-default-features`(proto-free)构建既有损坏:4 错误 【已核验,seven-axes 期】
+### F-057 `--no-default-features`(proto-free)构建既有损坏:4 错误 【已修复 2026-06-13,no-default cfg 修复批】
 - 落点:`groups/trust.rs:26`(invocation_transport 被 feature 配出)、
   `runtime/agents/discover_ability.rs:402`(同)、`services/pending_dispatch.rs:83`
   (easynet_axon::pb 不可达)、discover_ability.rs:401(E0277 连带) · 构建矩阵 · 低
@@ -586,12 +586,17 @@
   4 错误,全部在 seven-axes 未触碰的文件——默认特性已含 axon-pb,proto-free 配置
   长期无 CI 咬合而漂移。记忆 `project_axon_pb_feature_build_blindspot` 描述的是
   反向时代("默认 proto-free"),已过时。
-- 方向:裁决 proto-free 配置去留——(a) 修齐 cfg 门并入 CI 矩阵;(b) 正式宣布
-  axon-pb 为必选特性、删除 not(feature) 分支(更干净,与"无兼容层"方针一致)。
-  推荐 (b),需 DEC。S 级。
-- 2026-06-13 复核:seven-axes 后续修复已把新增的 `trust_ability::level_rank`
-  feature 回归清掉;当前 HEAD 的 `--no-default-features` 仍为上述基线 4 错误,
-  不再额外新增 policy/trust 错误。
+- 修复:把 `trust_anchor_path_from_env_or_default` 移到纯数据模块
+  `realm_trust_anchor`,让 `trust show` 不再穿透到 `invocation_transport::boot`;
+  把 feature-agnostic `federation_invoke_shim` 提升到 `services` 层,避免 shim
+  被 `invocation_transport` 父模块 cfg 掉;给 `PendingDispatchMap` 的内部 receipt
+  字段加 `DispatchReceipt` feature 边界;给只被 transport 使用的 owner-projection
+  lease helper 加 `axon-pb` cfg。no-default 构建仍是本地/只读最小表面,不会伪造远端
+  federation 成功。
+- 验证:`CARGO_TARGET_DIR=target/no-default-check cargo check --no-default-features`
+  无错误无警告;`CARGO_TARGET_DIR=target/no-default-check cargo clippy
+  --no-default-features --lib -- -D warnings` 通过;`CARGO_TARGET_DIR=target/default-check
+  cargo check` 通过。
 
 ### F-058 eal/interpreter/tests.rs 与 agent_lifecycle_ability.rs 既有 clippy 5 告警 【已修复 2026-06-13,seven-axes 修复批】
 - 落点:`eal/interpreter/tests.rs:13,1352,1457`(mod 同名 + 复杂类型 ×2)、

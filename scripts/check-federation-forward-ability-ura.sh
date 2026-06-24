@@ -25,14 +25,25 @@ if [[ -n "$bad" ]]; then
 $bad"
 fi
 
-grep -q 'struct TargetOwnedAbilityUra' src/services/invocation_transport/federation_invoke.rs \
-    || fail "missing explicit target-owned Ability URA value object"
-
-if grep -q 'fn forward_ability_ura_for_target' src/services/invocation_transport/federation_invoke.rs; then
-    fail "old target-owner Ability URA derivation helper must stay retired"
+bad_ability_ura_calls="$(
+    find src tests -name '*.rs' -print 2>/dev/null \
+        | grep -v 'src/services/invocation_transport/federation_invoke.rs' \
+        | sort \
+        | xargs grep -nE 'invoke_via_federation_forward_ability_ura(_with_timeout)?[[:space:]]*\(' 2>/dev/null || true
+)"
+if [[ -n "$bad_ability_ura_calls" ]]; then
+    fail "remote federation invoke callers must pass RemoteAbilityInvocationTarget:
+$bad_ability_ura_calls"
 fi
 
-grep -q 'fn invoke_via_federation_forward_ability_ura' src/services/invocation_transport/federation_invoke.rs \
-    || fail "missing canonical Ability URA federation invoke helper"
+grep -q 'struct RemoteAbilityInvocationTarget' src/services/invocation_transport/federation_invoke.rs \
+    || fail "missing explicit remote ability invocation target value object"
+
+if grep -q 'TargetOwnedAbilityUra' src/services/invocation_transport/federation_invoke.rs; then
+    fail "old target-owned Ability URA compatibility type must stay retired"
+fi
+
+grep -q 'fn invoke_via_federation_forward_target' src/services/invocation_transport/federation_invoke.rs \
+    || fail "missing target-object federation invoke helper"
 
 echo "check-federation-forward-ability-ura: ok"

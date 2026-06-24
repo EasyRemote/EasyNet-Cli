@@ -1,5 +1,12 @@
 # System Abilities v1
 
+> Scope note, 2026-06-21: this document records the historical v1 daemon
+> system-ability namespace. For the current ownership, authority, descriptor,
+> implementation, invocation, and receipt model, use
+> `docs/design/ability-control-plane-model.md`. In that model, device/system
+> abilities are `AbilityDescriptor`s advertised through a device projection and
+> governed by `AuthorityBinding`; they are not owned by the node object itself.
+
 > Device-level abilities published by `easynet-daemon` under the
 > `system.<feature>[.<verb>]` namespace. Distinct from agent
 > abilities (`<agent>.chat`, `<agent>.<verb>`) — system abilities

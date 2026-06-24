@@ -421,7 +421,6 @@ Per RFC §18 the device profile owns these.
 \begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
   \item[Node lifecycle:]
   \codew{device.fleet.list_nodes}, \codew{device.fleet.describe_node},
-  \codew{device.fleet.register_self}, \codew{device.fleet.deregister_self},
   \codew{device.fleet.remove_node}.
   Operator-facing fleet topology view.
 
@@ -545,12 +544,12 @@ Per RFC §18 the device profile owns these.
   Outbound MCP: dial a remote MCP server, list and call its
   tools. Pairs with the bridge.
 
-  \item[\codew{policy.evaluate}, \codew{policy.simulate}]
-  RFC §A6 admission policy. The kernel admission gate calls
-  \codew{policy.evaluate} as an in-process sub-invocation
-  carrying the original envelope; \codew{policy.simulate} is
-  the operator-facing dry-run. Without these the daemon has no
-  policy hooks at all and every Invoke is admitted unchecked.
+  \item[\codew{ability.access}, admission trust gates]
+  Standalone \codew{policy.evaluate}/\codew{policy.simulate} was
+  removed from the CLI P0 architecture. Admission is enforced by
+  the unified envelope, delegation, trust-anchor, quota, and
+  ability-access gates; future permission work must extend that
+  path rather than reintroducing a parallel policy ability.
 \end{description}
 
 \subsection{Device-owned --- ability publishing primitives (under \texttt{\small device.ability.*})}

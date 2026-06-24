@@ -400,7 +400,7 @@ async fn invoke_remote_once(
 
     let request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: String::new(),
         ability_ura: ability_ura.to_string(),
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -478,7 +478,7 @@ async fn open_unread_flood_call(
     let mut client = InvocationClient::new(channel);
     let request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: String::new(),
         ability_ura: FLOOD_B_URA.to_string(),
         args: b"{}".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -616,7 +616,7 @@ async fn invoke_remote_echo_c(channel: Channel, timeout: Duration) -> Result<Dur
     let mut client = InvocationClient::new(channel);
     let request = InvokeRemoteUp::Request {
         subject_device: DEVICE_C_URI.to_string(),
-        subject_ura: None,
+        subject_ura: String::new(),
         ability_ura: ECHO_C_URA.to_string(),
         args: SWEEP_PAYLOAD.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),

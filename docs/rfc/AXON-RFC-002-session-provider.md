@@ -498,7 +498,8 @@ bytes)`; integrity is the kernel's responsibility.
 ### Permission / admission
 
 Session create + attach go through the standard admission gate
-(envelope verification, delegation check, policy.evaluate sub-call).
+(envelope verification, delegation check, trust-anchor checks, and
+ability-access gates).
 The provider is invoked AFTER admission passes. Failure modes:
 
   * Admission rejects → session never created, provider not called,
