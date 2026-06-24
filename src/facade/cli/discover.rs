@@ -473,14 +473,6 @@ impl DiscoverExecutionPlan {
             include_realm: !args.local_only,
         })
     }
-
-    fn local_tiers(&self) -> Vec<&'static str> {
-        if self.self_projection == LocalSelfProjection::Preserve {
-            vec!["self", "device"]
-        } else {
-            vec!["device"]
-        }
-    }
 }
 
 /// Wire-level target for one discover ladder invocation.
@@ -560,6 +552,12 @@ struct DiscoverExecutionState {
 impl DiscoverExecutionState {
     fn record_invocation(&mut self, meta: Value) {
         self.invocations.push(meta);
+    }
+
+    fn record_completed_tier(&mut self, scope: &'static str) {
+        if !self.tiers_searched.contains(&scope) {
+            self.tiers_searched.push(scope);
+        }
     }
 
     fn extend_candidates(
@@ -653,7 +651,7 @@ impl DiscoverRuntimeService {
         self.state.record_source_diagnostic(&local_value);
         self.state
             .extend_candidates(&local_value, &self.plan.tokens, self.plan.self_projection);
-        self.state.tiers_searched = self.plan.local_tiers();
+        self.state.record_completed_tier("device");
         Ok(())
     }
 
@@ -681,7 +679,7 @@ impl DiscoverRuntimeService {
                     &self.plan.tokens,
                     LocalSelfProjection::Preserve,
                 );
-                self.state.tiers_searched.push("user");
+                self.state.record_completed_tier("user");
             }
         }
         Ok(())
@@ -1302,7 +1300,7 @@ mod tests {
         );
         let report = DiscoverReport {
             query: "chat".into(),
-            tiers_searched: vec!["self", "device"],
+            tiers_searched: vec!["device"],
             federation: Some(FederationStatus {
                 status: "federation_not_joined".into(),
                 message: "no credentials".into(),
@@ -1357,7 +1355,7 @@ mod tests {
         );
         let report = DiscoverReport {
             query: "read chat".into(),
-            tiers_searched: vec!["self", "device"],
+            tiers_searched: vec!["device"],
             federation: None,
             invocations: Vec::new(),
             diagnostics: Vec::new(),

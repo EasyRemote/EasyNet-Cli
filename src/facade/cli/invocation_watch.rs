@@ -63,12 +63,12 @@ const MAX_EMPTY_FOLLOW_POLLS: u16 = 120;
 
 /// Output format for `invocation watch`. It intentionally lives in
 /// this module instead of `support::output::OutputFormat` because
-/// `tui` is watch-specific; list/show commands stay table|json.
+/// `panel` is watch-specific; list/show commands stay table|json.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
     Table,
     Json,
-    Tui,
+    Panel,
 }
 
 #[derive(Debug, Args)]
@@ -85,8 +85,8 @@ pub struct WatchArgs {
     /// terminal (or the run's heartbeat goes stale).
     #[arg(long)]
     pub follow: bool,
-    /// 'table' renders a snapshot; 'json' emits NDJSON events
-    /// (streams have no table form — spec §0.2-3 exception).
+    /// 'table' renders state rows; 'json' emits NDJSON events; 'panel'
+    /// renders a deterministic three-column trace snapshot.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
@@ -690,8 +690,8 @@ pub fn execute_follow_until_terminal(args: &WatchArgs) -> anyhow::Result<Vec<Wat
 }
 
 pub fn run(args: WatchArgs) -> anyhow::Result<()> {
-    if args.format == OutputFormat::Tui {
-        return run_tui(args);
+    if args.format == OutputFormat::Panel {
+        return run_panel(args);
     }
     let ndjson = args.format == OutputFormat::Json;
     let emit = |events: &[WatchEvent]| -> anyhow::Result<()> {
@@ -737,10 +737,10 @@ fn stream_follow_events(
     }
 }
 
-fn run_tui(args: WatchArgs) -> anyhow::Result<()> {
+fn run_panel(args: WatchArgs) -> anyhow::Result<()> {
     if !args.follow {
         let snapshot = execute_once(&args)?;
-        println!("{}", render_tui_snapshot(&snapshot));
+        println!("{}", render_panel_snapshot(&snapshot));
         return Ok(());
     }
 
@@ -750,7 +750,7 @@ fn run_tui(args: WatchArgs) -> anyhow::Result<()> {
     loop {
         let step = engine.observe(&nodes)?;
         let snapshot = snapshot_from_nodes(engine.trace_id().to_string(), nodes.clone());
-        print!("\x1B[2J\x1B[H{}", render_tui_snapshot(&snapshot));
+        print!("\x1B[2J\x1B[H{}", render_panel_snapshot(&snapshot));
         for event in step
             .events
             .iter()
@@ -807,21 +807,25 @@ fn render_human(event: &WatchEvent) {
 /// Render the watch snapshot as a deterministic, ratatui-backed
 /// three-column frame. This is deliberately a pure renderer so tests
 /// pin the product semantics without depending on terminal I/O.
-pub fn render_tui_snapshot(snapshot: &WatchSnapshot) -> String {
-    render_tui_snapshot_with_size(snapshot, 120, 22)
+pub fn render_panel_snapshot(snapshot: &WatchSnapshot) -> String {
+    render_panel_snapshot_with_size(snapshot, 120, 22)
 }
 
-pub fn render_tui_snapshot_with_size(snapshot: &WatchSnapshot, width: u16, height: u16) -> String {
+pub fn render_panel_snapshot_with_size(
+    snapshot: &WatchSnapshot,
+    width: u16,
+    height: u16,
+) -> String {
     let width = width.max(1);
     let height = height.max(1);
 
     let area = Rect::new(0, 0, width, height);
     let mut buffer = Buffer::empty(area);
-    render_tui_frame(snapshot, area, &mut buffer);
+    render_panel_frame(snapshot, area, &mut buffer);
     buffer_to_string(&buffer, width, height)
 }
 
-fn render_tui_frame(snapshot: &WatchSnapshot, area: Rect, buffer: &mut Buffer) {
+fn render_panel_frame(snapshot: &WatchSnapshot, area: Rect, buffer: &mut Buffer) {
     let constraints = if area.width < 100 {
         [
             Constraint::Percentage(25),
@@ -1208,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    fn tui_snapshot_renders_the_three_fact_columns() {
+    fn panel_snapshot_renders_the_three_fact_columns() {
         let snapshot = WatchSnapshot {
             trace_id: "trace-1".into(),
             events: vec![WatchEvent::State {
@@ -1248,7 +1252,7 @@ mod tests {
             }),
         };
 
-        let frame = render_tui_snapshot(&snapshot);
+        let frame = render_panel_snapshot(&snapshot);
         assert!(frame.contains("Phases"), "{frame}");
         assert!(frame.contains("Invocations"), "{frame}");
         assert!(frame.contains("Receipt"), "{frame}");
@@ -1263,10 +1267,10 @@ mod tests {
         );
         assert!(
             !frame.contains("step"),
-            "watch TUI must not expose step-level addressing: {frame}"
+            "watch panel must not expose step-level addressing: {frame}"
         );
 
-        let narrow = render_tui_snapshot_with_size(&snapshot, 72, 12);
+        let narrow = render_panel_snapshot_with_size(&snapshot, 72, 12);
         assert_eq!(narrow.lines().count(), 12, "{narrow}");
         assert!(
             narrow.lines().all(|line| line.chars().count() <= 72),

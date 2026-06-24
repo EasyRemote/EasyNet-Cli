@@ -90,6 +90,66 @@ pub struct ForgetArgs {
     pub yes: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfirmationGate {
+    prompt: String,
+    bypassed: bool,
+}
+
+impl ConfirmationGate {
+    fn new(prompt: impl Into<String>, bypassed: bool) -> Self {
+        Self {
+            prompt: prompt.into(),
+            bypassed,
+        }
+    }
+
+    fn confirm(&self) -> anyhow::Result<bool> {
+        if self.bypassed {
+            return Ok(true);
+        }
+        output::confirm(&self.prompt)
+    }
+}
+
+fn teach_confirmation(args: &TeachArgs) -> ConfirmationGate {
+    ConfirmationGate::new(
+        format!(
+            "Grant descriptor {} to learner {}. Continue?",
+            args.ability, args.to
+        ),
+        args.yes,
+    )
+}
+
+fn learn_confirmation(args: &LearnArgs) -> ConfirmationGate {
+    ConfirmationGate::new(
+        format!(
+            "Import descriptor {} into agent {:?}. Continue?",
+            args.ability_ura, args.learner
+        ),
+        args.yes,
+    )
+}
+
+fn forget_confirmation(args: &ForgetArgs) -> ConfirmationGate {
+    ConfirmationGate::new(
+        format!(
+            "Remove imported descriptor {} from agent {:?}. Continue?",
+            args.ability, args.agent
+        ),
+        args.yes,
+    )
+}
+
+fn confirm_or_cancel(gate: ConfirmationGate) -> anyhow::Result<bool> {
+    if gate.confirm()? {
+        return Ok(true);
+    }
+    output::info("Cancelled.");
+    Ok(false)
+}
+
 /// Compute half of `teach` (e2e surface).
 pub fn execute_teach(args: &TeachArgs) -> anyhow::Result<Value> {
     let owner_ura = resolve_owner_ura_from_ability(&args.ability)?;
@@ -123,12 +183,8 @@ pub fn execute_forget(args: &ForgetArgs) -> anyhow::Result<Value> {
 }
 
 pub fn run_teach(args: TeachArgs) -> anyhow::Result<()> {
-    if !args.yes {
-        anyhow::bail!(
-            "granting descriptor {} to {}; re-run with -y to confirm",
-            args.ability,
-            args.to
-        );
+    if !confirm_or_cancel(teach_confirmation(&args))? {
+        return Ok(());
     }
     let resp = execute_teach(&args)?;
     let grant: DescriptorGrantResponse =
@@ -181,12 +237,8 @@ fn resolve_owner_ura_from_ability(ability: &str) -> anyhow::Result<String> {
 }
 
 pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
-    if !args.yes {
-        anyhow::bail!(
-            "importing descriptor {} into agent {:?}; re-run with -y to confirm",
-            args.ability_ura,
-            args.learner
-        );
+    if !confirm_or_cancel(learn_confirmation(&args))? {
+        return Ok(());
     }
     let (resp, _meta) = execute_learn(&args)?;
     let imported: DescriptorImportResponse =
@@ -202,12 +254,8 @@ pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
 }
 
 pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
-    if !args.yes {
-        anyhow::bail!(
-            "forgetting removes imported descriptor {} from agent {:?}; re-run with -y to confirm",
-            args.ability,
-            args.agent
-        );
+    if !confirm_or_cancel(forget_confirmation(&args))? {
+        return Ok(());
     }
     let resp = execute_forget(&args)?;
     let removed: DescriptorRemovalResponse =
@@ -217,4 +265,36 @@ pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
         removed.removed_descriptor, removed.source_descriptor_ura,
     ));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn teach_confirmation_prompt_names_transfer_edges() {
+        let args = TeachArgs {
+            ability: "mentor.quote".to_string(),
+            to: "easynet:///r/default/agent/user.student".to_string(),
+            yes: false,
+        };
+        let gate = teach_confirmation(&args);
+
+        assert!(!gate.bypassed);
+        assert!(gate.prompt.contains("mentor.quote"));
+        assert!(gate
+            .prompt
+            .contains("easynet:///r/default/agent/user.student"));
+    }
+
+    #[test]
+    fn yes_flag_bypasses_interactive_prompt_only() {
+        let args = LearnArgs {
+            ability_ura: "easynet:///r/default/ability/user.mentor/quote".to_string(),
+            learner: "student".to_string(),
+            yes: true,
+        };
+
+        assert!(learn_confirmation(&args).confirm().unwrap());
+    }
 }

@@ -172,7 +172,7 @@ fn advertise_remote_user_tier_ability(socket_path: &Path, host_device_ura: &str)
 }
 
 #[test]
-fn discover_e2e_local_tiers_and_typed_federation_degradation() {
+fn discover_e2e_local_scope_and_typed_federation_degradation() {
     let home = SevenAxesHome::seed();
     let daemon = home.start_daemon();
 
