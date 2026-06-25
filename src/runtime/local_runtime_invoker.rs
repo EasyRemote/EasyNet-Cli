@@ -17,8 +17,9 @@ use easynet_axon::invocation::{
 };
 use serde_json::Value;
 
-use crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
-use crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire;
+use crate::runtime::axon_bridge::descriptor_ref::{
+    ability_descriptor_ref_for_wire, ability_ura_for_wire,
+};
 use crate::runtime::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
@@ -103,18 +104,50 @@ fn local_invocation_causal_context(target: &InvocationTarget) -> CausalContext {
     target.causal_context.clone().unwrap_or(CausalContext::None)
 }
 
-fn local_descriptor_bound_envelope(
+/// Read the descriptor version the runtime registered for `runtime_ability`
+/// in `mode`. The version is bound into the runtime's per-mode proof binding
+/// at registration time, so the runtime is the single source of truth. There
+/// is no default fallback: an ability dispatched without a registered,
+/// version-bound descriptor cannot be stamped with a truthful version.
+async fn local_registered_descriptor_version(
+    runtime: &Arc<LocalRuntime>,
+    runtime_ability: &str,
+    mode: AxonInvocationCallMode,
+) -> Result<String, String> {
+    let options = runtime
+        .ability_options(runtime_ability)
+        .await
+        .ok_or_else(|| {
+            format!(
+                "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+                 version: ability is not registered in the local runtime"
+            )
+        })?;
+    let version = options.proof_for_mode(mode).descriptor_version;
+    if version.trim().is_empty() {
+        return Err(format!(
+            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+             version: runtime registration left the {mode:?} descriptor proof unbound"
+        ));
+    }
+    Ok(version)
+}
+
+async fn local_descriptor_bound_envelope(
+    runtime: &Arc<LocalRuntime>,
+    mode: AxonInvocationCallMode,
     target: &InvocationTarget,
     payload: &[u8],
 ) -> Result<DescriptorBoundEnvelope, String> {
     let callee_ura = local_invocation_callee_ura(target);
     let subject = local_invocation_subject(target, &callee_ura)?;
-    let ability = ability_descriptor_ref_for_wire(
-        &callee_ura,
-        &target.ability,
-        DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-    )
-    .map_err(|err| format!("{err}"))?;
+    let runtime_ability =
+        ability_ura_for_wire(&callee_ura, &target.ability).map_err(|err| format!("{err}"))?;
+    let descriptor_version =
+        local_registered_descriptor_version(runtime, &runtime_ability, mode).await?;
+    let ability =
+        ability_descriptor_ref_for_wire(&callee_ura, &target.ability, &descriptor_version)
+            .map_err(|err| format!("{err}"))?;
     DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller: system_agent_identity(),
         callee: local_identity(&callee_ura),
@@ -127,12 +160,13 @@ fn local_descriptor_bound_envelope(
     .map_err(|err| format!("{err}"))
 }
 
-fn local_system_request(
+async fn local_system_request(
+    runtime: &Arc<LocalRuntime>,
     mode: AxonInvocationCallMode,
     target: &InvocationTarget,
     payload: Vec<u8>,
 ) -> Result<DescriptorBoundInvocationRequest, String> {
-    let envelope = local_descriptor_bound_envelope(target, &payload)?;
+    let envelope = local_descriptor_bound_envelope(runtime, mode, target, &payload).await?;
     LocalRuntimeRequestFactory::request_for(
         mode,
         LocalRuntimeIngress::LocalSystem { envelope, payload },
@@ -225,7 +259,8 @@ pub async fn open_local_bidi(
 ) -> Result<RuntimeBidiSource, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    let request = local_system_request(AxonInvocationCallMode::Bidi, &target, payload)?;
+    let request =
+        local_system_request(&runtime, AxonInvocationCallMode::Bidi, &target, payload).await?;
     let (handle, _) = runtime
         .invoke_descriptor_bound_bidi_request_async(request)
         .await
@@ -253,7 +288,8 @@ pub async fn invoke_local_rpc(
 ) -> Result<Value, String> {
     ensure_local_target(&target)?;
     let payload = encode_json_payload(&target.normalized_args)?;
-    let request = local_system_request(AxonInvocationCallMode::Rpc, &target, payload)?;
+    let request =
+        local_system_request(&runtime, AxonInvocationCallMode::Rpc, &target, payload).await?;
     let (handle, _) = runtime
         .invoke_descriptor_bound_request_async(request)
         .await
@@ -308,8 +344,14 @@ pub async fn drain_local_stream_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions};
+
     use crate::runtime::invocation_target::CallMode;
     use serde_json::json;
+
+    const TEST_DESCRIPTOR_VERSION: &str = "1.0.0";
+    const TEST_SCHEMA_HASH: [u8; 32] = [0x11; 32];
+    const TEST_IMPL_HASH: [u8; 32] = [0x22; 32];
 
     fn target(ability: String, subject: Option<String>) -> InvocationTarget {
         InvocationTarget {
@@ -322,41 +364,98 @@ mod tests {
         }
     }
 
-    #[test]
-    fn canonical_ability_ura_projects_owner_as_callee() {
+    async fn runtime_with_descriptor_bound_ability(
+        callee_ura: &str,
+        ability: &str,
+    ) -> Arc<LocalRuntime> {
+        let runtime = LocalRuntime::new();
+        let runtime_ability =
+            ability_ura_for_wire(callee_ura, ability).expect("runtime ability URA");
+        runtime
+            .register_ability_with_options(
+                runtime_ability,
+                make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+                AbilityOptions::default()
+                    .with_modes(AbilityCallModes::RPC)
+                    .with_descriptor_proof(
+                        TEST_DESCRIPTOR_VERSION,
+                        TEST_SCHEMA_HASH,
+                        TEST_IMPL_HASH,
+                    ),
+            )
+            .await
+            .expect("register descriptor-bound test ability");
+        runtime
+    }
+
+    #[tokio::test]
+    async fn canonical_ability_ura_projects_owner_as_callee() {
         let owner = crate::ura::device_ura("acme", "dev-a");
         let ability = crate::ura::owner_ability_ura(&owner, "fs.read").unwrap();
-        let envelope = local_descriptor_bound_envelope(&target(ability.clone(), None), b"{}")
-            .expect("descriptor-bound envelope");
+        let runtime = runtime_with_descriptor_bound_ability(&owner, &ability).await;
+        let envelope = local_descriptor_bound_envelope(
+            &runtime,
+            AxonInvocationCallMode::Rpc,
+            &target(ability.clone(), None),
+            b"{}",
+        )
+        .await
+        .expect("descriptor-bound envelope");
 
         assert_eq!(envelope.envelope().callee.ura, owner);
         assert_eq!(envelope.envelope().subject.ura, owner);
-        assert_eq!(envelope.envelope().ability, ability);
+        assert_eq!(
+            envelope.envelope().ability,
+            format!("{ability}@{TEST_DESCRIPTOR_VERSION}")
+        );
     }
 
-    #[test]
-    fn resource_subject_does_not_become_callee() {
+    #[tokio::test]
+    async fn resource_subject_does_not_become_callee() {
         let subject = crate::ura::resource_dot_ura("acme", "device.dev-a.files", "tmp/report.txt");
+        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura(), "fs.read").await;
         let envelope = local_descriptor_bound_envelope(
+            &runtime,
+            AxonInvocationCallMode::Rpc,
             &target("fs.read".to_string(), Some(subject.clone())),
             b"{}",
         )
+        .await
         .expect("descriptor-bound envelope");
 
         assert_eq!(envelope.envelope().callee.ura, local_device_ura());
         assert_eq!(envelope.envelope().subject.ura, subject);
+        assert_eq!(
+            envelope.envelope().ability,
+            format!(
+                "{}@{TEST_DESCRIPTOR_VERSION}",
+                crate::ura::owner_ability_ura(&local_device_ura(), "fs.read").unwrap()
+            )
+        );
     }
 
-    #[test]
-    fn explicit_device_subject_is_not_reclassified_as_callee() {
+    #[tokio::test]
+    async fn explicit_device_subject_is_not_reclassified_as_callee() {
         let subject = crate::ura::device_ura("acme", "dev-b");
+        let runtime =
+            runtime_with_descriptor_bound_ability(&local_device_ura(), "device.inspect").await;
         let envelope = local_descriptor_bound_envelope(
+            &runtime,
+            AxonInvocationCallMode::Rpc,
             &target("device.inspect".to_string(), Some(subject.clone())),
             b"{}",
         )
+        .await
         .expect("descriptor-bound envelope");
 
         assert_eq!(envelope.envelope().callee.ura, local_device_ura());
         assert_eq!(envelope.envelope().subject.ura, subject);
+        assert_eq!(
+            envelope.envelope().ability,
+            format!(
+                "{}@{TEST_DESCRIPTOR_VERSION}",
+                crate::ura::owner_ability_ura(&local_device_ura(), "device.inspect").unwrap()
+            )
+        );
     }
 }

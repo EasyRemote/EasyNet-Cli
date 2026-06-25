@@ -35,7 +35,6 @@
 mod seven_axes_fixture;
 
 use easynet_cli::facade::cli::invocation_watch::{self, WatchArgs, WatchEvent};
-use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use seven_axes_fixture::SevenAxesHome;
 
 #[test]
@@ -44,11 +43,17 @@ fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
     let daemon = home.start_daemon();
 
     let meta = home.invoke_testbot_echo_with_meta("usage ride");
+    // The echo manifest declares descriptor_version = "2.3.0" (not the
+    // default), so this asserts the receipt proof fact carries the version
+    // the runtime actually registered — proving the version threads
+    // manifest -> control plane -> runtime proof binding -> wire envelope ->
+    // receipt, rather than a fabricated default stamped at the wire boundary.
+    let expected_echo_descriptor_version = "2.3.0";
     let expected_echo_ability_ref = format!(
         "{}@{}",
         easynet_cli::ura::owner_ability_ura(&home.testbot_ura, "echo")
             .expect("mint testbot echo ability URA"),
-        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        expected_echo_descriptor_version
     );
     let invocation_ura = meta["invocation_ura"]
         .as_str()
@@ -59,6 +64,7 @@ fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
         invocation: Some(invocation_ura),
         trace: None,
         follow: false,
+        max_wait_seconds: 60,
         format: invocation_watch::OutputFormat::Table,
     })
     .expect("watch the ledgered invocation");
@@ -86,7 +92,7 @@ fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
         .expect("terminal receipt must expose descriptor/runtime proof facts");
     assert_eq!(
         proof["descriptor_version"],
-        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        expected_echo_descriptor_version
     );
     assert_eq!(proof["runtime_env"], "axon-local-runtime-rs");
     assert_eq!(

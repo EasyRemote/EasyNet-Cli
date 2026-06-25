@@ -398,6 +398,7 @@ impl SevenAxesHome {
         std::fs::write(
             abilities_dir.join("echo.ability.toml"),
             "schema_version = \"1\"\n\
+             descriptor_version = \"2.3.0\"\n\
              name = \"echo\"\n\
              description = \"echo one short string for deterministic mission tests\"\n\
              timeout_seconds = 5\n\

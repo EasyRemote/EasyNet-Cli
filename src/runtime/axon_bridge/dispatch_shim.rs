@@ -41,7 +41,9 @@ use easynet_axon::invocation::{
 
 use easynet_axon::pb::axon::v1 as pb;
 
-use crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire;
+use crate::runtime::axon_bridge::descriptor_ref::{
+    ability_descriptor_ref_for_wire, ability_ura_for_wire,
+};
 use crate::runtime::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
@@ -426,8 +428,43 @@ fn local_descriptor_subject(
     Ok((requested, subject_ref))
 }
 
+/// Read the descriptor version the runtime registered for `ability` in
+/// `mode`, so a descriptor-bound envelope and its receipt proof facts carry
+/// the version policy actually admitted at registration rather than a
+/// fabricated default.
+///
+/// The version is bound into the runtime's per-mode `AbilityProofBinding` at
+/// registration time (see `AxonAbilityCatalog::bind_runtime_proof_for_mode`),
+/// so the runtime is the single source of truth. There is no default
+/// fallback: an ability that is dispatched but not registered, or registered
+/// without a bound descriptor version, cannot be given a truthful version, so
+/// it is refused.
+async fn registered_descriptor_version(
+    runtime: &Arc<LocalRuntime>,
+    runtime_ability: &str,
+    mode: AxonInvocationCallMode,
+) -> Result<String, AxonError> {
+    let options = runtime
+        .ability_options(runtime_ability)
+        .await
+        .ok_or_else(|| {
+            AxonError::invalid_argument(format!(
+                "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+             version: ability is not registered in the local runtime"
+            ))
+        })?;
+    let version = options.proof_for_mode(mode).descriptor_version;
+    if version.trim().is_empty() {
+        return Err(AxonError::invalid_argument(format!(
+            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+             version: runtime registration left the {mode:?} descriptor proof unbound"
+        )));
+    }
+    Ok(version)
+}
+
 pub async fn open_stream_local_with_subject(
-    _runtime: &Arc<LocalRuntime>,
+    runtime: &Arc<LocalRuntime>,
     callee_ura: &str,
     subject_ura: &str,
     ability: &str,
@@ -436,11 +473,11 @@ pub async fn open_stream_local_with_subject(
     let caller = system_agent_identity();
     let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
     let (subject, _) = local_descriptor_subject(subject_ura)?;
-    let ability = ability_descriptor_ref_for_wire(
-        callee_ura,
-        ability,
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-    )?;
+    let runtime_ability = ability_ura_for_wire(callee_ura, ability)?;
+    let descriptor_version =
+        registered_descriptor_version(runtime, &runtime_ability, AxonInvocationCallMode::Stream)
+            .await?;
+    let ability = ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_version)?;
     let descriptor_bound = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller,
         callee,
@@ -501,11 +538,11 @@ pub async fn open_bidi_local_with_subject(
     let caller = system_agent_identity();
     let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
     let (subject, _) = local_descriptor_subject(subject_ura)?;
-    let ability = ability_descriptor_ref_for_wire(
-        callee_ura,
-        ability,
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-    )?;
+    let runtime_ability = ability_ura_for_wire(callee_ura, ability)?;
+    let descriptor_version =
+        registered_descriptor_version(runtime, &runtime_ability, AxonInvocationCallMode::Bidi)
+            .await?;
+    let ability = ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_version)?;
     let descriptor_bound = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller,
         callee,
@@ -554,11 +591,36 @@ pub async fn dispatch_rpc_local_with_subject(
             };
         }
     };
-    let ability = match ability_descriptor_ref_for_wire(
-        callee_ura,
-        ability,
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-    ) {
+    let runtime_ability = match ability_ura_for_wire(callee_ura, ability) {
+        Ok(runtime_ability) => runtime_ability,
+        Err(err) => {
+            return RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            };
+        }
+    };
+    let descriptor_version =
+        match registered_descriptor_version(runtime, &runtime_ability, AxonInvocationCallMode::Rpc)
+            .await
+        {
+            Ok(descriptor_version) => descriptor_version,
+            Err(err) => {
+                return RpcDispatchOutcome {
+                    invocation_id: None,
+                    state: InvocationState::Failed,
+                    payload_bytes: Vec::new(),
+                    error: Some(err),
+                    admission_receipt: None,
+                    terminal_receipt: None,
+                };
+            }
+        };
+    let ability = match ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_version) {
         Ok(ability) => ability,
         Err(err) => {
             return RpcDispatchOutcome {
@@ -669,6 +731,12 @@ mod tests {
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use serde_json::Value;
 
+    /// Descriptor version a simulated upstream client stamps onto the wire
+    /// envelope. Deliberately not the production default constant: the
+    /// inbound wire path must carry whatever version the caller declared,
+    /// and the ledger must record exactly that.
+    const WIRE_TEST_DESCRIPTOR_VERSION: &str = "3.1.4";
+
     struct FixedKey(VerifyingKey);
     impl KeyResolver for FixedKey {
         fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
@@ -709,9 +777,9 @@ mod tests {
             AgentIdentity::new("easynet:///r/t/device/host", UraProfile::EasynetStrictV2);
         let subject_sdk = SubjectIdentity::from_callee(&callee_sdk);
         let nonce = fresh_nonce();
-        let descriptor_version = crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
         let ability_ref =
-            ability_descriptor_ref_for_wire(&callee_sdk.ura, ability, descriptor_version).unwrap();
+            ability_descriptor_ref_for_wire(&callee_sdk.ura, ability, WIRE_TEST_DESCRIPTOR_VERSION)
+                .unwrap();
         let descriptor_bound_sdk =
             DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
                 caller: caller_sdk.clone(),
@@ -795,10 +863,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].ability_name,
-            format!(
-                "{ability_ura}@{}",
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-            )
+            format!("{ability_ura}@{WIRE_TEST_DESCRIPTOR_VERSION}")
         );
         assert_eq!(records[0].state, "completed");
         assert_eq!(records[0].caller_ura, "easynet:///r/t/agent/u.alice");
@@ -955,10 +1020,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].ability_name,
-            format!(
-                "{ability_ura}@{}",
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-            )
+            format!("{ability_ura}@{WIRE_TEST_DESCRIPTOR_VERSION}")
         );
         assert_eq!(records[0].state, "completed");
         assert_eq!(
