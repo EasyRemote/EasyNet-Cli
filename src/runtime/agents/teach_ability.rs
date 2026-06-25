@@ -31,8 +31,9 @@ use sha2::{Digest, Sha256};
 
 use crate::core::ability_spec::{AbilityExec, AbilityManifest};
 use crate::persistence::teach_grants::{
-    AcquiringArtifactRecoveryState, AcquiringArtifactTxn, DescriptorImportRecord, TeachGrant,
-    TeachGrantStore, EXECUTION_MODE_DEFAULT,
+    AcquireStagedGrant, AcquiringArtifactRecoveryState, AcquiringArtifactTxn,
+    DescriptorImportRecord, TeachGrant, TeachGrantDraft, TeachGrantInvocationProof,
+    TeachGrantInvocationProofDraft, TeachGrantStore, EXECUTION_MODE_DEFAULT,
 };
 use crate::runtime::ability::HostedAgentAuthority;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
@@ -461,16 +462,28 @@ fn teach_handler_with_clock(
     let authority = require_owner_authority(&env, &home.owner_agent)?;
     let ability_ura = crate::ura::owner_ability_ura(&authority.owner_ura, &home.public_name)
         .ok_or_else(|| anyhow::anyhow!("could not mint the granted descriptor URA"))?;
-    TeachGrantStore::open_default().grant(TeachGrant::new(
+    let granted_at = clock.now_rfc3339();
+    let proof = teach_grant_invocation_proof(
+        &env,
+        &authority.granted_by,
         ability,
-        ability_ura.clone(),
-        authority.owner_ura.clone(),
-        home.owner_agent.clone(),
+        &ability_ura,
+        &authority.owner_ura,
         learner_ura,
-        snapshot.manifest_hash.clone(),
-        EXECUTION_MODE_DEFAULT,
-        clock.now_rfc3339(),
-    ))?;
+        &snapshot.manifest_hash,
+    )?;
+    TeachGrantStore::open_default().grant(TeachGrant::from_draft(TeachGrantDraft {
+        ability: ability.to_string(),
+        ability_ura: ability_ura.clone(),
+        owner_ura: authority.owner_ura.clone(),
+        granted_by_ura: authority.granted_by.clone(),
+        owner_agent: home.owner_agent.clone(),
+        learner_ura: learner_ura.to_string(),
+        manifest_hash: snapshot.manifest_hash.clone(),
+        execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
+        granted_at,
+        proof,
+    }))?;
 
     Ok(json!({
         "granted_descriptor": ability,
@@ -484,6 +497,35 @@ fn teach_handler_with_clock(
         "transfer_kind": TRANSFER_KIND_DISCOVERY_ONLY_MANIFEST,
         "invokable_after_acquire": false,
     }))
+}
+
+fn teach_grant_invocation_proof(
+    env: &EnvelopeContext,
+    granted_by_ura: &str,
+    granted_ability: &str,
+    granted_ability_ura: &str,
+    owner_ura: &str,
+    learner_ura: &str,
+    manifest_hash: &str,
+) -> anyhow::Result<TeachGrantInvocationProof> {
+    TeachGrantInvocationProof::from_draft(TeachGrantInvocationProofDraft {
+        invocation_id: env.invocation_id().to_string(),
+        caller_ura: env.caller().to_string(),
+        callee_ura: env.callee().to_string(),
+        subject_ura: env.subject().to_string(),
+        envelope_ability: env.ability().to_string(),
+        invocation_nonce_hex: hex::encode(env.invocation_nonce()),
+        causal_context: env.causal_context().clone(),
+        signature_algorithm: env.caller_signature().algorithm().to_string(),
+        signature_key_id_hint: env.caller_signature().key_id_hint().to_string(),
+        signature_hex: hex::encode(env.caller_signature().signature()),
+        granted_ability: granted_ability.to_string(),
+        granted_ability_ura: granted_ability_ura.to_string(),
+        owner_ura: owner_ura.to_string(),
+        granted_by_ura: granted_by_ura.to_string(),
+        learner_ura: learner_ura.to_string(),
+        manifest_hash: manifest_hash.to_string(),
+    })
 }
 
 fn stage_path_for(dest: &Path, operation: &str) -> anyhow::Result<PathBuf> {
@@ -1009,15 +1051,15 @@ impl AdmittedAcquire {
             grant.manifest_hash(),
             clock.now_rfc3339(),
         );
-        let acquired = TeachGrantStore::open_default().acquire_staged(
-            &plan.request.registry_name,
-            &plan.request.ability_ura,
-            &plan.request.owner_ura,
-            &plan.learner_ura,
-            &grant,
+        let acquired = TeachGrantStore::open_default().acquire_staged(AcquireStagedGrant {
+            registry_name: plan.request.registry_name.clone(),
+            ability_ura: plan.request.ability_ura.clone(),
+            owner_ura: plan.request.owner_ura.clone(),
+            learner_ura: plan.learner_ura.clone(),
+            expected_grant: grant,
             import_record,
             staged,
-        )?;
+        })?;
         Ok(CommittedAcquire { plan, acquired })
     }
 }

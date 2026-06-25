@@ -22,13 +22,14 @@
 // Schema (operator-inspectable)
 // -----------------------------
 // {
-//   "schema_version": "2",
+//   "schema_version": "3",
 //   "grants": [
 //     { "ability": "<owner-local registry name, e.g. testbot.weather-probe>",
 //       "owner_agent": "testbot",
 //       "learner_ura": "easynet:///r/<realm>/agent/<id>",
 //       "execution_mode": "sandbox_first",   // capability.proto:238 default
-//       "granted_at": "<rfc3339>" },
+//       "granted_at": "<rfc3339>",
+//       "proof": "<signed-envelope grant proof>" },
 //     …
 //   ],
 //   "imports": [
@@ -49,12 +50,14 @@ use std::sync::{Mutex, MutexGuard};
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use super::file_lock::ExclusiveFileLock;
 
 pub(crate) const FILE_NAME: &str = "teach-grants.json";
-const STORE_SCHEMA_VERSION: &str = "2";
+const STORE_SCHEMA_VERSION: &str = "3";
+const TEACH_GRANT_PROOF_KIND: &str = "teach_grant_signed_envelope_v1";
 static STORE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Default execution posture for future executable descriptor transfer
@@ -91,6 +94,14 @@ impl TeachGrantsFile {
                 STORE_SCHEMA_VERSION
             );
         }
+        for grant in &self.grants {
+            grant.validate_stored()?;
+        }
+        for import in &self.imports {
+            if let Some(grant) = &import.pending_grant {
+                grant.validate_stored()?;
+            }
+        }
         Ok(())
     }
 }
@@ -102,11 +113,68 @@ pub struct TeachGrant {
     ability_ura: String,
     #[serde(default)]
     owner_ura: String,
+    granted_by_ura: String,
     owner_agent: String,
     learner_ura: String,
     manifest_hash: String,
     execution_mode: String,
     granted_at: String,
+    proof: TeachGrantInvocationProof,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeachGrantDraft {
+    pub ability: String,
+    pub ability_ura: String,
+    pub owner_ura: String,
+    pub granted_by_ura: String,
+    pub owner_agent: String,
+    pub learner_ura: String,
+    pub manifest_hash: String,
+    pub execution_mode: String,
+    pub granted_at: String,
+    pub proof: TeachGrantInvocationProof,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeachGrantInvocationProof {
+    kind: String,
+    invocation_id: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    envelope_ability: String,
+    invocation_nonce_hex: String,
+    causal_context: Value,
+    signature_algorithm: String,
+    signature_key_id_hint: String,
+    signature_hex: String,
+    granted_ability: String,
+    granted_ability_ura: String,
+    owner_ura: String,
+    granted_by_ura: String,
+    learner_ura: String,
+    manifest_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeachGrantInvocationProofDraft {
+    pub invocation_id: String,
+    pub caller_ura: String,
+    pub callee_ura: String,
+    pub subject_ura: String,
+    pub envelope_ability: String,
+    pub invocation_nonce_hex: String,
+    pub causal_context: Value,
+    pub signature_algorithm: String,
+    pub signature_key_id_hint: String,
+    pub signature_hex: String,
+    pub granted_ability: String,
+    pub granted_ability_ura: String,
+    pub owner_ura: String,
+    pub granted_by_ura: String,
+    pub learner_ura: String,
+    pub manifest_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,10 +196,11 @@ pub struct DescriptorImportRecord {
     pending_grant: Option<TeachGrant>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DescriptorImportState {
     Acquiring,
+    #[default]
     Active,
     Forgetting,
 }
@@ -154,33 +223,20 @@ pub trait AcquiringArtifactTxn {
     fn rollback(&self) -> anyhow::Result<()>;
 }
 
-impl Default for DescriptorImportState {
-    fn default() -> Self {
-        Self::Active
-    }
-}
-
 impl TeachGrant {
     #[must_use]
-    pub fn new(
-        ability: impl Into<String>,
-        ability_ura: impl Into<String>,
-        owner_ura: impl Into<String>,
-        owner_agent: impl Into<String>,
-        learner_ura: impl Into<String>,
-        manifest_hash: impl Into<String>,
-        execution_mode: impl Into<String>,
-        granted_at: impl Into<String>,
-    ) -> Self {
+    pub fn from_draft(draft: TeachGrantDraft) -> Self {
         Self {
-            ability: ability.into(),
-            ability_ura: ability_ura.into(),
-            owner_ura: owner_ura.into(),
-            owner_agent: owner_agent.into(),
-            learner_ura: learner_ura.into(),
-            manifest_hash: manifest_hash.into(),
-            execution_mode: execution_mode.into(),
-            granted_at: granted_at.into(),
+            ability: draft.ability,
+            ability_ura: draft.ability_ura,
+            owner_ura: draft.owner_ura,
+            granted_by_ura: draft.granted_by_ura,
+            owner_agent: draft.owner_agent,
+            learner_ura: draft.learner_ura,
+            manifest_hash: draft.manifest_hash,
+            execution_mode: draft.execution_mode,
+            granted_at: draft.granted_at,
+            proof: draft.proof,
         }
     }
 
@@ -193,6 +249,160 @@ impl TeachGrant {
     pub fn manifest_hash(&self) -> &str {
         &self.manifest_hash
     }
+
+    fn validate_stored(&self) -> anyhow::Result<()> {
+        require_non_empty("teach grant ability", &self.ability)?;
+        require_non_empty("teach grant ability_ura", &self.ability_ura)?;
+        require_non_empty("teach grant owner_ura", &self.owner_ura)?;
+        require_non_empty("teach grant granted_by_ura", &self.granted_by_ura)?;
+        require_non_empty("teach grant owner_agent", &self.owner_agent)?;
+        require_non_empty("teach grant learner_ura", &self.learner_ura)?;
+        require_non_empty("teach grant manifest_hash", &self.manifest_hash)?;
+        require_non_empty("teach grant execution_mode", &self.execution_mode)?;
+        require_non_empty("teach grant granted_at", &self.granted_at)?;
+        self.proof.validate_for_grant(self)
+    }
+
+    fn validate_acquire_request(
+        &self,
+        registry_name: &str,
+        ability_ura: &str,
+        owner_ura: &str,
+        learner_ura: &str,
+    ) -> anyhow::Result<()> {
+        if self.ability != registry_name
+            || self.ability_ura != ability_ura
+            || self.owner_ura != owner_ura
+            || self.learner_ura != learner_ura
+        {
+            anyhow::bail!(
+                "teach grant identity mismatch during acquire admission; grant=({:?}, {:?}, {:?}, {:?}), request=({registry_name:?}, {ability_ura:?}, {owner_ura:?}, {learner_ura:?})",
+                self.ability,
+                self.ability_ura,
+                self.owner_ura,
+                self.learner_ura
+            );
+        }
+        self.proof.validate_for_grant(self)
+    }
+}
+
+impl From<TeachGrantDraft> for TeachGrant {
+    fn from(draft: TeachGrantDraft) -> Self {
+        Self::from_draft(draft)
+    }
+}
+
+impl TeachGrantInvocationProof {
+    pub fn from_draft(draft: TeachGrantInvocationProofDraft) -> anyhow::Result<Self> {
+        let proof = Self {
+            kind: TEACH_GRANT_PROOF_KIND.to_string(),
+            invocation_id: draft.invocation_id,
+            caller_ura: draft.caller_ura,
+            callee_ura: draft.callee_ura,
+            subject_ura: draft.subject_ura,
+            envelope_ability: draft.envelope_ability,
+            invocation_nonce_hex: draft.invocation_nonce_hex,
+            causal_context: draft.causal_context,
+            signature_algorithm: draft.signature_algorithm,
+            signature_key_id_hint: draft.signature_key_id_hint,
+            signature_hex: draft.signature_hex,
+            granted_ability: draft.granted_ability,
+            granted_ability_ura: draft.granted_ability_ura,
+            owner_ura: draft.owner_ura,
+            granted_by_ura: draft.granted_by_ura,
+            learner_ura: draft.learner_ura,
+            manifest_hash: draft.manifest_hash,
+        };
+        proof.validate_shape()?;
+        Ok(proof)
+    }
+
+    fn validate_shape(&self) -> anyhow::Result<()> {
+        if self.kind != TEACH_GRANT_PROOF_KIND {
+            anyhow::bail!(
+                "unsupported teach grant proof kind {:?}; expected {:?}",
+                self.kind,
+                TEACH_GRANT_PROOF_KIND
+            );
+        }
+        require_non_empty("teach grant proof invocation_id", &self.invocation_id)?;
+        require_non_empty("teach grant proof caller_ura", &self.caller_ura)?;
+        require_non_empty("teach grant proof callee_ura", &self.callee_ura)?;
+        require_non_empty("teach grant proof subject_ura", &self.subject_ura)?;
+        require_non_empty("teach grant proof envelope_ability", &self.envelope_ability)?;
+        require_non_empty(
+            "teach grant proof signature_algorithm",
+            &self.signature_algorithm,
+        )?;
+        require_non_empty(
+            "teach grant proof signature_key_id_hint",
+            &self.signature_key_id_hint,
+        )?;
+        require_non_empty("teach grant proof signature_hex", &self.signature_hex)?;
+        let nonce = hex::decode(&self.invocation_nonce_hex).map_err(|err| {
+            anyhow::anyhow!(
+                "teach grant proof invocation nonce must be hex encoded 16 bytes: {err}"
+            )
+        })?;
+        if nonce.len() != 16 {
+            anyhow::bail!(
+                "teach grant proof invocation nonce must be 16 bytes, got {}",
+                nonce.len()
+            );
+        }
+        let signature = hex::decode(&self.signature_hex).map_err(|err| {
+            anyhow::anyhow!("teach grant proof caller signature must be hex encoded: {err}")
+        })?;
+        if signature.is_empty() {
+            anyhow::bail!("teach grant proof caller signature must not be empty");
+        }
+        require_non_empty("teach grant proof granted_ability", &self.granted_ability)?;
+        require_non_empty(
+            "teach grant proof granted_ability_ura",
+            &self.granted_ability_ura,
+        )?;
+        require_non_empty("teach grant proof owner_ura", &self.owner_ura)?;
+        require_non_empty("teach grant proof granted_by_ura", &self.granted_by_ura)?;
+        require_non_empty("teach grant proof learner_ura", &self.learner_ura)?;
+        require_non_empty("teach grant proof manifest_hash", &self.manifest_hash)?;
+        Ok(())
+    }
+
+    fn validate_for_grant(&self, grant: &TeachGrant) -> anyhow::Result<()> {
+        self.validate_shape()?;
+        let proof_matches_grant = self.granted_ability == grant.ability
+            && self.granted_ability_ura == grant.ability_ura
+            && self.owner_ura == grant.owner_ura
+            && self.granted_by_ura == grant.granted_by_ura
+            && self.learner_ura == grant.learner_ura
+            && self.manifest_hash == grant.manifest_hash;
+        if !proof_matches_grant {
+            anyhow::bail!(
+                "teach grant proof does not match grant facts for descriptor {:?} to {:?}",
+                grant.ability_ura,
+                grant.learner_ura
+            );
+        }
+        Ok(())
+    }
+}
+
+fn require_non_empty(field: &'static str, value: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("{field} must not be empty");
+    }
+    Ok(())
+}
+
+pub struct AcquireStagedGrant<T> {
+    pub registry_name: String,
+    pub ability_ura: String,
+    pub owner_ura: String,
+    pub learner_ura: String,
+    pub expected_grant: TeachGrant,
+    pub import_record: DescriptorImportRecord,
+    pub staged: T,
 }
 
 impl DescriptorImportRecord {
@@ -447,22 +657,25 @@ impl TeachGrantStore {
 
     pub fn acquire_staged<T>(
         &self,
-        registry_name: &str,
-        ability_ura: &str,
-        owner_ura: &str,
-        learner_ura: &str,
-        expected_grant: &TeachGrant,
-        import_record: DescriptorImportRecord,
-        staged: T,
+        request: AcquireStagedGrant<T>,
     ) -> anyhow::Result<AcquiredTeachGrant>
     where
         T: AcquiringArtifactTxn,
     {
+        let AcquireStagedGrant {
+            registry_name,
+            ability_ura,
+            owner_ura,
+            learner_ura,
+            expected_grant,
+            import_record,
+            staged,
+        } = request;
         let acquired = match (|| {
             let _guard = self.lock()?;
             let mut directory = self.load_unlocked()?;
             let grant_idx = directory
-                .grant_index_for(registry_name, ability_ura, owner_ura, learner_ura)
+                .grant_index_for(&registry_name, &ability_ura, &owner_ura, &learner_ura)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "descriptor grant missing (allow_transferred_code=false): owner {owner_ura:?} \
@@ -470,12 +683,18 @@ impl TeachGrantStore {
                     )
                 })?;
             let grant = directory.grants[grant_idx].clone();
-            if &grant != expected_grant {
+            if grant != expected_grant {
                 anyhow::bail!(
                     "teach grant changed during acquire admission; retry acquire so execution \
                      posture is evaluated against the committed grant"
                 );
             }
+            grant.validate_acquire_request(
+                &registry_name,
+                &ability_ura,
+                &owner_ura,
+                &learner_ura,
+            )?;
             if directory
                 .import_by_active_or_forgetting(
                     &import_record.learner_agent,
@@ -899,6 +1118,65 @@ mod tests {
         }
     }
 
+    fn mentor_quote_grant(learner_ura: &str) -> TeachGrant {
+        TeachGrant::from_draft(TeachGrantDraft {
+            ability: "mentor.quote".to_string(),
+            ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+            owner_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            granted_by_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            owner_agent: "mentor".to_string(),
+            learner_ura: learner_ura.to_string(),
+            manifest_hash: TEST_MANIFEST_HASH.to_string(),
+            execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
+            granted_at: "t0".to_string(),
+            proof: mentor_quote_proof(learner_ura),
+        })
+    }
+
+    fn mentor_quote_proof(learner_ura: &str) -> TeachGrantInvocationProof {
+        TeachGrantInvocationProof::from_draft(TeachGrantInvocationProofDraft {
+            invocation_id: "test-invocation".to_string(),
+            caller_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            callee_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            subject_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            envelope_ability: "meta.teach".to_string(),
+            invocation_nonce_hex: hex::encode([0xA5; 16]),
+            causal_context: serde_json::json!({"kind": "none"}),
+            signature_algorithm: "ed25519".to_string(),
+            signature_key_id_hint: "test-envelope-key".to_string(),
+            signature_hex: hex::encode([0x5E; 64]),
+            granted_ability: "mentor.quote".to_string(),
+            granted_ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+            owner_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            granted_by_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            learner_ura: learner_ura.to_string(),
+            manifest_hash: TEST_MANIFEST_HASH.to_string(),
+        })
+        .expect("test proof is valid")
+    }
+
+    fn acquire_mentor_quote_request<T>(
+        learner_ura: &str,
+        expected_grant: TeachGrant,
+        staged: T,
+    ) -> AcquireStagedGrant<T> {
+        AcquireStagedGrant {
+            registry_name: "mentor.quote".to_string(),
+            ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+            owner_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            learner_ura: learner_ura.to_string(),
+            expected_grant,
+            import_record: DescriptorImportRecord::new(
+                "quote",
+                "apprentice",
+                "easynet:///r/acme/ability/mentor.quote",
+                TEST_MANIFEST_HASH,
+                "t1",
+            ),
+            staged,
+        }
+    }
+
     #[test]
     fn absent_grant_is_the_default_refusal() {
         let file = TeachGrantsFile::default();
@@ -926,18 +1204,59 @@ mod tests {
     }
 
     #[test]
+    fn load_rejects_grant_with_mismatched_invocation_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut file = TeachGrantsFile::default();
+        let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
+        grant.proof.manifest_hash = "sha256:tampered".to_string();
+        file.grants.push(grant);
+        std::fs::write(&path, serde_json::to_vec_pretty(&file).unwrap()).unwrap();
+        let store = TeachGrantStore { path };
+
+        let err = store
+            .load_unlocked()
+            .expect_err("grant proof must match grant facts");
+        assert!(
+            err.to_string()
+                .contains("teach grant proof does not match grant facts"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn grant_is_scoped_to_one_learner() {
         let mut file = TeachGrantsFile::default();
-        file.grants.push(TeachGrant::new(
-            "testbot.weather-probe",
-            "easynet:///r/acme/ability/testbot.weather-probe",
-            "easynet:///r/acme/agent/testbot",
-            "testbot",
-            "ura-b",
-            TEST_MANIFEST_HASH,
-            EXECUTION_MODE_DEFAULT,
-            "t0",
-        ));
+        file.grants.push(TeachGrant::from_draft(TeachGrantDraft {
+            ability: "testbot.weather-probe".to_string(),
+            ability_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
+            owner_ura: "easynet:///r/acme/agent/testbot".to_string(),
+            granted_by_ura: "easynet:///r/acme/agent/testbot".to_string(),
+            owner_agent: "testbot".to_string(),
+            learner_ura: "ura-b".to_string(),
+            manifest_hash: TEST_MANIFEST_HASH.to_string(),
+            execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
+            granted_at: "t0".to_string(),
+            proof: TeachGrantInvocationProof::from_draft(TeachGrantInvocationProofDraft {
+                invocation_id: "test-invocation".to_string(),
+                caller_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                callee_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                subject_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                envelope_ability: "meta.teach".to_string(),
+                invocation_nonce_hex: hex::encode([0xA5; 16]),
+                causal_context: serde_json::json!({"kind": "none"}),
+                signature_algorithm: "ed25519".to_string(),
+                signature_key_id_hint: "test-envelope-key".to_string(),
+                signature_hex: hex::encode([0x5E; 64]),
+                granted_ability: "testbot.weather-probe".to_string(),
+                granted_ability_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
+                owner_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                granted_by_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                learner_ura: "ura-b".to_string(),
+                manifest_hash: TEST_MANIFEST_HASH.to_string(),
+            })
+            .expect("test proof is valid"),
+        }));
         assert!(file
             .grant_index_for(
                 "testbot.weather-probe",
@@ -973,39 +1292,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let store = TeachGrantStore { path: path.clone() };
-        let grant = TeachGrant::new(
-            "mentor.quote",
-            "easynet:///r/acme/ability/mentor.quote",
-            "easynet:///r/acme/agent/mentor",
-            "mentor",
-            "easynet:///r/acme/agent/apprentice",
-            TEST_MANIFEST_HASH,
-            EXECUTION_MODE_DEFAULT,
-            "t0",
-        );
+        let learner = "easynet:///r/acme/agent/apprentice";
+        let grant = mentor_quote_grant(learner);
         store.grant(grant.clone()).unwrap();
         let rolled_back = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let rolled_back_for_closure = std::sync::Arc::clone(&rolled_back);
 
         let err = store
-            .acquire_staged(
-                "mentor.quote",
-                "easynet:///r/acme/ability/mentor.quote",
-                "easynet:///r/acme/agent/mentor",
-                "easynet:///r/acme/agent/apprentice",
-                &grant,
-                DescriptorImportRecord::new(
-                    "quote",
-                    "apprentice",
-                    "easynet:///r/acme/ability/mentor.quote",
-                    TEST_MANIFEST_HASH,
-                    "t1",
-                ),
+            .acquire_staged(acquire_mentor_quote_request(
+                learner,
+                grant.clone(),
                 TestAcquiringArtifact::with_commit_error(
                     "commit copy failed",
                     rolled_back_for_closure,
                 ),
-            )
+            ))
             .unwrap_err();
 
         assert!(err.to_string().contains("commit copy failed"));
@@ -1034,34 +1335,15 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
         let store = TeachGrantStore { path: path.clone() };
         let learner = "easynet:///r/acme/agent/apprentice";
-        let grant = TeachGrant::new(
-            "mentor.quote",
-            "easynet:///r/acme/ability/mentor.quote",
-            "easynet:///r/acme/agent/mentor",
-            "mentor",
-            learner,
-            TEST_MANIFEST_HASH,
-            EXECUTION_MODE_DEFAULT,
-            "t0",
-        );
+        let grant = mentor_quote_grant(learner);
         store.grant(grant.clone()).unwrap();
 
         store
-            .acquire_staged(
-                "mentor.quote",
-                "easynet:///r/acme/ability/mentor.quote",
-                "easynet:///r/acme/agent/mentor",
+            .acquire_staged(acquire_mentor_quote_request(
                 learner,
-                &grant,
-                DescriptorImportRecord::new(
-                    "quote",
-                    "apprentice",
-                    "easynet:///r/acme/ability/mentor.quote",
-                    TEST_MANIFEST_HASH,
-                    "t1",
-                ),
+                grant.clone(),
                 TestAcquiringArtifact::committed(),
-            )
+            ))
             .unwrap();
 
         let body = std::fs::read(&path).unwrap();
@@ -1084,16 +1366,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let store = TeachGrantStore { path: path.clone() };
-        let grant = TeachGrant::new(
-            "mentor.quote",
-            "easynet:///r/acme/ability/mentor.quote",
-            "easynet:///r/acme/agent/mentor",
-            "mentor",
-            "easynet:///r/acme/agent/apprentice",
-            TEST_MANIFEST_HASH,
-            EXECUTION_MODE_DEFAULT,
-            "t0",
-        );
+        let grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
         let mut import_record = DescriptorImportRecord::new(
             "quote",
             "apprentice",
@@ -1135,16 +1408,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let store = TeachGrantStore { path: path.clone() };
-        let grant = TeachGrant::new(
-            "mentor.quote",
-            "easynet:///r/acme/ability/mentor.quote",
-            "easynet:///r/acme/agent/mentor",
-            "mentor",
-            "easynet:///r/acme/agent/apprentice",
-            TEST_MANIFEST_HASH,
-            EXECUTION_MODE_DEFAULT,
-            "t0",
-        );
+        let grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
         let mut import_record = DescriptorImportRecord::new(
             "quote",
             "apprentice",
