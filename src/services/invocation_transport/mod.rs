@@ -79,6 +79,7 @@ pub mod hub_resolver;
 pub mod invocation_wire;
 pub mod invoke_remote_initiator;
 pub(crate) mod ledger_projection;
+pub(crate) mod lifecycle_driver;
 pub mod list_user_pubkeys;
 pub mod local_session_dispatcher;
 pub mod origin_caller;
