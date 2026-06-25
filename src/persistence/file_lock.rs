@@ -40,6 +40,7 @@ impl ExclusiveFileLock {
             .map_err(|e| anyhow::anyhow!("create lock dir {}: {e}", parent.display()))?;
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
@@ -70,6 +71,7 @@ impl SharedFileLock {
             .map_err(|e| anyhow::anyhow!("create lock dir {}: {e}", parent.display()))?;
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)

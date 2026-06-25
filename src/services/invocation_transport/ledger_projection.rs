@@ -330,30 +330,23 @@ fn status_code_retryable(code: tonic::Code) -> bool {
 pub(crate) fn ledger_authority_form_for_request(request: &InvokeRequest) -> &'static str {
     if bootstrap_authority_ability_for_ledger(&request.function_name) {
         "bootstrap"
-    } else if request
-        .metadata
-        .get(HOSTED_AGENT_DELEGATION_METADATA_KEY)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
+    } else if has_non_empty_metadata(request, HOSTED_AGENT_DELEGATION_METADATA_KEY)
+        || has_non_empty_metadata(request, DELEGATION_METADATA_KEY)
     {
         "delegated"
-    } else if request
-        .metadata
-        .get(DELEGATION_METADATA_KEY)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
-        "delegated"
-    } else if request
-        .metadata
-        .get(SESSION_AUTHORITY_METADATA_KEY)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
+    } else if has_non_empty_metadata(request, SESSION_AUTHORITY_METADATA_KEY) {
         "session"
     } else {
         "self"
     }
+}
+
+fn has_non_empty_metadata(request: &InvokeRequest, key: &str) -> bool {
+    request
+        .metadata
+        .get(key)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn bootstrap_authority_ability_for_ledger(function: &str) -> bool {

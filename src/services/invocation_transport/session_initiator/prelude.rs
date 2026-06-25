@@ -384,17 +384,15 @@ async fn advertise_hosted_agent_entry(
     .await;
     match advertise_agent_result {
         Ok(()) => {
-            advertise_hosted_agent_abilities(
+            let mut advertise_ctx = HostedAgentAbilityAdvertiseContext {
                 client,
                 caller_ura,
-                caller_node_id,
+                caller_node_id: caller_node_id.as_deref(),
                 agent_registry,
                 live_registry,
-                entry,
-                &agent_id,
                 signing_seed,
-            )
-            .await;
+            };
+            advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &agent_id).await;
         }
         Err(err) => {
             let agent_ura = entry.agent_ura.clone();
@@ -415,27 +413,31 @@ fn is_user_scoped_synthetic_agent(agent_id: &str) -> bool {
     matches!(agent_id, "pages" | "files")
 }
 
+struct HostedAgentAbilityAdvertiseContext<'a> {
+    client: &'a mut InvocationClient<Channel>,
+    caller_ura: &'a str,
+    caller_node_id: Option<&'a str>,
+    agent_registry: &'a crate::registry::agents::AgentRegistry,
+    live_registry: &'a crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    signing_seed: Option<SessionSigningSeed>,
+}
+
 async fn advertise_hosted_agent_abilities(
-    client: &mut InvocationClient<Channel>,
-    caller_ura: &str,
-    caller_node_id: &Option<String>,
-    agent_registry: &crate::registry::agents::AgentRegistry,
-    live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    ctx: &mut HostedAgentAbilityAdvertiseContext<'_>,
     entry: &AdvertiseEntry,
     agent_id: &str,
-    signing_seed: Option<SessionSigningSeed>,
 ) {
     let descriptors = match entry.hosted_agent_name.as_deref() {
         Some(agent_name) => {
-            let Some(agent_config) = agent_registry.agents.get(agent_name) else {
+            let Some(agent_config) = ctx.agent_registry.agents.get(agent_name) else {
                 return;
             };
             build_hosted_agent_ability_descriptors(
                 &entry.agent_ura,
                 agent_name,
                 agent_config,
-                caller_node_id.as_deref(),
-                live_registry,
+                ctx.caller_node_id,
+                ctx.live_registry,
             )
         }
         None if agent_id == "pages" => build_synthetic_pages_ability_descriptors(&entry.agent_ura),
@@ -453,11 +455,11 @@ async fn advertise_hosted_agent_abilities(
         ability_count = ability_count,
     );
     if let Err(err) = send_advertise_abilities_prelude(
-        client,
-        caller_ura,
+        ctx.client,
+        ctx.caller_ura,
         &entry.agent_ura,
-        caller_ura,
-        signing_seed,
+        ctx.caller_ura,
+        ctx.signing_seed,
         &descriptors,
     )
     .await

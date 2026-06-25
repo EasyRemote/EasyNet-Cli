@@ -761,16 +761,16 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     trace_id: Option<&str>,
     callee_agent: Option<&str>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
-    invoke_local_daemon_ability_with_invocation_meta_inner(
+    invoke_local_daemon_ability_with_invocation_meta_inner(LocalDaemonInvocationMetaRequest {
         function_name,
         payload_json,
         subject,
         causal_parents,
         step_timeout,
         trace_id,
-        None,
+        delegation: None,
         callee_agent,
-    )
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -784,22 +784,34 @@ pub(crate) fn invoke_local_daemon_ability_with_hosted_agent_delegation(
     hosted_agent_ura: &str,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     let delegated = HostedAgentDelegation::parse(hosted_agent_ura)?;
-    invoke_local_daemon_ability_with_invocation_meta_inner(
+    invoke_local_daemon_ability_with_invocation_meta_inner(LocalDaemonInvocationMetaRequest {
         function_name,
         payload_json,
         subject,
         causal_parents,
         step_timeout,
         trace_id,
-        Some(delegated),
-        None,
-    )
+        delegation: Some(delegated),
+        callee_agent: None,
+    })
 }
 
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone)]
 struct HostedAgentDelegation {
     agent_ura: String,
+}
+
+#[cfg(feature = "axon-pb")]
+struct LocalDaemonInvocationMetaRequest<'a> {
+    function_name: &'a str,
+    payload_json: serde_json::Value,
+    subject: Option<String>,
+    causal_parents: &'a [serde_json::Value],
+    step_timeout: Option<Duration>,
+    trace_id: Option<&'a str>,
+    delegation: Option<HostedAgentDelegation>,
+    callee_agent: Option<&'a str>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -960,19 +972,22 @@ fn terminal_receipt_has_complete_anchor(receipt: &serde_json::Value) -> bool {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_local_daemon_ability_with_invocation_meta_inner(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    subject: Option<String>,
-    causal_parents: &[serde_json::Value],
-    step_timeout: Option<Duration>,
-    trace_id: Option<&str>,
-    delegation: Option<HostedAgentDelegation>,
-    callee_agent: Option<&str>,
+    request: LocalDaemonInvocationMetaRequest<'_>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     use anyhow::{anyhow, bail, Context};
     use easynet_axon::pb::axon::v1 as pb;
     use serde_json::Value;
 
+    let LocalDaemonInvocationMetaRequest {
+        function_name,
+        payload_json,
+        subject,
+        causal_parents,
+        step_timeout,
+        trace_id,
+        delegation,
+        callee_agent,
+    } = request;
     let function_name = function_name.trim().to_string();
     if function_name.is_empty() {
         bail!("function_name must not be empty");
@@ -993,17 +1008,6 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     // local-agents.json to the canonical hosted Agent URA. The local device
     // remains only the execution substrate and mission-resource owner; it is
     // not allowed to synthesize a new callee identity during invocation.
-    let needs_local_device_context = subject
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .is_none()
-        && trace_id.map(str::trim).is_some_and(|t| !t.is_empty());
-    let local_device_context = if needs_local_device_context {
-        Some(local_device_context_for_daemon_subjects()?)
-    } else {
-        None
-    };
     let callee_ura = match callee_agent.map(str::trim).filter(|a| !a.is_empty()) {
         Some(agent) => canonical_hosted_agent_ura_by_name(agent)?,
         _ => default_callee_ura.clone(),
@@ -1012,14 +1016,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         Some(explicit) => explicit.to_string(),
         None => match trace_id.map(str::trim).filter(|t| !t.is_empty()) {
             Some(mission_id) => {
-                let context = local_device_context
-                    .as_ref()
-                    .expect("local device context was loaded for trace_id subject");
-                crate::ura::resource_dot_ura(
-                    &context.realm,
-                    &format!("device.{}.missions", context.device_id),
-                    mission_id,
-                )
+                LocalMissionSubjectOwner::from_runtime_identity()?.mission_subject_ura(mission_id)
             }
             _ => callee_ura.clone(),
         },
@@ -1356,30 +1353,75 @@ fn canonical_hosted_agent_ura_by_name(agent_name: &str) -> anyhow::Result<String
 }
 
 #[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone)]
-struct LocalDeviceContext {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalMissionSubjectOwner {
     realm: String,
     device_id: String,
 }
 
 #[cfg(feature = "axon-pb")]
-fn local_device_context_for_daemon_subjects() -> anyhow::Result<LocalDeviceContext> {
-    let credentials = crate::persistence::config::load_credentials().map_err(|err| {
-        anyhow::anyhow!(
-            "local daemon subject construction requires paired device credentials: {err}"
+impl LocalMissionSubjectOwner {
+    fn from_runtime_identity() -> anyhow::Result<Self> {
+        Self::from_device_ura(&crate::runtime::local_invocation_identity::local_device_ura())
+    }
+
+    fn from_device_ura(device_ura: &str) -> anyhow::Result<Self> {
+        let parsed = crate::ura::parse_ura(device_ura).map_err(|err| {
+            anyhow::anyhow!(
+                "local mission subject owner has invalid Device URA {device_ura:?}: {err}"
+            )
+        })?;
+        if parsed.kind != crate::ura::URAKind::Device {
+            anyhow::bail!("local mission subject owner must be a Device URA, got {device_ura:?}");
+        }
+        let device_id = parsed
+            .device_id()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "local mission subject owner Device URA has no device id: {device_ura:?}"
+                )
+            })?
+            .to_string();
+        Ok(Self {
+            realm: parsed.realm,
+            device_id,
+        })
+    }
+
+    fn mission_subject_ura(&self, mission_id: &str) -> String {
+        crate::ura::resource_dot_ura(
+            &self.realm,
+            &format!("device.{}.missions", self.device_id),
+            mission_id,
         )
-    })?;
-    let realm = credentials.realm.trim();
-    let device_id = credentials.node_id.trim();
-    if realm.is_empty() || device_id.is_empty() {
-        anyhow::bail!(
-            "local daemon subject construction requires non-empty credentials realm and node_id"
+    }
+}
+
+#[cfg(all(feature = "axon-pb", test))]
+mod local_mission_subject_owner_tests {
+    use super::LocalMissionSubjectOwner;
+
+    #[test]
+    fn mission_subject_uses_device_ura_identity() {
+        let owner = LocalMissionSubjectOwner::from_device_ura("easynet:///r/acme/device/device-1")
+            .expect("device owner");
+
+        assert_eq!(
+            owner.mission_subject_ura("mission-42"),
+            "easynet:///r/acme/resource/device.device-1.missions/mission-42"
         );
     }
-    Ok(LocalDeviceContext {
-        realm: realm.to_string(),
-        device_id: device_id.to_string(),
-    })
+
+    #[test]
+    fn mission_subject_accepts_unpaired_local_identity() {
+        let owner = LocalMissionSubjectOwner::from_device_ura("easynet:///r/default/device/local")
+            .expect("unpaired local device owner");
+
+        assert_eq!(
+            owner.mission_subject_ura("mission-42"),
+            "easynet:///r/default/resource/device.local.missions/mission-42"
+        );
+    }
 }
 
 #[cfg(feature = "axon-pb")]

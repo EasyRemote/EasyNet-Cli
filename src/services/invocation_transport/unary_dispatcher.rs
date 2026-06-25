@@ -1789,15 +1789,17 @@ impl UnaryDispatcher {
             .dispatch_contract_version(&selected_route.execution_host_ura)
             .unwrap_or(0)
             >= 1;
-        if target_contract_v1 && caller_envelope.is_some() && origin_caller.is_none() {
-            if dispatch_ability != selected_route.dispatch_name {
-                return Err(Status::failed_precondition(dispatch_key_mismatch_message(
-                    "federation.forward_invoke",
-                    &selected_route.dispatch_name,
-                    &dispatch_ability,
-                    &selected_route.route_ura,
-                )));
-            }
+        if target_contract_v1
+            && caller_envelope.is_some()
+            && origin_caller.is_none()
+            && dispatch_ability != selected_route.dispatch_name
+        {
+            return Err(Status::failed_precondition(dispatch_key_mismatch_message(
+                "federation.forward_invoke",
+                &selected_route.dispatch_name,
+                &dispatch_ability,
+                &selected_route.route_ura,
+            )));
         }
         let (call_id, dispatch_result) = self
             .dispatch_frame_to_presence(selected_route, "federation.forward_invoke", |call_id| {

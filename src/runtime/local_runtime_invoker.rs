@@ -208,17 +208,15 @@ pub fn ensure_local_target(target: &InvocationTarget) -> Result<(), String> {
 }
 
 pub async fn open_local_stream(
-    runtime: Arc<LocalRuntime>,
+    _runtime: Arc<LocalRuntime>,
     target: InvocationTarget,
 ) -> Result<StreamingInvocationHandle, String> {
     ensure_local_target(&target)?;
-    let payload = encode_json_payload(&target.normalized_args)?;
-    let request = local_system_request(AxonInvocationCallMode::Stream, &target, payload)?;
-    let (handle, _) = runtime
-        .invoke_descriptor_bound_stream_request_async(request)
-        .await
-        .map_err(|err| format!("{err}"))?;
-    Ok(handle)
+    Err(
+        "descriptor_bound_server_stream_requires_bidi: signed descriptor-bound server-streaming \
+         no longer has a receipt channel; invoke the ability through bidi or an RPC surface"
+            .to_string(),
+    )
 }
 
 pub async fn open_local_bidi(

@@ -401,14 +401,14 @@ pub async fn open_stream_admitted(
 }
 
 async fn open_stream(
-    runtime: &Arc<LocalRuntime>,
+    _runtime: &Arc<LocalRuntime>,
     wire: WireDispatch,
 ) -> Result<StreamingInvocationHandle, AxonError> {
-    let request = request_for_wire_dispatch(AxonInvocationCallMode::Stream, wire)?;
-    let (handle, _signed) = runtime
-        .invoke_descriptor_bound_stream_request_async(request)
-        .await?;
-    Ok(handle)
+    let _ = request_for_wire_dispatch(AxonInvocationCallMode::Stream, wire)?;
+    Err(AxonError::invalid_argument(
+        "descriptor_bound_server_stream_requires_bidi: signed descriptor-bound server-streaming \
+         no longer has a receipt channel; invoke the ability through bidi or an RPC surface",
+    ))
 }
 
 fn local_descriptor_subject(
@@ -427,7 +427,7 @@ fn local_descriptor_subject(
 }
 
 pub async fn open_stream_local_with_subject(
-    runtime: &Arc<LocalRuntime>,
+    _runtime: &Arc<LocalRuntime>,
     callee_ura: &str,
     subject_ura: &str,
     ability: &str,
@@ -458,10 +458,11 @@ pub async fn open_stream_local_with_subject(
         },
         LocalRuntimeRequestOptions::default(),
     )?;
-    let (handle, _signed) = runtime
-        .invoke_descriptor_bound_stream_request_async(request)
-        .await?;
-    Ok(handle)
+    drop(request);
+    Err(AxonError::invalid_argument(
+        "descriptor_bound_server_stream_requires_bidi: signed descriptor-bound server-streaming \
+         no longer has a receipt channel; invoke the ability through bidi or an RPC surface",
+    ))
 }
 
 pub async fn open_bidi_external_signed(
