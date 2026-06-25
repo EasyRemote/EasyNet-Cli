@@ -474,7 +474,7 @@ impl AbilityDescriptorRegistry {
 
     pub(crate) fn remove_matching(
         &mut self,
-        predicate: impl FnMut(&AbilityControlPlaneKey) -> bool,
+        mut predicate: impl FnMut(&AbilityControlPlaneKey) -> bool,
     ) -> bool {
         let before = self.descriptors.len();
         self.descriptors.retain(|key, _| !predicate(key));
