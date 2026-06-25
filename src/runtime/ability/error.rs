@@ -47,9 +47,17 @@ pub enum AbilityControlPlaneError {
     /// Authority owner projection lacked the local owner-plane label.
     #[error("authority owner projection must be non-empty")]
     EmptyAuthorityOwnerProjection,
+    /// Authority owner projection was not one of the canonical owner-plane
+    /// markers (`device`, `hub`, `agent:<id>`, `user:<id>`, `plugin:<id>`).
+    #[error("authority owner projection has invalid format: {projection:?}")]
+    InvalidAuthorityOwnerProjection { projection: String },
     /// Authority root lacked the URA or local marker backing the binding.
     #[error("authority root must be non-empty")]
     EmptyAuthorityRoot,
+    /// Authority root carried leading or trailing whitespace, or interior
+    /// control characters, so it would not round-trip as a stable key.
+    #[error("authority root has invalid format: {authority_root:?}")]
+    InvalidAuthorityRoot { authority_root: String },
     /// Authority binding was created without an ability name.
     #[error("authority ability must be non-empty")]
     EmptyAuthorityAbility,

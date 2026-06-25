@@ -85,18 +85,13 @@ pub struct DeviceAbilityRecord {
 /// `Removing` is a tombstone: boot replay must not re-register it, but the row
 /// remains available for rollback until the uninstall state machine commits the
 /// final physical delete.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceAbilityRecordState {
     Installing,
+    #[default]
     Installed,
     Removing,
-}
-
-impl Default for DeviceAbilityRecordState {
-    fn default() -> Self {
-        Self::Installed
-    }
 }
 
 impl DeviceAbilityRecord {
@@ -499,7 +494,7 @@ impl DeviceAbilityStore {
         let mut changed = false;
         for record in &mut rows {
             let matches_identity = record.ability_ura == ability_ura
-                && install_id.map_or(true, |id| record.install_id == id);
+                && install_id.is_none_or(|id| record.install_id == id);
             if !matches_identity {
                 continue;
             }

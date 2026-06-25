@@ -37,5 +37,6 @@ pub use error::AbilityControlPlaneError;
 pub use impl_binding::{AbilityImplBinding, AbilityImplRegistry, AbilityImplSource, RuntimeEnv};
 pub use registry::{
     AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneLookupError,
-    AbilityControlPlaneLookupMatch, AbilityControlPlaneRecord, AbilityControlPlaneRegistry,
+    AbilityControlPlaneLookupMatch, AbilityControlPlaneRecord, AbilityControlPlaneRegistration,
+    AbilityControlPlaneRegistry,
 };

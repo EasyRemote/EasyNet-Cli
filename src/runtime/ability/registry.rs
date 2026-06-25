@@ -139,6 +139,52 @@ impl AbilityControlPlaneRecordKey {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AbilityControlPlaneRegistration<'a> {
+    ability: String,
+    descriptor_version: String,
+    call_mode: CallMode,
+    manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
+    authority_scope: AuthorityScope,
+    runtime_env: RuntimeEnv,
+    impl_source: AbilityImplSource,
+    impl_content_hash: Option<String>,
+}
+
+impl<'a> AbilityControlPlaneRegistration<'a> {
+    pub fn new(
+        ability: impl Into<String>,
+        call_mode: CallMode,
+        manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
+        authority_scope: AuthorityScope,
+        runtime_env: RuntimeEnv,
+        impl_source: AbilityImplSource,
+    ) -> Self {
+        Self {
+            ability: ability.into(),
+            descriptor_version: manifest_descriptor_version(manifest).to_string(),
+            call_mode,
+            manifest,
+            authority_scope,
+            runtime_env,
+            impl_source,
+            impl_content_hash: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_descriptor_version(mut self, descriptor_version: impl Into<String>) -> Self {
+        self.descriptor_version = descriptor_version.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_impl_content_hash(mut self, impl_content_hash: impl Into<String>) -> Self {
+        self.impl_content_hash = Some(impl_content_hash.into());
+        self
+    }
+}
+
 impl AbilityControlPlaneRegistry {
     pub fn register(
         &mut self,
@@ -149,31 +195,21 @@ impl AbilityControlPlaneRegistry {
         runtime_env: RuntimeEnv,
         impl_source: AbilityImplSource,
     ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
-        let descriptor_version = manifest_descriptor_version(manifest);
-        self.register_version_with_impl_content_hash(
+        self.register_registration(AbilityControlPlaneRegistration::new(
             ability,
-            descriptor_version,
             call_mode,
             manifest,
             authority_scope,
             runtime_env,
             impl_source,
-            None,
-        )
+        ))
     }
 
-    pub fn register_with_impl_content_hash(
+    pub fn register_registration(
         &mut self,
-        ability: impl Into<String>,
-        call_mode: CallMode,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
-        authority_scope: AuthorityScope,
-        runtime_env: RuntimeEnv,
-        impl_source: AbilityImplSource,
-        impl_content_hash: Option<String>,
+        registration: AbilityControlPlaneRegistration<'_>,
     ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
-        let descriptor_version = manifest_descriptor_version(manifest);
-        self.register_version_with_impl_content_hash(
+        let AbilityControlPlaneRegistration {
             ability,
             descriptor_version,
             call_mode,
@@ -182,44 +218,7 @@ impl AbilityControlPlaneRegistry {
             runtime_env,
             impl_source,
             impl_content_hash,
-        )
-    }
-
-    pub fn register_version(
-        &mut self,
-        ability: impl Into<String>,
-        descriptor_version: impl Into<String>,
-        call_mode: CallMode,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
-        authority_scope: AuthorityScope,
-        runtime_env: RuntimeEnv,
-        impl_source: AbilityImplSource,
-    ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
-        self.register_version_with_impl_content_hash(
-            ability,
-            descriptor_version,
-            call_mode,
-            manifest,
-            authority_scope,
-            runtime_env,
-            impl_source,
-            None,
-        )
-    }
-
-    pub fn register_version_with_impl_content_hash(
-        &mut self,
-        ability: impl Into<String>,
-        descriptor_version: impl Into<String>,
-        call_mode: CallMode,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
-        authority_scope: AuthorityScope,
-        runtime_env: RuntimeEnv,
-        impl_source: AbilityImplSource,
-        impl_content_hash: Option<String>,
-    ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
-        let ability = ability.into();
-        let descriptor_version = descriptor_version.into();
+        } = registration;
         let ability_ura = crate::ura::owner_ability_ura(authority_scope.authority_root(), &ability)
             .ok_or_else(
                 || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
@@ -296,6 +295,57 @@ impl AbilityControlPlaneRegistry {
                 && key.call_mode() == call_mode)
         });
         self.records.len() != before
+    }
+
+    /// Snapshot every descriptor-version row for one authority-owned call mode.
+    ///
+    /// What this is NOT: a lookup helper for dispatch. Dispatch needs a unique
+    /// descriptor version and should call [`Self::get_for_authority_mode`].
+    /// Registration transactions use this method before an overwrite so rollback
+    /// can restore the exact prior control-plane facts instead of merely deleting
+    /// the failed write.
+    pub fn records_for_authority_mode(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: CallMode,
+    ) -> Vec<AbilityControlPlaneRecord> {
+        self.records
+            .iter()
+            .filter(|(key, _)| {
+                key.authority_root == authority_root
+                    && key.ability() == ability
+                    && key.call_mode() == call_mode
+            })
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+
+    /// Replace one authority-owned call-mode slice with a prior snapshot.
+    ///
+    /// Invariant 1: rows outside `(authority_root, ability, call_mode)` are left
+    /// untouched, so a failed Stream hot-register cannot erase an existing RPC or
+    /// Bidi record.
+    ///
+    /// Invariant 2: records are reinserted through their canonical key derived
+    /// from the record body, keeping key construction centralized in
+    /// [`AbilityControlPlaneRecordKey::from_record`].
+    pub fn restore_authority_mode_records(
+        &mut self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: CallMode,
+        records: Vec<AbilityControlPlaneRecord>,
+    ) {
+        self.records.retain(|key, _| {
+            !(key.authority_root == authority_root
+                && key.ability() == ability
+                && key.call_mode() == call_mode)
+        });
+        for record in records {
+            self.records
+                .insert(AbilityControlPlaneRecordKey::from_record(&record), record);
+        }
     }
 
     pub fn get(
@@ -497,7 +547,7 @@ fn unique_record_for_control_plane<'a>(
         .filter(|(key, _)| {
             key.ability() == ability
                 && key.descriptor_version() == descriptor_version
-                && call_mode.map_or(true, |mode| key.call_mode() == mode)
+                && call_mode.is_none_or(|mode| key.call_mode() == mode)
         })
         .collect::<Vec<_>>();
     match matches.as_slice() {
@@ -629,14 +679,16 @@ mod tests {
         .unwrap();
         let mut registry = AbilityControlPlaneRegistry::default();
         let err = registry
-            .register_version(
-                "agent.search",
-                "1.0.0",
-                CallMode::Rpc,
-                Some(&manifest),
-                AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
-                RuntimeEnv::new("env:manifest").unwrap(),
-                AbilityImplSource::NativeDaemon,
+            .register_registration(
+                AbilityControlPlaneRegistration::new(
+                    "agent.search",
+                    CallMode::Rpc,
+                    Some(&manifest),
+                    AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
+                    RuntimeEnv::new("env:manifest").unwrap(),
+                    AbilityImplSource::NativeDaemon,
+                )
+                .with_descriptor_version("1.0.0"),
             )
             .unwrap_err();
 
@@ -653,25 +705,29 @@ mod tests {
     fn register_version_keeps_same_ability_versions_distinct() {
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register_version(
-                "fs.read",
-                "1.0.0",
-                CallMode::Rpc,
-                None,
-                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
-                RuntimeEnv::new("env:v1").unwrap(),
-                AbilityImplSource::NativeDaemon,
+            .register_registration(
+                AbilityControlPlaneRegistration::new(
+                    "fs.read",
+                    CallMode::Rpc,
+                    None,
+                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    RuntimeEnv::new("env:v1").unwrap(),
+                    AbilityImplSource::NativeDaemon,
+                )
+                .with_descriptor_version("1.0.0"),
             )
             .unwrap();
         registry
-            .register_version(
-                "fs.read",
-                "2.0.0",
-                CallMode::Rpc,
-                None,
-                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
-                RuntimeEnv::new("env:v2").unwrap(),
-                AbilityImplSource::NativeDaemon,
+            .register_registration(
+                AbilityControlPlaneRegistration::new(
+                    "fs.read",
+                    CallMode::Rpc,
+                    None,
+                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    RuntimeEnv::new("env:v2").unwrap(),
+                    AbilityImplSource::NativeDaemon,
+                )
+                .with_descriptor_version("2.0.0"),
             )
             .unwrap();
 

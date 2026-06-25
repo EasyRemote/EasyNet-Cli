@@ -64,6 +64,13 @@ struct HostedAgentRuntimeBinding {
     agent_ura: String,
 }
 
+struct HotAgentRuntimeSyncContext<'a> {
+    runtime: &'a Arc<LocalRuntime>,
+    catalog: &'a Arc<AxonAbilityCatalog>,
+    binding: &'a HostedAgentRuntimeBinding,
+    outcome: &'a mut HotAgentRuntimeSyncOutcome,
+}
+
 impl HostedAgentRuntimeBinding {
     fn load(name: &str) -> anyhow::Result<Self> {
         let local_agents = crate::persistence::local_agents::load()
@@ -407,146 +414,136 @@ impl HotAgentRegistrar {
         // the end removes any other row whose decoded public ability name is
         // `<name>.*` — its backing manifest is gone.
         let mut synced: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        // ── chat
-        let chat_ability = format!("{name}.chat");
-        let chat_handler =
-            build_chat_handler_for(name.to_string(), entry.clone(), Arc::clone(&self.loaders));
-        if Self::register_rpc_with_spec(
-            runtime,
-            &catalog,
-            &binding,
-            &chat_ability,
-            owner.clone(),
-            crate::core::ability_spec::default_chat_manifest(),
-            chat_handler,
-            &mut outcome,
-        )
-        .await
         {
-            synced.insert(chat_ability.clone());
-        }
+            let mut sync_ctx = HotAgentRuntimeSyncContext {
+                runtime,
+                catalog: &catalog,
+                binding: &binding,
+                outcome: &mut outcome,
+            };
 
-        let chat_stream_handler = build_chat_stream_handler_for(
-            name.to_string(),
-            entry.clone(),
-            Arc::clone(&self.loaders),
-        );
-        if Self::register_stream_with_spec(
-            runtime,
-            &catalog,
-            &binding,
-            &chat_ability,
-            owner.clone(),
-            crate::core::ability_spec::default_chat_manifest(),
-            chat_stream_handler,
-            &mut outcome,
-        )
-        .await
-        {
-            synced.insert(chat_ability.clone());
-        }
-
-        // ── discover
-        let discover_handler = build_discover_handler_for(
-            name.to_string(),
-            Arc::clone(&self.dispatch_handle),
-            Arc::clone(&self.discover_federation_resolver),
-        );
-        let discover_ability = format!("{name}.discover");
-        if Self::register_rpc_with_spec(
-            runtime,
-            &catalog,
-            &binding,
-            &discover_ability,
-            owner.clone(),
-            crate::runtime::agents::discover_ability::manifest(),
-            discover_handler,
-            &mut outcome,
-        )
-        .await
-        {
-            synced.insert(discover_ability);
-        }
-
-        // ── invoke
-        let invoke_handler =
-            build_invoke_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
-        let invoke_ability = format!("{name}.invoke");
-        if Self::register_rpc_with_spec(
-            runtime,
-            &catalog,
-            &binding,
-            &invoke_ability,
-            owner.clone(),
-            crate::runtime::agents::invoke_ability::manifest(),
-            invoke_handler,
-            &mut outcome,
-        )
-        .await
-        {
-            synced.insert(invoke_ability);
-        }
-
-        // ── TOML-declared executor-bound abilities. Manifests without
-        // `[exec]` are discoverable declarations, not invocable runtime
-        // handlers.
-        let chat_name = format!("{name}.chat");
-        let manifests = crate::runtime::abilities::manifests_for(name, entry);
-        for spec in crate::runtime::abilities::abilities_for(name, entry) {
-            let ability_name = spec.name().to_string();
-            if ability_name == chat_name {
-                continue;
+            // ── chat
+            let chat_ability = format!("{name}.chat");
+            let chat_handler =
+                build_chat_handler_for(name.to_string(), entry.clone(), Arc::clone(&self.loaders));
+            if Self::register_rpc_with_spec(
+                &mut sync_ctx,
+                &chat_ability,
+                owner.clone(),
+                crate::core::ability_spec::default_chat_manifest(),
+                chat_handler,
+            )
+            .await
+            {
+                synced.insert(chat_ability.clone());
             }
-            let bare = ability_name
-                .strip_prefix(&format!("{name}."))
-                .unwrap_or(&ability_name)
-                .to_string();
 
-            let Some(manifest) = manifests.iter().find(|m| m.name() == bare) else {
-                continue;
-            };
-            let Some(exec) = manifest.exec() else {
-                continue;
-            };
-            match exec {
-                crate::core::ability_spec::AbilityExec::HostStream(stream_spec) => {
-                    let h = build_host_stream_handler(stream_spec.clone());
-                    if Self::register_stream_with_envelope_and_spec(
-                        runtime,
-                        &catalog,
-                        &binding,
-                        &ability_name,
-                        owner.clone(),
-                        manifest.clone(),
-                        h,
-                        &mut outcome,
-                    )
-                    .await
-                    {
-                        synced.insert(ability_name);
-                    }
+            let chat_stream_handler = build_chat_stream_handler_for(
+                name.to_string(),
+                entry.clone(),
+                Arc::clone(&self.loaders),
+            );
+            if Self::register_stream_with_spec(
+                &mut sync_ctx,
+                &chat_ability,
+                owner.clone(),
+                crate::core::ability_spec::default_chat_manifest(),
+                chat_stream_handler,
+            )
+            .await
+            {
+                synced.insert(chat_ability.clone());
+            }
+
+            // ── discover
+            let discover_handler = build_discover_handler_for(
+                name.to_string(),
+                Arc::clone(&self.dispatch_handle),
+                Arc::clone(&self.discover_federation_resolver),
+            );
+            let discover_ability = format!("{name}.discover");
+            if Self::register_rpc_with_spec(
+                &mut sync_ctx,
+                &discover_ability,
+                owner.clone(),
+                crate::runtime::agents::discover_ability::manifest(),
+                discover_handler,
+            )
+            .await
+            {
+                synced.insert(discover_ability);
+            }
+
+            // ── invoke
+            let invoke_handler =
+                build_invoke_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
+            let invoke_ability = format!("{name}.invoke");
+            if Self::register_rpc_with_spec(
+                &mut sync_ctx,
+                &invoke_ability,
+                owner.clone(),
+                crate::runtime::agents::invoke_ability::manifest(),
+                invoke_handler,
+            )
+            .await
+            {
+                synced.insert(invoke_ability);
+            }
+
+            // ── TOML-declared executor-bound abilities. Manifests without
+            // `[exec]` are discoverable declarations, not invocable runtime
+            // handlers.
+            let chat_name = format!("{name}.chat");
+            let manifests = crate::runtime::abilities::manifests_for(name, entry);
+            for spec in crate::runtime::abilities::abilities_for(name, entry) {
+                let ability_name = spec.name().to_string();
+                if ability_name == chat_name {
+                    continue;
                 }
-                _ => {
-                    let h = build_agent_ability_handler(
-                        name.to_string(),
-                        entry.clone(),
-                        Arc::clone(&self.loaders),
-                        bare,
-                    );
-                    if Self::register_rpc_with_spec(
-                        runtime,
-                        &catalog,
-                        &binding,
-                        &ability_name,
-                        owner.clone(),
-                        manifest.clone(),
-                        h,
-                        &mut outcome,
-                    )
-                    .await
-                    {
-                        synced.insert(ability_name);
+                let bare = ability_name
+                    .strip_prefix(&format!("{name}."))
+                    .unwrap_or(&ability_name)
+                    .to_string();
+
+                let Some(manifest) = manifests.iter().find(|m| m.name() == bare) else {
+                    continue;
+                };
+                let Some(exec) = manifest.exec() else {
+                    continue;
+                };
+                match exec {
+                    crate::core::ability_spec::AbilityExec::HostStream(stream_spec) => {
+                        let h = build_host_stream_handler(stream_spec.clone());
+                        if Self::register_stream_with_envelope_and_spec(
+                            &mut sync_ctx,
+                            &ability_name,
+                            owner.clone(),
+                            manifest.clone(),
+                            h,
+                        )
+                        .await
+                        {
+                            synced.insert(ability_name);
+                        }
+                    }
+                    _ => {
+                        let h = build_agent_ability_handler(
+                            name.to_string(),
+                            entry.clone(),
+                            Arc::clone(&self.loaders),
+                            bare,
+                        );
+                        if Self::register_rpc_with_spec(
+                            &mut sync_ctx,
+                            &ability_name,
+                            owner.clone(),
+                            manifest.clone(),
+                            h,
+                        )
+                        .await
+                        {
+                            synced.insert(ability_name);
+                        }
                     }
                 }
             }
@@ -642,125 +639,122 @@ impl HotAgentRegistrar {
     }
 
     async fn register_rpc_with_spec(
-        runtime: &Arc<LocalRuntime>,
-        catalog: &Arc<AxonAbilityCatalog>,
-        binding: &HostedAgentRuntimeBinding,
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalRpcHandler,
-        outcome: &mut HotAgentRuntimeSyncOutcome,
     ) -> bool {
-        let was_present = match binding.runtime_ability_ura(ability_name) {
+        let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
             Some(runtime_key) => {
                 Self::runtime_has_mode(
-                    runtime,
+                    ctx.runtime,
                     &runtime_key,
                     crate::runtime::ability::CallMode::Rpc,
                 )
                 .await
             }
             None => {
-                Self::record_bad_runtime_key(binding, ability_name, outcome);
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
                 return false;
             }
         };
-        match catalog.hot_register_rpc_with_spec(ability_name, owner, manifest, handler) {
+        match ctx
+            .catalog
+            .hot_register_rpc_with_spec(ability_name, owner, manifest, handler)
+        {
             Ok(()) if was_present => {
-                outcome.replaced += 1;
+                ctx.outcome.replaced += 1;
                 true
             }
             Ok(()) => {
-                outcome.registered += 1;
+                ctx.outcome.registered += 1;
                 true
             }
             Err(err) => {
-                Self::record_registration_error(ability_name, err, outcome);
+                Self::record_registration_error(ability_name, err, ctx.outcome);
                 false
             }
         }
     }
 
     async fn register_stream_with_spec(
-        runtime: &Arc<LocalRuntime>,
-        catalog: &Arc<AxonAbilityCatalog>,
-        binding: &HostedAgentRuntimeBinding,
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
-        outcome: &mut HotAgentRuntimeSyncOutcome,
     ) -> bool {
-        let was_present = match binding.runtime_ability_ura(ability_name) {
+        let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
             Some(runtime_key) => {
                 Self::runtime_has_mode(
-                    runtime,
+                    ctx.runtime,
                     &runtime_key,
                     crate::runtime::ability::CallMode::Stream,
                 )
                 .await
             }
             None => {
-                Self::record_bad_runtime_key(binding, ability_name, outcome);
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
                 return false;
             }
         };
-        match catalog.hot_register_stream_with_spec(ability_name, owner, manifest, handler) {
+        match ctx
+            .catalog
+            .hot_register_stream_with_spec(ability_name, owner, manifest, handler)
+        {
             Ok(()) if was_present => {
-                outcome.replaced += 1;
+                ctx.outcome.replaced += 1;
                 true
             }
             Ok(()) => {
-                outcome.registered += 1;
+                ctx.outcome.registered += 1;
                 true
             }
             Err(err) => {
-                Self::record_registration_error(ability_name, err, outcome);
+                Self::record_registration_error(ability_name, err, ctx.outcome);
                 false
             }
         }
     }
 
     async fn register_stream_with_envelope_and_spec(
-        runtime: &Arc<LocalRuntime>,
-        catalog: &Arc<AxonAbilityCatalog>,
-        binding: &HostedAgentRuntimeBinding,
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandlerWithEnvelope,
-        outcome: &mut HotAgentRuntimeSyncOutcome,
     ) -> bool {
-        let was_present = match binding.runtime_ability_ura(ability_name) {
+        let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
             Some(runtime_key) => {
                 Self::runtime_has_mode(
-                    runtime,
+                    ctx.runtime,
                     &runtime_key,
                     crate::runtime::ability::CallMode::Stream,
                 )
                 .await
             }
             None => {
-                Self::record_bad_runtime_key(binding, ability_name, outcome);
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
                 return false;
             }
         };
-        match catalog.hot_register_stream_with_envelope_and_spec(
+        match ctx.catalog.hot_register_stream_with_envelope_and_spec(
             ability_name,
             owner,
             manifest,
             handler,
         ) {
             Ok(()) if was_present => {
-                outcome.replaced += 1;
+                ctx.outcome.replaced += 1;
                 true
             }
             Ok(()) => {
-                outcome.registered += 1;
+                ctx.outcome.registered += 1;
                 true
             }
             Err(err) => {
-                Self::record_registration_error(ability_name, err, outcome);
+                Self::record_registration_error(ability_name, err, ctx.outcome);
                 false
             }
         }

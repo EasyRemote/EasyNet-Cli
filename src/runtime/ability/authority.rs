@@ -45,6 +45,75 @@ impl AuthorityPredicate {
     }
 }
 
+/// Canonical owner-plane marker grammar for an [`AuthorityScope`].
+///
+/// The owner projection is a product-level label, never a protocol owner.
+/// It has exactly five shapes: two bare planes (`device`, `hub`) and three
+/// `<plane>:<id>` planes (`agent`, `user`, `plugin`). Parsing the marker is
+/// kept in its own type so the grammar lives in one place and every
+/// construction site is forced through the same validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OwnerProjection {
+    Device,
+    Hub,
+    Agent(String),
+    User(String),
+    Plugin(String),
+}
+
+impl OwnerProjection {
+    /// Parse a trimmed owner-plane marker. The caller is responsible for
+    /// trimming; this method rejects anything that is not one of the five
+    /// canonical shapes, including a present-but-empty `<plane>:` id.
+    fn parse(marker: &str) -> Result<Self, AbilityControlPlaneError> {
+        let invalid = || AbilityControlPlaneError::InvalidAuthorityOwnerProjection {
+            projection: marker.to_string(),
+        };
+        match marker {
+            "device" => Ok(Self::Device),
+            "hub" => Ok(Self::Hub),
+            _ => {
+                let (plane, id) = marker.split_once(':').ok_or_else(invalid)?;
+                if !is_valid_owner_projection_id(id) {
+                    return Err(invalid());
+                }
+                let id = id.to_string();
+                match plane {
+                    "agent" => Ok(Self::Agent(id)),
+                    "user" => Ok(Self::User(id)),
+                    "plugin" => Ok(Self::Plugin(id)),
+                    _ => Err(invalid()),
+                }
+            }
+        }
+    }
+
+    /// Re-render the canonical marker. This always round-trips `parse`.
+    fn canonical(&self) -> String {
+        match self {
+            Self::Device => "device".to_string(),
+            Self::Hub => "hub".to_string(),
+            Self::Agent(id) => format!("agent:{id}"),
+            Self::User(id) => format!("user:{id}"),
+            Self::Plugin(id) => format!("plugin:{id}"),
+        }
+    }
+}
+
+/// A `<plane>:<id>` identifier segment must be present and must stay a
+/// stable, unambiguous map key. The id charset stays deliberately permissive
+/// — agent ids, realm-scoped user slugs (which may be email-shaped), and
+/// plugin slugs all flow through here — so only shapes that break the marker
+/// as a key are rejected: an empty id, surrounding/interior whitespace,
+/// control characters, or a further `:` that would make the plane ambiguous.
+fn is_valid_owner_projection_id(id: &str) -> bool {
+    !id.is_empty()
+        && id == id.trim()
+        && !id.contains(':')
+        && !id.chars().any(char::is_whitespace)
+        && !id.chars().any(char::is_control)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityScope {
     /// Human-readable owner plane: device, hub, agent:<id>, user:<id>, plugin:<id>.
@@ -71,6 +140,17 @@ impl AuthorityScope {
         if authority_root.trim().is_empty() {
             return Err(AbilityControlPlaneError::EmptyAuthorityRoot);
         }
+        // The owner projection must be one of the canonical owner-plane
+        // markers, and it is canonicalized so a marker can never be stored
+        // with incidental whitespace that would split otherwise-equal scopes
+        // across two map keys.
+        let owner_projection = OwnerProjection::parse(owner_projection.trim())?.canonical();
+        // The authority root backs runtime ability keys and proof facts, so it
+        // must not carry surrounding whitespace or interior control characters
+        // that would make a "format-like but route-unreal" key.
+        if !is_valid_authority_root(&authority_root) {
+            return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
+        }
         Ok(Self {
             owner_projection,
             authority_root,
@@ -84,6 +164,17 @@ impl AuthorityScope {
     pub fn authority_root(&self) -> &str {
         &self.authority_root
     }
+}
+
+/// An authority root must be a trimmed, single-token string with no interior
+/// whitespace or control characters. It may be a routable URA or a stable
+/// local marker, so the character set stays permissive; only shapes that
+/// cannot serve as a stable key are rejected.
+fn is_valid_authority_root(authority_root: &str) -> bool {
+    authority_root == authority_root.trim()
+        && !authority_root.is_empty()
+        && !authority_root.chars().any(char::is_whitespace)
+        && !authority_root.chars().any(char::is_control)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -614,6 +705,55 @@ mod tests {
             AbilityControlPlaneError::InvalidAuthorityDescriptorVersion {
                 version: "v1".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn authority_scope_accepts_every_canonical_owner_marker() {
+        for marker in ["device", "hub", "agent:codex", "user:u-1", "plugin:fs.read"] {
+            let scope = AuthorityScope::new(marker, LOCAL_DEVICE_URA)
+                .unwrap_or_else(|err| panic!("{marker} must be a valid owner projection: {err}"));
+            assert_eq!(scope.owner_projection(), marker);
+        }
+    }
+
+    #[test]
+    fn authority_scope_canonicalizes_surrounding_whitespace_in_owner_marker() {
+        let scope = AuthorityScope::new("  agent:codex  ", LOCAL_DEVICE_URA).unwrap();
+        assert_eq!(
+            scope.owner_projection(),
+            "agent:codex",
+            "owner projection must be trimmed so equal scopes share one map key"
+        );
+    }
+
+    #[test]
+    fn authority_scope_rejects_non_canonical_owner_markers() {
+        for marker in [
+            "realm",
+            "agent",
+            "agent:",
+            "device:1",
+            "user: ",
+            "agent:bad id",
+        ] {
+            assert_eq!(
+                AuthorityScope::new(marker, LOCAL_DEVICE_URA).unwrap_err(),
+                AbilityControlPlaneError::InvalidAuthorityOwnerProjection {
+                    projection: marker.trim().to_string()
+                },
+                "{marker} must be rejected as a non-canonical owner projection"
+            );
+        }
+    }
+
+    #[test]
+    fn authority_scope_rejects_authority_root_with_interior_whitespace() {
+        assert_eq!(
+            AuthorityScope::new("device", "easynet:///r/default/device local").unwrap_err(),
+            AbilityControlPlaneError::InvalidAuthorityRoot {
+                authority_root: "easynet:///r/default/device local".to_string()
+            },
         );
     }
 

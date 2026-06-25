@@ -37,7 +37,10 @@ use crate::runtime::ability::{
     AbilityDescriptorKey, AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
     RuntimeEnv,
 };
-use crate::runtime::ability_dispatch::{stream_env_ability_with_options, AxonAbilityCatalog};
+use crate::runtime::ability_dispatch::{
+    stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityRebind,
+    ControlPlaneImplementation,
+};
 use crate::runtime::agents::chat_ability::build_host_stream_handler;
 use crate::runtime::agents::device_ability_store::{
     manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
@@ -867,15 +870,17 @@ impl DeviceAbilityRegistrar {
         manifest: &AbilityManifest,
         impl_content_hash: &str,
     ) -> anyhow::Result<()> {
-        catalog.rebind_control_plane_record_with_authority_scope_and_impl_content_hash(
-            key.public_name(),
-            key.authority_scope()?,
-            Some(manifest),
-            key.call_mode(),
-            AbilityImplSource::DeviceDeploy,
-            RuntimeEnv::device_ability(deployed_exec_kind(manifest)),
-            impl_content_hash.to_string(),
-        )
+        catalog.rebind_control_plane_record_with_authority_scope(ControlPlaneAuthorityRebind {
+            ability: key.public_name(),
+            authority_scope: key.authority_scope()?,
+            manifest: Some(manifest),
+            call_mode: key.call_mode(),
+            implementation: ControlPlaneImplementation::new(
+                AbilityImplSource::DeviceDeploy,
+                RuntimeEnv::device_ability(deployed_exec_kind(manifest)),
+            )
+            .with_content_hash(impl_content_hash.to_string()),
+        })
     }
 }
 

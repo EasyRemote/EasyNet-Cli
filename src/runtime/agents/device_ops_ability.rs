@@ -278,10 +278,7 @@ impl AbilityNamespace {
                      deployed device abilities are always registered as `<namespace>.<name>`"
                 )
             })?;
-        if RESERVED_DEVICE_ABILITY_NAMESPACES
-            .iter()
-            .any(|reserved| raw == *reserved)
-        {
+        if RESERVED_DEVICE_ABILITY_NAMESPACES.contains(&raw) {
             anyhow::bail!(
                 "ability.deploy: namespace {raw:?} is reserved for daemon-owned ability surfaces"
             );
