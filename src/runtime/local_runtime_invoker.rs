@@ -118,9 +118,15 @@ async fn local_registered_descriptor_version(
         .ability_options(runtime_ability)
         .await
         .ok_or_else(|| {
+            // Carry the canonical not-found tokens so this pre-dispatch
+            // miss classifies as NOT_FOUND (via is_not_found_error /
+            // NOT_FOUND_REASON_FRAGMENTS) instead of a generic failure —
+            // this short-circuits before the request reaches Axon, which
+            // would otherwise be the one to emit `unknown_ability`.
             format!(
                 "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
-                 version: ability is not registered in the local runtime"
+                 version: unknown_ability `{runtime_ability}` is not registered in the local \
+                 runtime (ability_not_found)"
             )
         })?;
     let version = options.proof_for_mode(mode).descriptor_version;
@@ -203,6 +209,10 @@ pub const NOT_FOUND_REASON_FRAGMENTS: &[&str] = &[
     "no local stream handler registered",
     "no local bidi handler registered",
     "not registered in Axon LocalRuntime",
+    // Control-plane lookup miss: the dispatch never found a record to
+    // bind. Recognised here (the single classifier) rather than by
+    // editing each producing call site.
+    "is not registered in the control plane",
 ];
 
 /// True if `msg` contains any of the canonical "ability not found"
@@ -242,15 +252,18 @@ pub fn ensure_local_target(target: &InvocationTarget) -> Result<(), String> {
 }
 
 pub async fn open_local_stream(
-    _runtime: Arc<LocalRuntime>,
+    runtime: Arc<LocalRuntime>,
     target: InvocationTarget,
 ) -> Result<StreamingInvocationHandle, String> {
     ensure_local_target(&target)?;
-    Err(
-        "descriptor_bound_server_stream_requires_bidi: signed descriptor-bound server-streaming \
-         no longer has a receipt channel; invoke the ability through bidi or an RPC surface"
-            .to_string(),
-    )
+    let payload = encode_json_payload(&target.normalized_args)?;
+    let request =
+        local_system_request(&runtime, AxonInvocationCallMode::Stream, &target, payload).await?;
+    let (handle, _) = runtime
+        .invoke_descriptor_bound_stream_request_async(request)
+        .await
+        .map_err(|err| format!("{err}"))?;
+    Ok(handle)
 }
 
 pub async fn open_local_bidi(

@@ -2430,8 +2430,12 @@ impl AxonAbilityCatalog {
             return Ok(target);
         }
         let Some(record) = self.control_plane_record_for_mode(&target.ability, call_mode)? else {
+            // Carry the canonical `unknown_ability:<name>` token so a
+            // control-plane miss classifies as NOT_FOUND and reads as the
+            // same "unknown ability" condition everywhere, rather than a
+            // bespoke phrase.
             anyhow::bail!(
-                "ability {:?} is not registered in the control plane for {:?}",
+                "unknown_ability:{} is not registered in the control plane for {:?}",
                 target.ability,
                 call_mode
             );
@@ -4237,12 +4241,12 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_bound_server_stream_is_redirected_to_bidi() {
-        // Signed descriptor-bound server-streaming no longer carries a
-        // receipt channel through the local runtime, so `execute_stream`
-        // refuses it and points the caller at bidi/RPC. Pin the redirect
-        // so a future refactor can't silently re-open the receiptless
-        // stream path.
+    fn envelope_aware_stream_handler_receives_subject() {
+        // Signed descriptor-bound server-streaming dispatches through the
+        // Axon stream API (which carries a receipt), so `execute_stream`
+        // runs the env-aware handler and surfaces the envelope subject in
+        // the frame. Stream stays its own call mode — it is NOT collapsed
+        // onto bidi.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_stream_with_envelope(
             "x.subscribe",
@@ -4260,11 +4264,17 @@ mod tests {
             subject: Some("easynet:///r/x/resource/01MIC".into()),
             causal_context: None,
         };
-        let err = dispatcher.execute_stream(target).unwrap_err();
-        assert!(
-            format!("{err}").contains("descriptor_bound_server_stream_requires_bidi"),
-            "stream path must redirect to bidi; got {err}"
-        );
+        let src = dispatcher.execute_stream(target).unwrap();
+        match src {
+            StreamSource::Snapshot(frames) => {
+                assert_eq!(frames.len(), 1);
+                assert_eq!(
+                    frames[0]["subject_seen"],
+                    json!("easynet:///r/x/resource/01MIC")
+                );
+            }
+            other => panic!("expected Snapshot; got {other:?}"),
+        }
     }
 
     #[test]

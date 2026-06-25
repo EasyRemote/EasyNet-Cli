@@ -380,6 +380,20 @@ impl UnaryDispatcher {
                 false,
             );
         };
+        // Call-shape mismatch is decided first: a stream/bidi-only ability
+        // invoked as unary is a caller error (InvalidArgument), not a
+        // registration gap. Checking the RPC descriptor proof before this
+        // would misreport the mode mismatch as a missing-version
+        // FailedPrecondition.
+        if !options.modes.rpc {
+            return (
+                Err(Status::invalid_argument(format!(
+                    "easynet-daemon: ability `{ability}` is registered, but does not support \
+                     unary Invoke; use the stream/bidi call shape advertised by meta.list_abilities"
+                ))),
+                false,
+            );
+        }
         let proof_binding = options.proof_for_mode(AxonInvocationCallMode::Rpc);
         let descriptor_version = proof_binding.descriptor_version.trim();
         if descriptor_version.is_empty() {
@@ -410,15 +424,6 @@ impl UnaryDispatcher {
                     );
                 }
             };
-        if !options.modes.rpc {
-            return (
-                Err(Status::invalid_argument(format!(
-                    "easynet-daemon: ability `{ability}` is registered, but does not support \
-                     unary Invoke; use the stream/bidi call shape advertised by meta.list_abilities"
-                ))),
-                false,
-            );
-        }
         crate::op_event!(
             component = daemon_invocation,
             kind = dispatch_local_rpc_selected_route,
@@ -515,21 +520,16 @@ impl UnaryDispatcher {
                  LocalRuntime on this node"
             )));
         }
-        let envelope = request.envelope.clone().ok_or_else(|| {
-            Status::invalid_argument(format!(
-                "easynet-daemon: runtime admin ability `{ability}` request missing envelope"
-            ))
-        })?;
-        let wire = crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
-            envelope,
-            ability.to_string(),
+        // Admin abilities are installed bare (no owner, no descriptor
+        // proof). Dispatch by the bare registered name — the descriptor-
+        // bound wire path would canonicalize to a device-owned URA the
+        // runtime never registered and demand a proof the handler lacks.
+        let outcome = crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_admin_bare(
+            runtime,
+            ability,
             request.arguments.clone(),
-            request.metadata.clone(),
         )
-        .map_err(|err| status_from_axon_invoke_error("Invoke", ability, *err))?;
-        let outcome =
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_system(runtime, wire)
-                .await;
+        .await;
         rpc_dispatch_outcome_response(ability, "runtime admin ability", outcome).0
     }
 

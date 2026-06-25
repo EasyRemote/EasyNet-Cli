@@ -387,6 +387,35 @@ pub async fn dispatch_rpc_local_system(
     dispatch_rpc(runtime, wire).await
 }
 
+/// Dispatch a node-internal `runtime.*` admin ability by its BARE
+/// registered name, bypassing descriptor-bound canonicalization.
+///
+/// Admin abilities (`runtime.bootstrap_self_identity`, …) are installed by
+/// the Axon SDK under their bare name with no owner, no descriptor proof,
+/// and no presence/control-plane record. Routing them through the
+/// descriptor-bound path would canonicalize the name to a device-owned
+/// ability URA (`device.<id>.runtime.…`) the runtime never registered and
+/// demand a proof binding the admin handler does not carry — both wrong for
+/// a runtime-internal handshake. `invoke_async` runs the bare name under a
+/// system-local binding, which is exactly the admin contract.
+pub async fn dispatch_rpc_local_admin_bare(
+    runtime: &Arc<LocalRuntime>,
+    ability: &str,
+    payload: Vec<u8>,
+) -> RpcDispatchOutcome {
+    match runtime.invoke_async(ability, payload, None, None).await {
+        Ok(handle) => drain_to_outcome(handle).await,
+        Err(err) => RpcDispatchOutcome {
+            state: InvocationState::Failed,
+            payload_bytes: Vec::new(),
+            error: Some(err),
+            invocation_id: None,
+            admission_receipt: None,
+            terminal_receipt: None,
+        },
+    }
+}
+
 pub async fn open_stream_external_signed(
     runtime: &Arc<LocalRuntime>,
     wire: WireDispatch,
@@ -403,14 +432,14 @@ pub async fn open_stream_admitted(
 }
 
 async fn open_stream(
-    _runtime: &Arc<LocalRuntime>,
+    runtime: &Arc<LocalRuntime>,
     wire: WireDispatch,
 ) -> Result<StreamingInvocationHandle, AxonError> {
-    let _ = request_for_wire_dispatch(AxonInvocationCallMode::Stream, wire)?;
-    Err(AxonError::invalid_argument(
-        "descriptor_bound_server_stream_requires_bidi: signed descriptor-bound server-streaming \
-         no longer has a receipt channel; invoke the ability through bidi or an RPC surface",
-    ))
+    let request = request_for_wire_dispatch(AxonInvocationCallMode::Stream, wire)?;
+    let (handle, _signed) = runtime
+        .invoke_descriptor_bound_stream_request_async(request)
+        .await?;
+    Ok(handle)
 }
 
 fn local_descriptor_subject(
@@ -448,9 +477,13 @@ async fn registered_descriptor_version(
         .ability_options(runtime_ability)
         .await
         .ok_or_else(|| {
+            // Same canonical not-found tokens as the local_runtime_invoker
+            // twin, so a pre-dispatch miss classifies as NOT_FOUND / names
+            // the gate instead of reading as a generic failure.
             AxonError::invalid_argument(format!(
                 "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
-             version: ability is not registered in the local runtime"
+                 version: unknown_ability `{runtime_ability}` is not registered in the local \
+                 runtime (ability_not_found)"
             ))
         })?;
     let version = options.proof_for_mode(mode).descriptor_version;
@@ -495,11 +528,10 @@ pub async fn open_stream_local_with_subject(
         },
         LocalRuntimeRequestOptions::default(),
     )?;
-    drop(request);
-    Err(AxonError::invalid_argument(
-        "descriptor_bound_server_stream_requires_bidi: signed descriptor-bound server-streaming \
-         no longer has a receipt channel; invoke the ability through bidi or an RPC surface",
-    ))
+    let (handle, _signed) = runtime
+        .invoke_descriptor_bound_stream_request_async(request)
+        .await?;
+    Ok(handle)
 }
 
 pub async fn open_bidi_external_signed(
@@ -725,9 +757,19 @@ mod tests {
 
     use easynet_axon::invocation::{
         fresh_nonce, make_ability, sha256, sign_descriptor_bound_invocation,
-        signing_key_from_bytes, AgentIdentity, AxonError, CausalContext, DescriptorBoundEnvelope,
-        InvocationLedger, KeyResolver, LedgerSink, LocalRuntime, SubjectIdentity, UraProfile,
+        signing_key_from_bytes, AbilityCallModes, AbilityOptions, AgentIdentity, AxonError,
+        CausalContext, DescriptorBoundEnvelope, InvocationLedger, KeyResolver, LedgerSink,
+        LocalRuntime, SubjectIdentity, UraProfile,
     };
+
+    /// RPC options carrying the descriptor proof the receipt-proof
+    /// normalizer requires, stamped at the same version the simulated wire
+    /// envelope uses so `proof_descriptor_version` matches.
+    fn wire_proof_bound_rpc_options() -> AbilityOptions {
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof(WIRE_TEST_DESCRIPTOR_VERSION, [0x11; 32], [0x22; 32])
+    }
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use serde_json::Value;
 
@@ -780,6 +822,10 @@ mod tests {
         let ability_ref =
             ability_descriptor_ref_for_wire(&callee_sdk.ura, ability, WIRE_TEST_DESCRIPTOR_VERSION)
                 .unwrap();
+        // Carry the versioned descriptor ref as the wire `function_name`
+        // so reassembly preserves WIRE_TEST_DESCRIPTOR_VERSION instead of
+        // defaulting — the same ref the signature is computed over.
+        let wire_function_name = ability_ref.clone();
         let descriptor_bound_sdk =
             DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
                 caller: caller_sdk.clone(),
@@ -826,7 +872,7 @@ mod tests {
             ..Default::default()
         };
         let _ = sha256(payload); // assertion in test body
-        (wire_envelope, ability.to_string(), payload.to_vec())
+        (wire_envelope, wire_function_name, payload.to_vec())
     }
 
     #[tokio::test]
@@ -834,9 +880,10 @@ mod tests {
         let (rt, ledger, sk, _temp) = build_test_runtime();
         let callee_ura = "easynet:///r/t/device/host";
         let ability_ura = crate::ura::owner_ability_ura(callee_ura, "test.echo").unwrap();
-        rt.register_ability(
+        rt.register_ability_with_options(
             ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            wire_proof_bound_rpc_options(),
         )
         .await
         .unwrap();
@@ -990,9 +1037,10 @@ mod tests {
         let callee_ura = "easynet:///r/t/device/host";
         let ability_ura =
             crate::ura::owner_ability_ura(callee_ura, "demo.daemon_internal").unwrap();
-        rt.register_ability(
+        rt.register_ability_with_options(
             ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            wire_proof_bound_rpc_options(),
         )
         .await
         .unwrap();
