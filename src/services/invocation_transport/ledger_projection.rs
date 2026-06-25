@@ -591,7 +591,14 @@ pub(crate) fn ledger_record_from_remote_receipt(
         causal_links: Vec::new(),
         receipt_chain: Default::default(),
         visibility: Default::default(),
-        authority_form: "delegated".to_string(),
+        // A forwarded receipt carries identity bindings but NOT the
+        // caller's authority form (the delegation/session metadata lived
+        // on the originating request, which the hub never sees here).
+        // Record "unknown" rather than minting a classification the
+        // receipt did not assert — the callee's own ledger row holds the
+        // authoritative form. (seven-axes C2: never render a fabricated
+        // authority as fact.)
+        authority_form: "unknown".to_string(),
     })
 }
 
