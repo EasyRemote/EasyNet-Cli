@@ -474,12 +474,14 @@ fn teach_handler_with_clock(
     let proof = teach_grant_invocation_proof(
         &env,
         authority.admission_authority.clone(),
-        &authority.granted_by,
-        ability,
-        &ability_ura,
-        &authority.owner_ura,
-        learner_ura,
-        &snapshot.manifest_hash,
+        GrantedDescriptorFacts {
+            granted_by_ura: &authority.granted_by,
+            granted_ability: ability,
+            granted_ability_ura: &ability_ura,
+            owner_ura: &authority.owner_ura,
+            learner_ura,
+            manifest_hash: &snapshot.manifest_hash,
+        },
     )?;
     TeachGrantStore::open_default().grant(TeachGrant::from_draft(TeachGrantDraft {
         ability: ability.to_string(),
@@ -508,15 +510,21 @@ fn teach_handler_with_clock(
     }))
 }
 
+/// The grant-identity facts an admission proof binds, distinct from the
+/// envelope tuple the proof projects from `env`.
+struct GrantedDescriptorFacts<'a> {
+    granted_by_ura: &'a str,
+    granted_ability: &'a str,
+    granted_ability_ura: &'a str,
+    owner_ura: &'a str,
+    learner_ura: &'a str,
+    manifest_hash: &'a str,
+}
+
 fn teach_grant_invocation_proof(
     env: &EnvelopeContext,
     authority: TeachGrantAuthorityProof,
-    granted_by_ura: &str,
-    granted_ability: &str,
-    granted_ability_ura: &str,
-    owner_ura: &str,
-    learner_ura: &str,
-    manifest_hash: &str,
+    facts: GrantedDescriptorFacts<'_>,
 ) -> anyhow::Result<TeachGrantAdmissionProof> {
     TeachGrantAdmissionProof::from_draft(TeachGrantAdmissionProofDraft {
         invocation_id: env.invocation_id().to_string(),
@@ -527,12 +535,12 @@ fn teach_grant_invocation_proof(
         invocation_nonce_hex: hex::encode(env.invocation_nonce()),
         causal_context: env.causal_context().clone(),
         authority,
-        granted_ability: granted_ability.to_string(),
-        granted_ability_ura: granted_ability_ura.to_string(),
-        owner_ura: owner_ura.to_string(),
-        granted_by_ura: granted_by_ura.to_string(),
-        learner_ura: learner_ura.to_string(),
-        manifest_hash: manifest_hash.to_string(),
+        granted_ability: facts.granted_ability.to_string(),
+        granted_ability_ura: facts.granted_ability_ura.to_string(),
+        owner_ura: facts.owner_ura.to_string(),
+        granted_by_ura: facts.granted_by_ura.to_string(),
+        learner_ura: facts.learner_ura.to_string(),
+        manifest_hash: facts.manifest_hash.to_string(),
     })
 }
 
