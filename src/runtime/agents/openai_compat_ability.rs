@@ -793,6 +793,10 @@ mod tests {
 
     #[test]
     fn project_model_id_prefers_canonical_ability_ura_for_agent_owned_chat() {
+        // Hold the env lock: catalog registration consults HOME-rooted
+        // authority/runtime state, so a concurrent HOME-mutating test must
+        // not race it (passes isolated, flakes only under parallelism).
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner("codex.chat", OwnerKind::Agent("codex".into()), ok_handler());
         let identity = OpenAICompatIdentity {

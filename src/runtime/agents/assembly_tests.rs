@@ -108,6 +108,7 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
 
 #[test]
 fn terminal_list_is_owner_kind_device() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     use crate::runtime::ability_dispatch::OwnerKind;
     assert_eq!(
         system_ability_owner("terminal.list"),
@@ -142,6 +143,7 @@ fn discovery_hints_read_only_tracks_ability_layer() {
 
 #[test]
 fn ability_layer_classification_is_complete() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // The audit story (RFC docs/AXON-RFC-001-ability-layers.md)
     // says every published ability MUST belong to exactly one
     // semantic layer. A new ability that lands without a
@@ -204,6 +206,7 @@ fn build_registry_is_non_empty_and_includes_ping() {
 
 #[test]
 fn published_ability_names_matches_live_registry() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // The label-publishing helper and the publishable subset of the dispatch
     // registry must agree byte-for-byte. Local-only front doors may still live
     // in the registry for CLI/runtime calls, but must not be advertised.
@@ -218,6 +221,7 @@ fn published_ability_names_matches_live_registry() {
 
 #[test]
 fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // The TOML descriptors in abilities/system/ are the
     // source of truth for external discovery tools. They are
     // GENERATED from `render_ability_toml(name,
@@ -287,6 +291,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
 ///     get_rpc() returns None" type mismatches).
 #[test]
 fn every_published_ability_resolves_to_a_handler() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let names: Vec<String> = reg.list_abilities();
     let mut unresolved: Vec<String> = Vec::new();
@@ -326,6 +331,7 @@ fn every_published_ability_resolves_to_a_handler() {
 /// tests.
 #[test]
 fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     let reg = build_system_registry();
@@ -497,6 +503,7 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
 
 #[test]
 fn published_abilities_includes_skill_list_with_real_metadata() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // Load-bearing for the EasyNet frontend's Skills page: the
     // backend invokes `skill.list` against the target node.
     // A regression that dropped it from `published_abilities()`
@@ -533,6 +540,7 @@ fn published_abilities_includes_skill_list_with_real_metadata() {
 
 #[test]
 fn published_system_abilities_excludes_plugin_package_abilities() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let plugin_leaks: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -583,6 +591,7 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
 
 #[test]
 fn published_abilities_marks_bidi_routes_as_bidi_only() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "fs.transfer",
@@ -613,6 +622,7 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
 
 #[test]
 fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     use crate::registry::agents::{AgentEntry, AgentType};
     let mut agents = AgentRegistry::default();
     agents
@@ -661,6 +671,7 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
 
 #[test]
 fn description_for_and_input_schema_for_cover_every_published_name() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // Adding a new ability to build_registry without also adding
     // arms to `description_for`/`input_schema_for` would let it
     // ship with the unknown-name fallback ("(system ability)" and
@@ -735,6 +746,9 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
     // Run in a child-process-style isolation: redirect the
     // keyring file path to a tempdir + clear DISABLE so the
     // auto-init path runs. The default tests set DISABLE.
+    // NOTE: this test already serialises via env_lock() directly — do
+    // NOT also take a HomeGuard (it acquires the same non-reentrant
+    // env_lock and would deadlock).
     let _env_lock = crate::facade::cli::test_support::env_lock();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("keyring.json");
@@ -792,6 +806,7 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
 /// as `fs.read`.
 #[test]
 fn published_catalogue_does_not_duplicate_device_owner_prefix() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -816,6 +831,7 @@ fn published_catalogue_does_not_duplicate_device_owner_prefix() {
 /// a `<self>.*` entry and getting confused.
 #[test]
 fn published_catalogue_never_contains_self_alias() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)

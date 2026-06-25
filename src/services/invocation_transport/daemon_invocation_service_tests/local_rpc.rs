@@ -589,7 +589,7 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     let err = result.expect_err("stream-only ability rejects unary Invoke");
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(
-        err.message().contains("does not support unary Invoke"),
+        err.message().contains("does not support RPC Invoke"),
         "error must explain the call-shape mismatch, got: {err}"
     );
 }

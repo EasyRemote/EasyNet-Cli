@@ -2226,12 +2226,24 @@ mod tests {
         .expect_err("mentor never LEARNED quote");
         assert!(format!("{err}").contains("no imported descriptor"), "{err}");
 
-        // ...the imported descriptor copy is.
-        forget_handler(
-            forget_env(apprentice_ura.clone(), &apprentice_ura),
-            json!({ "ability": "quote", "agent": "apprentice" }),
-        )
-        .expect("forget");
+        // ...the imported descriptor copy is. Wire a live registrar so
+        // runtime sync converges (Committed) and the forget finalizes;
+        // require-forget-runtime-convergence keeps the tombstone otherwise.
+        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
+        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        tokio_runtime
+            .block_on(async {
+                forget_handler_with_hot_registrar(
+                    forget_env(apprentice_ura.clone(), &apprentice_ura),
+                    json!({ "ability": "quote", "agent": "apprentice" }),
+                    Some(&hot_cell),
+                )
+            })
+            .expect("forget");
         let home = std::env::var("HOME").unwrap();
         assert!(!std::path::Path::new(&home)
             .join("agents/apprentice/abilities/quote.ability.toml")
