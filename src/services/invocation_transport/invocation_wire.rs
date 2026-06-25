@@ -157,6 +157,37 @@ impl ProtoEnvelope {
         })
     }
 
+    /// Sign this envelope with an explicit descriptor-bound ability ref while
+    /// keeping `function_name` as the route query sent over `InvokeRequest`.
+    ///
+    /// Route names are caller-facing (`echo`, `fs.read`, ...); descriptor
+    /// refs are control-plane facts (`<ability-ura>@<descriptor-version>`).
+    /// They must not be conflated once descriptor versions are no longer
+    /// defaulted.
+    pub fn signed_descriptor_ref_invoke_request(
+        self,
+        function_name: impl Into<String>,
+        descriptor_ability_ref: impl Into<String>,
+        arguments: Vec<u8>,
+        signer: &dyn crate::services::self_identity::SelfIdentity,
+    ) -> anyhow::Result<InvokeRequest> {
+        let function_name = function_name.into();
+        if function_name.trim().is_empty() {
+            anyhow::bail!("function_name must not be empty");
+        }
+        let descriptor_ability_ref = descriptor_ability_ref.into();
+        if descriptor_ability_ref.trim().is_empty() {
+            anyhow::bail!("descriptor_ability_ref must not be empty");
+        }
+        let signed = self.sign_descriptor_bound(&descriptor_ability_ref, &arguments, signer)?;
+        Ok(InvokeRequest {
+            envelope: Some(signed.into_inner()),
+            function_name,
+            arguments,
+            ..InvokeRequest::default()
+        })
+    }
+
     /// Attach an Ed25519 caller signature over Axon's
     /// `DescriptorBoundEnvelope::canonical_bytes()`.
     pub fn sign_descriptor_bound(
@@ -571,5 +602,44 @@ mod tests {
                 &Signature::from_bytes(&signature_bytes),
             )
             .expect("signature must verify against descriptor-bound canonical bytes");
+    }
+
+    #[test]
+    fn descriptor_ref_signed_request_keeps_route_name_separate_from_signature_target() {
+        let signer = TestSigner(SigningKey::from_bytes(&[0x38; 32]));
+        let payload = br#"{"message":"hi"}"#.to_vec();
+        let callee = "easynet:///r/acme/device/dev-a";
+        let descriptor_ref = format!(
+            "{}@2.3.0",
+            crate::ura::owner_ability_ura(callee, "echo").unwrap()
+        );
+        let envelope = ProtoEnvelope::targeted(
+            "easynet:///r/acme/device/dev-a",
+            callee,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap();
+        let descriptor = envelope
+            .descriptor_bound_envelope(&descriptor_ref, &payload)
+            .unwrap();
+        let request = envelope
+            .signed_descriptor_ref_invoke_request("echo", descriptor_ref, payload, &signer)
+            .unwrap();
+
+        assert_eq!(request.function_name, "echo");
+        let signature = request
+            .envelope
+            .unwrap()
+            .caller_signature
+            .expect("signed request carries caller_signature");
+        let signature_bytes: [u8; 64] = signature.signature.as_slice().try_into().unwrap();
+        signer
+            .0
+            .verifying_key()
+            .verify(
+                &descriptor.canonical_bytes(),
+                &Signature::from_bytes(&signature_bytes),
+            )
+            .expect("signature must verify against explicit descriptor ref");
     }
 }

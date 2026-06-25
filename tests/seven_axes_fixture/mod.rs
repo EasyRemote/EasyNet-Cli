@@ -57,6 +57,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 
 const TEST_KEYRING_SEED_BYTE: u8 = 0x11;
+const TESTBOT_ECHO_DESCRIPTOR_VERSION: &str = "2.3.0";
 
 /// A seeded HOME: env pointed, product files written. Keep it alive
 /// for the whole test — dropping it deletes the tempdir.
@@ -397,8 +398,9 @@ impl SevenAxesHome {
         .expect("write weather-probe.ability.toml");
         std::fs::write(
             abilities_dir.join("echo.ability.toml"),
-            "schema_version = \"1\"\n\
-             descriptor_version = \"2.3.0\"\n\
+            format!(
+                "schema_version = \"1\"\n\
+             descriptor_version = \"{TESTBOT_ECHO_DESCRIPTOR_VERSION}\"\n\
              name = \"echo\"\n\
              description = \"echo one short string for deterministic mission tests\"\n\
              timeout_seconds = 5\n\
@@ -411,7 +413,8 @@ impl SevenAxesHome {
              \n\
              [exec]\n\
              kind = \"shell\"\n\
-             argv = [\"/bin/echo\", \"{{ message }}\"]\n",
+             argv = [\"/bin/echo\", \"{{{{ message }}}}\"]\n"
+            ),
         )
         .expect("write echo.ability.toml");
 
@@ -537,12 +540,18 @@ added_at_unix_ms = 0
     #[allow(dead_code)]
     pub fn invoke_testbot_echo_with_meta(&self, message: &str) -> Value {
         let callee = self.testbot_ura.clone();
+        let descriptor_ref = format!(
+            "{}@{TESTBOT_ECHO_DESCRIPTOR_VERSION}",
+            easynet_cli::ura::owner_ability_ura(&self.testbot_ura, "echo")
+                .expect("mint testbot echo ability URA")
+        );
         let (_value, request_id, terminal_receipt) = invoke_daemon_ability(
             &self.socket_path,
             &self.loopback_caller,
             &callee,
             &self.loopback_caller,
             "echo",
+            Some(descriptor_ref.as_str()),
             json!({ "message": message }),
         );
         assert!(
@@ -558,6 +567,7 @@ added_at_unix_ms = 0
                 &self.loopback_caller,
                 &self.loopback_caller,
                 "invocation.history.get",
+                None,
                 json!({ "key": { "request_id": request_id } }),
             );
             record = history.get("record").cloned().unwrap_or(Value::Null);
@@ -625,6 +635,7 @@ fn invoke_daemon_ability(
     callee_ura: &str,
     subject_ura: &str,
     function_name: &str,
+    descriptor_ability_ref: Option<&str>,
     args: Value,
 ) -> (
     Value,
@@ -639,10 +650,21 @@ fn invoke_daemon_ability(
         let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
         let arguments = serde_json::to_vec(&args).expect("encode daemon invoke args");
         let signer = SevenAxesSigner::for_caller(caller_ura);
-        let request = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
-            .expect("valid seven-axes invoke envelope")
-            .signed_invoke_request(function_name, arguments, &signer)
-            .expect("valid seven-axes signed invoke request");
+        let envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
+            .expect("valid seven-axes invoke envelope");
+        let request = match descriptor_ability_ref {
+            Some(descriptor_ability_ref) => envelope
+                .signed_descriptor_ref_invoke_request(
+                    function_name,
+                    descriptor_ability_ref,
+                    arguments,
+                    &signer,
+                )
+                .expect("valid seven-axes descriptor-ref signed invoke request"),
+            None => envelope
+                .signed_invoke_request(function_name, arguments, &signer)
+                .expect("valid seven-axes signed invoke request"),
+        };
         let response = tokio::time::timeout(
             Duration::from_secs(10),
             client.invoke(tonic::Request::new(request)),
@@ -692,6 +714,7 @@ fn seed_hosted_agent_projection(
         host_device_ura,
         caller_ura,
         "federation.advertise_agent",
+        None,
         json!({
             "agent_ura": agent_ura,
             "public_key_hex": "",
@@ -721,6 +744,7 @@ fn seed_hosted_agent_projection(
         host_device_ura,
         caller_ura,
         "federation.advertise_abilities",
+        None,
         json!({
             "agent_ura": agent_ura,
             "owner_ura": agent_ura,

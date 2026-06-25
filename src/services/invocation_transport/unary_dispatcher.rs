@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use tonic::{Response, Status};
 
+use easynet_axon::invocation::CallMode as AxonInvocationCallMode;
 use easynet_axon::pb::axon::v1::{
     Envelope, InvokeBidiDown, InvokeRequest, InvokeResponse, ResponseHeader,
 };
@@ -379,6 +380,36 @@ impl UnaryDispatcher {
                 false,
             );
         };
+        let proof_binding = options.proof_for_mode(AxonInvocationCallMode::Rpc);
+        let descriptor_version = proof_binding.descriptor_version.trim();
+        if descriptor_version.is_empty() {
+            return (
+                Err(Status::failed_precondition(format!(
+                    "easynet-daemon: selected route `{}` dispatches `{}` but the runtime \
+                     registration does not bind a descriptor version for RPC",
+                    selected_route.route_ura, selected_ability_ura
+                ))),
+                false,
+            );
+        }
+        let selected_descriptor_ref =
+            match crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                &selected_route.callee_ura,
+                &selected_ability_ura,
+                descriptor_version,
+            ) {
+                Ok(ref_) => ref_,
+                Err(err) => {
+                    return (
+                        Err(Status::failed_precondition(format!(
+                            "easynet-daemon: selected route `{}` cannot form a descriptor-bound \
+                             ability ref for `{}`: {err}",
+                            selected_route.route_ura, selected_ability_ura
+                        ))),
+                        false,
+                    );
+                }
+            };
         if !options.modes.rpc {
             return (
                 Err(Status::invalid_argument(format!(
@@ -429,7 +460,7 @@ impl UnaryDispatcher {
             Some(envelope) => {
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
-                    selected_ability_ura.clone(),
+                    selected_descriptor_ref,
                     arguments.to_vec(),
                     request.metadata.clone(),
                 )

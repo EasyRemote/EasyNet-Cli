@@ -483,9 +483,9 @@ impl AbilityDescriptorRegistry {
 
     pub(crate) fn contains_matching(
         &self,
-        mut predicate: impl FnMut(&AbilityControlPlaneKey) -> bool,
+        predicate: impl FnMut(&AbilityControlPlaneKey) -> bool,
     ) -> bool {
-        self.descriptors.keys().any(|key| predicate(key))
+        self.descriptors.keys().any(predicate)
     }
 
     pub(crate) fn names(&self) -> Vec<String> {
