@@ -58,7 +58,12 @@ use easynet_axon::invocation::InvocationState;
 /// read is daemon-local and cheap, and a knob would only invite
 /// configuration where none is needed.
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(500);
-const MAX_EMPTY_FOLLOW_POLLS: u16 = 120;
+/// Default observer-side follow budget in seconds. Bounds both an
+/// all-empty trace and a non-empty trace that stops producing diffs,
+/// so neither follow path can stream forever on a stuck run. It is an
+/// observer timeout, not an invocation timeout — exhausting it emits a
+/// liveness verdict, never a terminal failure.
+const DEFAULT_FOLLOW_MAX_WAIT_SECONDS: u64 = 60;
 
 /// Output format for `invocation watch`. It intentionally lives in
 /// this module instead of `support::output::OutputFormat` because
@@ -84,6 +89,14 @@ pub struct WatchArgs {
     /// terminal (or the run's heartbeat goes stale).
     #[arg(long)]
     pub follow: bool,
+    /// Maximum seconds `--follow` waits without observable ledger
+    /// progress before emitting an observer liveness verdict.
+    #[arg(
+        long = "max-wait-seconds",
+        default_value_t = DEFAULT_FOLLOW_MAX_WAIT_SECONDS,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub max_wait_seconds: u64,
     /// 'table' renders state rows; 'json' emits NDJSON events; 'panel'
     /// renders a deterministic three-column trace snapshot.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
@@ -115,8 +128,8 @@ pub enum WatchEvent {
         usage: Option<InvocationUsage>,
     },
     /// The trace exists as a mission run, but no invocation ledger row
-    /// has landed yet. This is bounded by [`MAX_EMPTY_FOLLOW_POLLS`]
-    /// in follow mode so a scheduler bug cannot render as an infinite
+    /// has landed yet. This is bounded by `--max-wait-seconds` in
+    /// follow mode so a scheduler bug cannot render as an infinite
     /// stream.
     Pending {
         trace: String,
@@ -287,9 +300,9 @@ struct FollowPolicy {
 }
 
 impl FollowPolicy {
-    fn production() -> Self {
+    fn from_args(args: &WatchArgs) -> Self {
         Self {
-            max_empty_polls: MAX_EMPTY_FOLLOW_POLLS,
+            max_empty_polls: follow_poll_budget(args.max_wait_seconds),
         }
     }
 
@@ -299,21 +312,27 @@ impl FollowPolicy {
     }
 }
 
+fn follow_poll_budget(max_wait_seconds: u64) -> u16 {
+    let interval_ms = FOLLOW_INTERVAL.as_millis() as u64;
+    let wait_ms = max_wait_seconds.saturating_mul(1_000);
+    let polls = wait_ms.div_ceil(interval_ms).max(1);
+    polls.min(u16::MAX as u64) as u16
+}
+
 /// Explicit follow-mode state machine. It owns the diff engine and
-/// the bounded empty-trace budget, so streaming JSON and the TUI
-/// cannot drift into separate terminality/liveness behavior.
+/// two observer-side budgets — empty-trace polls and stale (no
+/// observable progress) polls — so streaming JSON and the TUI cannot
+/// drift into separate terminality/liveness behavior, and no follow
+/// path can stream forever on a stuck trace.
 struct FollowEngine {
     watch: WatchEngine,
     policy: FollowPolicy,
     empty_polls: u16,
+    stale_polls: u16,
     pending_emitted: bool,
 }
 
 impl FollowEngine {
-    fn new(trace_id: String) -> Self {
-        Self::with_policy(trace_id, FollowPolicy::production())
-    }
-
     #[cfg(test)]
     fn with_empty_poll_budget(trace_id: String, max_empty_polls: u16) -> Self {
         Self::with_policy(trace_id, FollowPolicy::test_empty_budget(max_empty_polls))
@@ -324,6 +343,7 @@ impl FollowEngine {
             watch: WatchEngine::new(trace_id),
             policy,
             empty_polls: 0,
+            stale_polls: 0,
             pending_emitted: false,
         }
     }
@@ -359,6 +379,26 @@ impl FollowEngine {
                     events,
                     decision: FollowDecision::Stop,
                 });
+            }
+            // Non-terminal records present. A diff (`events` non-empty)
+            // is observable progress and resets the stale budget; a
+            // string of polls with no new event means the trace is
+            // stuck RUNNING (e.g. a bare invocation URA that is never a
+            // mission run, so `MissionFollowStatus::NotMission` can
+            // never stop us). Bound it on lack of progress — an
+            // observer-side verdict, never an invocation failure — so
+            // follow cannot stream forever.
+            if events.is_empty() {
+                self.stale_polls = self.stale_polls.saturating_add(1);
+                if self.stale_polls > self.policy.max_empty_polls {
+                    events.push(observer_budget_liveness_event());
+                    return Ok(FollowStep {
+                        events,
+                        decision: FollowDecision::Stop,
+                    });
+                }
+            } else {
+                self.stale_polls = 0;
             }
             return Ok(FollowStep {
                 events,
@@ -696,7 +736,7 @@ fn stream_follow_events(
     mut emit: impl FnMut(&[WatchEvent]) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let first = fetch_causal_set(args)?;
-    let mut engine = FollowEngine::new(first.trace_id);
+    let mut engine = FollowEngine::with_policy(first.trace_id, FollowPolicy::from_args(args));
     let mut nodes = first.nodes;
 
     loop {
@@ -718,7 +758,7 @@ fn run_panel(args: WatchArgs) -> anyhow::Result<()> {
     }
 
     let first = fetch_causal_set(&args)?;
-    let mut engine = FollowEngine::new(first.trace_id);
+    let mut engine = FollowEngine::with_policy(first.trace_id, FollowPolicy::from_args(&args));
     let mut nodes = first.nodes;
     loop {
         let step = engine.observe(&nodes)?;
@@ -1062,6 +1102,91 @@ mod tests {
                 source: "watch_follow_policy".into(),
             }]
         );
+    }
+
+    /// One non-terminal ledger record, decoded the same way the
+    /// production `fetch_trace` path decodes a trace snapshot.
+    fn running_record(ura: &str, state: &str) -> Record {
+        serde_json::from_value(json!({
+            "invocation_ura": ura,
+            "request_id": "req-1",
+            "trace_id": "trace-stuck",
+            "span_id": "span-1",
+            "caller_ura": "easynet:///r/acme/agent/user.caller",
+            "callee_ura": "easynet:///r/acme/agent/user.callee",
+            "subject_ura": "easynet:///r/acme/agent/user.callee",
+            "ability_ura": "easynet:///r/acme/ability/user.callee.fs.read",
+            "ability_name": "fs.read",
+            "state": state,
+            "started_unix_ms": 0,
+            "args": { "kind": "digest", "content_type": "application/json", "sha256": "00", "size_bytes": 0 },
+        }))
+        .expect("minimal running ledger record decodes")
+    }
+
+    #[test]
+    fn follow_engine_bounds_a_stuck_nonempty_running_trace() {
+        // A non-empty, non-terminal trace that stops producing diffs
+        // (e.g. a bare invocation URA stuck RUNNING — never a mission
+        // run, so MissionFollowStatus::NotMission can never stop it)
+        // must still be bounded by the observer budget, not stream
+        // forever. The first poll diffs (progress); subsequent
+        // unchanged polls accrue the stale budget; exhausting it emits
+        // an observer-side liveness verdict, never a terminal failure.
+        let mut engine = FollowEngine::with_empty_poll_budget("trace-stuck".into(), 2);
+        let nodes = [running_record(
+            "easynet:///r/acme/invocation/01STUCK",
+            "RUNNING",
+        )];
+
+        let first = engine
+            .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)
+            .expect("first poll reports the new record");
+        assert_eq!(first.events.len(), 1, "first poll diffs the new record");
+        assert_eq!(first.decision, FollowDecision::Continue);
+
+        // No state change → no diff → stale budget accrues, no stop yet.
+        let second = engine
+            .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)
+            .expect("unchanged poll stays quiet");
+        assert!(second.events.is_empty(), "{second:?}");
+        assert_eq!(second.decision, FollowDecision::Continue);
+
+        let third = engine
+            .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)
+            .expect("still within budget");
+        assert!(third.events.is_empty(), "{third:?}");
+        assert_eq!(third.decision, FollowDecision::Continue);
+
+        // Budget (2) exhausted on the next stale poll → observer-side stop.
+        let exhausted = engine
+            .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)
+            .expect("stuck trace stops on observer budget");
+        assert!(exhausted.done(), "stuck non-empty trace must stop");
+        assert_eq!(
+            exhausted.events,
+            vec![WatchEvent::Liveness {
+                status: "observer_budget_exhausted".into(),
+                source: "watch_follow_policy".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn follow_engine_does_not_bound_a_progressing_trace() {
+        // A trace that keeps producing diffs is making observable
+        // progress; the stale budget must reset every progress poll so
+        // a healthy long-running stream is never cut off.
+        let mut engine = FollowEngine::with_empty_poll_budget("trace-stuck".into(), 1);
+        for i in 0..5 {
+            let ura = format!("easynet:///r/acme/invocation/01PROG{i}");
+            let nodes = [running_record(&ura, "RUNNING")];
+            let step = engine
+                .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)
+                .expect("progress poll");
+            assert_eq!(step.decision, FollowDecision::Continue, "poll {i}");
+            assert_eq!(step.events.len(), 1, "poll {i} diffs a new record");
+        }
     }
 
     #[test]

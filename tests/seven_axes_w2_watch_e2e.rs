@@ -64,6 +64,7 @@ fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
         invocation: Some(invocation_ura.clone()),
         trace: None,
         follow: false,
+        max_wait_seconds: 60,
         format: invocation_watch::OutputFormat::Table,
     })
     .expect("watch the ledgered invocation");
@@ -133,6 +134,7 @@ mission "watch-stream" {
         invocation: None,
         trace: Some(run.meta.trace_id.clone()),
         follow: false,
+        max_wait_seconds: 60,
         format: invocation_watch::OutputFormat::Json,
     })
     .expect("watch the mission trace");
@@ -208,6 +210,7 @@ mission "watch-stream" {
         invocation: None,
         trace: Some(stale_trace.clone()),
         follow: true,
+        max_wait_seconds: 60,
         format: invocation_watch::OutputFormat::Json,
     })
     .expect("follow projects stale heartbeat to local liveness");
