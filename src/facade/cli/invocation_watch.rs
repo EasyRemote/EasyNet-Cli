@@ -35,7 +35,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Args, ValueEnum};
@@ -58,7 +58,6 @@ use easynet_axon::invocation::InvocationState;
 /// read is daemon-local and cheap, and a knob would only invite
 /// configuration where none is needed.
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(500);
-const FOLLOW_MAX_WAIT: Duration = Duration::from_secs(300);
 const MAX_EMPTY_FOLLOW_POLLS: u16 = 120;
 
 /// Output format for `invocation watch`. It intentionally lives in
@@ -285,28 +284,18 @@ impl FollowStep {
 #[derive(Debug, Clone, Copy)]
 struct FollowPolicy {
     max_empty_polls: u16,
-    max_wait: Option<Duration>,
 }
 
 impl FollowPolicy {
     fn production() -> Self {
         Self {
             max_empty_polls: MAX_EMPTY_FOLLOW_POLLS,
-            max_wait: Some(FOLLOW_MAX_WAIT),
         }
     }
 
     #[cfg(test)]
     fn test_empty_budget(max_empty_polls: u16) -> Self {
-        Self {
-            max_empty_polls,
-            max_wait: None,
-        }
-    }
-
-    fn elapsed(self, started_at: Instant) -> bool {
-        self.max_wait
-            .is_some_and(|max_wait| started_at.elapsed() >= max_wait)
+        Self { max_empty_polls }
     }
 }
 
@@ -316,7 +305,6 @@ impl FollowPolicy {
 struct FollowEngine {
     watch: WatchEngine,
     policy: FollowPolicy,
-    started_at: Instant,
     empty_polls: u16,
     pending_emitted: bool,
 }
@@ -335,7 +323,6 @@ impl FollowEngine {
         Self {
             watch: WatchEngine::new(trace_id),
             policy,
-            started_at: Instant::now(),
             empty_polls: 0,
             pending_emitted: false,
         }
@@ -373,13 +360,6 @@ impl FollowEngine {
                     decision: FollowDecision::Stop,
                 });
             }
-            if self.policy.elapsed(self.started_at) {
-                events.push(timeout_liveness_event());
-                return Ok(FollowStep {
-                    events,
-                    decision: FollowDecision::Stop,
-                });
-            }
             return Ok(FollowStep {
                 events,
                 decision: FollowDecision::Continue,
@@ -408,16 +388,9 @@ impl FollowEngine {
                 })
             }
             MissionFollowStatus::Running => {
-                if self.policy.elapsed(self.started_at) {
-                    events.push(timeout_liveness_event());
-                    return Ok(FollowStep {
-                        events,
-                        decision: FollowDecision::Stop,
-                    });
-                }
                 self.empty_polls = self.empty_polls.saturating_add(1);
                 if self.empty_polls > self.policy.max_empty_polls {
-                    events.push(timeout_liveness_event());
+                    events.push(observer_budget_liveness_event());
                     return Ok(FollowStep {
                         events,
                         decision: FollowDecision::Stop,
@@ -551,10 +524,10 @@ fn interrupted_liveness_event() -> WatchEvent {
     }
 }
 
-fn timeout_liveness_event() -> WatchEvent {
+fn observer_budget_liveness_event() -> WatchEvent {
     WatchEvent::Liveness {
-        status: "timeout".to_string(),
-        source: "follow_policy".to_string(),
+        status: "observer_budget_exhausted".to_string(),
+        source: "watch_follow_policy".to_string(),
     }
 }
 
@@ -1057,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn follow_engine_emits_pending_once_then_times_out_empty_running_trace() {
+    fn follow_engine_emits_pending_once_then_stops_empty_running_trace_after_observer_budget() {
         let mut engine = FollowEngine::with_empty_poll_budget("trace-empty".into(), 2);
         let first = engine
             .observe_with_mission_status(&[], MissionFollowStatus::Running)
@@ -1078,15 +1051,15 @@ mod tests {
         assert!(second.events.is_empty(), "{second:?}");
         assert_eq!(second.decision, FollowDecision::Continue);
 
-        let timeout = engine
+        let budget = engine
             .observe_with_mission_status(&[], MissionFollowStatus::Running)
             .expect("bounded empty trace returns a liveness outcome");
-        assert!(timeout.done());
+        assert!(budget.done());
         assert_eq!(
-            timeout.events,
+            budget.events,
             vec![WatchEvent::Liveness {
-                status: "timeout".into(),
-                source: "follow_policy".into(),
+                status: "observer_budget_exhausted".into(),
+                source: "watch_follow_policy".into(),
             }]
         );
     }
