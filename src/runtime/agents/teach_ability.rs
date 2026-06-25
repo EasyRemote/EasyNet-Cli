@@ -32,8 +32,8 @@ use sha2::{Digest, Sha256};
 use crate::core::ability_spec::{AbilityExec, AbilityManifest};
 use crate::persistence::teach_grants::{
     AcquireStagedGrant, AcquiringArtifactRecoveryState, AcquiringArtifactTxn,
-    DescriptorImportRecord, TeachGrant, TeachGrantDraft, TeachGrantInvocationProof,
-    TeachGrantInvocationProofDraft, TeachGrantStore, EXECUTION_MODE_DEFAULT,
+    DescriptorImportRecord, TeachGrant, TeachGrantAdmissionProof, TeachGrantAdmissionProofDraft,
+    TeachGrantAuthorityProof, TeachGrantDraft, TeachGrantStore, EXECUTION_MODE_DEFAULT,
 };
 use crate::runtime::ability::HostedAgentAuthority;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
@@ -259,6 +259,7 @@ impl GrantedDescriptorSnapshot {
 struct OwnerAuthority {
     owner_ura: String,
     granted_by: String,
+    admission_authority: TeachGrantAuthorityProof,
 }
 
 /// Resolve an owner-local registry name (`<agent>.<ability>`) to the
@@ -357,6 +358,11 @@ fn require_owner_authority(
         return Ok(OwnerAuthority {
             owner_ura: owner_entry.agent_ura.clone(),
             granted_by: authority.host_device_ura().to_string(),
+            admission_authority: TeachGrantAuthorityProof::hosted_agent_delegation(
+                authority.agent_ura(),
+                authority.host_device_ura(),
+                authority.ability(),
+            ),
         });
     }
 
@@ -364,6 +370,7 @@ fn require_owner_authority(
         return Ok(OwnerAuthority {
             owner_ura: owner_entry.agent_ura.clone(),
             granted_by: caller.to_string(),
+            admission_authority: TeachGrantAuthorityProof::direct_owner(caller),
         });
     }
 
@@ -372,6 +379,7 @@ fn require_owner_authority(
         return Ok(OwnerAuthority {
             owner_ura: owner_entry.agent_ura.clone(),
             granted_by: caller.to_string(),
+            admission_authority: TeachGrantAuthorityProof::host_device(caller),
         });
     }
 
@@ -465,6 +473,7 @@ fn teach_handler_with_clock(
     let granted_at = clock.now_rfc3339();
     let proof = teach_grant_invocation_proof(
         &env,
+        authority.admission_authority.clone(),
         &authority.granted_by,
         ability,
         &ability_ura,
@@ -482,7 +491,7 @@ fn teach_handler_with_clock(
         manifest_hash: snapshot.manifest_hash.clone(),
         execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
         granted_at,
-        proof,
+        admission_proof: proof,
     }))?;
 
     Ok(json!({
@@ -501,14 +510,15 @@ fn teach_handler_with_clock(
 
 fn teach_grant_invocation_proof(
     env: &EnvelopeContext,
+    authority: TeachGrantAuthorityProof,
     granted_by_ura: &str,
     granted_ability: &str,
     granted_ability_ura: &str,
     owner_ura: &str,
     learner_ura: &str,
     manifest_hash: &str,
-) -> anyhow::Result<TeachGrantInvocationProof> {
-    TeachGrantInvocationProof::from_draft(TeachGrantInvocationProofDraft {
+) -> anyhow::Result<TeachGrantAdmissionProof> {
+    TeachGrantAdmissionProof::from_draft(TeachGrantAdmissionProofDraft {
         invocation_id: env.invocation_id().to_string(),
         caller_ura: env.caller().to_string(),
         callee_ura: env.callee().to_string(),
@@ -516,9 +526,7 @@ fn teach_grant_invocation_proof(
         envelope_ability: env.ability().to_string(),
         invocation_nonce_hex: hex::encode(env.invocation_nonce()),
         causal_context: env.causal_context().clone(),
-        signature_algorithm: env.caller_signature().algorithm().to_string(),
-        signature_key_id_hint: env.caller_signature().key_id_hint().to_string(),
-        signature_hex: hex::encode(env.caller_signature().signature()),
+        authority,
         granted_ability: granted_ability.to_string(),
         granted_ability_ura: granted_ability_ura.to_string(),
         owner_ura: owner_ura.to_string(),
@@ -823,12 +831,7 @@ fn ability_exec_kind(exec: &AbilityExec) -> &'static str {
 /// binding.
 #[cfg(test)]
 fn acquire_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
-    acquire_handler_with_hot_registrar_and_policy(
-        env,
-        args,
-        None,
-        RuntimeSyncPolicy::UnitTestBypass,
-    )
+    AcquireWorkflow::new(env, args, None, &SystemTeachClock).run()
 }
 
 fn acquire_handler_with_hot_registrar(
@@ -836,22 +839,7 @@ fn acquire_handler_with_hot_registrar(
     args: Value,
     hot_registrar: Option<&SharedHotRegistrarCell>,
 ) -> anyhow::Result<Value> {
-    acquire_handler_with_hot_registrar_and_policy(
-        env,
-        args,
-        hot_registrar,
-        RuntimeSyncPolicy::Required,
-    )
-}
-
-fn acquire_handler_with_hot_registrar_and_policy(
-    env: EnvelopeContext,
-    args: Value,
-    hot_registrar: Option<&SharedHotRegistrarCell>,
-    runtime_sync_policy: RuntimeSyncPolicy,
-) -> anyhow::Result<Value> {
     AcquireWorkflow::new(env, args, hot_registrar, &SystemTeachClock)
-        .with_runtime_sync_policy(runtime_sync_policy)
         .run()
 }
 
@@ -860,7 +848,6 @@ struct AcquireWorkflow<'a> {
     args: Value,
     hot_registrar: Option<&'a SharedHotRegistrarCell>,
     clock: &'a dyn TeachClock,
-    runtime_sync_policy: RuntimeSyncPolicy,
 }
 
 impl<'a> AcquireWorkflow<'a> {
@@ -875,13 +862,7 @@ impl<'a> AcquireWorkflow<'a> {
             args,
             hot_registrar,
             clock,
-            runtime_sync_policy: RuntimeSyncPolicy::Required,
         }
-    }
-
-    fn with_runtime_sync_policy(mut self, runtime_sync_policy: RuntimeSyncPolicy) -> Self {
-        self.runtime_sync_policy = runtime_sync_policy;
-        self
     }
 
     fn run(self) -> anyhow::Result<Value> {
@@ -890,15 +871,12 @@ impl<'a> AcquireWorkflow<'a> {
             args,
             hot_registrar,
             clock,
-            runtime_sync_policy,
         } = self;
         let request = AcquireRequest::from_args(&args)?;
         let authorized = AuthorizedAcquire::from_request(env, request)?;
         let admitted = authorized.admit_transfer()?;
         let committed = admitted.commit(clock)?;
-        committed
-            .refresh_runtime(hot_registrar, runtime_sync_policy)?
-            .into_response()
+        committed.refresh_runtime(hot_registrar)?.into_response()
     }
 }
 
@@ -939,6 +917,13 @@ struct AuthorizedAcquire {
 
 impl AuthorizedAcquire {
     fn from_request(env: EnvelopeContext, request: AcquireRequest) -> anyhow::Result<Self> {
+        if env.subject() != request.ability_ura {
+            anyhow::bail!(
+                "{ACQUIRE} subject {:?} must be the source descriptor {:?}",
+                env.subject(),
+                request.ability_ura
+            );
+        }
         let agents = crate::registry::agents::load_agents()?;
         let learner_entry_for_runtime =
             agents
@@ -1074,7 +1059,6 @@ impl CommittedAcquire {
     fn refresh_runtime(
         self,
         hot_registrar: Option<&SharedHotRegistrarCell>,
-        runtime_sync_policy: RuntimeSyncPolicy,
     ) -> anyhow::Result<RuntimeSyncedAcquire> {
         let new_descriptor_ura =
             crate::ura::owner_ability_ura(&self.plan.learner_ura, &self.plan.request.public_name)
@@ -1083,8 +1067,7 @@ impl CommittedAcquire {
             hot_registrar,
             &self.plan.request.learner,
             &self.plan.learner_entry_for_runtime,
-            runtime_sync_policy,
-        )?;
+        );
         Ok(RuntimeSyncedAcquire {
             plan: self.plan,
             acquired: self.acquired,
@@ -1099,11 +1082,12 @@ struct RuntimeSyncedAcquire {
     plan: AuthorizedAcquire,
     acquired: crate::persistence::teach_grants::AcquiredTeachGrant,
     new_descriptor_ura: String,
-    runtime_sync: Value,
+    runtime_sync: RuntimeSyncOutcome,
 }
 
 impl RuntimeSyncedAcquire {
     fn into_response(self) -> anyhow::Result<Value> {
+        let transaction_status = self.runtime_sync.transaction_status().as_str();
         Ok(json!({
             "acquired_descriptor": self.plan.request.public_name,
             "new_descriptor_ura": self.new_descriptor_ura,
@@ -1113,8 +1097,9 @@ impl RuntimeSyncedAcquire {
             "transfer_kind": TRANSFER_KIND_DISCOVERY_ONLY_MANIFEST,
             "invokable": false,
             "invocation_status": INVOCATION_STATUS_NOT_INVOKABLE_WITHOUT_EXEC_BINDING,
+            "descriptor_transaction_status": transaction_status,
             "mutated_by": self.plan.mutated_by,
-            "runtime_sync": self.runtime_sync,
+            "runtime_sync": self.runtime_sync.into_value(),
         }))
     }
 }
@@ -1144,27 +1129,6 @@ fn append_cleanup_error(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeSyncPolicy {
-    Required,
-    UnitTestBypass,
-}
-
-impl RuntimeSyncPolicy {
-    fn enforce(self, surface: &str, report: &RuntimeSyncReport) -> anyhow::Result<()> {
-        if report.ok {
-            return Ok(());
-        }
-        if self == Self::UnitTestBypass && !report.attempted {
-            return Ok(());
-        }
-        anyhow::bail!(
-            "{surface} committed durable descriptor state but live runtime sync failed: {}",
-            report.summary()
-        );
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeSyncReport {
     attempted: bool,
@@ -1177,6 +1141,51 @@ struct RuntimeSyncReport {
     catalog_not_ready: bool,
     rejected_reserved_owner: bool,
     reason: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DescriptorTransactionStatus {
+    Committed,
+    CommittedRuntimeDegraded,
+}
+
+impl DescriptorTransactionStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+            Self::CommittedRuntimeDegraded => "committed_runtime_degraded",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSyncOutcome {
+    report: RuntimeSyncReport,
+    transaction_status: DescriptorTransactionStatus,
+}
+
+impl RuntimeSyncOutcome {
+    fn after_durable_commit(report: RuntimeSyncReport) -> Self {
+        let transaction_status = if report.ok {
+            DescriptorTransactionStatus::Committed
+        } else {
+            DescriptorTransactionStatus::CommittedRuntimeDegraded
+        };
+        Self {
+            report,
+            transaction_status,
+        }
+    }
+
+    fn transaction_status(&self) -> DescriptorTransactionStatus {
+        self.transaction_status
+    }
+
+    fn into_value(self) -> Value {
+        let mut value = self.report.into_value();
+        value["status"] = Value::String(self.transaction_status.as_str().to_string());
+        value
+    }
 }
 
 impl RuntimeSyncReport {
@@ -1212,23 +1221,6 @@ impl RuntimeSyncReport {
             rejected_reserved_owner: outcome.rejected_reserved_owner,
             reason: None,
         }
-    }
-
-    fn summary(&self) -> String {
-        if let Some(reason) = self.reason {
-            return reason.to_string();
-        }
-        format!(
-            "attempted={}, registered={}, replaced={}, failed={}, removed={}, runtime_not_ready={}, catalog_not_ready={}, rejected_reserved_owner={}",
-            self.attempted,
-            self.registered,
-            self.replaced,
-            self.failed,
-            self.removed,
-            self.runtime_not_ready,
-            self.catalog_not_ready,
-            self.rejected_reserved_owner,
-        )
     }
 
     fn into_value(self) -> Value {
@@ -1277,11 +1269,9 @@ fn sync_learner_runtime_after_acquire(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
     entry: &crate::registry::agents::AgentEntry,
-    policy: RuntimeSyncPolicy,
-) -> anyhow::Result<Value> {
+) -> RuntimeSyncOutcome {
     let report = collect_learner_runtime_sync(hot_registrar, learner, entry);
-    policy.enforce(ACQUIRE, &report)?;
-    Ok(report.into_value())
+    RuntimeSyncOutcome::after_durable_commit(report)
 }
 
 /// `meta.forget { ability, agent }` — drop an imported descriptor. The
@@ -1289,27 +1279,13 @@ fn sync_learner_runtime_after_acquire(
 /// it, so forget can never silently delete what an agent authored.
 #[cfg(test)]
 fn forget_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
-    forget_handler_with_hot_registrar_and_policy(env, args, None, RuntimeSyncPolicy::UnitTestBypass)
+    forget_handler_with_hot_registrar(env, args, None)
 }
 
 fn forget_handler_with_hot_registrar(
     env: EnvelopeContext,
     args: Value,
     hot_registrar: Option<&SharedHotRegistrarCell>,
-) -> anyhow::Result<Value> {
-    forget_handler_with_hot_registrar_and_policy(
-        env,
-        args,
-        hot_registrar,
-        RuntimeSyncPolicy::Required,
-    )
-}
-
-fn forget_handler_with_hot_registrar_and_policy(
-    env: EnvelopeContext,
-    args: Value,
-    hot_registrar: Option<&SharedHotRegistrarCell>,
-    runtime_sync_policy: RuntimeSyncPolicy,
 ) -> anyhow::Result<Value> {
     let ability = required_str(&args, "ability", FORGET)?;
     let agent = required_str(&args, "agent", FORGET)?;
@@ -1321,6 +1297,15 @@ fn forget_handler_with_hot_registrar_and_policy(
     let agent_ura = hosted_agent_by_name(&local, agent, FORGET)?
         .agent_ura
         .clone();
+    let expected_subject = crate::ura::owner_ability_ura(&agent_ura, ability)
+        .ok_or_else(|| anyhow::anyhow!("{FORGET} could not mint imported descriptor subject"))?;
+    if env.subject() != expected_subject {
+        anyhow::bail!(
+            "{FORGET} subject {:?} must be the imported descriptor {:?}",
+            env.subject(),
+            expected_subject
+        );
+    }
     let mutated_by = require_hosted_agent_authority(&env, &local, agent, &agent_ura, FORGET)?;
     let manifest = agents
         .agents
@@ -1337,24 +1322,23 @@ fn forget_handler_with_hot_registrar_and_policy(
 
     let runtime_pending = store.commit_forget_artifact(&staged, commit_forget_manifest)?;
     let runtime_sync = match agent_entry_for_runtime.as_ref() {
-        Some(entry) => {
-            sync_learner_runtime_after_forget(hot_registrar, agent, entry, runtime_sync_policy)?
-        }
+        Some(entry) => sync_learner_runtime_after_forget(hot_registrar, agent, entry),
         None => {
             let report = RuntimeSyncReport::not_ready("agent_registry_entry_missing");
-            runtime_sync_policy.enforce(FORGET, &report)?;
-            report.into_value()
+            RuntimeSyncOutcome::after_durable_commit(report)
         }
     };
     let committed = store.finish_forget(&runtime_pending)?;
     let record = committed.record();
+    let transaction_status = runtime_sync.transaction_status().as_str();
 
     Ok(json!({
         "removed_descriptor": ability,
         "agent": agent,
         "source_descriptor_ura": record.source_descriptor_ura(),
+        "descriptor_transaction_status": transaction_status,
         "mutated_by": mutated_by,
-        "runtime_sync": runtime_sync,
+        "runtime_sync": runtime_sync.into_value(),
         "resumed": staged.resumed(),
     }))
 }
@@ -1363,11 +1347,9 @@ fn sync_learner_runtime_after_forget(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
     entry: &crate::registry::agents::AgentEntry,
-    policy: RuntimeSyncPolicy,
-) -> anyhow::Result<Value> {
+) -> RuntimeSyncOutcome {
     let report = collect_learner_runtime_sync(hot_registrar, learner, entry);
-    policy.enforce(FORGET, &report)?;
-    Ok(report.into_value())
+    RuntimeSyncOutcome::after_durable_commit(report)
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -1452,8 +1434,36 @@ mod tests {
         (source_descriptor_ura, apprentice_ura, mentor_ura)
     }
 
-    fn caller_env(caller: impl Into<String>) -> EnvelopeContext {
-        EnvelopeContext::for_test(caller, "easynet:///r/test/device/local")
+    fn subject_for(owner_ura: &str, public_name: &str) -> String {
+        crate::ura::owner_ability_ura(owner_ura, public_name).expect("test ability subject")
+    }
+
+    fn caller_env_with_subject(
+        caller: impl Into<String>,
+        ability: impl Into<String>,
+        subject: impl Into<String>,
+    ) -> EnvelopeContext {
+        EnvelopeContext::for_test_ability(caller, ability, subject)
+    }
+
+    fn teach_env(caller: impl Into<String>, owner_ura: &str) -> EnvelopeContext {
+        teach_env_for(caller, owner_ura, "quote")
+    }
+
+    fn teach_env_for(
+        caller: impl Into<String>,
+        owner_ura: &str,
+        public_name: &str,
+    ) -> EnvelopeContext {
+        caller_env_with_subject(caller, TEACH, subject_for(owner_ura, public_name))
+    }
+
+    fn acquire_env(caller: impl Into<String>, source_descriptor_ura: &str) -> EnvelopeContext {
+        caller_env_with_subject(caller, ACQUIRE, source_descriptor_ura)
+    }
+
+    fn forget_env(caller: impl Into<String>, learner_ura: &str) -> EnvelopeContext {
+        caller_env_with_subject(caller, FORGET, subject_for(learner_ura, "quote"))
     }
 
     fn hot_registrar_cell_with_runtime(
@@ -1514,7 +1524,7 @@ mod tests {
         let ts = "2026-06-23T01:02:03Z";
 
         teach_handler_with_clock(
-            caller_env(mentor_ura.clone()),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
             &FixedTeachClock(ts),
         )
@@ -1538,7 +1548,7 @@ mod tests {
         let remote_agent = crate::ura::agent_ura("remote-realm", "remote-dev", "apprentice");
 
         let err = teach_handler_with_clock(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": remote_agent }),
             &FixedTeachClock("2026-06-23T01:02:03Z"),
         )
@@ -1558,9 +1568,9 @@ mod tests {
     #[test]
     fn acquire_without_grant_is_the_default_refusal() {
         let _g = HomeGuard::new();
-        let (source_descriptor_ura, _, _) = seed();
+        let (source_descriptor_ura, apprentice_ura, _) = seed();
         let err = acquire_handler(
-            caller_env(crate::ura::agent_ura("localhost", "dev", "apprentice")),
+            acquire_env(apprentice_ura, &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect_err("no grant must refuse");
@@ -1575,7 +1585,7 @@ mod tests {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed();
         teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("owner teaches");
@@ -1584,7 +1594,7 @@ mod tests {
         let forged_ability =
             crate::ura::owner_ability_ura(&forged_owner, "quote").expect("forged ability URA");
         let err = acquire_handler(
-            caller_env(apprentice_ura),
+            acquire_env(apprentice_ura, &forged_ability),
             json!({ "ability_ura": forged_ability, "learner": "apprentice" }),
         )
         .expect_err("same registry key with different owner URA must refuse");
@@ -1608,13 +1618,13 @@ mod tests {
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
 
         let teach = teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
         )
         .expect("owner teaches");
         assert_eq!(teach["owner_ura"], teach["granted_by"]);
         let resp = acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect("learner acquires");
@@ -1645,7 +1655,7 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura.clone()),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("owner teaches");
@@ -1663,7 +1673,7 @@ mod tests {
         .expect("mutate source manifest");
 
         let err = acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect_err("acquire must be bound to the descriptor granted by the owner");
@@ -1693,13 +1703,13 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed();
         teach_handler(
-            caller_env(mentor_ura.clone()),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("owner teaches");
 
         let err = acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect_err("executable transfers are blocked until sandbox_first is enforced");
@@ -1738,7 +1748,7 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("owner teaches");
@@ -1753,7 +1763,7 @@ mod tests {
         let resp = tokio_runtime
             .block_on(async {
                 acquire_handler_with_hot_registrar(
-                    caller_env(apprentice_ura),
+                    acquire_env(apprentice_ura, &source_descriptor_ura),
                     json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
                     Some(&hot_cell),
                 )
@@ -1762,6 +1772,8 @@ mod tests {
 
         assert_eq!(resp["runtime_sync"]["attempted"], true);
         assert_eq!(resp["runtime_sync"]["failed"], 0);
+        assert_eq!(resp["descriptor_transaction_status"], "committed");
+        assert_eq!(resp["runtime_sync"]["status"], "committed");
         let runtime_key = crate::ura::owner_ability_ura(
             &crate::runtime::local_invocation_identity::local_device_ura(),
             "apprentice.quote",
@@ -1782,7 +1794,7 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("owner teaches");
@@ -1796,7 +1808,7 @@ mod tests {
         tokio_runtime
             .block_on(async {
                 acquire_handler_with_hot_registrar(
-                    caller_env(apprentice_ura.clone()),
+                    acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
                     json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
                     Some(&hot_cell),
                 )
@@ -1824,13 +1836,15 @@ mod tests {
         let resp = tokio_runtime
             .block_on(async {
                 forget_handler_with_hot_registrar(
-                    caller_env(apprentice_ura),
+                    forget_env(apprentice_ura.clone(), &apprentice_ura),
                     json!({ "ability": "quote", "agent": "apprentice" }),
                     Some(&hot_cell),
                 )
             })
             .expect("forget");
         assert_eq!(resp["runtime_sync"]["attempted"], true);
+        assert_eq!(resp["descriptor_transaction_status"], "committed");
+        assert_eq!(resp["runtime_sync"]["status"], "committed");
         assert!(
             !crate::support::async_bridge::run_blocking(
                 runtime.has_ability(&runtime_key),
@@ -1841,48 +1855,77 @@ mod tests {
     }
 
     #[test]
-    fn forget_runtime_sync_unavailable_leaves_transaction_unfinished() {
+    fn acquire_runtime_sync_unavailable_returns_committed_degraded() {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
+            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
+        )
+        .expect("owner teaches");
+
+        let unwired_cell = SharedHotRegistrarCell::new();
+        let resp = acquire_handler_with_hot_registrar(
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
+            json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            Some(&unwired_cell),
+        )
+        .expect("durable acquire commits even when live runtime sync is degraded");
+
+        assert_eq!(
+            resp["descriptor_transaction_status"],
+            "committed_runtime_degraded"
+        );
+        assert_eq!(resp["runtime_sync"]["status"], "committed_runtime_degraded");
+        assert_eq!(resp["runtime_sync"]["reason"], "hot_registrar_not_wired");
+        assert!(
+            std::path::Path::new(&std::env::var("HOME").unwrap())
+                .join("agents/apprentice/abilities/quote.ability.toml")
+                .exists(),
+            "acquire artifact remains committed when runtime sync is degraded"
+        );
+    }
+
+    #[test]
+    fn forget_runtime_sync_unavailable_returns_committed_degraded() {
+        let _g = HomeGuard::new();
+        let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
+        teach_handler(
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("owner teaches");
         acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect("learner acquires discovery-only manifest");
 
         let unwired_cell = SharedHotRegistrarCell::new();
-        let err = forget_handler_with_hot_registrar(
-            caller_env(apprentice_ura.clone()),
+        let resp = forget_handler_with_hot_registrar(
+            forget_env(apprentice_ura.clone(), &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
             Some(&unwired_cell),
         )
-        .expect_err("runtime refresh is required for production forget");
-        assert!(
-            format!("{err}").contains("live runtime sync failed"),
-            "{err}"
+        .expect("durable forget commits even when live runtime sync is degraded");
+        assert_eq!(
+            resp["descriptor_transaction_status"],
+            "committed_runtime_degraded"
         );
-        assert!(
-            format!("{err}").contains("hot_registrar_not_wired"),
-            "{err}"
-        );
+        assert_eq!(resp["runtime_sync"]["status"], "committed_runtime_degraded");
+        assert_eq!(resp["runtime_sync"]["reason"], "hot_registrar_not_wired");
 
         let grants: Value = serde_json::from_slice(
             &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         let imports = grants["imports"].as_array().unwrap();
-        assert_eq!(imports.len(), 1, "{grants}");
-        assert_eq!(imports[0]["state"], "forgetting");
+        assert!(imports.is_empty(), "{grants}");
         assert!(
             !std::path::Path::new(&std::env::var("HOME").unwrap())
                 .join("agents/apprentice/abilities/quote.ability.toml")
                 .exists(),
-            "forget artifact step is complete; ledger remains forgetting until runtime refresh succeeds"
+            "forget artifact step remains complete when runtime sync is degraded"
         );
     }
 
@@ -1891,12 +1934,12 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
         acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect("acquire");
@@ -1906,7 +1949,7 @@ mod tests {
         mark_first_import_as_acquiring_for_test(&imported_manifest);
 
         let resp = forget_handler(
-            caller_env(apprentice_ura),
+            forget_env(apprentice_ura.clone(), &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
         )
         .expect("forget must recover the committed acquire before removing");
@@ -1927,8 +1970,8 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed();
         teach_handler(
-            caller_env(mentor_ura.clone()),
-            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
+            teach_env(mentor_ura.clone(), &mentor_ura),
+            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
         let home = std::env::var("HOME").unwrap();
@@ -1938,7 +1981,7 @@ mod tests {
         )
         .expect("native manifest");
         let err = acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect_err("must refuse to clobber");
@@ -1950,19 +1993,19 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura.clone()),
-            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
+            teach_env(mentor_ura.clone(), &mentor_ura),
+            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
         acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect("acquire");
 
         // A native ability is not forgettable…
         let err = forget_handler(
-            caller_env(mentor_ura),
+            forget_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "quote", "agent": "mentor" }),
         )
         .expect_err("mentor never LEARNED quote");
@@ -1970,7 +2013,7 @@ mod tests {
 
         // ...the imported descriptor copy is.
         forget_handler(
-            caller_env(apprentice_ura),
+            forget_env(apprentice_ura.clone(), &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
         )
         .expect("forget");
@@ -1991,12 +2034,12 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
         acquire_handler(
-            caller_env(apprentice_ura.clone()),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect("acquire");
@@ -2014,7 +2057,7 @@ mod tests {
         .expect("mutate imported descriptor manifest");
 
         let err = forget_handler(
-            caller_env(apprentice_ura),
+            forget_env(apprentice_ura.clone(), &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
         )
         .expect_err("forget must not delete a drifted imported descriptor manifest");
@@ -2033,14 +2076,14 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed();
         teach_handler(
-            caller_env(mentor_ura),
-            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
+            teach_env(mentor_ura.clone(), &mentor_ura),
+            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
 
         let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
         let err = acquire_handler(
-            caller_env(stranger),
+            acquire_env(stranger, &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect_err("stranger must not install into apprentice workspace");
@@ -2055,19 +2098,19 @@ mod tests {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
         acquire_handler(
-            caller_env(apprentice_ura),
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
         .expect("acquire");
 
         let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
         let err = forget_handler(
-            caller_env(stranger),
+            forget_env(stranger, &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
         )
         .expect_err("stranger must not delete apprentice workspace");
@@ -2082,7 +2125,7 @@ mod tests {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed();
         let err = teach_handler(
-            caller_env(mentor_ura),
+            teach_env_for(mentor_ura.clone(), &mentor_ura, "ghost"),
             json!({ "ability": "mentor.ghost", "learner_ura": apprentice_ura }),
         )
         .expect_err("no such manifest");
@@ -2099,7 +2142,7 @@ mod tests {
              type = \"object\"\n",
         );
         let err = teach_handler(
-            caller_env(mentor_ura),
+            teach_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
         )
         .expect_err("manifest identity must match the owner-local registry key");
@@ -2116,11 +2159,11 @@ mod tests {
     #[test]
     fn teach_refuses_callers_that_are_not_the_owner_or_host_authority() {
         let _g = HomeGuard::new();
-        let (_, apprentice_ura, _) = seed();
+        let (_, apprentice_ura, mentor_ura) = seed();
         let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
 
         let err = teach_handler(
-            caller_env(stranger),
+            teach_env(stranger, &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
         )
         .expect_err("unauthorized caller must not write a grant");
@@ -2133,11 +2176,11 @@ mod tests {
     #[test]
     fn teach_allows_the_host_device_authority_for_a_local_owner() {
         let _g = HomeGuard::new();
-        let (_, apprentice_ura, _) = seed();
+        let (_, apprentice_ura, mentor_ura) = seed();
         let host = crate::ura::device_ura("localhost", "dev-1");
 
         let resp = teach_handler(
-            caller_env(host.clone()),
+            teach_env(host.clone(), &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
         )
         .expect("host device signs for the local owner");

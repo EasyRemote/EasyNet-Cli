@@ -205,13 +205,23 @@ impl EnvelopeContext {
     /// "empty context" helper because production cannot dispatch one.
     #[cfg(test)]
     pub fn for_test(caller: impl Into<String>, subject: impl Into<String>) -> Self {
+        Self::for_test_ability(caller, "test.ability", subject)
+    }
+
+    #[cfg(test)]
+    pub fn for_test_ability(
+        caller: impl Into<String>,
+        ability: impl Into<String>,
+        subject: impl Into<String>,
+    ) -> Self {
         let caller = caller.into();
+        let ability = ability.into();
         let subject = subject.into();
         Self::new(EnvelopeContextParts {
             invocation_id: "test-invocation".to_string(),
             caller,
             callee: "easynet:///r/test/device/local".to_string(),
-            ability: "test.ability".to_string(),
+            ability,
             subject,
             invocation_nonce: vec![0xA5; 16],
             causal_context: serde_json::json!({"kind": "none"}),
@@ -4204,7 +4214,12 @@ mod tests {
     }
 
     #[test]
-    fn envelope_aware_stream_handler_receives_subject() {
+    fn descriptor_bound_server_stream_is_redirected_to_bidi() {
+        // Signed descriptor-bound server-streaming no longer carries a
+        // receipt channel through the local runtime, so `execute_stream`
+        // refuses it and points the caller at bidi/RPC. Pin the redirect
+        // so a future refactor can't silently re-open the receiptless
+        // stream path.
         let mut reg = AxonAbilityCatalog::new();
         reg.register_stream_with_envelope(
             "x.subscribe",
@@ -4222,17 +4237,11 @@ mod tests {
             subject: Some("easynet:///r/x/resource/01MIC".into()),
             causal_context: None,
         };
-        let src = dispatcher.execute_stream(target).unwrap();
-        match src {
-            StreamSource::Snapshot(frames) => {
-                assert_eq!(frames.len(), 1);
-                assert_eq!(
-                    frames[0]["subject_seen"],
-                    json!("easynet:///r/x/resource/01MIC")
-                );
-            }
-            other => panic!("expected Snapshot; got {other:?}"),
-        }
+        let err = dispatcher.execute_stream(target).unwrap_err();
+        assert!(
+            format!("{err}").contains("descriptor_bound_server_stream_requires_bidi"),
+            "stream path must redirect to bidi; got {err}"
+        );
     }
 
     #[test]

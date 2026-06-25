@@ -22,14 +22,14 @@
 // Schema (operator-inspectable)
 // -----------------------------
 // {
-//   "schema_version": "3",
+//   "schema_version": "4",
 //   "grants": [
 //     { "ability": "<owner-local registry name, e.g. testbot.weather-probe>",
 //       "owner_agent": "testbot",
 //       "learner_ura": "easynet:///r/<realm>/agent/<id>",
 //       "execution_mode": "sandbox_first",   // capability.proto:238 default
 //       "granted_at": "<rfc3339>",
-//       "proof": "<signed-envelope grant proof>" },
+//       "admission_proof": "<ledger-admitted grant authority proof>" },
 //     …
 //   ],
 //   "imports": [
@@ -56,8 +56,9 @@ use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use super::file_lock::ExclusiveFileLock;
 
 pub(crate) const FILE_NAME: &str = "teach-grants.json";
-const STORE_SCHEMA_VERSION: &str = "3";
-const TEACH_GRANT_PROOF_KIND: &str = "teach_grant_signed_envelope_v1";
+const STORE_SCHEMA_VERSION: &str = "4";
+const TEACH_GRANT_PROOF_KIND: &str = "teach_grant_admission_v2";
+const TEACH_GRANT_ENVELOPE_ABILITY: &str = "meta.teach";
 static STORE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Default execution posture for future executable descriptor transfer
@@ -119,7 +120,7 @@ pub struct TeachGrant {
     manifest_hash: String,
     execution_mode: String,
     granted_at: String,
-    proof: TeachGrantInvocationProof,
+    admission_proof: TeachGrantAdmissionProof,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,11 +134,11 @@ pub struct TeachGrantDraft {
     pub manifest_hash: String,
     pub execution_mode: String,
     pub granted_at: String,
-    pub proof: TeachGrantInvocationProof,
+    pub admission_proof: TeachGrantAdmissionProof,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TeachGrantInvocationProof {
+pub struct TeachGrantAdmissionProof {
     kind: String,
     invocation_id: String,
     caller_ura: String,
@@ -146,9 +147,7 @@ pub struct TeachGrantInvocationProof {
     envelope_ability: String,
     invocation_nonce_hex: String,
     causal_context: Value,
-    signature_algorithm: String,
-    signature_key_id_hint: String,
-    signature_hex: String,
+    authority: TeachGrantAuthorityProof,
     granted_ability: String,
     granted_ability_ura: String,
     owner_ura: String,
@@ -158,7 +157,7 @@ pub struct TeachGrantInvocationProof {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TeachGrantInvocationProofDraft {
+pub struct TeachGrantAdmissionProofDraft {
     pub invocation_id: String,
     pub caller_ura: String,
     pub callee_ura: String,
@@ -166,15 +165,62 @@ pub struct TeachGrantInvocationProofDraft {
     pub envelope_ability: String,
     pub invocation_nonce_hex: String,
     pub causal_context: Value,
-    pub signature_algorithm: String,
-    pub signature_key_id_hint: String,
-    pub signature_hex: String,
+    pub authority: TeachGrantAuthorityProof,
     pub granted_ability: String,
     pub granted_ability_ura: String,
     pub owner_ura: String,
     pub granted_by_ura: String,
     pub learner_ura: String,
     pub manifest_hash: String,
+}
+
+/// Authority facts admitted with a teach grant.
+///
+/// Invariant 1: this is not raw CLI metadata. Each variant is the durable
+/// projection of an authority path that `meta.teach` already admitted.
+///
+/// Invariant 2: validation is variant-specific because direct agent calls,
+/// direct host-device calls, and loopback hosted-agent delegation have
+/// different accountability roots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "authority_kind", rename_all = "snake_case")]
+pub enum TeachGrantAuthorityProof {
+    DirectOwnerCaller { owner_ura: String },
+    HostDeviceAuthority { host_device_ura: String },
+    HostedAgentDelegation {
+        agent_ura: String,
+        host_device_ura: String,
+        ability: String,
+    },
+}
+
+impl TeachGrantAuthorityProof {
+    #[must_use]
+    pub fn direct_owner(owner_ura: impl Into<String>) -> Self {
+        Self::DirectOwnerCaller {
+            owner_ura: owner_ura.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn host_device(host_device_ura: impl Into<String>) -> Self {
+        Self::HostDeviceAuthority {
+            host_device_ura: host_device_ura.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn hosted_agent_delegation(
+        agent_ura: impl Into<String>,
+        host_device_ura: impl Into<String>,
+        ability: impl Into<String>,
+    ) -> Self {
+        Self::HostedAgentDelegation {
+            agent_ura: agent_ura.into(),
+            host_device_ura: host_device_ura.into(),
+            ability: ability.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,7 +282,7 @@ impl TeachGrant {
             manifest_hash: draft.manifest_hash,
             execution_mode: draft.execution_mode,
             granted_at: draft.granted_at,
-            proof: draft.proof,
+            admission_proof: draft.admission_proof,
         }
     }
 
@@ -260,7 +306,7 @@ impl TeachGrant {
         require_non_empty("teach grant manifest_hash", &self.manifest_hash)?;
         require_non_empty("teach grant execution_mode", &self.execution_mode)?;
         require_non_empty("teach grant granted_at", &self.granted_at)?;
-        self.proof.validate_for_grant(self)
+        self.admission_proof.validate_for_grant(self)
     }
 
     fn validate_acquire_request(
@@ -283,7 +329,7 @@ impl TeachGrant {
                 self.learner_ura
             );
         }
-        self.proof.validate_for_grant(self)
+        self.admission_proof.validate_for_grant(self)
     }
 }
 
@@ -293,8 +339,8 @@ impl From<TeachGrantDraft> for TeachGrant {
     }
 }
 
-impl TeachGrantInvocationProof {
-    pub fn from_draft(draft: TeachGrantInvocationProofDraft) -> anyhow::Result<Self> {
+impl TeachGrantAdmissionProof {
+    pub fn from_draft(draft: TeachGrantAdmissionProofDraft) -> anyhow::Result<Self> {
         let proof = Self {
             kind: TEACH_GRANT_PROOF_KIND.to_string(),
             invocation_id: draft.invocation_id,
@@ -304,9 +350,7 @@ impl TeachGrantInvocationProof {
             envelope_ability: draft.envelope_ability,
             invocation_nonce_hex: draft.invocation_nonce_hex,
             causal_context: draft.causal_context,
-            signature_algorithm: draft.signature_algorithm,
-            signature_key_id_hint: draft.signature_key_id_hint,
-            signature_hex: draft.signature_hex,
+            authority: draft.authority,
             granted_ability: draft.granted_ability,
             granted_ability_ura: draft.granted_ability_ura,
             owner_ura: draft.owner_ura,
@@ -331,15 +375,13 @@ impl TeachGrantInvocationProof {
         require_non_empty("teach grant proof callee_ura", &self.callee_ura)?;
         require_non_empty("teach grant proof subject_ura", &self.subject_ura)?;
         require_non_empty("teach grant proof envelope_ability", &self.envelope_ability)?;
-        require_non_empty(
-            "teach grant proof signature_algorithm",
-            &self.signature_algorithm,
-        )?;
-        require_non_empty(
-            "teach grant proof signature_key_id_hint",
-            &self.signature_key_id_hint,
-        )?;
-        require_non_empty("teach grant proof signature_hex", &self.signature_hex)?;
+        if self.envelope_ability != TEACH_GRANT_ENVELOPE_ABILITY {
+            anyhow::bail!(
+                "teach grant proof envelope ability {:?} must be {:?}",
+                self.envelope_ability,
+                TEACH_GRANT_ENVELOPE_ABILITY
+            );
+        }
         let nonce = hex::decode(&self.invocation_nonce_hex).map_err(|err| {
             anyhow::anyhow!(
                 "teach grant proof invocation nonce must be hex encoded 16 bytes: {err}"
@@ -351,12 +393,7 @@ impl TeachGrantInvocationProof {
                 nonce.len()
             );
         }
-        let signature = hex::decode(&self.signature_hex).map_err(|err| {
-            anyhow::anyhow!("teach grant proof caller signature must be hex encoded: {err}")
-        })?;
-        if signature.is_empty() {
-            anyhow::bail!("teach grant proof caller signature must not be empty");
-        }
+        self.authority.validate_shape()?;
         require_non_empty("teach grant proof granted_ability", &self.granted_ability)?;
         require_non_empty(
             "teach grant proof granted_ability_ura",
@@ -383,6 +420,78 @@ impl TeachGrantInvocationProof {
                 grant.ability_ura,
                 grant.learner_ura
             );
+        }
+        if self.subject_ura != grant.ability_ura {
+            anyhow::bail!(
+                "teach grant proof subject {:?} does not bind granted descriptor {:?}",
+                self.subject_ura,
+                grant.ability_ura
+            );
+        }
+        self.authority.validate_for_grant(self, grant)?;
+        Ok(())
+    }
+}
+
+impl TeachGrantAuthorityProof {
+    fn validate_shape(&self) -> anyhow::Result<()> {
+        match self {
+            Self::DirectOwnerCaller { owner_ura } => {
+                require_non_empty("teach grant authority owner_ura", owner_ura)
+            }
+            Self::HostDeviceAuthority { host_device_ura } => {
+                require_non_empty("teach grant authority host_device_ura", host_device_ura)
+            }
+            Self::HostedAgentDelegation {
+                agent_ura,
+                host_device_ura,
+                ability,
+            } => {
+                require_non_empty("teach grant authority agent_ura", agent_ura)?;
+                require_non_empty("teach grant authority host_device_ura", host_device_ura)?;
+                require_non_empty("teach grant authority ability", ability)
+            }
+        }
+    }
+
+    fn validate_for_grant(
+        &self,
+        proof: &TeachGrantAdmissionProof,
+        grant: &TeachGrant,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::DirectOwnerCaller { owner_ura } => {
+                if owner_ura != &grant.owner_ura
+                    || proof.caller_ura != *owner_ura
+                    || grant.granted_by_ura != *owner_ura
+                {
+                    anyhow::bail!(
+                        "teach grant direct-owner authority does not match caller/owner/granted_by"
+                    );
+                }
+            }
+            Self::HostDeviceAuthority { host_device_ura } => {
+                if host_device_ura != &grant.granted_by_ura || proof.caller_ura != *host_device_ura {
+                    anyhow::bail!(
+                        "teach grant host-device authority does not match caller/granted_by"
+                    );
+                }
+            }
+            Self::HostedAgentDelegation {
+                agent_ura,
+                host_device_ura,
+                ability,
+            } => {
+                if agent_ura != &grant.owner_ura
+                    || host_device_ura != &grant.granted_by_ura
+                    || proof.callee_ura != *host_device_ura
+                    || ability != TEACH_GRANT_ENVELOPE_ABILITY
+                {
+                    anyhow::bail!(
+                        "teach grant hosted-agent authority does not match owner/host/ability"
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -1129,22 +1238,20 @@ mod tests {
             manifest_hash: TEST_MANIFEST_HASH.to_string(),
             execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
             granted_at: "t0".to_string(),
-            proof: mentor_quote_proof(learner_ura),
+            admission_proof: mentor_quote_proof(learner_ura),
         })
     }
 
-    fn mentor_quote_proof(learner_ura: &str) -> TeachGrantInvocationProof {
-        TeachGrantInvocationProof::from_draft(TeachGrantInvocationProofDraft {
+    fn mentor_quote_proof(learner_ura: &str) -> TeachGrantAdmissionProof {
+        TeachGrantAdmissionProof::from_draft(TeachGrantAdmissionProofDraft {
             invocation_id: "test-invocation".to_string(),
             caller_ura: "easynet:///r/acme/agent/mentor".to_string(),
             callee_ura: "easynet:///r/acme/agent/mentor".to_string(),
-            subject_ura: "easynet:///r/acme/agent/mentor".to_string(),
+            subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
             envelope_ability: "meta.teach".to_string(),
             invocation_nonce_hex: hex::encode([0xA5; 16]),
             causal_context: serde_json::json!({"kind": "none"}),
-            signature_algorithm: "ed25519".to_string(),
-            signature_key_id_hint: "test-envelope-key".to_string(),
-            signature_hex: hex::encode([0x5E; 64]),
+            authority: TeachGrantAuthorityProof::direct_owner("easynet:///r/acme/agent/mentor"),
             granted_ability: "mentor.quote".to_string(),
             granted_ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
             owner_ura: "easynet:///r/acme/agent/mentor".to_string(),
@@ -1209,7 +1316,7 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
         let mut file = TeachGrantsFile::default();
         let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
-        grant.proof.manifest_hash = "sha256:tampered".to_string();
+        grant.admission_proof.manifest_hash = "sha256:tampered".to_string();
         file.grants.push(grant);
         std::fs::write(&path, serde_json::to_vec_pretty(&file).unwrap()).unwrap();
         let store = TeachGrantStore { path };
@@ -1237,17 +1344,17 @@ mod tests {
             manifest_hash: TEST_MANIFEST_HASH.to_string(),
             execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
             granted_at: "t0".to_string(),
-            proof: TeachGrantInvocationProof::from_draft(TeachGrantInvocationProofDraft {
+            admission_proof: TeachGrantAdmissionProof::from_draft(TeachGrantAdmissionProofDraft {
                 invocation_id: "test-invocation".to_string(),
                 caller_ura: "easynet:///r/acme/agent/testbot".to_string(),
                 callee_ura: "easynet:///r/acme/agent/testbot".to_string(),
-                subject_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                subject_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
                 envelope_ability: "meta.teach".to_string(),
                 invocation_nonce_hex: hex::encode([0xA5; 16]),
                 causal_context: serde_json::json!({"kind": "none"}),
-                signature_algorithm: "ed25519".to_string(),
-                signature_key_id_hint: "test-envelope-key".to_string(),
-                signature_hex: hex::encode([0x5E; 64]),
+                authority: TeachGrantAuthorityProof::direct_owner(
+                    "easynet:///r/acme/agent/testbot"
+                ),
                 granted_ability: "testbot.weather-probe".to_string(),
                 granted_ability_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
                 owner_ura: "easynet:///r/acme/agent/testbot".to_string(),

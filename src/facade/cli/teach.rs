@@ -152,15 +152,15 @@ fn confirm_or_cancel(gate: ConfirmationGate) -> anyhow::Result<bool> {
 
 /// Compute half of `teach` (e2e surface).
 pub fn execute_teach(args: &TeachArgs) -> anyhow::Result<Value> {
-    let owner_ura = resolve_owner_ura_from_ability(&args.ability)?;
+    let subject = resolve_owner_ability_subject(&args.ability)?;
     invoke_local_ability_with_hosted_agent_delegation(
         TEACH,
         json!({ "ability": args.ability, "learner_ura": args.to }),
-        None,
+        Some(subject.ability_ura.clone()),
         &[],
         None,
         None,
-        &owner_ura,
+        &subject.owner_ura,
     )
     .map(|(resp, _meta)| resp)
     .context("confer the teach grant")
@@ -169,10 +169,12 @@ pub fn execute_teach(args: &TeachArgs) -> anyhow::Result<Value> {
 /// Compute half of `forget` (e2e surface).
 pub fn execute_forget(args: &ForgetArgs) -> anyhow::Result<Value> {
     let agent_ura = resolve_learner_ura(&args.agent)?;
+    let subject_ura = crate::ura::owner_ability_ura(&agent_ura, &args.ability)
+        .ok_or_else(|| anyhow::anyhow!("could not mint descriptor URA for forgotten ability"))?;
     invoke_local_ability_with_hosted_agent_delegation(
         FORGET,
         json!({ "ability": args.ability, "agent": args.agent }),
-        None,
+        Some(subject_ura),
         &[],
         None,
         None,
@@ -229,11 +231,23 @@ fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
     Ok(entry.agent_ura.clone())
 }
 
-fn resolve_owner_ura_from_ability(ability: &str) -> anyhow::Result<String> {
-    let (owner, _ability_name) = ability
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnerAbilitySubject {
+    owner_ura: String,
+    ability_ura: String,
+}
+
+fn resolve_owner_ability_subject(ability: &str) -> anyhow::Result<OwnerAbilitySubject> {
+    let (owner, ability_name) = ability
         .split_once('.')
         .ok_or_else(|| anyhow::anyhow!("teach ability must be in <agent>.<ability> form"))?;
-    resolve_learner_ura(owner)
+    let owner_ura = resolve_learner_ura(owner)?;
+    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, ability_name)
+        .ok_or_else(|| anyhow::anyhow!("could not mint teach descriptor subject URA"))?;
+    Ok(OwnerAbilitySubject {
+        owner_ura,
+        ability_ura,
+    })
 }
 
 pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {

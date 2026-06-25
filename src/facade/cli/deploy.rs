@@ -37,7 +37,7 @@ use serde_json::json;
 use crate::runtime::resources::filesystem::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
-use crate::support::local_invoke::invoke_local_ability;
+use crate::support::local_invoke::invoke_local_ability_with_subject;
 use crate::support::output;
 
 #[derive(Debug, Args)]
@@ -72,12 +72,19 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     );
     let resource_ref = resource_ref_for_local_path(dir, FilesystemResourceCapability::Read)
         .context("mint ability bundle ResourceRef")?;
-    let result = invoke_local_ability(
+    let subject_ura = resource_ref
+        .get("resource_ura")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("minted ResourceRef did not include resource_ura"))?;
+    let result = invoke_local_ability_with_subject(
         "ability.deploy",
         json!({
             "resource_ref": resource_ref,
             "node_id": args.node,
         }),
+        Some(subject_ura),
     )
     .context("invoke ability.deploy")?;
     eprintln!("{}", style("✓").green());
