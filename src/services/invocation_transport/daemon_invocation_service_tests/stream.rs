@@ -307,6 +307,76 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     assert!(close.is_none());
 }
 
+#[tokio::test]
+async fn invoke_stream_dispatches_non_default_descriptor_version() {
+    // Regression for the version-convergence gap: a stream ability
+    // registered at a NON-default descriptor version must dispatch. The
+    // dispatcher reads the Stream-mode proof version and stamps the wire
+    // ref accordingly; before the fix, reassembly forced 1.0.0 and Axon
+    // rejected the call as proof_descriptor_version_mismatch.
+    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode, LocalRuntime};
+    use futures::StreamExt;
+
+    const NON_DEFAULT_VERSION: &str = "2.0.0";
+    let rt = LocalRuntime::new();
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, "browser.capture_viewport")
+            .expect("device stream ability URA");
+    rt.register_ability_with_options(
+        runtime_ability,
+        make_ability(|_ctx| async move {
+            Ok(serde_json::to_vec(&serde_json::json!({"MARKER-V2": "dispatched"})).unwrap())
+        }),
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            NON_DEFAULT_VERSION,
+            [0x11; 32],
+            [0x22; 32],
+        ),
+    )
+    .await
+    .unwrap();
+    let svc = make_service().with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, "browser.capture_viewport");
+
+    // Sign over the VERSIONED descriptor ref so the caller signature
+    // matches what the dispatcher now reassembles at 2.0.0.
+    let function_name = "browser.capture_viewport".to_string();
+    let signed_ability =
+        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            TEST_DAEMON_URI,
+            &function_name,
+            NON_DEFAULT_VERSION,
+        )
+        .expect("versioned descriptor ref");
+    let arguments = br#"{}"#.to_vec();
+    let signing_key = test_device_signing_key();
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(signed_test_envelope(
+                TEST_DAEMON_URI,
+                TEST_DAEMON_URI,
+                TEST_DAEMON_URI,
+                &signed_ability,
+                &arguments,
+                &signing_key,
+            )),
+            function_name,
+            arguments,
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("non-default-version stream dispatch returns Ok");
+    let mut stream = resp.into_inner();
+    let first = stream.next().await.expect("one frame").expect("frame Ok");
+    let frame: serde_json::Value = serde_json::from_slice(&first.payload).expect("JSON frame");
+    assert_eq!(
+        frame.get("MARKER-V2").and_then(|v| v.as_str()),
+        Some("dispatched"),
+        "the 2.0.0-versioned stream handler must have run: {frame}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     use base64::Engine as _;

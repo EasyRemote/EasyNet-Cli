@@ -33,7 +33,6 @@ use std::sync::Arc;
 
 use tonic::{Response, Status};
 
-use easynet_axon::invocation::CallMode as AxonInvocationCallMode;
 use easynet_axon::pb::axon::v1::{
     Envelope, InvokeBidiDown, InvokeRequest, InvokeResponse, ResponseHeader,
 };
@@ -48,6 +47,7 @@ use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RuntimePlane, SessionPlane,
 };
+use crate::services::invocation_transport::descriptor_binding::RuntimeBoundAbility;
 use crate::services::invocation_transport::federation_wrappers;
 use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_LIST_USER_DEVICES,
@@ -369,61 +369,23 @@ impl UnaryDispatcher {
             );
         };
         let selected_ability_ura = selected_route.ability_ura.clone();
-        let runtime_ability = selected_ability_ura.clone();
-        let Some(options) = runtime.ability_options(&runtime_ability).await else {
-            return (
-                Err(Status::not_found(format!(
-                    "easynet-daemon: selected route `{}` dispatches `{}` but that ability is not \
-                     registered in Axon LocalRuntime as `{}`",
-                    selected_route.route_ura, selected_ability_ura, runtime_ability
-                ))),
-                false,
-            );
-        };
-        // Call-shape mismatch is decided first: a stream/bidi-only ability
-        // invoked as unary is a caller error (InvalidArgument), not a
-        // registration gap. Checking the RPC descriptor proof before this
-        // would misreport the mode mismatch as a missing-version
-        // FailedPrecondition.
-        if !options.modes.rpc {
-            return (
-                Err(Status::invalid_argument(format!(
-                    "easynet-daemon: ability `{ability}` is registered, but does not support \
-                     unary Invoke; use the stream/bidi call shape advertised by meta.list_abilities"
-                ))),
-                false,
-            );
-        }
-        let proof_binding = options.proof_for_mode(AxonInvocationCallMode::Rpc);
-        let descriptor_version = proof_binding.descriptor_version.trim();
-        if descriptor_version.is_empty() {
-            return (
-                Err(Status::failed_precondition(format!(
-                    "easynet-daemon: selected route `{}` dispatches `{}` but the runtime \
-                     registration does not bind a descriptor version for RPC",
-                    selected_route.route_ura, selected_ability_ura
-                ))),
-                false,
-            );
-        }
-        let selected_descriptor_ref =
-            match crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        let selected_descriptor_ref = match RuntimeBoundAbility::from_selected_route(
+            "easynet-daemon",
+            runtime,
+            &selected_route,
+        )
+        .await
+        .and_then(|bound_ability| {
+            bound_ability.descriptor_ref_for_mode(
+                "easynet-daemon",
                 &selected_route.callee_ura,
-                &selected_ability_ura,
-                descriptor_version,
-            ) {
-                Ok(ref_) => ref_,
-                Err(err) => {
-                    return (
-                        Err(Status::failed_precondition(format!(
-                            "easynet-daemon: selected route `{}` cannot form a descriptor-bound \
-                             ability ref for `{}`: {err}",
-                            selected_route.route_ura, selected_ability_ura
-                        ))),
-                        false,
-                    );
-                }
-            };
+                easynet_axon::invocation::CallMode::Rpc,
+                Some(&selected_route.route_ura),
+            )
+        }) {
+            Ok(ref_) => ref_.into_descriptor_ref(),
+            Err(status) => return (Err(status), false),
+        };
         crate::op_event!(
             component = daemon_invocation,
             kind = dispatch_local_rpc_selected_route,
@@ -1656,14 +1618,6 @@ impl UnaryDispatcher {
             .dispatch_contract_version(&selected_route.execution_host_ura)
             .unwrap_or(0)
             >= 1;
-        if target_contract_v1 && dispatch_ability != selected_route.dispatch_name {
-            return Err(status_from_dispatch_key_mismatch(
-                "Invoke",
-                &selected_route.dispatch_name,
-                &dispatch_ability,
-                &selected_route.route_ura,
-            ));
-        }
         crate::op_event!(
             component = daemon_invocation,
             kind = remote_rpc_selected_route_dispatch,
@@ -1799,18 +1753,6 @@ impl UnaryDispatcher {
             .dispatch_contract_version(&selected_route.execution_host_ura)
             .unwrap_or(0)
             >= 1;
-        if target_contract_v1
-            && caller_envelope.is_some()
-            && origin_caller.is_none()
-            && dispatch_ability != selected_route.dispatch_name
-        {
-            return Err(Status::failed_precondition(dispatch_key_mismatch_message(
-                "federation.forward_invoke",
-                &selected_route.dispatch_name,
-                &dispatch_ability,
-                &selected_route.route_ura,
-            )));
-        }
         let (call_id, dispatch_result) = self
             .dispatch_frame_to_presence(selected_route, "federation.forward_invoke", |call_id| {
                 match (target_contract_v1, caller_envelope, &origin_caller) {

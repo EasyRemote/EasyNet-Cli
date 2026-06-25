@@ -66,6 +66,7 @@ pub(crate) mod bidi_dispatcher;
 pub mod boot;
 pub mod daemon_invocation_service;
 pub(crate) mod deps;
+pub(crate) mod descriptor_binding;
 pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;

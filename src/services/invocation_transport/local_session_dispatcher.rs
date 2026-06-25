@@ -37,6 +37,9 @@ use crate::services::invocation_transport::invoke_remote_initiator::{
 use crate::services::invocation_transport::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
+use crate::services::invocation_transport::{
+    descriptor_binding::RuntimeBoundAbility, invocation_wire::target_ura_from_envelope,
+};
 use crate::services::session_failure::SessionFailure;
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
@@ -250,9 +253,30 @@ impl LocalAxonSessionDispatcher {
             ));
         };
         let function_name = request.function_name.clone();
+        let target_ura = target_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
+            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
+        let bound_ability = RuntimeBoundAbility::from_wire_target(
+            "carrier-v1 DispatchCall",
+            &runtime,
+            &target_ura,
+            &function_name,
+        )
+        .await
+        .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
+        let carrier_v1_stream = outbound.carrier_v1()
+            && bound_ability.supports_mode(easynet_axon::invocation::CallMode::Stream)
+            && !bound_ability.supports_mode(easynet_axon::invocation::CallMode::Rpc);
+        let call_mode = if carrier_v1_stream {
+            easynet_axon::invocation::CallMode::Stream
+        } else {
+            easynet_axon::invocation::CallMode::Rpc
+        };
+        let descriptor_ref = bound_ability
+            .descriptor_ref_for_mode("carrier-v1 DispatchCall", &target_ura, call_mode, None)
+            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
         let wire = crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
             envelope,
-            function_name.clone(),
+            descriptor_ref.into_descriptor_ref(),
             request.arguments,
             request.metadata,
         )
@@ -271,21 +295,10 @@ impl LocalAxonSessionDispatcher {
         // signature. Only the carrier-v1 transport carries the multi-frame
         // DispatchResult chain; carrier-v0 stream callers route through
         // open_stream_via_axon elsewhere.
-        if outbound.carrier_v1() {
-            let runtime_ability = easynet_axon::invocation::axiom::ability_ura_from_descriptor_ref(
-                &wire.envelope.envelope().ability,
-            )
-            .map_err(|err| {
-                SessionDispatchError::Other(format!("derive carrier-v1 runtime ability key: {err}"))
-            })?
-            .to_string();
-            if let Some(options) = runtime.ability_options(&runtime_ability).await {
-                if options.modes.stream && !options.modes.rpc {
-                    return self
-                        .handle_carrier_v1_stream_open(call_id, wire, outbound)
-                        .await;
-                }
-            }
+        if carrier_v1_stream {
+            return self
+                .handle_carrier_v1_stream_open(call_id, wire, outbound)
+                .await;
         }
 
         let outcome =
@@ -1308,9 +1321,54 @@ impl LocalAxonSessionDispatcher {
             )
             .await;
         };
+        let target_ura = match target_ura_from_envelope(Some(&envelope), "carrier-v1 BidiOpen") {
+            Ok(target_ura) => target_ura,
+            Err(status) => {
+                return Self::send_bidi_result(
+                    outbound,
+                    &Self::session_error_result(call_id, status.message()),
+                    None,
+                )
+                .await;
+            }
+        };
+        let bound_ability = match RuntimeBoundAbility::from_wire_target(
+            "carrier-v1 BidiOpen",
+            runtime,
+            &target_ura,
+            &ability,
+        )
+        .await
+        {
+            Ok(bound_ability) => bound_ability,
+            Err(status) => {
+                return Self::send_bidi_result(
+                    outbound,
+                    &Self::session_error_result(call_id, status.message()),
+                    None,
+                )
+                .await;
+            }
+        };
+        let descriptor_ref = match bound_ability.descriptor_ref_for_mode(
+            "carrier-v1 BidiOpen",
+            &target_ura,
+            easynet_axon::invocation::CallMode::Bidi,
+            None,
+        ) {
+            Ok(ref_) => ref_,
+            Err(status) => {
+                return Self::send_bidi_result(
+                    outbound,
+                    &Self::session_error_result(call_id, status.message()),
+                    None,
+                )
+                .await;
+            }
+        };
         let wire = match crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
             envelope,
-            ability.clone(),
+            descriptor_ref.into_descriptor_ref(),
             request.arguments,
             request.metadata,
         ) {
@@ -2010,7 +2068,9 @@ mod tests {
     // same non-zero stub facts the rest of the suite uses. The version must
     // match what the descriptor-bound dispatch path stamps on the envelope —
     // the default descriptor version for these owner-local test abilities.
-    const TEST_DESCRIPTOR_VERSION: &str = crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+    const TEST_DESCRIPTOR_VERSION: &str =
+        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+    const TEST_DESCRIPTOR_VERSION_V2: &str = "2.0.0";
     const TEST_SCHEMA_HASH: [u8; 32] = [0x11; 32];
     const TEST_IMPL_HASH: [u8; 32] = [0x22; 32];
 
@@ -2023,10 +2083,16 @@ mod tests {
     /// production. Use for every raw-runtime test registration so the
     /// dispatch path sees a bound descriptor proof.
     fn proof_bound_rpc_options() -> easynet_axon::invocation::AbilityOptions {
+        proof_bound_rpc_options_with_version(TEST_DESCRIPTOR_VERSION)
+    }
+
+    fn proof_bound_rpc_options_with_version(
+        descriptor_version: &str,
+    ) -> easynet_axon::invocation::AbilityOptions {
         use easynet_axon::invocation::{AbilityCallModes, AbilityOptions};
         AbilityOptions::default()
             .with_modes(AbilityCallModes::RPC)
-            .with_descriptor_proof(TEST_DESCRIPTOR_VERSION, TEST_SCHEMA_HASH, TEST_IMPL_HASH)
+            .with_descriptor_proof(descriptor_version, TEST_SCHEMA_HASH, TEST_IMPL_HASH)
     }
 
     /// Stream-mode twin of [`proof_bound_rpc_options`]: a server-streaming
@@ -2117,6 +2183,15 @@ mod tests {
     }
 
     fn carrier_v1_call(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
+        carrier_v1_call_signed_as(call_id, ability, ability, args)
+    }
+
+    fn carrier_v1_call_signed_as(
+        call_id: u64,
+        request_ability: &str,
+        signed_ability: &str,
+        args: Vec<u8>,
+    ) -> InvokeBidiDown {
         use easynet_axon::pb::axon::v1::{DispatchCall, InvokeRequest};
         use ed25519_dalek::Signer as _;
 
@@ -2131,7 +2206,7 @@ mod tests {
         let descriptor_bound =
             crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
                 envelope.clone(),
-                ability.to_string(),
+                signed_ability.to_string(),
                 &args,
                 crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
             )
@@ -2148,7 +2223,7 @@ mod tests {
                 call_id,
                 request: Some(InvokeRequest {
                     envelope: Some(envelope),
-                    function_name: ability.to_string(),
+                    function_name: request_ability.to_string(),
                     arguments: args,
                     ..Default::default()
                 }),
@@ -2362,6 +2437,56 @@ mod tests {
         assert_eq!(result.call_id, 7);
         assert!(result.terminal);
         assert_eq!(result.payload, br#"{"hello":"v1"}"#);
+        assert!(result.failure.is_none());
+    }
+
+    #[tokio::test]
+    async fn carrier_v1_dispatch_preserves_non_default_descriptor_version() {
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        register_test_ability_with_options(
+            &rt,
+            "test.echo",
+            easynet_axon::invocation::make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            proof_bound_rpc_options_with_version(TEST_DESCRIPTOR_VERSION_V2),
+        )
+        .await;
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
+        session_tx.set_negotiated_contract(1);
+        let signed_ability =
+            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                TEST_DEVICE_URA,
+                "test.echo",
+                TEST_DESCRIPTOR_VERSION_V2,
+            )
+            .expect("versioned carrier-v1 descriptor ref");
+
+        disp.handle_down(
+            carrier_v1_call_signed_as(
+                19,
+                "test.echo",
+                &signed_ability,
+                br#"{"hello":"v2"}"#.to_vec(),
+            ),
+            &session_tx,
+        )
+        .await
+        .expect("carrier-v1 dispatch succeeds with non-default descriptor version");
+
+        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("reply within 3s")
+            .expect("reply produced");
+        let Some(UpPayload::DispatchResult(result)) = reply.payload else {
+            panic!(
+                "v1 session must reply DispatchResult, got {:?}",
+                reply.payload
+            );
+        };
+        assert_eq!(result.call_id, 19);
+        assert!(result.terminal);
+        assert_eq!(result.payload, br#"{"hello":"v2"}"#);
         assert!(result.failure.is_none());
     }
 

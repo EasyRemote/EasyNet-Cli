@@ -48,6 +48,7 @@ use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::deps::{
     DirectoryPlane, IdentityPlane, RuntimePlane, SessionPlane,
 };
+use crate::services::invocation_transport::descriptor_binding::RuntimeBoundAbility;
 use crate::services::invocation_transport::federation_wrappers;
 use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
@@ -647,27 +648,24 @@ impl BidiDispatcher {
                 selected_route.dispatch_name
             )));
         };
-        let runtime_ability = dispatch_ability.clone();
-        let Some(options) = runtime.ability_options(&runtime_ability).await else {
-            return Err(Status::not_found(format!(
-                "InvokeBidi: selected route `{}` dispatches `{}` but that ability is not \
-                 registered in Axon LocalRuntime as `{}`",
-                selected_route.route_ura, dispatch_ability, runtime_ability
-            )));
-        };
-        if !options.modes.bidi {
-            return Err(Status::invalid_argument(format!(
-                "InvokeBidi: selected route `{}` dispatches `{}` but it does not support bidi Invoke",
-                selected_route.route_ura, dispatch_ability
-            )));
-        }
+        let bound_ability =
+            RuntimeBoundAbility::from_selected_route("InvokeBidi", runtime, &selected_route)
+                .await?;
+        let dispatch_descriptor_ref = bound_ability
+            .descriptor_ref_for_mode(
+                "InvokeBidi",
+                &selected_route.callee_ura,
+                easynet_axon::invocation::CallMode::Bidi,
+                Some(&selected_route.route_ura),
+            )?
+            .into_descriptor_ref();
         let wire_envelope = envelope_open
             .envelope
             .clone()
             .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
         let wire = crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
             wire_envelope,
-            dispatch_ability.clone(),
+            dispatch_descriptor_ref,
             envelope_open.initial_args.clone(),
             envelope_open.metadata.clone(),
         )
@@ -1042,17 +1040,6 @@ impl BidiDispatcher {
             .dispatch_contract_version(&selected_route.execution_host_ura)
             .unwrap_or(0)
             >= 1;
-        if target_contract_v1
-            && origin_caller.is_none()
-            && dispatch_ability != selected_route.dispatch_name
-        {
-            return Err(status_from_dispatch_key_mismatch(
-                "<self>.invoke_remote",
-                &selected_route.dispatch_name,
-                &dispatch_ability,
-                &selected_route.route_ura,
-            ));
-        }
         let dispatch_frame = if target_contract_v1 && origin_caller.is_none() {
             build_carrier_v1_dispatch_frame(
                 call_id,
@@ -3135,14 +3122,6 @@ pub(crate) fn build_remote_bidi_open_frame_for_contract(
     let dispatch_ability = selected_route.dispatch_key();
     match (target_contract_v1, envelope_open.envelope.clone()) {
         (true, Some(envelope)) => {
-            if dispatch_ability != selected_route.dispatch_name {
-                return Err(status_from_dispatch_key_mismatch(
-                    "<self>.invoke_remote",
-                    &selected_route.dispatch_name,
-                    &dispatch_ability,
-                    &selected_route.route_ura,
-                ));
-            }
             Ok(build_carrier_v1_dispatch_frame(
                 call_id,
                 easynet_axon::pb::axon::v1::InvokeRequest {

@@ -28,6 +28,7 @@ use tonic::{Response, Status};
 use easynet_axon::pb::axon::v1::{InvokeServerStreamRequest, InvokeStreamChunk};
 
 use crate::services::invocation_transport::deps::{DirectoryPlane, RuntimePlane};
+use crate::services::invocation_transport::descriptor_binding::RuntimeBoundAbility;
 use crate::services::invocation_transport::federation_wrappers;
 use crate::services::invocation_transport::invocation_wire::{
     status_from_axon_invoke_error, status_from_dispatch_key_mismatch, target_ura_from_envelope,
@@ -296,21 +297,17 @@ impl StreamDispatcher {
             )));
         };
         let selected_ability_ura = selected_route.ability_ura.clone();
-        let runtime_ability = selected_ability_ura.clone();
-        let Some(options) = runtime.ability_options(&runtime_ability).await else {
-            return Err(Status::not_found(format!(
-                "InvokeStream: selected route `{}` dispatches `{}` but that ability is not \
-                 registered in Axon LocalRuntime as `{}`",
-                selected_route.route_ura, selected_ability_ura, runtime_ability
-            )));
-        };
-        if !options.modes.stream {
-            return Err(Status::invalid_argument(format!(
-                "InvokeStream: selected route `{}` dispatches `{}` but it does not support \
-                 server-stream Invoke",
-                selected_route.route_ura, selected_ability_ura
-            )));
-        }
+        let bound_ability =
+            RuntimeBoundAbility::from_selected_route("InvokeStream", runtime, &selected_route)
+                .await?;
+        let selected_descriptor_ref = bound_ability
+            .descriptor_ref_for_mode(
+                "InvokeStream",
+                &selected_route.callee_ura,
+                easynet_axon::invocation::CallMode::Stream,
+                Some(&selected_route.route_ura),
+            )?
+            .into_descriptor_ref();
         let signed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
             &selected_route.callee_ura,
             ability,
@@ -333,7 +330,7 @@ impl StreamDispatcher {
             Some(envelope) => {
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
-                    selected_ability_ura.clone(),
+                    selected_descriptor_ref,
                     request.arguments.clone(),
                     request.metadata.clone(),
                 )
