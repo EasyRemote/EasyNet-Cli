@@ -63,11 +63,16 @@ pub(crate) fn build_peer_envelope(
     crate::ura::parse_ura(&peer_hub_ura).map_err(|err| {
         Status::invalid_argument(format!("peer envelope callee URA is invalid: {err}"))
     })?;
+    // Subject is the entity the forwarded invocation acts upon: the
+    // original caller when present, otherwise the target itself. It must
+    // be a device/agent/ability/resource — never the peer hub, which the
+    // descriptor-bound subject contract rejects (subject_ref_kind
+    // unsupported:Hub). The hub is the transport callee, not the subject.
     let subject_ura = caller_envelope
         .and_then(|env| env.caller.as_ref())
         .map(|caller| caller.ura.trim().to_string())
         .filter(|ura| !ura.is_empty())
-        .unwrap_or_else(|| peer_hub_ura.clone());
+        .unwrap_or_else(|| target_ura.trim().to_string());
     crate::ura::parse_ura(&subject_ura).map_err(|err| {
         Status::invalid_argument(format!("peer envelope subject URA is invalid: {err}"))
     })?;
@@ -400,7 +405,10 @@ mod tests {
 
         sign_peer_request_envelope(
             &mut env,
-            "discover",
+            // A hub ability is owner-local-dotted (`hub.<name>`); a bare
+            // single-segment name has no valid hub descriptor URA. Use a
+            // real federation ability, as every production caller does.
+            "federation.discover",
             br#"{"q":"chat"}"#,
             Some("local"),
             Some(&[3u8; 32]),

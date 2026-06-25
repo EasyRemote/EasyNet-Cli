@@ -89,7 +89,7 @@ async fn forward_invoke_self_target_runs_locally_via_axon_runtime() {
     // dispatch key is also bare. This mirrors the production
     // convention and the sibling `observe.health` quota test.
     let rt =
-        runtime_with_json_echo("demo.echo", "MARKER-C9-1", "self-target-fallthrough-fired").await;
+        runtime_with_json_echo(TEST_DAEMON_URI, "demo.echo", "MARKER-C9-1", "self-target-fallthrough-fired").await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -152,7 +152,7 @@ async fn forward_invoke_self_target_scopes_agent_target_ability() {
     upsert_hosted_agent(&mut local, "llm", "alice", target_ura);
     save(&local).expect("seed local-agents.json");
 
-    let rt = runtime_with_json_echo("alice.chat", "MARKER-AGENT-SCOPE", "agent-scope-fired").await;
+    let rt = runtime_with_json_echo(target_ura, "alice.chat", "MARKER-AGENT-SCOPE", "agent-scope-fired").await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -196,6 +196,7 @@ async fn forward_invoke_self_target_scopes_agent_target_ability() {
 async fn forward_invoke_agent_ability_unhosted_by_target_fails_at_resolution() {
     let target_ura = TEST_DAEMON_URI;
     let rt = runtime_with_json_echo(
+        target_ura,
         "observe.health",
         "MARKER-DEVICE-SCOPE",
         "device-scope-fired",
@@ -275,8 +276,13 @@ async fn forward_invoke_local_hub_ura_runs_locally_via_axon_runtime() {
     // `easynet:///r/<realm>/hub` as self-targeted even though
     // `AdmissionFacade.daemon_ura()` still carries the host
     // device URA from credentials.json.
-    let rt =
-        runtime_with_json_echo("demo.echo", "MARKER-C9-HUB", "local-hub-self-target-fired").await;
+    let rt = runtime_with_json_echo(
+        &crate::ura::hub_ura("test-realm"),
+        "demo.echo",
+        "MARKER-C9-HUB",
+        "local-hub-self-target-fired",
+    )
+    .await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -374,7 +380,7 @@ async fn forward_invoke_self_target_does_not_intercept_other_target_uras() {
     // through the existing presence-push path and surfaces
     // target_offline when the device is not subscribed —
     // unchanged by the fall-through.
-    let rt = runtime_with_json_echo("demo.echo", "MARKER-OTHER", "must-not-fire").await;
+    let rt = runtime_with_json_echo(TEST_DAEMON_URI, "demo.echo", "MARKER-OTHER", "must-not-fire").await;
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));

@@ -1843,6 +1843,9 @@ mod tests {
 
     #[test]
     fn register_mounts_one_handler_per_agent() {
+        // Hold the env lock: register() consults HOME-rooted registry
+        // state, so a concurrent HOME-mutating test must not race it.
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         let mut agents = AgentRegistry::default();
         agents.agents.insert("alice".into(), entry());
@@ -2386,9 +2389,22 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_for_handler = Arc::clone(&counter);
         let rt = LocalRuntime::new();
+        let chat_options = easynet_axon::invocation::AbilityOptions::default()
+            .with_modes(easynet_axon::invocation::AbilityCallModes::RPC)
+            .with_descriptor_proof(
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [0x11; 32],
+                [0x22; 32],
+            );
+        // Register under the canonical owner ability URA the kernel
+        // resolves (`device.a.alice.chat`), not the bare handler name — a
+        // raw LocalRuntime has no catalog to mirror the bare key.
+        let chat_runtime_ability =
+            crate::ura::owner_ability_ura(&crate::ura::device_ura("localhost", "a"), "alice.chat")
+                .expect("derive alice.chat runtime URA");
         crate::support::async_bridge::run_blocking(
-            rt.register_ability(
-                "alice.chat",
+            rt.register_ability_with_options(
+                chat_runtime_ability,
                 make_ability(move |_ctx| {
                     let counter_for_handler = Arc::clone(&counter_for_handler);
                     async move {
@@ -2400,6 +2416,7 @@ mod tests {
                         })
                     }
                 }),
+                chat_options,
             ),
             crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
         )

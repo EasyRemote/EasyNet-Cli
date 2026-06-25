@@ -2003,9 +2003,42 @@ mod tests {
 
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
 
+    // Descriptor proof a test ability must carry so Axon's receipt-proof
+    // normalizer admits its dispatch. Production stamps these from the
+    // control-plane record (AxonAbilityCatalog::bind_runtime_proof_for_mode);
+    // a raw-runtime test registration has no control plane, so it binds the
+    // same non-zero stub facts the rest of the suite uses. The version must
+    // match what the descriptor-bound dispatch path stamps on the envelope —
+    // the default descriptor version for these owner-local test abilities.
+    const TEST_DESCRIPTOR_VERSION: &str = crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+    const TEST_SCHEMA_HASH: [u8; 32] = [0x11; 32];
+    const TEST_IMPL_HASH: [u8; 32] = [0x22; 32];
+
     fn runtime_ability_for(callee_ura: &str, ability: &str) -> String {
         crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
             .expect("test ability must resolve to canonical Ability URA")
+    }
+
+    /// Proof-bound RPC options mirroring what the control plane stamps in
+    /// production. Use for every raw-runtime test registration so the
+    /// dispatch path sees a bound descriptor proof.
+    fn proof_bound_rpc_options() -> easynet_axon::invocation::AbilityOptions {
+        use easynet_axon::invocation::{AbilityCallModes, AbilityOptions};
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof(TEST_DESCRIPTOR_VERSION, TEST_SCHEMA_HASH, TEST_IMPL_HASH)
+    }
+
+    /// Stream-mode twin of [`proof_bound_rpc_options`]: a server-streaming
+    /// test ability binds its proof on the Stream call mode.
+    fn proof_bound_stream_options() -> easynet_axon::invocation::AbilityOptions {
+        use easynet_axon::invocation::{AbilityOptions, CallMode};
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            TEST_DESCRIPTOR_VERSION,
+            TEST_SCHEMA_HASH,
+            TEST_IMPL_HASH,
+        )
     }
 
     async fn register_test_rpc(
@@ -2013,10 +2046,8 @@ mod tests {
         ability: &str,
         handler: easynet_axon::invocation::AbilityFn,
     ) {
-        runtime
-            .register_ability(runtime_ability_for(TEST_DEVICE_URA, ability), handler)
-            .await
-            .expect("test RPC ability registers under canonical runtime key");
+        register_test_ability_with_options(runtime, ability, handler, proof_bound_rpc_options())
+            .await;
     }
 
     async fn register_test_rpc_for(
@@ -2026,7 +2057,11 @@ mod tests {
         handler: easynet_axon::invocation::AbilityFn,
     ) {
         runtime
-            .register_ability(runtime_ability_for(callee_ura, ability), handler)
+            .register_ability_with_options(
+                runtime_ability_for(callee_ura, ability),
+                handler,
+                proof_bound_rpc_options(),
+            )
             .await
             .expect("test RPC ability registers under canonical runtime key");
     }
@@ -2547,7 +2582,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_frame_stream_only_ability_forwards_non_terminal_frames() {
-        use easynet_axon::invocation::{make_ability, AbilityOptions};
+        use easynet_axon::invocation::make_ability;
 
         let rt = easynet_axon::invocation::LocalRuntime::new();
         let callee_ura = "easynet:///r/acme/device/dev-1";
@@ -2566,7 +2601,7 @@ mod tests {
                 .await?;
                 Ok(Vec::new())
             }),
-            AbilityOptions::streaming(),
+            proof_bound_stream_options(),
         )
         .await
         .expect("stream test ability registers under frame callee");
@@ -2647,7 +2682,7 @@ mod tests {
 
     #[tokio::test]
     async fn carrier_v1_stream_terminal_frame_carries_receipt() {
-        use easynet_axon::invocation::{make_ability, AbilityOptions};
+        use easynet_axon::invocation::make_ability;
 
         let rt = easynet_axon::invocation::LocalRuntime::new();
         register_test_ability_with_options(
@@ -2661,7 +2696,7 @@ mod tests {
                 .await?;
                 Ok(Vec::new())
             }),
-            AbilityOptions::streaming(),
+            proof_bound_stream_options(),
         )
         .await;
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
@@ -2733,8 +2768,7 @@ mod tests {
         // routes through `invoke_async` → LedgerSink → InvocationLedger.
         // One Dispatch frame in → one ledger row out.
         use easynet_axon::invocation::{
-            make_ability, AbilityCallModes, AbilityOptions, InvocationLedger, LedgerSink,
-            LocalRuntime,
+            make_ability, InvocationLedger, LedgerSink, LocalRuntime,
         };
 
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2746,7 +2780,7 @@ mod tests {
             &rt,
             "demo.session_echo",
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
-            AbilityOptions::default().with_modes(AbilityCallModes::RPC),
+            proof_bound_rpc_options(),
         )
         .await;
 

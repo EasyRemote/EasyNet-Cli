@@ -40,7 +40,7 @@ mod tests {
 
     use crate::persistence::resources::{self, ResourcesFile};
     use crate::plugins::remote_desktop::constants::{
-        REASON_CONSENT_RECEIPT_REQUIRED, REASON_SESSION_CALLER_MISMATCH,
+        REASON_CONSENT_RECEIPT_MISMATCH, REASON_SESSION_CALLER_MISMATCH,
         REASON_SESSION_TOKEN_MISMATCH, REASON_SESSION_TOKEN_REQUIRED,
     };
     use crate::plugins::remote_desktop::test_support::{
@@ -180,9 +180,13 @@ mod tests {
             json!({"session_id": "rd-consent-bound", "session_token": token}),
         )
         .unwrap_err();
+        // A session bound to an approval receipt rejects any access whose
+        // causal context does not carry that receipt — absence included.
+        // The contract folds "no receipt" into the single mismatch reason
+        // rather than a separate "required" code.
         assert!(missing
             .to_string()
-            .contains(REASON_CONSENT_RECEIPT_REQUIRED));
+            .contains(REASON_CONSENT_RECEIPT_MISMATCH));
 
         let shown = handle(
             Arc::clone(&plugin),

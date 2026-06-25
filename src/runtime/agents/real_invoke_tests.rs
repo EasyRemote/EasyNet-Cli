@@ -1453,7 +1453,13 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
 }
 
 #[test]
-fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
+fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
+    // A daemon-built registry wires the HotAgentRegistrar into the shared
+    // cell at construction (registry_builder stashes it immediately), so
+    // `agent.refresh` no longer reports the boot-window `runtime_not_ready`
+    // case — it scans the persisted agents through the registrar and
+    // returns `ok=true`. A hosted agent with no runtime row to sync simply
+    // reports `runtime_registered=0` without failing.
     let (reg, _g) = registry_with_temp_home();
     crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
         node_id: "dev-1".to_string(),
@@ -1476,11 +1482,12 @@ fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
     let resp = d
         .execute_rpc(target("agent.refresh", json!({})))
         .expect("agent.refresh");
-    assert_eq!(resp.get("ok"), Some(&json!(false)));
-    assert_eq!(resp.get("runtime_not_ready"), Some(&json!(true)));
+    assert_eq!(resp.get("ok"), Some(&json!(true)));
+    assert_eq!(resp.get("runtime_not_ready"), Some(&json!(false)));
+    assert_eq!(resp.get("agents_scanned"), Some(&json!(1)));
     assert!(
         resp.get("agents").and_then(Value::as_array).is_some(),
-        "refresh must return an agents array even when runtime is not ready: {resp}"
+        "refresh must return an agents array: {resp}"
     );
 }
 

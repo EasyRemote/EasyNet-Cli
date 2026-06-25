@@ -1357,6 +1357,7 @@ mod tests {
 
     #[test]
     fn unknown_scope_is_rejected() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
@@ -1906,6 +1907,7 @@ mod tests {
 
     #[test]
     fn provider_not_registered_returns_typed_error() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());

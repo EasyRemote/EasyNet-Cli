@@ -217,15 +217,26 @@ fn make_quota_service_for_device_caller(caller_ura: &str, cap: i32) -> DaemonInv
 }
 
 async fn runtime_with_json_echo(
+    owner_ura: &str,
     ability: &'static str,
     marker_key: &'static str,
     marker_value: &'static str,
 ) -> Arc<easynet_axon::invocation::LocalRuntime> {
-    use easynet_axon::invocation::make_ability;
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions};
 
+    // Register under the canonical owner ability URA the resolver looks up
+    // (route_resolver resolve_owner_ability -> owner_ability_ura(owner,
+    // name)). A raw LocalRuntime has no AxonAbilityCatalog to mirror a bare
+    // key into the canonical one, so the test must register the canonical
+    // key directly or resolve-first returns ROUTE_NEGATIVE.
+    let runtime_ability = crate::ura::owner_ability_ura(
+        owner_ura,
+        &crate::ura::owner_local_ability_name(owner_ura, ability),
+    )
+    .unwrap_or_else(|| panic!("derive runtime ability URA for {owner_ura} {ability}"));
     let rt = easynet_axon::invocation::LocalRuntime::new();
-    rt.register_ability(
-        ability,
+    rt.register_ability_with_options(
+        runtime_ability,
         make_ability(move |ctx| async move {
             let echoed_args: serde_json::Value =
                 serde_json::from_slice(&ctx.payload).unwrap_or(serde_json::Value::Null);
@@ -235,6 +246,13 @@ async fn runtime_with_json_echo(
             }))
             .unwrap())
         }),
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof(
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [0x11; 32],
+                [0x22; 32],
+            ),
     )
     .await
     .unwrap();

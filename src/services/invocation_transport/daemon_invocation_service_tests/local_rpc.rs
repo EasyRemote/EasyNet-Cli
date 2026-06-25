@@ -1,5 +1,30 @@
 use super::*;
 
+/// Descriptor proof a raw-runtime test ability must carry so Axon's
+/// receipt-proof normalizer admits its dispatch (production stamps the
+/// equivalent from the control-plane record). Non-zero stub hashes;
+/// version is the default these owner-local test abilities dispatch under.
+fn test_rpc_options() -> easynet_axon::invocation::AbilityOptions {
+    use easynet_axon::invocation::{AbilityCallModes, AbilityOptions};
+    AbilityOptions::default()
+        .with_modes(AbilityCallModes::RPC)
+        .with_descriptor_proof(
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            [0x11; 32],
+            [0x22; 32],
+        )
+}
+
+fn test_stream_options() -> easynet_axon::invocation::AbilityOptions {
+    use easynet_axon::invocation::{AbilityOptions, CallMode};
+    AbilityOptions::streaming().with_mode_descriptor_proof(
+        CallMode::Stream,
+        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        [0x11; 32],
+        [0x22; 32],
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity() {
     // Hot-added agents can be dispatchable through `agents.json`
@@ -114,7 +139,7 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
     // execution is selected by `namespace.resolve`, then
     // dispatched through Axon LocalRuntime using the selected
     // route's callee + dispatch key.
-    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, LocalRuntime};
     use futures::StreamExt;
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
@@ -128,7 +153,7 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
             // Echo: terminal payload is the inbound `args`.
             Ok(ctx.payload.clone())
         }),
-        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
+        test_rpc_options(),
     )
     .await
     .unwrap();
@@ -196,7 +221,7 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     // first-contact cross-device callers warm the anchor instead
     // of failing closed on a cold one. Admission itself must STAY
     // fail-closed: the fabricated signature below cannot admit.
-    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, LocalRuntime};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -215,7 +240,7 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     rt.register_ability_with_options(
         ability_ura.clone(),
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
-        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
+        test_rpc_options(),
     )
     .await
     .unwrap();
@@ -322,7 +347,7 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     // predicate layer; the full bidi exercise lives in
     // integration tests where a real grpc Streaming can be
     // constructed.
-    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, LocalRuntime};
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
     let rt = LocalRuntime::new();
@@ -334,7 +359,7 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     rt.register_ability_with_options(
         "agent.list",
         make_ability(|_| async move { Ok(Vec::new()) }),
-        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
+        test_rpc_options(),
     )
     .await
     .unwrap();
@@ -384,7 +409,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     // `invoke()` skips the manual `record_unary_invocation`
     // write (avoiding the duplicate row keyed by `request_id`).
     use easynet_axon::invocation::{
-        make_ability, AbilityCallModes, AbilityOptions, InvocationLedger, LedgerSink, LocalRuntime,
+        make_ability, InvocationLedger, LedgerSink, LocalRuntime,
     };
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
@@ -409,7 +434,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
             }))
             .map_err(|err| easynet_axon::invocation::AxonError::internal(err.to_string()))
         }),
-        AbilityOptions::default().with_modes(AbilityCallModes::RPC),
+        test_rpc_options(),
     )
     .await
     .unwrap();
@@ -533,7 +558,7 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     // for it. `axon_took_it` must stay false so `invoke()` records
     // the failed unary attempt through the manual ledger path
     // instead of assuming Axon's LedgerSink persisted a row.
-    use easynet_axon::invocation::{make_ability, AbilityOptions, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, LocalRuntime};
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
     let rt = LocalRuntime::new();
@@ -542,7 +567,7 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|_ctx| async { Ok(Vec::new()) }),
-        AbilityOptions::streaming(),
+        test_stream_options(),
     )
     .await
     .unwrap();

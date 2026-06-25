@@ -174,6 +174,7 @@ mod tests {
 
     #[test]
     fn runtime_dispatch_rpc_observe_health_returns_json_object() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let adapter = RuntimeDispatchAdapter::new_for_test();
         let value = adapter
             .execute_runtime_dispatch("observe.health", serde_json::json!({}), None)

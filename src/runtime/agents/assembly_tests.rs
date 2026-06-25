@@ -15,6 +15,24 @@ fn sha256_hex_for_test(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
+/// Seed `local-agents.json` with the canonical hosted-agent identities the
+/// hot registrar requires before it will register `<agent>.chat` into the
+/// runtime. Each tuple is `(profile, name)`; the agent URA is the canonical
+/// `agent/<name>.<profile>` form under the local realm. Call inside a
+/// `HomeGuard` so the file lands in the test's temp HOME.
+fn seed_hosted_agents_for_chat(agents: &[(&str, &str)]) {
+    use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
+    let mut local = LocalAgentsFile::default();
+    for (profile, name) in agents {
+        // Agent URA is `agent/<user>.<name>`; the registrar verifies its
+        // agent-id (the after-dot segment) equals the registry name, so
+        // `name` must be the third arg.
+        let agent_ura = crate::ura::agent_ura("localhost", profile, name);
+        upsert_hosted_agent(&mut local, profile, name, &agent_ura);
+    }
+    save(&local).expect("seed local-agents.json for chat handlers");
+}
+
 #[test]
 fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
     let _home = crate::facade::cli::test_support::HomeGuard::new();
@@ -35,7 +53,7 @@ fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
     std::fs::write(
         &grants_path,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": "2",
+            "schema_version": "4",
             "grants": [],
             "imports": [{
                 "ability_name": "quote",
@@ -74,6 +92,9 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
     // and both must be in the published set that (a) drives the device
     // profile and (b) is registered into the live LocalRuntime via
     // runtime.register_local_tool.
+    // Hold the env lock: published_ability_names() reads HOME-rooted
+    // registry state, so a concurrent HOME-mutating test must not race it.
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let names = published_ability_names();
     assert!(
         names.iter().any(|n| n == "agent.list"),
@@ -525,6 +546,9 @@ fn published_system_abilities_excludes_plugin_package_abilities() {
 
 #[test]
 fn published_abilities_marks_server_stream_routes_as_streaming_only() {
+    // Hold the env lock: published_abilities() reads HOME-rooted registry
+    // state, so a concurrent HOME-mutating test must not race it.
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "consent.subscribe",
@@ -612,6 +636,8 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
     // that shadows the manifest's real one. The filter in
     // `published_abilities()` enforces this; pin it.
     use crate::registry::agents::{AgentEntry, AgentType};
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    seed_hosted_agents_for_chat(&[("claude", "alice")]);
     let mut agents = AgentRegistry::default();
     agents
         .agents
@@ -683,6 +709,8 @@ fn registry_includes_chat_handler_per_registered_agent() {
     // property that lets the proxy dispatch chat through the
     // same registry as ping/session/permission.
     use crate::registry::agents::{AgentEntry, AgentType};
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    seed_hosted_agents_for_chat(&[("claude", "alice"), ("codex", "bob")]);
     let mut agents = AgentRegistry::default();
     agents
         .agents

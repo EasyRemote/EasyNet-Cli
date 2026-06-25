@@ -75,7 +75,7 @@ fn quota_for_forward_invoke_meters_inner_user_ability_only() {
 #[tokio::test]
 async fn forward_invoke_quota_throttles_by_inner_user_ability() {
     let caller_ura = "easynet:///r/test-realm/device/quota-caller";
-    let rt = runtime_with_json_echo("observe.health", "handled_by", "quota-test").await;
+    let rt = runtime_with_json_echo(TEST_DAEMON_URI, "observe.health", "handled_by", "quota-test").await;
     let svc = make_quota_service_for_device_caller(caller_ura, 1).with_local_runtime(rt);
     publish_test_route(&svc, TEST_DAEMON_URI, "observe.health");
     let args = forward_invoke_args_for_ability(
@@ -361,9 +361,12 @@ async fn invoke_writes_success_record_to_invocation_ledger() {
     assert!(record.invocation_ura.starts_with(&expected_prefix));
     assert!(!record.invocation_ura.contains("/resource/invocation."));
     assert_eq!(record.ability_name, ABILITY_FEDERATION_RESOLVE);
+    // The ledger ability_ura now projects from the callee DEVICE binding
+    // (where the self-target call actually executed), not the abstract hub
+    // form — the truthful provenance of a locally-run invocation.
     assert_eq!(
         record.ability_ura,
-        "easynet:///r/test-realm/ability/hub.federation.resolve"
+        "easynet:///r/test-realm/ability/device.test-daemon.federation.resolve"
     );
     assert_eq!(record.state, "completed");
     assert_eq!(record.authority_form, "self");
@@ -580,6 +583,7 @@ fn invocation_resource_ura_maps_agent_to_user_owned_namespace() {
 
 #[test]
 fn remote_receipt_projection_preserves_ability_identity_authority_and_proof_facts() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let receipt = InvocationReceipt {
         invocation_id: "remote-req-1".to_string(),
         state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
@@ -611,12 +615,24 @@ fn remote_receipt_projection_preserves_ability_identity_authority_and_proof_fact
 
     let record = ledger_record_from_remote_receipt(&receipt, "demo.echo", 1_000)
         .expect("remote receipt projects");
+    // The forwarded-receipt ability_ura projects from the callee DEVICE
+    // binding (`device-b`), the truthful provenance of where the peer ran
+    // it — not the abstract hub form.
     assert_eq!(
         record.ability_ura,
-        crate::ura::hub_ability_ura("peer-realm", "demo.echo"),
+        crate::ura::owner_ability_ura(
+            &crate::ura::device_ura("peer-realm", "device-b"),
+            "demo.echo"
+        )
+        .expect("device-form ability URA"),
         "remote rows must not leave ability_ura empty"
     );
-    assert_eq!(record.authority_form, "delegated");
+    // A forwarded receipt does not carry the caller's authority form
+    // (the delegation/session metadata lived on the originating request,
+    // which the hub never sees). The projection records "unknown" rather
+    // than minting a classification the receipt never asserted — the
+    // callee's own ledger row holds the authoritative form.
+    assert_eq!(record.authority_form, "unknown");
     assert_eq!(record.usage.tokens_in, 5);
     assert_eq!(record.usage.tokens_out, 7);
     assert_eq!(record.elapsed_ms, Some(200));
@@ -1419,14 +1435,21 @@ async fn invoke_unknown_ability_without_projection_returns_resolver_negative() {
 /// and returns the handler's JSON output.
 #[tokio::test]
 async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
-    use easynet_axon::invocation::{make_ability, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
 
     let rt = LocalRuntime::new();
     let ability = "test.fallback.echo";
     let ability_ura = crate::ura::owner_ability_ura(TEST_DAEMON_URI, ability).unwrap();
-    rt.register_ability(
+    rt.register_ability_with_options(
         ability_ura,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof(
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [0x11; 32],
+                [0x22; 32],
+            ),
     )
     .await
     .unwrap();

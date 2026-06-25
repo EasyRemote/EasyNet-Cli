@@ -228,14 +228,18 @@ async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
 
 #[tokio::test]
 async fn invoke_stream_dispatches_registered_local_stream_ability() {
-    use easynet_axon::invocation::{make_ability, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode, LocalRuntime};
     use futures::StreamExt;
 
     let rt = LocalRuntime::new();
     let runtime_ability =
         crate::ura::owner_ability_ura(TEST_DAEMON_URI, "browser.capture_viewport")
             .expect("device stream ability URA");
-    rt.register_streaming_ability(
+    // Stream-mode descriptor proof so Axon's receipt-proof normalizer
+    // admits the dispatch (production stamps the equivalent off the
+    // control-plane record). register_streaming_ability leaves the proof
+    // unbound, so register with explicit stream-mode options.
+    rt.register_ability_with_options(
         runtime_ability,
         make_ability(|ctx| async move {
             let args: serde_json::Value =
@@ -246,6 +250,12 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
             }))
             .unwrap())
         }),
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            [0x11; 32],
+            [0x22; 32],
+        ),
     )
     .await
     .unwrap();
