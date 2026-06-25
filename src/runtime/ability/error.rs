@@ -44,6 +44,14 @@ pub enum AbilityControlPlaneError {
         authority_root: String,
         ability: String,
     },
+    /// A descriptor, authority, or implementation row did not project to the
+    /// same authority-rooted control-plane key as the other two tables.
+    #[error("control-plane {table} row key {actual:?} does not match canonical key {expected:?}")]
+    ControlPlaneKeyMismatch {
+        table: &'static str,
+        expected: String,
+        actual: String,
+    },
     /// Authority owner projection lacked the local owner-plane label.
     #[error("authority owner projection must be non-empty")]
     EmptyAuthorityOwnerProjection,

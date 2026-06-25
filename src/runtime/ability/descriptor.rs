@@ -127,6 +127,102 @@ impl AbilityDescriptorKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AbilityControlPlaneKey {
+    authority_root: String,
+    descriptor: AbilityDescriptorKey,
+}
+
+impl AbilityControlPlaneKey {
+    pub fn new(
+        authority_root: impl Into<String>,
+        ability: impl Into<String>,
+        descriptor_version: impl Into<String>,
+        call_mode: CallMode,
+    ) -> Result<Self, AbilityControlPlaneError> {
+        let authority_root = authority_root.into();
+        if !is_stable_authority_root(&authority_root) {
+            return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
+        }
+        Ok(Self {
+            authority_root,
+            descriptor: AbilityDescriptorKey::new(ability, descriptor_version, call_mode)?,
+        })
+    }
+
+    pub(crate) fn from_validated_parts(
+        authority_root: impl Into<String>,
+        ability: impl Into<String>,
+        descriptor_version: impl Into<String>,
+        call_mode: CallMode,
+    ) -> Self {
+        Self {
+            authority_root: authority_root.into(),
+            descriptor: AbilityDescriptorKey::from_validated_parts(
+                ability,
+                descriptor_version,
+                call_mode,
+            ),
+        }
+    }
+
+    pub(crate) fn for_descriptor(
+        authority_root: impl Into<String>,
+        descriptor: &AbilityDescriptorRecord,
+    ) -> Self {
+        Self::from_validated_parts(
+            authority_root,
+            descriptor.name.clone(),
+            descriptor.version.to_string(),
+            descriptor.call_mode,
+        )
+    }
+
+    pub(crate) fn for_authority(binding: &crate::runtime::ability::AuthorityBindingRecord) -> Self {
+        Self::from_validated_parts(
+            binding.scope().authority_root().to_string(),
+            binding.ability().to_string(),
+            binding.descriptor_version().to_string(),
+            binding.call_mode(),
+        )
+    }
+
+    pub(crate) fn for_impl(
+        authority_root: impl Into<String>,
+        binding: &crate::runtime::ability::AbilityImplBinding,
+    ) -> Self {
+        Self::from_validated_parts(
+            authority_root,
+            binding.ability().to_string(),
+            binding.descriptor_version().to_string(),
+            binding.call_mode(),
+        )
+    }
+
+    pub fn authority_root(&self) -> &str {
+        &self.authority_root
+    }
+
+    pub fn ability(&self) -> &str {
+        self.descriptor.ability()
+    }
+
+    pub fn descriptor_version_str(&self) -> &str {
+        self.descriptor.descriptor_version_str()
+    }
+
+    pub fn call_mode(&self) -> CallMode {
+        self.descriptor.call_mode()
+    }
+}
+
+fn is_stable_authority_root(authority_root: &str) -> bool {
+    authority_root == authority_root.trim()
+        && !authority_root.is_empty()
+        && !authority_root.chars().any(char::is_whitespace)
+        && !authority_root.chars().any(char::is_control)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CallMode {
@@ -339,90 +435,100 @@ fn ensure_manifest_descriptor_version_matches(
 
 #[derive(Debug, Default, Clone)]
 pub struct AbilityDescriptorRegistry {
-    descriptors: BTreeMap<AbilityDescriptorKey, AbilityDescriptorRecord>,
+    descriptors: BTreeMap<AbilityControlPlaneKey, AbilityDescriptorRecord>,
 }
 
 impl AbilityDescriptorRegistry {
-    pub fn register(&mut self, descriptor: AbilityDescriptorRecord) {
-        self.descriptors.insert(descriptor.key(), descriptor);
+    pub(crate) fn register(
+        &mut self,
+        key: AbilityControlPlaneKey,
+        descriptor: AbilityDescriptorRecord,
+    ) {
+        self.descriptors.insert(key, descriptor);
     }
 
-    pub fn remove(&mut self, ability: &str) -> bool {
+    pub(crate) fn get(&self, key: &AbilityControlPlaneKey) -> Option<&AbilityDescriptorRecord> {
+        self.descriptors.get(key)
+    }
+
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &AbilityControlPlaneKey> {
+        self.descriptors.keys()
+    }
+
+    pub(crate) fn records_for_authority_mode(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: CallMode,
+    ) -> Vec<(AbilityControlPlaneKey, AbilityDescriptorRecord)> {
+        self.descriptors
+            .iter()
+            .filter(|(key, _)| {
+                key.authority_root() == authority_root
+                    && key.ability() == ability
+                    && key.call_mode() == call_mode
+            })
+            .map(|(key, record)| (key.clone(), record.clone()))
+            .collect()
+    }
+
+    pub(crate) fn remove_matching(
+        &mut self,
+        mut predicate: impl FnMut(&AbilityControlPlaneKey) -> bool,
+    ) -> bool {
         let before = self.descriptors.len();
-        self.descriptors.retain(|key, _| key.ability() != ability);
+        self.descriptors.retain(|key, _| !predicate(key));
         self.descriptors.len() != before
     }
 
-    pub fn get(&self, ability: &str) -> Option<&AbilityDescriptorRecord> {
-        self.get_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
-    }
-
-    pub fn get_for_mode(
+    pub(crate) fn contains_matching(
         &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Option<&AbilityDescriptorRecord> {
-        self.get_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
+        mut predicate: impl FnMut(&AbilityControlPlaneKey) -> bool,
+    ) -> bool {
+        self.descriptors.keys().any(predicate)
     }
 
-    pub fn get_version(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-    ) -> Option<&AbilityDescriptorRecord> {
-        unique_record_for(&self.descriptors, ability, descriptor_version)
-    }
-
-    pub fn get_version_for_mode(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-        call_mode: CallMode,
-    ) -> Option<&AbilityDescriptorRecord> {
-        let key = AbilityDescriptorKey::new(ability, descriptor_version, call_mode).ok()?;
-        self.descriptors.get(&key)
-    }
-
-    pub fn contains(&self, ability: &str) -> bool {
-        self.descriptors.keys().any(|key| key.ability() == ability)
-    }
-
-    pub fn names(&self) -> Vec<String> {
+    pub(crate) fn names(&self) -> Vec<String> {
         let mut names = self
             .descriptors
             .keys()
             .map(|key| key.ability().to_string())
             .collect::<Vec<_>>();
+        names.sort();
         names.dedup();
         names
     }
 }
 
-pub(crate) fn unique_record_for<'a, T>(
-    records: &'a BTreeMap<AbilityDescriptorKey, T>,
-    ability: &str,
-    descriptor_version: &str,
-) -> Option<&'a T> {
-    let mut matches = records
-        .iter()
-        .filter(|(key, _)| {
-            key.ability() == ability && key.descriptor_version_str() == descriptor_version
-        })
-        .map(|(_, value)| value);
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
-    Some(first)
-}
-
 pub fn schema_hash_for_manifest(
     manifest: Option<&crate::core::ability_spec::AbilityManifest>,
 ) -> SchemaHash {
-    let empty = Value::Object(Default::default());
     let summary = governed_schema_summary_for_manifest(manifest);
+    schema_hash_for_governed_summary(&summary)
+}
+
+pub fn governed_schema_summary(
+    input: &Value,
+    output: &Value,
+    visibility: Value,
+    scope_subjects: Value,
+    scope_agents: Value,
+    hints: Value,
+) -> Value {
+    serde_json::json!({
+        "input": input,
+        "output": output,
+        "visibility": visibility,
+        "scope_subjects": scope_subjects,
+        "scope_agents": scope_agents,
+        "hints": hints,
+    })
+}
+
+pub fn schema_hash_for_governed_summary(summary: &Value) -> SchemaHash {
+    let empty = Value::Object(Default::default());
     SchemaHash(
-        easynet_axon::invocation::axiom::ability_schema_hash(&summary, &empty)
+        easynet_axon::invocation::axiom::ability_schema_hash(summary, &empty)
             .expect("Axon ability schema hash must serialize JSON schema values"),
     )
 }
@@ -478,16 +584,63 @@ fn governed_schema_summary_for_manifest(
 ) -> Value {
     let empty = Value::Object(Default::default());
     match manifest {
-        Some(manifest) => serde_json::json!({
-            "input": manifest.input_schema(),
-            "output": manifest.output_schema().unwrap_or(&empty),
-            "access": manifest.access(),
-        }),
-        None => serde_json::json!({
-            "input": empty,
-            "output": empty,
-            "access": crate::core::ability_spec::AccessPolicy::default(),
-        }),
+        Some(manifest) => {
+            let access = manifest.access();
+            governed_schema_summary(
+                manifest.input_schema(),
+                manifest.output_schema().unwrap_or(&empty),
+                serde_json::to_value(manifest_visibility_projection(access.visibility))
+                    .expect("manifest visibility projection serializes"),
+                serde_json::to_value(crate::runtime::ability_descriptor::ScopeRule::Any)
+                    .expect("scope rule serializes"),
+                serde_json::to_value(manifest_scope_agents_projection(&access))
+                    .expect("scope rule serializes"),
+                serde_json::to_value(crate::runtime::ability_descriptor::AbilityHints::default())
+                    .expect("ability hints serialize"),
+            )
+        }
+        None => {
+            let access = crate::core::ability_spec::AccessPolicy::default();
+            governed_schema_summary(
+                &empty,
+                &empty,
+                serde_json::to_value(manifest_visibility_projection(access.visibility))
+                    .expect("manifest visibility projection serializes"),
+                serde_json::to_value(crate::runtime::ability_descriptor::ScopeRule::Any)
+                    .expect("scope rule serializes"),
+                serde_json::to_value(manifest_scope_agents_projection(&access))
+                    .expect("scope rule serializes"),
+                serde_json::to_value(crate::runtime::ability_descriptor::AbilityHints::default())
+                    .expect("ability hints serialize"),
+            )
+        }
+    }
+}
+
+fn manifest_visibility_projection(
+    visibility: crate::core::ability_spec::Visibility,
+) -> crate::runtime::ability_descriptor::Visibility {
+    match visibility {
+        crate::core::ability_spec::Visibility::Selfish => {
+            crate::runtime::ability_descriptor::Visibility::Private
+        }
+        crate::core::ability_spec::Visibility::Device => {
+            crate::runtime::ability_descriptor::Visibility::Scoped
+        }
+        crate::core::ability_spec::Visibility::Public => {
+            crate::runtime::ability_descriptor::Visibility::Public
+        }
+    }
+}
+
+fn manifest_scope_agents_projection(
+    access: &crate::core::ability_spec::AccessPolicy,
+) -> crate::runtime::ability_descriptor::ScopeRule {
+    match access.allow_callers.as_ref() {
+        Some(allow) if !allow.is_empty() => {
+            crate::runtime::ability_descriptor::ScopeRule::OnlyMatching(allow.clone())
+        }
+        _ => crate::runtime::ability_descriptor::ScopeRule::Any,
     }
 }
 
@@ -559,6 +712,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
+
     #[test]
     fn schema_hash_is_stable_under_object_key_order() {
         let a = canonical_json_bytes(&json!({"b": 2, "a": {"d": 4, "c": 3}}));
@@ -607,6 +762,55 @@ mod tests {
             base_record.descriptor_hash(),
             restricted_record.descriptor_hash(),
             "descriptor_hash must change when ability access policy changes"
+        );
+    }
+
+    #[test]
+    fn manifest_schema_hash_matches_runtime_descriptor_projection() {
+        let input = json!({
+            "type": "object",
+            "properties": {"topic": {"type": "string"}},
+            "required": ["topic"],
+        });
+        let output = json!({
+            "type": "object",
+            "properties": {"quote": {"type": "string"}},
+            "required": ["quote"],
+        });
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "quote",
+            "emit a quotable line",
+            input.clone(),
+        )
+        .unwrap()
+        .with_output_schema(output.clone())
+        .unwrap()
+        .with_access(crate::core::ability_spec::AccessPolicy {
+            visibility: crate::core::ability_spec::Visibility::Device,
+            allow_callers: Some(vec!["alice".to_string(), "bob".to_string()]),
+            deny_callers: None,
+        })
+        .unwrap();
+
+        let control_plane_record =
+            AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&manifest))
+                .unwrap();
+        let runtime_descriptor = crate::runtime::ability_descriptor::AbilityDescriptor::new(
+            "mentor.quote",
+            LOCAL_DEVICE_URA,
+            crate::runtime::ability_descriptor::Visibility::Scoped,
+        )
+        .unwrap()
+        .with_input_schema(input)
+        .with_output_schema(output)
+        .with_scope_agents(crate::runtime::ability_descriptor::ScopeRule::OnlyMatching(
+            vec!["alice".to_string(), "bob".to_string()],
+        ));
+
+        assert_eq!(
+            control_plane_record.schema_hash().0,
+            runtime_descriptor.schema_hash_bytes(),
+            "manifest-derived control-plane schema hashes must use the same governed summary as runtime AbilityDescriptor"
         );
     }
 

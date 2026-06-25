@@ -29,8 +29,8 @@ pub use authority::{
     HostedAgentDelegationContext, HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 pub use descriptor::{
-    canonical_json_bytes, AbilityDescriptorKey, AbilityDescriptorRecord, AbilityDescriptorRegistry,
-    AbilityDescriptorVersion, CallMode, DescriptorHash, SchemaHash,
+    canonical_json_bytes, AbilityControlPlaneKey, AbilityDescriptorKey, AbilityDescriptorRecord,
+    AbilityDescriptorRegistry, AbilityDescriptorVersion, CallMode, DescriptorHash, SchemaHash,
     DEFAULT_ABILITY_DESCRIPTOR_VERSION,
 };
 pub use error::AbilityControlPlaneError;

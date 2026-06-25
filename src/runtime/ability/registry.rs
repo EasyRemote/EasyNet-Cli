@@ -5,12 +5,12 @@
 // Description: Aggregates descriptor, authority, and implementation binding
 //              registries for daemon-local ability registration.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use super::{
-    AbilityControlPlaneError, AbilityDescriptorRecord, AbilityImplBinding, AbilityImplSource,
-    AuthorityBindingRecord, AuthorityScope, CallMode, RuntimeEnv,
+    AbilityControlPlaneError, AbilityControlPlaneKey, AbilityDescriptorRecord,
+    AbilityDescriptorRegistry, AbilityImplBinding, AbilityImplRegistry, AbilityImplSource,
+    AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityScope, CallMode, RuntimeEnv,
     DEFAULT_ABILITY_DESCRIPTOR_VERSION,
 };
 
@@ -84,59 +84,9 @@ impl AbilityControlPlaneRecord {
 
 #[derive(Debug, Default, Clone)]
 pub struct AbilityControlPlaneRegistry {
-    records: BTreeMap<AbilityControlPlaneRecordKey, AbilityControlPlaneRecord>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AbilityControlPlaneRecordKey {
-    authority_root: String,
-    ability: String,
-    descriptor_version: String,
-    call_mode: CallMode,
-}
-
-impl AbilityControlPlaneRecordKey {
-    fn new(
-        authority_root: impl Into<String>,
-        ability: impl Into<String>,
-        descriptor_version: impl Into<String>,
-        call_mode: CallMode,
-    ) -> Self {
-        Self {
-            authority_root: authority_root.into(),
-            ability: ability.into(),
-            descriptor_version: descriptor_version.into(),
-            call_mode,
-        }
-    }
-
-    fn from_record(record: &AbilityControlPlaneRecord) -> Self {
-        Self {
-            authority_root: record.authority().scope().authority_root().to_string(),
-            ability: record.descriptor().name().to_string(),
-            descriptor_version: record.descriptor().version().to_string(),
-            call_mode: record.descriptor().call_mode(),
-        }
-    }
-
-    fn ability(&self) -> &str {
-        &self.ability
-    }
-
-    fn descriptor_version(&self) -> &str {
-        &self.descriptor_version
-    }
-
-    fn call_mode(&self) -> CallMode {
-        self.call_mode
-    }
-
-    fn lookup_match(&self) -> AbilityControlPlaneLookupMatch {
-        AbilityControlPlaneLookupMatch {
-            authority_root: self.authority_root.clone(),
-            call_mode: self.call_mode,
-        }
-    }
+    descriptors: AbilityDescriptorRegistry,
+    authorities: AuthorityBindingRegistry,
+    implementations: AbilityImplRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +135,108 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AbilityControlPlaneRegistrationStage {
+    Planned,
+    Materialized,
+    Committed,
+}
+
+struct AbilityControlPlaneRegistrationPlan<'a> {
+    stage: AbilityControlPlaneRegistrationStage,
+    registration: AbilityControlPlaneRegistration<'a>,
+}
+
+struct MaterializedAbilityControlPlaneRegistration {
+    stage: AbilityControlPlaneRegistrationStage,
+    key: AbilityControlPlaneKey,
+    record: AbilityControlPlaneRecord,
+}
+
+impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
+    fn new(registration: AbilityControlPlaneRegistration<'a>) -> Self {
+        Self {
+            stage: AbilityControlPlaneRegistrationStage::Planned,
+            registration,
+        }
+    }
+
+    fn materialize(
+        self,
+    ) -> Result<MaterializedAbilityControlPlaneRegistration, AbilityControlPlaneError> {
+        debug_assert_eq!(self.stage, AbilityControlPlaneRegistrationStage::Planned);
+        let AbilityControlPlaneRegistration {
+            ability,
+            descriptor_version,
+            call_mode,
+            manifest,
+            authority_scope,
+            runtime_env,
+            impl_source,
+            impl_content_hash,
+        } = self.registration;
+        let authority_root = authority_scope.authority_root().to_string();
+        let ability_ura =
+            crate::ura::owner_ability_ura(&authority_root, &ability).ok_or_else(|| {
+                AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
+                    authority_root: authority_root.clone(),
+                    ability: ability.clone(),
+                }
+            })?;
+        let descriptor = AbilityDescriptorRecord::for_ability_ura(
+            ability_ura,
+            &ability,
+            descriptor_version,
+            call_mode,
+            manifest,
+        )?;
+        let authority = AuthorityBindingRecord::local_self_with_manifest_policy(
+            ability.clone(),
+            descriptor.version().to_string(),
+            call_mode,
+            authority_scope,
+            manifest,
+        )?;
+        let implementation = AbilityImplBinding::new_with_content_hash(
+            ability,
+            descriptor.version().to_string(),
+            call_mode,
+            runtime_env,
+            impl_source,
+            impl_content_hash,
+        )?;
+        let key = AbilityControlPlaneKey::for_descriptor(&authority_root, &descriptor);
+        assert_record_keys_match(&key, &descriptor, &authority, &implementation)?;
+        Ok(MaterializedAbilityControlPlaneRegistration {
+            stage: AbilityControlPlaneRegistrationStage::Materialized,
+            key,
+            record: AbilityControlPlaneRecord {
+                descriptor,
+                authority,
+                implementation,
+            },
+        })
+    }
+}
+
+impl MaterializedAbilityControlPlaneRegistration {
+    fn commit(mut self, registry: &mut AbilityControlPlaneRegistry) -> AbilityControlPlaneRecord {
+        debug_assert_eq!(
+            self.stage,
+            AbilityControlPlaneRegistrationStage::Materialized
+        );
+        registry
+            .descriptors
+            .register(self.key.clone(), self.record.descriptor.clone());
+        registry.authorities.bind(self.record.authority.clone());
+        registry
+            .implementations
+            .bind(self.key.clone(), self.record.implementation.clone());
+        self.stage = AbilityControlPlaneRegistrationStage::Committed;
+        self.record
+    }
+}
+
 impl AbilityControlPlaneRegistry {
     pub fn register(
         &mut self,
@@ -209,55 +261,9 @@ impl AbilityControlPlaneRegistry {
         &mut self,
         registration: AbilityControlPlaneRegistration<'_>,
     ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
-        let AbilityControlPlaneRegistration {
-            ability,
-            descriptor_version,
-            call_mode,
-            manifest,
-            authority_scope,
-            runtime_env,
-            impl_source,
-            impl_content_hash,
-        } = registration;
-        let ability_ura = crate::ura::owner_ability_ura(authority_scope.authority_root(), &ability)
-            .ok_or_else(
-                || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
-                    authority_root: authority_scope.authority_root().to_string(),
-                    ability: ability.clone(),
-                },
-            )?;
-        let descriptor = AbilityDescriptorRecord::for_ability_ura(
-            ability_ura,
-            &ability,
-            descriptor_version,
-            call_mode,
-            manifest,
-        )?;
-        let authority = AuthorityBindingRecord::local_self_with_manifest_policy(
-            ability.clone(),
-            descriptor.version().to_string(),
-            call_mode,
-            authority_scope,
-            manifest,
-        )?;
-        let implementation = AbilityImplBinding::new_with_content_hash(
-            ability,
-            descriptor.version().to_string(),
-            call_mode,
-            runtime_env,
-            impl_source,
-            impl_content_hash,
-        )?;
-        let record = AbilityControlPlaneRecord {
-            descriptor,
-            authority,
-            implementation,
-        };
-        self.records.insert(
-            AbilityControlPlaneRecordKey::from_record(&record),
-            record.clone(),
-        );
-        Ok(record)
+        Ok(AbilityControlPlaneRegistrationPlan::new(registration)
+            .materialize()?
+            .commit(self))
     }
 
     /// Remove every descriptor-version/call-mode row for one authority-owned
@@ -267,10 +273,16 @@ impl AbilityControlPlaneRegistry {
     /// advertise the same public ability name, so mutation must always name the
     /// owner root that established the record.
     pub fn remove_for_authority(&mut self, authority_root: &str, ability: &str) -> bool {
-        let before = self.records.len();
-        self.records
-            .retain(|key, _| !(key.authority_root == authority_root && key.ability() == ability));
-        self.records.len() != before
+        let descriptors_removed = self.descriptors.remove_matching(|key| {
+            key.authority_root() == authority_root && key.ability() == ability
+        });
+        let authorities_removed = self.authorities.remove_matching(|key| {
+            key.authority_root() == authority_root && key.ability() == ability
+        });
+        let implementations_removed = self.implementations.remove_matching(|key| {
+            key.authority_root() == authority_root && key.ability() == ability
+        });
+        descriptors_removed || authorities_removed || implementations_removed
     }
 
     /// Remove every descriptor-version row for one authority-owned call mode.
@@ -288,13 +300,22 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> bool {
-        let before = self.records.len();
-        self.records.retain(|key, _| {
-            !(key.authority_root == authority_root
+        let descriptors_removed = self.descriptors.remove_matching(|key| {
+            key.authority_root() == authority_root
                 && key.ability() == ability
-                && key.call_mode() == call_mode)
+                && key.call_mode() == call_mode
         });
-        self.records.len() != before
+        let authorities_removed = self.authorities.remove_matching(|key| {
+            key.authority_root() == authority_root
+                && key.ability() == ability
+                && key.call_mode() == call_mode
+        });
+        let implementations_removed = self.implementations.remove_matching(|key| {
+            key.authority_root() == authority_root
+                && key.ability() == ability
+                && key.call_mode() == call_mode
+        });
+        descriptors_removed || authorities_removed || implementations_removed
     }
 
     /// Snapshot every descriptor-version row for one authority-owned call mode.
@@ -310,14 +331,10 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Vec<AbilityControlPlaneRecord> {
-        self.records
-            .iter()
-            .filter(|(key, _)| {
-                key.authority_root == authority_root
-                    && key.ability() == ability
-                    && key.call_mode() == call_mode
-            })
-            .map(|(_, record)| record.clone())
+        self.descriptors
+            .records_for_authority_mode(authority_root, ability, call_mode)
+            .into_iter()
+            .filter_map(|(key, _descriptor)| self.record_for_key(&key))
             .collect()
     }
 
@@ -329,23 +346,19 @@ impl AbilityControlPlaneRegistry {
     ///
     /// Invariant 2: records are reinserted through their canonical key derived
     /// from the record body, keeping key construction centralized in
-    /// [`AbilityControlPlaneRecordKey::from_record`].
+    /// [`AbilityControlPlaneKey::for_descriptor`].
     pub fn restore_authority_mode_records(
         &mut self,
         authority_root: &str,
         ability: &str,
         call_mode: CallMode,
         records: Vec<AbilityControlPlaneRecord>,
-    ) {
-        self.records.retain(|key, _| {
-            !(key.authority_root == authority_root
-                && key.ability() == ability
-                && key.call_mode() == call_mode)
-        });
+    ) -> Result<(), AbilityControlPlaneError> {
+        self.remove_for_authority_mode(authority_root, ability, call_mode);
         for record in records {
-            self.records
-                .insert(AbilityControlPlaneRecordKey::from_record(&record), record);
+            self.insert_materialized_record(record)?;
         }
+        Ok(())
     }
 
     pub fn get(
@@ -374,8 +387,13 @@ impl AbilityControlPlaneRegistry {
         call_mode: CallMode,
     ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneAuthorityModeLookupError>
     {
-        unique_record_for_authority_mode(&self.records, authority_root, ability, call_mode)
-            .map(|record| record.cloned())
+        let key = unique_key_for_authority_mode(
+            self.descriptors.keys(),
+            authority_root,
+            ability,
+            call_mode,
+        )?;
+        Ok(key.and_then(|key| self.record_for_key(&key)))
     }
 
     pub fn get_version(
@@ -383,8 +401,13 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         descriptor_version: &str,
     ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        unique_record_for_control_plane(&self.records, ability, descriptor_version, None)
-            .map(|r| r.cloned())
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            None,
+        )?;
+        Ok(key.and_then(|key| self.record_for_key(&key)))
     }
 
     pub fn get_version_for_mode(
@@ -393,8 +416,13 @@ impl AbilityControlPlaneRegistry {
         descriptor_version: &str,
         call_mode: CallMode,
     ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        unique_record_for_control_plane(&self.records, ability, descriptor_version, Some(call_mode))
-            .map(|record| record.cloned())
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            Some(call_mode),
+        )?;
+        Ok(key.and_then(|key| self.record_for_key(&key)))
     }
 
     pub fn get_version_for_authority_mode(
@@ -404,22 +432,17 @@ impl AbilityControlPlaneRegistry {
         descriptor_version: &str,
         call_mode: CallMode,
     ) -> Option<AbilityControlPlaneRecord> {
-        self.records
-            .get(&AbilityControlPlaneRecordKey::new(
-                authority_root,
-                ability,
-                descriptor_version,
-                call_mode,
-            ))
-            .cloned()
+        let key =
+            AbilityControlPlaneKey::new(authority_root, ability, descriptor_version, call_mode)
+                .ok()?;
+        self.record_for_key(&key)
     }
 
     pub fn descriptor(
         &self,
         ability: &str,
     ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        self.record(ability)
-            .map(|record| record.map(AbilityControlPlaneRecord::descriptor))
+        self.descriptor_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
     }
 
     pub fn descriptor_for_mode(
@@ -427,16 +450,14 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        self.record_for_mode(ability, call_mode)
-            .map(|record| record.map(AbilityControlPlaneRecord::descriptor))
+        self.descriptor_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
     }
 
     pub fn authority(
         &self,
         ability: &str,
     ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        self.record(ability)
-            .map(|record| record.map(AbilityControlPlaneRecord::authority))
+        self.authority_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
     }
 
     pub fn authority_for_mode(
@@ -444,16 +465,14 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        self.record_for_mode(ability, call_mode)
-            .map(|record| record.map(AbilityControlPlaneRecord::authority))
+        self.authority_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
     }
 
     pub fn implementation(
         &self,
         ability: &str,
     ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        self.record(ability)
-            .map(|record| record.map(AbilityControlPlaneRecord::implementation))
+        self.implementation_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
     }
 
     pub fn implementation_for_mode(
@@ -461,29 +480,22 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        self.record_for_mode(ability, call_mode)
-            .map(|record| record.map(AbilityControlPlaneRecord::implementation))
+        self.implementation_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
     }
 
     pub fn contains(&self, ability: &str) -> bool {
-        self.records.keys().any(|key| key.ability() == ability)
+        self.descriptors
+            .contains_matching(|key| key.ability() == ability)
     }
 
     pub fn contains_for_authority(&self, authority_root: &str, ability: &str) -> bool {
-        self.records
-            .keys()
-            .any(|key| key.authority_root == authority_root && key.ability() == ability)
+        self.descriptors.contains_matching(|key| {
+            key.authority_root() == authority_root && key.ability() == ability
+        })
     }
 
     pub fn names(&self) -> Vec<String> {
-        let mut names = self
-            .records
-            .keys()
-            .map(|key| key.ability().to_string())
-            .collect::<Vec<_>>();
-        names.sort();
-        names.dedup();
-        names
+        self.descriptors.names()
     }
 
     /// Distinct authority roots that own `ability` across all registered modes.
@@ -493,101 +505,237 @@ impl AbilityControlPlaneRegistry {
     /// to prove that a name maps to one owner before deriving a protocol key.
     pub fn authority_roots_for_ability(&self, ability: &str) -> Vec<String> {
         let mut roots = self
-            .records
+            .descriptors
             .keys()
             .filter(|key| key.ability() == ability)
-            .map(|key| key.authority_root.clone())
+            .map(|key| key.authority_root().to_string())
             .collect::<Vec<_>>();
         roots.sort();
         roots.dedup();
         roots
     }
 
-    fn record(
-        &self,
-        ability: &str,
-    ) -> Result<Option<&AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        self.record_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
-    }
-
-    fn record_for_mode(
-        &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        self.record_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
-    }
-
-    fn record_version(
+    fn descriptor_version(
         &self,
         ability: &str,
         descriptor_version: &str,
-    ) -> Result<Option<&AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        unique_record_for_control_plane(&self.records, ability, descriptor_version, None)
+    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            None,
+        )?;
+        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
     }
 
-    fn record_version_for_mode(
+    fn descriptor_version_for_mode(
         &self,
         ability: &str,
         descriptor_version: &str,
         call_mode: CallMode,
-    ) -> Result<Option<&AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        unique_record_for_control_plane(&self.records, ability, descriptor_version, Some(call_mode))
+    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            Some(call_mode),
+        )?;
+        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
+    }
+
+    fn authority_version(
+        &self,
+        ability: &str,
+        descriptor_version: &str,
+    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            None,
+        )?;
+        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
+    }
+
+    fn authority_version_for_mode(
+        &self,
+        ability: &str,
+        descriptor_version: &str,
+        call_mode: CallMode,
+    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            Some(call_mode),
+        )?;
+        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
+    }
+
+    fn implementation_version(
+        &self,
+        ability: &str,
+        descriptor_version: &str,
+    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            None,
+        )?;
+        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
+    }
+
+    fn implementation_version_for_mode(
+        &self,
+        ability: &str,
+        descriptor_version: &str,
+        call_mode: CallMode,
+    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
+        let key = unique_key_for_control_plane(
+            self.descriptors.keys(),
+            ability,
+            descriptor_version,
+            Some(call_mode),
+        )?;
+        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
+    }
+
+    fn record_for_key(&self, key: &AbilityControlPlaneKey) -> Option<AbilityControlPlaneRecord> {
+        Some(AbilityControlPlaneRecord {
+            descriptor: self.descriptors.get(key)?.clone(),
+            authority: self.authorities.get(key)?.clone(),
+            implementation: self.implementations.get(key)?.clone(),
+        })
+    }
+
+    fn insert_materialized_record(
+        &mut self,
+        record: AbilityControlPlaneRecord,
+    ) -> Result<(), AbilityControlPlaneError> {
+        let key = key_for_record(&record);
+        assert_record_keys_match(
+            &key,
+            record.descriptor(),
+            record.authority(),
+            record.implementation(),
+        )?;
+        self.descriptors.register(key.clone(), record.descriptor);
+        self.authorities.bind(record.authority);
+        self.implementations.bind(key, record.implementation);
+        Ok(())
     }
 }
 
-fn unique_record_for_control_plane<'a>(
-    records: &'a BTreeMap<AbilityControlPlaneRecordKey, AbilityControlPlaneRecord>,
+fn unique_key_for_control_plane<'a>(
+    keys: impl Iterator<Item = &'a AbilityControlPlaneKey>,
     ability: &str,
     descriptor_version: &str,
     call_mode: Option<CallMode>,
-) -> Result<Option<&'a AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-    let matches = records
-        .iter()
-        .filter(|(key, _)| {
+) -> Result<Option<AbilityControlPlaneKey>, AbilityControlPlaneLookupError> {
+    let matches = keys
+        .filter(|key| {
             key.ability() == ability
-                && key.descriptor_version() == descriptor_version
+                && key.descriptor_version_str() == descriptor_version
                 && call_mode.is_none_or(|mode| key.call_mode() == mode)
         })
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [] => Ok(None),
-        [(_, record)] => Ok(Some(record)),
+        [key] => Ok(Some((*key).clone())),
         _ => Err(AbilityControlPlaneLookupError {
             ability: ability.to_string(),
             descriptor_version: descriptor_version.to_string(),
-            matches: matches.iter().map(|(key, _)| key.lookup_match()).collect(),
+            matches: matches
+                .iter()
+                .map(|key| lookup_match_for_key(key))
+                .collect(),
         }),
     }
 }
 
-fn unique_record_for_authority_mode<'a>(
-    records: &'a BTreeMap<AbilityControlPlaneRecordKey, AbilityControlPlaneRecord>,
+fn unique_key_for_authority_mode<'a>(
+    keys: impl Iterator<Item = &'a AbilityControlPlaneKey>,
     authority_root: &str,
     ability: &str,
     call_mode: CallMode,
-) -> Result<Option<&'a AbilityControlPlaneRecord>, AbilityControlPlaneAuthorityModeLookupError> {
-    let matches = records
-        .iter()
-        .filter(|(key, _)| {
-            key.authority_root == authority_root
+) -> Result<Option<AbilityControlPlaneKey>, AbilityControlPlaneAuthorityModeLookupError> {
+    let matches = keys
+        .filter(|key| {
+            key.authority_root() == authority_root
                 && key.ability() == ability
                 && key.call_mode() == call_mode
         })
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [] => Ok(None),
-        [(_, record)] => Ok(Some(record)),
+        [key] => Ok(Some((*key).clone())),
         _ => Err(AbilityControlPlaneAuthorityModeLookupError {
             authority_root: authority_root.to_string(),
             ability: ability.to_string(),
             call_mode,
             descriptor_versions: matches
                 .iter()
-                .map(|(key, _)| key.descriptor_version().to_string())
+                .map(|key| key.descriptor_version_str().to_string())
                 .collect(),
         }),
     }
+}
+
+fn key_for_record(record: &AbilityControlPlaneRecord) -> AbilityControlPlaneKey {
+    AbilityControlPlaneKey::for_descriptor(
+        record.authority().scope().authority_root(),
+        record.descriptor(),
+    )
+}
+
+fn assert_record_keys_match(
+    expected: &AbilityControlPlaneKey,
+    descriptor: &AbilityDescriptorRecord,
+    authority: &AuthorityBindingRecord,
+    implementation: &AbilityImplBinding,
+) -> Result<(), AbilityControlPlaneError> {
+    let descriptor_key =
+        AbilityControlPlaneKey::for_descriptor(expected.authority_root(), descriptor);
+    assert_table_key_matches("descriptor", expected, &descriptor_key)?;
+    let authority_key = authority.key();
+    assert_table_key_matches("authority", expected, &authority_key)?;
+    let implementation_key = implementation.key(expected.authority_root());
+    assert_table_key_matches("implementation", expected, &implementation_key)?;
+    Ok(())
+}
+
+fn assert_table_key_matches(
+    table: &'static str,
+    expected: &AbilityControlPlaneKey,
+    actual: &AbilityControlPlaneKey,
+) -> Result<(), AbilityControlPlaneError> {
+    if expected == actual {
+        return Ok(());
+    }
+    Err(AbilityControlPlaneError::ControlPlaneKeyMismatch {
+        table,
+        expected: format_control_plane_key(expected),
+        actual: format_control_plane_key(actual),
+    })
+}
+
+fn lookup_match_for_key(key: &AbilityControlPlaneKey) -> AbilityControlPlaneLookupMatch {
+    AbilityControlPlaneLookupMatch {
+        authority_root: key.authority_root().to_string(),
+        call_mode: key.call_mode(),
+    }
+}
+
+fn format_control_plane_key(key: &AbilityControlPlaneKey) -> String {
+    format!(
+        "{}::{}@{}::{:?}",
+        key.authority_root(),
+        key.ability(),
+        key.descriptor_version_str(),
+        key.call_mode()
+    )
 }
 
 fn manifest_descriptor_version(

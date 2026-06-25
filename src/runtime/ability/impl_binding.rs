@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::descriptor::{
     canonical_json_bytes, is_valid_ability_name, is_valid_descriptor_version, sha256_bytes,
-    unique_record_for, AbilityDescriptorKey, CallMode,
+    AbilityControlPlaneKey, CallMode,
 };
 use super::AbilityControlPlaneError;
 
@@ -213,63 +213,32 @@ impl AbilityImplBinding {
         &self.source
     }
 
-    pub fn key(&self) -> AbilityDescriptorKey {
-        AbilityDescriptorKey::from_validated_parts(
-            self.ability.clone(),
-            self.descriptor_version.clone(),
-            self.call_mode,
-        )
+    pub fn key(&self, authority_root: impl Into<String>) -> AbilityControlPlaneKey {
+        AbilityControlPlaneKey::for_impl(authority_root, self)
     }
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct AbilityImplRegistry {
-    bindings: BTreeMap<AbilityDescriptorKey, AbilityImplBinding>,
+    bindings: BTreeMap<AbilityControlPlaneKey, AbilityImplBinding>,
 }
 
 impl AbilityImplRegistry {
-    pub fn bind(&mut self, binding: AbilityImplBinding) {
-        self.bindings.insert(binding.key(), binding);
+    pub(crate) fn bind(&mut self, key: AbilityControlPlaneKey, binding: AbilityImplBinding) {
+        self.bindings.insert(key, binding);
     }
 
-    pub fn remove(&mut self, ability: &str) -> bool {
+    pub(crate) fn get(&self, key: &AbilityControlPlaneKey) -> Option<&AbilityImplBinding> {
+        self.bindings.get(key)
+    }
+
+    pub(crate) fn remove_matching(
+        &mut self,
+        mut predicate: impl FnMut(&AbilityControlPlaneKey) -> bool,
+    ) -> bool {
         let before = self.bindings.len();
-        self.bindings.retain(|key, _| key.ability() != ability);
+        self.bindings.retain(|key, _| !predicate(key));
         self.bindings.len() != before
-    }
-
-    pub fn get(&self, ability: &str) -> Option<&AbilityImplBinding> {
-        self.get_version(ability, super::DEFAULT_ABILITY_DESCRIPTOR_VERSION)
-    }
-
-    pub fn get_for_mode(&self, ability: &str, call_mode: CallMode) -> Option<&AbilityImplBinding> {
-        self.get_version_for_mode(
-            ability,
-            super::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            call_mode,
-        )
-    }
-
-    pub fn get_version(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-    ) -> Option<&AbilityImplBinding> {
-        unique_record_for(&self.bindings, ability, descriptor_version)
-    }
-
-    pub fn get_version_for_mode(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-        call_mode: CallMode,
-    ) -> Option<&AbilityImplBinding> {
-        let key = AbilityDescriptorKey::new(ability, descriptor_version, call_mode).ok()?;
-        self.bindings.get(&key)
-    }
-
-    pub fn contains(&self, ability: &str) -> bool {
-        self.bindings.keys().any(|key| key.ability() == ability)
     }
 }
 

@@ -670,20 +670,19 @@ impl AbilityDescriptor {
     }
 
     pub fn schema_hash_bytes(&self) -> [u8; 32] {
-        let empty = Value::Object(Default::default());
         let governed = self.governed_schema_summary();
-        crate::runtime::ability::descriptor::schema_hash_for_schema_summary(&governed, &empty).0
+        crate::runtime::ability::descriptor::schema_hash_for_governed_summary(&governed).0
     }
 
     fn governed_schema_summary(&self) -> Value {
-        serde_json::json!({
-            "input": self.schema_summary.input,
-            "output": self.schema_summary.output_receipt_body,
-            "visibility": self.visibility,
-            "scope_subjects": self.scope_subjects,
-            "scope_agents": self.scope_agents,
-            "hints": self.hints,
-        })
+        crate::runtime::ability::descriptor::governed_schema_summary(
+            &self.schema_summary.input,
+            &self.schema_summary.output_receipt_body,
+            serde_json::to_value(self.visibility).expect("visibility serializes"),
+            serde_json::to_value(&self.scope_subjects).expect("scope rule serializes"),
+            serde_json::to_value(&self.scope_agents).expect("scope rule serializes"),
+            serde_json::to_value(&self.hints).expect("ability hints serialize"),
+        )
     }
 
     pub fn schema_hash_prefixed(&self) -> String {

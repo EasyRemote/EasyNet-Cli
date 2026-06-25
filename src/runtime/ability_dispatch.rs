@@ -336,23 +336,6 @@ struct ControlPlaneRegistrationRequest<'a> {
     implementation: ControlPlaneImplementation,
 }
 
-impl<'a> ControlPlaneRegistrationRequest<'a> {
-    fn native(
-        ability: &'a str,
-        owner: &'a OwnerKind,
-        manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
-        call_mode: DescriptorCallMode,
-    ) -> Self {
-        Self {
-            ability,
-            owner,
-            manifest,
-            call_mode,
-            implementation: ControlPlaneImplementation::native_daemon(),
-        }
-    }
-}
-
 struct ResolvedControlPlaneRegistration<'a> {
     ability: &'a str,
     authority_scope: AuthorityScope,
@@ -1544,6 +1527,120 @@ impl DynamicRegistrationHandler {
     }
 }
 
+enum StaticRegistrationHandler {
+    Rpc(LocalRpcHandler),
+    Stream(LocalStreamHandler),
+    Bidi(LocalBidiHandler),
+    RpcWithEnvelope(LocalRpcHandlerWithEnvelope),
+    StreamWithEnvelope(LocalStreamHandlerWithEnvelope),
+    BidiWithEnvelope(LocalBidiHandlerWithEnvelope),
+}
+
+impl StaticRegistrationHandler {
+    fn call_mode(&self) -> DescriptorCallMode {
+        match self {
+            Self::Rpc(_) | Self::RpcWithEnvelope(_) => DescriptorCallMode::Rpc,
+            Self::Stream(_) | Self::StreamWithEnvelope(_) => DescriptorCallMode::Stream,
+            Self::Bidi(_) | Self::BidiWithEnvelope(_) => DescriptorCallMode::Bidi,
+        }
+    }
+
+    fn slot(&self) -> &'static str {
+        match self {
+            Self::Rpc(_) => "rpc",
+            Self::Stream(_) => "stream",
+            Self::Bidi(_) => "bidi",
+            Self::RpcWithEnvelope(_) => "rpc_with_env",
+            Self::StreamWithEnvelope(_) => "stream_with_env",
+            Self::BidiWithEnvelope(_) => "bidi_with_env",
+        }
+    }
+
+    fn install(self, ability: &str, catalog: &mut AxonAbilityCatalog) {
+        match self {
+            Self::Rpc(handler) => {
+                catalog.rpc.insert(ability.to_string(), handler);
+            }
+            Self::Stream(handler) => {
+                catalog.stream.insert(ability.to_string(), handler);
+            }
+            Self::Bidi(handler) => {
+                catalog.bidi.insert(ability.to_string(), handler);
+            }
+            Self::RpcWithEnvelope(handler) => {
+                catalog.rpc_with_env.insert(ability.to_string(), handler);
+            }
+            Self::StreamWithEnvelope(handler) => {
+                catalog.stream_with_env.insert(ability.to_string(), handler);
+            }
+            Self::BidiWithEnvelope(handler) => {
+                catalog.bidi_with_env.insert(ability.to_string(), handler);
+            }
+        }
+    }
+}
+
+struct StaticRegistration {
+    ability: String,
+    owner: OwnerKind,
+    manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+    implementation: ControlPlaneImplementation,
+    handler: StaticRegistrationHandler,
+}
+
+impl StaticRegistration {
+    fn new(
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: StaticRegistrationHandler,
+    ) -> Self {
+        Self {
+            ability: ability.into(),
+            owner,
+            manifest: None,
+            implementation: ControlPlaneImplementation::native_daemon(),
+            handler,
+        }
+    }
+
+    fn with_manifest(mut self, manifest: crate::core::ability_spec::AbilityManifest) -> Self {
+        self.manifest = Some(Arc::new(manifest));
+        self
+    }
+
+    fn with_implementation(mut self, implementation: ControlPlaneImplementation) -> Self {
+        self.implementation = implementation;
+        self
+    }
+
+    fn commit(self, catalog: &mut AxonAbilityCatalog) -> anyhow::Result<()> {
+        let Self {
+            ability,
+            owner,
+            manifest,
+            implementation,
+            handler,
+        } = self;
+        let call_mode = handler.call_mode();
+        let target_slot = handler.slot();
+        catalog.assert_static_handler_slot_available(&ability, target_slot);
+        catalog.register_control_plane_with_implementation(
+            &ability,
+            &owner,
+            manifest.as_ref().map(Arc::as_ref),
+            call_mode,
+            &implementation,
+        )?;
+        catalog.owner.insert(ability.clone(), owner);
+        if let Some(manifest) = manifest {
+            catalog.manifests.insert(ability.clone(), manifest);
+        }
+        handler.install(&ability, catalog);
+        catalog.sync_static_runtime_ability_or_panic(&ability);
+        Ok(())
+    }
+}
+
 struct DynamicRegistration {
     ability: String,
     owner: OwnerKind,
@@ -1875,7 +1972,8 @@ impl<'a> DynamicRegistrationTxn<'a> {
                     self.control_plane_key.ability(),
                     self.control_plane_key.call_mode(),
                     records,
-                );
+                )
+                .expect("control-plane rollback snapshot must preserve table keys");
         }
         self.phase = DynamicRegistrationPhase::RolledBack;
     }
@@ -2042,29 +2140,14 @@ impl AxonAbilityCatalog {
         }
     }
 
-    fn try_register_native_control_plane(
-        &self,
-        ability: &str,
-        owner: &OwnerKind,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
-        call_mode: DescriptorCallMode,
-    ) -> anyhow::Result<AbilityControlPlaneRecord> {
-        self.register_control_plane(ControlPlaneRegistrationRequest::native(
-            ability, owner, manifest, call_mode,
-        ))
+    fn register_static(&mut self, registration: StaticRegistration) -> anyhow::Result<()> {
+        registration.commit(self)
     }
 
-    fn register_native_control_plane(
-        &self,
-        ability: &str,
-        owner: &OwnerKind,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
-        call_mode: DescriptorCallMode,
-    ) {
-        self.try_register_native_control_plane(ability, owner, manifest, call_mode)
-            .unwrap_or_else(|error| {
-                panic!("native control-plane registration failed for {ability:?}: {error}")
-            });
+    fn register_static_or_panic(&mut self, registration: StaticRegistration) {
+        let ability = registration.ability.clone();
+        self.register_static(registration)
+            .unwrap_or_else(|error| panic!("static registration failed for {ability:?}: {error}"));
     }
 
     fn register_dynamic_control_plane_result(
@@ -2128,6 +2211,25 @@ impl AxonAbilityCatalog {
             .read()
             .expect("control_plane RwLock poisoned")
             .get_for_mode(ability, call_mode)
+    }
+
+    /// Resolve the registered descriptor version for `ability` in
+    /// `call_mode`, as the wire-facing dispatch paths must stamp it onto
+    /// the descriptor-bound envelope and the receipt proof facts.
+    ///
+    /// Returns `None` when the ability has no control-plane record for the
+    /// mode. There is deliberately no default-version fallback here: a
+    /// dispatch that reaches the wire with no registered descriptor is a
+    /// registration gap, and stamping a fabricated `1.0.0` would forge a
+    /// proof fact. Callers decide how to surface the absence.
+    pub fn registered_descriptor_version_for_mode(
+        &self,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> Result<Option<String>, AbilityControlPlaneLookupError> {
+        Ok(self
+            .control_plane_record_for_mode(ability, call_mode)?
+            .map(|record| record.descriptor().version().as_str().to_string()))
     }
 
     pub fn control_plane_record_for_authority_mode(
@@ -2676,17 +2778,11 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         handler: LocalRpcHandler,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "rpc");
-        self.owner.insert(name.clone(), owner);
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            None,
-            DescriptorCallMode::Rpc,
-        );
-        self.rpc.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
+        self.register_static_or_panic(StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::Rpc(handler),
+        ));
     }
 
     /// Register an RPC handler with explicit owner AND a manifest
@@ -2708,19 +2804,10 @@ impl AxonAbilityCatalog {
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalRpcHandler,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "rpc");
-        self.owner.insert(name.clone(), owner);
-        let manifest = Arc::new(manifest);
-        self.manifests.insert(name.clone(), Arc::clone(&manifest));
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            Some(manifest.as_ref()),
-            DescriptorCallMode::Rpc,
+        self.register_static_or_panic(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Rpc(handler))
+                .with_manifest(manifest),
         );
-        self.rpc.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Companion to [`register_rpc_with_spec`] for stream
@@ -2735,19 +2822,10 @@ impl AxonAbilityCatalog {
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalStreamHandler,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "stream");
-        self.owner.insert(name.clone(), owner);
-        let manifest = Arc::new(manifest);
-        self.manifests.insert(name.clone(), Arc::clone(&manifest));
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            Some(manifest.as_ref()),
-            DescriptorCallMode::Stream,
+        self.register_static_or_panic(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Stream(handler))
+                .with_manifest(manifest),
         );
-        self.stream.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     pub fn register_stream_with_spec_and_impl(
@@ -2758,21 +2836,11 @@ impl AxonAbilityCatalog {
         handler: LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "stream");
-        self.owner.insert(name.clone(), owner);
-        let manifest = Arc::new(manifest);
-        self.manifests.insert(name.clone(), Arc::clone(&manifest));
-        self.register_control_plane_with_implementation(
-            &name,
-            &self.owner[&name],
-            Some(manifest.as_ref()),
-            DescriptorCallMode::Stream,
-            &implementation,
-        )?;
-        self.stream.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
-        Ok(())
+        self.register_static(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Stream(handler))
+                .with_manifest(manifest)
+                .with_implementation(implementation),
+        )
     }
 
     /// Lookup the registered manifest, if any. Returns `None`
@@ -2836,17 +2904,11 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         handler: LocalStreamHandler,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "stream");
-        self.owner.insert(name.clone(), owner);
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            None,
-            DescriptorCallMode::Stream,
-        );
-        self.stream.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
+        self.register_static_or_panic(StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::Stream(handler),
+        ));
     }
 
     /// Register a stream handler under `ability`. Same single-
@@ -2864,17 +2926,11 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         handler: LocalBidiHandler,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "bidi");
-        self.owner.insert(name.clone(), owner);
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            None,
-            DescriptorCallMode::Bidi,
-        );
-        self.bidi.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
+        self.register_static_or_panic(StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::Bidi(handler),
+        ));
     }
 
     /// Register a bidi handler under `ability`. Same single-writer
@@ -2904,17 +2960,11 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         handler: LocalRpcHandlerWithEnvelope,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "rpc_with_env");
-        self.owner.insert(name.clone(), owner);
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            None,
-            DescriptorCallMode::Rpc,
-        );
-        self.rpc_with_env.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
+        self.register_static_or_panic(StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::RpcWithEnvelope(handler),
+        ));
     }
 
     /// Register an envelope-aware RPC handler with explicit owner and manifest.
@@ -2931,19 +2981,14 @@ impl AxonAbilityCatalog {
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "rpc_with_env");
-        self.owner.insert(name.clone(), owner);
-        let manifest = Arc::new(manifest);
-        self.manifests.insert(name.clone(), Arc::clone(&manifest));
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            Some(manifest.as_ref()),
-            DescriptorCallMode::Rpc,
+        self.register_static_or_panic(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::RpcWithEnvelope(handler),
+            )
+            .with_manifest(manifest),
         );
-        self.rpc_with_env.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Register an envelope-aware RPC handler. Used by abilities
@@ -2975,17 +3020,11 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         handler: LocalStreamHandlerWithEnvelope,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "stream_with_env");
-        self.owner.insert(name.clone(), owner);
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            None,
-            DescriptorCallMode::Stream,
-        );
-        self.stream_with_env.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
+        self.register_static_or_panic(StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::StreamWithEnvelope(handler),
+        ));
     }
 
     /// Register an envelope-aware stream handler with explicit owner and
@@ -2997,19 +3036,14 @@ impl AxonAbilityCatalog {
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "stream_with_env");
-        self.owner.insert(name.clone(), owner);
-        let manifest = Arc::new(manifest);
-        self.manifests.insert(name.clone(), Arc::clone(&manifest));
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            Some(manifest.as_ref()),
-            DescriptorCallMode::Stream,
+        self.register_static_or_panic(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::StreamWithEnvelope(handler),
+            )
+            .with_manifest(manifest),
         );
-        self.stream_with_env.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Envelope-aware stream variant. See `register_rpc_with_envelope`
@@ -3031,17 +3065,11 @@ impl AxonAbilityCatalog {
         owner: OwnerKind,
         handler: LocalBidiHandlerWithEnvelope,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "bidi_with_env");
-        self.owner.insert(name.clone(), owner);
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            None,
-            DescriptorCallMode::Bidi,
-        );
-        self.bidi_with_env.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
+        self.register_static_or_panic(StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::BidiWithEnvelope(handler),
+        ));
     }
 
     /// Register an envelope-aware bidi handler with explicit owner and
@@ -3053,19 +3081,14 @@ impl AxonAbilityCatalog {
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
     ) {
-        let name = ability.into();
-        self.assert_static_handler_slot_available(&name, "bidi_with_env");
-        self.owner.insert(name.clone(), owner);
-        let manifest = Arc::new(manifest);
-        self.manifests.insert(name.clone(), Arc::clone(&manifest));
-        self.register_native_control_plane(
-            &name,
-            &self.owner[&name],
-            Some(manifest.as_ref()),
-            DescriptorCallMode::Bidi,
+        self.register_static_or_panic(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::BidiWithEnvelope(handler),
+            )
+            .with_manifest(manifest),
         );
-        self.bidi_with_env.insert(name.clone(), handler);
-        self.sync_static_runtime_ability_or_panic(&name);
     }
 
     /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
