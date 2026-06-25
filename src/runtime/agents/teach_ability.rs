@@ -847,8 +847,7 @@ fn acquire_handler_with_hot_registrar(
     args: Value,
     hot_registrar: Option<&SharedHotRegistrarCell>,
 ) -> anyhow::Result<Value> {
-    AcquireWorkflow::new(env, args, hot_registrar, &SystemTeachClock)
-        .run()
+    AcquireWorkflow::new(env, args, hot_registrar, &SystemTeachClock).run()
 }
 
 struct AcquireWorkflow<'a> {

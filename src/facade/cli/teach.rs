@@ -45,6 +45,7 @@ struct DescriptorImportResponse {
     execution_mode: String,
     transfer_kind: String,
     invokable: bool,
+    descriptor_transaction_status: String,
 }
 
 /// Typed projection of the `meta.forget` daemon response.
@@ -52,6 +53,7 @@ struct DescriptorImportResponse {
 struct DescriptorRemovalResponse {
     removed_descriptor: String,
     source_descriptor_ura: String,
+    descriptor_transaction_status: String,
 }
 
 #[derive(Debug, Args)]
@@ -148,6 +150,19 @@ fn confirm_or_cancel(gate: ConfirmationGate) -> anyhow::Result<bool> {
     }
     output::info("Cancelled.");
     Ok(false)
+}
+
+fn descriptor_transaction_runtime_degraded(status: &str) -> bool {
+    status == "committed_runtime_degraded"
+}
+
+fn warn_if_descriptor_transaction_degraded(status: &str, operation: &str) {
+    if descriptor_transaction_runtime_degraded(status) {
+        output::warn(&format!(
+            "descriptor {operation} committed on disk but runtime sync degraded; refresh the \
+             agent runtime before invoking the changed descriptor"
+        ));
+    }
 }
 
 /// Compute half of `teach` (e2e surface).
@@ -264,6 +279,11 @@ pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
     output::detail("execution_mode", &imported.execution_mode);
     output::detail("transfer_kind", &imported.transfer_kind);
     output::detail("invokable", &imported.invokable.to_string());
+    output::detail(
+        "descriptor_transaction_status",
+        &imported.descriptor_transaction_status,
+    );
+    warn_if_descriptor_transaction_degraded(&imported.descriptor_transaction_status, "import");
     Ok(())
 }
 
@@ -278,6 +298,11 @@ pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
         "removed imported descriptor {} (source descriptor {})",
         removed.removed_descriptor, removed.source_descriptor_ura,
     ));
+    output::detail(
+        "descriptor_transaction_status",
+        &removed.descriptor_transaction_status,
+    );
+    warn_if_descriptor_transaction_degraded(&removed.descriptor_transaction_status, "removal");
     Ok(())
 }
 
@@ -310,5 +335,28 @@ mod tests {
         };
 
         assert!(learn_confirmation(&args).confirm().unwrap());
+    }
+
+    #[test]
+    fn acquire_response_requires_descriptor_transaction_status() {
+        let missing_status = serde_json::json!({
+            "new_descriptor_ura": "easynet:///r/default/agent/user.student/ability/quote",
+            "execution_mode": "sandbox_first",
+            "transfer_kind": "discovery_only_manifest",
+            "invokable": false,
+        });
+
+        assert!(
+            serde_json::from_value::<DescriptorImportResponse>(missing_status).is_err(),
+            "learn must not silently ignore missing descriptor transaction status"
+        );
+    }
+
+    #[test]
+    fn degraded_descriptor_transaction_status_is_warnable() {
+        assert!(descriptor_transaction_runtime_degraded(
+            "committed_runtime_degraded"
+        ));
+        assert!(!descriptor_transaction_runtime_degraded("committed"));
     }
 }

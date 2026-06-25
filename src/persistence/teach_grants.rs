@@ -48,12 +48,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
+use anyhow::Context;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use super::file_lock::ExclusiveFileLock;
+use crate::ura::AbilitySelector;
 
 pub(crate) const FILE_NAME: &str = "teach-grants.json";
 const STORE_SCHEMA_VERSION: &str = "4";
@@ -185,8 +187,12 @@ pub struct TeachGrantAdmissionProofDraft {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "authority_kind", rename_all = "snake_case")]
 pub enum TeachGrantAuthorityProof {
-    DirectOwnerCaller { owner_ura: String },
-    HostDeviceAuthority { host_device_ura: String },
+    DirectOwnerCaller {
+        owner_ura: String,
+    },
+    HostDeviceAuthority {
+        host_device_ura: String,
+    },
     HostedAgentDelegation {
         agent_ura: String,
         host_device_ura: String,
@@ -375,10 +381,18 @@ impl TeachGrantAdmissionProof {
         require_non_empty("teach grant proof callee_ura", &self.callee_ura)?;
         require_non_empty("teach grant proof subject_ura", &self.subject_ura)?;
         require_non_empty("teach grant proof envelope_ability", &self.envelope_ability)?;
-        if self.envelope_ability != TEACH_GRANT_ENVELOPE_ABILITY {
+        let selected_envelope_ability = canonical_envelope_ability(&self.envelope_ability)
+            .with_context(|| {
+                format!(
+                    "invalid teach grant proof envelope ability {:?}",
+                    self.envelope_ability
+                )
+            })?;
+        if selected_envelope_ability != TEACH_GRANT_ENVELOPE_ABILITY {
             anyhow::bail!(
-                "teach grant proof envelope ability {:?} must be {:?}",
+                "teach grant proof envelope ability {:?} resolved to {:?}; expected {:?}",
                 self.envelope_ability,
+                selected_envelope_ability,
                 TEACH_GRANT_ENVELOPE_ABILITY
             );
         }
@@ -471,7 +485,8 @@ impl TeachGrantAuthorityProof {
                 }
             }
             Self::HostDeviceAuthority { host_device_ura } => {
-                if host_device_ura != &grant.granted_by_ura || proof.caller_ura != *host_device_ura {
+                if host_device_ura != &grant.granted_by_ura || proof.caller_ura != *host_device_ura
+                {
                     anyhow::bail!(
                         "teach grant host-device authority does not match caller/granted_by"
                     );
@@ -482,10 +497,13 @@ impl TeachGrantAuthorityProof {
                 host_device_ura,
                 ability,
             } => {
+                let delegated_ability = canonical_envelope_ability(ability).with_context(|| {
+                    format!("invalid teach grant hosted-agent authority ability {ability:?}")
+                })?;
                 if agent_ura != &grant.owner_ura
                     || host_device_ura != &grant.granted_by_ura
                     || proof.callee_ura != *host_device_ura
-                    || ability != TEACH_GRANT_ENVELOPE_ABILITY
+                    || delegated_ability != TEACH_GRANT_ENVELOPE_ABILITY
                 {
                     anyhow::bail!(
                         "teach grant hosted-agent authority does not match owner/host/ability"
@@ -502,6 +520,22 @@ fn require_non_empty(field: &'static str, value: &str) -> anyhow::Result<()> {
         anyhow::bail!("{field} must not be empty");
     }
     Ok(())
+}
+
+fn canonical_envelope_ability(raw: &str) -> anyhow::Result<String> {
+    let trimmed = raw.trim();
+    require_non_empty("teach grant proof envelope ability", trimmed)?;
+    if trimmed == TEACH_GRANT_ENVELOPE_ABILITY {
+        return Ok(trimmed.to_string());
+    }
+    let selector = AbilitySelector::parse(trimmed)?;
+    Ok(strip_descriptor_version(selector.local_registry_ability()).to_string())
+}
+
+fn strip_descriptor_version(local_registry_ability: &str) -> &str {
+    local_registry_ability
+        .split_once('@')
+        .map_or(local_registry_ability, |(ability, _version)| ability)
 }
 
 pub struct AcquireStagedGrant<T> {
@@ -1332,6 +1366,29 @@ mod tests {
     }
 
     #[test]
+    fn admission_proof_accepts_versioned_teach_ability_ura() {
+        let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
+        grant.admission_proof.envelope_ability =
+            "easynet:///r/cli/ability/device.local.meta.teach@1.0.0".to_string();
+
+        grant
+            .validate_stored()
+            .expect("versioned selected route URA still resolves to meta.teach");
+    }
+
+    #[test]
+    fn admission_proof_rejects_versioned_non_teach_ability_ura() {
+        let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
+        grant.admission_proof.envelope_ability =
+            "easynet:///r/cli/ability/device.local.meta.acquire@1.0.0".to_string();
+
+        let err = grant
+            .validate_stored()
+            .expect_err("non-teach selected route URA must not admit a teach grant");
+        assert!(err.to_string().contains("expected \"meta.teach\""), "{err}");
+    }
+
+    #[test]
     fn grant_is_scoped_to_one_learner() {
         let mut file = TeachGrantsFile::default();
         file.grants.push(TeachGrant::from_draft(TeachGrantDraft {
@@ -1353,7 +1410,7 @@ mod tests {
                 invocation_nonce_hex: hex::encode([0xA5; 16]),
                 causal_context: serde_json::json!({"kind": "none"}),
                 authority: TeachGrantAuthorityProof::direct_owner(
-                    "easynet:///r/acme/agent/testbot"
+                    "easynet:///r/acme/agent/testbot",
                 ),
                 granted_ability: "testbot.weather-probe".to_string(),
                 granted_ability_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
