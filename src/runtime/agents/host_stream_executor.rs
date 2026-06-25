@@ -267,16 +267,8 @@ impl RollingHash {
     }
 
     fn finish(&self) -> String {
-        format!("sha256:{}", hex_lower(&self.prev))
+        format!("sha256:{}", hex::encode(self.prev))
     }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 /// A structured stream failure, projected onto the in-band error frame

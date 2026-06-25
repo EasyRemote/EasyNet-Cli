@@ -19,6 +19,8 @@
 
 use serde_json::Value;
 
+use crate::runtime::dispatch::ToolCall;
+
 /// Reserved payload key used by EasyNet MCP projection to attach
 /// daemon invocation identity to an otherwise ordinary tool result.
 ///
@@ -77,6 +79,48 @@ pub(crate) fn parse_invocation_trace_metadata(text: &str) -> Option<InvocationTr
 /// original string when the result is plain text.
 pub(crate) fn text_to_json_value(text: &str) -> Value {
     serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.to_string()))
+}
+
+/// Apply EasyNet trace metadata to the matching MCP tool call.
+///
+/// The merge is intentionally gated on an existing EasyNet MCP marker
+/// (`mcp_tool_name.is_some()`). Third-party tool output can contain a
+/// spoofed `x-easynet-invocation` object, but it cannot cause a random
+/// non-EasyNet tool call to gain invocation URAs.
+pub(crate) fn apply_tool_result_meta(
+    calls: &mut [ToolCall],
+    tool_use_id: Option<&str>,
+    meta: InvocationTraceMetadata,
+) {
+    let target = if let Some(id) = tool_use_id {
+        calls
+            .iter_mut()
+            .rev()
+            .find(|call| call.tool_use_id.as_deref() == Some(id) && call.mcp_tool_name.is_some())
+    } else {
+        calls.iter_mut().rev().find(|call| {
+            call.invocation_ura.is_none()
+                && call.mcp_tool_name.as_deref().is_some_and(|name| {
+                    meta.mcp_tool_name.as_deref() == Some(name)
+                        || meta.ability.as_deref() == Some(name)
+                })
+        })
+    };
+    let Some(call) = target else {
+        return;
+    };
+    if let Some(ability) = meta.ability {
+        call.ability = ability;
+    }
+    if meta.mcp_tool_name.is_some() {
+        call.mcp_tool_name = meta.mcp_tool_name;
+    }
+    call.request_id = meta.request_id.or(call.request_id.take());
+    call.ability_ura = meta.ability_ura.or(call.ability_ura.take());
+    call.invocation_ura = meta.invocation_ura.or(call.invocation_ura.take());
+    call.caller_ura = meta.caller_ura.or(call.caller_ura.take());
+    call.callee_ura = meta.callee_ura.or(call.callee_ura.take());
+    call.subject_ura = meta.subject_ura.or(call.subject_ura.take());
 }
 
 fn parse_tool_result_json(text: &str) -> Option<Value> {

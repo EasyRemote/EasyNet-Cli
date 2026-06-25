@@ -82,6 +82,45 @@ use crate::services::pending_dispatch::DispatchResult;
 use crate::services::session_failure::SessionFailure;
 use tokio_stream::wrappers::ReceiverStream;
 
+fn rpc_dispatch_outcome_response(
+    ability: &str,
+    failure_prefix: &str,
+    outcome: crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome,
+) -> (Result<Response<InvokeResponse>, Status>, bool) {
+    let crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome {
+        invocation_id,
+        payload_bytes,
+        error,
+        admission_receipt,
+        terminal_receipt,
+        ..
+    } = outcome;
+    let axon_started = invocation_id.is_some();
+    let response = match error {
+        None => Ok(Response::new(InvokeResponse {
+            header: invocation_id.map(|request_id| ResponseHeader {
+                request_id,
+                status: "completed".to_string(),
+                ..ResponseHeader::default()
+            }),
+            result: payload_bytes,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+            admission_receipt: admission_receipt
+                .as_ref()
+                .map(easynet_axon::invocation::wire::receipt_to_wire),
+            terminal_receipt: terminal_receipt
+                .as_ref()
+                .map(easynet_axon::invocation::wire::receipt_to_wire),
+            ..InvokeResponse::default()
+        })),
+        Some(err) => Err(Status::failed_precondition(format!(
+            "local-rpc axon dispatch: {failure_prefix} `{ability}` failed: {err}"
+        ))),
+    };
+    (response, axon_started)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum UnarySelfTargetSubject {
     Explicit(String),
@@ -412,38 +451,7 @@ impl UnaryDispatcher {
         };
         let outcome =
             crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_admitted(runtime, wire).await;
-        let crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome {
-            invocation_id,
-            payload_bytes,
-            error,
-            admission_receipt,
-            terminal_receipt,
-            ..
-        } = outcome;
-        let axon_started = invocation_id.is_some();
-        let response = match error {
-            None => Ok(Response::new(InvokeResponse {
-                header: invocation_id.map(|request_id| ResponseHeader {
-                    request_id,
-                    status: "completed".to_string(),
-                    ..ResponseHeader::default()
-                }),
-                result: payload_bytes,
-                result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
-                admission_receipt: admission_receipt
-                    .as_ref()
-                    .map(easynet_axon::invocation::wire::receipt_to_wire),
-                terminal_receipt: terminal_receipt
-                    .as_ref()
-                    .map(easynet_axon::invocation::wire::receipt_to_wire),
-                ..InvokeResponse::default()
-            })),
-            Some(err) => Err(Status::failed_precondition(format!(
-                "local-rpc axon dispatch: ability `{ability}` failed: {err}"
-            ))),
-        };
-        (response, axon_started)
+        rpc_dispatch_outcome_response(ability, "ability", outcome)
     }
 
     /// Dispatch a node-internal `runtime.*` admin ability directly on this
@@ -491,36 +499,7 @@ impl UnaryDispatcher {
         let outcome =
             crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_system(runtime, wire)
                 .await;
-        let crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome {
-            invocation_id,
-            payload_bytes,
-            error,
-            admission_receipt,
-            terminal_receipt,
-            ..
-        } = outcome;
-        match error {
-            None => Ok(Response::new(InvokeResponse {
-                header: invocation_id.map(|request_id| ResponseHeader {
-                    request_id,
-                    status: "completed".to_string(),
-                    ..ResponseHeader::default()
-                }),
-                result: payload_bytes,
-                result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
-                admission_receipt: admission_receipt
-                    .as_ref()
-                    .map(easynet_axon::invocation::wire::receipt_to_wire),
-                terminal_receipt: terminal_receipt
-                    .as_ref()
-                    .map(easynet_axon::invocation::wire::receipt_to_wire),
-                ..InvokeResponse::default()
-            })),
-            Some(err) => Err(Status::failed_precondition(format!(
-                "local-rpc axon dispatch: runtime admin ability `{ability}` failed: {err}"
-            ))),
-        }
+        rpc_dispatch_outcome_response(ability, "runtime admin ability", outcome).0
     }
 
     pub(crate) fn dispatch_register_device_pubkey(

@@ -450,9 +450,14 @@ fn build_registry_with_services_result_inner(
     let device_registrar_cell: Arc<
         crate::runtime::agents::device_ops_ability::SharedDeviceRegistrarCell,
     > = Arc::new(std::sync::OnceLock::new());
-    let _ = device_registrar_cell.set(
-        crate::runtime::agents::device_ability_registrar::DeviceAbilityRegistrar::new_pending(),
-    );
+    if device_registrar_cell
+        .set(
+            crate::runtime::agents::device_ability_registrar::DeviceAbilityRegistrar::new_pending(),
+        )
+        .is_err()
+    {
+        panic!("device registrar cell must be written exactly once during registry build");
+    }
     device_ops_ability::register(&mut reg, Arc::clone(&device_registrar_cell));
     // browser.* — RFC-012 §RemoteWebSurface; v0 mock
     // handlers per RFC-013 plan. capture_viewport is a streaming
