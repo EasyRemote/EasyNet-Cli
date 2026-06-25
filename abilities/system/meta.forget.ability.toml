@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "meta.forget"
-description = "Remove a learned ability copy from an agent workspace. Native authored abilities are not removed through this surface."
+description = "Remove an imported declaration-only descriptor from an agent workspace. Native authored abilities are not removed through this surface."
 
 [input_schema]
 type = "object"
@@ -9,8 +9,8 @@ additionalProperties = false
 
 [input_schema.properties.ability]
 type = "string"
-description = "Public learned ability name to remove from the agent workspace."
+description = "Public imported descriptor name to remove from the agent workspace."
 
 [input_schema.properties.agent]
 type = "string"
-description = "Local agent name that previously learned the ability."
+description = "Local agent name that previously imported the descriptor."

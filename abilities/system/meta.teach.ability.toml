@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "meta.teach"
-description = "Grant one local agent permission to acquire a specific advertised ability. The grant is explicit, same-device, and does not execute transferred code."
+description = "Grant one local agent permission to import a specific advertised ability descriptor. The grant is explicit, same-device, and does not install executable code."
 
 [input_schema]
 type = "object"
@@ -9,8 +9,8 @@ additionalProperties = false
 
 [input_schema.properties.ability]
 type = "string"
-description = "Owner-local ability name to teach, for example mentor.quote."
+description = "Owner-local ability descriptor name to grant, for example mentor.quote."
 
 [input_schema.properties.learner_ura]
 type = "string"
-description = "Agent URA allowed to acquire the ability."
+description = "Agent URA allowed to import the descriptor."
