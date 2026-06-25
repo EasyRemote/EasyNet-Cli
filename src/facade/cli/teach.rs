@@ -152,16 +152,16 @@ fn confirm_or_cancel(gate: ConfirmationGate) -> anyhow::Result<bool> {
     Ok(false)
 }
 
-fn descriptor_transaction_runtime_degraded(status: &str) -> bool {
-    status == "committed_runtime_degraded"
-}
-
-fn warn_if_descriptor_transaction_degraded(status: &str, operation: &str) {
-    if descriptor_transaction_runtime_degraded(status) {
-        output::warn(&format!(
-            "descriptor {operation} committed on disk but runtime sync degraded; refresh the \
-             agent runtime before invoking the changed descriptor"
-        ));
+fn ensure_descriptor_transaction_committed(status: &str, operation: &str) -> anyhow::Result<()> {
+    match status {
+        "committed" => Ok(()),
+        "committed_runtime_degraded" => anyhow::bail!(
+            "descriptor {operation} reached durable storage but runtime sync degraded; retry the \
+             command after the agent runtime is wired so the control-plane projection converges"
+        ),
+        other => anyhow::bail!(
+            "descriptor {operation} returned unsupported transaction status `{other}`"
+        ),
     }
 }
 
@@ -272,6 +272,7 @@ pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
     let (resp, _meta) = execute_learn(&args)?;
     let imported: DescriptorImportResponse =
         serde_json::from_value(resp).context("parse meta.acquire response")?;
+    ensure_descriptor_transaction_committed(&imported.descriptor_transaction_status, "import")?;
     output::success(&format!(
         "descriptor imported · new descriptor ura: {}",
         imported.new_descriptor_ura
@@ -283,7 +284,6 @@ pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
         "descriptor_transaction_status",
         &imported.descriptor_transaction_status,
     );
-    warn_if_descriptor_transaction_degraded(&imported.descriptor_transaction_status, "import");
     Ok(())
 }
 
@@ -294,6 +294,7 @@ pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
     let resp = execute_forget(&args)?;
     let removed: DescriptorRemovalResponse =
         serde_json::from_value(resp).context("parse meta.forget response")?;
+    ensure_descriptor_transaction_committed(&removed.descriptor_transaction_status, "removal")?;
     output::success(&format!(
         "removed imported descriptor {} (source descriptor {})",
         removed.removed_descriptor, removed.source_descriptor_ura,
@@ -302,7 +303,6 @@ pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
         "descriptor_transaction_status",
         &removed.descriptor_transaction_status,
     );
-    warn_if_descriptor_transaction_degraded(&removed.descriptor_transaction_status, "removal");
     Ok(())
 }
 
@@ -353,10 +353,23 @@ mod tests {
     }
 
     #[test]
-    fn degraded_descriptor_transaction_status_is_warnable() {
-        assert!(descriptor_transaction_runtime_degraded(
-            "committed_runtime_degraded"
-        ));
-        assert!(!descriptor_transaction_runtime_degraded("committed"));
+    fn degraded_descriptor_transaction_status_fails_cli() {
+        assert!(
+            ensure_descriptor_transaction_committed("committed", "import").is_ok(),
+            "committed is the only CLI success status"
+        );
+        let err = ensure_descriptor_transaction_committed("committed_runtime_degraded", "import")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("runtime sync degraded"),
+            "degraded status must force an actionable CLI failure: {err}"
+        );
+        assert!(
+            ensure_descriptor_transaction_committed("unknown", "import")
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported transaction status")
+        );
     }
 }

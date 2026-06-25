@@ -1111,6 +1111,157 @@ impl RuntimeSyncedAcquire {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ForgetRequest {
+    ability: String,
+    agent: String,
+}
+
+impl ForgetRequest {
+    fn from_args(args: &Value) -> anyhow::Result<Self> {
+        Ok(Self {
+            ability: required_str(args, "ability", FORGET)?.to_string(),
+            agent: required_str(args, "agent", FORGET)?.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AuthorizedForget {
+    request: ForgetRequest,
+    agent_entry_for_runtime: Option<crate::registry::agents::AgentEntry>,
+    mutated_by: String,
+    manifest: Option<PathBuf>,
+}
+
+impl AuthorizedForget {
+    fn from_request(env: EnvelopeContext, request: ForgetRequest) -> anyhow::Result<Self> {
+        let agents = crate::registry::agents::load_agents()?;
+        let agent_entry_for_runtime = agents.agents.get(&request.agent).cloned();
+        let local = crate::persistence::local_agents::load()?;
+        let agent_ura = hosted_agent_by_name(&local, &request.agent, FORGET)?
+            .agent_ura
+            .clone();
+        let expected_subject = crate::ura::owner_ability_ura(&agent_ura, &request.ability)
+            .ok_or_else(|| {
+                anyhow::anyhow!("{FORGET} could not mint imported descriptor subject")
+            })?;
+        if env.subject() != expected_subject {
+            anyhow::bail!(
+                "{FORGET} subject {:?} must be the imported descriptor {:?}",
+                env.subject(),
+                expected_subject
+            );
+        }
+        let mutated_by =
+            require_hosted_agent_authority(&env, &local, &request.agent, &agent_ura, FORGET)?;
+        let manifest = agents
+            .agents
+            .get(&request.agent)
+            .and_then(|e| e.root_path.as_ref())
+            .map(|root| {
+                root.join("abilities")
+                    .join(format!("{}.ability.toml", request.ability))
+            });
+        Ok(Self {
+            request,
+            agent_entry_for_runtime,
+            mutated_by,
+            manifest,
+        })
+    }
+
+    fn stage_removal(self) -> anyhow::Result<StagedForget> {
+        recover_descriptor_import_transactions()?;
+        let manifest = self.manifest.clone();
+        let store = TeachGrantStore::open_default();
+        let staged = store.stage_forget(&self.request.agent, &self.request.ability, |record| {
+            stage_forget_manifest(manifest.as_deref(), Some(record.manifest_hash()))
+        })?;
+        Ok(StagedForget { plan: self, staged })
+    }
+}
+
+#[derive(Debug)]
+struct StagedForget {
+    plan: AuthorizedForget,
+    staged: crate::persistence::teach_grants::StagedDescriptorImportRemoval<
+        StagedDescriptorRemovalManifest,
+    >,
+}
+
+impl StagedForget {
+    fn commit_artifact(self) -> anyhow::Result<RuntimePendingForget> {
+        let resumed = self.staged.resumed();
+        let pending = TeachGrantStore::open_default()
+            .commit_forget_artifact(&self.staged, commit_forget_manifest)?;
+        Ok(RuntimePendingForget {
+            plan: self.plan,
+            pending,
+            resumed,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct RuntimePendingForget {
+    plan: AuthorizedForget,
+    pending: crate::persistence::teach_grants::RuntimePendingDescriptorImportRemoval,
+    resumed: bool,
+}
+
+impl RuntimePendingForget {
+    fn refresh_runtime(
+        self,
+        hot_registrar: Option<&SharedHotRegistrarCell>,
+    ) -> RuntimeSyncedForget {
+        let runtime_sync = match self.plan.agent_entry_for_runtime.as_ref() {
+            Some(entry) => {
+                sync_learner_runtime_after_forget(hot_registrar, &self.plan.request.agent, entry)
+            }
+            None => {
+                let report = RuntimeSyncReport::not_ready("agent_registry_entry_missing");
+                RuntimeSyncOutcome::after_durable_commit(report)
+            }
+        };
+        RuntimeSyncedForget {
+            plan: self.plan,
+            pending: self.pending,
+            resumed: self.resumed,
+            runtime_sync,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RuntimeSyncedForget {
+    plan: AuthorizedForget,
+    pending: crate::persistence::teach_grants::RuntimePendingDescriptorImportRemoval,
+    resumed: bool,
+    runtime_sync: RuntimeSyncOutcome,
+}
+
+impl RuntimeSyncedForget {
+    fn finalize(self) -> anyhow::Result<Value> {
+        let runtime_sync = self.runtime_sync.require_committed(
+            FORGET,
+            "descriptor artifact removal is committed and the ledger tombstone remains in \
+             Forgetting state; retry meta.forget after the agent runtime is wired",
+        )?;
+        let committed = TeachGrantStore::open_default().finish_forget(&self.pending)?;
+        let record = committed.record();
+        Ok(json!({
+            "removed_descriptor": self.plan.request.ability,
+            "agent": self.plan.request.agent,
+            "source_descriptor_ura": record.source_descriptor_ura(),
+            "descriptor_transaction_status": runtime_sync.transaction_status().as_str(),
+            "mutated_by": self.plan.mutated_by,
+            "runtime_sync": runtime_sync.into_value(),
+            "resumed": self.resumed,
+        }))
+    }
+}
+
 fn no_teach_grant_error(
     registry_name: &str,
     ability_ura: &str,
@@ -1188,6 +1339,17 @@ impl RuntimeSyncOutcome {
         self.transaction_status
     }
 
+    fn require_committed(self, surface: &str, recovery_hint: &str) -> anyhow::Result<Self> {
+        if self.transaction_status == DescriptorTransactionStatus::Committed {
+            return Ok(self);
+        }
+        anyhow::bail!(
+            "{surface} durable transaction reached runtime-sync with status `{}` ({}). {recovery_hint}",
+            self.transaction_status.as_str(),
+            self.report.failure_summary()
+        )
+    }
+
     fn into_value(self) -> Value {
         let mut value = self.report.into_value();
         value["status"] = Value::String(self.transaction_status.as_str().to_string());
@@ -1228,6 +1390,22 @@ impl RuntimeSyncReport {
             rejected_reserved_owner: outcome.rejected_reserved_owner,
             reason: None,
         }
+    }
+
+    fn failure_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(reason) = self.reason {
+            parts.push(format!("reason={reason}"));
+        }
+        parts.push(format!("attempted={}", self.attempted));
+        parts.push(format!("runtime_not_ready={}", self.runtime_not_ready));
+        parts.push(format!("catalog_not_ready={}", self.catalog_not_ready));
+        parts.push(format!(
+            "rejected_reserved_owner={}",
+            self.rejected_reserved_owner
+        ));
+        parts.push(format!("failed={}", self.failed));
+        parts.join(", ")
     }
 
     fn into_value(self) -> Value {
@@ -1289,65 +1467,42 @@ fn forget_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
     forget_handler_with_hot_registrar(env, args, None)
 }
 
+struct ForgetWorkflow<'a> {
+    env: EnvelopeContext,
+    args: Value,
+    hot_registrar: Option<&'a SharedHotRegistrarCell>,
+}
+
+impl<'a> ForgetWorkflow<'a> {
+    fn new(
+        env: EnvelopeContext,
+        args: Value,
+        hot_registrar: Option<&'a SharedHotRegistrarCell>,
+    ) -> Self {
+        Self {
+            env,
+            args,
+            hot_registrar,
+        }
+    }
+
+    fn run(self) -> anyhow::Result<Value> {
+        let request = ForgetRequest::from_args(&self.args)?;
+        let authorized = AuthorizedForget::from_request(self.env, request)?;
+        let staged = authorized.stage_removal()?;
+        let runtime_pending = staged.commit_artifact()?;
+        runtime_pending
+            .refresh_runtime(self.hot_registrar)
+            .finalize()
+    }
+}
+
 fn forget_handler_with_hot_registrar(
     env: EnvelopeContext,
     args: Value,
     hot_registrar: Option<&SharedHotRegistrarCell>,
 ) -> anyhow::Result<Value> {
-    let ability = required_str(&args, "ability", FORGET)?;
-    let agent = required_str(&args, "agent", FORGET)?;
-    recover_descriptor_import_transactions()?;
-
-    let agents = crate::registry::agents::load_agents()?;
-    let agent_entry_for_runtime = agents.agents.get(agent).cloned();
-    let local = crate::persistence::local_agents::load()?;
-    let agent_ura = hosted_agent_by_name(&local, agent, FORGET)?
-        .agent_ura
-        .clone();
-    let expected_subject = crate::ura::owner_ability_ura(&agent_ura, ability)
-        .ok_or_else(|| anyhow::anyhow!("{FORGET} could not mint imported descriptor subject"))?;
-    if env.subject() != expected_subject {
-        anyhow::bail!(
-            "{FORGET} subject {:?} must be the imported descriptor {:?}",
-            env.subject(),
-            expected_subject
-        );
-    }
-    let mutated_by = require_hosted_agent_authority(&env, &local, agent, &agent_ura, FORGET)?;
-    let manifest = agents
-        .agents
-        .get(agent)
-        .and_then(|e| e.root_path.as_ref())
-        .map(|root| {
-            root.join("abilities")
-                .join(format!("{ability}.ability.toml"))
-        });
-    let store = TeachGrantStore::open_default();
-    let staged = store.stage_forget(agent, ability, |record| {
-        stage_forget_manifest(manifest.as_deref(), Some(record.manifest_hash()))
-    })?;
-
-    let runtime_pending = store.commit_forget_artifact(&staged, commit_forget_manifest)?;
-    let runtime_sync = match agent_entry_for_runtime.as_ref() {
-        Some(entry) => sync_learner_runtime_after_forget(hot_registrar, agent, entry),
-        None => {
-            let report = RuntimeSyncReport::not_ready("agent_registry_entry_missing");
-            RuntimeSyncOutcome::after_durable_commit(report)
-        }
-    };
-    let committed = store.finish_forget(&runtime_pending)?;
-    let record = committed.record();
-    let transaction_status = runtime_sync.transaction_status().as_str();
-
-    Ok(json!({
-        "removed_descriptor": ability,
-        "agent": agent,
-        "source_descriptor_ura": record.source_descriptor_ura(),
-        "descriptor_transaction_status": transaction_status,
-        "mutated_by": mutated_by,
-        "runtime_sync": runtime_sync.into_value(),
-        "resumed": staged.resumed(),
-    }))
+    ForgetWorkflow::new(env, args, hot_registrar).run()
 }
 
 fn sync_learner_runtime_after_forget(
@@ -1894,7 +2049,7 @@ mod tests {
     }
 
     #[test]
-    fn forget_runtime_sync_unavailable_returns_committed_degraded() {
+    fn forget_runtime_sync_unavailable_returns_error_and_keeps_tombstone() {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
         teach_handler(
@@ -1909,30 +2064,68 @@ mod tests {
         .expect("learner acquires discovery-only manifest");
 
         let unwired_cell = SharedHotRegistrarCell::new();
-        let resp = forget_handler_with_hot_registrar(
+        let err = forget_handler_with_hot_registrar(
             forget_env(apprentice_ura.clone(), &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
             Some(&unwired_cell),
         )
-        .expect("durable forget commits even when live runtime sync is degraded");
-        assert_eq!(
-            resp["descriptor_transaction_status"],
-            "committed_runtime_degraded"
+        .expect_err("forget must fail until live runtime cleanup converges");
+        let err = err.to_string();
+        assert!(
+            err.contains("committed_runtime_degraded")
+                && err.contains("hot_registrar_not_wired")
+                && err.contains("Forgetting state"),
+            "forget must return an actionable convergence error: {err}"
         );
-        assert_eq!(resp["runtime_sync"]["status"], "committed_runtime_degraded");
-        assert_eq!(resp["runtime_sync"]["reason"], "hot_registrar_not_wired");
 
         let grants: Value = serde_json::from_slice(
             &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         let imports = grants["imports"].as_array().unwrap();
-        assert!(imports.is_empty(), "{grants}");
+        // Compensating-transaction invariant (symmetric with acquire): a
+        // degraded runtime sync does NOT retire the ledger tombstone — the
+        // row stays in `forgetting` so boot recovery can re-drive the live
+        // cleanup. Dropping it here would lose the only retry anchor while
+        // a stale ability may still be advertised in the live runtime.
+        assert_eq!(
+            imports.len(),
+            1,
+            "tombstone must survive a degraded sync: {grants}"
+        );
+        assert_eq!(imports[0]["state"], "forgetting", "{grants}");
         assert!(
             !std::path::Path::new(&std::env::var("HOME").unwrap())
                 .join("agents/apprentice/abilities/quote.ability.toml")
                 .exists(),
             "forget artifact step remains complete when runtime sync is degraded"
+        );
+
+        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
+        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let retry = tokio_runtime
+            .block_on(async {
+                forget_handler_with_hot_registrar(
+                    forget_env(apprentice_ura.clone(), &apprentice_ura),
+                    json!({ "ability": "quote", "agent": "apprentice" }),
+                    Some(&hot_cell),
+                )
+            })
+            .expect("retry finishes the forgetting tombstone once runtime sync converges");
+        assert_eq!(retry["descriptor_transaction_status"], "committed");
+        assert_eq!(retry["runtime_sync"]["status"], "committed");
+        assert_eq!(retry["resumed"], true);
+        let grants: Value = serde_json::from_slice(
+            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            grants["imports"].as_array().unwrap().is_empty(),
+            "successful retry must retire the tombstone: {grants}"
         );
     }
 
@@ -1955,12 +2148,27 @@ mod tests {
             .join("agents/apprentice/abilities/quote.ability.toml");
         mark_first_import_as_acquiring_for_test(&imported_manifest);
 
-        let resp = forget_handler(
-            forget_env(apprentice_ura.clone(), &apprentice_ura),
-            json!({ "ability": "quote", "agent": "apprentice" }),
-        )
-        .expect("forget must recover the committed acquire before removing");
+        // Wire a live registrar so runtime sync converges (Committed):
+        // only then does forget retire the tombstone. Without it the
+        // compensating transaction correctly keeps the row degraded (see
+        // forget_runtime_sync_unavailable_returns_error_and_keeps_tombstone).
+        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
+        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let resp = tokio_runtime
+            .block_on(async {
+                forget_handler_with_hot_registrar(
+                    forget_env(apprentice_ura.clone(), &apprentice_ura),
+                    json!({ "ability": "quote", "agent": "apprentice" }),
+                    Some(&hot_cell),
+                )
+            })
+            .expect("forget must recover the committed acquire before removing");
         assert_eq!(resp["removed_descriptor"], "quote");
+        assert_eq!(resp["descriptor_transaction_status"], "committed");
         assert!(
             !imported_manifest.exists(),
             "forget must remove the recovered imported descriptor"
