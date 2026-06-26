@@ -52,14 +52,16 @@ Axon 统一"生命周期状态、终态、receipt 投影规则、stream/bidi/una
 
 调用生命周期的**协议语义**（admission → route → authorize → dispatch → terminal/receipt projection）被复制实现了四遍，唯一差异是 transport geometry，四份各自演化、彼此漂移：
 
-| Geometry | 文件 | LOC | 漂移锚点 |
-|---|---|---|---|
-| unary | `unary_dispatcher.rs` | 2282 | busy/offline 分类 `:1524` 区——**只有此处区分 Full→retryable 与 Closed→offline** |
-| bidi | `bidi_dispatcher.rs` | 3369 | `settle_terminal_result`:2484；session drain |
-| stream | `stream_dispatcher.rs` | 472 | terminal 空 payload 直接 break `:356`——**terminal chunk 不发、receipt 不附（现存 bug）** |
-| local_session | `local_session_dispatcher.rs` | 3704 | carrier-v1 dispatch/result 双解码 |
+| Geometry | 文件 | 总 LOC | 其中 lifecycle | 漂移锚点 |
+|---|---|---|---|---|
+| unary | `unary_dispatcher.rs` | 2224 | ~800 | busy/offline 分类 `:1524` 区——**只有此处区分 Full→retryable 与 Closed→offline** |
+| bidi | `bidi_dispatcher.rs` | 3348 | ~1060 | `settle_terminal_result`:2484；session drain |
+| stream | `stream_dispatcher.rs` | 469 | ~106 | terminal 空 payload 直接 break `:356`——**terminal chunk 不发、receipt 不附（现存 bug）** |
+| local_session | `local_session_dispatcher.rs` | 3829 | ~400 | carrier-v1 dispatch/result 双解码 |
 
-**为何永远不收敛**：每个语义修复必须在 N 个 dispatcher 各打一遍补丁，N 份不可能同步。活样本：busy≠offline 只在 unary 落实；stream 根本不投影 terminal receipt。没有一个对象拥有"协议状态"——它散在四个 `async fn` 的控制流里，无法集中演进、无法被 Go 复用、无法独立单测。
+> **修正（2026-06-26 逐方法解剖 12,268 行）**：上表"总 LOC"大部分**不是** lifecycle——四文件合计仅 ~2,400 行是真·调用生命周期，其余 ~5,000 行是 RPC handler（多数字面调 `federation_wrappers::handle_*`）+ ~4,800 行共享辅助（frame builders/mappers/stream types/ctor）。漂移只发生在那 ~2,400 行 lifecycle 上。因此本 RFC 的目标是**迁出那 ~2,400 行 lifecycle，保留其余作 handler-router**，不是整删文件。
+
+**为何永远不收敛**：每个语义修复必须在 N 个 dispatcher 各打一遍补丁，N 份不可能同步。活样本：busy≠offline 只在 unary 落实；stream 根本不投影 terminal receipt。没有一个对象拥有"协议状态"——它散在四个 `async fn` 的 lifecycle 路径里，无法集中演进、无法被 Go 复用、无法独立单测。
 
 ---
 
@@ -198,7 +200,7 @@ Settled + *
 
 ---
 
-## 4. 落地序列（每步独立可编译，1 commit = 1 逻辑变更；旧 dispatcher 删除不弃用，无 fallback）
+## 4. 落地序列（每步独立可编译，1 commit = 1 逻辑变更；lifecycle 方法迁出后旧体删除不弃用，handler 方法保留，无 fallback）
 
 | 步 | 内容 | 落点 |
 |---|---|---|
@@ -207,10 +209,10 @@ Settled + *
 | **S1** | 实现 `InvocationLifecycle` 转移表，单测覆盖每条边、终态吸收、timeout/cancel 独立终态、authorization 空透传 | Axon `invocation/lifecycle.rs` |
 | **S2** | 实现 receipt projection API，复用现有 `InvocationReceipt`/`ReceiptProofFacts`/`LedgerSink` | Axon `invocation/` |
 | **S3** | CLI 新增 `lifecycle_driver.rs`，mock transport 单测：decode frame → `on_event` → 执行动作 → 回喂 event | CLI `lifecycle_driver.rs` |
-| **S4-unary** | 切 unary service arm；替换 unary busy/offline 分类（`unary_dispatcher.rs:1524`）；确认无 double ledger row | CLI `transport_impls/unary.rs` → 删 `unary_dispatcher.rs` |
-| **S4-stream** | 修 stream terminal 空 payload 直接 break（`stream_dispatcher.rs:356`）——terminal chunk 必须发出并附 `terminal_receipt` | CLI `transport_impls/stream.rs` → 删 `stream_dispatcher.rs` |
-| **S4-bidi** | 切 `settle_terminal_result`（`bidi_dispatcher.rs:2484`）和 session drain 到 lifecycle driver | CLI `transport_impls/bidi.rs` → 删 `bidi_dispatcher.rs` |
-| **S4-session** | 切 local session carrier-v1 dispatch/result；保留 `SessionUpSender` 作为 transport ordering primitive | CLI `transport_impls/local_session.rs` → 删 `local_session_dispatcher.rs` |
+| **S4-unary** | 切 invoke arm 的 catch-all `_other`（`daemon_invocation_service.rs:822` = `dispatch_local_rpc_selected_route`）到 driver；替换 unary busy/offline 分类；确认无 double ledger row（复用 `axon_took_it` 路径）。**具名 federation/namespace/identity arm 全是 handler，保持直调不动。** forward_invoke（hybrid）留待后续 pass | CLI `transport_impls/unary.rs`（新建 adapter，借用幸存 helper）；`unary_dispatcher.rs` **降为 handler-router**（lifecycle ~800/2224 行迁出，handler+helper ~1400 行留） |
+| **S4-stream** | 切 `dispatch_local_selected_route`（`stream_dispatcher.rs:287`）到 driver；**修** terminal 空 payload break（driver 的 Open→Settled 总投 `[ProjectReceipt, SendFrame(terminal)]`） | CLI `transport_impls/stream.rs`；`stream_dispatcher.rs` **降为 directory-subscription handler 模块**（`dispatch_subscribe_directory_*` 是 presence pump，留；lifecycle ~106 行迁出） |
+| **S4-bidi** | 切 lifecycle arm（`dispatch_remote_bidi:283`/`dispatch_local_bidi_selected_route:627`/`dispatch_invoke_remote:856`/`dispatch_self_session_accept:1266`）到 driver；`settle_terminal_result` 终态化进 driver | CLI `transport_impls/bidi.rs`；`bidi_dispatcher.rs` **保留 frame-0 router + session-plane handler**（`drain_session_up_stream`/`dispatch_session_request_named` 留；frame builders/mappers/stream types 留或抽 util；lifecycle ~1060 行迁出） |
+| **S4-session** | 切 carrier-v1/Axon-dispatch lifecycle 入口（`handle_carrier_v1_dispatch:221`/`handle_carrier_v1_stream_open:381`/`try_dispatch_via_axon:783`/`open_stream_via_axon:913`）到 driver；**保留 `SessionUpSender` 作为 transport ordering primitive** | CLI `transport_impls/local_session.rs`；`local_session_dispatcher.rs` **保留 `handle_down` frame router + bidi/forwarding handlers**（lifecycle ~400 行迁出，handler+plumbing 留） |
 | **S5** | 每个 geometry 切完同 commit 删除对应旧 dispatcher 残壳；**`federation_wrappers.rs` 不删** | CLI |
 | **S6** | 收口 `admission_facade.rs`：把 Axon admission/canonical crypto 辅助迁到 Axon，CLI 只留 keyring/session/delegation policy glue | Axon + CLI |
 | **S7** | `cargo udeps` 或等价死代码检查，删未引用壳层 | CLI |
@@ -249,7 +251,9 @@ cargo test --features axon-pb
 - SDK 既有依赖：`audit.rs:383`(new_receipt)、`axiom.rs:343`(ReceiptProofFacts)、`call_mode.rs:107`(CallMode)、`admission.rs`(run_descriptor_bound_admission)
 - CLI driver：`EasyNet-Cli/src/services/invocation_transport/lifecycle_driver.rs`（新建）+ `transport_impls/{unary,stream,bidi,local_session}.rs`（新建）
 - CLI 保留：`route_resolver.rs`（`DaemonRouteResolver` live lookup）、`PresenceRegistry`、session up/down sender、plugin/ability registration
-- 删除目标：`unary_dispatcher.rs`、`bidi_dispatcher.rs`、`local_session_dispatcher.rs`、`stream_dispatcher.rs`（整删）；`admission_facade.rs` 的 lifecycle 编排部分（S6 收口）
+- 迁出目标（**非整删**，2026-06-26 逐方法解剖修正）：四个 dispatcher 各自的 lifecycle 方法（unary `dispatch_local_rpc_selected_route` / stream `dispatch_local_selected_route` / bidi `dispatch_remote_bidi`等4个 / session `handle_carrier_v1_dispatch`等4个）迁入 driver+executor；**四文件保留为 handler-router**（federation/namespace/identity/directory-subscription/session-plane handler + frame builders/mappers/stream types，与 federation_wrappers 同类不删，每文件留 ~75-85%）。S5 删的是迁出后变死的 lifecycle 方法体，**不是删文件**。`admission_facade.rs` 的 lifecycle 编排部分（S6 收口）。
+- ⚠️ 跨文件耦合：`dispatch_self_targeted_forward_invoke`/`dispatch_self_targeted_invoke_remote`（unary 内）被 `bidi_dispatcher.dispatch_invoke_remote` 调用——是共享 lifecycle 入口，不可内联删除，须保持可调或移入共享模块。
+- ⚠️ forward_invoke hybrid（unary `:1041` / bidi `:856`）：handler 外壳包 contained lifecycle。**S4 只迁纯本地 owner-routed arm，forward_invoke 内层 lifecycle 留后续 pass**（爆炸半径最小）。
 - **不删**：`federation_wrappers.rs`（非 lifecycle 复制体，CTO 确认）
 
 ---
