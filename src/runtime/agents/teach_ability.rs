@@ -763,9 +763,13 @@ pub fn recover_descriptor_import_transactions() -> anyhow::Result<usize> {
 /// `(learner, ability)` slot stayed occupied for the agent's lifetime and the
 /// descriptor could never be re-acquired. This boot sweep heals that: for each
 /// `Forgetting` row whose learner runtime is now wired and converges, it calls
-/// `finish_forget` and frees the slot. Rows whose runtime is still not ready
-/// are left `Forgetting` (no fabricated convergence) for the next boot or an
-/// explicit retry. Symmetric to [`recover_descriptor_import_transactions`], but
+/// `finish_forget` and frees the slot. A row whose learner agent no longer
+/// exists also converges here — there is nothing left to project the removal
+/// into (see [`RuntimeSyncReport::nothing_to_converge`]) — so a stopped learner
+/// can no longer strand its tombstone forever. Only rows whose runtime exists
+/// but is not yet wired are left `Forgetting` (no fabricated convergence) for
+/// the next boot or an explicit retry. Symmetric to
+/// [`recover_descriptor_import_transactions`], but
 /// run AFTER the hot registrar is populated because forget requires committed
 /// runtime convergence (acquire recovery is artifact-only and runs pre-boot).
 pub fn recover_forget_transactions(
@@ -785,13 +789,20 @@ pub fn recover_forget_transactions(
             Some(entry) => {
                 sync_learner_runtime_after_forget(hot_registrar, record.learner_agent(), entry)
             }
-            None => RuntimeSyncOutcome::after_durable_commit(RuntimeSyncReport::not_ready(
-                "agent_registry_entry_missing",
-            )),
+            // The learner agent is gone (e.g. agent.stop removed it). There
+            // is no runtime to project the removal into and no future boot
+            // can wire one, so the durable removal has fully converged.
+            // Treating this as terminal frees the slot; treating it as
+            // degraded left the tombstone stuck for the deployment's life.
+            None => RuntimeSyncOutcome::after_durable_commit(
+                RuntimeSyncReport::nothing_to_converge("agent_registry_entry_missing"),
+            ),
         };
         // Require committed convergence, exactly as the live forget path does.
-        // A still-degraded row is left Forgetting for the next boot/retry —
-        // recovery never fabricates convergence it did not achieve.
+        // A row that is degraded because the runtime exists but is not yet
+        // wired is left Forgetting for the next boot/retry — recovery never
+        // fabricates convergence it did not achieve. A row whose learner is
+        // gone converges terminally above (nothing left to project).
         if runtime_sync
             .require_committed(FORGET, "leaving forget tombstone for the next recovery sweep")
             .is_err()
@@ -1301,8 +1312,11 @@ impl RuntimePendingForget {
             Some(entry) => {
                 sync_learner_runtime_after_forget(hot_registrar, &self.plan.request.agent, entry)
             }
+            // No runtime entry for the learner: it has been removed, so the
+            // removal has nothing left to converge and is terminal. See
+            // `RuntimeSyncReport::nothing_to_converge`.
             None => {
-                let report = RuntimeSyncReport::not_ready("agent_registry_entry_missing");
+                let report = RuntimeSyncReport::nothing_to_converge("agent_registry_entry_missing");
                 RuntimeSyncOutcome::after_durable_commit(report)
             }
         };
@@ -1367,6 +1381,12 @@ struct RuntimeSyncReport {
     runtime_not_ready: bool,
     catalog_not_ready: bool,
     rejected_reserved_owner: bool,
+    /// The learner runtime no longer exists, so there is nothing to
+    /// project the removal into. This is a *terminal* outcome — the
+    /// durable removal is the complete result — and is distinct from
+    /// `runtime_not_ready` (the runtime exists but is not yet wired, which
+    /// is transient and retried). Set only by [`Self::nothing_to_converge`].
+    runtime_absent: bool,
     reason: Option<&'static str>,
 }
 
@@ -1438,6 +1458,29 @@ impl RuntimeSyncReport {
             runtime_not_ready: true,
             catalog_not_ready: false,
             rejected_reserved_owner: false,
+            runtime_absent: false,
+            reason: Some(reason),
+        }
+    }
+
+    /// The target runtime does not exist, so the removal has nothing left
+    /// to converge: the durable artifact is already gone and no future
+    /// boot can wire a runtime for an agent that was removed. This is a
+    /// committed, terminal outcome (`ok = true`) — NOT a degradation to be
+    /// retried. Using `not_ready` here is what left forget tombstones
+    /// stuck forever once their learner agent was stopped.
+    fn nothing_to_converge(reason: &'static str) -> Self {
+        Self {
+            attempted: false,
+            ok: true,
+            registered: 0,
+            replaced: 0,
+            failed: 0,
+            removed: 0,
+            runtime_not_ready: false,
+            catalog_not_ready: false,
+            rejected_reserved_owner: false,
+            runtime_absent: true,
             reason: Some(reason),
         }
     }
@@ -1457,6 +1500,7 @@ impl RuntimeSyncReport {
             runtime_not_ready: outcome.runtime_not_ready,
             catalog_not_ready: outcome.catalog_not_ready,
             rejected_reserved_owner: outcome.rejected_reserved_owner,
+            runtime_absent: false,
             reason: None,
         }
     }
@@ -1468,6 +1512,7 @@ impl RuntimeSyncReport {
         }
         parts.push(format!("attempted={}", self.attempted));
         parts.push(format!("runtime_not_ready={}", self.runtime_not_ready));
+        parts.push(format!("runtime_absent={}", self.runtime_absent));
         parts.push(format!("catalog_not_ready={}", self.catalog_not_ready));
         parts.push(format!(
             "rejected_reserved_owner={}",
@@ -1486,6 +1531,7 @@ impl RuntimeSyncReport {
             "failed": self.failed,
             "removed": self.removed,
             "runtime_not_ready": self.runtime_not_ready,
+            "runtime_absent": self.runtime_absent,
             "catalog_not_ready": self.catalog_not_ready,
             "rejected_reserved_owner": self.rejected_reserved_owner,
         });
@@ -2238,6 +2284,70 @@ mod tests {
         assert!(
             grants["imports"].as_array().unwrap().is_empty(),
             "successful retry must retire the tombstone: {grants}"
+        );
+    }
+
+    /// Regression: a `Forgetting` tombstone whose learner agent has since
+    /// been removed must converge, not stay stuck forever. Before the fix
+    /// the missing learner was mapped to a degraded runtime sync (retry
+    /// later), but no future sweep could ever wire a runtime for an agent
+    /// that no longer exists, so the row — and the `(learner, ability)`
+    /// slot — leaked for the deployment's lifetime.
+    #[test]
+    fn boot_sweep_converges_forget_tombstone_for_removed_learner() {
+        let _g = HomeGuard::new();
+        let (source_descriptor_ura, apprentice_ura, mentor_ura) = seed_declaration_only();
+        teach_handler(
+            teach_env(mentor_ura.clone(), &mentor_ura),
+            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
+        )
+        .expect("owner teaches");
+        acquire_handler_with_hot_registrar(
+            acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
+            json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
+        )
+        .expect("learner acquires discovery-only manifest");
+
+        // Drive a forget against an unwired registrar so the durable
+        // artifact removal commits but the row is parked in `Forgetting`.
+        let unwired_cell = SharedHotRegistrarCell::new();
+        forget_handler_with_hot_registrar(
+            forget_env(apprentice_ura.clone(), &apprentice_ura),
+            json!({ "ability": "quote", "agent": "apprentice" }),
+            Some(&unwired_cell),
+        )
+        .expect_err("forget parks the tombstone until runtime cleanup converges");
+        let grants: Value = serde_json::from_slice(
+            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grants["imports"][0]["state"], "forgetting", "{grants}");
+
+        // The learner agent is removed from the registry — agent.stop, a
+        // reset, whatever — leaving the tombstone with no runtime to ever
+        // converge against.
+        let mut registry = crate::registry::agents::load_agents().expect("load agents");
+        registry.agents.remove("apprentice");
+        crate::registry::agents::save_agents(&registry).expect("save agents");
+
+        // The boot sweep must retire the orphaned tombstone, not skip it.
+        let recovered = recover_forget_transactions(None).expect("boot sweep");
+        assert_eq!(recovered, 1, "the orphaned tombstone must converge");
+        let grants: Value = serde_json::from_slice(
+            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            grants["imports"].as_array().unwrap().is_empty(),
+            "the slot must be freed once the learner is gone: {grants}"
+        );
+
+        // Idempotent: a second sweep finds nothing left to do.
+        assert_eq!(
+            recover_forget_transactions(None).expect("second sweep"),
+            0,
+            "convergence is terminal"
         );
     }
 
