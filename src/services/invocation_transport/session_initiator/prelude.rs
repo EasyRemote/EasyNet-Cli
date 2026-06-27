@@ -674,15 +674,16 @@ fn sign_descriptor_bound_prelude_request(
         .map(|callee| callee.ura.trim())
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| Status::internal(format!("{function_name} prelude missing callee URA")))?;
-    let descriptor_ref = crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
-        callee_ura,
-        function_name,
-    )
-    .map_err(|err| {
-        Status::internal(format!(
-            "{function_name} prelude cannot resolve descriptor ref: {err}"
-        ))
-    })?;
+    let descriptor_ref =
+        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+            callee_ura,
+            function_name,
+        )
+        .map_err(|err| {
+            Status::internal(format!(
+                "{function_name} prelude signing requires an explicit descriptor ref: {err}"
+            ))
+        })?;
     let descriptor_bound =
         crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
             envelope.clone(),
@@ -943,7 +944,6 @@ fn build_hosted_agent_ability_descriptors(
     descriptors
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<AbilityDescriptor> {
     crate::runtime::agents::pages::management_ability_specs()
         .into_iter()

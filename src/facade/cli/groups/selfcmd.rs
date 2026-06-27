@@ -329,7 +329,6 @@ impl UninstallEnvironment for ProductionUninstallEnvironment {
             match crate::services::invocation_transport::federation_invoke::invoke_federation_revoke(
                 &identity.device_ura,
                 "self uninstall",
-                Some(&identity.device_ura),
             ) {
                 Ok(()) => HubRemovalReport::Reported,
                 Err(err) => HubRemovalReport::Failed(err.to_string()),

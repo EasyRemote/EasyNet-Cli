@@ -556,7 +556,7 @@ impl DiscoverProviderTarget {
         registry: &AxonAbilityCatalog,
     ) -> anyhow::Result<Self> {
         let provider = DiscoverProviderName::parse(raw)?;
-        if !agents.agents.contains_key(provider.agent) {
+        if !agents.agents.contains_key(provider.agent.as_str()) {
             anyhow::bail!(
                 "discover: provider agent {:?} is not registered on this daemon; choose an \
                  agent from `agent.list` or omit provider",
@@ -595,28 +595,25 @@ impl DiscoverProviderTarget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DiscoverProviderName<'a> {
-    agent: &'a str,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscoverProviderName {
+    agent: String,
 }
 
-impl<'a> DiscoverProviderName<'a> {
-    fn parse(raw: &'a str) -> anyhow::Result<Self> {
+impl DiscoverProviderName {
+    fn parse(raw: &str) -> anyhow::Result<Self> {
         let raw = raw.trim();
-        let Some((agent, verb)) = raw.rsplit_once('.') else {
-            anyhow::bail!("discover: provider {raw:?} must use `<agent>.discover`");
-        };
-        let agent = agent.trim();
-        let verb = verb.trim();
-        if agent.trim().is_empty() || verb.trim().is_empty() {
-            anyhow::bail!("discover: provider {raw:?} must use `<agent>.discover`");
-        }
-        if verb != ABILITY_VERB {
+        let owner_local = crate::ura::OwnerLocalAbilityName::parse(raw).map_err(|_| {
+            anyhow::anyhow!("discover: provider {raw:?} must use `<agent>.discover`")
+        })?;
+        if owner_local.public_name() != ABILITY_VERB {
             anyhow::bail!(
                 "discover: provider {raw:?} is not a discover provider; expected `<agent>.{ABILITY_VERB}`"
             );
         }
-        Ok(Self { agent })
+        Ok(Self {
+            agent: owner_local.owner().to_string(),
+        })
     }
 
     fn as_registry_name(&self) -> String {
@@ -754,7 +751,7 @@ fn resolve_via_federation(
         // compiles regardless of the `axon-pb` feature. With the
         // feature off, the reader returns an explicit capability error
         // rather than fabricating an empty directory.
-        match crate::services::federated_directory_reader::read_federated_directory(None, None) {
+        match crate::services::federated_directory_reader::read_federated_directory(None) {
             Ok(entries) => rows.extend(federated_directory_candidates(&entries)),
             Err(error) if rows.is_empty() => {
                 return Ok(error_envelope(
@@ -2198,6 +2195,9 @@ mod tests {
         let mut rows = vec![owner_only_candidate("codex")];
         score_against_query(&mut rows, "weather");
         rows.retain(|c| c.score > 0.0);
-        assert!(rows.is_empty(), "a genuinely unrelated query must score zero");
+        assert!(
+            rows.is_empty(),
+            "a genuinely unrelated query must score zero"
+        );
     }
 }

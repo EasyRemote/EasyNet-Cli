@@ -26,11 +26,11 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::runtime::ability::{
-    AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneError,
-    AbilityControlPlaneLookupError, AbilityControlPlaneRecord, AbilityControlPlaneRegistration,
-    AbilityControlPlaneRegistry, AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
-    HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, RuntimeEnv,
-    HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    public_route_ability_from_descriptor_ref, AbilityControlPlaneAuthorityModeLookupError,
+    AbilityControlPlaneError, AbilityControlPlaneLookupError, AbilityControlPlaneRecord,
+    AbilityControlPlaneRegistration, AbilityControlPlaneRegistry, AbilityImplSource,
+    AuthorityScope, CallMode as DescriptorCallMode, HostedAgentDelegationContext,
+    HostedAgentDelegationEnvelopeBinding, RuntimeEnv, HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
@@ -647,13 +647,19 @@ async fn envelope_context_from_axon(
     let invocation_nonce = envelope.invocation_nonce;
     let invocation_nonce_hex = hex::encode(invocation_nonce.as_slice());
     let ability = envelope.ability;
+    let hosted_agent_route_ability =
+        public_route_ability_from_descriptor_ref(&ability).map_err(|err| {
+            AxonError::invalid_argument(format!(
+                "hosted_agent_delegation envelope route ability: {err}"
+            ))
+        })?;
     let caller_signature = EnvelopeCallerSignature::from_axon(&signed.signature);
     let hosted_agent_envelope = HostedAgentDelegationEnvelopeBinding::new(
         &caller,
         &callee,
         &envelope_subject,
         &invocation_nonce_hex,
-        &ability,
+        &hosted_agent_route_ability,
     )
     .map_err(|err| {
         AxonError::invalid_argument(format!("hosted_agent_delegation envelope binding: {err}"))
@@ -1062,23 +1068,27 @@ impl AbilityAuthorityContext {
         }
     }
 
-    pub fn for_device_authority_root(device_authority_root: impl Into<String>) -> Self {
+    pub fn for_device_authority_root(
+        device_authority_root: impl Into<String>,
+    ) -> Result<Self, AbilityControlPlaneError> {
         let device_authority_root = device_authority_root.into();
-        let parsed = crate::ura::parse_ura(&device_authority_root).unwrap_or_else(|error| {
-            panic!(
-                "AbilityAuthorityContext requires a canonical device URA, got {device_authority_root:?}: {error}"
-            )
-        });
-        assert_eq!(
-            parsed.kind,
-            crate::ura::URAKind::Device,
-            "AbilityAuthorityContext device authority must be a /device/ URA, got {device_authority_root:?}"
-        );
-        Self {
+        let parsed = crate::ura::parse_ura(&device_authority_root).map_err(|error| {
+            AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
+                authority_root: device_authority_root.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+        if parsed.kind != crate::ura::URAKind::Device {
+            return Err(AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
+                authority_root: device_authority_root,
+                reason: format!("expected /device/ URA, got {:?}", parsed.kind),
+            });
+        }
+        Ok(Self {
             device_authority_root,
             hub_authority_root: crate::ura::hub_ura(&parsed.realm),
             source: AbilityAuthoritySource::FixedDevice,
-        }
+        })
     }
 
     fn agent_authority_root(&self, agent_id: &str) -> String {
@@ -4221,6 +4231,21 @@ mod tests {
     }
 
     #[test]
+    fn fixed_authority_context_rejects_non_device_ura() {
+        let err = AbilityAuthorityContext::for_device_authority_root("easynet:///r/acme/hub")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            AbilityControlPlaneError::InvalidDeviceAuthorityRoot { .. }
+        ));
+        assert!(
+            err.to_string().contains("device URA"),
+            "error should explain the authority root shape: {err}"
+        );
+    }
+
+    #[test]
     fn unregistered_local_ability_returns_clear_error() {
         // The error must name the ability so an operator can grep
         // "is observe.health registered?" against the daemon log.
@@ -4790,7 +4815,8 @@ mod tests {
     fn control_plane_keeps_rpc_and_stream_records_for_same_ability() {
         let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             LocalRuntime::new(),
-            AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev"),
+            AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev")
+                .expect("test device URA is a valid device authority root"),
         );
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
@@ -4896,7 +4922,8 @@ mod tests {
     fn runtime_binding_facts_return_every_registered_mode() {
         let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             LocalRuntime::new(),
-            AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev"),
+            AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev")
+                .expect("test device URA is a valid device authority root"),
         );
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));

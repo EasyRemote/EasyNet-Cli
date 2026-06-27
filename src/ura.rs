@@ -160,6 +160,62 @@ impl AbilitySelector {
     }
 }
 
+/// Parsed owner-local registry key in the CLI's `<agent>.<ability>` shape.
+///
+/// What this is: a daemon-local value object for registry keys that combine a
+/// hosted agent short name with the public ability name it advertises.
+///
+/// What this is not: it is not a URA parser and it is not a network identity.
+/// The owner segment is the local short name from `local-agents.json`; callers
+/// must still resolve it to an Agent URA before minting protocol identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerLocalAbilityName {
+    registry_name: String,
+    owner: String,
+    public_name: String,
+}
+
+impl OwnerLocalAbilityName {
+    /// Parse `<agent>.<ability>` exactly once for local registry surfaces.
+    ///
+    /// Invariant 1: agent short names are dot-free (`AgentSpec` validates this),
+    /// so the first dot is the only owner/ability boundary.
+    ///
+    /// Invariant 2: public ability names may contain dots (`fs.read`,
+    /// `meta.acquire`), so callers must not use `rsplit_once('.')`.
+    pub fn parse(raw: &str) -> anyhow::Result<Self> {
+        let raw = raw.trim();
+        let Some((owner, public_name)) = raw.split_once('.') else {
+            anyhow::bail!("owner-local ability must use `<agent>.<ability>` form; got {raw:?}");
+        };
+        let owner = owner.trim();
+        let public_name = public_name.trim();
+        if owner.is_empty() || public_name.is_empty() {
+            anyhow::bail!("owner-local ability must have non-empty owner and ability segments");
+        }
+        if owner.contains('.') {
+            anyhow::bail!("owner-local ability owner segment must not contain `.`");
+        }
+        Ok(Self {
+            registry_name: format!("{owner}.{public_name}"),
+            owner: owner.to_string(),
+            public_name: public_name.to_string(),
+        })
+    }
+
+    pub fn registry_name(&self) -> &str {
+        &self.registry_name
+    }
+
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub fn public_name(&self) -> &str {
+        &self.public_name
+    }
+}
+
 /// Project an internal registry ability name into the public name a
 /// given owner publishes under RFC-005.
 ///
@@ -322,6 +378,22 @@ mod tests {
             local_dispatch_ability_key("easynet:///r/localhost/agent/alice.claude", "chat"),
             "claude.chat"
         );
+    }
+
+    #[test]
+    fn owner_local_ability_name_keeps_dotted_public_ability() {
+        let parsed =
+            OwnerLocalAbilityName::parse("mentor.meta.acquire").expect("owner-local ability");
+
+        assert_eq!(parsed.registry_name(), "mentor.meta.acquire");
+        assert_eq!(parsed.owner(), "mentor");
+        assert_eq!(parsed.public_name(), "meta.acquire");
+    }
+
+    #[test]
+    fn owner_local_ability_name_rejects_missing_boundary() {
+        let err = OwnerLocalAbilityName::parse("mentor").expect_err("missing dot must fail");
+        assert!(err.to_string().contains("<agent>.<ability>"), "{err}");
     }
 
     #[test]

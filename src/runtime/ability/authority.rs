@@ -197,16 +197,20 @@ impl AuthorityBindingKind {
 /// Invocation-envelope facts that are signed into hosted-agent delegation.
 ///
 /// This is intentionally a value object rather than five free strings at every
-/// call site. The caller/callee/subject/nonce/ability tuple is a
-/// protocol binding; passing it as one object keeps signing and verification
-/// from drifting by argument order.
+/// call site. The caller/callee/subject/nonce/route-ability tuple is a local
+/// product-authority binding; passing it as one object keeps signing and
+/// verification from drifting by argument order.
+///
+/// Invariant 1: `route_ability` is the public ability name from the route, not
+/// an Axon descriptor ref. Descriptor versions are runtime proof facts and do
+/// not belong in this local host-authority token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostedAgentDelegationEnvelopeBinding {
     wire_caller_ura: String,
     wire_callee_ura: String,
     wire_subject_ura: String,
     wire_invocation_nonce_hex: String,
-    ability: String,
+    route_ability: String,
 }
 
 impl HostedAgentDelegationEnvelopeBinding {
@@ -215,14 +219,14 @@ impl HostedAgentDelegationEnvelopeBinding {
         wire_callee_ura: impl Into<String>,
         wire_subject_ura: impl Into<String>,
         wire_invocation_nonce_hex: impl Into<String>,
-        ability: impl Into<String>,
+        route_ability: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let binding = Self {
             wire_caller_ura: wire_caller_ura.into(),
             wire_callee_ura: wire_callee_ura.into(),
             wire_subject_ura: wire_subject_ura.into(),
             wire_invocation_nonce_hex: wire_invocation_nonce_hex.into(),
-            ability: ability.into(),
+            route_ability: route_ability.into(),
         };
         binding.validate()?;
         Ok(binding)
@@ -233,9 +237,14 @@ impl HostedAgentDelegationEnvelopeBinding {
             || self.wire_callee_ura.trim().is_empty()
             || self.wire_subject_ura.trim().is_empty()
             || self.wire_invocation_nonce_hex.trim().is_empty()
-            || self.ability.trim().is_empty()
+            || self.route_ability.trim().is_empty()
         {
             anyhow::bail!("hosted-agent delegation envelope binding fields must be non-empty");
+        }
+        if self.route_ability.trim().contains('@') {
+            anyhow::bail!(
+                "hosted-agent delegation route_ability must be a public route name, not a descriptor ref"
+            );
         }
         let nonce = hex::decode(self.wire_invocation_nonce_hex.trim()).map_err(|err| {
             anyhow::anyhow!("hosted-agent delegation invocation nonce must be hex: {err}")
@@ -265,8 +274,8 @@ impl HostedAgentDelegationEnvelopeBinding {
         self.wire_invocation_nonce_hex.trim()
     }
 
-    fn ability(&self) -> &str {
-        self.ability.trim()
+    fn route_ability(&self) -> &str {
+        self.route_ability.trim()
     }
 }
 
@@ -287,7 +296,7 @@ pub struct HostedAgentDelegationClaims {
     wire_callee_ura: String,
     wire_subject_ura: String,
     wire_invocation_nonce_hex: String,
-    ability: String,
+    route_ability: String,
 }
 
 impl HostedAgentDelegationClaims {
@@ -304,7 +313,7 @@ impl HostedAgentDelegationClaims {
             wire_callee_ura: envelope.wire_callee_ura,
             wire_subject_ura: envelope.wire_subject_ura,
             wire_invocation_nonce_hex: envelope.wire_invocation_nonce_hex,
-            ability: envelope.ability,
+            route_ability: envelope.route_ability,
         };
         claims.validate()?;
         Ok(claims)
@@ -339,9 +348,14 @@ impl HostedAgentDelegationClaims {
             || self.wire_callee_ura.trim().is_empty()
             || self.wire_subject_ura.trim().is_empty()
             || self.wire_invocation_nonce_hex.trim().is_empty()
-            || self.ability.trim().is_empty()
+            || self.route_ability.trim().is_empty()
         {
             anyhow::bail!("hosted-agent delegation claims fields must be non-empty");
+        }
+        if self.route_ability.trim().contains('@') {
+            anyhow::bail!(
+                "hosted-agent delegation route_ability must be a public route name, not a descriptor ref"
+            );
         }
         let nonce = hex::decode(self.wire_invocation_nonce_hex.trim()).map_err(|err| {
             anyhow::anyhow!("hosted-agent delegation invocation nonce must be hex: {err}")
@@ -376,7 +390,7 @@ pub struct HostedAgentDelegationContext {
     wire_callee_ura: String,
     wire_subject_ura: String,
     wire_invocation_nonce_hex: String,
-    ability: String,
+    route_ability: String,
 }
 
 impl HostedAgentDelegationContext {
@@ -432,14 +446,14 @@ impl HostedAgentDelegationContext {
         let wire_callee_ura = claims.wire_callee_ura.trim();
         let wire_subject_ura = claims.wire_subject_ura.trim();
         let wire_invocation_nonce_hex = claims.wire_invocation_nonce_hex.trim();
-        let ability = claims.ability.trim();
+        let route_ability = claims.route_ability.trim();
         if agent_ura.is_empty()
             || signing_authority.is_empty()
             || wire_caller_ura.is_empty()
             || wire_callee_ura.is_empty()
             || wire_subject_ura.is_empty()
             || wire_invocation_nonce_hex.is_empty()
-            || ability.is_empty()
+            || route_ability.is_empty()
         {
             anyhow::bail!("hosted-agent delegation metadata fields must be non-empty");
         }
@@ -452,7 +466,7 @@ impl HostedAgentDelegationContext {
             || wire_callee_ura != envelope.callee_ura()
             || wire_subject_ura != envelope.subject_ura()
             || wire_invocation_nonce_hex != envelope.invocation_nonce_hex()
-            || ability != envelope.ability()
+            || route_ability != envelope.route_ability()
         {
             anyhow::bail!(
                 "hosted-agent delegation metadata does not match the signed invocation envelope"
@@ -465,7 +479,7 @@ impl HostedAgentDelegationContext {
             wire_callee_ura: wire_callee_ura.to_string(),
             wire_subject_ura: wire_subject_ura.to_string(),
             wire_invocation_nonce_hex: wire_invocation_nonce_hex.to_string(),
-            ability: ability.to_string(),
+            route_ability: route_ability.to_string(),
         })
     }
 
@@ -482,11 +496,10 @@ impl HostedAgentDelegationContext {
                 expected_agent_ura
             );
         }
-        let delegated_public_ability = public_ability_from_descriptor_ref(&self.ability)?;
-        if delegated_public_ability != expected_ability {
+        if self.route_ability != expected_ability {
             anyhow::bail!(
                 "{expected_ability} hosted-agent authority was issued for {}, expected {expected_ability}",
-                self.ability
+                self.route_ability
             );
         }
         if self.wire_caller_ura.trim().is_empty() || self.wire_subject_ura.trim().is_empty() {
@@ -520,16 +533,24 @@ impl HostedAgentDelegationContext {
         Ok(HostedAgentAuthority {
             agent_ura: self.agent_ura.clone(),
             host_device_ura: self.wire_callee_ura.clone(),
-            ability: delegated_public_ability,
+            ability: self.route_ability.clone(),
             binding_kind: AuthorityBindingKind::HostedAgentDelegation,
         })
     }
 }
 
-fn public_ability_from_descriptor_ref(descriptor_ref: &str) -> anyhow::Result<String> {
+/// Project an Axon runtime descriptor ref onto the public ability name used by
+/// hosted-agent delegation metadata.
+///
+/// Runtime dispatch keeps the descriptor ref in the Axon envelope. Local
+/// EasyNet authorization must compare the stable public route ability instead
+/// of embedding descriptor-version facts in the delegation token.
+pub(crate) fn public_route_ability_from_descriptor_ref(
+    descriptor_ref: &str,
+) -> anyhow::Result<String> {
     let ability_ura =
         easynet_axon::invocation::axiom::ability_ura_from_descriptor_ref(descriptor_ref)
-            .map_err(|err| anyhow::anyhow!("invalid delegated ability descriptor ref: {err}"))?;
+            .map_err(|err| anyhow::anyhow!("invalid runtime ability descriptor ref: {err}"))?;
     let selector = crate::ura::AbilitySelector::parse(ability_ura)?;
     Ok(selector.public_name().to_string())
 }
@@ -847,17 +868,14 @@ mod tests {
         let callee = "easynet:///r/default/device/local";
         let subject = "easynet:///r/default/device/local";
         let nonce_hex = hex::encode([0x42u8; 16]);
-        let ability = format!(
-            "{}@1.0.0",
-            crate::ura::owner_ability_ura(callee, "meta.acquire").unwrap()
-        );
+        let ability = "meta.acquire";
         let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             callee,
             subject,
             nonce_hex.as_str(),
-            ability.as_str(),
+            ability,
         )
         .unwrap();
         let claims =
@@ -891,17 +909,13 @@ mod tests {
         let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
         let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
         let nonce_hex = hex::encode([0x24u8; 16]);
-        let ability = format!(
-            "{}@1.0.0",
-            crate::ura::owner_ability_ura("easynet:///r/default/device/local", "meta.acquire")
-                .unwrap()
-        );
+        let ability = "meta.acquire";
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
             nonce_hex.as_str(),
-            ability.as_str(),
+            ability,
         )
         .unwrap();
         let claims = HostedAgentDelegationClaims::new(agent_ura, "host_device", envelope).unwrap();
@@ -912,7 +926,7 @@ mod tests {
             "easynet:///r/default/device/other",
             "easynet:///r/default/device/local",
             nonce_hex.as_str(),
-            ability.as_str(),
+            ability,
         )
         .unwrap();
 
@@ -938,16 +952,13 @@ mod tests {
         let callee = "easynet:///r/default/device/local";
         let subject = "easynet:///r/default/device/local";
         let nonce_hex = hex::encode([0x33u8; 16]);
-        let ability = format!(
-            "{}@1.0.0",
-            crate::ura::owner_ability_ura(callee, "meta.acquire").unwrap()
-        );
+        let ability = "meta.acquire";
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             callee,
             subject,
             nonce_hex.as_str(),
-            ability.as_str(),
+            ability,
         )
         .unwrap();
         let claims = HostedAgentDelegationClaims::new(
@@ -964,7 +975,7 @@ mod tests {
             callee,
             subject,
             replayed_nonce_hex.as_str(),
-            ability.as_str(),
+            ability,
         )
         .unwrap();
 
@@ -979,5 +990,25 @@ mod tests {
             err.to_string().contains("signed invocation envelope"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn hosted_agent_delegation_rejects_descriptor_ref_in_route_ability() {
+        let descriptor_ref = format!(
+            "{}@1.0.0",
+            crate::ura::owner_ability_ura("easynet:///r/default/device/local", "meta.acquire")
+                .unwrap()
+        );
+
+        let err = HostedAgentDelegationEnvelopeBinding::new(
+            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            "easynet:///r/default/device/local",
+            "easynet:///r/default/device/local",
+            hex::encode([0x33u8; 16]),
+            descriptor_ref,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("public route name"), "{err}");
     }
 }

@@ -3389,7 +3389,8 @@ mod tests {
         config.authority_context = Some(
             crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DEVICE_URA,
-            ),
+            )
+            .expect("test device URA is a valid device authority root"),
         );
         crate::runtime::agents::build_registry_with_services(config)
     }

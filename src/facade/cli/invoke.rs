@@ -50,9 +50,10 @@ use crate::ura::AbilitySelector;
 
 #[derive(Debug, Args)]
 pub struct InvokeArgs {
-    /// Canonical Ability URA returned by `easynet ability list`,
-    /// e.g. `easynet:///r/<realm>/ability/device.<node>.observe.health`
-    /// or `easynet:///r/<realm>/ability/<user>.<agent>.chat`.
+    /// Canonical Ability URA returned by `easynet ability list`, or an
+    /// explicit descriptor ref `<ability-ura>@<version>` when the caller wants
+    /// remote origin-caller proof generation to bind a known descriptor
+    /// version.
     pub ability_ura: String,
     /// Pin the invocation to a remote node: a canonical Device URA
     /// (`easynet:///r/<realm>/device/<node_id>`) or Hub URA
@@ -96,8 +97,8 @@ pub struct InvokeArgs {
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
-    let ability_selector =
-        AbilitySelector::parse(&invoke_args.ability_ura).with_context(|| "parse <ability-ura>")?;
+    let ability_ref = InvokeAbilityRef::parse(&invoke_args.ability_ura)?;
+    let ability_selector = ability_ref.selector();
 
     // PR-N1 commit 8/N: `--node` is now wired against the local
     // daemon's `federation.forward_invoke` ability via the
@@ -170,11 +171,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .ok()
                 .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
                 .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-            let target_call =
-                crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::from_ability_ura(
-                    target,
-                    ability_selector.ability_ura(),
-                )?;
+            let target_call = ability_ref.remote_target(target)?;
             let value =
                 crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target_with_timeout(
                     &target_call,
@@ -189,6 +186,12 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         #[cfg(not(feature = "axon-pb"))]
         Some(_) => unreachable!("--node bail handled above when axon-pb is off"),
         None => {
+            if ability_ref.is_descriptor_ref() {
+                bail!(
+                    "local ability invoke does not accept descriptor refs; omit `@version` \
+                     for local dispatch or pass `--node` for remote descriptor-bound origin proof"
+                );
+            }
             // One ability invocation. The shared helper owns the
             // daemon.sock Axon Invoke, subject threading, and
             // daemon-error rendering — every CLI subcommand goes
@@ -202,7 +205,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
             let dispatch_name = ability_selector.local_registry_ability();
-            let target = LocalAbilityTarget::from_selector(&ability_selector);
+            let target = LocalAbilityTarget::from_selector(ability_selector);
             debug_assert_eq!(target.dispatch_name(), dispatch_name);
             let value = invoke_local_ability_target_with_subject_timeout(
                 &target, arguments, subject, timeout,
@@ -230,6 +233,67 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         ability_selector.ability_ura()
     ));
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct InvokeAbilityRef {
+    selector: AbilitySelector,
+    descriptor_ref: Option<String>,
+}
+
+impl InvokeAbilityRef {
+    fn parse(raw: &str) -> anyhow::Result<Self> {
+        let raw = raw.trim();
+        if raw.contains('@') {
+            let descriptor_ref = easynet_axon::invocation::canonical_ability_descriptor_ref(raw)
+                .map_err(|err| anyhow::anyhow!("parse <ability-ura>@<version>: {err}"))?;
+            let (ability_ura, _) = descriptor_ref
+                .rsplit_once('@')
+                .ok_or_else(|| anyhow::anyhow!("descriptor ref is missing `@version`"))?;
+            let selector = AbilitySelector::parse(ability_ura)
+                .with_context(|| "parse ability URA inside descriptor ref")?;
+            return Ok(Self {
+                selector,
+                descriptor_ref: Some(descriptor_ref),
+            });
+        }
+
+        Ok(Self {
+            selector: AbilitySelector::parse(raw).with_context(|| "parse <ability-ura>")?,
+            descriptor_ref: None,
+        })
+    }
+
+    fn selector(&self) -> &AbilitySelector {
+        &self.selector
+    }
+
+    fn is_descriptor_ref(&self) -> bool {
+        self.descriptor_ref.is_some()
+    }
+
+    #[cfg(feature = "axon-pb")]
+    fn remote_target(
+        &self,
+        execution_target_ura: &str,
+    ) -> anyhow::Result<
+        crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget,
+    > {
+        match self.descriptor_ref.as_deref() {
+            Some(descriptor_ref) => {
+                crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::from_descriptor_ref(
+                    execution_target_ura,
+                    descriptor_ref,
+                )
+            }
+            None => {
+                crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::from_ability_ura(
+                    execution_target_ura,
+                    self.selector.ability_ura(),
+                )
+            }
+        }
+    }
 }
 
 /// Strip one layer of the standard ability envelope when present.
@@ -263,6 +327,35 @@ fn unwrap_envelope(v: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invoke_ability_ref_parses_plain_ability_ura() {
+        let parsed =
+            InvokeAbilityRef::parse("easynet:///r/acme/ability/device.node.observe.health")
+                .expect("plain ability URA");
+
+        assert_eq!(
+            parsed.selector().ability_ura(),
+            "easynet:///r/acme/ability/device.node.observe.health"
+        );
+        assert!(!parsed.is_descriptor_ref());
+    }
+
+    #[test]
+    fn invoke_ability_ref_preserves_explicit_descriptor_ref() {
+        let parsed =
+            InvokeAbilityRef::parse("easynet:///r/acme/ability/device.node.observe.health@2.1.0")
+                .expect("descriptor ref");
+
+        assert_eq!(
+            parsed.selector().ability_ura(),
+            "easynet:///r/acme/ability/device.node.observe.health"
+        );
+        assert_eq!(
+            parsed.descriptor_ref.as_deref(),
+            Some("easynet:///r/acme/ability/device.node.observe.health@2.1.0")
+        );
+    }
 
     #[test]
     fn non_canonical_node_ura_returns_actionable_error() {

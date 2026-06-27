@@ -341,13 +341,9 @@ fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_revoke(target_ura: &str, reason: &str, caller_ura: &str) -> anyhow::Result<()> {
-    let caller_opt = if caller_ura.is_empty() {
-        None
-    } else {
-        Some(caller_ura)
-    };
+    let _ = caller_ura;
     crate::services::invocation_transport::federation_invoke::invoke_federation_revoke(
-        target_ura, reason, caller_opt,
+        target_ura, reason,
     )
 }
 

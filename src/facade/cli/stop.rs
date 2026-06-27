@@ -169,7 +169,6 @@ impl StopPlan {
             match crate::services::invocation_transport::federation_invoke::invoke_federation_revoke(
                 &caller_ura,
                 "device shutdown",
-                Some(&caller_ura),
             ) {
                 Ok(_) => self.renderer.stage_ok("revoke"),
                 Err(e) => self.renderer.stage_skipped("revoke", &format!("({e})")),

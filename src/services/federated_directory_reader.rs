@@ -15,13 +15,9 @@ use serde_json::Value;
 /// Read the federated directory through the local daemon's
 /// `federation.discover` ability.
 #[cfg(feature = "axon-pb")]
-pub fn read_federated_directory(
-    agent_ura_filter: Option<&str>,
-    caller_ura: Option<&str>,
-) -> anyhow::Result<Vec<Value>> {
+pub fn read_federated_directory(agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
     crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
         agent_ura_filter,
-        caller_ura,
     )
 }
 
@@ -29,20 +25,15 @@ pub fn read_federated_directory(
 pub fn read_federated_directory_filtered(
     agent_ura_filter: Option<&str>,
     local_user_id_filter: Option<&str>,
-    caller_ura: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
     crate::services::invocation_transport::federation_invoke::invoke_federation_discover_filtered(
         agent_ura_filter,
         local_user_id_filter,
-        caller_ura,
     )
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub fn read_federated_directory(
-    _agent_ura_filter: Option<&str>,
-    _caller_ura: Option<&str>,
-) -> anyhow::Result<Vec<Value>> {
+pub fn read_federated_directory(_agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
     Err(feature_unavailable_error("federation.discover"))
 }
 
@@ -50,7 +41,6 @@ pub fn read_federated_directory(
 pub fn read_federated_directory_filtered(
     _agent_ura_filter: Option<&str>,
     _local_user_id_filter: Option<&str>,
-    _caller_ura: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
     Err(feature_unavailable_error("federation.discover"))
 }
@@ -69,7 +59,7 @@ mod tests {
 
     #[test]
     fn feature_off_reports_unavailable_instead_of_empty_success() {
-        let err = read_federated_directory(None, None).unwrap_err();
+        let err = read_federated_directory(None).unwrap_err();
         assert!(
             err.to_string().contains("without the `axon-pb` feature"),
             "{err}"
@@ -78,7 +68,7 @@ mod tests {
 
     #[test]
     fn feature_off_filtered_reports_same_capability_error() {
-        let err = read_federated_directory_filtered(None, None, None).unwrap_err();
+        let err = read_federated_directory_filtered(None, None).unwrap_err();
         assert!(
             err.to_string().contains("without the `axon-pb` feature"),
             "{err}"

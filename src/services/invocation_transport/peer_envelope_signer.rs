@@ -106,11 +106,18 @@ pub(crate) fn build_peer_envelope(
 pub(crate) fn sign_peer_request_envelope(
     envelope: &mut Envelope,
     ability: &str,
+    descriptor_ref: Option<&str>,
     arguments: &[u8],
     local_realm: Option<&str>,
     hub_signing_seed: Option<&SessionSigningSeed>,
 ) -> Result<Option<String>, Status> {
     let Some(realm) = local_realm else {
+        return Ok(None);
+    };
+    let Some(descriptor_ref) = descriptor_ref
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return Ok(None);
     };
 
@@ -167,15 +174,16 @@ pub(crate) fn sign_peer_request_envelope(
             "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
         ));
     }
-    let descriptor_ref = crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
-        &callee_ura,
-        ability,
-    )
-    .map_err(|err| {
-        Status::internal(format!(
-            "cross-hub forward_invoke signing: resolve descriptor ref for `{ability}`: {err}"
-        ))
-    })?;
+    let descriptor_ref =
+        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+            &callee_ura,
+            descriptor_ref,
+        )
+        .map_err(|err| {
+            Status::internal(format!(
+                "cross-hub forward_invoke signing: invalid explicit descriptor ref for `{ability}`: {err}"
+            ))
+        })?;
 
     let descriptor_bound = descriptor_bound_from_wire_parts(
         envelope.clone(),
@@ -418,6 +426,7 @@ mod tests {
             // single-segment name has no valid hub descriptor URA. Use a
             // real federation ability, as every production caller does.
             "federation.discover",
+            Some("easynet:///r/peer/ability/hub.federation.discover@1.0.0"),
             br#"{"q":"chat"}"#,
             Some("local"),
             Some(&[3u8; 32]),

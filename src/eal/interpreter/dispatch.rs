@@ -109,7 +109,6 @@ fn dispatch_remote_via_forward_invoke(
         ))
     }
 }
-
 /// Per-mission-run dispatch context.
 ///
 /// `trace_id` is the mission run's id (minted once per run in
@@ -385,9 +384,9 @@ pub(super) fn dispatch_to_agent(
     let display_name = format!("{}.{}", agent_id.name, ability.as_str());
     match try_dispatch_via_daemon(&agent_id.name, ability.as_str(), arguments) {
         DaemonDispatch::Result(value) => Ok(value.into()),
-        DaemonDispatch::AbilityNotFound => {
-            Err(EalError::NotFound(format!("unknown ability: {display_name}")))
-        }
+        DaemonDispatch::AbilityNotFound => Err(EalError::NotFound(format!(
+            "unknown ability: {display_name}"
+        ))),
         DaemonDispatch::DaemonDown(reason) => Err(EalError::Unavailable(format!(
             "daemon {display_name}: {reason}"
         ))),
@@ -447,4 +446,3 @@ fn try_dispatch_via_daemon(
         },
     }
 }
-

@@ -66,6 +66,13 @@ pub enum AbilityControlPlaneError {
     /// control characters, so it would not round-trip as a stable key.
     #[error("authority root has invalid format: {authority_root:?}")]
     InvalidAuthorityRoot { authority_root: String },
+    /// A device-scoped authority context was constructed with a non-device URA
+    /// or a value that could not be parsed as a URA.
+    #[error("device authority root must be a canonical device URA: {authority_root:?}: {reason}")]
+    InvalidDeviceAuthorityRoot {
+        authority_root: String,
+        reason: String,
+    },
     /// Authority binding was created without an ability name.
     #[error("authority ability must be non-empty")]
     EmptyAuthorityAbility,

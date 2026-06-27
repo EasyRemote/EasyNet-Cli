@@ -879,6 +879,7 @@ impl UnaryDispatcher {
                 sign_peer_request_envelope(
                     envelope,
                     &peer_request.function_name,
+                    None,
                     &peer_request.arguments,
                     local_realm,
                     self.federation.hub_signing_seed.as_ref(),
@@ -986,6 +987,7 @@ impl UnaryDispatcher {
                 sign_peer_request_envelope(
                     envelope,
                     &peer_request.function_name,
+                    None,
                     &peer_request.arguments,
                     local_realm,
                     self.federation.hub_signing_seed.as_ref(),
@@ -1350,6 +1352,7 @@ impl UnaryDispatcher {
             sign_peer_request_envelope(
                 envelope,
                 &peer_request.function_name,
+                None,
                 &peer_request.arguments,
                 self.identity.session_realm.as_deref(),
                 self.federation.hub_signing_seed.as_ref(),

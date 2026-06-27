@@ -304,11 +304,9 @@ struct OwnerAuthority {
 /// owning agent's on-disk manifest. Precise refusals at every step —
 /// a transfer surface must never guess.
 fn resolve_owner_manifest(registry_name: &str) -> anyhow::Result<AbilityHome> {
-    let Some((agent, public_name)) = registry_name.split_once('.') else {
-        anyhow::bail!(
-            "ability must use the owner-local `<agent>.<name>` form; got {registry_name:?}"
-        );
-    };
+    let owner_local = crate::ura::OwnerLocalAbilityName::parse(registry_name)?;
+    let agent = owner_local.owner();
+    let public_name = owner_local.public_name();
     let agents = crate::registry::agents::load_agents()?;
     let Some(entry) = agents.agents.get(agent) else {
         anyhow::bail!("no agent {agent:?} on this device (see `easynet agent list`)");
@@ -804,7 +802,10 @@ pub fn recover_forget_transactions(
         // fabricates convergence it did not achieve. A row whose learner is
         // gone converges terminally above (nothing left to project).
         if runtime_sync
-            .require_committed(FORGET, "leaving forget tombstone for the next recovery sweep")
+            .require_committed(
+                FORGET,
+                "leaving forget tombstone for the next recovery sweep",
+            )
             .is_err()
         {
             continue;
@@ -1740,16 +1741,12 @@ mod tests {
         let env = teach_env(caller, owner_ura);
         let signer = ed25519_dalek::SigningKey::from_bytes(&[0x44; 32]);
         let nonce_hex = hex::encode(env.invocation_nonce());
-        let descriptor_ref = format!(
-            "{}@1.0.0",
-            crate::ura::owner_ability_ura(env.callee(), TEACH).expect("test teach descriptor ref")
-        );
         let envelope = crate::runtime::ability::HostedAgentDelegationEnvelopeBinding::new(
             env.caller(),
             env.callee(),
             env.subject(),
             nonce_hex.as_str(),
-            descriptor_ref.as_str(),
+            TEACH,
         )
         .expect("test hosted-agent delegation envelope");
         let claims = crate::runtime::ability::HostedAgentDelegationClaims::new(

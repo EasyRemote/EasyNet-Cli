@@ -253,9 +253,8 @@ fn run_json() -> anyhow::Result<()> {
 /// above; whether any peers are advertised is a softer signal).
 #[cfg(feature = "axon-pb")]
 fn fetch_directory_entries() -> Vec<Value> {
-    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
-        None, None,
-    ) {
+    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(None)
+    {
         Ok(entries) => entries,
         Err(e) => {
             output::info(&format!("Fleet: cannot query federation.discover ('{e}')"));

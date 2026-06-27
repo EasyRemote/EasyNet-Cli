@@ -344,11 +344,12 @@ impl Kernel {
         // block alongside the rest of the descriptor-bound construction.
         let dispatch_invocation = invocation.clone();
         let result = block_on_axon_dispatch(move || async move {
-            let runtime_ability = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
-                &dispatch_invocation.callee,
-                dispatch_invocation.ability.as_str(),
-            )
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
+            let runtime_ability =
+                crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+                    &dispatch_invocation.callee,
+                    dispatch_invocation.ability.as_str(),
+                )
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
             let descriptor_version =
                 crate::runtime::axon_bridge::descriptor_ref::registered_descriptor_version(
                     &runtime,

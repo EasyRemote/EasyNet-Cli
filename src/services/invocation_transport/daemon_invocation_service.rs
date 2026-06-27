@@ -121,6 +121,9 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::runtime::agents::invocation_history_ability::{
+    record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
+};
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::invocation_transport::admission_facade::AdmissionFacade;
@@ -140,12 +143,7 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE,
 };
-use crate::runtime::agents::invocation_history_ability::{
-    record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
-};
-use crate::services::invocation_transport::invocation_wire::{
-    wrap_json_response, BoxedDownStream,
-};
+use crate::services::invocation_transport::invocation_wire::{wrap_json_response, BoxedDownStream};
 use crate::services::invocation_transport::ledger_projection::build_unary_ledger_record;
 use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::quota_meter::quota_metered_ability_for_request;
@@ -391,14 +389,12 @@ impl DaemonInvocationService {
                 "invocation.record.get: daemon has no invocation ledger wired",
             ));
         };
-        let record =
-            record_by_request_id(ledger, &request.request_id).map_err(|err| match err.to_string()
-            {
-                msg if msg.contains("request_id must not be empty") => {
-                    Status::invalid_argument(msg)
-                }
-                msg => Status::internal(msg),
-            })?;
+        let record = record_by_request_id(ledger, &request.request_id).map_err(|err| match err
+            .to_string()
+        {
+            msg if msg.contains("request_id must not be empty") => Status::invalid_argument(msg),
+            msg => Status::internal(msg),
+        })?;
         wrap_json_response(&serde_json::json!({ "record": record }))
     }
 

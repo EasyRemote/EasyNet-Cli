@@ -57,10 +57,9 @@ use serde_json::{json, Value};
 
 use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
 use crate::services::invocation_transport::ProtoEnvelope;
-use crate::services::self_identity::LocalDaemonSigner;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{
-    Error as WireError, InvocationState as WireInvocationState, InvokeRequest, InvokeResponse,
+    Error as WireError, InvocationState as WireInvocationState, InvokeResponse,
 };
 use easynet_axon::ura::{parse_ura, URAKind};
 
@@ -162,41 +161,12 @@ enum RemoteDescriptorBinding {
 
 impl RemoteAbilityInvocationTarget {
     /// Project a target-owned system ability selector into a full remote
-    /// invocation target.
+    /// invocation target with descriptor binding deferred to that target.
     ///
     /// Use this for command adapters whose product contract is "call this
     /// device/hub-owned system ability on `--node`". It is deliberately named
     /// target-owned so it is not reused for arbitrary Ability URAs.
     pub(crate) fn for_target_owned_selector(
-        execution_target_ura: &str,
-        selector: &str,
-    ) -> anyhow::Result<Self> {
-        validate_forward_target_ura(execution_target_ura)?;
-        let public_ability = crate::ura::owner_local_ability_name(execution_target_ura, selector);
-        crate::ura::owner_ability_ura(execution_target_ura, &public_ability).ok_or_else(|| {
-            anyhow::anyhow!("derive ability URA for {execution_target_ura} {public_ability}")
-        })?;
-        let descriptor_ref =
-            crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
-                execution_target_ura,
-                &public_ability,
-            )
-            .with_context(|| {
-                format!(
-                    "resolve descriptor version for target-owned selector `{selector}` on `{execution_target_ura}`"
-                )
-        })?;
-        Self::from_descriptor_ref(execution_target_ura, &descriptor_ref)
-    }
-
-    /// Project a target-owned selector for a pure remote dispatch.
-    ///
-    /// Use this for surfaces where the local process is not allowed to mint a
-    /// descriptor-bound origin-caller proof because it does not own the remote
-    /// descriptor source of truth. The target remains explicit: execution node,
-    /// callee owner, public ability, and descriptor-binding state are all
-    /// inspectable on the value object.
-    pub(crate) fn for_target_owned_remote_dispatch_selector(
         execution_target_ura: &str,
         selector: &str,
     ) -> anyhow::Result<Self> {
@@ -376,7 +346,7 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     // the Postel-permissive admission paths still admit either,
     // but we want the wire to ship a parseable URA so that any
     // caller-side strict validator does not reject the envelope.
-    let resolved_caller_ura = resolved_local_caller_ura(caller_ura);
+    let outer_caller_ura = LOCAL_SYSTEM_AGENT_URA;
     let forward_subject_ura =
         crate::ura::owner_ability_ura(target.execution_target_ura(), "federation.forward_invoke")
             .ok_or_else(|| {
@@ -390,16 +360,12 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     // (`AXON_NONCE_REPLAY` rejects on a hit in the replay window).
     // CLI-initiated calls are one-shot, so a fresh `OsRng` 16-byte
     // sample per call is sufficient.
-    let request = signed_local_daemon_request(
-        &resolved_caller_ura,
-        ProtoEnvelope::targeted(
-            &resolved_caller_ura,
-            target.execution_target_ura(),
-            forward_subject_ura,
-        )?,
-        "federation.forward_invoke",
-        forward_args_bytes,
-    )?;
+    let request = ProtoEnvelope::targeted(
+        outer_caller_ura,
+        target.execution_target_ura(),
+        forward_subject_ura,
+    )?
+    .invoke_request("federation.forward_invoke", forward_args_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -833,18 +799,10 @@ fn validate_forward_target_ura(target_ura: &str) -> anyhow::Result<()> {
 ///     to the daemon. `None` returns the full federated
 ///     directory; `Some(ura)` returns at most one entry (lex
 ///     tie-break on peer realm).
-///   * `caller_ura` — optional caller URA for the envelope. When
-///     `None`, uses the daemon's process-local `_system.local`
-///     control-plane identity. It is not a device, user, or hub
-///     identity and cannot be reproduced by external callers.
-///
 /// Returns the `entries` array as a `Vec<Value>` (each element
 /// is a `DirectoryEntry`-shaped JSON object).
-pub fn invoke_federation_discover(
-    agent_ura_filter: Option<&str>,
-    caller_ura: Option<&str>,
-) -> anyhow::Result<Vec<Value>> {
-    invoke_federation_discover_filtered(agent_ura_filter, None, caller_ura)
+pub fn invoke_federation_discover(agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
+    invoke_federation_discover_filtered(agent_ura_filter, None)
 }
 
 /// Same daemon-backed discovery path as `invoke_federation_discover`,
@@ -855,7 +813,6 @@ pub fn invoke_federation_discover(
 pub fn invoke_federation_discover_filtered(
     agent_ura_filter: Option<&str>,
     local_user_id_filter: Option<&str>,
-    caller_ura: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
@@ -875,14 +832,13 @@ pub fn invoke_federation_discover_filtered(
     }
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
-    let resolved_caller = resolved_local_caller_ura(caller_ura);
-
-    let request = signed_local_daemon_request(
-        &resolved_caller,
-        ProtoEnvelope::loopback(resolved_caller.as_str())?,
-        "federation.discover",
-        arg_bytes,
-    )?;
+    let local_device_ura = crate::runtime::local_invocation_identity::local_device_ura();
+    let request = ProtoEnvelope::targeted(
+        LOCAL_SYSTEM_AGENT_URA,
+        local_device_ura.as_str(),
+        local_device_ura.as_str(),
+    )?
+    .invoke_request("federation.discover", arg_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -932,17 +888,10 @@ pub fn invoke_federation_discover_filtered(
 ///     a device URA `easynet:///r/<realm>/device/<id>`).
 ///   * `reason` — operator-supplied label, written through to the
 ///     receipt for audit. `"deregister"` / `"reset"` are common.
-///   * `caller_ura` — same caller identity rule as
-///     `invoke_federation_discover`.
-///
 /// Returns `Ok(())` on a successful ack from the daemon. Best-effort
 /// by contract on the hub side, but this helper still surfaces
 /// transport / parse errors so callers can log them honestly.
-pub fn invoke_federation_revoke(
-    agent_ura: &str,
-    reason: &str,
-    caller_ura: Option<&str>,
-) -> anyhow::Result<()> {
+pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result<()> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -958,14 +907,13 @@ pub fn invoke_federation_revoke(
     });
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
-    let resolved_caller = resolved_local_caller_ura(caller_ura);
-
-    let request = signed_local_daemon_request(
-        &resolved_caller,
-        ProtoEnvelope::loopback(resolved_caller.as_str())?,
-        "federation.revoke",
-        arg_bytes,
-    )?;
+    let local_device_ura = crate::runtime::local_invocation_identity::local_device_ura();
+    let request = ProtoEnvelope::targeted(
+        LOCAL_SYSTEM_AGENT_URA,
+        local_device_ura.as_str(),
+        local_device_ura.as_str(),
+    )?
+    .invoke_request("federation.revoke", arg_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1008,32 +956,6 @@ fn generate_call_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("cli-{nanos:x}")
-}
-
-fn resolved_local_caller_ura(caller_ura: Option<&str>) -> String {
-    caller_ura
-        .map(str::trim)
-        .filter(|caller| !caller.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| LOCAL_SYSTEM_AGENT_URA.to_string())
-}
-
-fn signed_local_daemon_request(
-    caller_ura: &str,
-    envelope: ProtoEnvelope,
-    function_name: &str,
-    arguments: Vec<u8>,
-) -> anyhow::Result<InvokeRequest> {
-    let signer = LocalDaemonSigner::for_caller(caller_ura);
-    let callee_ura = envelope
-        .callee_ura()
-        .ok_or_else(|| anyhow::anyhow!("signed local daemon request missing callee"))?
-        .to_string();
-    let descriptor_ref = crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
-        &callee_ura,
-        function_name,
-    )?;
-    envelope.signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
 }
 
 #[cfg(test)]
@@ -1354,8 +1276,8 @@ mod tests {
     }
 
     #[test]
-    fn remote_dispatch_selector_declares_descriptor_binding_deferred_to_destination() {
-        let target = RemoteAbilityInvocationTarget::for_target_owned_remote_dispatch_selector(
+    fn target_owned_selector_declares_descriptor_binding_deferred_to_destination() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
             "easynet:///r/acme/device/N1",
             "claude.chat",
         )

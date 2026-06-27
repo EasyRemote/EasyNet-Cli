@@ -87,7 +87,8 @@ impl RuntimeDispatchAdapter {
         config.authority_context = Some(
             crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
                 crate::runtime::local_invocation_identity::local_device_ura(),
-            ),
+            )
+            .expect("local device URA is a valid device authority root"),
         );
         let _registry = crate::runtime::agents::build_registry_with_services(config);
         let resolver: Arc<dyn TargetResolver> =

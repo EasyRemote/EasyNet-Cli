@@ -209,46 +209,19 @@ fn invoke_plugin_control_ability(
 fn invoke_plugin_control_ability_via_daemon(
     ability: &'static str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    crate::support::async_bridge::run_blocking(
-        async {
-            let client = match crate::daemon::DaemonClient::local() {
-                Ok(client) => client,
-                Err(crate::daemon::DaemonError::InvocationEndpointDown { .. }) => {
-                    return Ok(None);
-                }
-                Err(err) => return Err(err.into()),
-            };
-            let Some(subject) = plugin_control_subject_ura()? else {
-                return Ok(None);
-            };
-            let descriptor_ref =
-                crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
-                    &subject, ability,
-                )?;
-            let invocation = crate::daemon::DaemonInvocation::builder(
-                &subject,
-                &subject,
-                descriptor_ref,
-                &subject,
-            )?
-            .args_json(&serde_json::json!({}))?
-            .build();
-            let response = client.invoke(invocation).await?;
-            if let Some(err) = response.error {
-                anyhow::bail!(
-                    "daemon plugin control ability {ability} failed ({}): {}",
-                    err.code,
-                    err.message
-                );
-            }
-            if response.result.is_empty() {
-                return Ok(Some(serde_json::Value::Null));
-            }
-            let value = serde_json::from_slice(&response.result)?;
-            Ok(Some(value))
-        },
-        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
-    )
+    let Some(_subject) = plugin_control_subject_ura()? else {
+        return Ok(None);
+    };
+    match crate::support::local_invoke::invoke_local_ability(ability, serde_json::json!({})) {
+        Ok(value) => Ok(Some(value)),
+        Err(err)
+            if crate::support::local_invoke::classify_invoke_error(&err)
+                == crate::support::local_invoke::LocalInvokeErrorKind::DaemonOffline =>
+        {
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(feature = "axon-pb")]

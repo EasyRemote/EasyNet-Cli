@@ -1172,6 +1172,14 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
     let signed_descriptor_ref = sign_peer_request_envelope(
         &mut envelope,
         ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+        Some(&format!(
+            "{}@1.0.0",
+            crate::ura::owner_ability_ura(
+                &crate::ura::hub_ura("local-realm"),
+                ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES
+            )
+            .expect("proxy list descriptor ref")
+        )),
         args,
         Some("local-realm"),
         Some(&[0x22; 32]),

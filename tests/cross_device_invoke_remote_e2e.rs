@@ -330,7 +330,8 @@ added_at_unix_ms = 0
     let authority_context =
         easynet_cli::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
             DEVICE_A_URI,
-        );
+        )
+        .expect("test device URI is a valid device authority root");
     let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
         authority_context,

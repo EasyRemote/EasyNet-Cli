@@ -396,7 +396,8 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
             Arc::clone(&rt),
             crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DAEMON_URI,
-            ),
+            )
+            .expect("test daemon URI is a valid device authority root"),
         );
     crate::runtime::agents::file_transfer_ability::register(&mut catalog);
 

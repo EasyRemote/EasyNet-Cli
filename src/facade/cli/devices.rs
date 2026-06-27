@@ -145,11 +145,9 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn fetch_directory_entries(self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
-        None, self_ura,
-    )
-    .context("invoke federation.discover for device list")
+fn fetch_directory_entries(_self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
+    crate::services::invocation_transport::federation_invoke::invoke_federation_discover(None)
+        .context("invoke federation.discover for device list")
 }
 
 #[cfg(not(feature = "axon-pb"))]

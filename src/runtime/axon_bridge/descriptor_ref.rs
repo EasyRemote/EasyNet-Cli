@@ -66,13 +66,16 @@ pub(crate) async fn registered_descriptor_version(
     runtime_ability: &str,
     mode: AxonInvocationCallMode,
 ) -> Result<String, DescriptorVersionError> {
-    let options = runtime.ability_options(runtime_ability).await.ok_or_else(|| {
-        DescriptorVersionError::AbilityNotFound(format!(
-            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+    let options = runtime
+        .ability_options(runtime_ability)
+        .await
+        .ok_or_else(|| {
+            DescriptorVersionError::AbilityNotFound(format!(
+                "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
              version: unknown_ability `{runtime_ability}` is not registered in the local \
              runtime (ability_not_found)"
-        ))
-    })?;
+            ))
+        })?;
     let version = options.proof_for_mode(mode).descriptor_version;
     if version.trim().is_empty() {
         return Err(DescriptorVersionError::VersionUnbound(format!(

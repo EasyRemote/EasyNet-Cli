@@ -81,7 +81,6 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
     let entries = crate::services::federated_directory_reader::read_federated_directory_filtered(
         args.agent_ura.as_deref(),
         args.local_user_id.as_deref(),
-        None,
     )?;
 
     if args.json {

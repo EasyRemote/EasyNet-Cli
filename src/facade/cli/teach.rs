@@ -301,11 +301,10 @@ struct OwnerAbilitySubject {
 }
 
 fn resolve_owner_ability_subject(ability: &str) -> anyhow::Result<OwnerAbilitySubject> {
-    let (owner, ability_name) = ability
-        .split_once('.')
-        .ok_or_else(|| anyhow::anyhow!("teach ability must be in <agent>.<ability> form"))?;
-    let owner_ura = resolve_learner_ura(owner)?;
-    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, ability_name)
+    let owner_local = crate::ura::OwnerLocalAbilityName::parse(ability)
+        .map_err(|err| anyhow::anyhow!("teach ability must be in <agent>.<ability> form: {err}"))?;
+    let owner_ura = resolve_learner_ura(owner_local.owner())?;
+    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, owner_local.public_name())
         .ok_or_else(|| anyhow::anyhow!("could not mint teach descriptor subject URA"))?;
     Ok(OwnerAbilitySubject {
         owner_ura,

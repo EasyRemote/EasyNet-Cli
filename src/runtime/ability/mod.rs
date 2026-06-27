@@ -23,6 +23,7 @@ pub mod error;
 pub mod impl_binding;
 pub mod registry;
 
+pub(crate) use authority::public_route_ability_from_descriptor_ref;
 pub use authority::{
     AuthorityBindingKind, AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityPredicate,
     AuthorityScope, HostedAgentAuthority, HostedAgentDelegationClaims,

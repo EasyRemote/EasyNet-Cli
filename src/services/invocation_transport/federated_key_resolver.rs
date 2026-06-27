@@ -445,6 +445,7 @@ impl FederatedKeyResolver {
             sign_peer_request_envelope(
                 envelope,
                 ability,
+                None,
                 &request.arguments,
                 Some(self_realm),
                 self.hub_signing_seed.as_ref(),

@@ -254,9 +254,8 @@ fn check_federation() -> Check {
 #[cfg(feature = "axon-pb")]
 fn federation_check_impl() -> Check {
     use serde_json::Value;
-    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
-        None, None,
-    ) {
+    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(None)
+    {
         Ok(entries) => {
             let total = entries.len();
             let stale = entries
