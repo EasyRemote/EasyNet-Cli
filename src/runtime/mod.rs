@@ -119,8 +119,8 @@ pub mod kernel;
 // "no peer import" rule.
 pub mod execution;
 
-// PR-SYS: stage-2 dispatch executor + the `system.*` ability
-// namespace. `ability_dispatch` consumes `InvocationTarget` (from
+// Stage-2 dispatch executor for daemon-owned and agent-owned abilities.
+// `ability_dispatch` consumes `InvocationTarget` (from
 // stage-1 resolver in `invocation_target.rs`) and routes either to
 // the in-process `AxonAbilityCatalog` or via `GatewayApi`.
 // `agents::build_registry` populates the registry with every

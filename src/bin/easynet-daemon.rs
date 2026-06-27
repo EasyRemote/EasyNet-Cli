@@ -192,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
     }
     boot_bus.emit_ok("loop-controller");
 
-    // Build the system.* ability registry off the SAME sub-service
+    // Build the daemon-owned ability registry off the SAME sub-service
     // handles the Kernel holds. This is the U1 unity property at
     // the boot path: every ability lookup and every KernelApi call
     // observe one set of sub-service state. A regression that built

@@ -98,15 +98,15 @@ pub fn is_valid_descriptor_version(version: &str) -> bool {
         .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// Two kinds of ability the CLI publishes. Introduced by PR-SYS to
-/// disambiguate agent abilities (per-agent `<agent>.chat`-style)
-/// from device-level system abilities (`system.<feature>`).
+/// Two kinds of ability the CLI publishes. The split disambiguates
+/// agent abilities (per-agent `<agent>.<verb>`-style) from daemon-owned
+/// device/control-plane abilities.
 ///
-/// Why an enum and not a free-form string: a name beginning with
-/// `system.` is a wire-level promise that the publishing node
-/// itself owns the handler — no agent subprocess gets reached. The
-/// enum lets a reader look at one field and know which dispatch
-/// path applies, instead of grepping the prefix.
+/// Why an enum and not a free-form string: the kind is a wire-level
+/// promise about handler ownership. `System` means the publishing node
+/// owns the handler and no agent subprocess is reached. The enum lets a
+/// reader look at one field and know which dispatch path applies,
+/// instead of grepping a prefix.
 ///
 /// `Agent` is the existing case (every `<name>.chat` pre-PR-SYS
 /// shipped under this kind, even though the kind didn't exist
@@ -121,7 +121,7 @@ pub enum AbilityKind {
     /// agent's subprocess. Names: `<agent>.<verb>`.
     Agent,
     /// Belongs to the daemon (the node) itself; dispatch lands
-    /// in-process via `runtime::system::*`. Names: `system.<feature>`.
+    /// in-process via daemon-owned ability handlers.
     System,
 }
 
@@ -130,12 +130,9 @@ impl AbilityKind {
     /// dispatch-router boundaries that receive a string and need
     /// to know which sub-system owns the handler.
     ///
-    /// Post-RFC-001 v4.1.7 system-namespace migration: the
-    /// classifier matches the canonical first-segment partition
-    /// (`device.*` / `hub.*` for system-tier abilities; everything
-    /// else is agent-owned). The pre-migration `system.*` prefix
-    /// is retained as a back-compat sniff for legacy manifests
-    /// the reader may still encounter on disk.
+    /// The classifier matches the canonical first-segment partition:
+    /// `device.*`, `hub.*`, and current control-plane `system.*` names
+    /// are daemon-owned; everything else is agent-owned.
     pub fn from_qualified_name(name: &str) -> Self {
         if name.starts_with("device.") || name.starts_with("hub.") || name.starts_with("system.") {
             Self::System

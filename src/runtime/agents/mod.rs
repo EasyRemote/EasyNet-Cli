@@ -1,19 +1,19 @@
-// EasyNet CLI — System Abilities (`system.*` namespace)
-// ======================================================
+// EasyNet CLI — Daemon-Owned Abilities
+// ====================================
 //
 // File: src/runtime/system/mod.rs
 // Description: Device-level abilities published by `easynet-daemon`.
-//              Distinct from agent abilities (which live under
-//              `runtime::abilities` and bind to one registered AI
-//              agent), system abilities belong to the *node*
-//              itself: ping, schedule, session-attach, permission,
-//              discuss, loop. Their handlers run inside the daemon,
-//              not inside an agent subprocess.
+//              Distinct from agent abilities (which bind to one registered
+//              AI agent), daemon-owned abilities belong to the node itself:
+//              ping, schedule, session-attach, permission, discuss, loop.
+//              Their handlers run inside the daemon, not inside an agent
+//              subprocess.
 //
 // Naming
 // ------
-// All system abilities are named `system.<feature>[.<verb>]`. Today
-// only `observe.health` exists; PR-ATTACH onwards extends the namespace.
+// Names are explicit device/control-plane prefixes such as `observe.*`,
+// `session.*`, `consent.*`, and the existing boot-control
+// `system.watch_boot` wire subscription.
 //
 // Per-feature module layout
 // -------------------------
