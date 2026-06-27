@@ -976,6 +976,15 @@ impl HostedAgentDelegation {
     }
 }
 
+/// State machine for projecting daemon invocation metadata after a terminal
+/// unary response.
+///
+/// Invariant 1: `ReceiptBacked` is the only state that may be used as a
+/// causal parent because it owns a complete `(receipt_ura, receipt_hash)`
+/// anchor.
+/// Invariant 2: pending states still return the invocation result and submitted
+/// tuple echoes. Observation surfaces may report them; child-invocation builders
+/// must reject them before dispatch.
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone)]
 enum InvocationMetadataProjection {
@@ -983,46 +992,71 @@ enum InvocationMetadataProjection {
         ledger_record: serde_json::Value,
         terminal_receipt: serde_json::Value,
     },
+    LedgerPending {
+        reason: String,
+    },
+    ReceiptAnchorPending {
+        ledger_record: serde_json::Value,
+        terminal_receipt: serde_json::Value,
+        reason: String,
+    },
 }
 
 #[cfg(feature = "axon-pb")]
 impl InvocationMetadataProjection {
-    fn from_ledger_record(
+    fn from_polled_ledger_record(
         ledger_record: serde_json::Value,
         request_id: &str,
         ability: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> Self {
         if ledger_record.is_null() {
-            anyhow::bail!(
-                "ledger did not expose invocation record for request_id {request_id} after local invoke {ability}; cannot build receipt-backed invocation metadata"
-            );
+            return Self::LedgerPending {
+                reason: format!(
+                    "ledger did not expose invocation record for request_id {request_id} after local invoke {ability}"
+                ),
+            };
         }
 
         match terminal_receipt_from_ledger_record(&ledger_record) {
             Some(terminal_receipt) if terminal_receipt_has_complete_anchor(&terminal_receipt) => {
-                Ok(Self::ReceiptBacked {
+                Self::ReceiptBacked {
                     ledger_record,
                     terminal_receipt,
-                })
+                }
             }
-            _ => anyhow::bail!(
-                "ledger record for request_id {request_id} after local invoke {ability} has no complete terminal receipt anchor; cannot build causal parent metadata"
-            ),
+            Some(terminal_receipt) => Self::ReceiptAnchorPending {
+                ledger_record,
+                terminal_receipt,
+                reason: format!(
+                    "ledger record for request_id {request_id} after local invoke {ability} has no complete terminal receipt anchor"
+                ),
+            },
+            None => Self::ReceiptAnchorPending {
+                ledger_record,
+                terminal_receipt: serde_json::Value::Null,
+                reason: format!(
+                    "ledger record for request_id {request_id} after local invoke {ability} has no receipt_chain projection"
+                ),
+            },
         }
     }
 
     fn state_label(&self) -> &'static str {
         match self {
             Self::ReceiptBacked { .. } => "receipt_backed",
+            Self::LedgerPending { .. } => "ledger_pending",
+            Self::ReceiptAnchorPending { .. } => "receipt_anchor_pending",
         }
     }
 
     fn ledger_field(&self, key: &str) -> serde_json::Value {
         match self {
-            Self::ReceiptBacked { ledger_record, .. } => ledger_record
+            Self::ReceiptBacked { ledger_record, .. }
+            | Self::ReceiptAnchorPending { ledger_record, .. } => ledger_record
                 .get(key)
                 .cloned()
                 .unwrap_or(serde_json::Value::Null),
+            Self::LedgerPending { .. } => serde_json::Value::Null,
         }
     }
 
@@ -1030,7 +1064,20 @@ impl InvocationMetadataProjection {
         match self {
             Self::ReceiptBacked {
                 terminal_receipt, ..
+            }
+            | Self::ReceiptAnchorPending {
+                terminal_receipt, ..
             } => terminal_receipt.clone(),
+            Self::LedgerPending { .. } => serde_json::Value::Null,
+        }
+    }
+
+    fn diagnostic(&self) -> Option<&str> {
+        match self {
+            Self::ReceiptBacked { .. } => None,
+            Self::LedgerPending { reason } | Self::ReceiptAnchorPending { reason, .. } => {
+                Some(reason.as_str())
+            }
         }
     }
 }
@@ -1255,11 +1302,11 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let metadata_projection = InvocationMetadataProjection::from_ledger_record(
+    let metadata_projection = InvocationMetadataProjection::from_polled_ledger_record(
         ledger_record,
         &request_id,
         &function_name,
-    )?;
+    );
 
     // Identity fields are the LEDGER's persisted values, not the
     // submitted ones — the daemon may rewrite the callee during route
@@ -1291,6 +1338,9 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             "wire_caller_ura": meta.get("caller_ura").cloned().unwrap_or(Value::Null),
             "wire_callee_ura": meta.get("callee_ura").cloned().unwrap_or(Value::Null),
         });
+    }
+    if let Some(diagnostic) = metadata_projection.diagnostic() {
+        meta["metadata_diagnostic"] = serde_json::json!(diagnostic);
     }
 
     Ok((result_value, meta))
@@ -1761,5 +1811,47 @@ mod tests {
             err.to_string().contains("cannot resolve descriptor ref"),
             "unknown wrappers must not fall back to a fabricated descriptor version: {err}"
         );
+    }
+
+    #[test]
+    fn invocation_metadata_projection_models_missing_ledger_as_pending_state() {
+        let projection = InvocationMetadataProjection::from_polled_ledger_record(
+            serde_json::Value::Null,
+            "req-1",
+            "discover",
+        );
+
+        assert_eq!(projection.state_label(), "ledger_pending");
+        assert_eq!(projection.receipt(), serde_json::Value::Null);
+        assert!(projection
+            .diagnostic()
+            .expect("pending diagnostic")
+            .contains("req-1"));
+    }
+
+    #[test]
+    fn invocation_metadata_projection_models_incomplete_anchor_as_pending_state() {
+        let projection = InvocationMetadataProjection::from_polled_ledger_record(
+            serde_json::json!({
+                "state": "completed",
+                "trace_id": "trace-1",
+                "receipt_chain": {
+                    "head_receipt_hash": "",
+                    "anchors": []
+                }
+            }),
+            "req-2",
+            "discover",
+        );
+
+        assert_eq!(projection.state_label(), "receipt_anchor_pending");
+        assert_eq!(
+            projection.ledger_field("trace_id"),
+            serde_json::json!("trace-1")
+        );
+        assert!(projection
+            .diagnostic()
+            .expect("anchor diagnostic")
+            .contains("no complete terminal receipt anchor"));
     }
 }

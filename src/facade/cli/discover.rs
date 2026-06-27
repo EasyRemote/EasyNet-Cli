@@ -614,6 +614,10 @@ impl DiscoverExecutionState {
         });
     }
 
+    fn record_diagnostic(&mut self, diagnostic: DiscoverDiagnostic) {
+        self.diagnostics.push(diagnostic);
+    }
+
     fn finish(mut self, plan: &DiscoverExecutionPlan) -> DiscoverReport {
         self.candidates = rank_and_deduplicate_candidates(self.candidates, plan.limit);
         DiscoverReport {
@@ -668,7 +672,17 @@ impl DiscoverRuntimeService {
             .context("local discover tier did not produce invocation metadata")?;
         let causal_state = RealmCausalState::from_local_invocation(&local_invocation_meta);
         let trace_id = trace_id_from_invocation_meta(&local_invocation_meta);
-        let causal_parents = causal_state.parents()?;
+        let Some(causal_parents) = causal_state.parents() else {
+            self.state.record_diagnostic(DiscoverDiagnostic {
+                scope: "user".to_string(),
+                code: "causal_anchor_pending",
+                message: causal_state
+                    .unanchored_reason()
+                    .unwrap_or("local receipt anchor is unavailable")
+                    .to_string(),
+            });
+            return Ok(());
+        };
         let (realm_value, realm_invocation_meta) =
             self.walk_tier_with_trace("user", causal_parents, trace_id.as_deref())?;
         self.state.record_invocation(realm_invocation_meta);
@@ -718,9 +732,10 @@ impl DiscoverRuntimeService {
 
 /// Causal-anchor state for the realm tier.
 ///
-/// Local discovery always runs first. Realm discovery must use that local
-/// receipt anchor; without it, cross-tier discovery cannot preserve the AXIOM
-/// causal chain and must fail closed instead of fabricating an empty parent set.
+/// Local discovery always runs first. Realm discovery may run only when the
+/// local invocation produced a complete receipt anchor. Missing anchors are a
+/// typed skipped state for this observation surface; they are not converted to
+/// empty parents.
 #[derive(Debug, Clone)]
 enum RealmCausalState {
     Anchored(Vec<Value>),
@@ -737,12 +752,17 @@ impl RealmCausalState {
         }
     }
 
-    fn parents(&self) -> anyhow::Result<&[Value]> {
+    fn parents(&self) -> Option<&[Value]> {
         match self {
-            Self::Anchored(parents) => Ok(parents.as_slice()),
-            Self::Unanchored { reason } => {
-                anyhow::bail!("{reason}; realm discovery requires a local receipt anchor")
-            }
+            Self::Anchored(parents) => Some(parents.as_slice()),
+            Self::Unanchored { .. } => None,
+        }
+    }
+
+    fn unanchored_reason(&self) -> Option<&str> {
+        match self {
+            Self::Anchored(_) => None,
+            Self::Unanchored { reason } => Some(reason.as_str()),
         }
     }
 }
@@ -1121,20 +1141,20 @@ mod tests {
     }
 
     #[test]
-    fn missing_local_receipt_anchor_rejects_realm_walk() {
+    fn missing_local_receipt_anchor_skips_realm_walk_without_fabricating_parent() {
         let causal_state = RealmCausalState::from_local_invocation(&json!({
-                "metadata_state": "missing_receipt_anchor",
+                "metadata_state": "receipt_anchor_pending",
                 "trace_id": "trace-1",
         }));
 
-        let err = causal_state
-            .parents()
-            .expect_err("missing anchor must fail closed");
         assert!(
-            err.to_string()
-                .contains("realm discovery requires a local receipt anchor"),
-            "{err}"
+            causal_state.parents().is_none(),
+            "missing anchor must not fabricate an empty causal parent list"
         );
+        assert!(causal_state
+            .unanchored_reason()
+            .expect("unanchored reason")
+            .contains("receipt.anchor"));
     }
 
     #[test]
@@ -1266,7 +1286,7 @@ mod tests {
             })
         );
 
-        let missing_anchor = json!({ "metadata_state": "missing_receipt_anchor" });
+        let missing_anchor = json!({ "metadata_state": "receipt_anchor_pending" });
         let err = receipt_parent_from_invocation_meta(&missing_anchor).unwrap_err();
         assert!(
             err.to_string().contains("receipt.anchor"),
