@@ -615,6 +615,8 @@ fn parse_hosted_agent_delegation_context(
     envelope_caller: &str,
     envelope_callee: &str,
     envelope_subject: &str,
+    envelope_request_id: &str,
+    envelope_invocation_nonce_hex: &str,
     envelope_ability: &str,
 ) -> Result<Option<HostedAgentDelegationContext>, AxonError> {
     let Some(raw) = metadata.get(HOSTED_AGENT_DELEGATION_METADATA_KEY) else {
@@ -625,6 +627,8 @@ fn parse_hosted_agent_delegation_context(
         envelope_caller,
         envelope_callee,
         envelope_subject,
+        envelope_request_id,
+        envelope_invocation_nonce_hex,
         envelope_ability,
         crate::runtime::local_invocation_identity::system_verifying_key(),
     )
@@ -645,16 +649,22 @@ async fn envelope_context_from_axon(
                 ctx.invocation_id
             ))
         })?;
-    let caller = signed.envelope.caller.ura;
-    let callee = signed.envelope.callee.ura;
-    let envelope_subject = signed.envelope.subject.ura;
-    let ability = signed.envelope.ability;
+    let envelope = signed.envelope;
+    let caller = envelope.caller.ura;
+    let callee = envelope.callee.ura;
+    let envelope_subject = envelope.subject.ura;
+    let request_id = ctx.invocation_id.clone();
+    let invocation_nonce = envelope.invocation_nonce;
+    let invocation_nonce_hex = hex::encode(&invocation_nonce);
+    let ability = envelope.ability;
     let caller_signature = EnvelopeCallerSignature::from_axon(&signed.signature);
     let hosted_agent_delegation = parse_hosted_agent_delegation_context(
         &ctx.request_metadata,
         &caller,
         &callee,
         &envelope_subject,
+        &request_id,
+        &invocation_nonce_hex,
         &ability,
     )?;
     EnvelopeContext::new(EnvelopeContextParts {
@@ -663,8 +673,8 @@ async fn envelope_context_from_axon(
         callee,
         ability,
         subject: envelope_subject,
-        invocation_nonce: signed.envelope.invocation_nonce.to_vec(),
-        causal_context: causal_context_to_json(&signed.envelope.causal_context),
+        invocation_nonce: invocation_nonce.to_vec(),
+        causal_context: causal_context_to_json(&envelope.causal_context),
         caller_signature,
     })
     .map(|context| context.with_hosted_agent_delegation(hosted_agent_delegation))

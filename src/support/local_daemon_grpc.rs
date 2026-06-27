@@ -839,6 +839,8 @@ impl HostedAgentDelegation {
         wire_caller_ura: &str,
         callee_ura: &str,
         subject_ura: &str,
+        request_id: &str,
+        invocation_nonce_hex: &str,
         ability: &str,
         signer: &dyn SelfIdentity,
     ) -> anyhow::Result<String> {
@@ -848,6 +850,8 @@ impl HostedAgentDelegation {
             wire_caller_ura,
             callee_ura,
             subject_ura,
+            request_id,
+            invocation_nonce_hex,
             ability,
         )?;
         let signature = signer.sign(
@@ -1042,6 +1046,19 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     let mut request = envelope
         .signed_invoke_request(&function_name, arguments, &signer)
         .with_context(|| format!("build signed {function_name} Axon InvokeRequest"))?;
+    let (wire_request_id, nonce_hex) = request
+        .envelope
+        .as_ref()
+        .map(|env| {
+            (
+                env.request_id.trim().to_string(),
+                hex::encode(&env.invocation_nonce),
+            )
+        })
+        .ok_or_else(|| anyhow!("build signed {function_name} request without envelope"))?;
+    if wire_request_id.is_empty() {
+        bail!("build signed {function_name} request without envelope request_id");
+    }
     if let Some(delegation) = delegation.as_ref() {
         let envelope_ability =
             crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
@@ -1056,6 +1073,8 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             &wire_caller_ura,
             &callee_ura,
             &subject_ura,
+            &wire_request_id,
+            &nonce_hex,
             &envelope_ability,
             &signer,
         )?;
@@ -1064,11 +1083,6 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             metadata_value,
         );
     }
-    let nonce_hex = request
-        .envelope
-        .as_ref()
-        .map(|env| hex::encode(&env.invocation_nonce))
-        .unwrap_or_default();
     if let Some(envelope) = request.envelope.as_mut() {
         // `trace_id` is Envelope operational metadata (outside the
         // caller-signature region), so stamping it post-build is safe.

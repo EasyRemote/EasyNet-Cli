@@ -210,6 +210,8 @@ pub struct HostedAgentDelegationClaims {
     wire_caller_ura: String,
     wire_callee_ura: String,
     wire_subject_ura: String,
+    wire_request_id: String,
+    wire_invocation_nonce_hex: String,
     ability: String,
 }
 
@@ -220,6 +222,8 @@ impl HostedAgentDelegationClaims {
         wire_caller_ura: impl Into<String>,
         wire_callee_ura: impl Into<String>,
         wire_subject_ura: impl Into<String>,
+        wire_request_id: impl Into<String>,
+        wire_invocation_nonce_hex: impl Into<String>,
         ability: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let claims = Self {
@@ -229,9 +233,11 @@ impl HostedAgentDelegationClaims {
             wire_caller_ura: wire_caller_ura.into(),
             wire_callee_ura: wire_callee_ura.into(),
             wire_subject_ura: wire_subject_ura.into(),
+            wire_request_id: wire_request_id.into(),
+            wire_invocation_nonce_hex: wire_invocation_nonce_hex.into(),
             ability: ability.into(),
         };
-        claims.validate_non_empty()?;
+        claims.validate()?;
         Ok(claims)
     }
 
@@ -256,16 +262,27 @@ impl HostedAgentDelegationClaims {
             .map_err(|err| anyhow::anyhow!("encode hosted-agent delegation token: {err}"))
     }
 
-    fn validate_non_empty(&self) -> anyhow::Result<()> {
+    fn validate(&self) -> anyhow::Result<()> {
         if self.kind.trim().is_empty()
             || self.agent_ura.trim().is_empty()
             || self.signing_authority.trim().is_empty()
             || self.wire_caller_ura.trim().is_empty()
             || self.wire_callee_ura.trim().is_empty()
             || self.wire_subject_ura.trim().is_empty()
+            || self.wire_request_id.trim().is_empty()
+            || self.wire_invocation_nonce_hex.trim().is_empty()
             || self.ability.trim().is_empty()
         {
             anyhow::bail!("hosted-agent delegation claims fields must be non-empty");
+        }
+        let nonce = hex::decode(self.wire_invocation_nonce_hex.trim()).map_err(|err| {
+            anyhow::anyhow!("hosted-agent delegation invocation nonce must be hex: {err}")
+        })?;
+        if nonce.len() != 16 {
+            anyhow::bail!(
+                "hosted-agent delegation invocation nonce must decode to 16 bytes, got {}",
+                nonce.len()
+            );
         }
         Ok(())
     }
@@ -290,6 +307,8 @@ pub struct HostedAgentDelegationContext {
     wire_caller_ura: String,
     wire_callee_ura: String,
     wire_subject_ura: String,
+    wire_request_id: String,
+    wire_invocation_nonce_hex: String,
     ability: String,
 }
 
@@ -301,12 +320,14 @@ impl HostedAgentDelegationContext {
         envelope_caller: &str,
         envelope_callee: &str,
         envelope_subject: &str,
+        envelope_request_id: &str,
+        envelope_invocation_nonce_hex: &str,
         envelope_ability: &str,
         verifying_key: VerifyingKey,
     ) -> anyhow::Result<Self> {
         let token: SignedHostedAgentDelegation = serde_json::from_str(raw)
             .map_err(|err| anyhow::anyhow!("invalid hosted-agent delegation token JSON: {err}"))?;
-        token.claims.validate_non_empty()?;
+        token.claims.validate()?;
         let signer_ura = token.signer_ura.trim();
         if signer_ura.is_empty() {
             anyhow::bail!("hosted-agent delegation token signer_ura must be non-empty");
@@ -334,6 +355,8 @@ impl HostedAgentDelegationContext {
             envelope_caller,
             envelope_callee,
             envelope_subject,
+            envelope_request_id,
+            envelope_invocation_nonce_hex,
             envelope_ability,
         )
     }
@@ -343,6 +366,8 @@ impl HostedAgentDelegationContext {
         envelope_caller: &str,
         envelope_callee: &str,
         envelope_subject: &str,
+        envelope_request_id: &str,
+        envelope_invocation_nonce_hex: &str,
         envelope_ability: &str,
     ) -> anyhow::Result<Self> {
         if claims.kind != "hosted_agent" {
@@ -356,12 +381,16 @@ impl HostedAgentDelegationContext {
         let wire_caller_ura = claims.wire_caller_ura.trim();
         let wire_callee_ura = claims.wire_callee_ura.trim();
         let wire_subject_ura = claims.wire_subject_ura.trim();
+        let wire_request_id = claims.wire_request_id.trim();
+        let wire_invocation_nonce_hex = claims.wire_invocation_nonce_hex.trim();
         let ability = claims.ability.trim();
         if agent_ura.is_empty()
             || signing_authority.is_empty()
             || wire_caller_ura.is_empty()
             || wire_callee_ura.is_empty()
             || wire_subject_ura.is_empty()
+            || wire_request_id.is_empty()
+            || wire_invocation_nonce_hex.is_empty()
             || ability.is_empty()
         {
             anyhow::bail!("hosted-agent delegation metadata fields must be non-empty");
@@ -374,6 +403,8 @@ impl HostedAgentDelegationContext {
         if wire_caller_ura != envelope_caller
             || wire_callee_ura != envelope_callee
             || wire_subject_ura != envelope_subject
+            || wire_request_id != envelope_request_id
+            || wire_invocation_nonce_hex != envelope_invocation_nonce_hex
             || ability != envelope_ability
         {
             anyhow::bail!(
@@ -386,6 +417,8 @@ impl HostedAgentDelegationContext {
             wire_caller_ura: wire_caller_ura.to_string(),
             wire_callee_ura: wire_callee_ura.to_string(),
             wire_subject_ura: wire_subject_ura.to_string(),
+            wire_request_id: wire_request_id.to_string(),
+            wire_invocation_nonce_hex: wire_invocation_nonce_hex.to_string(),
             ability: ability.to_string(),
         })
     }
@@ -767,6 +800,8 @@ mod tests {
         let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
         let callee = "easynet:///r/default/device/local";
         let subject = "easynet:///r/default/device/local";
+        let request_id = "req-hosted-1";
+        let nonce_hex = hex::encode([0x42u8; 16]);
         let ability = format!(
             "{}@1.0.0",
             crate::ura::owner_ability_ura(callee, "meta.acquire").unwrap()
@@ -778,6 +813,8 @@ mod tests {
             caller,
             callee,
             subject,
+            request_id,
+            nonce_hex.as_str(),
             ability.as_str(),
         )
         .unwrap();
@@ -789,6 +826,8 @@ mod tests {
             caller,
             callee,
             subject,
+            request_id,
+            nonce_hex.as_str(),
             ability.as_str(),
             signer.verifying_key(),
         )
@@ -811,6 +850,8 @@ mod tests {
         let signer = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
         let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
         let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
+        let request_id = "req-hosted-2";
+        let nonce_hex = hex::encode([0x24u8; 16]);
         let ability = format!(
             "{}@1.0.0",
             crate::ura::owner_ability_ura("easynet:///r/default/device/local", "meta.acquire")
@@ -822,6 +863,8 @@ mod tests {
             caller,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
+            request_id,
+            nonce_hex.as_str(),
             ability.as_str(),
         )
         .unwrap();
@@ -833,6 +876,53 @@ mod tests {
             caller,
             "easynet:///r/default/device/other",
             "easynet:///r/default/device/local",
+            request_id,
+            nonce_hex.as_str(),
+            ability.as_str(),
+            signer.verifying_key(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("signed invocation envelope"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn hosted_agent_delegation_token_rejects_request_replay() {
+        use ed25519_dalek::Signer as _;
+
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
+        let callee = "easynet:///r/default/device/local";
+        let subject = "easynet:///r/default/device/local";
+        let nonce_hex = hex::encode([0x33u8; 16]);
+        let ability = format!(
+            "{}@1.0.0",
+            crate::ura::owner_ability_ura(callee, "meta.acquire").unwrap()
+        );
+        let claims = HostedAgentDelegationClaims::new(
+            crate::ura::agent_ura("default", "u", "apprentice"),
+            "host_device",
+            caller,
+            callee,
+            subject,
+            "req-original",
+            nonce_hex.as_str(),
+            ability.as_str(),
+        )
+        .unwrap();
+        let signature = signer.sign(&claims.signing_payload_bytes(caller));
+        let raw = claims.signed_metadata_value(caller, &signature).unwrap();
+
+        let err = HostedAgentDelegationContext::from_signed_metadata(
+            &raw,
+            caller,
+            callee,
+            subject,
+            "req-replayed",
+            nonce_hex.as_str(),
             ability.as_str(),
             signer.verifying_key(),
         )
