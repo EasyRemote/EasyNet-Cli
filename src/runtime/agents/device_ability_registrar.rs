@@ -25,6 +25,8 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 use easynet_axon::invocation::{
@@ -39,8 +41,8 @@ use crate::runtime::ability::{
     CallMode as DescriptorCallMode, RuntimeEnv,
 };
 use crate::runtime::ability_dispatch::{
-    stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityRebind,
-    ControlPlaneImplementation,
+    stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityModeTxn,
+    ControlPlaneAuthorityRebind, ControlPlaneImplementation,
 };
 use crate::runtime::agents::chat_ability::build_host_stream_handler;
 use crate::runtime::agents::device_ability_store::{
@@ -430,6 +432,8 @@ pub struct DeviceAbilityRegistrar {
     runtime: OnceLock<Arc<LocalRuntime>>,
     control_plane_catalog: OnceLock<Weak<AxonAbilityCatalog>>,
     store: DeviceAbilityStore,
+    #[cfg(test)]
+    fail_next_runtime_replace: AtomicBool,
 }
 
 impl DeviceAbilityRegistrar {
@@ -439,6 +443,8 @@ impl DeviceAbilityRegistrar {
             runtime: OnceLock::new(),
             control_plane_catalog: OnceLock::new(),
             store: DeviceAbilityStore::open_default(),
+            #[cfg(test)]
+            fail_next_runtime_replace: AtomicBool::new(false),
         })
     }
 
@@ -449,7 +455,26 @@ impl DeviceAbilityRegistrar {
             runtime: OnceLock::new(),
             control_plane_catalog: OnceLock::new(),
             store,
+            #[cfg(test)]
+            fail_next_runtime_replace: AtomicBool::new(false),
         })
+    }
+
+    #[cfg(test)]
+    fn fail_next_runtime_replace_for_test(&self) {
+        self.fail_next_runtime_replace.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn injected_runtime_replace_fault(&self) -> Option<anyhow::Error> {
+        self.fail_next_runtime_replace
+            .swap(false, Ordering::SeqCst)
+            .then(|| anyhow::anyhow!("injected runtime replace failure"))
+    }
+
+    #[cfg(not(test))]
+    fn injected_runtime_replace_fault(&self) -> Option<anyhow::Error> {
+        None
     }
 
     /// Attach the live runtime exactly once. A second attachment is a boot
@@ -542,6 +567,8 @@ impl DeviceAbilityRegistrar {
         // The returned record is the only authority for runtime proof
         // binding. Runtime rows must never fabricate descriptor version
         // or hashes from defaults after this point.
+        let mut control_plane_txn =
+            Self::begin_control_plane_transaction(&catalog, &control_plane_key);
         let control_plane_record = match Self::rebind_control_plane_record(
             &catalog,
             &control_plane_key,
@@ -550,11 +577,16 @@ impl DeviceAbilityRegistrar {
         ) {
             Ok(record) => record,
             Err(e) => {
+                let control_plane_restore = control_plane_txn.rollback();
                 let rollback = self
                     .store
                     .rollback_install(record.install_id(), overwritten);
                 return Err(append_cleanup_error(
-                    anyhow::anyhow!("ability.deploy: control-plane rebind({key}) failed: {e}"),
+                    append_cleanup_error(
+                        anyhow::anyhow!("ability.deploy: control-plane rebind({key}) failed: {e}"),
+                        control_plane_restore,
+                        "restore prior control-plane records",
+                    ),
                     rollback,
                     "restore durable device ability store",
                 ));
@@ -565,22 +597,22 @@ impl DeviceAbilityRegistrar {
         let binding = match DeviceRuntimeBinding::from_install(&install, &control_plane_record) {
             Ok(binding) => binding,
             Err(e) => {
-                catalog.remove_control_plane_record_for_authority_mode(
-                    control_plane_key.authority_root(),
-                    control_plane_key.public_name(),
-                    control_plane_key.call_mode(),
-                );
                 let overwritten_for_restore = overwritten.clone();
                 let rollback = self
                     .store
                     .rollback_install(record.install_id(), overwritten);
                 let live_restore = self.restore_live_records(&overwritten_for_restore).await;
+                let control_plane_restore = control_plane_txn.rollback();
                 return Err(append_cleanup_error(
-                    anyhow::anyhow!(
-                        "ability.deploy: proof-bound runtime binding({key}) failed: {e}"
+                    append_cleanup_error(
+                        anyhow::anyhow!(
+                            "ability.deploy: proof-bound runtime binding({key}) failed: {e}"
+                        ),
+                        rollback.and(live_restore.map(|_| ())),
+                        "restore durable device ability store and prior live runtime binding",
                     ),
-                    rollback.and(live_restore.map(|_| ())),
-                    "restore durable device ability store and prior live runtime binding",
+                    control_plane_restore,
+                    "restore prior control-plane records",
                 ));
             }
         };
@@ -588,26 +620,31 @@ impl DeviceAbilityRegistrar {
         let axon_call_mode = binding.axon_call_mode;
         let (runtime_key, ability_fn, options) = binding.into_parts();
 
-        if let Err(e) = runtime
-            .replace_ability(runtime_key.clone(), ability_fn, options)
-            .await
-        {
-            catalog.remove_control_plane_record_for_authority_mode(
-                control_plane_key.authority_root(),
-                control_plane_key.public_name(),
-                control_plane_key.call_mode(),
-            );
+        let replace_result = match self.injected_runtime_replace_fault() {
+            Some(err) => Err(err),
+            None => runtime
+                .replace_ability(runtime_key.clone(), ability_fn, options)
+                .await
+                .map(|_| ())
+                .map_err(|err| anyhow::anyhow!("{err}")),
+        };
+        if let Err(e) = replace_result {
             let overwritten_for_restore = overwritten.clone();
             let rollback = self
                 .store
                 .rollback_install(record.install_id(), overwritten);
             let live_restore = self.restore_live_records(&overwritten_for_restore).await;
+            let control_plane_restore = control_plane_txn.rollback();
             return Err(append_cleanup_error(
-                anyhow::anyhow!(
-                    "ability.deploy: replace_ability({runtime_key}) for {key} failed: {e}"
+                append_cleanup_error(
+                    anyhow::anyhow!(
+                        "ability.deploy: replace_ability({runtime_key}) for {key} failed: {e}"
+                    ),
+                    rollback.and(live_restore.map(|_| ())),
+                    "restore durable device ability store and prior live runtime binding",
                 ),
-                rollback.and(live_restore.map(|_| ())),
-                "restore durable device ability store and prior live runtime binding",
+                control_plane_restore,
+                "restore prior control-plane records",
             ));
         }
 
@@ -631,22 +668,23 @@ impl DeviceAbilityRegistrar {
         };
         if let Err(e) = self.store.commit_installed(record.install_id()) {
             let _ = runtime.unregister_ability(&runtime_key).await;
-            catalog.remove_control_plane_record_for_authority_mode(
-                control_plane_key.authority_root(),
-                control_plane_key.public_name(),
-                control_plane_key.call_mode(),
-            );
             let overwritten_for_restore = overwritten.clone();
             let rollback = self
                 .store
                 .rollback_install(record.install_id(), overwritten);
             let live_restore = self.restore_live_records(&overwritten_for_restore).await;
+            let control_plane_restore = control_plane_txn.rollback();
             return Err(append_cleanup_error(
-                anyhow::anyhow!("ability.deploy: commit installed({key}) failed: {e}"),
-                rollback.and(live_restore.map(|_| ())),
-                "restore durable device ability store and prior live runtime binding",
+                append_cleanup_error(
+                    anyhow::anyhow!("ability.deploy: commit installed({key}) failed: {e}"),
+                    rollback.and(live_restore.map(|_| ())),
+                    "restore durable device ability store and prior live runtime binding",
+                ),
+                control_plane_restore,
+                "restore prior control-plane records",
             ));
         }
+        control_plane_txn.commit();
         Ok(state)
     }
 
@@ -785,6 +823,7 @@ impl DeviceAbilityRegistrar {
 
     async fn restore_live_records(&self, records: &[DeviceAbilityRecord]) -> anyhow::Result<usize> {
         let runtime = self.runtime()?.clone();
+        let catalog = self.control_plane_catalog("device ability restore")?;
         let mut restored = 0;
         for row in records {
             let bytes = row.manifest_bytes().map_err(|e| {
@@ -806,8 +845,14 @@ impl DeviceAbilityRegistrar {
                 row,
                 descriptor_call_mode_for_manifest(&manifest)?,
             )?;
-            let control_plane_record =
-                self.rebind_control_plane(&control_plane_key, &manifest, row.manifest_hash())?;
+            let control_plane_txn =
+                Self::begin_control_plane_transaction(&catalog, &control_plane_key);
+            let control_plane_record = Self::rebind_control_plane_record(
+                &catalog,
+                &control_plane_key,
+                &manifest,
+                row.manifest_hash(),
+            )?;
             let binding = DeviceRuntimeBinding::from_record(row, &manifest, &control_plane_record)
                 .map_err(|e| {
                     anyhow::anyhow!("restore {}: proof-bound binding: {e}", row.public_name())
@@ -822,6 +867,7 @@ impl DeviceAbilityRegistrar {
                         row.public_name()
                     )
                 })?;
+            control_plane_txn.commit();
             restored += 1;
         }
         Ok(restored)
@@ -937,24 +983,50 @@ impl DeviceAbilityRegistrar {
                         continue;
                     }
                 };
-            let control_plane_record =
-                match self.rebind_control_plane(&control_plane_key, &manifest, row.manifest_hash())
-                {
-                    Ok(record) => record,
-                    Err(err) => {
-                        report
-                            .push_errored(&row, format!("rebind control-plane descriptor: {err}"));
-                        continue;
-                    }
-                };
+            let catalog = match self.control_plane_catalog("device ability replay") {
+                Ok(catalog) => catalog,
+                Err(err) => {
+                    report.push_errored(&row, format!("control-plane catalog unavailable: {err}"));
+                    continue;
+                }
+            };
+            let mut control_plane_txn =
+                Self::begin_control_plane_transaction(&catalog, &control_plane_key);
+            let control_plane_record = match Self::rebind_control_plane_record(
+                &catalog,
+                &control_plane_key,
+                &manifest,
+                row.manifest_hash(),
+            ) {
+                Ok(record) => record,
+                Err(err) => {
+                    let rollback = control_plane_txn.rollback();
+                    report.push_errored(
+                        &row,
+                        append_cleanup_error(
+                            anyhow::anyhow!("rebind control-plane descriptor: {err}"),
+                            rollback,
+                            "restore prior control-plane records",
+                        )
+                        .to_string(),
+                    );
+                    continue;
+                }
+            };
             let binding =
                 match DeviceRuntimeBinding::from_record(&row, &manifest, &control_plane_record) {
                     Ok(binding) => binding,
                     Err(err) => {
                         let _ = runtime.unregister_ability(row.ability_ura()).await;
+                        let rollback = control_plane_txn.rollback();
                         report.push_errored(
                             &row,
-                            format!("build proof-bound runtime binding: {err}"),
+                            append_cleanup_error(
+                                anyhow::anyhow!("build proof-bound runtime binding: {err}"),
+                                rollback,
+                                "restore prior control-plane records",
+                            )
+                            .to_string(),
                         );
                         continue;
                     }
@@ -964,24 +1036,37 @@ impl DeviceAbilityRegistrar {
                 .replace_ability(runtime_key, ability_fn, options)
                 .await
             {
-                Ok(_) => report.push_registered(&row),
+                Ok(_) => {
+                    control_plane_txn.commit();
+                    report.push_registered(&row);
+                }
                 Err(err) => {
                     let _ = runtime.unregister_ability(row.ability_ura()).await;
-                    report.push_errored(&row, format!("replace runtime ability: {err}"));
+                    let rollback = control_plane_txn.rollback();
+                    report.push_errored(
+                        &row,
+                        append_cleanup_error(
+                            anyhow::anyhow!("replace runtime ability: {err}"),
+                            rollback,
+                            "restore prior control-plane records",
+                        )
+                        .to_string(),
+                    );
                 }
             }
         }
         report
     }
 
-    fn rebind_control_plane(
-        &self,
+    fn begin_control_plane_transaction<'a>(
+        catalog: &'a AxonAbilityCatalog,
         key: &DeviceAbilityControlPlaneKey,
-        manifest: &AbilityManifest,
-        impl_content_hash: &str,
-    ) -> anyhow::Result<AbilityControlPlaneRecord> {
-        let catalog = self.control_plane_catalog("device ability rebind")?;
-        Self::rebind_control_plane_record(&catalog, key, manifest, impl_content_hash)
+    ) -> ControlPlaneAuthorityModeTxn<'a> {
+        catalog.begin_control_plane_authority_mode_transaction(
+            key.authority_root(),
+            key.public_name(),
+            key.call_mode(),
+        )
     }
 
     fn rebind_control_plane_record(
@@ -1350,6 +1435,13 @@ mod tests {
         (registrar, rt, catalog)
     }
 
+    fn stream_control_plane_record(catalog: &AxonAbilityCatalog) -> AbilityControlPlaneRecord {
+        catalog
+            .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
+            .expect("device ability control-plane lookup is unambiguous")
+            .expect("device ability control-plane record")
+    }
+
     // ── Negative test matrix (plan §"必测四个失败态") ──────────────
 
     /// Failure 1 (invariant 1e): durable commit fails before binding,
@@ -1713,6 +1805,63 @@ mod tests {
                 .len(),
             1,
             "durable store must roll back to the previous row"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_replace_failure_restores_prior_control_plane_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("device-abilities.json");
+        let (registrar, rt, catalog) =
+            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+
+        registrar
+            .install(host_stream_install_with_version(
+                dir.path(),
+                "/tmp/old-er-host.sock",
+                Some("1.0.0"),
+            ))
+            .await
+            .unwrap();
+        let old_record = stream_control_plane_record(&catalog);
+        let old_descriptor_version = old_record.descriptor().version().as_str().to_string();
+        let old_impl_hash = old_record.implementation().impl_hash();
+
+        registrar.fail_next_runtime_replace_for_test();
+        let err = registrar
+            .install(host_stream_install_with_version(
+                dir.path(),
+                "/tmp/new-er-host.sock",
+                Some("2.0.0"),
+            ))
+            .await
+            .expect_err("injected runtime replace failure must abort deploy");
+        assert!(
+            err.to_string().contains("injected runtime replace failure"),
+            "{err}"
+        );
+
+        let restored_record = stream_control_plane_record(&catalog);
+        assert_eq!(
+            restored_record.descriptor().version().as_str(),
+            old_descriptor_version,
+            "failed redeploy must restore the previous descriptor version"
+        );
+        assert_eq!(
+            restored_record.implementation().impl_hash(),
+            old_impl_hash,
+            "failed redeploy must restore the previous implementation proof"
+        );
+        assert!(rt.has_ability(er_generate_runtime_key()).await);
+        let rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        assert_eq!(rows.len(), 1, "failed redeploy must leave one durable row");
+        assert_eq!(
+            rows[0].manifest_hash(),
+            old_record
+                .implementation()
+                .content_hash()
+                .unwrap_or_default(),
+            "durable row must remain the previous installed manifest"
         );
     }
 

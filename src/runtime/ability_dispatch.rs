@@ -1851,15 +1851,11 @@ impl DynamicRegistration {
         let predicted_control_plane_key = catalog
             .control_plane_key_for_owner(&ability, &self.owner)?
             .for_mode(call_mode);
-        let prior_control_plane_records = catalog
-            .control_plane
-            .read()
-            .expect("control_plane RwLock poisoned")
-            .records_for_authority_mode(
-                predicted_control_plane_key.authority_root(),
-                predicted_control_plane_key.ability(),
-                predicted_control_plane_key.call_mode(),
-            );
+        let control_plane_txn = catalog.begin_control_plane_authority_mode_transaction(
+            predicted_control_plane_key.authority_root(),
+            predicted_control_plane_key.ability(),
+            predicted_control_plane_key.call_mode(),
+        );
         let control_plane_key = catalog.register_dynamic_control_plane_result(
             &ability,
             &self.owner,
@@ -1872,7 +1868,7 @@ impl DynamicRegistration {
             catalog,
             control_plane_key,
             prior_dynamic,
-            prior_control_plane_records,
+            control_plane_txn,
         );
         {
             let mut dyn_ext = catalog
@@ -1883,6 +1879,84 @@ impl DynamicRegistration {
         }
         txn.mark_side_table_committed()?;
         txn.sync_runtime_or_rollback()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlPlaneAuthorityModeTxnPhase {
+    Active,
+    Committed,
+    RolledBack,
+}
+
+/// RAII transaction for one `(authority_root, ability, call_mode)` slice of the
+/// daemon control plane.
+///
+/// This object keeps table internals behind `AxonAbilityCatalog`. Callers that
+/// need to overwrite a descriptor/authority/implementation projection can begin
+/// a transaction, perform their write, and call `commit` only after the outer
+/// capability state machine reaches its own durable terminal state. Dropping an
+/// active transaction restores the exact prior records.
+pub struct ControlPlaneAuthorityModeTxn<'a> {
+    catalog: &'a AxonAbilityCatalog,
+    authority_root: String,
+    ability: String,
+    call_mode: DescriptorCallMode,
+    prior_records: Option<Vec<AbilityControlPlaneRecord>>,
+    phase: ControlPlaneAuthorityModeTxnPhase,
+}
+
+impl<'a> ControlPlaneAuthorityModeTxn<'a> {
+    fn begin(
+        catalog: &'a AxonAbilityCatalog,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> Self {
+        let prior_records = catalog
+            .control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .records_for_authority_mode(authority_root, ability, call_mode);
+        Self {
+            catalog,
+            authority_root: authority_root.to_string(),
+            ability: ability.to_string(),
+            call_mode,
+            prior_records: Some(prior_records),
+            phase: ControlPlaneAuthorityModeTxnPhase::Active,
+        }
+    }
+
+    pub fn commit(mut self) {
+        self.prior_records = None;
+        self.phase = ControlPlaneAuthorityModeTxnPhase::Committed;
+    }
+
+    pub fn rollback(&mut self) -> anyhow::Result<()> {
+        if self.phase != ControlPlaneAuthorityModeTxnPhase::Active {
+            return Ok(());
+        }
+        if let Some(records) = self.prior_records.take() {
+            self.catalog
+                .control_plane
+                .write()
+                .expect("control_plane RwLock poisoned")
+                .restore_authority_mode_records(
+                    &self.authority_root,
+                    &self.ability,
+                    self.call_mode,
+                    records,
+                )?;
+        }
+        self.phase = ControlPlaneAuthorityModeTxnPhase::RolledBack;
+        Ok(())
+    }
+}
+
+impl Drop for ControlPlaneAuthorityModeTxn<'_> {
+    fn drop(&mut self) {
+        let _ = self.rollback();
     }
 }
 
@@ -1898,7 +1972,7 @@ struct DynamicRegistrationTxn<'a> {
     catalog: &'a AxonAbilityCatalog,
     control_plane_key: ControlPlaneModeKey,
     prior_dynamic: Option<DynamicAbilitySnapshot>,
-    prior_control_plane_records: Option<Vec<AbilityControlPlaneRecord>>,
+    control_plane_txn: Option<ControlPlaneAuthorityModeTxn<'a>>,
     phase: DynamicRegistrationPhase,
 }
 
@@ -1907,13 +1981,13 @@ impl<'a> DynamicRegistrationTxn<'a> {
         catalog: &'a AxonAbilityCatalog,
         control_plane_key: ControlPlaneModeKey,
         prior_dynamic: DynamicAbilitySnapshot,
-        prior_control_plane_records: Vec<AbilityControlPlaneRecord>,
+        control_plane_txn: ControlPlaneAuthorityModeTxn<'a>,
     ) -> Self {
         Self {
             catalog,
             control_plane_key,
             prior_dynamic: Some(prior_dynamic),
-            prior_control_plane_records: Some(prior_control_plane_records),
+            control_plane_txn: Some(control_plane_txn),
             phase: DynamicRegistrationPhase::ControlPlaneAccepted,
         }
     }
@@ -1948,6 +2022,9 @@ impl<'a> DynamicRegistrationTxn<'a> {
         {
             Ok(()) => {
                 self.phase = DynamicRegistrationPhase::RuntimeSynced;
+                if let Some(control_plane_txn) = self.control_plane_txn.take() {
+                    control_plane_txn.commit();
+                }
                 Ok(())
             }
             Err(error) => {
@@ -1972,17 +2049,9 @@ impl<'a> DynamicRegistrationTxn<'a> {
                 .expect("dynamic_ext RwLock poisoned");
             dyn_ext.restore(self.control_plane_key.ability(), snapshot);
         }
-        if let Some(records) = self.prior_control_plane_records.take() {
-            self.catalog
-                .control_plane
-                .write()
-                .expect("control_plane RwLock poisoned")
-                .restore_authority_mode_records(
-                    self.control_plane_key.authority_root(),
-                    self.control_plane_key.ability(),
-                    self.control_plane_key.call_mode(),
-                    records,
-                )
+        if let Some(mut control_plane_txn) = self.control_plane_txn.take() {
+            control_plane_txn
+                .rollback()
                 .expect("control-plane rollback snapshot must preserve table keys");
         }
         self.phase = DynamicRegistrationPhase::RolledBack;
@@ -2265,6 +2334,15 @@ impl AxonAbilityCatalog {
             .read()
             .expect("control_plane RwLock poisoned")
             .get_for_authority_mode(authority_root, ability, call_mode)
+    }
+
+    pub fn begin_control_plane_authority_mode_transaction(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> ControlPlaneAuthorityModeTxn<'_> {
+        ControlPlaneAuthorityModeTxn::begin(self, authority_root, ability, call_mode)
     }
 
     pub fn rebind_control_plane_record(
@@ -5365,6 +5443,80 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_authority_mode_transaction_restores_prior_slice() {
+        let catalog = AxonAbilityCatalog::new();
+        let old_manifest = crate::core::ability_spec::AbilityManifest::new(
+            "txn",
+            "Old transactional descriptor.",
+            serde_json::json!({"type": "object", "properties": {"old": {"type": "boolean"}}}),
+        )
+        .unwrap();
+        catalog
+            .register_dynamic_control_plane_result(
+                "plugin.txn",
+                &OwnerKind::Device,
+                Some(&old_manifest),
+                DescriptorCallMode::Rpc,
+                &ControlPlaneImplementation::native_daemon(),
+            )
+            .expect("old control-plane record writes");
+        let control_plane_key = catalog
+            .control_plane_key_for_owner("plugin.txn", &OwnerKind::Device)
+            .expect("device owner has a control-plane key")
+            .for_mode(DescriptorCallMode::Rpc);
+        let old_schema_hash = catalog
+            .control_plane_record_for_mode("plugin.txn", DescriptorCallMode::Rpc)
+            .expect("old lookup succeeds")
+            .expect("old record exists")
+            .descriptor()
+            .schema_hash();
+
+        let mut txn = catalog.begin_control_plane_authority_mode_transaction(
+            control_plane_key.authority_root(),
+            control_plane_key.ability(),
+            control_plane_key.call_mode(),
+        );
+        let new_manifest = crate::core::ability_spec::AbilityManifest::new(
+            "txn",
+            "New transactional descriptor.",
+            serde_json::json!({"type": "object", "properties": {"new": {"type": "boolean"}}}),
+        )
+        .unwrap();
+        catalog
+            .register_dynamic_control_plane_result(
+                "plugin.txn",
+                &OwnerKind::Device,
+                Some(&new_manifest),
+                DescriptorCallMode::Rpc,
+                &ControlPlaneImplementation::native_daemon(),
+            )
+            .expect("new control-plane record writes");
+        assert_ne!(
+            catalog
+                .control_plane_record_for_mode("plugin.txn", DescriptorCallMode::Rpc)
+                .expect("new lookup succeeds")
+                .expect("new record exists")
+                .descriptor()
+                .schema_hash(),
+            old_schema_hash,
+            "test must exercise an actual overwrite"
+        );
+
+        txn.rollback().expect("rollback restores prior slice");
+
+        assert_eq!(
+            catalog
+                .control_plane_record_for_mode("plugin.txn", DescriptorCallMode::Rpc)
+                .expect("restored lookup succeeds")
+                .expect("restored record exists")
+                .descriptor()
+                .schema_hash(),
+            old_schema_hash,
+            "rollback must restore old descriptor facts"
+        );
+    }
+
+    #[test]
     fn dynamic_registration_rollback_restores_prior_snapshot() {
         let catalog = AxonAbilityCatalog::new();
         let old_manifest = crate::core::ability_spec::AbilityManifest::new(
@@ -5397,15 +5549,11 @@ mod tests {
             .read()
             .expect("dynamic_ext RwLock poisoned")
             .snapshot("plugin.rollback");
-        let prior_control_plane_records = catalog
-            .control_plane
-            .read()
-            .expect("control_plane RwLock poisoned")
-            .records_for_authority_mode(
-                control_plane_key.authority_root(),
-                control_plane_key.ability(),
-                control_plane_key.call_mode(),
-            );
+        let control_plane_txn = catalog.begin_control_plane_authority_mode_transaction(
+            control_plane_key.authority_root(),
+            control_plane_key.ability(),
+            control_plane_key.call_mode(),
+        );
 
         let new_manifest = crate::core::ability_spec::AbilityManifest::new(
             "rollback",
@@ -5427,7 +5575,7 @@ mod tests {
             &catalog,
             written_key,
             prior_dynamic,
-            prior_control_plane_records,
+            control_plane_txn,
         );
         catalog
             .dynamic_ext

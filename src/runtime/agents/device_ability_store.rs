@@ -47,9 +47,9 @@ static STORE_LOCK: Lazy<RwLock<()>> = Lazy::new(|| RwLock::new(()));
 
 /// One durably-recorded device ability install.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceAbilityRecord {
     /// Lifecycle state for crash-recoverable install/uninstall.
-    #[serde(default)]
     state: DeviceAbilityRecordState,
     /// Stable id: `hash(ability_ura + manifest_hash)`.
     /// Re-deploy of the same manifest yields the same id (upsert).
@@ -68,7 +68,6 @@ pub struct DeviceAbilityRecord {
     /// SHA-256 of the manifest bytes at install time.
     manifest_hash: String,
     /// Base64 copy of the exact manifest bytes committed by deploy.
-    #[serde(default)]
     manifest_snapshot_b64: String,
     /// Unix epoch ms when this row was written. Caller-supplied (the
     /// runtime forbids ambient clock reads); 0 if unknown.
@@ -269,11 +268,10 @@ pub fn manifest_digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StoreFile {
-    #[serde(default)]
     schema_version: String,
-    #[serde(default)]
     installed: Vec<DeviceAbilityRecord>,
 }
 
@@ -653,6 +651,37 @@ mod tests {
     fn missing_file_loads_empty() {
         let (store, _d) = tmp_store();
         assert!(store.load().unwrap().is_empty());
+    }
+
+    #[test]
+    fn load_rejects_missing_schema_version() {
+        let (store, _d) = tmp_store();
+        std::fs::write(&store.path, r#"{"installed":[]}"#).unwrap();
+
+        let err = store
+            .load()
+            .expect_err("device ability store schema version is mandatory");
+        assert!(format!("{err}").contains("schema_version"), "{err}");
+    }
+
+    #[test]
+    fn load_rejects_record_missing_manifest_snapshot() {
+        let (store, _d) = tmp_store();
+        let file = StoreFile {
+            schema_version: STORE_SCHEMA_VERSION.to_string(),
+            installed: vec![record("generate")],
+        };
+        let mut value = serde_json::to_value(file).unwrap();
+        value["installed"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("manifest_snapshot_b64");
+        std::fs::write(&store.path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        let err = store
+            .load()
+            .expect_err("manifest snapshot is mandatory for replay");
+        assert!(format!("{err}").contains("manifest_snapshot_b64"), "{err}");
     }
 
     #[test]

@@ -13,10 +13,9 @@
 // project a learner-owned descriptor URA. It is intentionally not invokable.
 //
 // Execution posture: the grant default is `execution_mode =
-// "sandbox_first"` (capability.proto:238). Until the runtime boundary
-// can prove that posture for executable descriptors, acquire is deliberately
-// fail-closed for any granted descriptor that carries `[exec]`; only
-// discovery-only descriptor import is admitted.
+// "sandbox_first"` (capability.proto:238). This surface does not interpret
+// that value as permission to transfer executable code; acquire is
+// deliberately fail-closed for any granted descriptor that carries `[exec]`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -32,8 +31,9 @@ use sha2::{Digest, Sha256};
 use crate::core::ability_spec::{AbilityExec, AbilityManifest};
 use crate::persistence::teach_grants::{
     AcquireStagedGrant, AcquiringArtifactRecoveryState, AcquiringArtifactTxn,
-    DescriptorImportRecord, TeachGrant, TeachGrantAdmissionProof, TeachGrantAdmissionProofDraft,
-    TeachGrantAuthorityProof, TeachGrantDraft, TeachGrantStore, EXECUTION_MODE_DEFAULT,
+    DescriptorImportRecord, TeachGrant, TeachGrantAdmissionSnapshot,
+    TeachGrantAdmissionSnapshotDraft, TeachGrantAuthoritySnapshot, TeachGrantDraft,
+    TeachGrantStore, EXECUTION_MODE_DEFAULT,
 };
 use crate::runtime::ability::HostedAgentAuthority;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
@@ -49,6 +49,9 @@ pub const FORGET: &str = "meta.forget";
 const TRANSFER_KIND_DISCOVERY_ONLY_MANIFEST: &str = "discovery_only_manifest";
 const INVOCATION_STATUS_NOT_INVOKABLE_WITHOUT_EXEC_BINDING: &str =
     "not_invokable_without_exec_binding";
+const TEACH_MANIFEST_VERB: &str = "teach";
+const ACQUIRE_MANIFEST_VERB: &str = "acquire";
+const FORGET_MANIFEST_VERB: &str = "forget";
 static IMPORT_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 trait TeachClock {
@@ -168,18 +171,30 @@ pub fn forget_input_schema() -> Value {
 }
 
 fn teach_manifest() -> AbilityManifest {
-    AbilityManifest::new(TEACH, teach_description(), teach_input_schema())
-        .expect("meta.teach manifest is static and valid")
+    AbilityManifest::new(
+        TEACH_MANIFEST_VERB,
+        teach_description(),
+        teach_input_schema(),
+    )
+    .expect("meta.teach manifest is static and valid")
 }
 
 fn acquire_manifest() -> AbilityManifest {
-    AbilityManifest::new(ACQUIRE, acquire_description(), acquire_input_schema())
-        .expect("meta.acquire manifest is static and valid")
+    AbilityManifest::new(
+        ACQUIRE_MANIFEST_VERB,
+        acquire_description(),
+        acquire_input_schema(),
+    )
+    .expect("meta.acquire manifest is static and valid")
 }
 
 fn forget_manifest() -> AbilityManifest {
-    AbilityManifest::new(FORGET, forget_description(), forget_input_schema())
-        .expect("meta.forget manifest is static and valid")
+    AbilityManifest::new(
+        FORGET_MANIFEST_VERB,
+        forget_description(),
+        forget_input_schema(),
+    )
+    .expect("meta.forget manifest is static and valid")
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegistrarCell>) {
@@ -281,7 +296,7 @@ impl GrantedDescriptorSnapshot {
 struct OwnerAuthority {
     owner_ura: String,
     granted_by: String,
-    admission_authority: TeachGrantAuthorityProof,
+    admission_authority: TeachGrantAuthoritySnapshot,
 }
 
 /// Resolve an owner-local registry name (`<agent>.<ability>`) to the
@@ -359,10 +374,9 @@ fn hosted_agent_by_ura<'a>(
 /// Validate that the current invocation caller may confer an
 /// ability advertised by `owner_agent`.
 ///
-/// Clean v1 rule: the caller must be either the advertising Agent URA or
-/// the host device named by that Agent's persisted signing authority.
-/// This keeps local operator UX working without allowing an arbitrary
-/// admitted caller to write grants for someone else's ability.
+/// Clean v1 rule: the caller must be the advertising Agent URA, or the
+/// invocation must carry signed hosted-agent delegation metadata issued through
+/// that Agent's persisted host authority.
 fn require_owner_authority(
     env: &EnvelopeContext,
     owner_agent: &str,
@@ -380,7 +394,7 @@ fn require_owner_authority(
         return Ok(OwnerAuthority {
             owner_ura: owner_entry.agent_ura.clone(),
             granted_by: authority.host_device_ura().to_string(),
-            admission_authority: TeachGrantAuthorityProof::hosted_agent_delegation(
+            admission_authority: TeachGrantAuthoritySnapshot::hosted_agent_delegation(
                 authority.agent_ura(),
                 authority.host_device_ura(),
                 authority.ability(),
@@ -392,22 +406,14 @@ fn require_owner_authority(
         return Ok(OwnerAuthority {
             owner_ura: owner_entry.agent_ura.clone(),
             granted_by: caller.to_string(),
-            admission_authority: TeachGrantAuthorityProof::direct_owner(caller),
-        });
-    }
-
-    let expected_host = format!("hosted_by:{caller}");
-    if owner_entry.signing_authority == expected_host {
-        return Ok(OwnerAuthority {
-            owner_ura: owner_entry.agent_ura.clone(),
-            granted_by: caller.to_string(),
-            admission_authority: TeachGrantAuthorityProof::host_device(caller),
+            admission_authority: TeachGrantAuthoritySnapshot::direct_owner(caller),
         });
     }
 
     anyhow::bail!(
         "{TEACH} caller {caller:?} cannot teach abilities advertised by \
-         {owner_agent:?}; expected advertising agent {} or its host device authority",
+         {owner_agent:?}; expected advertising agent {} or signed hosted-agent delegation from \
+         its host device authority",
         owner_entry.agent_ura
     );
 }
@@ -454,14 +460,10 @@ fn require_hosted_agent_authority(
         return Ok(authority.host_device_ura().to_string());
     }
 
-    let expected_host = format!("hosted_by:{caller}");
-    if entry.signing_authority == expected_host {
-        return Ok(caller.to_string());
-    }
-
     anyhow::bail!(
         "{surface} caller {caller:?} cannot mutate abilities for agent {agent_name:?}; \
-         expected the learner Agent URA {agent_ura} or its host device authority"
+         expected the learner Agent URA {agent_ura} or signed hosted-agent delegation from its \
+         host device authority"
     );
 }
 
@@ -493,7 +495,7 @@ fn teach_handler_with_clock(
     let ability_ura = crate::ura::owner_ability_ura(&authority.owner_ura, &home.public_name)
         .ok_or_else(|| anyhow::anyhow!("could not mint the granted descriptor URA"))?;
     let granted_at = clock.now_rfc3339();
-    let proof = teach_grant_invocation_proof(
+    let admission_snapshot = teach_grant_admission_snapshot(
         &env,
         authority.admission_authority.clone(),
         GrantedDescriptorFacts {
@@ -515,7 +517,7 @@ fn teach_handler_with_clock(
         manifest_hash: snapshot.manifest_hash.clone(),
         execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
         granted_at,
-        admission_proof: proof,
+        admission_snapshot,
     }))?;
 
     Ok(json!({
@@ -532,8 +534,8 @@ fn teach_handler_with_clock(
     }))
 }
 
-/// The grant-identity facts an admission proof binds, distinct from the
-/// envelope tuple the proof projects from `env`.
+/// The grant-identity facts an admission snapshot binds, distinct from the
+/// envelope tuple the snapshot projects from `env`.
 struct GrantedDescriptorFacts<'a> {
     granted_by_ura: &'a str,
     granted_ability: &'a str,
@@ -543,12 +545,12 @@ struct GrantedDescriptorFacts<'a> {
     manifest_hash: &'a str,
 }
 
-fn teach_grant_invocation_proof(
+fn teach_grant_admission_snapshot(
     env: &EnvelopeContext,
-    authority: TeachGrantAuthorityProof,
+    authority: TeachGrantAuthoritySnapshot,
     facts: GrantedDescriptorFacts<'_>,
-) -> anyhow::Result<TeachGrantAdmissionProof> {
-    TeachGrantAdmissionProof::from_draft(TeachGrantAdmissionProofDraft {
+) -> anyhow::Result<TeachGrantAdmissionSnapshot> {
+    TeachGrantAdmissionSnapshot::from_draft(TeachGrantAdmissionSnapshotDraft {
         invocation_id: env.invocation_id().to_string(),
         caller_ura: env.caller().to_string(),
         callee_ura: env.callee().to_string(),
@@ -848,9 +850,9 @@ impl TransferExecutionPosture {
             } => anyhow::bail!(
                 "{surface} refuses executable transferred ability {}: manifest declares \
                  [exec] kind {exec_kind:?}, grant execution_mode={execution_mode:?}, and \
-                 sandbox_first is not yet an enforced runtime boundary. Acquire currently \
-                 admits discovery-only manifest transfer only; remove [exec] before teaching \
-                 or deploy executable code through the device ability deployment path.",
+                 this product surface admits discovery-only manifest transfer only. Remove \
+                 [exec] before teaching or deploy executable code through the device ability \
+                 deployment path.",
                 source.display()
             ),
         }
@@ -1606,7 +1608,7 @@ mod tests {
         .expect("mentor manifest");
 
         let mut local = crate::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: crate::ura::device_ura("localhost", "dev-1"),
+            host_device_agent_ura: crate::ura::device_ura("test", "local"),
             ..Default::default()
         };
         let mentor_ura = crate::ura::agent_ura("localhost", "dev", "mentor");
@@ -1652,6 +1654,50 @@ mod tests {
         public_name: &str,
     ) -> EnvelopeContext {
         caller_env_with_subject(caller, TEACH, subject_for(owner_ura, public_name))
+    }
+
+    fn teach_env_with_hosted_delegation(
+        caller: impl Into<String>,
+        owner_ura: &str,
+        hosted_agent_ura: &str,
+    ) -> EnvelopeContext {
+        use ed25519_dalek::Signer as _;
+
+        let env = teach_env(caller, owner_ura);
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[0x44; 32]);
+        let nonce_hex = hex::encode(env.invocation_nonce());
+        let descriptor_ref = format!(
+            "{}@1.0.0",
+            crate::ura::owner_ability_ura(env.callee(), TEACH).expect("test teach descriptor ref")
+        );
+        let claims = crate::runtime::ability::HostedAgentDelegationClaims::new(
+            hosted_agent_ura,
+            "host_device",
+            env.caller(),
+            env.callee(),
+            env.subject(),
+            env.invocation_id(),
+            nonce_hex.as_str(),
+            descriptor_ref.as_str(),
+        )
+        .expect("test hosted-agent delegation claims");
+        let signature = signer.sign(&claims.signing_payload_bytes(env.caller()));
+        let raw = claims
+            .signed_metadata_value(env.caller(), &signature)
+            .expect("test hosted-agent delegation token");
+        let delegation =
+            crate::runtime::ability::HostedAgentDelegationContext::from_signed_metadata(
+                &raw,
+                env.caller(),
+                env.callee(),
+                env.subject(),
+                env.invocation_id(),
+                nonce_hex.as_str(),
+                descriptor_ref.as_str(),
+                signer.verifying_key(),
+            )
+            .expect("test hosted-agent delegation context");
+        env.with_hosted_agent_delegation(Some(delegation))
     }
 
     fn acquire_env(caller: impl Into<String>, source_descriptor_ura: &str) -> EnvelopeContext {
@@ -1908,14 +1954,14 @@ mod tests {
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
         )
-        .expect_err("executable transfers are blocked until sandbox_first is enforced");
+        .expect_err("executable transfers are outside descriptor-import scope");
 
         assert!(
             format!("{err}").contains("refuses executable transferred ability"),
             "{err}"
         );
         assert!(
-            format!("{err}").contains("sandbox_first is not yet an enforced runtime boundary"),
+            format!("{err}").contains("discovery-only manifest transfer only"),
             "{err}"
         );
         let home = std::env::var("HOME").unwrap();
@@ -2467,16 +2513,37 @@ mod tests {
     }
 
     #[test]
-    fn teach_allows_the_host_device_authority_for_a_local_owner() {
+    fn teach_refuses_unsigned_host_device_authority_for_a_local_owner() {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed();
-        let host = crate::ura::device_ura("localhost", "dev-1");
+        let host = crate::ura::device_ura("test", "local");
 
-        let resp = teach_handler(
-            teach_env(host.clone(), &mentor_ura),
+        let err = teach_handler(
+            teach_env(host, &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
         )
-        .expect("host device signs for the local owner");
+        .expect_err("unsigned host device authority must not write grants");
+        assert!(
+            format!("{err}").contains("signed hosted-agent delegation"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn teach_allows_signed_hosted_agent_delegation_for_a_local_owner() {
+        let _g = HomeGuard::new();
+        let (_, apprentice_ura, mentor_ura) = seed();
+        let host = crate::ura::device_ura("test", "local");
+
+        let resp = teach_handler(
+            teach_env_with_hosted_delegation(
+                crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                &mentor_ura,
+                &mentor_ura,
+            ),
+            json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
+        )
+        .expect("signed host device delegation authorizes the local owner");
         assert_eq!(resp["granted_by"], host);
     }
 }

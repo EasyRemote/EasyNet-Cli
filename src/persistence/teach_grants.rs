@@ -22,14 +22,14 @@
 // Schema (operator-inspectable)
 // -----------------------------
 // {
-//   "schema_version": "4",
+//   "schema_version": "5",
 //   "grants": [
 //     { "ability": "<owner-local registry name, e.g. testbot.weather-probe>",
 //       "owner_agent": "testbot",
 //       "learner_ura": "easynet:///r/<realm>/agent/<id>",
 //       "execution_mode": "sandbox_first",   // capability.proto:238 default
 //       "granted_at": "<rfc3339>",
-//       "admission_proof": "<ledger-admitted grant authority proof>" },
+//       "admission_snapshot": "<ledger-admitted grant authority snapshot>" },
 //     …
 //   ],
 //   "imports": [
@@ -58,8 +58,8 @@ use super::file_lock::ExclusiveFileLock;
 use crate::ura::AbilitySelector;
 
 pub(crate) const FILE_NAME: &str = "teach-grants.json";
-const STORE_SCHEMA_VERSION: &str = "4";
-const TEACH_GRANT_PROOF_KIND: &str = "teach_grant_admission_v2";
+const STORE_SCHEMA_VERSION: &str = "5";
+const TEACH_GRANT_SNAPSHOT_KIND: &str = "teach_grant_admission_snapshot_v1";
 const TEACH_GRANT_ENVELOPE_ABILITY: &str = "meta.teach";
 static STORE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
@@ -69,11 +69,10 @@ static STORE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 pub const EXECUTION_MODE_DEFAULT: &str = "sandbox_first";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TeachGrantsFile {
     schema_version: String,
-    #[serde(default)]
     grants: Vec<TeachGrant>,
-    #[serde(default)]
     imports: Vec<DescriptorImportRecord>,
 }
 
@@ -110,11 +109,10 @@ impl TeachGrantsFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TeachGrant {
     ability: String,
-    #[serde(default)]
     ability_ura: String,
-    #[serde(default)]
     owner_ura: String,
     granted_by_ura: String,
     owner_agent: String,
@@ -122,7 +120,7 @@ pub struct TeachGrant {
     manifest_hash: String,
     execution_mode: String,
     granted_at: String,
-    admission_proof: TeachGrantAdmissionProof,
+    admission_snapshot: TeachGrantAdmissionSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,11 +134,12 @@ pub struct TeachGrantDraft {
     pub manifest_hash: String,
     pub execution_mode: String,
     pub granted_at: String,
-    pub admission_proof: TeachGrantAdmissionProof,
+    pub admission_snapshot: TeachGrantAdmissionSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TeachGrantAdmissionProof {
+#[serde(deny_unknown_fields)]
+pub struct TeachGrantAdmissionSnapshot {
     kind: String,
     invocation_id: String,
     caller_ura: String,
@@ -149,7 +148,7 @@ pub struct TeachGrantAdmissionProof {
     envelope_ability: String,
     invocation_nonce_hex: String,
     causal_context: Value,
-    authority: TeachGrantAuthorityProof,
+    authority: TeachGrantAuthoritySnapshot,
     granted_ability: String,
     granted_ability_ura: String,
     owner_ura: String,
@@ -159,7 +158,7 @@ pub struct TeachGrantAdmissionProof {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TeachGrantAdmissionProofDraft {
+pub struct TeachGrantAdmissionSnapshotDraft {
     pub invocation_id: String,
     pub caller_ura: String,
     pub callee_ura: String,
@@ -167,7 +166,7 @@ pub struct TeachGrantAdmissionProofDraft {
     pub envelope_ability: String,
     pub invocation_nonce_hex: String,
     pub causal_context: Value,
-    pub authority: TeachGrantAuthorityProof,
+    pub authority: TeachGrantAuthoritySnapshot,
     pub granted_ability: String,
     pub granted_ability_ura: String,
     pub owner_ura: String,
@@ -182,16 +181,13 @@ pub struct TeachGrantAdmissionProofDraft {
 /// projection of an authority path that `meta.teach` already admitted.
 ///
 /// Invariant 2: validation is variant-specific because direct agent calls,
-/// direct host-device calls, and loopback hosted-agent delegation have
-/// different accountability roots.
+/// direct owner calls and signed loopback hosted-agent delegation have distinct
+/// accountability roots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "authority_kind", rename_all = "snake_case")]
-pub enum TeachGrantAuthorityProof {
+#[serde(tag = "authority_kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TeachGrantAuthoritySnapshot {
     DirectOwnerCaller {
         owner_ura: String,
-    },
-    HostDeviceAuthority {
-        host_device_ura: String,
     },
     HostedAgentDelegation {
         agent_ura: String,
@@ -200,18 +196,11 @@ pub enum TeachGrantAuthorityProof {
     },
 }
 
-impl TeachGrantAuthorityProof {
+impl TeachGrantAuthoritySnapshot {
     #[must_use]
     pub fn direct_owner(owner_ura: impl Into<String>) -> Self {
         Self::DirectOwnerCaller {
             owner_ura: owner_ura.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn host_device(host_device_ura: impl Into<String>) -> Self {
-        Self::HostDeviceAuthority {
-            host_device_ura: host_device_ura.into(),
         }
     }
 
@@ -230,13 +219,13 @@ impl TeachGrantAuthorityProof {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DescriptorImportRecord {
     ability_name: String,
     learner_agent: String,
     source_descriptor_ura: String,
     manifest_hash: String,
     imported_at: String,
-    #[serde(default)]
     state: DescriptorImportState,
     #[serde(default)]
     acquiring_manifest_path: Option<String>,
@@ -288,7 +277,7 @@ impl TeachGrant {
             manifest_hash: draft.manifest_hash,
             execution_mode: draft.execution_mode,
             granted_at: draft.granted_at,
-            admission_proof: draft.admission_proof,
+            admission_snapshot: draft.admission_snapshot,
         }
     }
 
@@ -312,7 +301,7 @@ impl TeachGrant {
         require_non_empty("teach grant manifest_hash", &self.manifest_hash)?;
         require_non_empty("teach grant execution_mode", &self.execution_mode)?;
         require_non_empty("teach grant granted_at", &self.granted_at)?;
-        self.admission_proof.validate_for_grant(self)
+        self.admission_snapshot.validate_for_grant(self)
     }
 
     fn validate_acquire_request(
@@ -335,7 +324,7 @@ impl TeachGrant {
                 self.learner_ura
             );
         }
-        self.admission_proof.validate_for_grant(self)
+        self.admission_snapshot.validate_for_grant(self)
     }
 }
 
@@ -345,10 +334,10 @@ impl From<TeachGrantDraft> for TeachGrant {
     }
 }
 
-impl TeachGrantAdmissionProof {
-    pub fn from_draft(draft: TeachGrantAdmissionProofDraft) -> anyhow::Result<Self> {
-        let proof = Self {
-            kind: TEACH_GRANT_PROOF_KIND.to_string(),
+impl TeachGrantAdmissionSnapshot {
+    pub fn from_draft(draft: TeachGrantAdmissionSnapshotDraft) -> anyhow::Result<Self> {
+        let snapshot = Self {
+            kind: TEACH_GRANT_SNAPSHOT_KIND.to_string(),
             invocation_id: draft.invocation_id,
             caller_ura: draft.caller_ura,
             callee_ura: draft.callee_ura,
@@ -364,33 +353,36 @@ impl TeachGrantAdmissionProof {
             learner_ura: draft.learner_ura,
             manifest_hash: draft.manifest_hash,
         };
-        proof.validate_shape()?;
-        Ok(proof)
+        snapshot.validate_shape()?;
+        Ok(snapshot)
     }
 
     fn validate_shape(&self) -> anyhow::Result<()> {
-        if self.kind != TEACH_GRANT_PROOF_KIND {
+        if self.kind != TEACH_GRANT_SNAPSHOT_KIND {
             anyhow::bail!(
-                "unsupported teach grant proof kind {:?}; expected {:?}",
+                "unsupported teach grant snapshot kind {:?}; expected {:?}",
                 self.kind,
-                TEACH_GRANT_PROOF_KIND
+                TEACH_GRANT_SNAPSHOT_KIND
             );
         }
-        require_non_empty("teach grant proof invocation_id", &self.invocation_id)?;
-        require_non_empty("teach grant proof caller_ura", &self.caller_ura)?;
-        require_non_empty("teach grant proof callee_ura", &self.callee_ura)?;
-        require_non_empty("teach grant proof subject_ura", &self.subject_ura)?;
-        require_non_empty("teach grant proof envelope_ability", &self.envelope_ability)?;
+        require_non_empty("teach grant snapshot invocation_id", &self.invocation_id)?;
+        require_non_empty("teach grant snapshot caller_ura", &self.caller_ura)?;
+        require_non_empty("teach grant snapshot callee_ura", &self.callee_ura)?;
+        require_non_empty("teach grant snapshot subject_ura", &self.subject_ura)?;
+        require_non_empty(
+            "teach grant snapshot envelope_ability",
+            &self.envelope_ability,
+        )?;
         let selected_envelope_ability = canonical_envelope_ability(&self.envelope_ability)
             .with_context(|| {
                 format!(
-                    "invalid teach grant proof envelope ability {:?}",
+                    "invalid teach grant snapshot envelope ability {:?}",
                     self.envelope_ability
                 )
             })?;
         if selected_envelope_ability != TEACH_GRANT_ENVELOPE_ABILITY {
             anyhow::bail!(
-                "teach grant proof envelope ability {:?} resolved to {:?}; expected {:?}",
+                "teach grant snapshot envelope ability {:?} resolved to {:?}; expected {:?}",
                 self.envelope_ability,
                 selected_envelope_ability,
                 TEACH_GRANT_ENVELOPE_ABILITY
@@ -398,46 +390,49 @@ impl TeachGrantAdmissionProof {
         }
         let nonce = hex::decode(&self.invocation_nonce_hex).map_err(|err| {
             anyhow::anyhow!(
-                "teach grant proof invocation nonce must be hex encoded 16 bytes: {err}"
+                "teach grant snapshot invocation nonce must be hex encoded 16 bytes: {err}"
             )
         })?;
         if nonce.len() != 16 {
             anyhow::bail!(
-                "teach grant proof invocation nonce must be 16 bytes, got {}",
+                "teach grant snapshot invocation nonce must be 16 bytes, got {}",
                 nonce.len()
             );
         }
         self.authority.validate_shape()?;
-        require_non_empty("teach grant proof granted_ability", &self.granted_ability)?;
         require_non_empty(
-            "teach grant proof granted_ability_ura",
+            "teach grant snapshot granted_ability",
+            &self.granted_ability,
+        )?;
+        require_non_empty(
+            "teach grant snapshot granted_ability_ura",
             &self.granted_ability_ura,
         )?;
-        require_non_empty("teach grant proof owner_ura", &self.owner_ura)?;
-        require_non_empty("teach grant proof granted_by_ura", &self.granted_by_ura)?;
-        require_non_empty("teach grant proof learner_ura", &self.learner_ura)?;
-        require_non_empty("teach grant proof manifest_hash", &self.manifest_hash)?;
+        require_non_empty("teach grant snapshot owner_ura", &self.owner_ura)?;
+        require_non_empty("teach grant snapshot granted_by_ura", &self.granted_by_ura)?;
+        require_non_empty("teach grant snapshot learner_ura", &self.learner_ura)?;
+        require_non_empty("teach grant snapshot manifest_hash", &self.manifest_hash)?;
         Ok(())
     }
 
     fn validate_for_grant(&self, grant: &TeachGrant) -> anyhow::Result<()> {
         self.validate_shape()?;
-        let proof_matches_grant = self.granted_ability == grant.ability
+        let snapshot_matches_grant = self.granted_ability == grant.ability
             && self.granted_ability_ura == grant.ability_ura
             && self.owner_ura == grant.owner_ura
             && self.granted_by_ura == grant.granted_by_ura
             && self.learner_ura == grant.learner_ura
             && self.manifest_hash == grant.manifest_hash;
-        if !proof_matches_grant {
+        if !snapshot_matches_grant {
             anyhow::bail!(
-                "teach grant proof does not match grant facts for descriptor {:?} to {:?}",
+                "teach grant snapshot does not match grant facts for descriptor {:?} to {:?}",
                 grant.ability_ura,
                 grant.learner_ura
             );
         }
         if self.subject_ura != grant.ability_ura {
             anyhow::bail!(
-                "teach grant proof subject {:?} does not bind granted descriptor {:?}",
+                "teach grant snapshot subject {:?} does not bind granted descriptor {:?}",
                 self.subject_ura,
                 grant.ability_ura
             );
@@ -447,14 +442,11 @@ impl TeachGrantAdmissionProof {
     }
 }
 
-impl TeachGrantAuthorityProof {
+impl TeachGrantAuthoritySnapshot {
     fn validate_shape(&self) -> anyhow::Result<()> {
         match self {
             Self::DirectOwnerCaller { owner_ura } => {
                 require_non_empty("teach grant authority owner_ura", owner_ura)
-            }
-            Self::HostDeviceAuthority { host_device_ura } => {
-                require_non_empty("teach grant authority host_device_ura", host_device_ura)
             }
             Self::HostedAgentDelegation {
                 agent_ura,
@@ -470,25 +462,17 @@ impl TeachGrantAuthorityProof {
 
     fn validate_for_grant(
         &self,
-        proof: &TeachGrantAdmissionProof,
+        snapshot: &TeachGrantAdmissionSnapshot,
         grant: &TeachGrant,
     ) -> anyhow::Result<()> {
         match self {
             Self::DirectOwnerCaller { owner_ura } => {
                 if owner_ura != &grant.owner_ura
-                    || proof.caller_ura != *owner_ura
+                    || snapshot.caller_ura != *owner_ura
                     || grant.granted_by_ura != *owner_ura
                 {
                     anyhow::bail!(
                         "teach grant direct-owner authority does not match caller/owner/granted_by"
-                    );
-                }
-            }
-            Self::HostDeviceAuthority { host_device_ura } => {
-                if host_device_ura != &grant.granted_by_ura || proof.caller_ura != *host_device_ura
-                {
-                    anyhow::bail!(
-                        "teach grant host-device authority does not match caller/granted_by"
                     );
                 }
             }
@@ -502,7 +486,7 @@ impl TeachGrantAuthorityProof {
                 })?;
                 if agent_ura != &grant.owner_ura
                     || host_device_ura != &grant.granted_by_ura
-                    || proof.callee_ura != *host_device_ura
+                    || snapshot.callee_ura != *host_device_ura
                     || delegated_ability != TEACH_GRANT_ENVELOPE_ABILITY
                 {
                     anyhow::bail!(
@@ -524,7 +508,7 @@ fn require_non_empty(field: &'static str, value: &str) -> anyhow::Result<()> {
 
 fn canonical_envelope_ability(raw: &str) -> anyhow::Result<String> {
     let trimmed = raw.trim();
-    require_non_empty("teach grant proof envelope ability", trimmed)?;
+    require_non_empty("teach grant snapshot envelope ability", trimmed)?;
     if trimmed == TEACH_GRANT_ENVELOPE_ABILITY {
         return Ok(trimmed.to_string());
     }
@@ -1272,12 +1256,12 @@ mod tests {
             manifest_hash: TEST_MANIFEST_HASH.to_string(),
             execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
             granted_at: "t0".to_string(),
-            admission_proof: mentor_quote_proof(learner_ura),
+            admission_snapshot: mentor_quote_snapshot(learner_ura),
         })
     }
 
-    fn mentor_quote_proof(learner_ura: &str) -> TeachGrantAdmissionProof {
-        TeachGrantAdmissionProof::from_draft(TeachGrantAdmissionProofDraft {
+    fn mentor_quote_snapshot(learner_ura: &str) -> TeachGrantAdmissionSnapshot {
+        TeachGrantAdmissionSnapshot::from_draft(TeachGrantAdmissionSnapshotDraft {
             invocation_id: "test-invocation".to_string(),
             caller_ura: "easynet:///r/acme/agent/mentor".to_string(),
             callee_ura: "easynet:///r/acme/agent/mentor".to_string(),
@@ -1285,7 +1269,7 @@ mod tests {
             envelope_ability: "meta.teach".to_string(),
             invocation_nonce_hex: hex::encode([0xA5; 16]),
             causal_context: serde_json::json!({"kind": "none"}),
-            authority: TeachGrantAuthorityProof::direct_owner("easynet:///r/acme/agent/mentor"),
+            authority: TeachGrantAuthoritySnapshot::direct_owner("easynet:///r/acme/agent/mentor"),
             granted_ability: "mentor.quote".to_string(),
             granted_ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
             owner_ura: "easynet:///r/acme/agent/mentor".to_string(),
@@ -1293,7 +1277,7 @@ mod tests {
             learner_ura: learner_ura.to_string(),
             manifest_hash: TEST_MANIFEST_HASH.to_string(),
         })
-        .expect("test proof is valid")
+        .expect("test snapshot is valid")
     }
 
     fn acquire_mentor_quote_request<T>(
@@ -1345,30 +1329,30 @@ mod tests {
     }
 
     #[test]
-    fn load_rejects_grant_with_mismatched_invocation_proof() {
+    fn load_rejects_grant_with_mismatched_invocation_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
         let mut file = TeachGrantsFile::default();
         let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
-        grant.admission_proof.manifest_hash = "sha256:tampered".to_string();
+        grant.admission_snapshot.manifest_hash = "sha256:tampered".to_string();
         file.grants.push(grant);
         std::fs::write(&path, serde_json::to_vec_pretty(&file).unwrap()).unwrap();
         let store = TeachGrantStore { path };
 
         let err = store
             .load_unlocked()
-            .expect_err("grant proof must match grant facts");
+            .expect_err("grant snapshot must match grant facts");
         assert!(
             err.to_string()
-                .contains("teach grant proof does not match grant facts"),
+                .contains("teach grant snapshot does not match grant facts"),
             "{err}"
         );
     }
 
     #[test]
-    fn admission_proof_accepts_versioned_teach_ability_ura() {
+    fn admission_snapshot_accepts_versioned_teach_ability_ura() {
         let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
-        grant.admission_proof.envelope_ability =
+        grant.admission_snapshot.envelope_ability =
             "easynet:///r/cli/ability/device.local.meta.teach@1.0.0".to_string();
 
         grant
@@ -1377,9 +1361,9 @@ mod tests {
     }
 
     #[test]
-    fn admission_proof_rejects_versioned_non_teach_ability_ura() {
+    fn admission_snapshot_rejects_versioned_non_teach_ability_ura() {
         let mut grant = mentor_quote_grant("easynet:///r/acme/agent/apprentice");
-        grant.admission_proof.envelope_ability =
+        grant.admission_snapshot.envelope_ability =
             "easynet:///r/cli/ability/device.local.meta.acquire@1.0.0".to_string();
 
         let err = grant
@@ -1401,25 +1385,28 @@ mod tests {
             manifest_hash: TEST_MANIFEST_HASH.to_string(),
             execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
             granted_at: "t0".to_string(),
-            admission_proof: TeachGrantAdmissionProof::from_draft(TeachGrantAdmissionProofDraft {
-                invocation_id: "test-invocation".to_string(),
-                caller_ura: "easynet:///r/acme/agent/testbot".to_string(),
-                callee_ura: "easynet:///r/acme/agent/testbot".to_string(),
-                subject_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
-                envelope_ability: "meta.teach".to_string(),
-                invocation_nonce_hex: hex::encode([0xA5; 16]),
-                causal_context: serde_json::json!({"kind": "none"}),
-                authority: TeachGrantAuthorityProof::direct_owner(
-                    "easynet:///r/acme/agent/testbot",
-                ),
-                granted_ability: "testbot.weather-probe".to_string(),
-                granted_ability_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
-                owner_ura: "easynet:///r/acme/agent/testbot".to_string(),
-                granted_by_ura: "easynet:///r/acme/agent/testbot".to_string(),
-                learner_ura: "ura-b".to_string(),
-                manifest_hash: TEST_MANIFEST_HASH.to_string(),
-            })
-            .expect("test proof is valid"),
+            admission_snapshot: TeachGrantAdmissionSnapshot::from_draft(
+                TeachGrantAdmissionSnapshotDraft {
+                    invocation_id: "test-invocation".to_string(),
+                    caller_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                    callee_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                    subject_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
+                    envelope_ability: "meta.teach".to_string(),
+                    invocation_nonce_hex: hex::encode([0xA5; 16]),
+                    causal_context: serde_json::json!({"kind": "none"}),
+                    authority: TeachGrantAuthoritySnapshot::direct_owner(
+                        "easynet:///r/acme/agent/testbot",
+                    ),
+                    granted_ability: "testbot.weather-probe".to_string(),
+                    granted_ability_ura: "easynet:///r/acme/ability/testbot.weather-probe"
+                        .to_string(),
+                    owner_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                    granted_by_ura: "easynet:///r/acme/agent/testbot".to_string(),
+                    learner_ura: "ura-b".to_string(),
+                    manifest_hash: TEST_MANIFEST_HASH.to_string(),
+                },
+            )
+            .expect("test snapshot is valid"),
         }));
         assert!(file
             .grant_index_for(
