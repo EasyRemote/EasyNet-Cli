@@ -667,12 +667,10 @@ impl DiscoverRuntimeService {
             .cloned()
             .context("local discover tier did not produce invocation metadata")?;
         let causal_state = RealmCausalState::from_local_invocation(&local_invocation_meta);
-        if let Some(diagnostic) = causal_state.diagnostic() {
-            self.state.diagnostics.push(diagnostic);
-        }
         let trace_id = trace_id_from_invocation_meta(&local_invocation_meta);
+        let causal_parents = causal_state.parents()?;
         let (realm_value, realm_invocation_meta) =
-            self.walk_tier_with_trace("user", causal_state.parents(), trace_id.as_deref())?;
+            self.walk_tier_with_trace("user", causal_parents, trace_id.as_deref())?;
         self.state.record_invocation(realm_invocation_meta);
         self.state.record_source_diagnostic(&realm_value);
         match FederationStatus::from_envelope(&realm_value) {
@@ -720,10 +718,9 @@ impl DiscoverRuntimeService {
 
 /// Causal-anchor state for the realm tier.
 ///
-/// Local discovery always runs first. Realm discovery should use that
-/// local receipt anchor when the daemon returned one, but an absent
-/// anchor is not a terminal discover state: it means the realm tier runs
-/// unanchored and the report carries a typed diagnostic.
+/// Local discovery always runs first. Realm discovery must use that local
+/// receipt anchor; without it, cross-tier discovery cannot preserve the AXIOM
+/// causal chain and must fail closed instead of fabricating an empty parent set.
 #[derive(Debug, Clone)]
 enum RealmCausalState {
     Anchored(Vec<Value>),
@@ -740,21 +737,12 @@ impl RealmCausalState {
         }
     }
 
-    fn parents(&self) -> &[Value] {
+    fn parents(&self) -> anyhow::Result<&[Value]> {
         match self {
-            Self::Anchored(parents) => parents.as_slice(),
-            Self::Unanchored { .. } => &[],
-        }
-    }
-
-    fn diagnostic(&self) -> Option<DiscoverDiagnostic> {
-        match self {
-            Self::Anchored(_) => None,
-            Self::Unanchored { reason } => Some(DiscoverDiagnostic {
-                scope: "device".to_string(),
-                code: "local_receipt_anchor_missing",
-                message: format!("{reason}; continuing realm discovery without a causal parent"),
-            }),
+            Self::Anchored(parents) => Ok(parents.as_slice()),
+            Self::Unanchored { reason } => {
+                anyhow::bail!("{reason}; realm discovery requires a local receipt anchor")
+            }
         }
     }
 }
@@ -1133,23 +1121,19 @@ mod tests {
     }
 
     #[test]
-    fn missing_local_receipt_anchor_degrades_realm_walk() {
+    fn missing_local_receipt_anchor_rejects_realm_walk() {
         let causal_state = RealmCausalState::from_local_invocation(&json!({
                 "metadata_state": "missing_receipt_anchor",
                 "trace_id": "trace-1",
         }));
 
-        assert!(causal_state.parents().is_empty());
-        let diagnostic = causal_state
-            .diagnostic()
-            .expect("missing anchor must surface as a typed diagnostic");
-        assert_eq!(diagnostic.code, "local_receipt_anchor_missing");
+        let err = causal_state
+            .parents()
+            .expect_err("missing anchor must fail closed");
         assert!(
-            diagnostic
-                .message
-                .contains("continuing realm discovery without a causal parent"),
-            "{}",
-            diagnostic.message
+            err.to_string()
+                .contains("realm discovery requires a local receipt anchor"),
+            "{err}"
         );
     }
 
