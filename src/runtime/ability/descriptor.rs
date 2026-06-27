@@ -510,18 +510,28 @@ pub fn schema_hash_for_manifest(
 pub fn governed_schema_summary(
     input: &Value,
     output: &Value,
-    visibility: Value,
-    scope_subjects: Value,
-    scope_agents: Value,
+    access_policy: Value,
     hints: Value,
 ) -> Value {
     serde_json::json!({
         "input": input,
         "output": output,
+        "access_policy": access_policy,
+        "hints": hints,
+    })
+}
+
+pub fn governed_access_policy_summary(
+    visibility: Value,
+    scope_subjects: Value,
+    scope_agents: Value,
+    deny_callers: Value,
+) -> Value {
+    serde_json::json!({
         "visibility": visibility,
         "scope_subjects": scope_subjects,
         "scope_agents": scope_agents,
-        "hints": hints,
+        "deny_callers": deny_callers,
     })
 }
 
@@ -586,35 +596,40 @@ fn governed_schema_summary_for_manifest(
     match manifest {
         Some(manifest) => {
             let access = manifest.access();
+            let access_policy = manifest_access_policy_projection(&access);
             governed_schema_summary(
                 manifest.input_schema(),
                 manifest.output_schema().unwrap_or(&empty),
-                serde_json::to_value(manifest_visibility_projection(access.visibility))
-                    .expect("manifest visibility projection serializes"),
-                serde_json::to_value(crate::runtime::ability_descriptor::ScopeRule::Any)
-                    .expect("scope rule serializes"),
-                serde_json::to_value(manifest_scope_agents_projection(&access))
-                    .expect("scope rule serializes"),
+                access_policy,
                 serde_json::to_value(crate::runtime::ability_descriptor::AbilityHints::default())
                     .expect("ability hints serialize"),
             )
         }
         None => {
             let access = crate::core::ability_spec::AccessPolicy::default();
+            let access_policy = manifest_access_policy_projection(&access);
             governed_schema_summary(
                 &empty,
                 &empty,
-                serde_json::to_value(manifest_visibility_projection(access.visibility))
-                    .expect("manifest visibility projection serializes"),
-                serde_json::to_value(crate::runtime::ability_descriptor::ScopeRule::Any)
-                    .expect("scope rule serializes"),
-                serde_json::to_value(manifest_scope_agents_projection(&access))
-                    .expect("scope rule serializes"),
+                access_policy,
                 serde_json::to_value(crate::runtime::ability_descriptor::AbilityHints::default())
                     .expect("ability hints serialize"),
             )
         }
     }
+}
+
+fn manifest_access_policy_projection(access: &crate::core::ability_spec::AccessPolicy) -> Value {
+    governed_access_policy_summary(
+        serde_json::to_value(manifest_visibility_projection(access.visibility))
+            .expect("manifest visibility projection serializes"),
+        serde_json::to_value(crate::runtime::ability_descriptor::ScopeRule::Any)
+            .expect("scope rule serializes"),
+        serde_json::to_value(manifest_scope_agents_projection(access))
+            .expect("scope rule serializes"),
+        serde_json::to_value(sorted_policy_list(access.deny_callers.as_deref()))
+            .expect("deny caller list serializes"),
+    )
 }
 
 fn manifest_visibility_projection(
@@ -638,10 +653,24 @@ fn manifest_scope_agents_projection(
 ) -> crate::runtime::ability_descriptor::ScopeRule {
     match access.allow_callers.as_ref() {
         Some(allow) if !allow.is_empty() => {
-            crate::runtime::ability_descriptor::ScopeRule::OnlyMatching(allow.clone())
+            crate::runtime::ability_descriptor::ScopeRule::OnlyMatching(sorted_policy_list(Some(
+                allow.as_slice(),
+            )))
         }
         _ => crate::runtime::ability_descriptor::ScopeRule::Any,
     }
+}
+
+fn sorted_policy_list(values: Option<&[String]>) -> Vec<String> {
+    let mut values = values
+        .unwrap_or_default()
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
 }
 
 pub fn descriptor_hash_for_manifest_parts(
@@ -762,6 +791,47 @@ mod tests {
             base_record.descriptor_hash(),
             restricted_record.descriptor_hash(),
             "descriptor_hash must change when ability access policy changes"
+        );
+    }
+
+    #[test]
+    fn descriptor_hash_binds_manifest_deny_callers() {
+        let input = json!({"type": "object"});
+        let base = crate::core::ability_spec::AbilityManifest::new(
+            "quote",
+            "emit a quotable line",
+            input.clone(),
+        )
+        .unwrap()
+        .with_access(crate::core::ability_spec::AccessPolicy {
+            visibility: crate::core::ability_spec::Visibility::Device,
+            allow_callers: Some(vec!["alice".to_string()]),
+            deny_callers: None,
+        })
+        .unwrap();
+        let deny_alice =
+            crate::core::ability_spec::AbilityManifest::new("quote", "emit a quotable line", input)
+                .unwrap()
+                .with_access(crate::core::ability_spec::AccessPolicy {
+                    visibility: crate::core::ability_spec::Visibility::Device,
+                    allow_callers: Some(vec!["alice".to_string()]),
+                    deny_callers: Some(vec!["alice".to_string()]),
+                })
+                .unwrap();
+
+        let base_record =
+            AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&base))
+                .unwrap();
+        let deny_record = AbilityDescriptorRecord::from_manifest(
+            "mentor.quote",
+            CallMode::Rpc,
+            Some(&deny_alice),
+        )
+        .unwrap();
+        assert_ne!(
+            base_record.descriptor_hash(),
+            deny_record.descriptor_hash(),
+            "descriptor_hash must bind deny_callers because deny overrides allow at invoke time"
         );
     }
 

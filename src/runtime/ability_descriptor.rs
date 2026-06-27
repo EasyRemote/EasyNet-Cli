@@ -72,7 +72,7 @@ pub enum Visibility {
 }
 
 /// Per AXON-RFC-006 §"transition receipts", an ability falls into
-/// one of three execution shapes that determine receipt
+/// one of four execution shapes that determine receipt
 /// machinery + audit timing:
 ///
 ///   * `Query`      — single-shot read. One request, one response,
@@ -86,6 +86,11 @@ pub enum Visibility {
 ///                    auditing lives in the stream itself.
 ///                    Examples: `mic.subscribe`, `camera.subscribe`,
 ///                    `discuss.subscribe`.
+///
+///   * `Bidi`       — full-duplex session. One open handshake, then
+///                    independent inbound/outbound frames until a
+///                    terminal close. It intentionally hashes as the
+///                    Axon Bidi call mode, never as a Stream.
 ///
 ///   * `Transition` — state-mutating sequence. The ability hands
 ///                    back a receipt that itself carries the
@@ -104,6 +109,7 @@ pub enum Visibility {
 pub enum AbilityClass {
     Query,
     Stream,
+    Bidi,
     Transition,
 }
 
@@ -116,6 +122,7 @@ impl AbilityClass {
         match self {
             AbilityClass::Query => "query",
             AbilityClass::Stream => "stream",
+            AbilityClass::Bidi => "bidi",
             AbilityClass::Transition => "transition",
         }
     }
@@ -123,7 +130,9 @@ impl AbilityClass {
     /// Derive the execution class from transport hints when an
     /// ability manifest has not declared a class explicitly.
     pub fn from_hints(hints: &AbilityHints) -> Self {
-        if hints.streaming_only || hints.bidi_only {
+        if hints.bidi_only {
+            AbilityClass::Bidi
+        } else if hints.streaming_only {
             AbilityClass::Stream
         } else {
             AbilityClass::Query
@@ -521,6 +530,7 @@ pub enum DescriptorError {
     EmptyName,
     UnnamespacedName,
     EmptyOwner,
+    InvalidVersion { version: String },
 }
 
 impl std::fmt::Display for DescriptorError {
@@ -532,6 +542,9 @@ impl std::fmt::Display for DescriptorError {
             }
             DescriptorError::EmptyOwner => {
                 write!(f, "owner_ura must not be empty")
+            }
+            DescriptorError::InvalidVersion { version } => {
+                write!(f, "descriptor version {version:?} is not a valid semver")
             }
         }
     }
@@ -599,12 +612,14 @@ impl AbilityDescriptor {
         self
     }
 
-    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+    pub fn with_version(mut self, version: impl Into<String>) -> Result<Self, DescriptorError> {
         let version = version.into();
-        if !version.trim().is_empty() {
-            self.version = version;
+        let version = version.trim().to_string();
+        if !crate::runtime::ability::descriptor::is_valid_descriptor_version(&version) {
+            return Err(DescriptorError::InvalidVersion { version });
         }
-        self
+        self.version = version;
+        Ok(self)
     }
 
     pub fn with_input_schema(mut self, schema: Value) -> Self {
@@ -675,12 +690,16 @@ impl AbilityDescriptor {
     }
 
     fn governed_schema_summary(&self) -> Value {
+        let access_policy = crate::runtime::ability::descriptor::governed_access_policy_summary(
+            serde_json::to_value(self.visibility).expect("visibility serializes"),
+            governed_scope_rule_value(&self.scope_subjects),
+            governed_scope_rule_value(&self.scope_agents),
+            serde_json::json!([]),
+        );
         crate::runtime::ability::descriptor::governed_schema_summary(
             &self.schema_summary.input,
             &self.schema_summary.output_receipt_body,
-            serde_json::to_value(self.visibility).expect("visibility serializes"),
-            serde_json::to_value(&self.scope_subjects).expect("scope rule serializes"),
-            serde_json::to_value(&self.scope_agents).expect("scope rule serializes"),
+            access_policy,
             serde_json::to_value(&self.hints).expect("ability hints serialize"),
         )
     }
@@ -692,6 +711,7 @@ impl AbilityDescriptor {
     pub fn descriptor_hash_bytes(&self) -> [u8; 32] {
         let call_mode = match self.ability_class() {
             AbilityClass::Stream => crate::runtime::ability::CallMode::Stream,
+            AbilityClass::Bidi => crate::runtime::ability::CallMode::Bidi,
             AbilityClass::Query | AbilityClass::Transition => {
                 crate::runtime::ability::CallMode::Rpc
             }
@@ -756,6 +776,27 @@ impl AbilityDescriptor {
             }
         }
     }
+}
+
+fn governed_scope_rule_value(rule: &ScopeRule) -> Value {
+    match rule {
+        ScopeRule::OnlyMatching(values) => {
+            serde_json::to_value(ScopeRule::OnlyMatching(sorted_scope_values(values)))
+                .expect("scope rule serializes")
+        }
+        other => serde_json::to_value(other).expect("scope rule serializes"),
+    }
+}
+
+fn sorted_scope_values(values: &[String]) -> Vec<String> {
+    let mut values = values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
 }
 
 #[cfg(test)]
@@ -1013,6 +1054,14 @@ mod tests {
         assert_eq!(stream.ability_class(), AbilityClass::Stream);
         assert!(!stream.class_was_pinned());
 
+        let bidi = query.clone().with_hints(AbilityHints {
+            streaming_only: true,
+            bidi_only: true,
+            ..Default::default()
+        });
+        assert_eq!(bidi.ability_class(), AbilityClass::Bidi);
+        assert!(!bidi.class_was_pinned());
+
         let transition = query.with_class(AbilityClass::Transition);
         assert_eq!(transition.ability_class(), AbilityClass::Transition);
         assert!(transition.class_was_pinned());
@@ -1168,6 +1217,23 @@ mod tests {
     }
 
     #[test]
+    fn with_version_validates_the_governed_interface_version() {
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        );
+        let versioned = d.clone().with_version("2.0.0").unwrap();
+        assert_eq!(versioned.version, "2.0.0");
+        assert_eq!(
+            d.with_version("not-semver").unwrap_err(),
+            DescriptorError::InvalidVersion {
+                version: "not-semver".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn wire_class_field_is_always_present_with_effective_value() {
         // Unpinned + streaming hints → emit "stream" on the wire even
         // though `class_override` is None internally.
@@ -1183,6 +1249,27 @@ mod tests {
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(json["class"], serde_json::json!("stream"));
         assert!(!d.class_was_pinned());
+    }
+
+    #[test]
+    fn bidi_descriptor_hash_uses_bidi_call_mode() {
+        let owner = "easynet:///r/acme/agent/alice.claude";
+        let stream = must("chat", owner, Visibility::Scoped).with_hints(AbilityHints {
+            streaming_only: true,
+            ..Default::default()
+        });
+        let bidi = must("chat", owner, Visibility::Scoped).with_hints(AbilityHints {
+            bidi_only: true,
+            ..Default::default()
+        });
+
+        assert_eq!(bidi.ability_class(), AbilityClass::Bidi);
+        assert_eq!(serde_json::to_value(&bidi).unwrap()["class"], "bidi");
+        assert_ne!(
+            stream.descriptor_hash_prefixed(),
+            bidi.descriptor_hash_prefixed(),
+            "bidi descriptors must hash with Axon CallMode::Bidi, not Stream"
+        );
     }
 
     #[test]
