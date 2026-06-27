@@ -552,7 +552,6 @@ fn should_gate(ability: &str) -> bool {
         "observe.",
         "openai.",
         "plugin.",
-        "policy.",
         "process.",
         "remote.",
         "schedule.",
