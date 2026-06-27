@@ -754,6 +754,56 @@ pub fn recover_descriptor_import_transactions() -> anyhow::Result<usize> {
     })
 }
 
+/// Re-drive every descriptor-import row stuck in `Forgetting` to convergence.
+///
+/// A `Forgetting` row means the artifact was already removed but the original
+/// meta.forget could not complete runtime convergence + `finish_forget` — the
+/// common case being that the learner runtime was not yet wired. Only an
+/// explicit user re-invocation of meta.forget retired such a row, so the
+/// `(learner, ability)` slot stayed occupied for the agent's lifetime and the
+/// descriptor could never be re-acquired. This boot sweep heals that: for each
+/// `Forgetting` row whose learner runtime is now wired and converges, it calls
+/// `finish_forget` and frees the slot. Rows whose runtime is still not ready
+/// are left `Forgetting` (no fabricated convergence) for the next boot or an
+/// explicit retry. Symmetric to [`recover_descriptor_import_transactions`], but
+/// run AFTER the hot registrar is populated because forget requires committed
+/// runtime convergence (acquire recovery is artifact-only and runs pre-boot).
+pub fn recover_forget_transactions(
+    hot_registrar: Option<&SharedHotRegistrarCell>,
+) -> anyhow::Result<usize> {
+    let store = TeachGrantStore::open_default();
+    let agents = crate::registry::agents::load_agents()?;
+    let mut recovered = 0usize;
+    for record in store.snapshot_forgetting_records()? {
+        let pending = match store.resume_forget_pending(&record) {
+            Ok(pending) => pending,
+            // Row left Forgetting state between snapshot and resume (a
+            // concurrent forget completed it); nothing to recover.
+            Err(_) => continue,
+        };
+        let runtime_sync = match agents.agents.get(record.learner_agent()) {
+            Some(entry) => {
+                sync_learner_runtime_after_forget(hot_registrar, record.learner_agent(), entry)
+            }
+            None => RuntimeSyncOutcome::after_durable_commit(RuntimeSyncReport::not_ready(
+                "agent_registry_entry_missing",
+            )),
+        };
+        // Require committed convergence, exactly as the live forget path does.
+        // A still-degraded row is left Forgetting for the next boot/retry —
+        // recovery never fabricates convergence it did not achieve.
+        if runtime_sync
+            .require_committed(FORGET, "leaving forget tombstone for the next recovery sweep")
+            .is_err()
+        {
+            continue;
+        }
+        store.finish_forget(&pending)?;
+        recovered += 1;
+    }
+    Ok(recovered)
+}
+
 fn stage_forget_manifest(
     path: Option<&Path>,
     expected_hash: Option<&str>,

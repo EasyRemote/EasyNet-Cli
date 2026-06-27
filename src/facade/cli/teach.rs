@@ -186,9 +186,31 @@ fn parse_descriptor_transaction_status(
     DescriptorTransactionStatus::parse(status, operation)
 }
 
+/// Report an acquire/import transaction status.
+///
+/// Acquire has best-effort runtime convergence, so `committed_runtime_degraded`
+/// is a legitimate outcome the operator is warned about (retry once the runtime
+/// is wired).
 fn report_descriptor_transaction_status(status: &str, operation: &str) -> anyhow::Result<()> {
     parse_descriptor_transaction_status(status, operation)?.warn_if_runtime_degraded(operation);
     Ok(())
+}
+
+/// Report a forget transaction status.
+///
+/// Forget has require-committed convergence semantics (the daemon only returns
+/// success once runtime sync committed), so `committed` is the ONLY valid
+/// status — a degraded forget surfaces as a daemon error, not a status. Sharing
+/// the acquire warn-on-degraded handler would leave a dead branch and invite a
+/// maintainer to weaken forget to warn-and-continue, violating require-committed.
+fn require_committed_forget_status(status: &str) -> anyhow::Result<()> {
+    match parse_descriptor_transaction_status(status, "removal")? {
+        DescriptorTransactionStatus::Committed => Ok(()),
+        DescriptorTransactionStatus::CommittedRuntimeDegraded => anyhow::bail!(
+            "descriptor removal returned `committed_runtime_degraded`, but forget requires \
+             committed runtime convergence; this is a daemon contract violation"
+        ),
+    }
 }
 
 /// Compute half of `teach` (e2e surface).
@@ -320,7 +342,7 @@ pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
     let resp = execute_forget(&args)?;
     let removed: DescriptorRemovalResponse =
         serde_json::from_value(resp).context("parse meta.forget response")?;
-    report_descriptor_transaction_status(&removed.descriptor_transaction_status, "removal")?;
+    require_committed_forget_status(&removed.descriptor_transaction_status)?;
     output::success(&format!(
         "removed imported descriptor {} (source descriptor {})",
         removed.removed_descriptor, removed.source_descriptor_ura,

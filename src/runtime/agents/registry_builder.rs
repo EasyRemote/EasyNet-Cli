@@ -906,6 +906,34 @@ fn build_registry_with_services_result_inner(
                 );
             }
         }
+
+        // Forget tombstones converge here, after the learner runtimes are
+        // replayed above: a forget that degraded on the "runtime not yet
+        // wired" path left its row in Forgetting, occupying the slot forever
+        // until an explicit retry. Re-drive those rows now that convergence is
+        // possible so the slot is freed and the descriptor can be re-acquired.
+        match teach_ability::recover_forget_transactions(Some(&hot_agent_registrar_cell)) {
+            Ok(recovered) if recovered > 0 => {
+                let recovered = recovered.to_string();
+                crate::op_event!(
+                    component = agents_boot,
+                    kind = forget_tombstone_recovery_completed,
+                    recovered = recovered.as_str(),
+                    message = "converged stuck forget tombstones after hosted-agent replay",
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = agents_boot,
+                    kind = forget_tombstone_recovery_failed,
+                    level = "warn",
+                    error = err_msg,
+                    message = "forget tombstone recovery sweep did not complete",
+                );
+            }
+        }
     }
 
     // Hot-reload sinks. Wired after Arc::new(reg) so each sink can

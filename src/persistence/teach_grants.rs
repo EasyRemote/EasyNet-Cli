@@ -625,6 +625,11 @@ impl DescriptorImportRecord {
     }
 
     #[must_use]
+    pub fn learner_agent(&self) -> &str {
+        &self.learner_agent
+    }
+
+    #[must_use]
     pub fn source_descriptor_ura(&self) -> &str {
         &self.source_descriptor_ura
     }
@@ -838,6 +843,26 @@ impl TeachGrantStore {
             .collect())
     }
 
+    /// Snapshot every descriptor-import row stuck in `Forgetting`.
+    ///
+    /// A row reaches `Forgetting` once the artifact has been removed but the
+    /// runtime convergence + `finish_forget` step did not complete (the common
+    /// "runtime not yet wired" path at the time of the original meta.forget).
+    /// Boot recovery re-drives each of these rows to convergence so the
+    /// `(learner, ability)` slot is released; without it the tombstone leaks
+    /// for the agent's lifetime, permanently blocking re-acquire. Symmetric to
+    /// [`Self::snapshot_acquiring_records`].
+    pub fn snapshot_forgetting_records(&self) -> anyhow::Result<Vec<DescriptorImportRecord>> {
+        let _guard = self.lock()?;
+        let directory = self.load_unlocked()?;
+        Ok(directory
+            .imports
+            .iter()
+            .filter(|record| record.state() == DescriptorImportState::Forgetting)
+            .cloned()
+            .collect())
+    }
+
     fn apply_acquiring_recovery(
         &self,
         decisions: Vec<AcquiringRecoveryDecision>,
@@ -1038,6 +1063,22 @@ impl TeachGrantStore {
         self.require_forgetting_ledger_row(staged.record())?;
         Ok(RuntimePendingDescriptorImportRemoval {
             record: staged.record().clone(),
+        })
+    }
+
+    /// Resume a `Forgetting` row as a runtime-pending removal so boot recovery
+    /// can re-attempt convergence + `finish_forget` without re-staging an
+    /// artifact that the original meta.forget already removed.
+    ///
+    /// Validated against the live ledger row (must still be `Forgetting`), so a
+    /// concurrently-completed forget is reported rather than re-driven.
+    pub fn resume_forget_pending(
+        &self,
+        record: &DescriptorImportRecord,
+    ) -> anyhow::Result<RuntimePendingDescriptorImportRemoval> {
+        self.require_forgetting_ledger_row(record)?;
+        Ok(RuntimePendingDescriptorImportRemoval {
+            record: record.clone(),
         })
     }
 
@@ -1850,6 +1891,82 @@ mod tests {
         let body = std::fs::read(&path).unwrap();
         let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
         assert!(file.imports.is_empty(), "retry must finish the tombstone");
+    }
+
+    #[test]
+    fn snapshot_and_resume_forget_pending_converges_stuck_tombstone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let store = TeachGrantStore { path: path.clone() };
+        // A tombstone left in Forgetting by a degraded forget (artifact already
+        // removed; runtime convergence + finish_forget never ran).
+        let mut stuck = DescriptorImportRecord::new(
+            "quote",
+            "apprentice",
+            "easynet:///r/acme/ability/mentor.quote",
+            TEST_MANIFEST_HASH,
+            "t1",
+        );
+        stuck.mark_forgetting();
+        // An unrelated Active row must be left untouched by the sweep.
+        let active = DescriptorImportRecord::new(
+            "weather",
+            "apprentice",
+            "easynet:///r/acme/ability/mentor.weather",
+            TEST_MANIFEST_HASH,
+            "t2",
+        );
+        store
+            .write_unlocked(&TeachGrantsFile {
+                grants: Vec::new(),
+                imports: vec![stuck, active],
+                ..TeachGrantsFile::default()
+            })
+            .unwrap();
+
+        let forgetting = store.snapshot_forgetting_records().unwrap();
+        assert_eq!(forgetting.len(), 1, "only the Forgetting row is swept");
+        assert_eq!(forgetting[0].learner_agent(), "apprentice");
+
+        let pending = store.resume_forget_pending(&forgetting[0]).unwrap();
+        store.finish_forget(&pending).unwrap();
+
+        let body = std::fs::read(&path).unwrap();
+        let file: TeachGrantsFile = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            file.imports.len(),
+            1,
+            "the stuck tombstone is retired, the Active row remains"
+        );
+        assert_eq!(file.imports[0].state(), DescriptorImportState::Active);
+        assert_eq!(file.imports[0].ability_name, "weather");
+    }
+
+    #[test]
+    fn resume_forget_pending_rejects_non_forgetting_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let store = TeachGrantStore { path };
+        let active = DescriptorImportRecord::new(
+            "quote",
+            "apprentice",
+            "easynet:///r/acme/ability/mentor.quote",
+            TEST_MANIFEST_HASH,
+            "t1",
+        );
+        store
+            .write_unlocked(&TeachGrantsFile {
+                grants: Vec::new(),
+                imports: vec![active.clone()],
+                ..TeachGrantsFile::default()
+            })
+            .unwrap();
+
+        let err = store.resume_forget_pending(&active).unwrap_err();
+        assert!(
+            err.to_string().contains("not in"),
+            "resume must reject a non-Forgetting row: {err}"
+        );
     }
 
     #[test]
