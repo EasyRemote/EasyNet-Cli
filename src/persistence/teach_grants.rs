@@ -252,6 +252,11 @@ pub enum AcquiringArtifactRecoveryState {
     NotCommitted,
 }
 
+struct AcquiringRecoveryDecision {
+    record: DescriptorImportRecord,
+    artifact: AcquiringArtifactRecoveryState,
+}
+
 pub trait AcquiringArtifactTxn {
     fn committed_artifact_path(&self) -> String;
 
@@ -812,32 +817,58 @@ impl TeachGrantStore {
             &DescriptorImportRecord,
         ) -> anyhow::Result<AcquiringArtifactRecoveryState>,
     ) -> anyhow::Result<usize> {
+        let records = self.snapshot_acquiring_records()?;
+        let mut decisions = Vec::with_capacity(records.len());
+        for record in records {
+            let artifact = recover_artifact(&record)?;
+            decisions.push(AcquiringRecoveryDecision { record, artifact });
+        }
+        self.apply_acquiring_recovery(decisions)
+    }
+
+    fn snapshot_acquiring_records(&self) -> anyhow::Result<Vec<DescriptorImportRecord>> {
+        let _guard = self.lock()?;
+        let directory = self.load_unlocked()?;
+        Ok(directory
+            .imports
+            .iter()
+            .filter(|record| record.state() == DescriptorImportState::Acquiring)
+            .cloned()
+            .collect())
+    }
+
+    fn apply_acquiring_recovery(
+        &self,
+        decisions: Vec<AcquiringRecoveryDecision>,
+    ) -> anyhow::Result<usize> {
+        if decisions.is_empty() {
+            return Ok(0);
+        }
         let _guard = self.lock()?;
         let mut directory = self.load_unlocked()?;
         let mut recovered = 0usize;
-        let mut idx = 0usize;
-        while idx < directory.imports.len() {
+        for decision in decisions {
+            let Some(idx) = directory.import_by_record(&decision.record) else {
+                continue;
+            };
             if directory.imports[idx].state() != DescriptorImportState::Acquiring {
-                idx += 1;
                 continue;
             }
-            let record = directory.imports[idx].clone();
-            match recover_artifact(&record)? {
+            match decision.artifact {
                 AcquiringArtifactRecoveryState::Committed => {
                     directory.imports[idx].mark_active();
                     recovered += 1;
-                    idx += 1;
-                    continue;
                 }
-                AcquiringArtifactRecoveryState::NotCommitted => {}
-            }
-            if let Some(grant) = record.pending_grant.clone() {
-                if directory.grant_index_for_record(&grant).is_none() {
-                    directory.grants.push(grant);
+                AcquiringArtifactRecoveryState::NotCommitted => {
+                    if let Some(grant) = decision.record.pending_grant.clone() {
+                        if directory.grant_index_for_record(&grant).is_none() {
+                            directory.grants.push(grant);
+                        }
+                    }
+                    directory.imports.remove(idx);
+                    recovered += 1;
                 }
             }
-            directory.imports.remove(idx);
-            recovered += 1;
         }
         if recovered > 0 {
             self.write_unlocked(&directory)?;
