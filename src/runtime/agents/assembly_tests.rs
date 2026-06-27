@@ -53,7 +53,7 @@ fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
     std::fs::write(
         &grants_path,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": "4",
+            "schema_version": "5",
             "grants": [],
             "imports": [{
                 "ability_name": "quote",
