@@ -101,21 +101,19 @@ Skill 支撑 Ability 实现(资源面,不可寻址)。  EasyNet backend/browser 
 frame0 携 boot-nonce 指纹 → `claimant_conflict`;admission receipt 携契约版本号。
 → T1.1 / T1.2
 
-**第二支柱——调用层状态机(F-051,AXON-RFC-008)**:A1 的隐式状态机债有两层。
+**第二支柱——调用层语义统一(F-051,AXON-RFC-008 v3)**:A1 的隐式状态机债有两层。
 T1.1 治**连接层**(`DeviceSessionState`:Dialing→Live→Backoff,一条会话的生死);
-但**一次调用的协议语义生命周期**(admission→route→authorize→dispatch→terminal/receipt)
-同样无类型表示——它被 4 个 dispatcher(unary/bidi/stream/local_session)各手写一遍,彼此
-漂移(活样本:`busy≠offline` 只在 unary 落实,stream 无终态 receipt 投影)。终态:提取
-单一 sans-IO `InvocationLifecycle{Idle,Admitting,Routing,Authorizing,Dispatching,Open,
-Settled(TerminalKind)}` 核心**下沉 Axon SDK**(零 tokio/tonic/mpsc/daemon-store,
-`on_event(Event)->Vec<Action>`,Go 可 1:1 复用转移表),4 个 dispatcher 降为 thin
-Transport impl。**Axon 只拥有协议语义**;`DaemonRouteResolver`/presence/session/plugin
-facts 留 CLI(Axon 只加纯类型 + opaque key,不做 daemon lookup)。**终态不可混淆**:
-TimedOut/Cancelled 独立于 Failed。`Authorizing` v1 空透传为 Policy 主干预留挂载点;
-terminal transition 的 `ProjectReceipt` 为 Receipt 主干唯一 sink(顺修 stream 不投影 bug,
-且 CLI 不手搓 canonical receipt)。**依赖 A2(carrier)先行**——需其保证的帧七元组完整 +
-`DispatchResult.receipt`。旧 dispatcher 删除不弃用;federation_wrappers.rs 不删。
-设计已 CTO 修正版拍板,见 `docs/rfc/AXON-RFC-008-invocation-lifecycle-sans-io.md`(v2)。
+但**一次调用的协议语义生命周期**(admission→authorization→scheduling→terminal)同样曾
+散在巨型 handler 里彼此漂移。**终态(CTO 进行中实现)**:不是「一个 LifecycleDriver 整吞
+四个 dispatcher」(v1/v2 的错误方向,抽公共 RPC loop),而是**统一 Invocation 语义内核 +
+多 transport surface**——语义统一(admission 先于 dispatch、idempotency 可查、terminal 唯一
+可审计、receipt/ledger/watch/idempotency 单点落地),机制各自保留(unary response/stream
+chunk/bidi frame-chain/hub-forward peer transport)。落点在 `EasyNet-Axon/core/runtime-rs/
+src/services/invocation/` 的 ~30 个 phase 模块:统一 `admission_phase`→`authorization_phase`→
+`invocation_scheduling_phase`→**唯一 terminal owner `TerminalFinalizationService`**(三 geometry
+全 delegate finalize,无 per-geometry terminal side effect)。强类型相位 token 不传 loose strings。
+**两层状态分清**:internal phase ≠ protocol-visible event。**v1/v2 sans-IO LifecycleDriver 作废,
+SDK S0-S3 已 revert。** 见 `docs/rfc/AXON-RFC-008-invocation-lifecycle-sans-io.md`(v3)。
 → T1.6
 
 ### A2. 第二 invocation 载体:SessionDispatch JSON 帧(F-004 + F-038 + F-040 + F-044)
@@ -229,7 +227,7 @@ DEC-F046 拍板签名路线。→ T0.5a–c / T0.6 / T2.3 / T5.11 / T5.1(F-045 �
 | T1.3 | **✅ 已完成(EasyNet c54c59c,2026-06-12)** F-031:src/lib/backoff.ts 共享 util(full-jitter,250ms×2^n 封顶 30s,对齐 Cli F-003;random 可注入);terminal-store 永久硬停换为时间门控窗口(成功清零、窗口外放行、文案"next attempt allowed in ~Ns");曲线/jitter 边界单测 + store 测试改钉新语义(注入 state 保证确定性);36/36 + tsc 干净 | EasyNet FE | 完成 | ✓ |
 | T1.4 | **✅ 已完成(Cli f206026,2026-06-12;axon-pb 全量 3183/3183 验证过)** F-024:契约单一剥离点落 src/eal/string_escape.rs(规范注释 + unescape_string_literal——只剥作者层 `\"`/`\\`,其余转义原样属载荷);mod.rs 管线文档载规范行;`\"…\"` 端到端往返测试钉住。**刻意不在 planner 自动应用**(存量自行 unescape 的 wrapper 会双重解码)。wrapper 迁移半边复核为仓内空集(审计"两个 wrapper"系盘点级;"新 wrapper 有据可依"由规范行+helper 满足) | Cli | 完成 | ✓ |
 | T1.5 | **F-049 残留:①② ✅ 已完成(2026-06-12)**。① sidecar 退役(Cli fbbad85,−978 行:heartbeat.rs + 隐藏命令 + boot 门控全删,边界契约测试换 Auth 锚点;grep 三关键词零命中,bins 双特性编译,facade::cli 240/240,script_checks 27/27);② device-state 映射(EasyNet e1c332b):`suspended`(15s 清扫降级,事故本体)→ SUSPECT,`revoked` 显式 → REMOVED,未知词汇/无条目 → UNKNOWN——REMOVED 只留操作员撤销,UNKNOWN 留在 ratified 7 态词汇内不发明 OFFLINE;③(可选,M)hub bidi 活跃兜底刷新目录——设计随 T1.1 一并定,**仍开放** | Cli+BE | ①②完成(+M) | ③ 若做:断 device 心跳仅留 bidi,目录不降级 |
-| T1.6 | **F-051 调用层协议语义 sans-IO 下沉(AXON-RFC-008 v2)**:`InvocationLifecycle{Idle,Admitting,Routing,Authorizing,Dispatching,Open,Settled(TerminalKind)}` 纯核心**下沉 Axon SDK**(`sdk/rust/src/invocation/lifecycle.rs`,零 tokio/tonic/mpsc/daemon-store,`on_event(Event)->Vec<Action>`+`state()`,14 Event/8 Action,Go 可 1:1 复用转移表)。**终态不可混淆**:`TerminalKind{Completed,Failed{code},TimedOut,Cancelled}`——timeout→TimedOut、cancel→Cancelled,绝不并进 Failed。**`Open` 取代长期 `Projecting`**:receipt 投影是 terminal transition 上的原子 action(先 ProjectReceipt 再 SendFrame(terminal) 同 tick 进 Settled;terminal 发送失败不回滚 receipt)。**边界**:Axon 只拥有协议语义 + 纯类型 `RouteQuery/ResolvedRoute/RouteProfile/DispatchTarget`(无 daemon lookup,daemon 专属字段用 opaque key);**`DaemonRouteResolver`、presence、session、plugin/runtime facts 留 CLI**,`SelectedInvokeRoute` 实现 `TryFrom`→`ResolvedRoute`。**Receipt 不许 CLI 手搓**:local 由 Axon LocalRuntime receipt chain 产、remote callee-signed 只投本地 ledger 不重签、admission/route 失败产失败 receipt/diagnostic 不伪造 callee execution receipt。CLI 落 `lifecycle_driver.rs` + 4 个 `transport_impls/{unary,stream,bidi,local_session}.rs`。**修正(2026-06-26 逐方法解剖 12,268 行)**:四个 dispatcher **不整删**——逐方法核实后,四文件里只有 ~6 个方法(~2,400 行)是真·lifecycle,其余 ~50 个方法是 RPC handler(~5,000 行,多数字面调 `federation_wrappers::handle_*`,与 federation_wrappers 同类)+ 共享辅助(~4,800 行)。S4 = **把每文件的 lifecycle arm 迁入 driver+executor,旧 dispatcher 保留为 handler-router**(每文件留 ~75-85%)。invoke arm 是 `match function` 路由表:具名 arm 全是 handler 保持直调,唯一 catch-all `_other` arm(`daemon_invocation_service.rs:822` 的 `dispatch_local_rpc_selected_route`)才是 lifecycle,S4 只换它为 driver;`axon_took_it` flag 已分隔两种 receipt 路径。S6 收口 admission_facade。`Authorizing` v1 空透传(保留 AuthorizationDenied 边)为 Policy 主干预留挂载点。落地序 S-1(计划包)→S0(纯类型)→S1(转移表)→S2(receipt API)→S3(driver)→S4-{unary,stream,bidi,session}(**切 lifecycle arm 进 driver + 留 handler arm**)→S5(删迁出后的死方法体,非删文件)→S6(admission 收口)→S7(udeps),每步独立可编译=1 commit、零 fallback。**不删 federation_wrappers.rs,亦不删四个 dispatcher 内的 handler 方法**(同类:CTO 确认非 lifecycle 复制体)。详见 docs/rfc/AXON-RFC-008 v2 | Axon+Cli | XL → A2(carrier) | 六命令全绿(build/clippy/test ×{默认,--features axon-pb});七条必测:unary busy=retryable不移除presence·stream空payload也发terminal+receipt·bidi缺receipt fail-closed不挂pending·timeout→TimedOut·cancel→Cancelled·terminal后重复event no-op·remote receipt不重签不伪造;SDK core 纯单测覆盖每条边+终态吸收+authz空透传;daemon_invocation_service_tests 不回归 |
+| T1.6 | **F-051 Invocation 相位架构:统一语义内核 + 多 transport surface(AXON-RFC-008 v3)**。**核心判断修正**:理想架构不是「一个 LifecycleDriver 整吞四个 dispatcher」,而是**统一 Invocation 语义内核 + 多条 transport-specific surface**——生命周期*语义*统一(admission 先于 dispatch、replay/idempotency 可查、route/policy/delegation 执行前定型、terminal 唯一单调可审计、receipt/ledger/watch/idempotency-mapping 单点落地),wire/stream/frame/session *机制*各自保留。**真实落点**:`EasyNet-Axon/core/runtime-rs/src/services/invocation/`(server 侧,非 SDK 非 CLI dispatcher)。**统一相位**:`admission_phase`/`admission_flow`(强类型 `InvokeAdmissionState{Unsigned→Verified→Admitted}`,不传 loose strings)→`authorization_phase`(`InvocationAuthorization`)→`invocation_scheduling_phase`(`InvocationSchedulingDecision::Scheduled\|Terminal`)→**唯一 terminal owner `TerminalFinalizationService::finalize`**(`terminal_finalization.rs:44`,独占 record upsert/idempotency mapping/inflight decrement/circuit metrics/terminal event/audit;**无 per-geometry terminal side effect**,frame/response shaping 在 finalize 之后)。**per-geometry surface**:unary(`unary_{idempotency,route,scheduling,dispatch,execution}_phase`,RAII idempotency claim + dispatch opening)/server-stream(`server_stream_{opening,route,execution,loop,terminal}_phase` + StreamGate)/bidi(`bidi_{frame_zero,opening,up_frame,down_frame,payload,loop,session,terminal}_phase`,frame-chain/HMAC/session attach)/hub-forward(`hub_forward`/`hub_profile/*`)。**两层状态**:internal phase(admission→idempotency→routing→policy→dispatch→terminal)≠ protocol-visible(ACCEPTED→ADMITTED→DISPATCHED→RUNNING→terminal),不再混为一谈。**v1/v2 作废**:sans-IO LifecycleDriver 抽的是「公共 RPC loop」(方向错),对应 SDK S0-S3 已 revert(`23b629e1`等5 commit)。详见 docs/rfc/AXON-RFC-008 v3 | Axon runtime-rs | XL(CTO 进行中) | 唯一 terminal owner 落地;三 geometry 全 delegate finalize;强类型相位 token 不传 loose strings;admission 先于 dispatch;待裁:RouteDecision sealed enum 是否物化、SDK conformance algebra 归宿、ReceiptProjection 定位 |
 
 ### Phase 2 — 协议形状(P0 长线;T2.0 ✅)
 
@@ -353,7 +351,7 @@ T2.1-pre(帧 mini-RFC)· T2.2 parity 盘点(逐函数映射表)· T4.1 crate 依
 | F-007 ✅ | 基线 | |
 | F-008 | T1.1 | |
 | F-009 | T1.2 | |
-| F-051 | T1.6 | 调用层状态机 sans-IO 下沉 SDK(AXON-RFC-008);A1 第二支柱;依赖 A2/carrier |
+| F-051 | T1.6 | Invocation 相位架构:统一语义内核+多 transport surface(AXON-RFC-008 v3,runtime-rs phase 模块);唯一 terminal owner;A1 第二支柱 |
 | F-010 | T4.1 | |
 | F-011 | T3.1 | 含 prefix 扫描附注 |
 | F-012 | T5.5 | |

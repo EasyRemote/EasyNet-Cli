@@ -1,261 +1,147 @@
-# AXON-RFC-008：InvocationLifecycle sans-IO 协议语义下沉 Axon SDK（v2，2026-06-25）
+# AXON-RFC-008：Invocation 相位架构 — 统一语义内核 + 多 transport surface（v3，2026-06-27）
 
-> 状态：**ratified-design / pre-code**（CTO Silan.Hu 修正版裁决，编码前无遗留决策）。
-> 本版 v2 取代 v1：v1 的两点被 CTO 否决——「route facade 整体下沉 SDK」改为「只下沉纯
-> 类型 + CLI 留 resolver」；「Timeout/Cancelled 并进 Failed」改为「独立终态不可混淆」。
-> 关系：本 RFC 是 A1（会话平面隐式状态机，F-008/F-009）债的**第二根支柱**——
-> T1.1 的 `DeviceSessionState` 治"连接层"状态机（Dialing→Live→Backoff），本 RFC
-> 治"调用层"协议语义状态机（Admitting→…→Settled）。两者正交互补，见 §0.3。
-> **依赖**：A2（dispatch-frame-carrier-unification mini-RFC，已批准在落）必须先完成——
-> 本设计的 `InvocationReceived` 需要 carrier 保证的帧七元组完整性 + `DispatchResult.receipt`
-> 才能解码出干净 envelope 并在终态投影真 receipt。carrier 是地基，本 RFC 是上层。
-> 全部 file:line 已对照磁盘亲核（分支 `seven-axes-p0-landing-v1`，2026-06-25）。
+> 状态：**descriptive / in-progress**（描述 CTO 在 Axon runtime-rs 进行中的实现，未提交）。
+> v3 取代 v1/v2：v1/v2 提出的「sans-IO `InvocationLifecycle` 状态机 + `LifecycleDriver` + Transport
+> trait」是**错误方向**——它抽的是「公共 RPC loop」（一个泵吞四个 geometry），而正确的抽象是
+> 「公共 phase contract」：生命周期**语义**统一，wire/stream/frame/session **机制**各自保留。
+> 对应的 SDK 侧 S0-S3 代码已 revert（`23b629e1`/`6ad2173b`/`c7a527ff`/`20362164` + CLI `9eff9780`）。
+> 真实实现落在 `EasyNet-Axon/core/runtime-rs/src/services/invocation/`（server 侧），不在 SDK，也不在
+> CLI dispatcher。全部 file:line 已对磁盘亲核（2026-06-27，in-progress 工作树）。
 
 ---
 
-## 0. 核心裁决与边界
+## 0. 核心判断
 
-### 0.1 核心裁决（CTO 修正版）
+**理想架构不是「一个 `LifecycleDriver` 整吞四个 dispatcher」，而是：一个统一 Invocation 语义内核，多条 transport-specific surface。**
 
-**`InvocationLifecycle` 的协议语义下沉到 Axon SDK；`DaemonRouteResolver`、presence、session、plugin/local runtime facts 仍留在 EasyNet-Cli daemon。**
+要收敛的是**生命周期语义**，不是**文件形状**。`unary` / `server-stream` / `bidi` / `hub-forward` 的共同点只有这些（统一）：
 
-Axon 统一"生命周期状态、终态、receipt 投影规则、stream/bidi/unary 语义"；CLI 只做 wire decode、daemon route facts、transport send/recv。这是一条**语义/事实分离**线：Axon 拥有**协议如何演进**（与 I/O、运行时、daemon 存储无关的纯语义），CLI 拥有**本地事实从哪来**（live runtime/session/presence/plugin lookup）。
+- admission 必须先于 dispatch
+- replay / idempotency 必须可查询、可复放
+- route / policy / delegation 决策必须在执行前定型
+- terminal 必须唯一、单调、可审计
+- receipt / ledger / watch / idempotency terminal mapping 必须在**同一个地方**落地
 
-### 0.2 边界裁定（谁拥有什么）
+它们**不**共享的（各自保留）：
 
-**Axon SDK 拥有：**
+- unary 的 response shaping
+- server-stream 的 chunk / transcript / terminal chunk 规则
+- bidi 的 frame-chain / HMAC / session attach
+- hub-forward 的 peer transport / resolver delegation
 
-- sans-IO lifecycle state machine：**无 tokio、无 tonic、无 mpsc、无 daemon store**。
-- 纯 Rust `RouteQuery` / `ResolvedRoute` / `RouteError` / `RouteProfile` / `DispatchTarget` 类型，**但不实现 daemon route lookup**。
-- `TransportFrame` / `LifecycleFrame` 这种 wire-agnostic frame union。
-- terminal mapping：`Completed`、`Failed`、`TimedOut`、`Cancelled` **不可混淆**。
-- receipt projection API：复用现有 `InvocationReceipt`、`ReceiptProofFacts`、`LedgerSink`、`receipt_to_wire`。
-
-**EasyNet-Cli 保留：**
-
-- `route_resolver.rs` 的 live runtime/session/hosted-agent placement lookup（`DaemonRouteResolver` 不下沉）。
-- `PresenceRegistry`、pending maps、session up/down sender、plugin/ability registration。
-- tonic/proto ↔ Axon pure frame conversion。
-- federation wrapper handlers。**`federation_wrappers.rs` 不是 lifecycle 复制体，不是删除目标。**
-
-### 0.3 与 A1（T1.1）/ A2（carrier）的层级关系
-
-| 层 | 状态机 | 管什么 | 归属 |
-|---|---|---|---|
-| 连接层 | `DeviceSessionState{Idle,Dialing,Preluding,Live,Backoff}` + `CloseClass`（T1.1 / F-008） | 一条 device↔hub **会话连接**的生死 | CLI device 侧 |
-| wire 层 | DispatchCall/DispatchResult proto 帧（A2 / F-004） | dispatch **帧载体**归一（七元组完整、receipt 闭环） | Axon proto + CLI |
-| **调用层** | **`InvocationLifecycle{Idle,Admitting,Routing,Authorizing,Dispatching,Open,Settled(TerminalKind)}`（本 RFC）** | **一次调用的协议语义生命周期**，跨全部 4 geometry，Go 可复用 | **Axon SDK 纯核心** |
-
-三者正交且层叠：carrier（wire）保证帧干净 → 本 RFC（调用层语义）在干净帧上跑单一生命周期 → T1.1（连接层）管承载这些调用的会话连接。**本 RFC 不取代任何一个，是 A1 终态的调用层支柱。**
-
-### 0.4 根因（为何不收敛）
-
-调用生命周期的**协议语义**（admission → route → authorize → dispatch → terminal/receipt projection）被复制实现了四遍，唯一差异是 transport geometry，四份各自演化、彼此漂移：
-
-| Geometry | 文件 | 总 LOC | 其中 lifecycle | 漂移锚点 |
-|---|---|---|---|---|
-| unary | `unary_dispatcher.rs` | 2224 | ~800 | busy/offline 分类 `:1524` 区——**只有此处区分 Full→retryable 与 Closed→offline** |
-| bidi | `bidi_dispatcher.rs` | 3348 | ~1060 | `settle_terminal_result`:2484；session drain |
-| stream | `stream_dispatcher.rs` | 469 | ~106 | terminal 空 payload 直接 break `:356`——**terminal chunk 不发、receipt 不附（现存 bug）** |
-| local_session | `local_session_dispatcher.rs` | 3829 | ~400 | carrier-v1 dispatch/result 双解码 |
-
-> **修正（2026-06-26 逐方法解剖 12,268 行）**：上表"总 LOC"大部分**不是** lifecycle——四文件合计仅 ~2,400 行是真·调用生命周期，其余 ~5,000 行是 RPC handler（多数字面调 `federation_wrappers::handle_*`）+ ~4,800 行共享辅助（frame builders/mappers/stream types/ctor）。漂移只发生在那 ~2,400 行 lifecycle 上。因此本 RFC 的目标是**迁出那 ~2,400 行 lifecycle，保留其余作 handler-router**，不是整删文件。
-
-**为何永远不收敛**：每个语义修复必须在 N 个 dispatcher 各打一遍补丁，N 份不可能同步。活样本：busy≠offline 只在 unary 落实；stream 根本不投影 terminal receipt。没有一个对象拥有"协议状态"——它散在四个 `async fn` 的 lifecycle 路径里，无法集中演进、无法被 Go 复用、无法独立单测。
+因此抽象的是**公共 phase contract**，不是公共 RPC loop。
 
 ---
 
-## 1. Axon 核心表面（sans-IO）
+## 1. 真实架构（磁盘亲核，runtime-rs/services/invocation/）
 
-落 `EasyNet-Axon/sdk/rust/src/invocation/lifecycle.rs`（greenfield，已确认 SDK 下无 `lifecycle.rs`）。零 tokio、零 await、零 tonic、零 mpsc、零 daemon store。可独立单测，可被 Go 1:1 镜像。
+CTO 进行中的实现把巨型 handler（`rpc_handlers.rs` / `bidi_handler.rs` / `invoke_stream_pipeline.rs`，净 −3461 行）拆成 ~30 个聚焦的 phase 模块。
 
-```rust
-pub struct InvocationLifecycle { state: State, ctx: Context }
+### 1.1 统一语义内核（所有 geometry 共享）
 
-pub enum State {
-    Idle,
-    Admitting,
-    Routing,
-    Authorizing,
-    Dispatching,
-    Open,
-    Settled(TerminalKind),
-}
-
-pub enum TerminalKind {
-    Completed,
-    Failed { code: ErrorCode },
-    TimedOut,
-    Cancelled,
-}
-
-impl InvocationLifecycle {
-    pub fn on_event(&mut self, ev: Event) -> Vec<Action>;
-    pub fn state(&self) -> State;
-}
-```
-
-**终态不可混淆（CTO 硬约束）**：`TimedOut` 与 `Cancelled` 是 `TerminalKind` 的**独立变体**，绝不并进 `Failed`。timeout → `TimedOut` receipt；caller cancel → `Cancelled` receipt。
-
-**`Open` 取代长期 `Projecting`（CTO 修正）**：receipt 投影**不是**一个长期可见状态。它是 terminal transition 上的**原子 action 序列**：先 `ProjectReceipt`，再 `SendFrame(terminal)`，同一个 `on_event` 后直接进入 `Settled(...)`。流式调用在出结果块期间停在 `Open`（每块只发 `SendFrame(chunk)`），直到 terminal 事件一次性收口。**若 terminal frame 发送失败，invocation 仍已终态**——那是 transport diagnostic，**不回滚 receipt**。
-
-`Idle` 是初态；`Open` 是"已 dispatch、正在出块或等终态"的持续态。
-
-### 1.1 Event 与 Action
-
-**Event：**
-
-- `InvocationReceived`
-- `AdmissionGranted` / `AdmissionDenied`
-- `RouteResolved` / `RouteRejected`
-- `AuthorizationGranted` / `AuthorizationDenied`
-- `DispatchAccepted`
-- `DispatchChunk`
-- `DispatchTerminal`
-- `DispatchFailed`
-- `CallerCancelled`
-- `DeadlineExceeded`
-- `TargetPeerClosed`
-
-**Action：**
-
-- `RunAdmission`
-- `ResolveRoute`
-- `DispatchTo`
-- `SendFrame`
-- `ProjectReceipt`
-- `PersistLedgerBestEffort`
-- `EmitError`
-- `CloseTransport`
-
-**v1 authorization 空透传**：`RouteResolved` 后进入 `Authorizing`，同 tick 自发 `AuthorizationGranted`，返回 `DispatchTo`。**不引入 `RunPolicy`，但保留 `AuthorizationDenied` 边**（Policy frame 落地时只在进 Authorizing 发 RunPolicy + executor 回喂决策，state/transition/ctx 不动）。
-
-### 1.2 关键转移表
-
-```text
-Idle + InvocationReceived
-  -> Admitting [RunAdmission]
-
-Admitting + AdmissionGranted
-  -> Routing [ResolveRoute]
-
-Admitting + AdmissionDenied
-  -> Settled(Failed) [ProjectReceipt(admission_failed), EmitError]
-
-Routing + RouteResolved
-  -> Authorizing -> Dispatching [DispatchTo]    ← 同 tick 自发 AuthorizationGranted
-
-Routing + RouteRejected
-  -> Settled(Failed) [ProjectReceipt(route_rejected), EmitError]
-
-Dispatching/Open + DispatchChunk
-  -> Open [SendFrame(chunk)]
-
-Dispatching/Open + DispatchTerminal(Completed)
-  -> Settled(Completed) [ProjectReceipt(completed), SendFrame(terminal)]
-
-Dispatching/Open + DispatchFailed
-  -> Settled(Failed) [ProjectReceipt(failed), EmitError/SendFrame(error)]
-
-Dispatching/Open + DeadlineExceeded
-  -> Settled(TimedOut) [ProjectReceipt(timed_out), EmitError]
-
-Dispatching/Open + CallerCancelled
-  -> Settled(Cancelled) [ProjectReceipt(cancelled), CloseTransport]
-
-Dispatching/Open + TargetPeerClosed
-  -> Settled(Failed{PEER_CLOSED}) [ProjectReceipt(failed), EmitError]
-
-Settled + *
-  -> Settled [no-op]
-```
-
-**五主干脊柱落点**：`Admitting`=Admission（Identity 内嵌于 envelope 校验）；`Routing`=Discovery；`Authorizing`=Policy（v1 空透传，State 变体 + 两条边 + `ctx.policy_decision` 字段三重常驻）；terminal transition 的 `ProjectReceipt`=Receipt 主干唯一 proof_facts sink。`trust` 是 attribute 不入 State。
-
----
-
-## 2. Route 修正（CTO：不整体下沉）
-
-**S0 不是"整体下沉 route facade"。** 拆成：
-
-- Axon 新增**纯类型**：`RouteQuery`、`ResolvedRoute`、`RouteProfile`、`DispatchTarget`（无 daemon lookup 实现）。
-- CLI 的 `SelectedInvokeRoute`（`route_resolver.rs:146`）实现 `TryFrom<SelectedInvokeRoute> for axon::ResolvedRoute`。
-- **`DaemonRouteResolver` 留在 CLI**；它执行 `ResolveRoute` action 并回喂 `RouteResolved` event。
-- `DispatchTarget` 中 daemon 专属字段（local session / presence / plugin 路由信息）用 **opaque key** 承载，**Axon 不解释其含义**——core 只知"有个目标键",不知它指向 presence 槽位还是 plugin handler。
-
-这条保证 Axon core 真正 sans-IO + 无 daemon 概念泄漏，同时 CLI 保留所有 live fact lookup。
-
----
-
-## 3. Receipt 修正（CTO：CLI 不许手搓 canonical receipt）
-
-| 情形 | receipt 来源 | 禁止 |
+| 相位 | 模块 | 强类型产物 |
 |---|---|---|
-| local Axon runtime 执行的 call | Axon `LocalRuntime` 现有 receipt chain 产生 terminal receipt | CLI 自造 |
-| remote carrier-v1 回来的 callee-signed receipt | CLI 只把它投到本地 hub ledger | **重签成 callee receipt** |
-| admission/route 失败、未进 callee execution | runtime/admission 层失败 receipt 或 ledger diagnostic | **伪造成 callee execution receipt** |
-| stream terminal | 必须携带 receipt（proto 已有 `InvokeStreamChunk.admission_receipt` + `terminal_receipt` 字段） | 改 proto（不需要） |
+| Admission | `admission_phase.rs` / `admission_flow.rs` | `InvocationAdmissionStart{candidate_invocation_id, InvokeAdmissionState::Unsigned\|Verified\|Admitted}`；拒绝 `AdmissionStartRejection` |
+| Authorization | `authorization_phase.rs` | `InvocationAuthorization{optional VerifiedDelegation}`；拒绝 `AuthorizationRejection` |
+| Scheduling | `invocation_scheduling_phase.rs` | `InvocationSchedulingDecision::{Scheduled(InvocationScheduledDispatch)\|Terminal(InvocationSchedulingTerminal)}` |
+| Terminal | `terminal_finalization.rs` | `FinalizedTerminal{outcome, admission_receipt, terminal_receipt, elapsed_ms}` |
 
-`ProjectReceipt` action 在 Axon 侧据上表规则选择 receipt 来源；CLI 的 executor 只搬运不铸造。
+强类型纪律：`InvokeAdmissionState`（`admission_flow.rs`）是 `Unsigned → Verified → Admitted` 状态机，承载 `invocation_id/envelope/signed_ability/arguments/proof_binding/admitted_at`——**不再让 handler 到处传 loose strings**。`invocation_id` 在 idempotency claim 成功后经 `commit_verified_with()` 锁定为 `AdmittedInvocation`。
 
----
+### 1.2 唯一 terminal owner
 
-## 4. 落地序列（每步独立可编译，1 commit = 1 逻辑变更；lifecycle 方法迁出后旧体删除不弃用，handler 方法保留，无 fallback）
+**`TerminalFinalizationService::finalize`（`terminal_finalization.rs:44`，commit 落 `:138-316`）是唯一 terminal owner。** unary / server-stream / bidi 三 geometry **全部 delegate 到它**，传入 `TerminalOutcome` + optional `TerminalReceiptContext`，它独占：
 
-| 步 | 内容 | 落点 |
+1. invocation record upsert（`execution.invocations`）
+2. request→invocation 反向映射
+3. idempotency terminal mapping commit/delete
+4. topology node inflight decrement
+5. circuit breaker metrics
+6. terminal event broadcast（`invocation_tx`）
+7. audit trail append
+
+**没有 per-geometry terminal side effect**——response/frame shaping 一律发生在 finalization **之后**（unary `finalize_invoke`、stream chunk projection、bidi frame encoding）。任何 handler 直接写 terminal receipt 或 terminal state 都是架构分叉，本架构在类型层杜绝。
+
+### 1.3 per-geometry surface（机制各自保留）
+
+| Geometry | surface 相位 | 各自拥有的机制 |
 |---|---|---|
-| **S-1** | 建计划包 `pr/2026-06-25-invocation-lifecycle-sans-io/`，写 invariants、边界证明、caller inventory | CLI `pr/` |
-| **S0** | Axon SDK 增加纯 route/frame/lifecycle 类型（`RouteQuery/ResolvedRoute/RouteProfile/DispatchTarget` + `TransportFrame`），**不接 CLI resolver** | Axon `invocation/{route,frame}.rs` |
-| **S1** | 实现 `InvocationLifecycle` 转移表，单测覆盖每条边、终态吸收、timeout/cancel 独立终态、authorization 空透传 | Axon `invocation/lifecycle.rs` |
-| **S2** | 实现 receipt projection API，复用现有 `InvocationReceipt`/`ReceiptProofFacts`/`LedgerSink` | Axon `invocation/` |
-| **S3** | CLI 新增 `lifecycle_driver.rs`，mock transport 单测：decode frame → `on_event` → 执行动作 → 回喂 event | CLI `lifecycle_driver.rs` |
-| **S4-unary** | 切 invoke arm 的 catch-all `_other`（`daemon_invocation_service.rs:822` = `dispatch_local_rpc_selected_route`）到 driver；替换 unary busy/offline 分类；确认无 double ledger row（复用 `axon_took_it` 路径）。**具名 federation/namespace/identity arm 全是 handler，保持直调不动。** forward_invoke（hybrid）留待后续 pass | CLI `transport_impls/unary.rs`（新建 adapter，借用幸存 helper）；`unary_dispatcher.rs` **降为 handler-router**（lifecycle ~800/2224 行迁出，handler+helper ~1400 行留） |
-| **S4-stream** | 切 `dispatch_local_selected_route`（`stream_dispatcher.rs:287`）到 driver；**修** terminal 空 payload break（driver 的 Open→Settled 总投 `[ProjectReceipt, SendFrame(terminal)]`） | CLI `transport_impls/stream.rs`；`stream_dispatcher.rs` **降为 directory-subscription handler 模块**（`dispatch_subscribe_directory_*` 是 presence pump，留；lifecycle ~106 行迁出） |
-| **S4-bidi** | 切 lifecycle arm（`dispatch_remote_bidi:283`/`dispatch_local_bidi_selected_route:627`/`dispatch_invoke_remote:856`/`dispatch_self_session_accept:1266`）到 driver；`settle_terminal_result` 终态化进 driver | CLI `transport_impls/bidi.rs`；`bidi_dispatcher.rs` **保留 frame-0 router + session-plane handler**（`drain_session_up_stream`/`dispatch_session_request_named` 留；frame builders/mappers/stream types 留或抽 util；lifecycle ~1060 行迁出） |
-| **S4-session** | 切 carrier-v1/Axon-dispatch lifecycle 入口（`handle_carrier_v1_dispatch:221`/`handle_carrier_v1_stream_open:381`/`try_dispatch_via_axon:783`/`open_stream_via_axon:913`）到 driver；**保留 `SessionUpSender` 作为 transport ordering primitive** | CLI `transport_impls/local_session.rs`；`local_session_dispatcher.rs` **保留 `handle_down` frame router + bidi/forwarding handlers**（lifecycle ~400 行迁出，handler+plumbing 留） |
-| **S5** | 每个 geometry 切完同 commit 删除对应旧 dispatcher 残壳；**`federation_wrappers.rs` 不删** | CLI |
-| **S6** | 收口 `admission_facade.rs`：把 Axon admission/canonical crypto 辅助迁到 Axon，CLI 只留 keyring/session/delegation policy glue | Axon + CLI |
-| **S7** | `cargo udeps` 或等价死代码检查，删未引用壳层 | CLI |
+| unary | `unary_{idempotency,route,scheduling,dispatch,execution,early_response,inline_response,inline_terminal}_phase` | idempotency claim（RAII `UnaryIdempotencyClaim`：`inflight_guard` + rollback fingerprint）、`InvokeResponse` shaping、dispatch opening（RAII 持 semaphore permit 至 terminal） |
+| server-stream | `server_stream_{opening,route,execution,loop,hub,terminal}_phase` + `server_stream_terminal_facts.rs` | `StreamGate`（admission 一次、后续相位复用）、transcript digest、chunk loop、terminal chunk 规则 |
+| bidi | `bidi_{frame_zero,opening,up_frame,down_frame,payload,loop,session,terminal,phase}_phase` + `bidi_error_codes.rs` | frame-chain / HMAC（up/down frame auth）、session attach、frame-zero 校验、payload routing |
+| hub-forward | `hub_forward.rs` / `hub_profile/{forward,resolve,streaming}.rs` | peer transport、resolver delegation |
+
+### 1.4 两层状态（v1/v2 混淆，v3 纠正）
+
+v1/v2 把 `Idle/Admitting/Routing/.../Settled` 当 protocol-visible state 还宣称「Go 1:1 复用」——**错**。两层必须分清：
+
+| internal phase | protocol-visible event |
+|---|---|
+| request structurally accepted | `accepted` |
+| admission + replay commit complete | `admitted` |
+| execution target selected + notified | `dispatched` |
+| callee/session ack | `running` |
+| terminal outcome finalized | `completed`/`failed`/`timed_out`/`cancelled` |
+
+runtime / SDK / conformance 不再各讲一套状态语言。
 
 ---
 
-## 5. 验收门槛
+## 2. 相位链（按 geometry）
 
-每步必须跑（六命令全绿）：
+**统一前缀（所有 geometry）**：
+`AdmissionPhase → AuthorizationPhase → InvocationSchedulingPhase`
 
-```bash
-cargo build
-cargo build --features axon-pb
-cargo clippy --all-targets -- -D warnings
-cargo clippy --all-targets --features axon-pb -- -D warnings
-cargo test
-cargo test --features axon-pb
-```
+**unary**：
+`UnaryInvokeOpening → UnaryIdempotencyPhase(RAII claim) → start_admission → commit_verified_with → authorize → UnaryRouteFacts(CanonicalInvokeRoute) → UnarySchedulingPhase → UnaryDispatchRecordPhase(RAII opening) → execution → TerminalFinalizationService::finalize → finalize_invoke(shape response)`
 
-**新增必测（七条）：**
+**server-stream**：
+`ServerStreamOpeningPhase::open(admission+authorization inline) → commit_verified_with(invocation_id 锁入 StreamGate) → route/hub/execution(复用 StreamGate，不重跑 admission) → ServerStreamTerminalFacts → TerminalFinalizationService::finalize → chunk projection`
 
-- unary busy 是 retryable backpressure，**不移除 presence**；closed 才 offline。
-- stream terminal 空 payload **也必须发 terminal chunk + receipt**。
-- bidi terminal 缺 receipt 要 **fail closed 或记录协议违约，不能挂 pending**。
-- timeout → `TimedOut` receipt，**不是 `Failed`**。
-- caller cancel → `Cancelled` receipt，**不是 `Failed`**。
-- terminal 后重复 frame/event **全 no-op**。
-- remote receipt projection **不重签、不伪造 callee execution receipt**。
+**bidi**：
+`BidiAdmissionOpening.admit(run_admission_gate, seal invocation_id) → frame_zero 校验 → opening → session attach → up/down frame auth → payload loop → bidi_terminal_phase → TerminalFinalizationService::finalize → frame encoding`
 
 ---
 
-## 6. 落点速查（编码定位）
+## 3. 理想模块边界（映射真实实现）
 
-- 核心落点：`EasyNet-Axon/sdk/rust/src/invocation/lifecycle.rs`（新建）+ `mod.rs` `pub mod lifecycle;`
-- 纯路由/帧类型：`EasyNet-Axon/sdk/rust/src/invocation/{route,frame}.rs`（新建，纯类型无 lookup）
-- SDK 既有依赖：`audit.rs:383`(new_receipt)、`axiom.rs:343`(ReceiptProofFacts)、`call_mode.rs:107`(CallMode)、`admission.rs`(run_descriptor_bound_admission)
-- CLI driver：`EasyNet-Cli/src/services/invocation_transport/lifecycle_driver.rs`（新建）+ `transport_impls/{unary,stream,bidi,local_session}.rs`（新建）
-- CLI 保留：`route_resolver.rs`（`DaemonRouteResolver` live lookup）、`PresenceRegistry`、session up/down sender、plugin/ability registration
-- 迁出目标（**非整删**，2026-06-26 逐方法解剖修正）：四个 dispatcher 各自的 lifecycle 方法（unary `dispatch_local_rpc_selected_route` / stream `dispatch_local_selected_route` / bidi `dispatch_remote_bidi`等4个 / session `handle_carrier_v1_dispatch`等4个）迁入 driver+executor；**四文件保留为 handler-router**（federation/namespace/identity/directory-subscription/session-plane handler + frame builders/mappers/stream types，与 federation_wrappers 同类不删，每文件留 ~75-85%）。S5 删的是迁出后变死的 lifecycle 方法体，**不是删文件**。`admission_facade.rs` 的 lifecycle 编排部分（S6 收口）。
-- ⚠️ 跨文件耦合：`dispatch_self_targeted_forward_invoke`/`dispatch_self_targeted_invoke_remote`（unary 内）被 `bidi_dispatcher.dispatch_invoke_remote` 调用——是共享 lifecycle 入口，不可内联删除，须保持可调或移入共享模块。
-- ⚠️ forward_invoke hybrid（unary `:1041` / bidi `:856`）：handler 外壳包 contained lifecycle。**S4 只迁纯本地 owner-routed arm，forward_invoke 内层 lifecycle 留后续 pass**（爆炸半径最小）。
-- **不删**：`federation_wrappers.rs`（非 lifecycle 复制体，CTO 确认）
+| 理想模块（架构信） | 真实落点 | 职责 / 不该做什么 |
+|---|---|---|
+| `InvocationSurface` | `rpc_handlers.rs`(瘦后) / `invoke_stream_pipeline.rs` / `bidi_handler.rs` | 只做 wire 适配 + 调用 phase；**不**拥有 receipt commit 细节 |
+| `AdmissionPipeline` | `admission_phase` + `admission_flow` + `admission_gate` | raw request → `AdmittedInvocation` 或 terminal rejection（强类型事实） |
+| `RouteDecisionPipeline` | `unary_route_phase` / `server_stream_route_phase` + `resolver_consume` | 解释 resolver 结果不执行；产 `CanonicalInvokeRoute`（route_only / descriptor_bound）。**注**：架构信的 sealed `RouteDecision{LocalDispatch\|ForwardDelegation\|TerminalReject}` 当前**未物化**，路由/委派隐含在 `CanonicalInvokeRoute + VerifiedDelegation` 中——是否显式化为 sealed enum 待 CTO 裁决（见 §5）。 |
+| `ExecutionDispatch` | `unary_{scheduling,dispatch,execution}` / stream execution | 只送执行端，返回 `TerminalOutcome`，**不** emit terminal side effect |
+| `TerminalFinalizationService` | `terminal_finalization.rs` ✅ | 唯一 terminal owner（§1.2）。已是最接近理想的模块 |
+| `ReceiptProjection` | （SDK 侧纯映射，待定位） | terminal-kind → receipt-kind/source 纯语义；**不**当 runtime receipt signer。runtime signer/ledger 仍归 runtime |
 
 ---
 
-*本 RFC v2 描述磁盘真实代码，每处 file:line 可经 `grep` 验证。v2 取代 v1（route facade 整体下沉、Timeout/Cancelled 并进 Failed 两点已被 CTO 否决）。依赖 A2（carrier-unification）先行；编码前 CTO 修正版裁决已拍板，无遗留决策。*
+## 4. 落地序列（架构信的 7 步：Extract Invocation Phase Services Behind Existing Surfaces）
+
+> CTO 进行中已覆盖前几步（admission/authorization/scheduling/terminal phase + per-geometry surface 相位已落 runtime-rs）。本节记录目标序列，剩余项为收尾。
+
+1. ✅ 从 `rpc_handlers::invoke` 抽 `AdmissionPipeline`（`admission_phase`/`admission_flow`），不改行为。
+2. ⏳ 抽 `RouteDecisionPipeline`，让 resolver/delegation 只有一个解释出口（当前 `CanonicalInvokeRoute`，sealed enum 待裁）。
+3. ✅ 抽 `ExecutionDispatch` 返回统一 outcome（`TerminalOutcome`，无 side effect）。
+4. ✅ 收紧 `TerminalFinalizationService` 为唯一 terminal owner，禁止 handler 直接 terminal side effect。
+5. ✅ `InvokeStreamPipeline` 复用 admission/route/terminal phase，保留 stream loop（`StreamGate` + server_stream 族）。
+6. ✅ `bidi_handler` 复用 admission/terminal phase，保留 frame-chain/session（bidi 族）。
+7. ⏳ 决定 SDK `InvocationLifecycle` 归宿：保留为纯 conformance algebra，还是抽到 shared protocol crate（见 §5）。
+
+---
+
+## 5. 待裁决（CTO）
+
+- **(a) RouteDecision sealed enum**：当前路由/委派隐含在 `CanonicalInvokeRoute + VerifiedDelegation`。是否物化为架构信的 sealed `RouteDecision{LocalDispatch\|ForwardDelegation\|TerminalReject}`？显式化收益（单一解释出口、穷尽匹配）vs 当前隐式的成本。
+- **(b) SDK lifecycle 归宿**：S0-S3 已 revert。SDK 侧是否需要一个**纯 conformance algebra**（internal-phase 的可执行规格，供六语言一致性测试），还是 runtime-rs 的 phase 模块即真相源、SDK 不需要镜像？
+- **(c) ReceiptProjection 定位**：terminal-kind → receipt-kind/source 的纯 vocabulary 映射是否值得作为 SDK 类型（CTO 曾认可方向），还是留在 runtime 内。
+
+---
+
+## 6. 一句话结论
+
+理想架构是「统一生命周期事实和 terminal closure」，不是「统一所有 dispatcher 控制流」。真正应被消灭的是重复的 admission/route/terminal **语义**，不是 unary/stream/bidi/hub-forward 各自必要的协议**形态**。本架构（runtime-rs phase 模块 + 唯一 `TerminalFinalizationService`）正是其落地。
+
+---
+
+*v3 描述磁盘真实实现（in-progress, runtime-rs/services/invocation/），每处 file:line 可 `grep` 验证。v1/v2 的 sans-IO LifecycleDriver 方向已作废、对应 SDK 代码已 revert。*
