@@ -39,27 +39,47 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     let reader = Arc::new(InvocationLedgerReader::new(ledger));
 
     let list_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_HISTORY_LIST,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_HISTORY_LIST,
+            list_history_description(),
+            list_history_input_schema(),
+        ),
         Arc::new(move |args| list_reader.list_history(args)),
     );
     let get_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_HISTORY_GET,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_HISTORY_GET,
+            get_history_description(),
+            get_history_input_schema(),
+        ),
         Arc::new(move |args| get_reader.get_history(args)),
     );
     let trace_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_TRACE_GET,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_TRACE_GET,
+            get_trace_description(),
+            get_trace_input_schema(),
+        ),
         Arc::new(move |args| trace_reader.get_trace(args)),
     );
     let path_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_HISTORY_PATH,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_HISTORY_PATH,
+            get_path_description(),
+            get_path_input_schema(),
+        ),
         Arc::new(move |args| path_reader.get_path(args)),
     );
 }
@@ -570,6 +590,28 @@ mod tests {
         assert!(reg.get_rpc(ABILITY_HISTORY_GET).is_some());
         assert!(reg.get_rpc(ABILITY_TRACE_GET).is_some());
         assert!(reg.get_rpc(ABILITY_HISTORY_PATH).is_some());
+    }
+
+    #[test]
+    fn registration_publishes_invocation_history_manifests() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, None);
+
+        for ability in [
+            ABILITY_HISTORY_LIST,
+            ABILITY_HISTORY_GET,
+            ABILITY_TRACE_GET,
+            ABILITY_HISTORY_PATH,
+        ] {
+            let manifest = reg
+                .manifest_for(ability)
+                .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
+            assert_eq!(
+                manifest.input_schema().get("type").and_then(Value::as_str),
+                Some("object"),
+                "{ability} must publish an object input schema"
+            );
+        }
     }
 
     #[test]

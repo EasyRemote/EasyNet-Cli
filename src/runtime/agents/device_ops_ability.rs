@@ -79,27 +79,66 @@ impl DeviceOpsClock for SystemDeviceOpsClock {
 /// Register every device operation handler on `reg`. Called once
 /// at daemon boot from `runtime::agents::build_registry_with_services`.
 pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDeviceRegistrarCell>) {
-    reg.register_rpc_with_owner("node.list", OwnerKind::Device, Arc::new(list_nodes_handler));
-    reg.register_rpc_with_owner(
-        "node.describe",
+    reg.register_rpc_with_spec(
+        ABILITY_LIST_NODES,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_LIST_NODES,
+            list_nodes_description(),
+            list_nodes_input_schema(),
+        ),
+        Arc::new(list_nodes_handler),
+    );
+    reg.register_rpc_with_spec(
+        ABILITY_DESCRIBE_NODE,
+        OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_DESCRIBE_NODE,
+            describe_node_description(),
+            describe_node_input_schema(),
+        ),
         Arc::new(describe_node_handler),
     );
-    reg.register_rpc_with_owner(
-        "node.remove",
+    reg.register_rpc_with_spec(
+        ABILITY_REMOVE_NODE,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_REMOVE_NODE,
+            remove_node_description(),
+            remove_node_input_schema(),
+        ),
         Arc::new(remove_node_handler),
     );
-    reg.register_rpc_with_envelope_and_owner("ability.deploy", OwnerKind::Device, {
-        let cell = Arc::clone(&device_registrar);
-        Arc::new(move |env: EnvelopeContext, args: Value| deploy_ability_handler(env, args, &cell))
-    });
-    reg.register_rpc_with_envelope_and_owner("ability.uninstall", OwnerKind::Device, {
-        let cell = Arc::clone(&device_registrar);
-        Arc::new(move |env: EnvelopeContext, args: Value| {
-            uninstall_ability_handler(env, args, &cell)
-        })
-    });
+    reg.register_rpc_with_envelope_and_spec(
+        ABILITY_DEPLOY_ABILITY,
+        OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_DEPLOY_ABILITY,
+            deploy_ability_description(),
+            deploy_ability_input_schema(),
+        ),
+        {
+            let cell = Arc::clone(&device_registrar);
+            Arc::new(move |env: EnvelopeContext, args: Value| {
+                deploy_ability_handler(env, args, &cell)
+            })
+        },
+    );
+    reg.register_rpc_with_envelope_and_spec(
+        ABILITY_UNINSTALL_ABILITY,
+        OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_UNINSTALL_ABILITY,
+            uninstall_ability_description(),
+            uninstall_ability_input_schema(),
+        ),
+        {
+            let cell = Arc::clone(&device_registrar);
+            Arc::new(move |env: EnvelopeContext, args: Value| {
+                uninstall_ability_handler(env, args, &cell)
+            })
+        },
+    );
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -658,6 +697,29 @@ mod tests {
             "node.list must include the local device entry: {resp}"
         );
         assert!(resp.get("federation_view").is_some());
+    }
+
+    #[test]
+    fn registration_publishes_device_ops_manifests() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, Arc::new(empty_device_cell()));
+
+        for ability in [
+            ABILITY_LIST_NODES,
+            ABILITY_DESCRIBE_NODE,
+            ABILITY_REMOVE_NODE,
+            ABILITY_DEPLOY_ABILITY,
+            ABILITY_UNINSTALL_ABILITY,
+        ] {
+            let manifest = reg
+                .manifest_for(ability)
+                .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
+            assert_eq!(
+                manifest.input_schema().get("type").and_then(Value::as_str),
+                Some("object"),
+                "{ability} must publish an object input schema"
+            );
+        }
     }
 
     #[test]
