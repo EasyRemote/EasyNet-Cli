@@ -655,6 +655,7 @@ impl AdmissionFacade {
                 "envelope present but ability/function_name is empty; cannot run admission",
             ));
         }
+        reject_missing_or_malformed_caller_signature(envelope)?;
 
         let signed_descriptor_ref = signed_descriptor_ref_from_metadata(ability, metadata)?;
         ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)?;
@@ -1362,6 +1363,25 @@ fn reject_public_hosted_agent_delegation_metadata(
         "{REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY}: `{HOSTED_AGENT_DELEGATION_METADATA_KEY}` \
          is local daemon control metadata and is only accepted on trusted loopback ingress"
     )))
+}
+
+fn reject_missing_or_malformed_caller_signature(envelope: &Envelope) -> Result<(), Status> {
+    let Some(signature) = envelope.caller_signature.as_ref() else {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_CALLER_SIGNATURE_INVALID}:caller_signature_missing"
+        )));
+    };
+    if signature.algorithm.trim().is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_CALLER_SIGNATURE_INVALID}:signature_algorithm_empty"
+        )));
+    }
+    if signature.signature.is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_CALLER_SIGNATURE_INVALID}:signature_bytes_empty"
+        )));
+    }
+    Ok(())
 }
 
 /// Map an axon-SDK invocation `AxonError` (the kind admission
@@ -2167,6 +2187,7 @@ mod tests {
             envelope: req.envelope.clone(),
             function_name: req.function_name.clone(),
             arguments: req.arguments.clone(),
+            metadata: req.metadata.clone(),
             ..InvokeServerStreamRequest::default()
         };
         facade

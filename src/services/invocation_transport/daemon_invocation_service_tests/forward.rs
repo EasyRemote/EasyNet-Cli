@@ -1003,7 +1003,7 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     // Daemon B's trust anchor contains daemon A's public key. The
     // in-process federation client below signs the rebuilt peer
     // request with the matching private key, so daemon B exercises
-    // the same strict Device admission path as production callers.
+    // the same strict Device-caller admission path as production callers.
     let daemon_a_in_b_trust = vec![crate::services::realm_trust_anchor::TrustedAgent {
         agent_ura: DAEMON_A_URI.to_string(),
         public_key_b64: daemon_a_pubkey_b64,
@@ -1091,7 +1091,7 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     let federation_client: Arc<dyn FederationClient> = Arc::new(ForwardingPeerClient {
         peer: daemon_b,
         caller_ura: DAEMON_A_URI.to_string(),
-        callee_ura: DAEMON_B_URI.to_string(),
+        callee_ura: crate::ura::hub_ura(REALM_B),
         subject_ura: DAEMON_B_URI.to_string(),
         signing_seed: DAEMON_A_SIGNING_SEED,
     });

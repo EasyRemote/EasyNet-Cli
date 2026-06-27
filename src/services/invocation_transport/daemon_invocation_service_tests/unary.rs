@@ -1001,6 +1001,11 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
         envelope: Some(envelope),
         function_name: function_name.to_string(),
         arguments,
+        metadata: std::collections::HashMap::from([(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+        )]),
         ..InvokeRequest::default()
     });
 
