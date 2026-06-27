@@ -11,11 +11,32 @@
 // corrupt the audit trail the caller is trying to inspect.
 
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
+use once_cell::sync::Lazy;
 use serde_json::Value;
 
 use crate::persistence::daemon_config::{default_config_path, default_ledger_dir, DaemonConfig};
+
+static PROCESS_LEDGER: Lazy<RwLock<Option<Arc<easynet_axon::invocation::InvocationLedger>>>> =
+    Lazy::new(|| RwLock::new(None));
+
+pub(crate) fn register_process_ledger(ledger: Arc<easynet_axon::invocation::InvocationLedger>) {
+    if let Ok(mut slot) = PROCESS_LEDGER.write() {
+        *slot = Some(ledger);
+    }
+}
+
+fn process_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLedger>> {
+    PROCESS_LEDGER.read().ok().and_then(|slot| slot.clone())
+}
+
+#[derive(Clone)]
+enum LocalInvocationLedgerSource {
+    Shared(Arc<easynet_axon::invocation::InvocationLedger>),
+    Path(PathBuf),
+}
 
 /// Read-only local daemon invocation ledger view.
 ///
@@ -25,15 +46,27 @@ use crate::persistence::daemon_config::{default_config_path, default_ledger_dir,
 /// Invariant 3: absence of the ledger file means "no record yet", not an
 /// operator error, because the daemon sink may persist asynchronously after the
 /// unary response returns.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct LocalInvocationLedgerReader {
-    path: PathBuf,
+    source: LocalInvocationLedgerSource,
 }
 
 impl LocalInvocationLedgerReader {
     pub(crate) fn from_default_config() -> Self {
+        if let Some(ledger) = process_ledger() {
+            return Self {
+                source: LocalInvocationLedgerSource::Shared(ledger),
+            };
+        }
         Self {
-            path: ledger_path_from_config(),
+            source: LocalInvocationLedgerSource::Path(ledger_path_from_config()),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_path(path: PathBuf) -> Self {
+        Self {
+            source: LocalInvocationLedgerSource::Path(path),
         }
     }
 
@@ -42,9 +75,6 @@ impl LocalInvocationLedgerReader {
         if request_id.is_empty() {
             anyhow::bail!("request_id must not be empty");
         }
-        if !self.path.exists() {
-            return Ok(None);
-        }
         let query = easynet_axon::invocation::InvocationLedgerQuery::new()
             .key(
                 easynet_axon::invocation::InvocationLedgerFetchKey::RequestId(
@@ -52,9 +82,18 @@ impl LocalInvocationLedgerReader {
                 ),
             )
             .limit(1);
-        let ledger = easynet_axon::invocation::InvocationLedger::open(&self.path)
-            .with_context(|| format!("open invocation ledger at {}", self.path.display()))?;
-        let Some(record) = ledger.fetch_one(query)? else {
+        let record = match &self.source {
+            LocalInvocationLedgerSource::Shared(ledger) => ledger.fetch_one(query)?,
+            LocalInvocationLedgerSource::Path(path) => {
+                if !path.exists() {
+                    return Ok(None);
+                }
+                let ledger = easynet_axon::invocation::InvocationLedger::open(path)
+                    .with_context(|| format!("open invocation ledger at {}", path.display()))?;
+                ledger.fetch_one(query)?
+            }
+        };
+        let Some(record) = record else {
             return Ok(None);
         };
         serde_json::to_value(record)
@@ -76,9 +115,7 @@ mod tests {
     #[test]
     fn missing_ledger_is_empty_read() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let reader = LocalInvocationLedgerReader {
-            path: dir.path().join("missing.redb"),
-        };
+        let reader = LocalInvocationLedgerReader::from_path(dir.path().join("missing.redb"));
 
         let record = reader
             .record_by_request_id("req-missing")
@@ -88,9 +125,8 @@ mod tests {
 
     #[test]
     fn empty_request_id_is_rejected_before_disk_read() {
-        let reader = LocalInvocationLedgerReader {
-            path: PathBuf::from("/path/that/does/not/matter"),
-        };
+        let reader =
+            LocalInvocationLedgerReader::from_path(PathBuf::from("/path/that/does/not/matter"));
 
         let err = reader.record_by_request_id(" ").unwrap_err();
         assert!(err.to_string().contains("request_id"));

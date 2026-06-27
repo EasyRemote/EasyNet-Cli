@@ -551,6 +551,7 @@ impl DaemonInvocationService {
         mut self,
         ledger: Arc<easynet_axon::invocation::InvocationLedger>,
     ) -> Self {
+        crate::support::local_invocation_ledger::register_process_ledger(Arc::clone(&ledger));
         self.runtime.invocation_ledger = Some(ledger);
         self
     }
