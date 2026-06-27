@@ -49,7 +49,7 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::time::Duration;
+use std::{fmt::Write as _, time::Duration};
 
 use anyhow::{anyhow, bail, Context};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -60,9 +60,16 @@ use crate::services::invocation_transport::ProtoEnvelope;
 use crate::services::self_identity::LocalDaemonSigner;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{
-    InvocationState as WireInvocationState, InvokeRequest, InvokeResponse,
+    Error as WireError, InvocationState as WireInvocationState, InvokeRequest, InvokeResponse,
 };
 use easynet_axon::ura::{parse_ura, URAKind};
+
+const FORWARD_CONTEXT_ATTEMPT_COUNT: &str = "forward.attempt_count";
+const FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT: &str = "forward.diagnostic_attempt_count";
+const FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED: &str = "forward.diagnostic_truncated";
+const FORWARD_CONTEXT_LAST_ERROR: &str = "forward.last_error";
+const FORWARD_CONTEXT_ATTEMPTS_JSON: &str = "forward.attempts_json";
+const FORWARD_CONTEXT_DIAGNOSTICS_ERROR: &str = "forward.diagnostics_error";
 
 /// Validate a `--node` argument as a canonical Axon Device or Hub URA.
 /// Returns the URA string when it parses; surfaces a typed error
@@ -403,9 +410,8 @@ fn ensure_completed_invoke_response(surface: &str, body: &InvokeResponse) -> any
     let state = WireInvocationState::try_from(body.state)
         .map(|state| state.as_str_name().to_string())
         .unwrap_or_else(|_| format!("UNKNOWN_STATE_{}", body.state));
-    let (code, message) = body
-        .error
-        .as_ref()
+    let error = body.error.as_ref();
+    let (code, message) = error
         .map(|error| {
             (
                 error.code.trim().to_string(),
@@ -418,8 +424,11 @@ fn ensure_completed_invoke_response(surface: &str, body: &InvokeResponse) -> any
                 "InvokeResponse did not carry a structured error".to_string(),
             )
         });
+    let diagnostics = error
+        .and_then(|error| render_invoke_error_context(surface, error))
+        .unwrap_or_default();
     bail!(
-        "{surface} did not complete: state={state} code={} message={}",
+        "{surface} did not complete: state={state} code={} message={}{}",
         if code.is_empty() {
             "INVOKE_NOT_COMPLETED"
         } else {
@@ -429,8 +438,139 @@ fn ensure_completed_invoke_response(surface: &str, body: &InvokeResponse) -> any
             "InvokeResponse did not carry an error message"
         } else {
             message.as_str()
-        }
+        },
+        diagnostics,
     )
+}
+
+fn render_invoke_error_context(surface: &str, error: &WireError) -> Option<String> {
+    if surface != "federation.forward_invoke" {
+        return None;
+    }
+    render_forward_diagnostics_context(error)
+}
+
+fn render_forward_diagnostics_context(error: &WireError) -> Option<String> {
+    let context = &error.context;
+    let has_forward_context = [
+        FORWARD_CONTEXT_ATTEMPT_COUNT,
+        FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT,
+        FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED,
+        FORWARD_CONTEXT_LAST_ERROR,
+        FORWARD_CONTEXT_ATTEMPTS_JSON,
+        FORWARD_CONTEXT_DIAGNOSTICS_ERROR,
+    ]
+    .iter()
+    .any(|key| context.contains_key(*key));
+    if !has_forward_context {
+        return None;
+    }
+
+    let mut out = String::from("\nforward diagnostics:");
+    append_forward_context_field(
+        &mut out,
+        "attempt_count",
+        context.get(FORWARD_CONTEXT_ATTEMPT_COUNT),
+    );
+    append_forward_context_field(
+        &mut out,
+        "diagnostic_attempt_count",
+        context.get(FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT),
+    );
+    append_forward_context_field(
+        &mut out,
+        "diagnostic_truncated",
+        context.get(FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED),
+    );
+    append_forward_context_field(
+        &mut out,
+        "last_error",
+        context.get(FORWARD_CONTEXT_LAST_ERROR),
+    );
+    append_forward_context_field(
+        &mut out,
+        "diagnostics_error",
+        context.get(FORWARD_CONTEXT_DIAGNOSTICS_ERROR),
+    );
+
+    if let Some(attempts_json) = context.get(FORWARD_CONTEXT_ATTEMPTS_JSON) {
+        append_forward_attempts(&mut out, attempts_json);
+    }
+
+    Some(out)
+}
+
+fn append_forward_context_field(out: &mut String, label: &str, value: Option<&String>) {
+    let Some(value) = value else {
+        return;
+    };
+    let _ = write!(out, "\n  {label}: {}", compact_context_value(value));
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ForwardAttemptDiagnosticDisplay {
+    endpoint: Option<String>,
+    failure_class: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+    retryable: Option<bool>,
+}
+
+fn append_forward_attempts(out: &mut String, attempts_json: &str) {
+    match serde_json::from_str::<Vec<ForwardAttemptDiagnosticDisplay>>(attempts_json) {
+        Ok(attempts) if attempts.is_empty() => {
+            let _ = write!(out, "\n  attempts: []");
+        }
+        Ok(attempts) => {
+            let _ = write!(out, "\n  attempts:");
+            for (idx, attempt) in attempts.iter().enumerate() {
+                let _ = write!(
+                    out,
+                    "\n    {}. endpoint={} class={} retryable={} code={} message={}",
+                    idx + 1,
+                    attempt_field(attempt.endpoint.as_deref()),
+                    attempt_field(attempt.failure_class.as_deref()),
+                    attempt
+                        .retryable
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    attempt_field(attempt.code.as_deref()),
+                    attempt_field(attempt.message.as_deref()),
+                );
+            }
+        }
+        Err(err) => {
+            let _ = write!(
+                out,
+                "\n  attempts_json_parse_error: {}",
+                compact_context_value(&err.to_string())
+            );
+        }
+    }
+}
+
+fn attempt_field(value: Option<&str>) -> String {
+    value
+        .map(compact_context_value)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn compact_context_value(value: &str) -> String {
+    const MAX_CONTEXT_VALUE_DISPLAY_BYTES: usize = 512;
+
+    let mut compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.len() <= MAX_CONTEXT_VALUE_DISPLAY_BYTES {
+        return compact;
+    }
+
+    let mut end = MAX_CONTEXT_VALUE_DISPLAY_BYTES;
+    while !compact.is_char_boundary(end) {
+        end -= 1;
+    }
+    compact.truncate(end);
+    compact.push_str("...");
+    compact
 }
 
 fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
@@ -1280,5 +1420,118 @@ mod tests {
         assert!(rendered.contains("state=INVOCATION_STATE_FAILED"));
         assert!(rendered.contains("AXON_TARGET_OFFLINE"));
         assert!(rendered.contains("peer is unreachable"));
+    }
+
+    #[test]
+    fn forward_diagnostics_context_is_rendered_for_forward_failures() {
+        let attempts_json = serde_json::json!([
+            {
+                "endpoint": "http://peer-a",
+                "failure_class": "transport",
+                "code": "",
+                "message": "connect refused",
+                "retryable": true
+            },
+            {
+                "endpoint": "http://peer-b",
+                "failure_class": "remote_rejected",
+                "code": "AXON_REMOTE_POLICY_REJECTED",
+                "message": "signature rejected",
+                "retryable": false
+            }
+        ])
+        .to_string();
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
+            error: Some(easynet_axon::pb::axon::v1::Error {
+                code: "AXON_FORWARD_HOP_FAILED".to_string(),
+                message: "all remote shard endpoints failed".to_string(),
+                context: [
+                    (FORWARD_CONTEXT_ATTEMPT_COUNT.to_string(), "2".to_string()),
+                    (
+                        FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT.to_string(),
+                        "2".to_string(),
+                    ),
+                    (
+                        FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED.to_string(),
+                        "false".to_string(),
+                    ),
+                    (
+                        FORWARD_CONTEXT_LAST_ERROR.to_string(),
+                        "http://peer-b remote_rejected signature rejected".to_string(),
+                    ),
+                    (FORWARD_CONTEXT_ATTEMPTS_JSON.to_string(), attempts_json),
+                ]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = decode_forward_invoke_response_value(&body)
+            .expect_err("forward failure should surface diagnostics");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("AXON_FORWARD_HOP_FAILED"));
+        assert!(rendered.contains("forward diagnostics:"));
+        assert!(rendered.contains("attempt_count: 2"));
+        assert!(rendered.contains("diagnostic_truncated: false"));
+        assert!(rendered.contains("last_error: http://peer-b remote_rejected signature rejected"));
+        assert!(rendered.contains("1. endpoint=http://peer-a class=transport retryable=true"));
+        assert!(rendered.contains(
+            "2. endpoint=http://peer-b class=remote_rejected retryable=false \
+             code=AXON_REMOTE_POLICY_REJECTED message=signature rejected"
+        ));
+    }
+
+    #[test]
+    fn forward_diagnostics_malformed_attempts_json_keeps_canonical_error() {
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
+            error: Some(easynet_axon::pb::axon::v1::Error {
+                code: "AXON_FORWARD_HOP_FAILED".to_string(),
+                message: "all remote shard endpoints failed".to_string(),
+                context: [(
+                    FORWARD_CONTEXT_ATTEMPTS_JSON.to_string(),
+                    "not-json".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = decode_forward_invoke_response_value(&body)
+            .expect_err("forward failure should preserve malformed diagnostics");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("AXON_FORWARD_HOP_FAILED"));
+        assert!(rendered.contains("forward diagnostics:"));
+        assert!(rendered.contains("attempts_json_parse_error:"));
+    }
+
+    #[test]
+    fn forward_context_is_not_rendered_for_other_surfaces() {
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
+            error: Some(easynet_axon::pb::axon::v1::Error {
+                code: "AXON_FORWARD_HOP_FAILED".to_string(),
+                message: "all remote shard endpoints failed".to_string(),
+                context: [(FORWARD_CONTEXT_ATTEMPT_COUNT.to_string(), "2".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = ensure_completed_invoke_response("federation.revoke", &body)
+            .expect_err("non-forward surface still fails");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("AXON_FORWARD_HOP_FAILED"));
+        assert!(!rendered.contains("forward diagnostics:"));
     }
 }
