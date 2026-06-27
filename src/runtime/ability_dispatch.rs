@@ -644,7 +644,6 @@ async fn envelope_context_from_axon(
     let caller = envelope.caller.ura;
     let callee = envelope.callee.ura;
     let envelope_subject = envelope.subject.ura;
-    let request_id = ctx.invocation_id.clone();
     let invocation_nonce = envelope.invocation_nonce;
     let invocation_nonce_hex = hex::encode(invocation_nonce.as_slice());
     let ability = envelope.ability;
@@ -653,7 +652,6 @@ async fn envelope_context_from_axon(
         &caller,
         &callee,
         &envelope_subject,
-        &request_id,
         &invocation_nonce_hex,
         &ability,
     )

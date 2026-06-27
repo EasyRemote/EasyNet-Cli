@@ -325,24 +325,16 @@ impl LocalDaemonLoopbackInvocation {
         Ok(envelope)
     }
 
-    fn identity_from_request(
+    fn nonce_hex_from_request(
         request: &easynet_axon::pb::axon::v1::InvokeRequest,
         function_name: &str,
-    ) -> anyhow::Result<(String, String)> {
-        let (request_id, nonce_hex) = request
+    ) -> anyhow::Result<String> {
+        let nonce_hex = request
             .envelope
             .as_ref()
-            .map(|env| {
-                (
-                    env.request_id.trim().to_string(),
-                    hex::encode(&env.invocation_nonce),
-                )
-            })
+            .map(|env| hex::encode(&env.invocation_nonce))
             .ok_or_else(|| anyhow::anyhow!("build {function_name} request without envelope"))?;
-        if request_id.is_empty() {
-            anyhow::bail!("build {function_name} request without envelope request_id");
-        }
-        Ok((request_id, nonce_hex))
+        Ok(nonce_hex)
     }
 
     fn timeout_seconds(&self) -> i32 {
@@ -1192,8 +1184,8 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     .with_trace_id(trace_id);
     let wire_caller_ura = invocation.caller_ura.clone();
     let mut request = invocation.invoke_request()?;
-    let (wire_request_id, nonce_hex) =
-        LocalDaemonLoopbackInvocation::identity_from_request(&request, &function_name)?;
+    let nonce_hex =
+        LocalDaemonLoopbackInvocation::nonce_hex_from_request(&request, &function_name)?;
     if let Some(delegation) = delegation.as_ref() {
         let signer = LocalDaemonSigner::for_caller(&wire_caller_ura);
         let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, &function_name)
@@ -1202,7 +1194,6 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             &wire_caller_ura,
             &callee_ura,
             &subject_ura,
-            &wire_request_id,
             &nonce_hex,
             &descriptor_ref,
         )?;

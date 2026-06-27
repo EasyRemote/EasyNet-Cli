@@ -38,6 +38,14 @@
 
 pub use easynet_axon::ura::*;
 
+/// Synthetic system Agent URA for daemon-internal LocalRuntime calls.
+///
+/// This is a CLI-owned identity layered on top of Axon's URA grammar: it is
+/// not a user, device, or hub identity, but it still uses the canonical Agent
+/// URA shape so admission snapshots and persisted grants can compare it
+/// without depending on runtime internals.
+pub(crate) const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_system.local";
+
 /// Canonical whole-realm prefix used by directory/federation filters.
 ///
 /// Directory queries use prefix matching instead of a concrete role URA.

@@ -1652,7 +1652,6 @@ mod tests {
             env.caller(),
             env.callee(),
             env.subject(),
-            env.invocation_id(),
             nonce_hex.as_str(),
             descriptor_ref.as_str(),
         )

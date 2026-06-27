@@ -13,8 +13,8 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::RngCore as _;
 use std::sync::{Arc, OnceLock};
 
-/// Synthetic system-agent URA for daemon-internal LocalRuntime calls.
-pub(crate) const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_system.local";
+pub(crate) use crate::ura::LOCAL_SYSTEM_AGENT_URA;
+
 pub(crate) const UNPAIRED_LOCAL_REALM: &str = "default";
 pub(crate) const UNPAIRED_LOCAL_DEVICE_ID: &str = "local";
 

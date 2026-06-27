@@ -492,7 +492,7 @@ impl TeachGrantAuthoritySnapshot {
                 })?;
                 if agent_ura != &grant.owner_ura
                     || host_device_ura != &grant.granted_by_ura
-                    || snapshot.caller_ura != *host_device_ura
+                    || snapshot.caller_ura != crate::ura::LOCAL_SYSTEM_AGENT_URA
                     || snapshot.callee_ura != *host_device_ura
                     || delegated_ability != TEACH_GRANT_ENVELOPE_ABILITY
                 {

@@ -196,8 +196,8 @@ impl AuthorityBindingKind {
 
 /// Invocation-envelope facts that are signed into hosted-agent delegation.
 ///
-/// This is intentionally a value object rather than six free strings at every
-/// call site. The caller/callee/subject/request/nonce/ability tuple is a
+/// This is intentionally a value object rather than five free strings at every
+/// call site. The caller/callee/subject/nonce/ability tuple is a
 /// protocol binding; passing it as one object keeps signing and verification
 /// from drifting by argument order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,7 +205,6 @@ pub struct HostedAgentDelegationEnvelopeBinding {
     wire_caller_ura: String,
     wire_callee_ura: String,
     wire_subject_ura: String,
-    wire_request_id: String,
     wire_invocation_nonce_hex: String,
     ability: String,
 }
@@ -215,7 +214,6 @@ impl HostedAgentDelegationEnvelopeBinding {
         wire_caller_ura: impl Into<String>,
         wire_callee_ura: impl Into<String>,
         wire_subject_ura: impl Into<String>,
-        wire_request_id: impl Into<String>,
         wire_invocation_nonce_hex: impl Into<String>,
         ability: impl Into<String>,
     ) -> anyhow::Result<Self> {
@@ -223,7 +221,6 @@ impl HostedAgentDelegationEnvelopeBinding {
             wire_caller_ura: wire_caller_ura.into(),
             wire_callee_ura: wire_callee_ura.into(),
             wire_subject_ura: wire_subject_ura.into(),
-            wire_request_id: wire_request_id.into(),
             wire_invocation_nonce_hex: wire_invocation_nonce_hex.into(),
             ability: ability.into(),
         };
@@ -235,7 +232,6 @@ impl HostedAgentDelegationEnvelopeBinding {
         if self.wire_caller_ura.trim().is_empty()
             || self.wire_callee_ura.trim().is_empty()
             || self.wire_subject_ura.trim().is_empty()
-            || self.wire_request_id.trim().is_empty()
             || self.wire_invocation_nonce_hex.trim().is_empty()
             || self.ability.trim().is_empty()
         {
@@ -265,10 +261,6 @@ impl HostedAgentDelegationEnvelopeBinding {
         self.wire_subject_ura.trim()
     }
 
-    fn request_id(&self) -> &str {
-        self.wire_request_id.trim()
-    }
-
     fn invocation_nonce_hex(&self) -> &str {
         self.wire_invocation_nonce_hex.trim()
     }
@@ -294,7 +286,6 @@ pub struct HostedAgentDelegationClaims {
     wire_caller_ura: String,
     wire_callee_ura: String,
     wire_subject_ura: String,
-    wire_request_id: String,
     wire_invocation_nonce_hex: String,
     ability: String,
 }
@@ -312,7 +303,6 @@ impl HostedAgentDelegationClaims {
             wire_caller_ura: envelope.wire_caller_ura,
             wire_callee_ura: envelope.wire_callee_ura,
             wire_subject_ura: envelope.wire_subject_ura,
-            wire_request_id: envelope.wire_request_id,
             wire_invocation_nonce_hex: envelope.wire_invocation_nonce_hex,
             ability: envelope.ability,
         };
@@ -348,7 +338,6 @@ impl HostedAgentDelegationClaims {
             || self.wire_caller_ura.trim().is_empty()
             || self.wire_callee_ura.trim().is_empty()
             || self.wire_subject_ura.trim().is_empty()
-            || self.wire_request_id.trim().is_empty()
             || self.wire_invocation_nonce_hex.trim().is_empty()
             || self.ability.trim().is_empty()
         {
@@ -386,7 +375,6 @@ pub struct HostedAgentDelegationContext {
     wire_caller_ura: String,
     wire_callee_ura: String,
     wire_subject_ura: String,
-    wire_request_id: String,
     wire_invocation_nonce_hex: String,
     ability: String,
 }
@@ -443,7 +431,6 @@ impl HostedAgentDelegationContext {
         let wire_caller_ura = claims.wire_caller_ura.trim();
         let wire_callee_ura = claims.wire_callee_ura.trim();
         let wire_subject_ura = claims.wire_subject_ura.trim();
-        let wire_request_id = claims.wire_request_id.trim();
         let wire_invocation_nonce_hex = claims.wire_invocation_nonce_hex.trim();
         let ability = claims.ability.trim();
         if agent_ura.is_empty()
@@ -451,7 +438,6 @@ impl HostedAgentDelegationContext {
             || wire_caller_ura.is_empty()
             || wire_callee_ura.is_empty()
             || wire_subject_ura.is_empty()
-            || wire_request_id.is_empty()
             || wire_invocation_nonce_hex.is_empty()
             || ability.is_empty()
         {
@@ -465,7 +451,6 @@ impl HostedAgentDelegationContext {
         if wire_caller_ura != envelope.caller_ura()
             || wire_callee_ura != envelope.callee_ura()
             || wire_subject_ura != envelope.subject_ura()
-            || wire_request_id != envelope.request_id()
             || wire_invocation_nonce_hex != envelope.invocation_nonce_hex()
             || ability != envelope.ability()
         {
@@ -479,7 +464,6 @@ impl HostedAgentDelegationContext {
             wire_caller_ura: wire_caller_ura.to_string(),
             wire_callee_ura: wire_callee_ura.to_string(),
             wire_subject_ura: wire_subject_ura.to_string(),
-            wire_request_id: wire_request_id.to_string(),
             wire_invocation_nonce_hex: wire_invocation_nonce_hex.to_string(),
             ability: ability.to_string(),
         })
@@ -862,7 +846,6 @@ mod tests {
         let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
         let callee = "easynet:///r/default/device/local";
         let subject = "easynet:///r/default/device/local";
-        let request_id = "req-hosted-1";
         let nonce_hex = hex::encode([0x42u8; 16]);
         let ability = format!(
             "{}@1.0.0",
@@ -873,7 +856,6 @@ mod tests {
             caller,
             callee,
             subject,
-            request_id,
             nonce_hex.as_str(),
             ability.as_str(),
         )
@@ -908,7 +890,6 @@ mod tests {
         let signer = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
         let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
         let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
-        let request_id = "req-hosted-2";
         let nonce_hex = hex::encode([0x24u8; 16]);
         let ability = format!(
             "{}@1.0.0",
@@ -919,7 +900,6 @@ mod tests {
             caller,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
-            request_id,
             nonce_hex.as_str(),
             ability.as_str(),
         )
@@ -931,7 +911,6 @@ mod tests {
             caller,
             "easynet:///r/default/device/other",
             "easynet:///r/default/device/local",
-            request_id,
             nonce_hex.as_str(),
             ability.as_str(),
         )
@@ -951,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_agent_delegation_token_rejects_request_replay() {
+    fn hosted_agent_delegation_token_rejects_nonce_replay() {
         use ed25519_dalek::Signer as _;
 
         let signer = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
@@ -967,7 +946,6 @@ mod tests {
             caller,
             callee,
             subject,
-            "req-original",
             nonce_hex.as_str(),
             ability.as_str(),
         )
@@ -980,12 +958,12 @@ mod tests {
         .unwrap();
         let signature = signer.sign(&claims.signing_payload_bytes(caller));
         let raw = claims.signed_metadata_value(caller, &signature).unwrap();
+        let replayed_nonce_hex = hex::encode([0x34u8; 16]);
         let replayed_envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             callee,
             subject,
-            "req-replayed",
-            nonce_hex.as_str(),
+            replayed_nonce_hex.as_str(),
             ability.as_str(),
         )
         .unwrap();
