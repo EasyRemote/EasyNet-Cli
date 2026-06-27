@@ -423,7 +423,18 @@ impl UnaryDispatcher {
                 false,
             );
         }
+        let loopback_admitted = self
+            .admission
+            .accepts_loopback_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
+            Some(envelope) if loopback_admitted => {
+                crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                    envelope,
+                    selected_descriptor_ref,
+                    arguments.to_vec(),
+                    request.metadata.clone(),
+                )
+            }
             Some(envelope) => {
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,

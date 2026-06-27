@@ -135,8 +135,6 @@ pub(crate) async fn connect_channel(
 /// client instead of rebuilding socket/protobuf/tonic plumbing.
 #[derive(Debug, Clone)]
 pub(crate) struct LocalDaemonAbilityClient {
-    #[cfg(feature = "axon-pb")]
-    caller_override: Option<String>,
     #[cfg(all(test, feature = "axon-pb"))]
     transport: LocalDaemonAbilityTransport,
 }
@@ -206,10 +204,170 @@ impl LocalDaemonSubjectPolicy {
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+struct LocalDaemonLoopbackInvocation {
+    function_name: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    arguments: Vec<u8>,
+    timeout: Duration,
+    causal_context: Option<easynet_axon::pb::axon::v1::CausalContext>,
+    trace_id: Option<String>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl LocalDaemonLoopbackInvocation {
+    fn from_subject_policy(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        callee_override: Option<&str>,
+        subject_policy: LocalDaemonSubjectPolicy,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let default_callee_ura = local_daemon_default_callee_ura();
+        let callee_ura = callee_override
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default_callee_ura.as_str())
+            .to_string();
+        let subject_ura = subject_policy.resolve(&callee_ura)?;
+        Self::from_target(
+            function_name,
+            payload_json,
+            callee_ura,
+            subject_ura,
+            timeout,
+        )
+    }
+
+    fn from_target(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        callee_ura: String,
+        subject_ura: String,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let function_name = normalized_local_daemon_function_name(function_name)?;
+        let arguments = serde_json::to_vec(&payload_json)
+            .map_err(|err| anyhow::anyhow!("encode {function_name} args: {err}"))?;
+        Ok(Self {
+            function_name,
+            caller_ura: local_daemon_loopback_caller_ura()?,
+            callee_ura: normalized_local_daemon_ura(&callee_ura, "callee_ura")?,
+            subject_ura: normalized_local_daemon_ura(&subject_ura, "subject_ura")?,
+            arguments,
+            timeout,
+            causal_context: None,
+            trace_id: None,
+        })
+    }
+
+    #[must_use]
+    fn with_causal_context(
+        mut self,
+        causal_context: easynet_axon::pb::axon::v1::CausalContext,
+    ) -> Self {
+        self.causal_context = Some(causal_context);
+        self
+    }
+
+    #[must_use]
+    fn with_trace_id(mut self, trace_id: Option<&str>) -> Self {
+        self.trace_id = trace_id
+            .map(str::trim)
+            .filter(|trace_id| !trace_id.is_empty())
+            .map(str::to_string);
+        self
+    }
+
+    fn invoke_request(&self) -> anyhow::Result<easynet_axon::pb::axon::v1::InvokeRequest> {
+        let request = easynet_axon::pb::axon::v1::InvokeRequest {
+            envelope: Some(self.envelope()?),
+            function_name: self.function_name.clone(),
+            arguments: self.arguments.clone(),
+            content_type: "application/json".to_string(),
+            timeout_seconds: self.timeout_seconds(),
+            ..easynet_axon::pb::axon::v1::InvokeRequest::default()
+        };
+        if request.function_name.trim().is_empty() {
+            anyhow::bail!("function_name must not be empty");
+        }
+        Ok(request)
+    }
+
+    fn stream_request(
+        &self,
+    ) -> anyhow::Result<easynet_axon::pb::axon::v1::InvokeServerStreamRequest> {
+        Ok(easynet_axon::pb::axon::v1::InvokeServerStreamRequest {
+            envelope: Some(self.envelope()?),
+            function_name: self.function_name.clone(),
+            arguments: self.arguments.clone(),
+            content_type: "application/json".to_string(),
+            timeout_seconds: self.timeout_seconds(),
+            ..easynet_axon::pb::axon::v1::InvokeServerStreamRequest::default()
+        })
+    }
+
+    fn envelope(&self) -> anyhow::Result<easynet_axon::pb::axon::v1::Envelope> {
+        let mut envelope = crate::services::invocation_transport::ProtoEnvelope::targeted(
+            self.caller_ura.clone(),
+            self.callee_ura.clone(),
+            self.subject_ura.clone(),
+        )?;
+        if let Some(causal_context) = self.causal_context.clone() {
+            envelope = envelope.with_causal_context(causal_context);
+        }
+        let mut envelope = envelope.into_inner();
+        if let Some(trace_id) = self.trace_id.as_ref() {
+            envelope.trace_id = trace_id.clone();
+        }
+        Ok(envelope)
+    }
+
+    fn identity_from_request(
+        request: &easynet_axon::pb::axon::v1::InvokeRequest,
+        function_name: &str,
+    ) -> anyhow::Result<(String, String)> {
+        let (request_id, nonce_hex) = request
+            .envelope
+            .as_ref()
+            .map(|env| {
+                (
+                    env.request_id.trim().to_string(),
+                    hex::encode(&env.invocation_nonce),
+                )
+            })
+            .ok_or_else(|| anyhow::anyhow!("build {function_name} request without envelope"))?;
+        if request_id.is_empty() {
+            anyhow::bail!("build {function_name} request without envelope request_id");
+        }
+        Ok((request_id, nonce_hex))
+    }
+
+    fn timeout_seconds(&self) -> i32 {
+        i32::try_from(self.timeout.as_secs()).unwrap_or(i32::MAX)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn normalized_local_daemon_function_name(function_name: &str) -> anyhow::Result<String> {
+    let function_name = function_name.trim();
+    if function_name.is_empty() {
+        anyhow::bail!("function_name must not be empty");
+    }
+    Ok(function_name.to_string())
+}
+
+#[cfg(feature = "axon-pb")]
+fn normalized_local_daemon_ura(value: &str, field: &str) -> anyhow::Result<String> {
+    LocalDaemonSubjectPolicy::normalized_ura(value, field)
+}
+
+#[cfg(feature = "axon-pb")]
 impl LocalDaemonAbilityClient {
-    fn grpc(caller_override: Option<String>) -> Self {
+    fn grpc() -> Self {
         Self {
-            caller_override,
             #[cfg(test)]
             transport: LocalDaemonAbilityTransport::Grpc,
         }
@@ -217,16 +375,16 @@ impl LocalDaemonAbilityClient {
 
     pub(crate) fn new() -> anyhow::Result<Self> {
         Self::validate_socket()?;
-        Ok(Self::grpc(None))
+        Ok(Self::grpc())
     }
 
-    pub(crate) fn with_caller_ura(caller_ura: impl Into<String>) -> anyhow::Result<Self> {
+    fn require_host_device_ura(caller_ura: impl Into<String>) -> anyhow::Result<()> {
         let caller_ura = caller_ura.into();
         if caller_ura.trim().is_empty() {
             anyhow::bail!("host device URI is empty; cannot invoke local daemon abilities");
         }
-        Self::validate_socket()?;
-        Ok(Self::grpc(Some(caller_ura)))
+        normalized_local_daemon_ura(caller_ura.trim(), "host_device_ura")?;
+        Ok(())
     }
 
     /// Constructor for CLI agent-management commands.
@@ -257,8 +415,10 @@ impl LocalDaemonAbilityClient {
         #[cfg(test)]
         {
             if let Some(caller_ura) = trimmed {
-                if let Ok(client) = Self::with_caller_ura(caller_ura) {
-                    return Ok(client);
+                if Self::require_host_device_ura(caller_ura).is_ok()
+                    && Self::validate_socket().is_ok()
+                {
+                    return Ok(Self::grpc());
                 }
             }
             Ok(Self::for_agent_management_in_process_test_only())
@@ -272,7 +432,9 @@ impl LocalDaemonAbilityClient {
                      using agent management"
                 )
             })?;
-            Self::with_caller_ura(caller_ura)
+            Self::require_host_device_ura(caller_ura)?;
+            Self::validate_socket()?;
+            Ok(Self::grpc())
         }
     }
 
@@ -284,7 +446,6 @@ impl LocalDaemonAbilityClient {
     #[cfg(test)]
     fn for_agent_management_in_process_test_only() -> Self {
         Self {
-            caller_override: None,
             transport: LocalDaemonAbilityTransport::InProcessAgentManagement,
         }
     }
@@ -340,10 +501,9 @@ impl LocalDaemonAbilityClient {
             return invoke_agent_management_in_process(function_name, payload_json);
         }
 
-        invoke_local_daemon_ability_with_caller_and_subject_policy(
+        invoke_local_daemon_ability_with_subject_policy(
             function_name,
             payload_json,
-            self.caller_override.as_deref(),
             subject_policy,
             timeout,
         )
@@ -371,10 +531,6 @@ impl LocalDaemonAbilityClient {
             "invoking daemon-hosted Axon abilities requires the `axon-pb` feature; \
              rebuild with `cargo build --features axon-pb`"
         )
-    }
-
-    pub(crate) fn with_caller_ura(_caller_ura: impl Into<String>) -> anyhow::Result<Self> {
-        Self::new()
     }
 
     pub(crate) fn for_agent_management(_caller_ura: Option<String>) -> anyhow::Result<Self> {
@@ -459,10 +615,9 @@ pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
 ) -> anyhow::Result<serde_json::Value> {
     let subject_policy =
         LocalDaemonSubjectPolicy::explicit_or_declared_default(default_subject_ura, subject)?;
-    invoke_local_daemon_ability_with_caller_callee_and_subject(
+    invoke_local_daemon_ability_with_callee_and_subject(
         function_name,
         payload_json,
-        None,
         Some(callee_ura),
         subject_policy,
         timeout,
@@ -508,13 +663,7 @@ fn invoke_local_daemon_ability_stream_with_target(
     timeout: Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::local_invoke::LocalStreamFrame>> {
-    use anyhow::{anyhow, bail, Context};
-    use easynet_axon::pb::axon::v1::InvokeServerStreamRequest;
-
-    let function_name = function_name.trim();
-    if function_name.is_empty() {
-        bail!("function_name must not be empty");
-    }
+    use anyhow::{anyhow, Context};
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
@@ -527,39 +676,15 @@ fn invoke_local_daemon_ability_stream_with_target(
         ));
     }
 
-    let caller_ura = local_daemon_loopback_caller_ura()?;
-    let default_callee_ura = local_daemon_default_callee_ura();
-    let callee_ura = callee_override
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(default_callee_ura.as_str())
-        .to_string();
-    let subject_ura = subject_policy.resolve(&callee_ura)?;
-    let arguments = serde_json::to_vec(&payload_json)
-        .with_context(|| format!("encode {function_name} args"))?;
-    let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, function_name)
-        .with_context(|| format!("resolve descriptor ref for {function_name}"))?;
-    let envelope = signed_local_daemon_envelope(
-        caller_ura.clone(),
-        callee_ura,
-        subject_ura,
-        &descriptor_ref,
-        &arguments,
-    )
-    .with_context(|| format!("sign {function_name} Axon InvokeStream envelope"))?;
-    let mut request = InvokeServerStreamRequest {
-        envelope: Some(envelope),
-        function_name: function_name.to_string(),
-        arguments,
-        content_type: "application/json".to_string(),
-        timeout_seconds: i32::try_from(timeout.as_secs()).unwrap_or(i32::MAX),
-        ..InvokeServerStreamRequest::default()
-    };
-    request.metadata.insert(
-        crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-            .to_string(),
-        descriptor_ref,
-    );
+    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+        function_name,
+        payload_json,
+        callee_override,
+        subject_policy,
+        timeout,
+    )?;
+    let function_name = invocation.function_name.clone();
+    let request = invocation.stream_request()?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -638,17 +763,15 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_local_daemon_ability_with_caller_and_subject_policy(
+fn invoke_local_daemon_ability_with_subject_policy(
     function_name: &str,
     payload_json: serde_json::Value,
-    caller_override: Option<&str>,
     subject_policy: LocalDaemonSubjectPolicy,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_local_daemon_ability_with_caller_callee_and_subject(
+    invoke_local_daemon_ability_with_callee_and_subject(
         function_name,
         payload_json,
-        caller_override,
         None,
         subject_policy,
         timeout,
@@ -656,20 +779,14 @@ fn invoke_local_daemon_ability_with_caller_and_subject_policy(
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_local_daemon_ability_with_caller_callee_and_subject(
+fn invoke_local_daemon_ability_with_callee_and_subject(
     function_name: &str,
     payload_json: serde_json::Value,
-    caller_override: Option<&str>,
     callee_override: Option<&str>,
     subject_policy: LocalDaemonSubjectPolicy,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    use anyhow::{anyhow, bail, Context};
-
-    let function_name = function_name.trim();
-    if function_name.is_empty() {
-        bail!("function_name must not be empty");
-    }
+    use anyhow::{anyhow, Context};
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
@@ -682,27 +799,15 @@ fn invoke_local_daemon_ability_with_caller_callee_and_subject(
         ));
     }
 
-    let caller_ura = match caller_override.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(caller) => caller.to_string(),
-        None => local_daemon_loopback_caller_ura()?,
-    };
-    let default_callee_ura = local_daemon_default_callee_ura();
-    let callee_ura = callee_override
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(default_callee_ura.as_str())
-        .to_string();
-    let subject_ura = subject_policy.resolve(&callee_ura)?;
-    let arguments = serde_json::to_vec(&payload_json)
-        .with_context(|| format!("encode {function_name} args"))?;
-    let request = signed_local_daemon_invoke_request(
-        caller_ura.clone(),
-        callee_ura,
-        subject_ura,
+    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
         function_name,
-        arguments,
-    )
-    .with_context(|| format!("build signed {function_name} Axon InvokeRequest"))?;
+        payload_json,
+        callee_override,
+        subject_policy,
+        timeout,
+    )?;
+    let function_name = invocation.function_name.clone();
+    let request = invocation.invoke_request()?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1015,7 +1120,6 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         );
     }
 
-    let wire_caller_ura = local_daemon_loopback_caller_ura()?;
     let default_callee_ura = local_daemon_default_callee_ura();
     // Identity granularity: a caller-provided agent name resolves through
     // local-agents.json to the canonical hosted Agent URA. The local device
@@ -1041,41 +1145,25 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         1 => pb::causal_context::Form::Scalar(refs.remove(0)),
         _ => pb::causal_context::Form::List(pb::ReceiptList { prior: refs }),
     };
-    let arguments = serde_json::to_vec(&payload_json)
-        .with_context(|| format!("encode {function_name} args"))?;
-    let envelope = crate::services::invocation_transport::ProtoEnvelope::targeted(
-        wire_caller_ura.clone(),
+    let invocation = LocalDaemonLoopbackInvocation::from_target(
+        &function_name,
+        payload_json,
         callee_ura.clone(),
         subject_ura.clone(),
+        step_timeout.unwrap_or_else(|| Duration::from_secs(30)),
     )?
     .with_causal_context(pb::CausalContext {
         form: Some(causal_form),
-    });
-    let signer = LocalDaemonSigner::for_caller(&wire_caller_ura);
-    let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, &function_name)
-        .with_context(|| format!("resolve descriptor ref for {function_name}"))?;
-    let mut request = envelope
-        .signed_descriptor_ref_invoke_request(
-            &function_name,
-            descriptor_ref.clone(),
-            arguments,
-            &signer,
-        )
-        .with_context(|| format!("build signed {function_name} Axon InvokeRequest"))?;
-    let (wire_request_id, nonce_hex) = request
-        .envelope
-        .as_ref()
-        .map(|env| {
-            (
-                env.request_id.trim().to_string(),
-                hex::encode(&env.invocation_nonce),
-            )
-        })
-        .ok_or_else(|| anyhow!("build signed {function_name} request without envelope"))?;
-    if wire_request_id.is_empty() {
-        bail!("build signed {function_name} request without envelope request_id");
-    }
+    })
+    .with_trace_id(trace_id);
+    let wire_caller_ura = invocation.caller_ura.clone();
+    let mut request = invocation.invoke_request()?;
+    let (wire_request_id, nonce_hex) =
+        LocalDaemonLoopbackInvocation::identity_from_request(&request, &function_name)?;
     if let Some(delegation) = delegation.as_ref() {
+        let signer = LocalDaemonSigner::for_caller(&wire_caller_ura);
+        let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, &function_name)
+            .with_context(|| format!("resolve delegation descriptor ref for {function_name}"))?;
         let metadata_value = delegation.metadata_value(
             &wire_caller_ura,
             &callee_ura,
@@ -1089,13 +1177,6 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
             metadata_value,
         );
-    }
-    if let Some(envelope) = request.envelope.as_mut() {
-        // `trace_id` is Envelope operational metadata (outside the
-        // caller-signature region), so stamping it post-build is safe.
-        if let Some(trace_id) = trace_id.map(str::trim).filter(|t| !t.is_empty()) {
-            envelope.trace_id = trace_id.to_string();
-        }
     }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1446,24 +1527,6 @@ mod local_mission_subject_owner_tests {
 }
 
 #[cfg(feature = "axon-pb")]
-fn signed_local_daemon_invoke_request(
-    caller_ura: String,
-    callee_ura: String,
-    subject_ura: String,
-    function_name: &str,
-    arguments: Vec<u8>,
-) -> anyhow::Result<easynet_axon::pb::axon::v1::InvokeRequest> {
-    let signer = LocalDaemonSigner::for_caller(&caller_ura);
-    let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, function_name)?;
-    crate::services::invocation_transport::ProtoEnvelope::targeted(
-        caller_ura,
-        callee_ura,
-        subject_ura,
-    )?
-    .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
-}
-
-#[cfg(feature = "axon-pb")]
 pub(crate) fn resolve_local_signed_descriptor_ref(
     callee_ura: &str,
     function_name: &str,
@@ -1477,15 +1540,6 @@ pub(crate) fn resolve_local_signed_descriptor_ref(
         return Ok(descriptor_ref);
     }
 
-    if let Some(version) = descriptor_version_from_device_store(callee_ura, function_name)? {
-        return crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-            callee_ura,
-            function_name,
-            &version,
-        )
-        .map_err(|err| anyhow::anyhow!("{err}"));
-    }
-
     if let Some(version) = descriptor_version_from_daemon_wrapper(function_name) {
         return crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             callee_ura,
@@ -1496,6 +1550,15 @@ pub(crate) fn resolve_local_signed_descriptor_ref(
     }
 
     if let Some(version) = descriptor_version_from_system_manifest(function_name)? {
+        return crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura,
+            function_name,
+            &version,
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"));
+    }
+
+    if let Some(version) = descriptor_version_from_device_store(callee_ura, function_name)? {
         return crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             callee_ura,
             function_name,
@@ -1591,41 +1654,46 @@ fn descriptor_version_from_system_manifest(function_name: &str) -> anyhow::Resul
             manifest_path.display()
         )
     })?;
-    let manifest = AbilityManifest::from_toml_str(&body).map_err(|err| {
+    let manifest: toml::Value = toml::from_str(&body).map_err(|err| {
         anyhow::anyhow!(
-            "parse system ability manifest {} for descriptor signing: {err}",
+            "parse system ability manifest TOML {} for descriptor signing: {err}",
             manifest_path.display()
         )
     })?;
-    if manifest.name() != function_name {
+    let manifest_name = manifest
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "system ability manifest {} missing string `name` for descriptor signing",
+                manifest_path.display()
+            )
+        })?;
+    if manifest_name != function_name {
         anyhow::bail!(
             "system ability manifest {} names {:?}, expected {:?}",
             manifest_path.display(),
-            manifest.name(),
+            manifest_name,
             function_name
         );
     }
-    Ok(Some(manifest.descriptor_version().to_string()))
-}
-
-#[cfg(feature = "axon-pb")]
-fn signed_local_daemon_envelope(
-    caller_ura: String,
-    callee_ura: String,
-    subject_ura: String,
-    descriptor_ref: &str,
-    arguments: &[u8],
-) -> anyhow::Result<easynet_axon::pb::axon::v1::Envelope> {
-    let signer = LocalDaemonSigner::for_caller(&caller_ura);
-    Ok(
-        crate::services::invocation_transport::ProtoEnvelope::targeted(
-            caller_ura,
-            callee_ura,
-            subject_ura,
-        )?
-        .sign_descriptor_bound(descriptor_ref, arguments, &signer)?
-        .into_inner(),
-    )
+    let descriptor_version = match manifest.get("descriptor_version") {
+        Some(value) => value.as_str().ok_or_else(|| {
+            anyhow::anyhow!(
+                "system ability manifest {} has non-string `descriptor_version`",
+                manifest_path.display()
+            )
+        })?,
+        None => crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+    };
+    if !crate::core::ability_spec::is_valid_descriptor_version(descriptor_version) {
+        anyhow::bail!(
+            "system ability manifest {} has invalid descriptor_version {:?}",
+            manifest_path.display(),
+            descriptor_version
+        );
+    }
+    Ok(Some(descriptor_version.to_string()))
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -1633,7 +1701,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn loopback_invoke_request_does_not_pre_resolve_descriptor_ref() {
+        let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+            "discover",
+            serde_json::json!({"query": "capabilities"}),
+            Some("easynet:///r/default/agent/dev.worker"),
+            LocalDaemonSubjectPolicy::SelfTarget,
+            Duration::from_secs(5),
+        )
+        .expect("loopback invocation projection");
+        let request = invocation.invoke_request().expect("loopback request");
+
+        assert_eq!(request.function_name, "discover");
+        assert!(
+            !request.metadata.contains_key(
+                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            ),
+            "local loopback projection must not pre-bind descriptor metadata"
+        );
+        let envelope = request.envelope.as_ref().expect("request envelope");
+        assert_eq!(
+            envelope.caller.as_ref().map(|caller| caller.ura.as_str()),
+            Some(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA)
+        );
+        assert!(
+            envelope.caller_signature.is_none(),
+            "daemon loopback requests are promoted to LocalSystem inside the daemon dispatcher"
+        );
+        assert_eq!(
+            envelope.callee.as_ref().map(|callee| callee.ura.as_str()),
+            Some("easynet:///r/default/agent/dev.worker")
+        );
+    }
+
+    #[test]
     fn daemon_wrapper_descriptor_resolves_without_system_manifest_fallback() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
         let callee = crate::ura::hub_ura("acme");
         let function_name = crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_FORWARD_INVOKE;
         let descriptor_ref = resolve_local_signed_descriptor_ref(&callee, function_name).unwrap();
@@ -1648,6 +1751,7 @@ mod tests {
 
     #[test]
     fn unknown_local_signed_descriptor_ref_fails_closed() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
         let err = resolve_local_signed_descriptor_ref(
             &crate::ura::hub_ura("acme"),
             "unknown/internal-wrapper",

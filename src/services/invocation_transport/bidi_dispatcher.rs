@@ -663,12 +663,24 @@ impl BidiDispatcher {
             .envelope
             .clone()
             .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
-        let wire = crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
-            wire_envelope,
-            dispatch_descriptor_ref,
-            envelope_open.initial_args.clone(),
-            envelope_open.metadata.clone(),
-        )
+        let loopback_admitted = self
+            .admission
+            .accepts_loopback_envelope(envelope_open.envelope.as_ref());
+        let wire = if loopback_admitted {
+            crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                wire_envelope,
+                dispatch_descriptor_ref,
+                envelope_open.initial_args.clone(),
+                envelope_open.metadata.clone(),
+            )
+        } else {
+            crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+                wire_envelope,
+                dispatch_descriptor_ref,
+                envelope_open.initial_args.clone(),
+                envelope_open.metadata.clone(),
+            )
+        }
         .map_err(|err| status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, *err))?;
         let wire_kind = self
             .runtime.ability_wire

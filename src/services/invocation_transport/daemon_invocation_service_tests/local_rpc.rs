@@ -443,9 +443,10 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     publish_test_route(&svc, TEST_DAEMON_URI, "demo.unary_via_axon");
 
     let mut request = invoke_request("demo.unary_via_axon", r#"{"k":"v"}"#).into_inner();
+    let external_caller = "easynet:///r/test-realm/device/client-1";
     let signing_key = test_device_signing_key();
     request.envelope = Some(signed_test_envelope(
-        TEST_DAEMON_URI,
+        external_caller,
         TEST_DAEMON_URI,
         "easynet:///r/test-realm/resource/camera-1",
         &request.function_name,
@@ -499,7 +500,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     );
     assert_eq!(records[0].state, "completed");
     assert_eq!(
-        records[0].caller_ura, TEST_DAEMON_URI,
+        records[0].caller_ura, external_caller,
         "Axon-routed unary ledger row must preserve the external-signed wire caller"
     );
     assert_eq!(
@@ -511,6 +512,112 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         "Axon-routed unary ledger row must preserve the external-signed wire subject"
     );
     assert_eq!(header_request_id, Some(records[0].request_id.as_str()));
+}
+
+#[tokio::test]
+async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
+    use easynet_axon::invocation::{make_ability, InvocationLedger, LedgerSink, LocalRuntime};
+
+    let _hg = crate::facade::cli::test_support::HomeGuard::new();
+    let temp = tempfile::tempdir().unwrap();
+    let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
+    let rt = LocalRuntime::new();
+    rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, "demo.loopback_unsigned").unwrap();
+    rt.register_ability_with_options(
+        runtime_ability.clone(),
+        make_ability(|ctx| async move {
+            let envelope = ctx
+                .runtime
+                .axiom_envelope_of(&ctx.invocation_id)
+                .await
+                .expect("runtime stores descriptor-bound envelope")
+                .envelope;
+            serde_json::to_vec(&serde_json::json!({
+                "caller": envelope.caller.ura,
+                "callee": envelope.callee.ura,
+                "subject": envelope.subject.ura,
+                "payload": serde_json::from_slice::<serde_json::Value>(&ctx.payload)
+                    .unwrap_or(serde_json::Value::Null),
+            }))
+            .map_err(|err| easynet_axon::invocation::AxonError::internal(err.to_string()))
+        }),
+        test_rpc_options(),
+    )
+    .await
+    .unwrap();
+
+    let svc = make_service()
+        .with_session_realm("test-realm")
+        .with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, "demo.loopback_unsigned");
+
+    let arguments = br#"{"k":"v"}"#.to_vec();
+    let request = InvokeRequest {
+        envelope: Some(
+            ProtoEnvelope::targeted(
+                crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                TEST_DAEMON_URI,
+                "easynet:///r/test-realm/resource/camera-1",
+            )
+            .expect("valid loopback envelope")
+            .into_inner(),
+        ),
+        function_name: "demo.loopback_unsigned".to_string(),
+        arguments,
+        ..InvokeRequest::default()
+    };
+
+    let (result, axon_took_it) = svc
+        .unary_dispatcher()
+        .dispatch_local_rpc_selected_route(&request)
+        .await;
+
+    assert!(
+        axon_took_it,
+        "trusted loopback should enter Axon without external signature; result={:?}",
+        result.as_ref().err()
+    );
+    let body = result.expect("loopback dispatch returns Ok").into_inner();
+    let decoded: serde_json::Value =
+        serde_json::from_slice(&body.result).expect("decode handler payload");
+    assert_eq!(
+        decoded["caller"],
+        crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA
+    );
+    assert_eq!(decoded["callee"], TEST_DAEMON_URI);
+    assert_eq!(
+        decoded["subject"],
+        "easynet:///r/test-realm/resource/camera-1"
+    );
+    assert_eq!(decoded["payload"], serde_json::json!({"k": "v"}));
+
+    tokio::task::yield_now().await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let records = ledger.list_all().expect("list ledger");
+    assert_eq!(
+        records.len(),
+        1,
+        "loopback dispatch must still be a single Axon-owned ledger row"
+    );
+    assert_eq!(
+        records[0].ability_name,
+        format!(
+            "{runtime_ability}@{}",
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        )
+    );
+    assert_eq!(
+        records[0].caller_ura,
+        crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+        "loopback dispatch must be signed by daemon-local system identity"
+    );
+    assert_eq!(records[0].callee_ura, TEST_DAEMON_URI);
+    assert_eq!(
+        records[0].subject_ura,
+        "easynet:///r/test-realm/resource/camera-1"
+    );
 }
 
 #[tokio::test]

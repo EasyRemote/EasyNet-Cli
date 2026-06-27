@@ -27,6 +27,7 @@ use tonic::{Response, Status};
 
 use easynet_axon::pb::axon::v1::{InvokeServerStreamRequest, InvokeStreamChunk};
 
+use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::deps::{DirectoryPlane, RuntimePlane};
 use crate::services::invocation_transport::descriptor_binding::RuntimeBoundAbility;
 use crate::services::invocation_transport::federation_wrappers;
@@ -43,14 +44,21 @@ use crate::services::invocation_transport::target_gate::{
 /// `InvokeStream` routing surface. Cheap per-call construction: both
 /// planes and the gate are `Arc`-shaped.
 pub(crate) struct StreamDispatcher {
+    admission: AdmissionFacade,
     directory: DirectoryPlane,
     runtime: RuntimePlane,
     gate: TargetGate,
 }
 
 impl StreamDispatcher {
-    pub(crate) fn new(directory: DirectoryPlane, runtime: RuntimePlane, gate: TargetGate) -> Self {
+    pub(crate) fn new(
+        admission: AdmissionFacade,
+        directory: DirectoryPlane,
+        runtime: RuntimePlane,
+        gate: TargetGate,
+    ) -> Self {
         Self {
+            admission,
             directory,
             runtime,
             gate,
@@ -326,7 +334,18 @@ impl StreamDispatcher {
                 &selected_route.route_ura,
             ));
         }
+        let loopback_admitted = self
+            .admission
+            .accepts_loopback_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
+            Some(envelope) if loopback_admitted => {
+                crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                    envelope,
+                    selected_descriptor_ref,
+                    request.arguments.clone(),
+                    request.metadata.clone(),
+                )
+            }
             Some(envelope) => {
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,

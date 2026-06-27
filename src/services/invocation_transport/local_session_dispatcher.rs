@@ -2203,10 +2203,17 @@ mod tests {
         )
         .expect("valid carrier-v1 envelope")
         .into_inner();
+        let signed_descriptor_ref =
+            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                TEST_DEVICE_URA,
+                signed_ability,
+                TEST_DESCRIPTOR_VERSION,
+            )
+            .expect("carrier-v1 test signed ability must resolve to a descriptor ref");
         let descriptor_bound =
             crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
                 envelope.clone(),
-                signed_ability.to_string(),
+                signed_descriptor_ref,
                 &args,
                 crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
             )

@@ -375,6 +375,7 @@ impl DaemonInvocationService {
     /// per-call construction: planes and gate are `Arc`-shaped.
     fn stream_dispatcher(&self) -> StreamDispatcher {
         StreamDispatcher::new(
+            self.admission.clone(),
             self.directory.clone(),
             self.runtime.clone(),
             self.target_gate(),

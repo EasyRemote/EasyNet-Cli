@@ -738,6 +738,17 @@ impl AdmissionFacade {
         }
     }
 
+    pub(crate) fn accepts_loopback_envelope(&self, envelope: Option<&Envelope>) -> bool {
+        let Some(caller_ura) = envelope
+            .and_then(|envelope| envelope.caller.as_ref())
+            .map(|caller| caller.ura.trim())
+            .filter(|caller| !caller.is_empty())
+        else {
+            return false;
+        };
+        self.is_loopback(caller_ura)
+    }
+
     /// **PR-N2 commit 1/N**. Decide whether `caller_ura` belongs to
     /// a federated peer realm — i.e. a realm the operator has
     /// explicitly opted into by adding a `[daemon.federated_peers]`

@@ -244,8 +244,16 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
         make_ability(|ctx| async move {
             let args: serde_json::Value =
                 serde_json::from_slice(&ctx.payload).unwrap_or(serde_json::Value::Null);
+            let envelope = ctx
+                .runtime
+                .axiom_envelope_of(&ctx.invocation_id)
+                .await
+                .expect("runtime stores descriptor-bound stream envelope")
+                .envelope;
             Ok(serde_json::to_vec(&serde_json::json!({
                 "MARKER-LOCAL-STREAM": "dispatched",
+                "caller": envelope.caller.ura,
+                "subject": envelope.subject.ura,
                 "session_ura": args.get("session_ura").and_then(|v| v.as_str()),
             }))
             .unwrap())
@@ -264,17 +272,18 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 
     let function_name = "browser.capture_viewport".to_string();
     let arguments = br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#.to_vec();
-    let signing_key = test_device_signing_key();
+    let subject_ura = "easynet:///r/test-realm/resource/browser.capture/s1";
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
-            envelope: Some(signed_test_envelope(
-                TEST_DAEMON_URI,
-                TEST_DAEMON_URI,
-                TEST_DAEMON_URI,
-                &function_name,
-                &arguments,
-                &signing_key,
-            )),
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    subject_ura,
+                )
+                .expect("valid unsigned loopback stream envelope")
+                .into_inner(),
+            ),
             function_name,
             arguments,
             ..InvokeServerStreamRequest::default()
@@ -295,6 +304,14 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
             .get("MARKER-LOCAL-STREAM")
             .and_then(|value| value.as_str()),
         Some("dispatched")
+    );
+    assert_eq!(
+        frame.get("caller").and_then(|value| value.as_str()),
+        Some(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA)
+    );
+    assert_eq!(
+        frame.get("subject").and_then(|value| value.as_str()),
+        Some(subject_ura)
     );
     assert_eq!(
         frame.get("session_ura").and_then(|value| value.as_str()),
@@ -339,28 +356,19 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     publish_test_route(&svc, TEST_DAEMON_URI, "browser.capture_viewport");
 
-    // Sign over the VERSIONED descriptor ref so the caller signature
-    // matches what the dispatcher now reassembles at 2.0.0.
     let function_name = "browser.capture_viewport".to_string();
-    let signed_ability =
-        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-            TEST_DAEMON_URI,
-            &function_name,
-            NON_DEFAULT_VERSION,
-        )
-        .expect("versioned descriptor ref");
     let arguments = br#"{}"#.to_vec();
-    let signing_key = test_device_signing_key();
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
-            envelope: Some(signed_test_envelope(
-                TEST_DAEMON_URI,
-                TEST_DAEMON_URI,
-                TEST_DAEMON_URI,
-                &signed_ability,
-                &arguments,
-                &signing_key,
-            )),
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URI,
+                )
+                .expect("valid loopback stream envelope")
+                .into_inner(),
+            ),
             function_name,
             arguments,
             ..InvokeServerStreamRequest::default()
@@ -412,10 +420,11 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
         .expect("local fs ResourceRef"),
     }))
     .unwrap();
-    let open = make_envelope_open(
+    let file_transfer_descriptor_ref = test_descriptor_ref(
+        TEST_DAEMON_URI,
         crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
-        args,
     );
+    let open = make_envelope_open(&file_transfer_descriptor_ref, args);
     let wire =
         crate::runtime::axon_bridge::dispatch_shim::external_signed_from_envelope_open(&open)
             .expect("wire dispatch");
