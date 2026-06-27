@@ -58,6 +58,7 @@ use tonic::transport::{Channel, Endpoint, Server, Uri};
 
 const TEST_KEYRING_SEED_BYTE: u8 = 0x11;
 const TESTBOT_ECHO_DESCRIPTOR_VERSION: &str = "2.3.0";
+const FIXTURE_SYSTEM_DESCRIPTOR_VERSION: &str = "1.0.0";
 
 /// A seeded HOME: env pointed, product files written. Keep it alive
 /// for the whole test — dropping it deletes the tempdir.
@@ -540,18 +541,15 @@ added_at_unix_ms = 0
     #[allow(dead_code)]
     pub fn invoke_testbot_echo_with_meta(&self, message: &str) -> Value {
         let callee = self.testbot_ura.clone();
-        let descriptor_ref = format!(
-            "{}@{TESTBOT_ECHO_DESCRIPTOR_VERSION}",
-            easynet_cli::ura::owner_ability_ura(&self.testbot_ura, "echo")
-                .expect("mint testbot echo ability URA")
-        );
+        let descriptor_ref =
+            fixture_descriptor_ref(&self.testbot_ura, "echo", TESTBOT_ECHO_DESCRIPTOR_VERSION);
         let (_value, request_id, terminal_receipt) = invoke_daemon_ability(
             &self.socket_path,
             &self.loopback_caller,
             &callee,
             &self.loopback_caller,
             "echo",
-            Some(descriptor_ref.as_str()),
+            descriptor_ref.as_str(),
             json!({ "message": message }),
         );
         assert!(
@@ -560,6 +558,11 @@ added_at_unix_ms = 0
         );
 
         let mut record = Value::Null;
+        let history_descriptor_ref = fixture_descriptor_ref(
+            &self.loopback_caller,
+            "invocation.history.get",
+            FIXTURE_SYSTEM_DESCRIPTOR_VERSION,
+        );
         for _ in 0..10 {
             let (history, _, _) = invoke_daemon_ability(
                 &self.socket_path,
@@ -567,7 +570,7 @@ added_at_unix_ms = 0
                 &self.loopback_caller,
                 &self.loopback_caller,
                 "invocation.history.get",
-                None,
+                history_descriptor_ref.as_str(),
                 json!({ "key": { "request_id": request_id } }),
             );
             record = history.get("record").cloned().unwrap_or(Value::Null);
@@ -635,7 +638,7 @@ fn invoke_daemon_ability(
     callee_ura: &str,
     subject_ura: &str,
     function_name: &str,
-    descriptor_ability_ref: Option<&str>,
+    descriptor_ability_ref: &str,
     args: Value,
 ) -> (
     Value,
@@ -652,19 +655,6 @@ fn invoke_daemon_ability(
         let signer = SevenAxesSigner::for_caller(caller_ura);
         let envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
             .expect("valid seven-axes invoke envelope");
-        let fallback_descriptor_ref;
-        let descriptor_ability_ref = match descriptor_ability_ref {
-            Some(descriptor_ability_ref) => descriptor_ability_ref,
-            None => {
-                fallback_descriptor_ref = format!(
-                    "{}@{}",
-                    easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
-                        .expect("fixture ability URA"),
-                    easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-                );
-                fallback_descriptor_ref.as_str()
-            }
-        };
         let request = envelope
             .signed_descriptor_ref_invoke_request(
                 function_name,
@@ -710,19 +700,32 @@ fn receipt_proof_facts_value(receipt: &easynet_axon::pb::axon::v1::InvocationRec
     })
 }
 
+fn fixture_descriptor_ref(callee_ura: &str, function_name: &str, version: &str) -> String {
+    format!(
+        "{}@{version}",
+        easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
+            .expect("fixture ability URA")
+    )
+}
+
 fn seed_hosted_agent_projection(
     socket_path: &Path,
     caller_ura: &str,
     host_device_ura: &str,
     agent_ura: &str,
 ) {
+    let advertise_agent_descriptor_ref = fixture_descriptor_ref(
+        host_device_ura,
+        "federation.advertise_agent",
+        FIXTURE_SYSTEM_DESCRIPTOR_VERSION,
+    );
     let (agent_resp, _, _) = invoke_daemon_ability(
         socket_path,
         caller_ura,
         host_device_ura,
         caller_ura,
         "federation.advertise_agent",
-        None,
+        advertise_agent_descriptor_ref.as_str(),
         json!({
             "agent_ura": agent_ura,
             "public_key_hex": "",
@@ -746,13 +749,18 @@ fn seed_hosted_agent_projection(
         .rsplit_once('.')
         .map(|(namespace, local)| (namespace.to_string(), local.to_string()))
         .unwrap_or_else(|| (String::new(), public_name.clone()));
+    let advertise_abilities_descriptor_ref = fixture_descriptor_ref(
+        host_device_ura,
+        "federation.advertise_abilities",
+        FIXTURE_SYSTEM_DESCRIPTOR_VERSION,
+    );
     let (abilities_resp, _, _) = invoke_daemon_ability(
         socket_path,
         caller_ura,
         host_device_ura,
         caller_ura,
         "federation.advertise_abilities",
-        None,
+        advertise_abilities_descriptor_ref.as_str(),
         json!({
             "agent_ura": agent_ura,
             "owner_ura": agent_ura,
