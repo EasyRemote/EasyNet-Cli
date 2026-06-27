@@ -22,12 +22,10 @@
 // prefix hit), description (1), and owner segment (1), with +2 when
 // every token hit somewhere. Zero-score candidates drop. No LLM, no
 // network-side ranking — a user can always predict why a row ranked
-// where it did. The runtime ladder is a score-agnostic source: it is
-// never told the intent, so it cannot pre-judge relevance with a
-// narrower scorer than this one. A bounded tier caps the candidate
-// set by the alphabetical tiebreaker only; relevance ranking happens
-// exclusively here. Source-reduction and the frozen ranking contract
-// stay disjoint because the source never sees the query.
+// where it did. The runtime ladder receives the same query only to
+// reduce each source tier before the CLI applies this frozen final
+// scorer; bounded source windows therefore truncate after intent-aware
+// source filtering instead of by an unrelated registry order.
 //
 // The owner segment fed to the scorer is the candidate's canonical
 // Ability URA for every tier — the earlier dual-path implementation
@@ -517,11 +515,13 @@ impl DiscoverLadderTarget {
 }
 
 impl SourceWindowMode {
-    fn runtime_args(self, scope: &'static str, source_limit: usize) -> Value {
+    fn runtime_args(self, scope: &'static str, source_limit: usize, query: &str) -> Value {
+        let query = query.trim();
         match self {
             SourceWindowMode::Bounded => {
                 json!({
                     "scope": scope,
+                    "query": query,
                     "source_window": "bounded",
                     "top_k": source_limit,
                 })
@@ -529,6 +529,7 @@ impl SourceWindowMode {
             SourceWindowMode::All => {
                 json!({
                     "scope": scope,
+                    "query": query,
                     "source_window": "all",
                 })
             }
@@ -706,7 +707,7 @@ impl DiscoverRuntimeService {
             self.plan.ladder.ability(),
             self.plan
                 .source_window
-                .runtime_args(scope, self.plan.source_limit),
+                .runtime_args(scope, self.plan.source_limit, &self.plan.query),
             None,
             causal_parents,
             None,
@@ -1153,30 +1154,23 @@ mod tests {
     }
 
     #[test]
-    fn bounded_source_window_sends_top_k_but_never_the_query() {
-        // Frozen ranking contract: the runtime ladder is a score-agnostic
-        // source. It bounds the candidate set by the alphabetical
-        // tiebreaker (`top_k`) and is never told the intent, so it cannot
-        // pre-filter relevance ahead of the CLI ranker.
-        let args = SourceWindowMode::Bounded.runtime_args("device", 123);
+    fn bounded_source_window_sends_top_k_and_query() {
+        let args = SourceWindowMode::Bounded.runtime_args("device", 123, "read files");
 
         assert_eq!(args["scope"], json!("device"));
+        assert_eq!(args["query"], json!("read files"));
         assert_eq!(args["source_window"], json!("bounded"));
         assert_eq!(args["top_k"], json!(123));
-        assert!(
-            args.get("query").is_none(),
-            "the bounded source must not receive the query; got {args}"
-        );
     }
 
     #[test]
-    fn exhaustive_source_window_omits_top_k_and_query() {
-        let args = SourceWindowMode::All.runtime_args("user", 123);
+    fn exhaustive_source_window_omits_top_k_but_keeps_query() {
+        let args = SourceWindowMode::All.runtime_args("user", 123, "chat");
 
         assert_eq!(args["scope"], json!("user"));
+        assert_eq!(args["query"], json!("chat"));
         assert_eq!(args["source_window"], json!("all"));
         assert!(args.get("top_k").is_none());
-        assert!(args.get("query").is_none());
     }
 
     #[test]
