@@ -167,20 +167,42 @@ pub fn forget_input_schema() -> Value {
     })
 }
 
+fn teach_manifest() -> AbilityManifest {
+    AbilityManifest::new(TEACH, teach_description(), teach_input_schema())
+        .expect("meta.teach manifest is static and valid")
+}
+
+fn acquire_manifest() -> AbilityManifest {
+    AbilityManifest::new(ACQUIRE, acquire_description(), acquire_input_schema())
+        .expect("meta.acquire manifest is static and valid")
+}
+
+fn forget_manifest() -> AbilityManifest {
+    AbilityManifest::new(FORGET, forget_description(), forget_input_schema())
+        .expect("meta.forget manifest is static and valid")
+}
+
 pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegistrarCell>) {
-    reg.register_rpc_with_envelope_and_owner(TEACH, OwnerKind::Device, Arc::new(teach_handler));
+    reg.register_rpc_with_envelope_and_spec(
+        TEACH,
+        OwnerKind::Device,
+        teach_manifest(),
+        Arc::new(teach_handler),
+    );
     let registrar_for_acquire = Arc::clone(&hot_registrar);
-    reg.register_rpc_with_envelope_and_owner(
+    reg.register_rpc_with_envelope_and_spec(
         ACQUIRE,
         OwnerKind::Device,
+        acquire_manifest(),
         Arc::new(move |env, args| {
             acquire_handler_with_hot_registrar(env, args, Some(&registrar_for_acquire))
         }),
     );
     let registrar_for_forget = Arc::clone(&hot_registrar);
-    reg.register_rpc_with_envelope_and_owner(
+    reg.register_rpc_with_envelope_and_spec(
         FORGET,
         OwnerKind::Device,
+        forget_manifest(),
         Arc::new(move |env, args| {
             forget_handler_with_hot_registrar(env, args, Some(&registrar_for_forget))
         }),
@@ -632,20 +654,26 @@ fn stage_descriptor_import_manifest(
 fn commit_descriptor_import_manifest(
     staged: &StagedDescriptorImportManifest,
 ) -> anyhow::Result<()> {
-    if staged.dest.exists() {
-        anyhow::bail!(
-            "commit descriptor-import manifest {}: destination already exists",
-            staged.dest.display()
-        );
-    }
-    std::fs::rename(&staged.temp, &staged.dest).map_err(|e| {
-        anyhow::anyhow!(
-            "commit descriptor-import manifest {} -> {}: {e}",
-            staged.temp.display(),
-            staged.dest.display()
-        )
+    std::fs::hard_link(&staged.temp, &staged.dest).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::anyhow!(
+                "commit descriptor-import manifest {}: destination already exists",
+                staged.dest.display()
+            )
+        } else {
+            anyhow::anyhow!(
+                "commit descriptor-import manifest {} -> {} without overwrite: {e}",
+                staged.temp.display(),
+                staged.dest.display()
+            )
+        }
     })?;
-    sync_parent_dir(&staged.dest)
+    sync_parent_dir(&staged.dest)?;
+    let _ = remove_file_if_exists(
+        &staged.temp,
+        "remove committed descriptor-import staging manifest",
+    );
+    Ok(())
 }
 
 fn rollback_descriptor_import_manifest(
@@ -712,6 +740,12 @@ pub fn recover_descriptor_import_transactions() -> anyhow::Result<usize> {
                 expected_hash,
                 actual_hash
             );
+        }
+        if let Some(staging) = record.acquiring_staging_manifest_path() {
+            remove_file_if_exists(
+                Path::new(staging),
+                "remove stale committed acquiring descriptor-import staging manifest",
+            )?;
         }
         Ok(AcquiringArtifactRecoveryState::Committed)
     })
@@ -2201,6 +2235,38 @@ mod tests {
         )
         .expect_err("must refuse to clobber");
         assert!(format!("{err}").contains("never overwrites"), "{err}");
+    }
+
+    #[test]
+    fn descriptor_import_commit_refuses_destination_created_after_stage() {
+        let _g = HomeGuard::new();
+        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let dir = home.join("atomic-import");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let temp = dir.join(".quote.ability.toml.import.staging");
+        let dest = dir.join("quote.ability.toml");
+        let staged_bytes = b"name = \"quote\"\ndescription = \"imported\"\n";
+        std::fs::write(&temp, staged_bytes).expect("stage");
+        std::fs::write(&dest, b"native ability").expect("racing writer");
+        let staged = StagedDescriptorImportManifest {
+            temp: temp.clone(),
+            dest: dest.clone(),
+            content_hash: sha256_bytes(staged_bytes),
+        };
+
+        let err = staged
+            .commit()
+            .expect_err("commit must not replace a concurrently-created native ability");
+
+        assert!(
+            err.to_string().contains("destination already exists"),
+            "{err}"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"native ability");
+        assert!(
+            temp.exists(),
+            "failed no-replace commit leaves the staged artifact available for rollback"
+        );
     }
 
     #[test]

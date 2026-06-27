@@ -152,17 +152,43 @@ fn confirm_or_cancel(gate: ConfirmationGate) -> anyhow::Result<bool> {
     Ok(false)
 }
 
-fn ensure_descriptor_transaction_committed(status: &str, operation: &str) -> anyhow::Result<()> {
-    match status {
-        "committed" => Ok(()),
-        "committed_runtime_degraded" => anyhow::bail!(
-            "descriptor {operation} reached durable storage but runtime sync degraded; retry the \
-             command after the agent runtime is wired so the control-plane projection converges"
-        ),
-        other => anyhow::bail!(
-            "descriptor {operation} returned unsupported transaction status `{other}`"
-        ),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DescriptorTransactionStatus {
+    Committed,
+    CommittedRuntimeDegraded,
+}
+
+impl DescriptorTransactionStatus {
+    fn parse(status: &str, operation: &str) -> anyhow::Result<Self> {
+        match status {
+            "committed" => Ok(Self::Committed),
+            "committed_runtime_degraded" => Ok(Self::CommittedRuntimeDegraded),
+            other => anyhow::bail!(
+                "descriptor {operation} returned unsupported transaction status `{other}`"
+            ),
+        }
     }
+
+    fn warn_if_runtime_degraded(self, operation: &str) {
+        if self == Self::CommittedRuntimeDegraded {
+            output::warn(&format!(
+                "descriptor {operation} reached durable storage, but live runtime sync degraded; \
+                 retry once the agent runtime is wired so the control-plane projection converges"
+            ));
+        }
+    }
+}
+
+fn parse_descriptor_transaction_status(
+    status: &str,
+    operation: &str,
+) -> anyhow::Result<DescriptorTransactionStatus> {
+    DescriptorTransactionStatus::parse(status, operation)
+}
+
+fn report_descriptor_transaction_status(status: &str, operation: &str) -> anyhow::Result<()> {
+    parse_descriptor_transaction_status(status, operation)?.warn_if_runtime_degraded(operation);
+    Ok(())
 }
 
 /// Compute half of `teach` (e2e surface).
@@ -272,7 +298,7 @@ pub fn run_learn(args: LearnArgs) -> anyhow::Result<()> {
     let (resp, _meta) = execute_learn(&args)?;
     let imported: DescriptorImportResponse =
         serde_json::from_value(resp).context("parse meta.acquire response")?;
-    ensure_descriptor_transaction_committed(&imported.descriptor_transaction_status, "import")?;
+    report_descriptor_transaction_status(&imported.descriptor_transaction_status, "import")?;
     output::success(&format!(
         "descriptor imported · new descriptor ura: {}",
         imported.new_descriptor_ura
@@ -294,7 +320,7 @@ pub fn run_forget(args: ForgetArgs) -> anyhow::Result<()> {
     let resp = execute_forget(&args)?;
     let removed: DescriptorRemovalResponse =
         serde_json::from_value(resp).context("parse meta.forget response")?;
-    ensure_descriptor_transaction_committed(&removed.descriptor_transaction_status, "removal")?;
+    report_descriptor_transaction_status(&removed.descriptor_transaction_status, "removal")?;
     output::success(&format!(
         "removed imported descriptor {} (source descriptor {})",
         removed.removed_descriptor, removed.source_descriptor_ura,
@@ -353,23 +379,18 @@ mod tests {
     }
 
     #[test]
-    fn degraded_descriptor_transaction_status_fails_cli() {
-        assert!(
-            ensure_descriptor_transaction_committed("committed", "import").is_ok(),
-            "committed is the only CLI success status"
+    fn degraded_descriptor_transaction_status_is_success_with_warning_semantics() {
+        assert_eq!(
+            parse_descriptor_transaction_status("committed", "import").unwrap(),
+            DescriptorTransactionStatus::Committed
         );
-        let err = ensure_descriptor_transaction_committed("committed_runtime_degraded", "import")
+        assert_eq!(
+            parse_descriptor_transaction_status("committed_runtime_degraded", "import").unwrap(),
+            DescriptorTransactionStatus::CommittedRuntimeDegraded
+        );
+        assert!(parse_descriptor_transaction_status("unknown", "import")
             .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("runtime sync degraded"),
-            "degraded status must force an actionable CLI failure: {err}"
-        );
-        assert!(
-            ensure_descriptor_transaction_committed("unknown", "import")
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported transaction status")
-        );
+            .to_string()
+            .contains("unsupported transaction status"));
     }
 }
