@@ -1176,24 +1176,49 @@ pub enum ReplayOutcomeStatus {
 /// rejected until a permission broker and receipt-audited operator
 /// approval path exist; `ability.deploy` must not become an arbitrary
 /// host-command surface without that broker.
+/// The single deployable device exec kind, with the deployability policy and
+/// its operator-facing rejection strings defined in exactly one place.
+///
+/// `build_binding` (handler + options) and `descriptor_call_mode_for_manifest`
+/// (call mode) both classify through here, so the "what may be deployed and why
+/// not" decision — a security-relevant gate — cannot diverge between the two
+/// consumers or grow two different error strings for the same condition.
+enum DeployableExec<'a> {
+    HostStream(&'a crate::core::ability_spec::HostStreamExec),
+}
+
+impl<'a> DeployableExec<'a> {
+    fn classify(manifest: &'a AbilityManifest) -> anyhow::Result<Self> {
+        match manifest.exec() {
+            Some(AbilityExec::HostStream(spec)) => Ok(Self::HostStream(spec)),
+            Some(AbilityExec::Shell(_)) => Err(anyhow::anyhow!(
+                "ability.deploy: shell exec requires a permission broker, bounded output policy, \
+                 command allow-list, and receipt-audited operator approval; deploy host_stream \
+                 abilities until that broker is wired"
+            )),
+            Some(other) => Err(anyhow::anyhow!(
+                "ability.deploy: device ability exec kind {other:?} is not deployable \
+                 (only host_stream is supported on the device deploy path)"
+            )),
+            None => Err(anyhow::anyhow!(
+                "ability.deploy: device ability manifest has no [exec] binding"
+            )),
+        }
+    }
+
+    fn descriptor_call_mode(&self) -> DescriptorCallMode {
+        match self {
+            Self::HostStream(_) => DescriptorCallMode::Stream,
+        }
+    }
+}
+
 fn build_binding(manifest: &AbilityManifest) -> anyhow::Result<(AbilityFn, AbilityOptions)> {
-    match manifest.exec() {
-        Some(AbilityExec::HostStream(spec)) => {
+    match DeployableExec::classify(manifest)? {
+        DeployableExec::HostStream(spec) => {
             let handler = build_host_stream_handler(spec.clone());
             Ok(stream_env_ability_with_options(handler))
         }
-        Some(AbilityExec::Shell(_)) => Err(anyhow::anyhow!(
-            "ability.deploy: shell exec requires a permission broker, bounded output policy, \
-             command allow-list, and receipt-audited operator approval; deploy host_stream \
-             abilities until that broker is wired"
-        )),
-        Some(other) => Err(anyhow::anyhow!(
-            "ability.deploy: device ability exec kind {other:?} is not deployable \
-             (only host_stream is supported on the device deploy path)"
-        )),
-        None => Err(anyhow::anyhow!(
-            "ability.deploy: device ability manifest has no [exec] binding"
-        )),
     }
 }
 
@@ -1219,21 +1244,7 @@ fn descriptor_call_mode_for_modes(modes: AbilityCallModes) -> DescriptorCallMode
 fn descriptor_call_mode_for_manifest(
     manifest: &AbilityManifest,
 ) -> anyhow::Result<DescriptorCallMode> {
-    match manifest.exec() {
-        Some(AbilityExec::HostStream(_)) => Ok(DescriptorCallMode::Stream),
-        Some(AbilityExec::Shell(_)) => Err(anyhow::anyhow!(
-            "ability.deploy: shell exec requires a permission broker, bounded output policy, \
-             command allow-list, and receipt-audited operator approval; deploy host_stream \
-             abilities until that broker is wired"
-        )),
-        Some(other) => Err(anyhow::anyhow!(
-            "ability.deploy: device ability exec kind {other:?} is not deployable \
-             (only host_stream is supported on the device deploy path)"
-        )),
-        None => Err(anyhow::anyhow!(
-            "ability.deploy: device ability manifest has no [exec] binding"
-        )),
-    }
+    Ok(DeployableExec::classify(manifest)?.descriptor_call_mode())
 }
 
 fn axon_call_mode_for_descriptor_mode(mode: DescriptorCallMode) -> AxonCallMode {
