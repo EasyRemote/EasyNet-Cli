@@ -18,7 +18,7 @@ use easynet_axon::invocation::{
 use serde_json::Value;
 
 use crate::runtime::axon_bridge::descriptor_ref::{
-    ability_descriptor_ref_for_wire, ability_ura_for_wire,
+    ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_version,
 };
 use crate::runtime::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
@@ -104,41 +104,6 @@ fn local_invocation_causal_context(target: &InvocationTarget) -> CausalContext {
     target.causal_context.clone().unwrap_or(CausalContext::None)
 }
 
-/// Read the descriptor version the runtime registered for `runtime_ability`
-/// in `mode`. The version is bound into the runtime's per-mode proof binding
-/// at registration time, so the runtime is the single source of truth. There
-/// is no default fallback: an ability dispatched without a registered,
-/// version-bound descriptor cannot be stamped with a truthful version.
-async fn local_registered_descriptor_version(
-    runtime: &Arc<LocalRuntime>,
-    runtime_ability: &str,
-    mode: AxonInvocationCallMode,
-) -> Result<String, String> {
-    let options = runtime
-        .ability_options(runtime_ability)
-        .await
-        .ok_or_else(|| {
-            // Carry the canonical not-found tokens so this pre-dispatch
-            // miss classifies as NOT_FOUND (via is_not_found_error /
-            // NOT_FOUND_REASON_FRAGMENTS) instead of a generic failure —
-            // this short-circuits before the request reaches Axon, which
-            // would otherwise be the one to emit `unknown_ability`.
-            format!(
-                "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
-                 version: unknown_ability `{runtime_ability}` is not registered in the local \
-                 runtime (ability_not_found)"
-            )
-        })?;
-    let version = options.proof_for_mode(mode).descriptor_version;
-    if version.trim().is_empty() {
-        return Err(format!(
-            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
-             version: runtime registration left the {mode:?} descriptor proof unbound"
-        ));
-    }
-    Ok(version)
-}
-
 async fn local_descriptor_bound_envelope(
     runtime: &Arc<LocalRuntime>,
     mode: AxonInvocationCallMode,
@@ -149,8 +114,9 @@ async fn local_descriptor_bound_envelope(
     let subject = local_invocation_subject(target, &callee_ura)?;
     let runtime_ability =
         ability_ura_for_wire(&callee_ura, &target.ability).map_err(|err| format!("{err}"))?;
-    let descriptor_version =
-        local_registered_descriptor_version(runtime, &runtime_ability, mode).await?;
+    let descriptor_version = registered_descriptor_version(runtime, &runtime_ability, mode)
+        .await
+        .map_err(|err| err.message().to_string())?;
     let ability =
         ability_descriptor_ref_for_wire(&callee_ura, &target.ability, &descriptor_version)
             .map_err(|err| format!("{err}"))?;

@@ -42,7 +42,7 @@ use easynet_axon::invocation::{
 use easynet_axon::pb::axon::v1 as pb;
 
 use crate::runtime::axon_bridge::descriptor_ref::{
-    ability_descriptor_ref_for_wire, ability_ura_for_wire,
+    ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_version,
 };
 use crate::runtime::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
@@ -457,45 +457,6 @@ fn local_descriptor_subject(
     Ok((requested, subject_ref))
 }
 
-/// Read the descriptor version the runtime registered for `ability` in
-/// `mode`, so a descriptor-bound envelope and its receipt proof facts carry
-/// the version policy actually admitted at registration rather than a
-/// fabricated default.
-///
-/// The version is bound into the runtime's per-mode `AbilityProofBinding` at
-/// registration time (see `AxonAbilityCatalog::bind_runtime_proof_for_mode`),
-/// so the runtime is the single source of truth. There is no default
-/// fallback: an ability that is dispatched but not registered, or registered
-/// without a bound descriptor version, cannot be given a truthful version, so
-/// it is refused.
-async fn registered_descriptor_version(
-    runtime: &Arc<LocalRuntime>,
-    runtime_ability: &str,
-    mode: AxonInvocationCallMode,
-) -> Result<String, AxonError> {
-    let options = runtime
-        .ability_options(runtime_ability)
-        .await
-        .ok_or_else(|| {
-            // Same canonical not-found tokens as the local_runtime_invoker
-            // twin, so a pre-dispatch miss classifies as NOT_FOUND / names
-            // the gate instead of reading as a generic failure.
-            AxonError::invalid_argument(format!(
-                "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
-                 version: unknown_ability `{runtime_ability}` is not registered in the local \
-                 runtime (ability_not_found)"
-            ))
-        })?;
-    let version = options.proof_for_mode(mode).descriptor_version;
-    if version.trim().is_empty() {
-        return Err(AxonError::invalid_argument(format!(
-            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
-             version: runtime registration left the {mode:?} descriptor proof unbound"
-        )));
-    }
-    Ok(version)
-}
-
 pub async fn open_stream_local_with_subject(
     runtime: &Arc<LocalRuntime>,
     callee_ura: &str,
@@ -646,7 +607,7 @@ pub async fn dispatch_rpc_local_with_subject(
                     invocation_id: None,
                     state: InvocationState::Failed,
                     payload_bytes: Vec::new(),
-                    error: Some(err),
+                    error: Some(err.into()),
                     admission_receipt: None,
                     terminal_receipt: None,
                 };

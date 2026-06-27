@@ -312,14 +312,6 @@ impl Kernel {
             }),
         );
 
-        let (envelope, payload) = match invocation.axon_descriptor_bound_envelope(
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-        ) {
-            Ok(parts) => parts,
-            Err(error) => {
-                return KernelDispatchOutcome::failed(format!("{error}"), Vec::new());
-            }
-        };
         let caller_signature =
             invocation
                 .caller_signature
@@ -342,7 +334,31 @@ impl Kernel {
         let ability_name = invocation.ability.to_string();
         let trace_id = session_id.as_ref().to_string();
         let runtime = Arc::clone(runtime);
+        // The descriptor-bound envelope must carry the version the runtime
+        // registered for this ability, not a fabricated default — otherwise a
+        // kernel-originated call (schedule tick / loop iteration / KernelApi
+        // dispatch) of an ability registered at a non-default version is
+        // rejected at Axon admission with `proof_descriptor_version_mismatch`,
+        // inconsistent with the same ability dispatched over the wire. Version
+        // resolution reads the runtime (async), so it runs inside the dispatch
+        // block alongside the rest of the descriptor-bound construction.
+        let dispatch_invocation = invocation.clone();
         let result = block_on_axon_dispatch(move || async move {
+            let runtime_ability = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+                &dispatch_invocation.callee,
+                dispatch_invocation.ability.as_str(),
+            )
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+            let descriptor_version =
+                crate::runtime::axon_bridge::descriptor_ref::registered_descriptor_version(
+                    &runtime,
+                    &runtime_ability,
+                    AxonInvocationCallMode::Rpc,
+                )
+                .await
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
+            let (envelope, payload) =
+                dispatch_invocation.axon_descriptor_bound_envelope(&descriptor_version)?;
             let ingress = match caller_signature {
                 Some(signature) => LocalRuntimeIngress::ExternalSigned {
                     envelope,

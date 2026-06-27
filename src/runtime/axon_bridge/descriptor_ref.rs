@@ -5,7 +5,83 @@
 //! protobuf modules. This module owns the pure descriptor-reference portion so
 //! feature-agnostic runtime paths never import `axon-pb`-gated transport code.
 
-use easynet_axon::invocation::{canonical_ability_descriptor_ref, AxonError};
+use std::sync::Arc;
+
+use easynet_axon::invocation::{
+    canonical_ability_descriptor_ref, AxonError, CallMode as AxonInvocationCallMode, LocalRuntime,
+};
+
+/// Failure to resolve the descriptor version a runtime registered for an
+/// ability in a given call mode.
+///
+/// Carried as a typed error so every dispatch path (RPC/stream/bidi wire,
+/// daemon-local invoker, kernel-internal dispatch) maps it into its own
+/// domain error without re-deriving the canonical not-found tokens. There is
+/// deliberately NO default fallback: an ability dispatched without a
+/// registered, version-bound descriptor cannot be stamped with a truthful
+/// version, so resolution fails closed.
+#[derive(Debug)]
+pub(crate) enum DescriptorVersionError {
+    /// The ability is not registered in the local runtime. The message carries
+    /// the canonical not-found tokens so a pre-dispatch miss classifies as
+    /// NOT_FOUND (via `is_not_found_error` / `NOT_FOUND_REASON_FRAGMENTS`)
+    /// instead of a generic failure.
+    AbilityNotFound(String),
+    /// The ability is registered but registration left the per-mode descriptor
+    /// proof unbound, so no truthful version exists.
+    VersionUnbound(String),
+}
+
+impl DescriptorVersionError {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::AbilityNotFound(message) | Self::VersionUnbound(message) => message,
+        }
+    }
+}
+
+impl std::fmt::Display for DescriptorVersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl From<DescriptorVersionError> for AxonError {
+    fn from(error: DescriptorVersionError) -> Self {
+        AxonError::invalid_argument(error.message().to_string())
+    }
+}
+
+/// Read the descriptor version the runtime registered for `runtime_ability`
+/// in `mode`.
+///
+/// The version is bound into the runtime's per-mode `AbilityProofBinding` at
+/// registration time (see `AxonAbilityCatalog::bind_runtime_proof_for_mode`),
+/// so the runtime is the single source of truth. Every descriptor-bound
+/// dispatch path resolves through this one helper so the wire envelope and its
+/// receipt proof facts carry the version actually admitted at registration
+/// rather than a fabricated default.
+pub(crate) async fn registered_descriptor_version(
+    runtime: &Arc<LocalRuntime>,
+    runtime_ability: &str,
+    mode: AxonInvocationCallMode,
+) -> Result<String, DescriptorVersionError> {
+    let options = runtime.ability_options(runtime_ability).await.ok_or_else(|| {
+        DescriptorVersionError::AbilityNotFound(format!(
+            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+             version: unknown_ability `{runtime_ability}` is not registered in the local \
+             runtime (ability_not_found)"
+        ))
+    })?;
+    let version = options.proof_for_mode(mode).descriptor_version;
+    if version.trim().is_empty() {
+        return Err(DescriptorVersionError::VersionUnbound(format!(
+            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+             version: runtime registration left the {mode:?} descriptor proof unbound"
+        )));
+    }
+    Ok(version)
+}
 
 pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<String, AxonError> {
     let callee_ura = callee_ura.trim();
