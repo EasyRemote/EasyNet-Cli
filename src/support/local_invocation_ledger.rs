@@ -11,7 +11,7 @@
 // corrupt the audit trail the caller is trying to inspect.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 
 use anyhow::Context;
 use once_cell::sync::Lazy;
@@ -19,17 +19,22 @@ use serde_json::Value;
 
 use crate::persistence::daemon_config::{default_config_path, default_ledger_dir, DaemonConfig};
 
-static PROCESS_LEDGER: Lazy<RwLock<Option<Arc<easynet_axon::invocation::InvocationLedger>>>> =
+static PROCESS_LEDGER: Lazy<RwLock<Option<Weak<easynet_axon::invocation::InvocationLedger>>>> =
     Lazy::new(|| RwLock::new(None));
 
 pub(crate) fn register_process_ledger(ledger: Arc<easynet_axon::invocation::InvocationLedger>) {
-    if let Ok(mut slot) = PROCESS_LEDGER.write() {
-        *slot = Some(ledger);
-    }
+    let mut slot = PROCESS_LEDGER
+        .write()
+        .expect("process invocation ledger registry lock poisoned");
+    *slot = Some(Arc::downgrade(&ledger));
 }
 
 fn process_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLedger>> {
-    PROCESS_LEDGER.read().ok().and_then(|slot| slot.clone())
+    PROCESS_LEDGER
+        .read()
+        .expect("process invocation ledger registry lock poisoned")
+        .as_ref()
+        .and_then(Weak::upgrade)
 }
 
 #[derive(Clone)]
@@ -130,5 +135,20 @@ mod tests {
 
         let err = reader.record_by_request_id(" ").unwrap_err();
         assert!(err.to_string().contains("request_id"));
+    }
+
+    #[test]
+    fn process_registry_does_not_extend_ledger_lifetime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger = Arc::new(
+            easynet_axon::invocation::InvocationLedger::open(dir.path().join("inv.redb"))
+                .expect("open ledger"),
+        );
+
+        register_process_ledger(Arc::clone(&ledger));
+        assert!(process_ledger().is_some());
+
+        drop(ledger);
+        assert!(process_ledger().is_none());
     }
 }
