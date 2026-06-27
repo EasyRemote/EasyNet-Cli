@@ -89,10 +89,9 @@ pub struct WatchArgs {
     /// terminal (or the run's heartbeat goes stale).
     #[arg(long)]
     pub follow: bool,
-    /// Maximum seconds `--follow` waits for a trace that exists as a
-    /// local mission run but has not produced any invocation ledger rows.
-    /// Once a ledger row exists, follow mode tracks it until terminality
-    /// and only emits no-progress liveness notices.
+    /// Maximum seconds `--follow` waits for a trace to produce ledger rows
+    /// or for a non-terminal trace to produce new ledger diffs. This does
+    /// not cancel the invocation; it bounds the observer.
     #[arg(
         long = "max-wait-seconds",
         default_value_t = DEFAULT_FOLLOW_MAX_WAIT_SECONDS,
@@ -299,7 +298,7 @@ impl FollowStep {
 #[derive(Debug, Clone, Copy)]
 struct FollowPolicy {
     max_empty_polls: u64,
-    stale_notice_polls: u64,
+    max_stale_polls: u64,
 }
 
 impl FollowPolicy {
@@ -307,7 +306,7 @@ impl FollowPolicy {
         let max_empty_polls = follow_poll_budget(args.max_wait_seconds);
         Self {
             max_empty_polls,
-            stale_notice_polls: max_empty_polls,
+            max_stale_polls: max_empty_polls,
         }
     }
 
@@ -315,7 +314,7 @@ impl FollowPolicy {
     fn test_budget(max_empty_polls: u64) -> Self {
         Self {
             max_empty_polls,
-            stale_notice_polls: max_empty_polls,
+            max_stale_polls: max_empty_polls,
         }
     }
 }
@@ -334,7 +333,6 @@ enum FollowPhase {
     },
     TrackingLedgerRows {
         stale_polls: u64,
-        stale_notice_emitted: bool,
     },
 }
 
@@ -347,31 +345,30 @@ impl FollowPhase {
     }
 
     fn observe_progress(&mut self) {
-        *self = Self::TrackingLedgerRows {
-            stale_polls: 0,
-            stale_notice_emitted: false,
-        };
+        *self = Self::TrackingLedgerRows { stale_polls: 0 };
     }
 
-    fn observe_stale_ledger_rows(&mut self, policy: FollowPolicy) -> Option<WatchEvent> {
+    fn observe_stale_ledger_rows(&mut self, policy: FollowPolicy) -> FollowStep {
         match self {
-            Self::TrackingLedgerRows {
-                stale_polls,
-                stale_notice_emitted,
-            } => {
+            Self::TrackingLedgerRows { stale_polls } => {
                 *stale_polls = stale_polls.saturating_add(1);
-                if !*stale_notice_emitted && *stale_polls >= policy.stale_notice_polls {
-                    *stale_notice_emitted = true;
-                    return Some(no_progress_liveness_event());
+                if *stale_polls >= policy.max_stale_polls {
+                    return FollowStep {
+                        events: vec![stale_trace_timeout_liveness_event()],
+                        decision: FollowDecision::Stop,
+                    };
                 }
-                None
+                FollowStep {
+                    events: Vec::new(),
+                    decision: FollowDecision::Continue,
+                }
             }
             Self::AwaitingLedgerRows { .. } => {
-                *self = Self::TrackingLedgerRows {
-                    stale_polls: 1,
-                    stale_notice_emitted: false,
-                };
-                None
+                *self = Self::TrackingLedgerRows { stale_polls: 1 };
+                FollowStep {
+                    events: Vec::new(),
+                    decision: FollowDecision::Continue,
+                }
             }
         }
     }
@@ -468,15 +465,12 @@ impl FollowEngine {
                 });
             }
             // Non-terminal records present. A diff (`events` non-empty)
-            // is observable progress. A string of polls with no new
-            // event is a liveness observation, not a terminal condition:
-            // once a ledger row exists, `--follow` means "track until
-            // terminality" and the operator can interrupt a genuinely
-            // stuck run.
+            // is observable progress and resets the stale budget. A
+            // string of polls with no new event is a bounded liveness
+            // failure; follow mode must return control to the operator
+            // instead of turning a scheduler bug into an infinite stream.
             if events.is_empty() {
-                if let Some(event) = self.phase.observe_stale_ledger_rows(self.policy) {
-                    events.push(event);
-                }
+                return Ok(self.phase.observe_stale_ledger_rows(self.policy));
             } else {
                 self.phase.observe_progress();
             }
@@ -635,9 +629,9 @@ fn empty_trace_timeout_liveness_event() -> WatchEvent {
     }
 }
 
-fn no_progress_liveness_event() -> WatchEvent {
+fn stale_trace_timeout_liveness_event() -> WatchEvent {
     WatchEvent::Liveness {
-        status: "no_ledger_progress_observed".to_string(),
+        status: "ledger_progress_timeout".to_string(),
         source: "watch_follow_policy".to_string(),
     }
 }
@@ -1219,11 +1213,10 @@ mod tests {
     }
 
     #[test]
-    fn follow_engine_warns_but_keeps_tracking_stale_nonempty_running_trace() {
-        // Once a ledger row exists, follow mode is a terminality tracker,
-        // not an observer-side timeout. A stale RUNNING row emits one
-        // liveness notice after the no-progress budget and then keeps
-        // following until the ledger reaches a terminal state.
+    fn follow_engine_stops_stale_nonempty_running_trace_after_timeout() {
+        // Once a ledger row exists, follow mode still has an observer-side
+        // liveness budget. A stale RUNNING row with no diffs must terminate
+        // after that budget so a broken scheduler cannot stream forever.
         let mut engine = FollowEngine::with_test_budget("trace-stuck".into(), 2);
         let nodes = [running_record(
             "easynet:///r/acme/invocation/01STUCK",
@@ -1243,25 +1236,18 @@ mod tests {
         assert!(second.events.is_empty(), "{second:?}");
         assert_eq!(second.decision, FollowDecision::Continue);
 
-        // Budget (2) reached on the second stale poll → liveness notice,
-        // but no terminal stop.
-        let notice = engine
+        // Budget (2) reached on the second stale poll → liveness timeout.
+        let timeout = engine
             .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)
-            .expect("stale trace emits one liveness notice");
-        assert_eq!(notice.decision, FollowDecision::Continue);
+            .expect("stale trace emits a terminal liveness timeout");
+        assert_eq!(timeout.decision, FollowDecision::Stop);
         assert_eq!(
-            notice.events,
+            timeout.events,
             vec![WatchEvent::Liveness {
-                status: "no_ledger_progress_observed".into(),
+                status: "ledger_progress_timeout".into(),
                 source: "watch_follow_policy".into(),
             }]
         );
-
-        let quiet = engine
-            .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)
-            .expect("subsequent stale polls stay quiet");
-        assert!(quiet.events.is_empty(), "{quiet:?}");
-        assert_eq!(quiet.decision, FollowDecision::Continue);
     }
 
     #[test]
@@ -1271,7 +1257,8 @@ mod tests {
         // a healthy long-running stream is never cut off.
         let mut engine = FollowEngine::with_test_budget("trace-stuck".into(), 1);
         for i in 0..5 {
-            let ura = format!("easynet:///r/acme/invocation/01PROG{i}");
+            let request_id = format!("01PROG{i}");
+            let ura = crate::ura::resource_dot_ura("acme", "alice.invocations", &request_id);
             let nodes = [running_record(&ura, "RUNNING")];
             let step = engine
                 .observe_with_mission_status(&nodes, MissionFollowStatus::NotMission)

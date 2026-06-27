@@ -23,7 +23,7 @@ use std::time::Duration;
 #[cfg(feature = "axon-pb")]
 use crate::core::ability_spec::AbilityManifest;
 #[cfg(feature = "axon-pb")]
-use crate::runtime::ability::HostedAgentDelegationClaims;
+use crate::runtime::ability::{HostedAgentDelegationClaims, HostedAgentDelegationEnvelopeBinding};
 #[cfg(feature = "axon-pb")]
 use crate::services::self_identity::{LocalDaemonSigner, SelfIdentity};
 
@@ -856,8 +856,10 @@ fn invoke_local_daemon_ability_with_callee_and_subject(
 ///      field unset; this path makes causal placement a first-class
 ///      input so receipt-DAG reconstruction has real edges to read.
 ///   2. After the invoke completes, the daemon's invocation ledger is
-///      polled (`invocation.history.get` by `request_id`) for the
-///      persisted record, so the returned metadata carries the
+///      read directly by `request_id` for the persisted record. This is
+///      intentionally not an `invocation.history.get` call: metadata
+///      observation must not create a second invocation in the audit trail.
+///      The returned metadata carries the
 ///      ledger-assigned `invocation_ura`, `trace_id`, and receipt
 ///      anchors — the material a downstream step needs to reference
 ///      THIS invocation as its causal parent.
@@ -950,29 +952,14 @@ impl HostedAgentDelegation {
 
     fn metadata_value(
         &self,
-        wire_caller_ura: &str,
-        callee_ura: &str,
-        subject_ura: &str,
-        request_id: &str,
-        invocation_nonce_hex: &str,
-        ability: &str,
+        envelope: HostedAgentDelegationEnvelopeBinding,
         signer: &dyn SelfIdentity,
     ) -> anyhow::Result<String> {
-        let claims = HostedAgentDelegationClaims::new(
-            self.agent_ura.clone(),
-            "host_device",
-            wire_caller_ura,
-            callee_ura,
-            subject_ura,
-            request_id,
-            invocation_nonce_hex,
-            ability,
-        )?;
-        let signature = signer.sign(
-            wire_caller_ura,
-            &claims.signing_payload_bytes(wire_caller_ura),
-        )?;
-        claims.signed_metadata_value(wire_caller_ura, &signature)
+        let signer_ura = envelope.caller_ura().to_string();
+        let claims =
+            HostedAgentDelegationClaims::new(self.agent_ura.clone(), "host_device", envelope)?;
+        let signature = signer.sign(&signer_ura, &claims.signing_payload_bytes(&signer_ura))?;
+        claims.signed_metadata_value(&signer_ura, &signature)
     }
 }
 
@@ -1211,15 +1198,15 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         let signer = LocalDaemonSigner::for_caller(&wire_caller_ura);
         let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, &function_name)
             .with_context(|| format!("resolve delegation descriptor ref for {function_name}"))?;
-        let metadata_value = delegation.metadata_value(
+        let envelope = HostedAgentDelegationEnvelopeBinding::new(
             &wire_caller_ura,
             &callee_ura,
             &subject_ura,
             &wire_request_id,
             &nonce_hex,
             &descriptor_ref,
-            &signer,
         )?;
+        let metadata_value = delegation.metadata_value(envelope, &signer)?;
         request.metadata.insert(
             crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
             metadata_value,
@@ -1285,20 +1272,17 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         );
     }
 
-    // The unary invoke returns at terminal state, but the ledger sink
-    // persists asynchronously — poll briefly rather than racing it.
+    // The unary invoke returns at terminal state, but the ledger sink persists
+    // asynchronously. Poll the local ledger file directly rather than invoking
+    // `invocation.history.get`, because observation must not append another
+    // invocation to the ledger it is observing.
+    let ledger_reader =
+        crate::support::local_invocation_ledger::LocalInvocationLedgerReader::from_default_config();
     let mut ledger_record = Value::Null;
     for _ in 0..10 {
-        if let Ok(found) = invoke_local_daemon_ability_with_subject(
-            "invocation.history.get",
-            serde_json::json!({ "key": { "request_id": request_id } }),
-            None,
-        ) {
-            let record = found.get("record").cloned().unwrap_or(Value::Null);
-            if !record.is_null() {
-                ledger_record = record;
-                break;
-            }
+        if let Some(record) = ledger_reader.record_by_request_id(&request_id)? {
+            ledger_record = record;
+            break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }

@@ -93,16 +93,44 @@ pub enum DiscoverScopeMode {
     Local,
     /// Search local device results plus the caller's realm.
     Realm,
-    /// Search local device results plus the public cross-tenant catalogue.
+    /// Search local device results, the caller's realm, and the public catalogue.
     Public,
 }
 
 impl DiscoverScopeMode {
-    fn federated_scope(self) -> Option<&'static str> {
+    fn tier_plan(self) -> &'static [DiscoverTier] {
         match self {
-            Self::Local => None,
-            Self::Realm => Some("user"),
-            Self::Public => Some("public"),
+            Self::Local => &[DiscoverTier::Device],
+            Self::Realm => &[DiscoverTier::Device, DiscoverTier::Realm],
+            Self::Public => &[
+                DiscoverTier::Device,
+                DiscoverTier::Realm,
+                DiscoverTier::Public,
+            ],
+        }
+    }
+}
+
+/// One executable step in the discover ladder.
+///
+/// Invariant 1: the sequence is monotonic from local visibility to wider
+/// visibility; callers never replace a narrower tier with a wider tier.
+/// Invariant 2: every non-device tier is causally anchored to the previous
+/// completed invocation, so the public opt-in remains auditable instead of
+/// becoming an unrelated second query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoverTier {
+    Device,
+    Realm,
+    Public,
+}
+
+impl DiscoverTier {
+    fn scope(self) -> &'static str {
+        match self {
+            Self::Device => "device",
+            Self::Realm => "user",
+            Self::Public => "public",
         }
     }
 }
@@ -468,7 +496,7 @@ struct DiscoverExecutionPlan {
     ladder: DiscoverLadderTarget,
     source_window: SourceWindowMode,
     source_limit: usize,
-    federated_scope: Option<&'static str>,
+    tiers: &'static [DiscoverTier],
 }
 
 impl DiscoverExecutionPlan {
@@ -493,7 +521,7 @@ impl DiscoverExecutionPlan {
             ladder: resolve_ladder_target(args.as_agent.as_deref())?,
             source_window: args.source_window,
             source_limit: args.limit,
-            federated_scope: args.scope.federated_scope(),
+            tiers: args.scope.tier_plan(),
         })
     }
 }
@@ -561,7 +589,7 @@ impl SourceWindowMode {
 
 /// Mutable state for the discover execution state machine.
 ///
-/// The executor moves through `local -> optional realm -> rank` exactly
+/// The executor moves through its immutable tier plan exactly
 /// once. Keeping all mutation here prevents the plan, rendering model,
 /// and causal-anchor decision from smuggling half-updated state across
 /// phase boundaries.
@@ -674,9 +702,11 @@ impl DiscoverRuntimeService {
     }
 
     fn execute(mut self) -> anyhow::Result<DiscoverReport> {
-        self.walk_local_tier()?;
-        if let Some(scope) = self.plan.federated_scope {
-            self.walk_federated_tier(scope)?;
+        for tier in self.plan.tiers.iter().copied() {
+            match tier {
+                DiscoverTier::Device => self.walk_local_tier()?,
+                DiscoverTier::Realm | DiscoverTier::Public => self.walk_federated_tier(tier)?,
+            }
         }
         Ok(self.state.finish(&self.plan))
     }
@@ -691,15 +721,16 @@ impl DiscoverRuntimeService {
         Ok(())
     }
 
-    fn walk_federated_tier(&mut self, scope: &'static str) -> anyhow::Result<()> {
-        let local_invocation_meta = self
+    fn walk_federated_tier(&mut self, tier: DiscoverTier) -> anyhow::Result<()> {
+        let scope = tier.scope();
+        let parent_invocation_meta = self
             .state
             .invocations
             .last()
             .cloned()
-            .context("local discover tier did not produce invocation metadata")?;
+            .context("discover tier did not produce parent invocation metadata")?;
         let mut anchor_resolver = RealmAnchorResolver::production();
-        let anchor = match anchor_resolver.resolve(&local_invocation_meta)? {
+        let anchor = match anchor_resolver.resolve(&parent_invocation_meta)? {
             RealmAnchorResolution::Anchored(anchor) => anchor,
             RealmAnchorResolution::Unanchored { reason } => {
                 self.state.record_diagnostic(DiscoverDiagnostic {
@@ -910,15 +941,9 @@ fn request_id_from_invocation_meta(meta: &Value) -> Option<String> {
 }
 
 fn fetch_invocation_record_by_request_id(request_id: &str) -> anyhow::Result<Option<Value>> {
-    let value = invoke_local_ability(
-        crate::runtime::agents::invocation_history_ability::ABILITY_HISTORY_GET,
-        json!({ "key": { "request_id": request_id } }),
-    )
-    .with_context(|| format!("poll invocation history for request_id {request_id}"))?;
-    Ok(value
-        .get("record")
-        .cloned()
-        .filter(|record| !record.is_null()))
+    crate::support::local_invocation_ledger::LocalInvocationLedgerReader::from_default_config()
+        .record_by_request_id(request_id)
+        .with_context(|| format!("poll invocation ledger for request_id {request_id}"))
 }
 
 fn refreshed_invocation_meta_from_record(original: &Value, record: &Value) -> Value {
@@ -1470,10 +1495,23 @@ mod tests {
     }
 
     #[test]
-    fn discover_scope_mode_maps_to_one_federated_tier() {
-        assert_eq!(DiscoverScopeMode::Local.federated_scope(), None);
-        assert_eq!(DiscoverScopeMode::Realm.federated_scope(), Some("user"));
-        assert_eq!(DiscoverScopeMode::Public.federated_scope(), Some("public"));
+    fn discover_scope_mode_expands_to_monotonic_tier_plan() {
+        assert_eq!(
+            DiscoverScopeMode::Local.tier_plan(),
+            &[DiscoverTier::Device]
+        );
+        assert_eq!(
+            DiscoverScopeMode::Realm.tier_plan(),
+            &[DiscoverTier::Device, DiscoverTier::Realm]
+        );
+        assert_eq!(
+            DiscoverScopeMode::Public.tier_plan(),
+            &[
+                DiscoverTier::Device,
+                DiscoverTier::Realm,
+                DiscoverTier::Public
+            ]
+        );
     }
 
     #[test]

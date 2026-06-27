@@ -126,6 +126,7 @@ pub mod async_bridge;
 /// usage re-spawns the "one CLI subcommand opens its own IPC"
 /// anti-pattern this module file was created to eliminate.
 pub(crate) mod local_daemon_grpc;
+pub(crate) mod local_invocation_ledger;
 
 /// **Canonical CLI ability-invocation surface.** One helper —
 /// `invoke_local_ability(name, args)` — every CLI subcommand uses
