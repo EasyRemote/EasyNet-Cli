@@ -486,11 +486,12 @@ impl TeachGrantAuthoritySnapshot {
                 })?;
                 if agent_ura != &grant.owner_ura
                     || host_device_ura != &grant.granted_by_ura
+                    || snapshot.caller_ura != *host_device_ura
                     || snapshot.callee_ura != *host_device_ura
                     || delegated_ability != TEACH_GRANT_ENVELOPE_ABILITY
                 {
                     anyhow::bail!(
-                        "teach grant hosted-agent authority does not match owner/host/ability"
+                        "teach grant hosted-agent authority does not match owner/host/caller/callee/ability"
                     );
                 }
             }
@@ -523,13 +524,75 @@ fn strip_descriptor_version(local_registry_ability: &str) -> &str {
 }
 
 pub struct AcquireStagedGrant<T> {
-    pub registry_name: String,
-    pub ability_ura: String,
-    pub owner_ura: String,
-    pub learner_ura: String,
-    pub expected_grant: TeachGrant,
-    pub import_record: DescriptorImportRecord,
-    pub staged: T,
+    registry_name: String,
+    ability_ura: String,
+    owner_ura: String,
+    learner_ura: String,
+    expected_grant: TeachGrant,
+    import_record: DescriptorImportRecord,
+    staged: T,
+}
+
+impl<T> AcquireStagedGrant<T> {
+    /// Build a staged acquire request whose grant, import row, and staged
+    /// artifact identity describe the same descriptor transfer.
+    ///
+    /// What this is NOT: a DTO for callers to fill piecemeal. The store owns
+    /// the acquire state machine, so external callers can only submit a request
+    /// that passes the same identity checks the store later enforces under its
+    /// file lock.
+    pub fn new(
+        registry_name: impl Into<String>,
+        ability_ura: impl Into<String>,
+        owner_ura: impl Into<String>,
+        learner_ura: impl Into<String>,
+        expected_grant: TeachGrant,
+        import_record: DescriptorImportRecord,
+        staged: T,
+    ) -> anyhow::Result<Self> {
+        let registry_name = registry_name.into();
+        let ability_ura = ability_ura.into();
+        let owner_ura = owner_ura.into();
+        let learner_ura = learner_ura.into();
+        require_non_empty("acquire staged registry_name", &registry_name)?;
+        require_non_empty("acquire staged ability_ura", &ability_ura)?;
+        require_non_empty("acquire staged owner_ura", &owner_ura)?;
+        require_non_empty("acquire staged learner_ura", &learner_ura)?;
+        expected_grant.validate_acquire_request(
+            &registry_name,
+            &ability_ura,
+            &owner_ura,
+            &learner_ura,
+        )?;
+        if import_record.state() != DescriptorImportState::Active {
+            anyhow::bail!(
+                "acquire staged import record must start active before the store marks it acquiring"
+            );
+        }
+        if import_record.source_descriptor_ura != ability_ura {
+            anyhow::bail!(
+                "acquire staged import source {:?} does not match granted descriptor {:?}",
+                import_record.source_descriptor_ura,
+                ability_ura
+            );
+        }
+        if import_record.manifest_hash != expected_grant.manifest_hash {
+            anyhow::bail!(
+                "acquire staged import manifest hash {:?} does not match grant hash {:?}",
+                import_record.manifest_hash,
+                expected_grant.manifest_hash
+            );
+        }
+        Ok(Self {
+            registry_name,
+            ability_ura,
+            owner_ura,
+            learner_ura,
+            expected_grant,
+            import_record,
+            staged,
+        })
+    }
 }
 
 impl DescriptorImportRecord {
@@ -1285,13 +1348,13 @@ mod tests {
         expected_grant: TeachGrant,
         staged: T,
     ) -> AcquireStagedGrant<T> {
-        AcquireStagedGrant {
-            registry_name: "mentor.quote".to_string(),
-            ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
-            owner_ura: "easynet:///r/acme/agent/mentor".to_string(),
-            learner_ura: learner_ura.to_string(),
+        AcquireStagedGrant::new(
+            "mentor.quote",
+            "easynet:///r/acme/ability/mentor.quote",
+            "easynet:///r/acme/agent/mentor",
+            learner_ura,
             expected_grant,
-            import_record: DescriptorImportRecord::new(
+            DescriptorImportRecord::new(
                 "quote",
                 "apprentice",
                 "easynet:///r/acme/ability/mentor.quote",
@@ -1299,7 +1362,8 @@ mod tests {
                 "t1",
             ),
             staged,
-        }
+        )
+        .expect("test staged acquire request is valid")
     }
 
     #[test]
@@ -1370,6 +1434,56 @@ mod tests {
             .validate_stored()
             .expect_err("non-teach selected route URA must not admit a teach grant");
         assert!(err.to_string().contains("expected \"meta.teach\""), "{err}");
+    }
+
+    #[test]
+    fn hosted_delegation_snapshot_binds_caller_to_host_device() {
+        let learner = "easynet:///r/acme/agent/apprentice";
+        let host = "easynet:///r/acme/device/host-1";
+        let owner = "easynet:///r/acme/agent/mentor";
+        let mut grant = TeachGrant::from_draft(TeachGrantDraft {
+            ability: "mentor.quote".to_string(),
+            ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+            owner_ura: owner.to_string(),
+            granted_by_ura: host.to_string(),
+            owner_agent: "mentor".to_string(),
+            learner_ura: learner.to_string(),
+            manifest_hash: TEST_MANIFEST_HASH.to_string(),
+            execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
+            granted_at: "t0".to_string(),
+            admission_snapshot: TeachGrantAdmissionSnapshot::from_draft(
+                TeachGrantAdmissionSnapshotDraft {
+                    invocation_id: "hosted-teach".to_string(),
+                    caller_ura: host.to_string(),
+                    callee_ura: host.to_string(),
+                    subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+                    envelope_ability: "meta.teach".to_string(),
+                    invocation_nonce_hex: hex::encode([0xB6; 16]),
+                    causal_context: serde_json::json!({"kind": "none"}),
+                    authority: TeachGrantAuthoritySnapshot::hosted_agent_delegation(
+                        owner,
+                        host,
+                        "meta.teach",
+                    ),
+                    granted_ability: "mentor.quote".to_string(),
+                    granted_ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
+                    owner_ura: owner.to_string(),
+                    granted_by_ura: host.to_string(),
+                    learner_ura: learner.to_string(),
+                    manifest_hash: TEST_MANIFEST_HASH.to_string(),
+                },
+            )
+            .expect("hosted snapshot is valid"),
+        });
+        grant
+            .validate_stored()
+            .expect("hosted snapshot accepts host as caller");
+
+        grant.admission_snapshot.caller_ura = "easynet:///r/acme/device/other".to_string();
+        let err = grant
+            .validate_stored()
+            .expect_err("hosted delegation must reject a caller that is not the host device");
+        assert!(err.to_string().contains("caller"), "{err}");
     }
 
     #[test]

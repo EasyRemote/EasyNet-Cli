@@ -873,11 +873,6 @@ fn ability_exec_kind(exec: &AbilityExec) -> &'static str {
 /// manifest copy into one local learner workspace. It mints a learner-owned
 /// descriptor URA for discovery, but it does not install an executable runtime
 /// binding.
-#[cfg(test)]
-fn acquire_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
-    AcquireWorkflow::new(env, args, None, &SystemTeachClock).run()
-}
-
 fn acquire_handler_with_hot_registrar(
     env: EnvelopeContext,
     args: Value,
@@ -1079,15 +1074,15 @@ impl AdmittedAcquire {
             grant.manifest_hash(),
             clock.now_rfc3339(),
         );
-        let acquired = TeachGrantStore::open_default().acquire_staged(AcquireStagedGrant {
-            registry_name: plan.request.registry_name.clone(),
-            ability_ura: plan.request.ability_ura.clone(),
-            owner_ura: plan.request.owner_ura.clone(),
-            learner_ura: plan.learner_ura.clone(),
-            expected_grant: grant,
+        let acquired = TeachGrantStore::open_default().acquire_staged(AcquireStagedGrant::new(
+            plan.request.registry_name.clone(),
+            plan.request.ability_ura.clone(),
+            plan.request.owner_ura.clone(),
+            plan.learner_ura.clone(),
+            grant,
             import_record,
             staged,
-        })?;
+        )?)?;
         Ok(CommittedAcquire { plan, acquired })
     }
 }
@@ -1498,11 +1493,6 @@ fn sync_learner_runtime_after_acquire(
 /// `meta.forget { ability, agent }` — drop an imported descriptor. The
 /// descriptor-import ledger is the authority: a native ability never matches
 /// it, so forget can never silently delete what an agent authored.
-#[cfg(test)]
-fn forget_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
-    forget_handler_with_hot_registrar(env, args, None)
-}
-
 struct ForgetWorkflow<'a> {
     env: EnvelopeContext,
     args: Value,
@@ -1811,9 +1801,10 @@ mod tests {
     fn acquire_without_grant_is_the_default_refusal() {
         let _g = HomeGuard::new();
         let (source_descriptor_ura, apprentice_ura, _) = seed();
-        let err = acquire_handler(
+        let err = acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura, &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect_err("no grant must refuse");
         assert!(
@@ -1835,9 +1826,10 @@ mod tests {
         let forged_owner = crate::ura::agent_ura("localhost", "other-user", "mentor");
         let forged_ability =
             crate::ura::owner_ability_ura(&forged_owner, "quote").expect("forged ability URA");
-        let err = acquire_handler(
+        let err = acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura, &forged_ability),
             json!({ "ability_ura": forged_ability, "learner": "apprentice" }),
+            None,
         )
         .expect_err("same registry key with different owner URA must refuse");
 
@@ -1865,9 +1857,10 @@ mod tests {
         )
         .expect("owner teaches");
         assert_eq!(teach["owner_ura"], teach["granted_by"]);
-        let resp = acquire_handler(
+        let resp = acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect("learner acquires");
 
@@ -1914,9 +1907,10 @@ mod tests {
         )
         .expect("mutate source manifest");
 
-        let err = acquire_handler(
+        let err = acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect_err("acquire must be bound to the descriptor granted by the owner");
         assert!(format!("{err}").contains("teach grant pinned"), "{err}");
@@ -1950,9 +1944,10 @@ mod tests {
         )
         .expect("owner teaches");
 
-        let err = acquire_handler(
+        let err = acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect_err("executable transfers are outside descriptor-import scope");
 
@@ -2137,9 +2132,10 @@ mod tests {
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("owner teaches");
-        acquire_handler(
+        acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect("learner acquires discovery-only manifest");
 
@@ -2218,9 +2214,10 @@ mod tests {
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
-        acquire_handler(
+        acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect("acquire");
 
@@ -2275,9 +2272,10 @@ mod tests {
             "name = \"quote\"\ndescription = \"the apprentice's own quote\"\n\n[input_schema]\ntype = \"object\"\n",
         )
         .expect("native manifest");
-        let err = acquire_handler(
+        let err = acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect_err("must refuse to clobber");
         assert!(format!("{err}").contains("never overwrites"), "{err}");
@@ -2324,16 +2322,18 @@ mod tests {
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
-        acquire_handler(
+        acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect("acquire");
 
         // A native ability is not forgettable…
-        let err = forget_handler(
+        let err = forget_handler_with_hot_registrar(
             forget_env(mentor_ura.clone(), &mentor_ura),
             json!({ "ability": "quote", "agent": "mentor" }),
+            None,
         )
         .expect_err("mentor never LEARNED quote");
         assert!(format!("{err}").contains("no imported descriptor"), "{err}");
@@ -2377,9 +2377,10 @@ mod tests {
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
-        acquire_handler(
+        acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect("acquire");
 
@@ -2395,9 +2396,10 @@ mod tests {
         )
         .expect("mutate imported descriptor manifest");
 
-        let err = forget_handler(
+        let err = forget_handler_with_hot_registrar(
             forget_env(apprentice_ura.clone(), &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
+            None,
         )
         .expect_err("forget must not delete a drifted imported descriptor manifest");
         assert!(
@@ -2421,9 +2423,10 @@ mod tests {
         .expect("teach");
 
         let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
-        let err = acquire_handler(
+        let err = acquire_handler_with_hot_registrar(
             acquire_env(stranger, &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect_err("stranger must not install into apprentice workspace");
         assert!(
@@ -2441,16 +2444,18 @@ mod tests {
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura.clone() }),
         )
         .expect("teach");
-        acquire_handler(
+        acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
+            None,
         )
         .expect("acquire");
 
         let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
-        let err = forget_handler(
+        let err = forget_handler_with_hot_registrar(
             forget_env(stranger, &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
+            None,
         )
         .expect_err("stranger must not delete apprentice workspace");
         assert!(
@@ -2536,11 +2541,7 @@ mod tests {
         let host = crate::ura::device_ura("test", "local");
 
         let resp = teach_handler(
-            teach_env_with_hosted_delegation(
-                crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
-                &mentor_ura,
-                &mentor_ura,
-            ),
+            teach_env_with_hosted_delegation(host.clone(), &mentor_ura, &mentor_ura),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
         )
         .expect("signed host device delegation authorizes the local owner");
