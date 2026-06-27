@@ -941,9 +941,21 @@ fn request_id_from_invocation_meta(meta: &Value) -> Option<String> {
 }
 
 fn fetch_invocation_record_by_request_id(request_id: &str) -> anyhow::Result<Option<Value>> {
-    crate::support::local_invocation_ledger::LocalInvocationLedgerReader::from_default_config()
-        .record_by_request_id(request_id)
-        .with_context(|| format!("poll invocation ledger for request_id {request_id}"))
+    // Read the receipt projection through the daemon's side-effect-free
+    // `invocation.record.get` RPC, not by opening the redb ledger file: redb's
+    // exclusive cross-process lock makes a second-process open fail hard while
+    // the daemon holds it (the common topology). The daemon reads its own
+    // in-process ledger and writes no row, so realm-anchor resolution does not
+    // append a second invocation to the trail it is anchoring against.
+    let response = invoke_local_ability(
+        crate::runtime::agents::invocation_history_ability::ABILITY_INVOCATION_RECORD_GET,
+        serde_json::json!({ "request_id": request_id }),
+    )
+    .with_context(|| format!("poll invocation ledger for request_id {request_id}"))?;
+    Ok(response
+        .get("record")
+        .filter(|record| !record.is_null())
+        .cloned())
 }
 
 fn refreshed_invocation_meta_from_record(original: &Value, record: &Value) -> Value {
@@ -954,7 +966,8 @@ fn refreshed_invocation_meta_from_record(original: &Value, record: &Value) -> Va
     meta["callee_ura"] = record_field(record, "callee_ura");
     meta["subject_ura"] = record_field(record, "subject_ura");
     meta["ledger_state"] = record_field(record, "state");
-    let receipt = terminal_receipt_from_ledger_record(record);
+    let receipt =
+        crate::support::invocation_receipt_projection::terminal_receipt_from_ledger_record(record);
     let receipt_backed = receipt
         .as_ref()
         .and_then(|receipt| receipt_parent_from_terminal_receipt(receipt).ok())
@@ -970,34 +983,6 @@ fn refreshed_invocation_meta_from_record(original: &Value, record: &Value) -> Va
 
 fn record_field(record: &Value, key: &str) -> Value {
     record.get(key).cloned().unwrap_or(Value::Null)
-}
-
-fn terminal_receipt_from_ledger_record(record: &Value) -> Option<Value> {
-    let chain = record.get("receipt_chain")?;
-    let head_hash = chain
-        .get("head_receipt_hash")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let anchors = chain
-        .get("anchors")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let head_anchor = anchors
-        .iter()
-        .find(|anchor| {
-            anchor.get("receipt_hash").and_then(Value::as_str) == Some(head_hash.as_str())
-                && !head_hash.is_empty()
-        })
-        .or_else(|| anchors.last())
-        .cloned()
-        .unwrap_or(Value::Null);
-    Some(json!({
-        "head_receipt_hash": head_hash,
-        "anchor": head_anchor,
-        "anchor_count": anchors.len(),
-    }))
 }
 
 fn trace_id_from_invocation_meta(meta: &Value) -> Option<String> {

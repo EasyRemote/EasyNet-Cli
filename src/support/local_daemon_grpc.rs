@@ -1062,57 +1062,9 @@ impl InvocationMetadataProjection {
 }
 
 #[cfg(feature = "axon-pb")]
-fn terminal_receipt_from_ledger_record(
-    ledger_record: &serde_json::Value,
-) -> Option<serde_json::Value> {
-    let chain = ledger_record.get("receipt_chain")?;
-    let head_hash = chain
-        .get("head_receipt_hash")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let anchors = chain
-        .get("anchors")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let head_anchor = anchors
-        .iter()
-        .find(|anchor| {
-            anchor
-                .get("receipt_hash")
-                .and_then(serde_json::Value::as_str)
-                == Some(head_hash.as_str())
-                && !head_hash.is_empty()
-        })
-        .or_else(|| anchors.last())
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    Some(serde_json::json!({
-        "head_receipt_hash": head_hash,
-        "anchor": head_anchor,
-        "anchor_count": anchors.len(),
-    }))
-}
-
-#[cfg(feature = "axon-pb")]
-fn terminal_receipt_has_complete_anchor(receipt: &serde_json::Value) -> bool {
-    let anchor = match receipt.get("anchor") {
-        Some(anchor) => anchor,
-        None => return false,
-    };
-    let has_ura = anchor
-        .get("receipt_ura")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let has_hash = anchor
-        .get("receipt_hash")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    has_ura && has_hash
-}
+use crate::support::invocation_receipt_projection::{
+    terminal_receipt_from_ledger_record, terminal_receipt_has_complete_anchor,
+};
 
 #[cfg(feature = "axon-pb")]
 fn invoke_local_daemon_ability_with_invocation_meta_inner(
@@ -1264,15 +1216,21 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     }
 
     // The unary invoke returns at terminal state, but the ledger sink persists
-    // asynchronously. Poll the local ledger file directly rather than invoking
-    // `invocation.history.get`, because observation must not append another
-    // invocation to the ledger it is observing.
-    let ledger_reader =
-        crate::support::local_invocation_ledger::LocalInvocationLedgerReader::from_default_config();
+    // asynchronously. Poll the daemon's side-effect-free `invocation.record.get`
+    // read RPC rather than opening the redb ledger file from this CLI process:
+    // redb takes an exclusive cross-process lock, so a second-process open fails
+    // hard whenever the daemon is running. The daemon services the read off its
+    // own in-process ledger handle and writes no row, so observation never
+    // appends another invocation to the ledger it is observing.
+    let record_reader = LocalDaemonAbilityClient::new()?;
     let mut ledger_record = Value::Null;
     for _ in 0..10 {
-        if let Some(record) = ledger_reader.record_by_request_id(&request_id)? {
-            ledger_record = record;
+        let response = record_reader.invoke(
+            crate::runtime::agents::invocation_history_ability::ABILITY_INVOCATION_RECORD_GET,
+            serde_json::json!({ "request_id": request_id }),
+        )?;
+        if let Some(record) = response.get("record").filter(|record| !record.is_null()) {
+            ledger_record = record.clone();
             break;
         }
         std::thread::sleep(Duration::from_millis(100));

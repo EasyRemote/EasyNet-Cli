@@ -131,8 +131,8 @@ pub(crate) mod errors;
 /// helpers here are pub(crate) for that one shim; widening their
 /// usage re-spawns the "one CLI subcommand opens its own IPC"
 /// anti-pattern this module file was created to eliminate.
+pub(crate) mod invocation_receipt_projection;
 pub(crate) mod local_daemon_grpc;
-pub(crate) mod local_invocation_ledger;
 
 /// **Canonical CLI ability-invocation surface.** One helper —
 /// `invoke_local_ability(name, args)` — every CLI subcommand uses

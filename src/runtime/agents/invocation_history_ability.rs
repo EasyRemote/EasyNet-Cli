@@ -32,6 +32,44 @@ pub const ABILITY_HISTORY_GET: &str = "invocation.history.get";
 pub const ABILITY_TRACE_GET: &str = "invocation.trace.get";
 pub const ABILITY_HISTORY_PATH: &str = "invocation.history.path";
 
+/// Daemon-internal, side-effect-free read RPC: fetch one ledger record by
+/// `request_id`.
+///
+/// Distinct from [`ABILITY_HISTORY_GET`]: this is NOT dispatched through the
+/// Axon LocalRuntime (which would append a second ledger row and corrupt the
+/// audit trail the caller is observing). The daemon `invoke` handler services
+/// it directly off the in-process `InvocationLedger` and writes no ledger row.
+/// It is the channel an out-of-process CLI uses to observe the receipt
+/// projection of a request it just issued, instead of opening the daemon-owned
+/// redb file (which redb forbids from a second process via its exclusive lock).
+pub const ABILITY_INVOCATION_RECORD_GET: &str = "invocation.record.get";
+
+/// Fetch one ledger record by `request_id` directly off an in-process ledger
+/// handle, with no dispatch and no ledger write. Returns `None` when no record
+/// exists yet (the sink persists asynchronously after the unary response).
+///
+/// Side-effect-free by construction: it only issues a redb read transaction on
+/// a handle the daemon already holds open, so it never takes a second
+/// cross-process lock and never appends to the ledger.
+pub fn record_by_request_id(
+    ledger: &InvocationLedger,
+    request_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        anyhow::bail!("invocation.record.get: request_id must not be empty");
+    }
+    let query = InvocationLedgerQuery::new()
+        .key(InvocationLedgerFetchKey::RequestId(request_id.to_string()))
+        .limit(1);
+    let Some(record) = ledger.fetch_one(query)? else {
+        return Ok(None);
+    };
+    serde_json::to_value(record)
+        .map(Some)
+        .map_err(|err| anyhow::anyhow!("serialize invocation ledger record: {err}"))
+}
+
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 

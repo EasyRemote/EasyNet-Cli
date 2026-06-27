@@ -140,7 +140,12 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE,
 };
-use crate::services::invocation_transport::invocation_wire::BoxedDownStream;
+use crate::runtime::agents::invocation_history_ability::{
+    record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
+};
+use crate::services::invocation_transport::invocation_wire::{
+    wrap_json_response, BoxedDownStream,
+};
 use crate::services::invocation_transport::ledger_projection::build_unary_ledger_record;
 use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::quota_meter::quota_metered_ability_for_request;
@@ -359,6 +364,44 @@ impl DaemonInvocationService {
         }
     }
 
+    /// Side-effect-free `invocation.record.get`: fetch one ledger record by
+    /// `request_id` off the in-process ledger handle and return it as JSON.
+    ///
+    /// Services the out-of-process CLI's observe-my-own-request read without
+    /// dispatching a second invocation (which would corrupt the audit trail)
+    /// and without opening the daemon-owned redb from a second process (which
+    /// redb forbids via its exclusive lock). The caller (`skip_ledger_record`)
+    /// guarantees this writes no ledger row. A `null` record is a valid
+    /// "not yet projected" answer, not an error.
+    fn dispatch_invocation_record_get(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        #[derive(serde::Deserialize)]
+        struct RecordGetRequest {
+            request_id: String,
+        }
+        let request: RecordGetRequest = serde_json::from_slice(arguments).map_err(|err| {
+            Status::invalid_argument(format!(
+                "invocation.record.get: failed to decode JSON arguments: {err}"
+            ))
+        })?;
+        let Some(ledger) = self.runtime.invocation_ledger.as_ref() else {
+            return Err(Status::failed_precondition(
+                "invocation.record.get: daemon has no invocation ledger wired",
+            ));
+        };
+        let record =
+            record_by_request_id(ledger, &request.request_id).map_err(|err| match err.to_string()
+            {
+                msg if msg.contains("request_id must not be empty") => {
+                    Status::invalid_argument(msg)
+                }
+                msg => Status::internal(msg),
+            })?;
+        wrap_json_response(&serde_json::json!({ "record": record }))
+    }
+
     /// Resolve-first gate shared by the unary/stream/bidi dispatch
     /// paths. Cheap per-call construction: every plane is `Arc`-shaped.
     pub(crate) fn target_gate(&self) -> TargetGate {
@@ -551,7 +594,6 @@ impl DaemonInvocationService {
         mut self,
         ledger: Arc<easynet_axon::invocation::InvocationLedger>,
     ) -> Self {
-        crate::support::local_invocation_ledger::register_process_ledger(Arc::clone(&ledger));
         self.runtime.invocation_ledger = Some(ledger);
         self
     }
@@ -759,7 +801,17 @@ impl Invocation for DaemonInvocationService {
         // rows for the same call).
         let unary = self.unary_dispatcher();
         let mut axon_took_it = false;
+        // Set by the side-effect-free `invocation.record.get` read arm: it
+        // observes the ledger without dispatching, so it must write NO ledger
+        // row (neither the Axon LedgerSink nor the manual `record_unary_invocation`
+        // path). Distinct from `axon_took_it`, which means "Axon already wrote a
+        // row" — here nothing should be written at all.
+        let mut skip_ledger_record = false;
         let result = match function {
+            ABILITY_INVOCATION_RECORD_GET => {
+                skip_ledger_record = true;
+                self.dispatch_invocation_record_get(&inner.arguments)
+            }
             ABILITY_FEDERATION_JOIN => unary.dispatch_federation_join(&inner.arguments),
             ABILITY_FEDERATION_ADVERTISE_AGENT => {
                 unary.dispatch_federation_advertise_agent(&inner.arguments)
@@ -827,7 +879,7 @@ impl Invocation for DaemonInvocationService {
                 r
             }
         };
-        if !axon_took_it {
+        if !axon_took_it && !skip_ledger_record {
             self.record_unary_invocation(&inner, started_unix_ms, &result);
         }
         // #185: attach the caller's post-decrement quota status to the
