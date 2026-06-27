@@ -24,6 +24,7 @@ pub struct AbilityControlPlaneRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbilityControlPlaneLookupMatch {
     pub authority_root: String,
+    pub descriptor_version: String,
     pub call_mode: CallMode,
 }
 
@@ -365,7 +366,8 @@ impl AbilityControlPlaneRegistry {
         &self,
         ability: &str,
     ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        self.get_version(ability, super::DEFAULT_ABILITY_DESCRIPTOR_VERSION)
+        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
+        Ok(key.and_then(|key| self.record_for_key(&key)))
     }
 
     pub fn get_for_mode(
@@ -373,11 +375,12 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
-        self.get_version_for_mode(
+        let key = unique_key_for_control_plane_default(
+            self.descriptors.keys(),
             ability,
-            super::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            call_mode,
-        )
+            Some(call_mode),
+        )?;
+        Ok(key.and_then(|key| self.record_for_key(&key)))
     }
 
     pub fn get_for_authority_mode(
@@ -442,7 +445,8 @@ impl AbilityControlPlaneRegistry {
         &self,
         ability: &str,
     ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        self.descriptor_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
+        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
+        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
     }
 
     pub fn descriptor_for_mode(
@@ -450,14 +454,20 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        self.descriptor_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
+        let key = unique_key_for_control_plane_default(
+            self.descriptors.keys(),
+            ability,
+            Some(call_mode),
+        )?;
+        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
     }
 
     pub fn authority(
         &self,
         ability: &str,
     ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        self.authority_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
+        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
+        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
     }
 
     pub fn authority_for_mode(
@@ -465,14 +475,20 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        self.authority_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
+        let key = unique_key_for_control_plane_default(
+            self.descriptors.keys(),
+            ability,
+            Some(call_mode),
+        )?;
+        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
     }
 
     pub fn implementation(
         &self,
         ability: &str,
     ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        self.implementation_version(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION)
+        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
+        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
     }
 
     pub fn implementation_for_mode(
@@ -480,7 +496,12 @@ impl AbilityControlPlaneRegistry {
         ability: &str,
         call_mode: CallMode,
     ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        self.implementation_version_for_mode(ability, DEFAULT_ABILITY_DESCRIPTOR_VERSION, call_mode)
+        let key = unique_key_for_control_plane_default(
+            self.descriptors.keys(),
+            ability,
+            Some(call_mode),
+        )?;
+        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
     }
 
     pub fn contains(&self, ability: &str) -> bool {
@@ -515,93 +536,6 @@ impl AbilityControlPlaneRegistry {
         roots
     }
 
-    fn descriptor_version(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane(
-            self.descriptors.keys(),
-            ability,
-            descriptor_version,
-            None,
-        )?;
-        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
-    }
-
-    fn descriptor_version_for_mode(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane(
-            self.descriptors.keys(),
-            ability,
-            descriptor_version,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
-    }
-
-    fn authority_version(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane(
-            self.descriptors.keys(),
-            ability,
-            descriptor_version,
-            None,
-        )?;
-        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
-    }
-
-    fn authority_version_for_mode(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane(
-            self.descriptors.keys(),
-            ability,
-            descriptor_version,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
-    }
-
-    fn implementation_version(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane(
-            self.descriptors.keys(),
-            ability,
-            descriptor_version,
-            None,
-        )?;
-        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
-    }
-
-    fn implementation_version_for_mode(
-        &self,
-        ability: &str,
-        descriptor_version: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane(
-            self.descriptors.keys(),
-            ability,
-            descriptor_version,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
-    }
-
     fn record_for_key(&self, key: &AbilityControlPlaneKey) -> Option<AbilityControlPlaneRecord> {
         Some(AbilityControlPlaneRecord {
             descriptor: self.descriptors.get(key)?.clone(),
@@ -625,6 +559,30 @@ impl AbilityControlPlaneRegistry {
         self.authorities.bind(record.authority);
         self.implementations.bind(key, record.implementation);
         Ok(())
+    }
+}
+
+fn unique_key_for_control_plane_default<'a>(
+    keys: impl Iterator<Item = &'a AbilityControlPlaneKey>,
+    ability: &str,
+    call_mode: Option<CallMode>,
+) -> Result<Option<AbilityControlPlaneKey>, AbilityControlPlaneLookupError> {
+    let matches = keys
+        .filter(|key| {
+            key.ability() == ability && call_mode.is_none_or(|mode| key.call_mode() == mode)
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [key] => Ok(Some((*key).clone())),
+        _ => Err(AbilityControlPlaneLookupError {
+            ability: ability.to_string(),
+            descriptor_version: "<unique>".to_string(),
+            matches: matches
+                .iter()
+                .map(|key| lookup_match_for_key(key))
+                .collect(),
+        }),
     }
 }
 
@@ -724,6 +682,7 @@ fn assert_table_key_matches(
 fn lookup_match_for_key(key: &AbilityControlPlaneKey) -> AbilityControlPlaneLookupMatch {
     AbilityControlPlaneLookupMatch {
         authority_root: key.authority_root().to_string(),
+        descriptor_version: key.descriptor_version_str().to_string(),
         call_mode: key.call_mode(),
     }
 }
@@ -809,10 +768,13 @@ mod tests {
             .get_version_for_mode("agent.search", "2.3.4", CallMode::Rpc)
             .unwrap()
             .is_some());
-        assert!(registry
+        let default_lookup = registry
             .get_for_mode("agent.search", CallMode::Rpc)
-            .unwrap()
-            .is_none());
+            .expect("single non-default descriptor version is selected");
+        assert_eq!(
+            default_lookup.unwrap().descriptor().version().as_str(),
+            "2.3.4"
+        );
     }
 
     #[test]
@@ -892,6 +854,18 @@ mod tests {
         assert_ne!(
             v1.implementation().impl_hash(),
             v2.implementation().impl_hash()
+        );
+        let err = registry
+            .get_for_mode("fs.read", CallMode::Rpc)
+            .expect_err("mode lookup must not choose between descriptor versions");
+        assert_eq!(err.descriptor_version, "<unique>");
+        assert_eq!(err.matches.len(), 2);
+        assert_eq!(
+            err.matches
+                .iter()
+                .map(|m| m.descriptor_version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1.0.0", "2.0.0"]
         );
     }
 
