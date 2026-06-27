@@ -373,58 +373,28 @@ pub(super) fn dispatch_to_agent(
     // display names are not dispatch keys.
     //
     // We do the IPC round-trip here only when the manifest path
-    // above did NOT short-circuit. Failure modes are explicit:
-    //
-    //   * daemon down → propagate as Unavailable (caller may retry).
-    //   * daemon returned `ability_not_found` → fall through to the
-    //     chat path (preserves the legacy "manifest declares an
-    //     ability but only chat can fulfil it" behaviour).
-    //   * daemon returned any other typed error → propagate.
+    // above did NOT short-circuit. Every outcome is terminal — there is
+    // no chat fall-through. An ability the daemon does not recognise is a
+    // NOT_FOUND, the same answer the daemon/MCP surface gives; the EAL
+    // path must not divert to an LLM-fabricated reply for an ability that
+    // does not exist (that would make the same call return different
+    // results depending on the entry point). The only abilities reachable
+    // by chatting an agent are the explicit `<agent>.chat` verb handled
+    // above and declared abilities with a real `exec`, handled in-process
+    // or registered on the daemon.
     let display_name = format!("{}.{}", agent_id.name, ability.as_str());
     match try_dispatch_via_daemon(&agent_id.name, ability.as_str(), arguments) {
-        DaemonDispatch::Result(value) => return Ok(value.into()),
-        DaemonDispatch::AbilityNotFound => { /* fall through to chat */ }
-        DaemonDispatch::DaemonDown(reason) => {
-            return Err(EalError::Unavailable(format!(
-                "daemon {display_name}: {reason}"
-            )));
+        DaemonDispatch::Result(value) => Ok(value.into()),
+        DaemonDispatch::AbilityNotFound => {
+            Err(EalError::NotFound(format!("unknown ability: {display_name}")))
         }
-        DaemonDispatch::Error(reason) => {
-            return Err(EalError::Unavailable(format!(
-                "daemon {display_name}: {reason}"
-            )));
-        }
+        DaemonDispatch::DaemonDown(reason) => Err(EalError::Unavailable(format!(
+            "daemon {display_name}: {reason}"
+        ))),
+        DaemonDispatch::Error(reason) => Err(EalError::Unavailable(format!(
+            "daemon {display_name}: {reason}"
+        ))),
     }
-
-    let prompt = build_agent_prompt(ability.as_str(), arguments);
-
-    // Agent CLI dispatch failures (process spawn, IO, model error) are
-    // transport-class — `unavailable` is the right bucket so the
-    // interpreter's retry policy can fire when configured.
-    //
-    // IMPORTANT: pass the BARE agent name to send_to_agent, not the
-    // namespaced AgentId form (`default/claude`). Downstream
-    // workspace::ensure_workspace runs the registry name validator
-    // against this string, and the validator legitimately rejects
-    // anything containing `/`. The namespaced form is the registry
-    // *lookup* identity above; the *runtime* identity is the bare
-    // name. Using the wrong one here was the root cause of every
-    // EAL→agent dispatch failing with
-    // "workspace provisioning failed: agent.toml: name = "default/claude"
-    //  must contain only lowercase ASCII letters, …" before the
-    // CLI could even spawn.
-    let response =
-        crate::runtime::dispatch::send_to_agent(&agent_id.name, entry, &prompt, None, None)
-            .map_err(|e| EalError::Unavailable(format!("agent dispatch: {e}")))?;
-
-    Ok(serde_json::json!({
-        "ok": true,
-        "agent": response.agent,
-        "output": response.content,
-        "model": response.model,
-        "duration_ms": response.duration_ms,
-    })
-    .into())
 }
 
 /// Outcome of attempting to dispatch a `<agent>.<verb>` call through
@@ -432,21 +402,17 @@ pub(super) fn dispatch_to_agent(
 ///
 /// Why a custom enum (rather than `Result<Option<Value>, ...>`)
 /// -----------------------------------------------------------
-/// `dispatch_to_agent` needs to make three decisions on the result:
-///   1. Got a value → return it directly.
-///   2. Daemon told us "no such ability" → silently fall through to
-///      the chat path. Legacy abilities that exist in name only (a
-///      manifest declares the verb but the daemon never registered
-///      a handler) STILL need the chat translation, and the caller
-///      must not see a stack trace just because the daemon was
-///      consulted first.
-///   3. Daemon down / daemon errored → propagate as Unavailable and
-///      stop. Continuing to chat in this case would mask transport
-///      failures.
+/// `dispatch_to_agent` maps each outcome onto a distinct terminal answer:
+///   1. Got a value → return it.
+///   2. Daemon told us "no such ability" → NOT_FOUND. The same answer the
+///      daemon/MCP surface gives; the call does not divert to a chat
+///      reply just because the daemon was consulted first.
+///   3. Daemon down / daemon errored → Unavailable. Surfacing the error
+///      is the point — masking a transport failure would be worse.
 ///
-/// A flat `Result<Option<Value>, ...>` collapses (2) and (3) into the
-/// "Err" axis, which the chat-fall-through code can't distinguish
-/// without string-matching the error message — fragile.
+/// A flat `Result<Option<Value>, ...>` would collapse (2) and (3) into
+/// the "Err" axis, indistinguishable without string-matching the error
+/// message — fragile.
 enum DaemonDispatch {
     Result(Value),
     AbilityNotFound,
@@ -482,25 +448,3 @@ fn try_dispatch_via_daemon(
     }
 }
 
-/// Build a prompt for an agent from an EAL step's `function_name` and arguments.
-///
-/// The convention is: `function_name` becomes the task description,
-/// arguments become context. The `prompt` argument, if present, is used directly.
-fn build_agent_prompt(function_name: &str, arguments: &Value) -> String {
-    // If there's a "prompt" key, use it directly.
-    if let Some(prompt) = arguments.get("prompt").and_then(|v| v.as_str()) {
-        return prompt.to_string();
-    }
-
-    // Otherwise, build from function name + all argument key-values.
-    let mut parts = vec![format!("Task: {function_name}")];
-    if let Some(obj) = arguments.as_object() {
-        for (key, val) in obj {
-            match val {
-                Value::String(s) => parts.push(format!("{key}: {s}")),
-                other => parts.push(format!("{key}: {other}")),
-            }
-        }
-    }
-    parts.join("\n\n")
-}

@@ -201,39 +201,6 @@ pub(crate) fn resolve_model(
     spec_model.or(entry_model)
 }
 
-/// Send a prompt to a registered agent and return the response.
-///
-/// Production entry point — reads the active `DispatchContext` via the
-/// thread-local channel in `runtime::context` (which transparently falls
-/// back to the env vars for subprocess children that inherited only the
-/// env state from their parent). Tests should use
-/// `send_to_agent_with_depth(.., Some(depth))` to inject a depth without
-/// touching either channel.
-///
-/// - Routes to the appropriate agent wrapper based on `entry.agent_type`.
-/// - Propagates a *child* `DispatchContext` into the spawned agent's
-///   environment so the next link in the chain inherits the mission id
-///   and incremented depth.
-/// - Creates a per-run directory under the agent workspace and writes
-///   prompt / response / trace / meta files.
-pub fn send_to_agent(
-    agent_name: &str,
-    entry: &AgentEntry,
-    prompt: &str,
-    context: Option<&str>,
-    extra_trace_path: Option<&Path>,
-) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(
-        agent_name,
-        entry,
-        prompt,
-        context,
-        extra_trace_path,
-        None,
-        None,
-    )
-}
-
 /// Send a prompt to a registered agent on behalf of an *external* caller —
 /// a peer node, a federated agent, or a direct MCP tool invocation that
 /// arrived over the network rather than from inside a local mission.
@@ -1084,7 +1051,7 @@ mod tests {
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
         let entry = dummy_entry();
-        let err = send_to_agent("alice", &entry, "prompt", None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
             .expect_err("missing mission context must stop dispatch");
         let msg = format!("{err}");
         assert!(
@@ -1103,7 +1070,7 @@ mod tests {
         std::env::set_var("EASYNET_MISSION_ID", "forged-mission");
         std::env::set_var("EASYNET_AGENT_DEPTH", "0");
         let entry = dummy_entry();
-        let err = send_to_agent("alice", &entry, "prompt", None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
             .expect_err("unknown mission id must stop dispatch");
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
