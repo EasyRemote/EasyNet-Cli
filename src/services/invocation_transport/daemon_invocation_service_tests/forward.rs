@@ -88,8 +88,13 @@ async fn forward_invoke_self_target_runs_locally_via_axon_runtime() {
     // LocalRuntime verbatim, so the selected route's device-local
     // dispatch key is also bare. This mirrors the production
     // convention and the sibling `observe.health` quota test.
-    let rt =
-        runtime_with_json_echo(TEST_DAEMON_URI, "demo.echo", "MARKER-C9-1", "self-target-fallthrough-fired").await;
+    let rt = runtime_with_json_echo(
+        TEST_DAEMON_URI,
+        "demo.echo",
+        "MARKER-C9-1",
+        "self-target-fallthrough-fired",
+    )
+    .await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -152,7 +157,13 @@ async fn forward_invoke_self_target_scopes_agent_target_ability() {
     upsert_hosted_agent(&mut local, "llm", "alice", target_ura);
     save(&local).expect("seed local-agents.json");
 
-    let rt = runtime_with_json_echo(target_ura, "alice.chat", "MARKER-AGENT-SCOPE", "agent-scope-fired").await;
+    let rt = runtime_with_json_echo(
+        target_ura,
+        "alice.chat",
+        "MARKER-AGENT-SCOPE",
+        "agent-scope-fired",
+    )
+    .await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -380,7 +391,13 @@ async fn forward_invoke_self_target_does_not_intercept_other_target_uras() {
     // through the existing presence-push path and surfaces
     // target_offline when the device is not subscribed —
     // unchanged by the fall-through.
-    let rt = runtime_with_json_echo(TEST_DAEMON_URI, "demo.echo", "MARKER-OTHER", "must-not-fire").await;
+    let rt = runtime_with_json_echo(
+        TEST_DAEMON_URI,
+        "demo.echo",
+        "MARKER-OTHER",
+        "must-not-fire",
+    )
+    .await;
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));

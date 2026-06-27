@@ -112,6 +112,7 @@ use crate::services::invocation_transport::federated_key_resolver::{
 use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
+use crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
 use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
 use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;
@@ -655,9 +656,11 @@ impl AdmissionFacade {
             ));
         }
 
+        let signed_descriptor_ref = signed_descriptor_ref_from_metadata(ability, metadata)?;
+        ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)?;
         let descriptor_bound = descriptor_bound_from_wire_parts(
             envelope.clone(),
-            ability.to_string(),
+            signed_descriptor_ref,
             args,
             WireCallerIdentity::FromEnvelope,
         )
@@ -1377,6 +1380,68 @@ fn axon_error_to_status(err: InvocationError) -> Status {
     }
 }
 
+fn signed_descriptor_ref_from_metadata(
+    route_ability: &str,
+    metadata: Option<&HashMap<String, String>>,
+) -> Result<String, Status> {
+    let Some(value) = metadata
+        .and_then(|metadata| metadata.get(SIGNED_DESCRIPTOR_REF_METADATA_KEY))
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(Status::invalid_argument(format!(
+            "signed public Invoke for `{route_ability}` is missing `{SIGNED_DESCRIPTOR_REF_METADATA_KEY}`; \
+             route name and descriptor-bound signature target must be explicit"
+        )));
+    };
+    Ok(value.to_string())
+}
+
+fn ensure_signed_descriptor_ref_matches_route(
+    envelope: &Envelope,
+    route_ability: &str,
+    descriptor_ref: &str,
+) -> Result<(), Status> {
+    let callee_ura = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.as_str())
+        .map(str::trim)
+        .filter(|callee| !callee.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument("signed descriptor ref route check requires envelope callee")
+        })?;
+    let signed_ability_ura =
+        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+            callee_ura,
+            descriptor_ref,
+        )
+        .map_err(axon_error_to_status)
+        .and_then(|canonical_ref| {
+            canonical_ref
+                .rsplit_once('@')
+                .map(|(ability_ura, _)| ability_ura.to_string())
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "signed descriptor ref route check requires descriptor version",
+                    )
+                })
+        })?;
+    let routed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        callee_ura,
+        route_ability,
+    )
+    .map_err(axon_error_to_status)?;
+    if signed_ability_ura != routed_ability_ura {
+        return Err(Status::invalid_argument(format!(
+            "signed descriptor ref `{descriptor_ref}` does not match route `{route_ability}` \
+             for callee `{callee_ura}`"
+        )));
+    }
+    Ok(())
+}
+
 /// Build the axiom-side `CallerSignature` from the proto field. A
 /// missing field is the "no signature carried" case — admission
 /// step 2 (`validate_signature_structure`) will reject it with
@@ -1526,6 +1591,13 @@ mod tests {
             .expect("test callee must own the signed ability")
     }
 
+    fn descriptor_ref_for(callee_ura: &str, ability: &str) -> String {
+        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura, ability, "1.0.0",
+        )
+        .expect("test descriptor ref")
+    }
+
     /// Build an envelope+signature pair that admits cleanly. `nonce`
     /// is variable so distinct tests don't collide on the daemon-
     /// shared replay store.
@@ -1566,9 +1638,10 @@ mod tests {
         .expect("valid signed test envelope")
         .into_inner();
         envelope.invocation_nonce = nonce.to_vec();
+        let descriptor_ref = descriptor_ref_for(callee_ura, ability);
         let descriptor_bound = descriptor_bound_from_wire_parts(
             envelope.clone(),
-            ability.to_string(),
+            descriptor_ref.clone(),
             args,
             WireCallerIdentity::FromEnvelope,
         )
@@ -1583,6 +1656,11 @@ mod tests {
             envelope: Some(envelope),
             function_name: ability.to_string(),
             arguments: args.to_vec(),
+            metadata: HashMap::from([(
+                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                    .to_string(),
+                descriptor_ref,
+            )]),
             ..InvokeRequest::default()
         }
     }

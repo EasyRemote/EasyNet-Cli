@@ -145,6 +145,7 @@ pub(crate) struct RemoteAbilityInvocationTarget {
     ability_ura: String,
     callee_ura: String,
     public_ability: String,
+    descriptor_version: Option<String>,
 }
 
 impl RemoteAbilityInvocationTarget {
@@ -160,11 +161,20 @@ impl RemoteAbilityInvocationTarget {
     ) -> anyhow::Result<Self> {
         validate_forward_target_ura(execution_target_ura)?;
         let public_ability = crate::ura::owner_local_ability_name(execution_target_ura, selector);
-        let ability_ura = crate::ura::owner_ability_ura(execution_target_ura, &public_ability)
-            .ok_or_else(|| {
-                anyhow::anyhow!("derive ability URA for {execution_target_ura} {public_ability}")
+        crate::ura::owner_ability_ura(execution_target_ura, &public_ability).ok_or_else(|| {
+            anyhow::anyhow!("derive ability URA for {execution_target_ura} {public_ability}")
+        })?;
+        let descriptor_ref =
+            crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
+                execution_target_ura,
+                &public_ability,
+            )
+            .with_context(|| {
+                format!(
+                    "resolve descriptor version for target-owned selector `{selector}` on `{execution_target_ura}`"
+                )
             })?;
-        Self::from_ability_ura(execution_target_ura, &ability_ura)
+        Self::from_descriptor_ref(execution_target_ura, &descriptor_ref)
     }
 
     /// Accept an already-canonical Ability URA and bind it to an execution
@@ -182,7 +192,24 @@ impl RemoteAbilityInvocationTarget {
             ability_ura: trimmed.to_string(),
             callee_ura: selector.owner_ura().to_string(),
             public_ability: selector.public_name().to_string(),
+            descriptor_version: None,
         })
+    }
+
+    /// Accept a descriptor-bound Ability ref and preserve the version for
+    /// origin-caller proof generation.
+    pub(crate) fn from_descriptor_ref(
+        execution_target_ura: &str,
+        descriptor_ref: &str,
+    ) -> anyhow::Result<Self> {
+        let canonical = easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref)
+            .map_err(|err| anyhow!("invalid descriptor-bound Ability ref: {err}"))?;
+        let (ability_ura, descriptor_version) = canonical
+            .rsplit_once('@')
+            .ok_or_else(|| anyhow!("descriptor-bound Ability ref is missing `@version`"))?;
+        let mut target = Self::from_ability_ura(execution_target_ura, ability_ura)?;
+        target.descriptor_version = Some(descriptor_version.to_string());
+        Ok(target)
     }
 
     /// Borrow the canonical URA for the transport helper.
@@ -193,6 +220,10 @@ impl RemoteAbilityInvocationTarget {
     /// Node or hub that receives the forwarding request.
     pub(crate) fn execution_target_ura(&self) -> &str {
         &self.execution_target_ura
+    }
+
+    pub(crate) fn descriptor_version(&self) -> Option<&str> {
+        self.descriptor_version.as_deref()
     }
 }
 
@@ -602,8 +633,9 @@ fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
 /// forward path relays no explicit subject), causal = None, ability =
 /// the PUBLIC name, args = the hub-re-serialised bytes.
 ///
-/// Returns `None` when the caller is not a device URA — fidelity is
-/// additive; execution then proceeds with the trust-domain identity.
+/// Returns `None` when the caller is not a device URA or when the route target
+/// lacks a descriptor version. Fidelity is additive, but it must never mint an
+/// origin proof over a guessed descriptor.
 fn device_origin_claim(
     caller_ura: &str,
     target: &RemoteAbilityInvocationTarget,
@@ -630,7 +662,7 @@ fn device_origin_claim(
     let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
 
     let nonce = easynet_axon::invocation::fresh_nonce();
-    let descriptor_version = crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+    let descriptor_version = target.descriptor_version()?;
     let subject_ura = match EntityRef::try_from_subject_identity(&SubjectIdentity::new(
         callee_ura.clone(),
         UraProfile::EasynetStrictV2,
@@ -956,7 +988,15 @@ fn signed_local_daemon_request(
     arguments: Vec<u8>,
 ) -> anyhow::Result<InvokeRequest> {
     let signer = LocalDaemonSigner::for_caller(caller_ura);
-    envelope.signed_invoke_request(function_name, arguments, &signer)
+    let callee_ura = envelope
+        .callee_ura()
+        .ok_or_else(|| anyhow::anyhow!("signed local daemon request missing callee"))?
+        .to_string();
+    let descriptor_ref = crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
+        &callee_ura,
+        function_name,
+    )?;
+    envelope.signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
 }
 
 #[cfg(test)]
@@ -974,9 +1014,10 @@ mod tests {
 
         let caller = "easynet:///r/easynet.run/device/node-a";
         let ability_ura = "easynet:///r/easynet.run/ability/alice.bfilter.code_filter";
-        let target = RemoteAbilityInvocationTarget::from_ability_ura(
+        let descriptor_ref = format!("{ability_ura}@2.4.0");
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/easynet.run/device/node-b",
-            ability_ura,
+            &descriptor_ref,
         )
         .expect("remote ability target");
         let args_bytes =
@@ -987,10 +1028,7 @@ mod tests {
             .expect("device caller produces a claim");
         assert_eq!(claim.caller_ura, caller);
         assert_eq!(claim.ability, "code_filter");
-        assert_eq!(
-            claim.descriptor_version,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-        );
+        assert_eq!(claim.descriptor_version, "2.4.0");
 
         // Executing-device side: decode and rebuild exactly as
         // `LocalAxonSessionDispatcher` does (claim -> wire dispatch with
@@ -1044,13 +1082,26 @@ mod tests {
     /// fidelity is additive, never fabricated.
     #[test]
     fn device_origin_claim_requires_device_caller() {
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/easynet.run/device/node-b",
+            "easynet:///r/easynet.run/ability/alice.bfilter.code_filter@2.4.0",
+        )
+        .expect("remote ability target");
+        assert!(
+            device_origin_claim("easynet:///r/easynet.run/user/alice", &target, b"{}",).is_none()
+        );
+    }
+
+    #[test]
+    fn device_origin_claim_requires_descriptor_version() {
         let target = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/easynet.run/device/node-b",
             "easynet:///r/easynet.run/ability/alice.bfilter.code_filter",
         )
         .expect("remote ability target");
         assert!(
-            device_origin_claim("easynet:///r/easynet.run/user/alice", &target, b"{}",).is_none()
+            device_origin_claim("easynet:///r/easynet.run/device/node-a", &target, b"{}",)
+                .is_none()
         );
     }
 

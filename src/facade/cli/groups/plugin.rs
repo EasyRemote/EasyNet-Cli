@@ -221,10 +221,18 @@ fn invoke_plugin_control_ability_via_daemon(
             let Some(subject) = plugin_control_subject_ura()? else {
                 return Ok(None);
             };
-            let invocation =
-                crate::daemon::DaemonInvocation::builder(&subject, &subject, ability, &subject)?
-                    .args_json(&serde_json::json!({}))?
-                    .build();
+            let descriptor_ref =
+                crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
+                    &subject, ability,
+                )?;
+            let invocation = crate::daemon::DaemonInvocation::builder(
+                &subject,
+                &subject,
+                descriptor_ref,
+                &subject,
+            )?
+            .args_json(&serde_json::json!({}))?
+            .build();
             let response = client.invoke(invocation).await?;
             if let Some(err) = response.error {
                 anyhow::bail!(

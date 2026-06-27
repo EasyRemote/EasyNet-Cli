@@ -441,7 +441,7 @@ impl FederatedKeyResolver {
                 .with_reason("resolve_key_envelope_build")
                 .with_message(format!("agent_ura:{agent_ura}:{e}"))
         })?;
-        if let Some(envelope) = request.envelope.as_mut() {
+        let signed_descriptor_ref = if let Some(envelope) = request.envelope.as_mut() {
             sign_peer_request_envelope(
                 envelope,
                 ability,
@@ -457,11 +457,18 @@ impl FederatedKeyResolver {
                         status.code(),
                         status.message()
                     ))
-            })?;
+            })?
         } else {
             return Err(AxonError::new(AxonErrorKind::Internal)
                 .with_reason("resolve_key_envelope_missing")
                 .with_message(format!("agent_ura:{agent_ura}")));
+        };
+        if let Some(descriptor_ref) = signed_descriptor_ref {
+            request.metadata.insert(
+                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                    .to_string(),
+                descriptor_ref,
+            );
         }
 
         // Bridge sync trait → async tonic call.

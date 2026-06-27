@@ -229,10 +229,16 @@ fn invoke(
 ) -> Request<InvokeRequest> {
     let arguments = args.to_string().into_bytes();
     let signer = device_signer();
+    let descriptor_ref = format!(
+        "{}@{}",
+        easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
+            .expect("fixture ability URA"),
+        easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    );
     Request::new(
         ProtoEnvelope::targeted(DEVICE_URI, callee_ura, callee_ura)
             .expect("valid invoke envelope")
-            .signed_invoke_request(function_name, arguments, &signer)
+            .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
             .expect("valid signed invoke request"),
     )
 }

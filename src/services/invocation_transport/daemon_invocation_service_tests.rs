@@ -280,6 +280,15 @@ fn next_test_invocation_nonce() -> [u8; 16] {
     nonce
 }
 
+fn test_descriptor_ref(callee_ura: &str, ability: &str) -> String {
+    crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        callee_ura,
+        ability,
+        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+    )
+    .expect("test descriptor ref")
+}
+
 fn signed_test_envelope(
     caller_ura: &str,
     callee_ura: &str,
@@ -295,10 +304,11 @@ fn signed_test_envelope(
         .expect("valid signed test envelope")
         .into_inner();
     envelope.invocation_nonce = nonce.to_vec();
+    let descriptor_ref = test_descriptor_ref(callee_ura, ability);
     let descriptor_bound =
         crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
             envelope.clone(),
-            ability.to_string(),
+            descriptor_ref,
             arguments,
             crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
@@ -326,6 +336,11 @@ fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest
         )),
         function_name: function_name.to_string(),
         arguments,
+        metadata: std::collections::HashMap::from([(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+        )]),
         ..InvokeRequest::default()
     })
 }
@@ -347,6 +362,11 @@ fn invoke_request_from_device(
         )),
         function_name: function_name.to_string(),
         arguments,
+        metadata: std::collections::HashMap::from([(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+        )]),
         ..InvokeRequest::default()
     })
 }

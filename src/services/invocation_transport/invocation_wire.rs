@@ -57,6 +57,7 @@ pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 /// (single wire-contract source; admission verifies, ledger records).
 pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
 pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
+pub(crate) const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 #[derive(Debug, Clone)]
 pub struct ProtoEnvelope {
@@ -107,6 +108,11 @@ impl ProtoEnvelope {
     }
 
     #[must_use]
+    pub fn callee_ura(&self) -> Option<&str> {
+        self.inner.callee.as_ref().map(|callee| callee.ura.as_str())
+    }
+
+    #[must_use]
     pub fn with_causal_context(
         mut self,
         causal_context: easynet_axon::pb::axon::v1::CausalContext,
@@ -126,31 +132,6 @@ impl ProtoEnvelope {
         }
         Ok(InvokeRequest {
             envelope: Some(self.into_inner()),
-            function_name,
-            arguments,
-            ..InvokeRequest::default()
-        })
-    }
-
-    /// Sign this full descriptor-bound envelope and build an InvokeRequest.
-    ///
-    /// This is the local-daemon client path: the envelope remains ordinary
-    /// external caller material, so Axon admission later verifies the
-    /// `caller_signature` against the caller's trust anchor. Daemon-internal
-    /// `_system.local` calls use `LocalRuntimeIngress::LocalSystem` instead.
-    pub fn signed_invoke_request(
-        self,
-        function_name: impl Into<String>,
-        arguments: Vec<u8>,
-        signer: &dyn crate::services::self_identity::SelfIdentity,
-    ) -> anyhow::Result<InvokeRequest> {
-        let function_name = function_name.into();
-        if function_name.trim().is_empty() {
-            anyhow::bail!("function_name must not be empty");
-        }
-        let signed = self.sign_descriptor_bound(&function_name, &arguments, signer)?;
-        Ok(InvokeRequest {
-            envelope: Some(signed.into_inner()),
             function_name,
             arguments,
             ..InvokeRequest::default()
@@ -180,12 +161,17 @@ impl ProtoEnvelope {
             anyhow::bail!("descriptor_ability_ref must not be empty");
         }
         let signed = self.sign_descriptor_bound(&descriptor_ability_ref, &arguments, signer)?;
-        Ok(InvokeRequest {
+        let mut request = InvokeRequest {
             envelope: Some(signed.into_inner()),
             function_name,
             arguments,
             ..InvokeRequest::default()
-        })
+        };
+        request.metadata.insert(
+            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
+            descriptor_ability_ref,
+        );
+        Ok(request)
     }
 
     /// Attach an Ed25519 caller signature over Axon's
@@ -576,18 +562,35 @@ mod tests {
     fn signed_request_signs_descriptor_bound_canonical_bytes() {
         let signer = TestSigner(SigningKey::from_bytes(&[0x37; 32]));
         let payload = br#"{"x":1}"#.to_vec();
+        let callee = "easynet:///r/acme/device/dev-a";
+        let descriptor_ref = format!(
+            "{}@1.0.0",
+            crate::ura::owner_ability_ura(callee, "demo.echo").unwrap()
+        );
         let envelope = ProtoEnvelope::targeted(
             "easynet:///r/acme/device/dev-a",
-            "easynet:///r/acme/device/dev-a",
+            callee,
             "easynet:///r/acme/device/dev-a",
         )
         .unwrap();
         let descriptor = envelope
-            .descriptor_bound_envelope("demo.echo", &payload)
+            .descriptor_bound_envelope(&descriptor_ref, &payload)
             .unwrap();
         let request = envelope
-            .signed_invoke_request("demo.echo", payload, &signer)
+            .signed_descriptor_ref_invoke_request(
+                "demo.echo",
+                descriptor_ref.clone(),
+                payload,
+                &signer,
+            )
             .unwrap();
+        assert_eq!(
+            request
+                .metadata
+                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
+                .map(String::as_str),
+            Some(descriptor_ref.as_str())
+        );
         let signature = request
             .envelope
             .unwrap()

@@ -11,7 +11,7 @@ use easynet_axon::invocation::{
 };
 use easynet_axon::pb::axon::v1 as pb;
 
-use crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire;
+use crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire;
 use crate::runtime::local_invocation_identity::system_agent_identity;
 
 #[derive(Debug, Clone, Copy)]
@@ -66,11 +66,7 @@ pub(crate) fn descriptor_bound_from_wire_parts(
         Err(err) => return Err(err),
     };
     let causal_context = wire::causal_context_from_wire(envelope.causal_context)?;
-    let ability = ability_descriptor_ref_for_wire(
-        &callee.ura,
-        &ability,
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-    )?;
+    let ability = require_descriptor_ref_for_wire(&callee.ura, &ability)?;
     let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller,
         callee,

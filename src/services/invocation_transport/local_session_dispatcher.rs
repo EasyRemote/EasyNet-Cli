@@ -2892,9 +2892,7 @@ mod tests {
         // and hosts the target ability, the session-receive path
         // routes through `invoke_async` → LedgerSink → InvocationLedger.
         // One Dispatch frame in → one ledger row out.
-        use easynet_axon::invocation::{
-            make_ability, InvocationLedger, LedgerSink, LocalRuntime,
-        };
+        use easynet_axon::invocation::{make_ability, InvocationLedger, LedgerSink, LocalRuntime};
 
         let temp = tempfile::tempdir().expect("tempdir");
         let ledger =

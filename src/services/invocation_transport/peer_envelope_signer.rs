@@ -109,9 +109,9 @@ pub(crate) fn sign_peer_request_envelope(
     arguments: &[u8],
     local_realm: Option<&str>,
     hub_signing_seed: Option<&SessionSigningSeed>,
-) -> Result<(), Status> {
+) -> Result<Option<String>, Status> {
     let Some(realm) = local_realm else {
-        return Ok(());
+        return Ok(None);
     };
 
     use ed25519_dalek::{Signer as _, SigningKey};
@@ -167,10 +167,19 @@ pub(crate) fn sign_peer_request_envelope(
             "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
         ));
     }
+    let descriptor_ref = crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
+        &callee_ura,
+        ability,
+    )
+    .map_err(|err| {
+        Status::internal(format!(
+            "cross-hub forward_invoke signing: resolve descriptor ref for `{ability}`: {err}"
+        ))
+    })?;
 
     let descriptor_bound = descriptor_bound_from_wire_parts(
         envelope.clone(),
-        ability.to_string(),
+        descriptor_ref.clone(),
         arguments,
         WireCallerIdentity::FromEnvelope,
     )
@@ -211,7 +220,7 @@ pub(crate) fn sign_peer_request_envelope(
         signature: signature.to_bytes().to_vec(),
         ..CallerSignature::default()
     });
-    Ok(())
+    Ok(Some(descriptor_ref))
 }
 
 fn descriptor_subject_ura_for(

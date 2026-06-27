@@ -408,9 +408,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     // Returns `(response, axon_took_it=true)` so the caller in
     // `invoke()` skips the manual `record_unary_invocation`
     // write (avoiding the duplicate row keyed by `request_id`).
-    use easynet_axon::invocation::{
-        make_ability, InvocationLedger, LedgerSink, LocalRuntime,
-    };
+    use easynet_axon::invocation::{make_ability, InvocationLedger, LedgerSink, LocalRuntime};
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
     let temp = tempfile::tempdir().unwrap();

@@ -864,14 +864,23 @@ impl UnaryDispatcher {
                 arguments: inner_arguments.clone(),
                 ..InvokeRequest::default()
             };
-            if let Some(envelope) = peer_request.envelope.as_mut() {
+            let signed_descriptor_ref = if let Some(envelope) = peer_request.envelope.as_mut() {
                 sign_peer_request_envelope(
                     envelope,
                     &peer_request.function_name,
                     &peer_request.arguments,
                     local_realm,
                     self.federation.hub_signing_seed.as_ref(),
-                )?;
+                )?
+            } else {
+                None
+            };
+            if let Some(descriptor_ref) = signed_descriptor_ref {
+                peer_request.metadata.insert(
+                    crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                        .to_string(),
+                    descriptor_ref,
+                );
             }
             fanout.push(async move {
                 match client.forward_invoke(&peer_hub_url, peer_request).await {
@@ -962,14 +971,23 @@ impl UnaryDispatcher {
                 arguments: inner_arguments.clone(),
                 ..InvokeRequest::default()
             };
-            if let Some(envelope) = peer_request.envelope.as_mut() {
+            let signed_descriptor_ref = if let Some(envelope) = peer_request.envelope.as_mut() {
                 sign_peer_request_envelope(
                     envelope,
                     &peer_request.function_name,
                     &peer_request.arguments,
                     local_realm,
                     self.federation.hub_signing_seed.as_ref(),
-                )?;
+                )?
+            } else {
+                None
+            };
+            if let Some(descriptor_ref) = signed_descriptor_ref {
+                peer_request.metadata.insert(
+                    crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                        .to_string(),
+                    descriptor_ref,
+                );
             }
             fanout.push(async move {
                 match client.forward_invoke(&peer_hub_url, peer_request).await {
@@ -1317,14 +1335,23 @@ impl UnaryDispatcher {
             arguments: nested_arguments,
             ..InvokeRequest::default()
         };
-        if let Some(envelope) = peer_request.envelope.as_mut() {
+        let signed_descriptor_ref = if let Some(envelope) = peer_request.envelope.as_mut() {
             sign_peer_request_envelope(
                 envelope,
                 &peer_request.function_name,
                 &peer_request.arguments,
                 self.identity.session_realm.as_deref(),
                 self.federation.hub_signing_seed.as_ref(),
-            )?;
+            )?
+        } else {
+            None
+        };
+        if let Some(descriptor_ref) = signed_descriptor_ref {
+            peer_request.metadata.insert(
+                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                    .to_string(),
+                descriptor_ref,
+            );
         }
         Ok(peer_request)
     }

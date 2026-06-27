@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(feature = "axon-pb")]
+use crate::core::ability_spec::AbilityManifest;
+#[cfg(feature = "axon-pb")]
 use crate::runtime::ability::HostedAgentDelegationClaims;
 #[cfg(feature = "axon-pb")]
 use crate::services::self_identity::{LocalDaemonSigner, SelfIdentity};
@@ -535,15 +537,17 @@ fn invoke_local_daemon_ability_stream_with_target(
     let subject_ura = subject_policy.resolve(&callee_ura)?;
     let arguments = serde_json::to_vec(&payload_json)
         .with_context(|| format!("encode {function_name} args"))?;
+    let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, function_name)
+        .with_context(|| format!("resolve descriptor ref for {function_name}"))?;
     let envelope = signed_local_daemon_envelope(
         caller_ura.clone(),
         callee_ura,
         subject_ura,
-        function_name,
+        &descriptor_ref,
         &arguments,
     )
     .with_context(|| format!("sign {function_name} Axon InvokeStream envelope"))?;
-    let request = InvokeServerStreamRequest {
+    let mut request = InvokeServerStreamRequest {
         envelope: Some(envelope),
         function_name: function_name.to_string(),
         arguments,
@@ -551,6 +555,11 @@ fn invoke_local_daemon_ability_stream_with_target(
         timeout_seconds: i32::try_from(timeout.as_secs()).unwrap_or(i32::MAX),
         ..InvokeServerStreamRequest::default()
     };
+    request.metadata.insert(
+        crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            .to_string(),
+        descriptor_ref,
+    );
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1043,8 +1052,15 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         form: Some(causal_form),
     });
     let signer = LocalDaemonSigner::for_caller(&wire_caller_ura);
+    let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, &function_name)
+        .with_context(|| format!("resolve descriptor ref for {function_name}"))?;
     let mut request = envelope
-        .signed_invoke_request(&function_name, arguments, &signer)
+        .signed_descriptor_ref_invoke_request(
+            &function_name,
+            descriptor_ref.clone(),
+            arguments,
+            &signer,
+        )
         .with_context(|| format!("build signed {function_name} Axon InvokeRequest"))?;
     let (wire_request_id, nonce_hex) = request
         .envelope
@@ -1060,22 +1076,13 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         bail!("build signed {function_name} request without envelope request_id");
     }
     if let Some(delegation) = delegation.as_ref() {
-        let envelope_ability =
-            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-                &callee_ura,
-                &function_name,
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            )
-            .map_err(|err| {
-                anyhow!("derive signed envelope ability ref for {function_name}: {err}")
-            })?;
         let metadata_value = delegation.metadata_value(
             &wire_caller_ura,
             &callee_ura,
             &subject_ura,
             &wire_request_id,
             &nonce_hex,
-            &envelope_ability,
+            &descriptor_ref,
             &signer,
         )?;
         request.metadata.insert(
@@ -1447,12 +1454,158 @@ fn signed_local_daemon_invoke_request(
     arguments: Vec<u8>,
 ) -> anyhow::Result<easynet_axon::pb::axon::v1::InvokeRequest> {
     let signer = LocalDaemonSigner::for_caller(&caller_ura);
+    let descriptor_ref = resolve_local_signed_descriptor_ref(&callee_ura, function_name)?;
     crate::services::invocation_transport::ProtoEnvelope::targeted(
         caller_ura,
         callee_ura,
         subject_ura,
     )?
-    .signed_invoke_request(function_name, arguments, &signer)
+    .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn resolve_local_signed_descriptor_ref(
+    callee_ura: &str,
+    function_name: &str,
+) -> anyhow::Result<String> {
+    if let Ok(descriptor_ref) =
+        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+            callee_ura,
+            function_name,
+        )
+    {
+        return Ok(descriptor_ref);
+    }
+
+    if let Some(version) = descriptor_version_from_device_store(callee_ura, function_name)? {
+        return crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura,
+            function_name,
+            &version,
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"));
+    }
+
+    if let Some(version) = descriptor_version_from_daemon_wrapper(function_name) {
+        return crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura,
+            function_name,
+            version,
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"));
+    }
+
+    if let Some(version) = descriptor_version_from_system_manifest(function_name)? {
+        return crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura,
+            function_name,
+            &version,
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"));
+    }
+
+    anyhow::bail!(
+        "cannot resolve descriptor ref for local daemon ability {function_name:?} under \
+         callee {callee_ura:?}; no explicit descriptor ref, device deploy snapshot, or \
+         daemon/system descriptor source was found"
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_version_from_device_store(
+    callee_ura: &str,
+    function_name: &str,
+) -> anyhow::Result<Option<String>> {
+    let rows = crate::runtime::agents::device_ability_store::DeviceAbilityStore::open_default()
+        .load()
+        .map_err(|err| {
+            anyhow::anyhow!("read device ability store for descriptor signing: {err}")
+        })?;
+    for row in rows {
+        if row.public_name() != function_name {
+            continue;
+        }
+        let selector = match crate::ura::AbilitySelector::parse(row.ability_ura()) {
+            Ok(selector) => selector,
+            Err(_) => continue,
+        };
+        if selector.owner_ura() != callee_ura {
+            continue;
+        }
+        let bytes = row.manifest_bytes()?;
+        let manifest = AbilityManifest::from_json_slice(&bytes)?;
+        return Ok(Some(manifest.descriptor_version().to_string()));
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_version_from_daemon_wrapper(function_name: &str) -> Option<&'static str> {
+    use crate::services::invocation_transport::federation_wrappers::{
+        ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
+        ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE,
+        ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
+        ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+        ABILITY_FEDERATION_RESOLVE, ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+        ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE,
+        ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+    };
+
+    match function_name {
+        ABILITY_FEDERATION_JOIN
+        | ABILITY_FEDERATION_ADVERTISE_AGENT
+        | ABILITY_FEDERATION_HEARTBEAT
+        | ABILITY_FEDERATION_RESOLVE
+        | ABILITY_NAMESPACE_RESOLVE
+        | ABILITY_NAMESPACE_PROXY_RESOLVE
+        | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
+        | ABILITY_FEDERATION_REVOKE
+        | ABILITY_FEDERATION_FORWARD_INVOKE
+        | ABILITY_FEDERATION_RESOLVE_KEY
+        | ABILITY_FEDERATION_DISCOVER
+        | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
+        | ABILITY_FEDERATION_LIST_USER_DEVICES
+        | ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES
+        | ABILITY_FEDERATION_ADVERTISE_ABILITIES
+        | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY => Some("1.0.0"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_version_from_system_manifest(function_name: &str) -> anyhow::Result<Option<String>> {
+    if function_name.contains('/') || function_name.contains('\\') {
+        return Ok(None);
+    }
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("abilities")
+        .join("system")
+        .join(format!("{function_name}.ability.toml"));
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let body = std::fs::read_to_string(&manifest_path).map_err(|err| {
+        anyhow::anyhow!(
+            "read system ability manifest {} for descriptor signing: {err}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest = AbilityManifest::from_toml_str(&body).map_err(|err| {
+        anyhow::anyhow!(
+            "parse system ability manifest {} for descriptor signing: {err}",
+            manifest_path.display()
+        )
+    })?;
+    if manifest.name() != function_name {
+        anyhow::bail!(
+            "system ability manifest {} names {:?}, expected {:?}",
+            manifest_path.display(),
+            manifest.name(),
+            function_name
+        );
+    }
+    Ok(Some(manifest.descriptor_version().to_string()))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1460,7 +1613,7 @@ fn signed_local_daemon_envelope(
     caller_ura: String,
     callee_ura: String,
     subject_ura: String,
-    function_name: &str,
+    descriptor_ref: &str,
     arguments: &[u8],
 ) -> anyhow::Result<easynet_axon::pb::axon::v1::Envelope> {
     let signer = LocalDaemonSigner::for_caller(&caller_ura);
@@ -1470,7 +1623,39 @@ fn signed_local_daemon_envelope(
             callee_ura,
             subject_ura,
         )?
-        .sign_descriptor_bound(function_name, arguments, &signer)?
+        .sign_descriptor_bound(descriptor_ref, arguments, &signer)?
         .into_inner(),
     )
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_wrapper_descriptor_resolves_without_system_manifest_fallback() {
+        let callee = crate::ura::hub_ura("acme");
+        let function_name = crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_FORWARD_INVOKE;
+        let descriptor_ref = resolve_local_signed_descriptor_ref(&callee, function_name).unwrap();
+        assert_eq!(
+            descriptor_ref,
+            format!(
+                "{}@1.0.0",
+                crate::ura::owner_ability_ura(&callee, function_name).unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn unknown_local_signed_descriptor_ref_fails_closed() {
+        let err = resolve_local_signed_descriptor_ref(
+            &crate::ura::hub_ura("acme"),
+            "unknown/internal-wrapper",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("cannot resolve descriptor ref"),
+            "unknown wrappers must not fall back to a fabricated descriptor version: {err}"
+        );
+    }
 }

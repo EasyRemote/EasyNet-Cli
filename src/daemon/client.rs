@@ -61,7 +61,7 @@ impl DaemonClient {
         &self,
         invocation: DaemonInvocation,
     ) -> Result<easynet_axon::pb::axon::v1::InvokeResponse> {
-        let ability = invocation.ability().to_string();
+        let ability = invocation.descriptor_ref().to_string();
         let request = invocation.into_request()?;
         let channel = local_daemon_grpc::connect_channel(
             self.endpoint.clone(),
@@ -93,7 +93,7 @@ impl DaemonClient {
         &self,
         invocation: DaemonInvocation,
     ) -> Result<tonic::Streaming<easynet_axon::pb::axon::v1::InvokeStreamChunk>> {
-        let ability = invocation.ability().to_string();
+        let ability = invocation.descriptor_ref().to_string();
         let request = invocation.into_server_stream_request()?;
         let channel = local_daemon_grpc::connect_channel(
             self.endpoint.clone(),
@@ -129,7 +129,7 @@ impl DaemonClient {
         invocation: DaemonInvocation,
         streams: Vec<easynet_axon::pb::axon::v1::StreamDescriptor>,
     ) -> Result<DaemonBidiSession> {
-        let ability = invocation.ability().to_string();
+        let ability = invocation.descriptor_ref().to_string();
         let frame0 = invocation.into_bidi_open_frame(streams)?;
         let channel = local_daemon_grpc::connect_channel(
             self.endpoint.clone(),

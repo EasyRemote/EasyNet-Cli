@@ -652,19 +652,27 @@ fn invoke_daemon_ability(
         let signer = SevenAxesSigner::for_caller(caller_ura);
         let envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
             .expect("valid seven-axes invoke envelope");
-        let request = match descriptor_ability_ref {
-            Some(descriptor_ability_ref) => envelope
-                .signed_descriptor_ref_invoke_request(
-                    function_name,
-                    descriptor_ability_ref,
-                    arguments,
-                    &signer,
-                )
-                .expect("valid seven-axes descriptor-ref signed invoke request"),
-            None => envelope
-                .signed_invoke_request(function_name, arguments, &signer)
-                .expect("valid seven-axes signed invoke request"),
+        let fallback_descriptor_ref;
+        let descriptor_ability_ref = match descriptor_ability_ref {
+            Some(descriptor_ability_ref) => descriptor_ability_ref,
+            None => {
+                fallback_descriptor_ref = format!(
+                    "{}@{}",
+                    easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
+                        .expect("fixture ability URA"),
+                    easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+                );
+                fallback_descriptor_ref.as_str()
+            }
         };
+        let request = envelope
+            .signed_descriptor_ref_invoke_request(
+                function_name,
+                descriptor_ability_ref,
+                arguments,
+                &signer,
+            )
+            .expect("valid seven-axes descriptor-ref signed invoke request");
         let response = tokio::time::timeout(
             Duration::from_secs(10),
             client.invoke(tonic::Request::new(request)),

@@ -75,7 +75,13 @@ fn quota_for_forward_invoke_meters_inner_user_ability_only() {
 #[tokio::test]
 async fn forward_invoke_quota_throttles_by_inner_user_ability() {
     let caller_ura = "easynet:///r/test-realm/device/quota-caller";
-    let rt = runtime_with_json_echo(TEST_DAEMON_URI, "observe.health", "handled_by", "quota-test").await;
+    let rt = runtime_with_json_echo(
+        TEST_DAEMON_URI,
+        "observe.health",
+        "handled_by",
+        "quota-test",
+    )
+    .await;
     let svc = make_quota_service_for_device_caller(caller_ura, 1).with_local_runtime(rt);
     publish_test_route(&svc, TEST_DAEMON_URI, "observe.health");
     let args = forward_invoke_args_for_ability(
@@ -1158,14 +1164,15 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         invocation_nonce: vec![7; 16],
         ..Envelope::default()
     };
-    sign_peer_request_envelope(
+    let signed_descriptor_ref = sign_peer_request_envelope(
         &mut envelope,
         ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
         args,
         Some("local-realm"),
         Some(&[0x22; 32]),
     )
-    .expect("sign test envelope");
+    .expect("sign test envelope")
+    .expect("signed descriptor ref");
 
     let mut request = InvokeRequest {
         envelope: Some(envelope),
@@ -1173,6 +1180,11 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         arguments: args.to_vec(),
         ..InvokeRequest::default()
     };
+    request.metadata.insert(
+        crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            .to_string(),
+        signed_descriptor_ref,
+    );
     request.metadata.insert(
         "x-easynet-delegation".to_string(),
         signed_delegation_metadata_for_test(

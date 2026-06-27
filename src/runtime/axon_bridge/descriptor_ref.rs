@@ -90,6 +90,39 @@ pub(crate) fn ability_descriptor_ref_for_wire(
     Ok(format!("{ability_ura}@{descriptor_version}"))
 }
 
+pub(crate) fn require_descriptor_ref_for_wire(
+    callee_ura: &str,
+    descriptor_ref: &str,
+) -> Result<String, AxonError> {
+    let callee_ura = callee_ura.trim();
+    let descriptor_ref = descriptor_ref.trim();
+    if callee_ura.is_empty() {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability callee URA is empty",
+        ));
+    }
+    if descriptor_ref.is_empty() {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability ref is empty",
+        ));
+    }
+    let descriptor_ref = canonical_ability_descriptor_ref(descriptor_ref).map_err(|err| {
+        AxonError::invalid_argument(format!(
+            "descriptor-bound ability must be an explicit descriptor ref: {err}"
+        ))
+    })?;
+    let (ability_ura, _) = descriptor_ref.rsplit_once('@').ok_or_else(|| {
+        AxonError::invalid_argument("descriptor-bound ability ref missing version")
+    })?;
+    let selector = crate::ura::AbilitySelector::parse(ability_ura).map_err(|err| {
+        AxonError::invalid_argument(format!(
+            "descriptor-bound ability ref carries invalid ability URA `{ability_ura}`: {err}"
+        ))
+    })?;
+    ensure_ability_owner_matches_callee(callee_ura, &selector)?;
+    Ok(descriptor_ref)
+}
+
 fn ensure_ability_owner_matches_callee(
     callee_ura: &str,
     selector: &crate::ura::AbilitySelector,
@@ -145,5 +178,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(normalized, ability_ref);
+    }
+
+    #[test]
+    fn explicit_descriptor_ref_is_required_when_no_version_is_available() {
+        let callee = crate::ura::device_ura("acme", "host-a");
+        let err = require_descriptor_ref_for_wire(&callee, "fs.read").unwrap_err();
+
+        assert!(err.to_string().contains("explicit descriptor ref"), "{err}");
     }
 }

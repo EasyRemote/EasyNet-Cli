@@ -97,7 +97,7 @@ const BIDI_CALLBACK_QUEUE_CAPACITY: usize = 64;
 /// {
 ///   "caller_ura": "...",
 ///   "callee_ura": "...",
-///   "ability": "observe.health",
+///   "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
 ///   "subject_ura": "...",
 ///   "nonce_base64": "<16 bytes, base64>",
 ///   "causal_context": {"form": "none"},
@@ -1197,7 +1197,7 @@ fn invocation_endpoint_for_session(
 struct InvocationJson {
     caller_ura: String,
     callee_ura: String,
-    ability: String,
+    descriptor_ref: String,
     subject_ura: String,
     nonce: [u8; 16],
     causal_context: easynet_axon::pb::axon::v1::CausalContext,
@@ -1219,7 +1219,7 @@ impl InvocationJson {
 
         let caller_ura = required_string(obj, "caller_ura")?;
         let callee_ura = required_string(obj, "callee_ura")?;
-        let ability = required_string(obj, "ability")?;
+        let descriptor_ref = required_string(obj, "descriptor_ref")?;
         let subject_ura = required_string(obj, "subject_ura")?;
         let nonce = decode_nonce(required_string(obj, "nonce_base64")?)?;
         let causal_context = parse_causal_context(
@@ -1235,7 +1235,7 @@ impl InvocationJson {
         Ok(Self {
             caller_ura,
             callee_ura,
-            ability,
+            descriptor_ref,
             subject_ura,
             nonce,
             causal_context,
@@ -1252,7 +1252,7 @@ impl InvocationJson {
         let mut builder = crate::daemon::DaemonInvocation::builder(
             self.caller_ura,
             self.callee_ura,
-            self.ability,
+            self.descriptor_ref,
             self.subject_ura,
         )?
         .nonce(self.nonce)
@@ -1795,7 +1795,7 @@ fn invocation_output_json(
         "ok": true,
         "caller_ura": spec.caller_ura,
         "callee_ura": spec.callee_ura,
-        "ability": spec.ability,
+        "descriptor_ref": spec.descriptor_ref,
         "subject_ura": spec.subject_ura,
         "nonce_base64": base64::engine::general_purpose::STANDARD.encode(spec.nonce),
         "state": response.state,
@@ -1992,12 +1992,20 @@ mod tests {
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
 
+    fn descriptor_ref(owner_ura: &str, public_name: &str, version: &str) -> String {
+        format!(
+            "{}@{}",
+            crate::ura::owner_ability_ura(owner_ura, public_name).unwrap(),
+            version
+        )
+    }
+
     fn valid_invocation_json() -> CString {
         CString::new(
             serde_json::json!({
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "observe.health",
+                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
@@ -2009,12 +2017,13 @@ mod tests {
     }
 
     fn valid_bidi_invocation_json() -> CString {
-        let callee_ura = crate::ura::hub_ura("acme");
+        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let descriptor_ref = descriptor_ref(&callee_ura, "device.pty.attach", "2.4.0");
         CString::new(
             serde_json::json!({
                 "caller_ura": "easynet:///r/acme/device/dev-a",
                 "callee_ura": callee_ura,
-                "ability": "device.pty.attach",
+                "descriptor_ref": descriptor_ref,
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
@@ -2043,7 +2052,7 @@ mod tests {
             r#"{
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "observe.health",
+                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "args": {}
@@ -2060,10 +2069,11 @@ mod tests {
     /// `into_daemon_invocation` (the builder's `checked_ura` rejects
     /// the legacy `ura://` fixture shapes that parse-only tests use).
     fn canonical_invocation_json(extra: serde_json::Value) -> String {
+        let callee_ura = "easynet:///r/acme/device/dev-a";
         let mut obj = serde_json::json!({
             "caller_ura": "easynet:///r/acme/device/dev-a",
-            "callee_ura": "easynet:///r/acme/device/dev-a",
-            "ability": "observe.health",
+            "callee_ura": callee_ura,
+            "descriptor_ref": descriptor_ref(callee_ura, "observe.health", "2.4.0"),
             "subject_ura": "easynet:///r/acme/device/dev-a",
             "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
             "causal_context": {"form": "none"},
@@ -2104,7 +2114,7 @@ mod tests {
                 r#"{{
                     "caller_ura": "ura://device/test/caller",
                     "callee_ura": "ura://device/test/callee",
-                    "ability": "observe.health",
+                    "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
                     "subject_ura": "ura://device/test/callee",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                     "causal_context": {{"form": "none"}},
@@ -2126,7 +2136,7 @@ mod tests {
             r#"{
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "observe.health",
+                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AAAAAAAAAAAAAAAAAAAAAA==",
                 "causal_context": {"form": "none"},
@@ -2146,7 +2156,7 @@ mod tests {
             r#"{
                 "caller_ura": "ura://device/test/caller",
                 "callee_ura": "ura://device/test/callee",
-                "ability": "observe.health",
+                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
                 "subject_ura": "ura://device/test/callee",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
@@ -2163,7 +2173,14 @@ mod tests {
     fn parse_invocation_json_supports_complete_bidi_invocation() {
         let raw = valid_bidi_invocation_json();
         let spec = InvocationJson::parse(raw.to_str().unwrap()).unwrap();
-        assert_eq!(spec.ability, "device.pty.attach");
+        assert_eq!(
+            spec.descriptor_ref,
+            descriptor_ref(
+                "easynet:///r/acme/device/dev-a",
+                "device.pty.attach",
+                "2.4.0"
+            )
+        );
         assert_eq!(spec.metadata["x-easynet-delegation"], "producer");
         let signature = spec.caller_signature.expect("caller signature required");
         assert_eq!(signature.algorithm, "ed25519");

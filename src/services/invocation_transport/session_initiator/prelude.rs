@@ -5,7 +5,7 @@ use std::time::Duration;
 use easynet_axon::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
 use tonic::{transport::Channel, Status};
 
-use super::envelope::{sign_envelope_with_seed, SessionSigningSeed};
+use super::envelope::SessionSigningSeed;
 use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
@@ -647,12 +647,67 @@ pub(super) fn signed_prelude_request(
     .and_then(|env| env.invoke_request(function_name, arguments))
     .map_err(|e| Status::invalid_argument(format!("{function_name} prelude: {e}")))?;
     if let Some(seed) = signing_seed {
-        let envelope = request.envelope.as_mut().ok_or_else(|| {
-            Status::internal(format!("{function_name} prelude request missing envelope"))
-        })?;
-        sign_envelope_with_seed(envelope, function_name, &request.arguments, &seed)?;
+        sign_descriptor_bound_prelude_request(&mut request, function_name, &seed)?;
     }
     Ok(request)
+}
+
+fn sign_descriptor_bound_prelude_request(
+    request: &mut InvokeRequest,
+    function_name: &str,
+    seed: &SessionSigningSeed,
+) -> Result<(), Status> {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    let envelope = request.envelope.as_mut().ok_or_else(|| {
+        Status::internal(format!("{function_name} prelude request missing envelope"))
+    })?;
+    let caller_ura = envelope
+        .caller
+        .as_ref()
+        .map(|caller| caller.ura.trim().to_string())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| Status::internal(format!("{function_name} prelude missing caller URA")))?;
+    let callee_ura = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| Status::internal(format!("{function_name} prelude missing callee URA")))?;
+    let descriptor_ref = crate::support::local_daemon_grpc::resolve_local_signed_descriptor_ref(
+        callee_ura,
+        function_name,
+    )
+    .map_err(|err| {
+        Status::internal(format!(
+            "{function_name} prelude cannot resolve descriptor ref: {err}"
+        ))
+    })?;
+    let descriptor_bound =
+        crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+            envelope.clone(),
+            descriptor_ref.clone(),
+            &request.arguments,
+            crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+        )
+        .map_err(|err| {
+            Status::internal(format!(
+                "{function_name} prelude descriptor-bound envelope failed: {err}"
+            ))
+        })?;
+    let signing_key = SigningKey::from_bytes(seed);
+    let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
+    envelope.caller_signature = Some(easynet_axon::pb::axon::v1::CallerSignature {
+        algorithm: "ed25519".to_string(),
+        signature: signature.to_bytes().to_vec(),
+        key_id_hint: caller_ura,
+    });
+    request.metadata.insert(
+        crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            .to_string(),
+        descriptor_ref,
+    );
+    Ok(())
 }
 
 fn descriptor_prelude_subject_ura(

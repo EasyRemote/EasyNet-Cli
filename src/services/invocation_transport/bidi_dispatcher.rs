@@ -3121,18 +3121,16 @@ pub(crate) fn build_remote_bidi_open_frame_for_contract(
 ) -> Result<DispatchFrame, Status> {
     let dispatch_ability = selected_route.dispatch_key();
     match (target_contract_v1, envelope_open.envelope.clone()) {
-        (true, Some(envelope)) => {
-            Ok(build_carrier_v1_dispatch_frame(
-                call_id,
-                easynet_axon::pb::axon::v1::InvokeRequest {
-                    envelope: Some(envelope_with_selected_callee(envelope, selected_route)),
-                    function_name: selected_route.dispatch_name.clone(),
-                    arguments: envelope_open.initial_args.clone(),
-                    ..Default::default()
-                },
-                true,
-            ))
-        }
+        (true, Some(envelope)) => Ok(build_carrier_v1_dispatch_frame(
+            call_id,
+            easynet_axon::pb::axon::v1::InvokeRequest {
+                envelope: Some(envelope_with_selected_callee(envelope, selected_route)),
+                function_name: selected_route.dispatch_name.clone(),
+                arguments: envelope_open.initial_args.clone(),
+                ..Default::default()
+            },
+            true,
+        )),
         _ => build_remote_bidi_open_dispatch_frame(
             call_id,
             &selected_route.callee_ura,
