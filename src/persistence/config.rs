@@ -155,8 +155,18 @@ pub(crate) fn atomic_write_with_permissions(
         let _ = fs::remove_file(&tmp);
         return Err(e.into());
     }
-    let dir_handle = File::open(dir)?;
-    dir_handle.sync_all()?;
+    // Fsync the parent directory so the rename itself is durable. This is
+    // a POSIX guarantee: opening a directory as a file and syncing it is
+    // not supported on Windows (the open fails), and NTFS makes the
+    // metadata update durable through the rename, so the step is both
+    // unsupported and unnecessary there.
+    #[cfg(unix)]
+    {
+        let dir_handle = File::open(dir)?;
+        dir_handle.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
     Ok(())
 }
 
