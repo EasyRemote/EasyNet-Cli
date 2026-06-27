@@ -1456,10 +1456,13 @@ mod tests {
     }
 
     #[test]
-    fn hosted_delegation_snapshot_binds_caller_to_host_device() {
+    fn hosted_delegation_snapshot_binds_caller_to_local_system_and_callee_to_host() {
         let learner = "easynet:///r/acme/agent/apprentice";
         let host = "easynet:///r/acme/device/host-1";
         let owner = "easynet:///r/acme/agent/mentor";
+        // The daemon presents the signed delegation under its local-system
+        // identity (caller), while the host device it delegates for is the
+        // envelope callee. Both bindings are load-bearing.
         let mut grant = TeachGrant::from_draft(TeachGrantDraft {
             ability: "mentor.quote".to_string(),
             ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
@@ -1473,7 +1476,7 @@ mod tests {
             admission_snapshot: TeachGrantAdmissionSnapshot::from_draft(
                 TeachGrantAdmissionSnapshotDraft {
                     invocation_id: "hosted-teach".to_string(),
-                    caller_ura: host.to_string(),
+                    caller_ura: crate::ura::LOCAL_SYSTEM_AGENT_URA.to_string(),
                     callee_ura: host.to_string(),
                     subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
                     envelope_ability: "meta.teach".to_string(),
@@ -1496,12 +1499,12 @@ mod tests {
         });
         grant
             .validate_stored()
-            .expect("hosted snapshot accepts host as caller");
+            .expect("hosted snapshot accepts the local-system caller delegating for the host");
 
-        grant.admission_snapshot.caller_ura = "easynet:///r/acme/device/other".to_string();
-        let err = grant
-            .validate_stored()
-            .expect_err("hosted delegation must reject a caller that is not the host device");
+        grant.admission_snapshot.caller_ura = host.to_string();
+        let err = grant.validate_stored().expect_err(
+            "hosted delegation must reject a caller that is not the local-system identity",
+        );
         assert!(err.to_string().contains("caller"), "{err}");
     }
 

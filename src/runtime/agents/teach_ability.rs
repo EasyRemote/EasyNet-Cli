@@ -2524,10 +2524,17 @@ mod tests {
     fn teach_allows_signed_hosted_agent_delegation_for_a_local_owner() {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed();
+        // Hosted-agent delegation is a loopback path: the daemon presents the
+        // signed token under its local-system identity, while the delegation's
+        // host device (the envelope callee) is the authority being delegated.
         let host = crate::ura::device_ura("test", "local");
 
         let resp = teach_handler(
-            teach_env_with_hosted_delegation(host.clone(), &mentor_ura, &mentor_ura),
+            teach_env_with_hosted_delegation(
+                crate::ura::LOCAL_SYSTEM_AGENT_URA,
+                &mentor_ura,
+                &mentor_ura,
+            ),
             json!({ "ability": "mentor.quote", "learner_ura": apprentice_ura }),
         )
         .expect("signed host device delegation authorizes the local owner");
