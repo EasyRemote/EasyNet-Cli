@@ -41,6 +41,7 @@ use crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell;
 use crate::runtime::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentRuntimeSyncOutcome,
 };
+use crate::support::errors::append_cleanup_error;
 use crate::ura::AbilitySelector;
 
 pub const TEACH: &str = "meta.teach";
@@ -1303,19 +1304,6 @@ fn no_teach_grant_error(
         "descriptor grant missing (allow_transferred_code=false): owner {owner_ura:?} has not \
          granted descriptor {ability_ura:?} ({registry_name:?}) to learner {learner_ura}"
     )
-}
-
-fn append_cleanup_error(
-    primary: anyhow::Error,
-    cleanup: anyhow::Result<()>,
-    cleanup_action: &'static str,
-) -> anyhow::Error {
-    match cleanup {
-        Ok(()) => primary,
-        Err(cleanup_err) => {
-            anyhow::anyhow!("{primary}; additionally failed to {cleanup_action}: {cleanup_err}")
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

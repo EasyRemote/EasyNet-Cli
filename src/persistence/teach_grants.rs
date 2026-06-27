@@ -55,6 +55,7 @@ use serde_json::Value;
 
 use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use super::file_lock::ExclusiveFileLock;
+use crate::support::errors::append_cleanup_error;
 use crate::ura::AbilitySelector;
 
 pub(crate) const FILE_NAME: &str = "teach-grants.json";
@@ -1217,19 +1218,6 @@ impl TeachGrantStore {
         directory.imports.remove(import_idx);
         directory.grants.push(acquired.grant.clone());
         self.write_unlocked(&directory)
-    }
-}
-
-fn append_cleanup_error(
-    primary: anyhow::Error,
-    cleanup: anyhow::Result<()>,
-    cleanup_action: &'static str,
-) -> anyhow::Error {
-    match cleanup {
-        Ok(()) => primary,
-        Err(cleanup_err) => {
-            anyhow::anyhow!("{primary}; additionally failed to {cleanup_action}: {cleanup_err}")
-        }
     }
 }
 

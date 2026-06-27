@@ -48,6 +48,7 @@ use crate::runtime::agents::chat_ability::build_host_stream_handler;
 use crate::runtime::agents::device_ability_store::{
     manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
 };
+use crate::support::errors::append_cleanup_error;
 
 /// Outcome of one install attempt, mapped 1:1 to the deploy handler's
 /// `state` field. `Active` requires route visibility AND the right
@@ -1202,19 +1203,6 @@ fn rpc_only() -> AbilityCallModes {
         rpc: true,
         stream: false,
         bidi: false,
-    }
-}
-
-fn append_cleanup_error(
-    primary: anyhow::Error,
-    cleanup: anyhow::Result<()>,
-    cleanup_action: &'static str,
-) -> anyhow::Error {
-    match cleanup {
-        Ok(()) => primary,
-        Err(cleanup_err) => {
-            anyhow::anyhow!("{primary}; additionally failed to {cleanup_action}: {cleanup_err}")
-        }
     }
 }
 

@@ -109,6 +109,12 @@
 /// `runtime/local_runtime_invoker.rs`.
 pub mod async_bridge;
 
+/// `append_cleanup_error()` — fold a best-effort cleanup outcome into a
+/// primary error so transactional rollback paths report both what failed
+/// and whether compensation completed. Shared by `runtime::agents` and
+/// `persistence` rollback sites; see `errors.rs` for the rationale.
+pub(crate) mod errors;
+
 // federation_invoke moved under services::invocation_transport, and the
 // product read boundary lives in services::federated_directory_reader.
 // Keeping both out of support prevents this module from reaching upward into
