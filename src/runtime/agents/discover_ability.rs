@@ -1153,9 +1153,13 @@ fn federated_directory_candidates(_entries: &[Value]) -> Vec<Candidate> {
 
 /// Score every candidate against `query`. The scoring is intentionally
 /// simple — a direct exact match on the ability name beats a substring
-/// match, which beats a description keyword hit. The numbers carry no
-/// absolute meaning; only the relative ordering matters, and the LLM
-/// reads `reason` for the human story.
+/// match, which beats a description or owner keyword hit. The numbers
+/// carry no absolute meaning; only the relative ordering matters, and the
+/// LLM reads `reason` for the human story.
+///
+/// The scored dimensions (name, description, owner) are a superset of the
+/// caller-owned ranker's signals, so this reduction never drops a row the
+/// final ranker would have ranked.
 ///
 /// A future PR can replace this with a richer scorer inside a hosted
 /// agent's `<agent>.discover` implementation. The function is kept
@@ -1171,6 +1175,7 @@ fn score_against_query(rows: &mut [Candidate], query: &str) {
         let name = row.ability.to_lowercase();
         let qualified = row.qualified_name.to_lowercase();
         let description = row.description.to_lowercase();
+        let owner = row.owner.to_lowercase();
 
         let mut score: f64 = 0.0;
         let mut reasons: Vec<&str> = Vec::new();
@@ -1187,6 +1192,16 @@ fn score_against_query(rows: &mut [Candidate], query: &str) {
             if description.contains(term.as_str()) {
                 score += 1.0;
                 reasons.push("term in description");
+            }
+            // Owner is a first-class ranking signal: a query that names
+            // the owning agent/device must produce a non-zero score so the
+            // row survives the `score > 0` reduction and reaches the
+            // caller-owned ranker (which also scores the owner segment).
+            // Scoring fewer dimensions here than the final ranker would
+            // silently drop owner-only matches before they are ever ranked.
+            if !owner.is_empty() && owner.contains(term.as_str()) {
+                score += 1.0;
+                reasons.push("term in owner");
             }
         }
 
@@ -2142,5 +2157,47 @@ mod tests {
             out.is_empty(),
             "presence-only directory snapshots must not expand into Ability candidates"
         );
+    }
+
+    /// Build a minimal `Candidate` whose only query-relevant signal is the
+    /// owner segment — name and description deliberately share no token
+    /// with the query so the row scores zero unless the owner is ranked.
+    fn owner_only_candidate(owner: &str) -> Candidate {
+        Candidate {
+            qualified_name: format!("easynet:///r/acme/agent/u/{owner}/fs.read"),
+            owner: owner.to_string(),
+            ability: "fs.read".to_string(),
+            description: "read a file from disk".to_string(),
+            input_schema: json!({"type": "object"}),
+            visibility: Visibility::Device,
+            scope_matched: Scope::Device,
+            score: 0.0,
+            reason: String::new(),
+            fulfilled_by: None,
+            identity_state: "minted",
+            diagnostic: None,
+        }
+    }
+
+    /// Regression: the runtime reducer scores the owner segment, so a
+    /// query that names the owning agent survives the `score > 0`
+    /// reduction and reaches the caller-owned ranker. Before this fix the
+    /// owner dimension was scored only by the CLI ranker, which never saw
+    /// the row because the reducer dropped it first.
+    #[test]
+    fn owner_name_query_survives_score_reduction() {
+        let mut rows = vec![owner_only_candidate("codex")];
+        score_against_query(&mut rows, "codex");
+        rows.retain(|c| c.score > 0.0);
+        assert_eq!(rows.len(), 1, "owner-only match must not be dropped");
+        assert!(rows[0].reason.contains("owner"));
+    }
+
+    #[test]
+    fn unrelated_query_still_drops_the_row() {
+        let mut rows = vec![owner_only_candidate("codex")];
+        score_against_query(&mut rows, "weather");
+        rows.retain(|c| c.score > 0.0);
+        assert!(rows.is_empty(), "a genuinely unrelated query must score zero");
     }
 }
