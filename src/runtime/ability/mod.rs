@@ -26,7 +26,8 @@ pub mod registry;
 pub use authority::{
     AuthorityBindingKind, AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityPredicate,
     AuthorityScope, HostedAgentAuthority, HostedAgentDelegationClaims,
-    HostedAgentDelegationContext, HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding,
+    HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 pub use descriptor::{
     canonical_json_bytes, AbilityControlPlaneKey, AbilityDescriptorKey, AbilityDescriptorRecord,

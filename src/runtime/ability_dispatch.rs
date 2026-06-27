@@ -29,7 +29,8 @@ use crate::runtime::ability::{
     AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneError,
     AbilityControlPlaneLookupError, AbilityControlPlaneRecord, AbilityControlPlaneRegistration,
     AbilityControlPlaneRegistry, AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
-    HostedAgentDelegationContext, RuntimeEnv, HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, RuntimeEnv,
+    HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
@@ -612,24 +613,14 @@ pub(crate) fn rpc_handler_to_ability_fn(handler: LocalRpcHandler) -> AbilityFn {
 
 fn parse_hosted_agent_delegation_context(
     metadata: &std::collections::HashMap<String, String>,
-    envelope_caller: &str,
-    envelope_callee: &str,
-    envelope_subject: &str,
-    envelope_request_id: &str,
-    envelope_invocation_nonce_hex: &str,
-    envelope_ability: &str,
+    envelope: &HostedAgentDelegationEnvelopeBinding,
 ) -> Result<Option<HostedAgentDelegationContext>, AxonError> {
     let Some(raw) = metadata.get(HOSTED_AGENT_DELEGATION_METADATA_KEY) else {
         return Ok(None);
     };
     HostedAgentDelegationContext::from_signed_metadata(
         raw,
-        envelope_caller,
-        envelope_callee,
-        envelope_subject,
-        envelope_request_id,
-        envelope_invocation_nonce_hex,
-        envelope_ability,
+        envelope,
         crate::runtime::local_invocation_identity::system_verifying_key(),
     )
     .map(Some)
@@ -655,18 +646,22 @@ async fn envelope_context_from_axon(
     let envelope_subject = envelope.subject.ura;
     let request_id = ctx.invocation_id.clone();
     let invocation_nonce = envelope.invocation_nonce;
-    let invocation_nonce_hex = hex::encode(&invocation_nonce);
+    let invocation_nonce_hex = hex::encode(invocation_nonce.as_slice());
     let ability = envelope.ability;
     let caller_signature = EnvelopeCallerSignature::from_axon(&signed.signature);
-    let hosted_agent_delegation = parse_hosted_agent_delegation_context(
-        &ctx.request_metadata,
+    let hosted_agent_envelope = HostedAgentDelegationEnvelopeBinding::new(
         &caller,
         &callee,
         &envelope_subject,
         &request_id,
         &invocation_nonce_hex,
         &ability,
-    )?;
+    )
+    .map_err(|err| {
+        AxonError::invalid_argument(format!("hosted_agent_delegation envelope binding: {err}"))
+    })?;
+    let hosted_agent_delegation =
+        parse_hosted_agent_delegation_context(&ctx.request_metadata, &hosted_agent_envelope)?;
     EnvelopeContext::new(EnvelopeContextParts {
         invocation_id: ctx.invocation_id.clone(),
         caller,

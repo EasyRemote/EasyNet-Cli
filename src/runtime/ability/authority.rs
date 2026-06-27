@@ -194,6 +194,90 @@ impl AuthorityBindingKind {
     }
 }
 
+/// Invocation-envelope facts that are signed into hosted-agent delegation.
+///
+/// This is intentionally a value object rather than six free strings at every
+/// call site. The caller/callee/subject/request/nonce/ability tuple is a
+/// protocol binding; passing it as one object keeps signing and verification
+/// from drifting by argument order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostedAgentDelegationEnvelopeBinding {
+    wire_caller_ura: String,
+    wire_callee_ura: String,
+    wire_subject_ura: String,
+    wire_request_id: String,
+    wire_invocation_nonce_hex: String,
+    ability: String,
+}
+
+impl HostedAgentDelegationEnvelopeBinding {
+    pub fn new(
+        wire_caller_ura: impl Into<String>,
+        wire_callee_ura: impl Into<String>,
+        wire_subject_ura: impl Into<String>,
+        wire_request_id: impl Into<String>,
+        wire_invocation_nonce_hex: impl Into<String>,
+        ability: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let binding = Self {
+            wire_caller_ura: wire_caller_ura.into(),
+            wire_callee_ura: wire_callee_ura.into(),
+            wire_subject_ura: wire_subject_ura.into(),
+            wire_request_id: wire_request_id.into(),
+            wire_invocation_nonce_hex: wire_invocation_nonce_hex.into(),
+            ability: ability.into(),
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.wire_caller_ura.trim().is_empty()
+            || self.wire_callee_ura.trim().is_empty()
+            || self.wire_subject_ura.trim().is_empty()
+            || self.wire_request_id.trim().is_empty()
+            || self.wire_invocation_nonce_hex.trim().is_empty()
+            || self.ability.trim().is_empty()
+        {
+            anyhow::bail!("hosted-agent delegation envelope binding fields must be non-empty");
+        }
+        let nonce = hex::decode(self.wire_invocation_nonce_hex.trim()).map_err(|err| {
+            anyhow::anyhow!("hosted-agent delegation invocation nonce must be hex: {err}")
+        })?;
+        if nonce.len() != 16 {
+            anyhow::bail!(
+                "hosted-agent delegation invocation nonce must decode to 16 bytes, got {}",
+                nonce.len()
+            );
+        }
+        Ok(())
+    }
+
+    pub fn caller_ura(&self) -> &str {
+        self.wire_caller_ura.trim()
+    }
+
+    fn callee_ura(&self) -> &str {
+        self.wire_callee_ura.trim()
+    }
+
+    fn subject_ura(&self) -> &str {
+        self.wire_subject_ura.trim()
+    }
+
+    fn request_id(&self) -> &str {
+        self.wire_request_id.trim()
+    }
+
+    fn invocation_nonce_hex(&self) -> &str {
+        self.wire_invocation_nonce_hex.trim()
+    }
+
+    fn ability(&self) -> &str {
+        self.ability.trim()
+    }
+}
+
 /// Signed local control claim that allows the host process to act for one
 /// hosted Agent on administrative ability surfaces.
 ///
@@ -219,23 +303,18 @@ impl HostedAgentDelegationClaims {
     pub fn new(
         agent_ura: impl Into<String>,
         signing_authority: impl Into<String>,
-        wire_caller_ura: impl Into<String>,
-        wire_callee_ura: impl Into<String>,
-        wire_subject_ura: impl Into<String>,
-        wire_request_id: impl Into<String>,
-        wire_invocation_nonce_hex: impl Into<String>,
-        ability: impl Into<String>,
+        envelope: HostedAgentDelegationEnvelopeBinding,
     ) -> anyhow::Result<Self> {
         let claims = Self {
             kind: "hosted_agent".to_string(),
             agent_ura: agent_ura.into(),
             signing_authority: signing_authority.into(),
-            wire_caller_ura: wire_caller_ura.into(),
-            wire_callee_ura: wire_callee_ura.into(),
-            wire_subject_ura: wire_subject_ura.into(),
-            wire_request_id: wire_request_id.into(),
-            wire_invocation_nonce_hex: wire_invocation_nonce_hex.into(),
-            ability: ability.into(),
+            wire_caller_ura: envelope.wire_caller_ura,
+            wire_callee_ura: envelope.wire_callee_ura,
+            wire_subject_ura: envelope.wire_subject_ura,
+            wire_request_id: envelope.wire_request_id,
+            wire_invocation_nonce_hex: envelope.wire_invocation_nonce_hex,
+            ability: envelope.ability,
         };
         claims.validate()?;
         Ok(claims)
@@ -317,12 +396,7 @@ impl HostedAgentDelegationContext {
 
     pub fn from_signed_metadata(
         raw: &str,
-        envelope_caller: &str,
-        envelope_callee: &str,
-        envelope_subject: &str,
-        envelope_request_id: &str,
-        envelope_invocation_nonce_hex: &str,
-        envelope_ability: &str,
+        envelope: &HostedAgentDelegationEnvelopeBinding,
         verifying_key: VerifyingKey,
     ) -> anyhow::Result<Self> {
         let token: SignedHostedAgentDelegation = serde_json::from_str(raw)
@@ -332,9 +406,10 @@ impl HostedAgentDelegationContext {
         if signer_ura.is_empty() {
             anyhow::bail!("hosted-agent delegation token signer_ura must be non-empty");
         }
-        if signer_ura != envelope_caller {
+        if signer_ura != envelope.caller_ura() {
             anyhow::bail!(
-                "hosted-agent delegation signer {signer_ura:?} does not match envelope caller {envelope_caller:?}"
+                "hosted-agent delegation signer {signer_ura:?} does not match envelope caller {:?}",
+                envelope.caller_ura()
             );
         }
         let signature_bytes = BASE64_STANDARD
@@ -350,25 +425,12 @@ impl HostedAgentDelegationContext {
         verifying_key
             .verify(&token.claims.signing_payload_bytes(signer_ura), &signature)
             .map_err(|err| anyhow::anyhow!("hosted-agent delegation signature invalid: {err}"))?;
-        Self::from_bound_claims(
-            token.claims,
-            envelope_caller,
-            envelope_callee,
-            envelope_subject,
-            envelope_request_id,
-            envelope_invocation_nonce_hex,
-            envelope_ability,
-        )
+        Self::from_bound_claims(token.claims, envelope)
     }
 
     fn from_bound_claims(
         claims: HostedAgentDelegationClaims,
-        envelope_caller: &str,
-        envelope_callee: &str,
-        envelope_subject: &str,
-        envelope_request_id: &str,
-        envelope_invocation_nonce_hex: &str,
-        envelope_ability: &str,
+        envelope: &HostedAgentDelegationEnvelopeBinding,
     ) -> anyhow::Result<Self> {
         if claims.kind != "hosted_agent" {
             anyhow::bail!(
@@ -400,12 +462,12 @@ impl HostedAgentDelegationContext {
         if parsed_agent.kind != crate::ura::URAKind::Agent {
             anyhow::bail!("hosted-agent delegation agent_ura must be an Agent URA");
         }
-        if wire_caller_ura != envelope_caller
-            || wire_callee_ura != envelope_callee
-            || wire_subject_ura != envelope_subject
-            || wire_request_id != envelope_request_id
-            || wire_invocation_nonce_hex != envelope_invocation_nonce_hex
-            || ability != envelope_ability
+        if wire_caller_ura != envelope.caller_ura()
+            || wire_callee_ura != envelope.callee_ura()
+            || wire_subject_ura != envelope.subject_ura()
+            || wire_request_id != envelope.request_id()
+            || wire_invocation_nonce_hex != envelope.invocation_nonce_hex()
+            || ability != envelope.ability()
         {
             anyhow::bail!(
                 "hosted-agent delegation metadata does not match the signed invocation envelope"
@@ -807,9 +869,7 @@ mod tests {
             crate::ura::owner_ability_ura(callee, "meta.acquire").unwrap()
         );
         let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
-        let claims = HostedAgentDelegationClaims::new(
-            agent_ura.as_str(),
-            "host_device",
+        let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             callee,
             subject,
@@ -818,17 +878,15 @@ mod tests {
             ability.as_str(),
         )
         .unwrap();
+        let claims =
+            HostedAgentDelegationClaims::new(agent_ura.as_str(), "host_device", envelope.clone())
+                .unwrap();
         let signature = signer.sign(&claims.signing_payload_bytes(caller));
         let raw = claims.signed_metadata_value(caller, &signature).unwrap();
 
         let context = HostedAgentDelegationContext::from_signed_metadata(
             &raw,
-            caller,
-            callee,
-            subject,
-            request_id,
-            nonce_hex.as_str(),
-            ability.as_str(),
+            &envelope,
             signer.verifying_key(),
         )
         .unwrap();
@@ -857,9 +915,7 @@ mod tests {
             crate::ura::owner_ability_ura("easynet:///r/default/device/local", "meta.acquire")
                 .unwrap()
         );
-        let claims = HostedAgentDelegationClaims::new(
-            agent_ura,
-            "host_device",
+        let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
@@ -868,17 +924,22 @@ mod tests {
             ability.as_str(),
         )
         .unwrap();
+        let claims = HostedAgentDelegationClaims::new(agent_ura, "host_device", envelope).unwrap();
         let signature = signer.sign(&claims.signing_payload_bytes(caller));
         let raw = claims.signed_metadata_value(caller, &signature).unwrap();
-
-        let err = HostedAgentDelegationContext::from_signed_metadata(
-            &raw,
+        let drifted_envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             "easynet:///r/default/device/other",
             "easynet:///r/default/device/local",
             request_id,
             nonce_hex.as_str(),
             ability.as_str(),
+        )
+        .unwrap();
+
+        let err = HostedAgentDelegationContext::from_signed_metadata(
+            &raw,
+            &drifted_envelope,
             signer.verifying_key(),
         )
         .unwrap_err();
@@ -902,9 +963,7 @@ mod tests {
             "{}@1.0.0",
             crate::ura::owner_ability_ura(callee, "meta.acquire").unwrap()
         );
-        let claims = HostedAgentDelegationClaims::new(
-            crate::ura::agent_ura("default", "u", "apprentice"),
-            "host_device",
+        let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             callee,
             subject,
@@ -913,17 +972,27 @@ mod tests {
             ability.as_str(),
         )
         .unwrap();
+        let claims = HostedAgentDelegationClaims::new(
+            crate::ura::agent_ura("default", "u", "apprentice"),
+            "host_device",
+            envelope,
+        )
+        .unwrap();
         let signature = signer.sign(&claims.signing_payload_bytes(caller));
         let raw = claims.signed_metadata_value(caller, &signature).unwrap();
-
-        let err = HostedAgentDelegationContext::from_signed_metadata(
-            &raw,
+        let replayed_envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             callee,
             subject,
             "req-replayed",
             nonce_hex.as_str(),
             ability.as_str(),
+        )
+        .unwrap();
+
+        let err = HostedAgentDelegationContext::from_signed_metadata(
+            &raw,
+            &replayed_envelope,
             signer.verifying_key(),
         )
         .unwrap_err();

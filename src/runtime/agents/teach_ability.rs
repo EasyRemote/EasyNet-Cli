@@ -1660,15 +1660,19 @@ mod tests {
             "{}@1.0.0",
             crate::ura::owner_ability_ura(env.callee(), TEACH).expect("test teach descriptor ref")
         );
-        let claims = crate::runtime::ability::HostedAgentDelegationClaims::new(
-            hosted_agent_ura,
-            "host_device",
+        let envelope = crate::runtime::ability::HostedAgentDelegationEnvelopeBinding::new(
             env.caller(),
             env.callee(),
             env.subject(),
             env.invocation_id(),
             nonce_hex.as_str(),
             descriptor_ref.as_str(),
+        )
+        .expect("test hosted-agent delegation envelope");
+        let claims = crate::runtime::ability::HostedAgentDelegationClaims::new(
+            hosted_agent_ura,
+            "host_device",
+            envelope.clone(),
         )
         .expect("test hosted-agent delegation claims");
         let signature = signer.sign(&claims.signing_payload_bytes(env.caller()));
@@ -1678,12 +1682,7 @@ mod tests {
         let delegation =
             crate::runtime::ability::HostedAgentDelegationContext::from_signed_metadata(
                 &raw,
-                env.caller(),
-                env.callee(),
-                env.subject(),
-                env.invocation_id(),
-                nonce_hex.as_str(),
-                descriptor_ref.as_str(),
+                &envelope,
                 signer.verifying_key(),
             )
             .expect("test hosted-agent delegation context");
