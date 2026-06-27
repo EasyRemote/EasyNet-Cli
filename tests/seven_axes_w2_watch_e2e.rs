@@ -38,8 +38,7 @@ use easynet_cli::facade::cli::mission_runs::{
     self, MissionRunDir, MissionRunMeta, MissionRunOpts, MissionRunStatus,
 };
 use easynet_cli::facade::cli::receipt_verification::CliReceiptChainVerification;
-use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
-use seven_axes_fixture::SevenAxesHome;
+use seven_axes_fixture::{SevenAxesHome, TESTBOT_ECHO_DESCRIPTOR_VERSION};
 
 #[test]
 fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
@@ -52,7 +51,7 @@ fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
         "{}@{}",
         easynet_cli::ura::owner_ability_ura(&home.testbot_ura, "echo")
             .expect("mint testbot echo ability URA"),
-        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        TESTBOT_ECHO_DESCRIPTOR_VERSION
     );
     let invocation_ura = meta["invocation_ura"]
         .as_str()

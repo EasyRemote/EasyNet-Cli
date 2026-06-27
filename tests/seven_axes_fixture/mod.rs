@@ -57,7 +57,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 
 const TEST_KEYRING_SEED_BYTE: u8 = 0x11;
-const TESTBOT_ECHO_DESCRIPTOR_VERSION: &str = "2.3.0";
+pub const TESTBOT_ECHO_DESCRIPTOR_VERSION: &str = "2.3.0";
 const FIXTURE_SYSTEM_DESCRIPTOR_VERSION: &str = "1.0.0";
 
 /// A seeded HOME: env pointed, product files written. Keep it alive
