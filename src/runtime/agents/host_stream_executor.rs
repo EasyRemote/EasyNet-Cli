@@ -103,42 +103,58 @@ async fn pump_host_stream(
     tx: &broadcast::Sender<Value>,
 ) -> Result<(), StreamFailure> {
     let stream = UnixStream::connect(socket_path).await.map_err(|e| {
-        StreamFailure::new("HOST_UNREACHABLE", format!("connect {socket_path}: {e}"))
+        StreamFailure::new(
+            StreamFailureKind::HostUnreachable,
+            format!("connect {socket_path}: {e}"),
+        )
     })?;
     let (read_half, mut write_half) = stream.into_split();
 
-    let line = serde_json::to_string(request)
-        .map_err(|e| StreamFailure::new("INTERNAL", format!("encode request: {e}")))?;
+    let line = serde_json::to_string(request).map_err(|e| {
+        StreamFailure::new(StreamFailureKind::Internal, format!("encode request: {e}"))
+    })?;
     write_half
         .write_all(format!("{line}\n").as_bytes())
         .await
-        .map_err(|e| StreamFailure::new("HOST_UNREACHABLE", format!("send request: {e}")))?;
-    write_half
-        .flush()
-        .await
-        .map_err(|e| StreamFailure::new("HOST_UNREACHABLE", format!("flush request: {e}")))?;
+        .map_err(|e| {
+            StreamFailure::new(
+                StreamFailureKind::HostUnreachable,
+                format!("send request: {e}"),
+            )
+        })?;
+    write_half.flush().await.map_err(|e| {
+        StreamFailure::new(
+            StreamFailureKind::HostUnreachable,
+            format!("flush request: {e}"),
+        )
+    })?;
 
     let mut reader = BufReader::new(read_half).lines();
     let mut next_seq: u64 = 0;
     let mut rolling = RollingHash::new();
 
-    while let Some(line) = reader
-        .next_line()
-        .await
-        .map_err(|e| StreamFailure::new("STREAM_TRUNCATED", format!("read frame: {e}")))?
-    {
+    while let Some(line) = reader.next_line().await.map_err(|e| {
+        StreamFailure::new(
+            StreamFailureKind::StreamTruncated,
+            format!("read frame: {e}"),
+        )
+    })? {
         if line.trim().is_empty() {
             continue;
         }
-        let frame: Value = serde_json::from_str(&line)
-            .map_err(|e| StreamFailure::new("PROTOCOL", format!("frame is not JSON: {e}")))?;
+        let frame: Value = serde_json::from_str(&line).map_err(|e| {
+            StreamFailure::new(
+                StreamFailureKind::Protocol,
+                format!("frame is not JSON: {e}"),
+            )
+        })?;
 
         match decode_host_frame(&frame)? {
             HostFrame::StreamItem { seq, item } => {
                 if seq != next_seq {
                     // Invariant 1: a gap or reorder must not be invisible.
                     return Err(StreamFailure::new(
-                        "STREAM_TRUNCATED",
+                        StreamFailureKind::StreamTruncated,
                         format!("frame reorder/gap: expected seq {next_seq}, got {seq}"),
                     ));
                 }
@@ -165,7 +181,7 @@ async fn pump_host_stream(
 
     // Invariant 4: the socket closed before terminal/error arrived.
     Err(StreamFailure::new(
-        "STREAM_TRUNCATED",
+        StreamFailureKind::StreamTruncated,
         "host closed the connection before sending terminal/error".to_string(),
     ))
 }
@@ -184,16 +200,18 @@ fn decode_host_frame(frame: &Value) -> Result<HostFrame<'_>, StreamFailure> {
     let kinds = usize::from(has_item) + usize::from(has_terminal) + usize::from(has_error);
     if kinds != 1 {
         return Err(StreamFailure::new(
-            "PROTOCOL",
+            StreamFailureKind::Protocol,
             "frame must contain exactly one of stream_item/terminal/error".to_string(),
         ));
     }
 
     if let Some(item) = frame.get("stream_item") {
-        let seq = frame
-            .get("seq")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| StreamFailure::new("PROTOCOL", "stream_item missing u64 seq".into()))?;
+        let seq = frame.get("seq").and_then(Value::as_u64).ok_or_else(|| {
+            StreamFailure::new(
+                StreamFailureKind::Protocol,
+                "stream_item missing u64 seq".into(),
+            )
+        })?;
         return Ok(HostFrame::StreamItem { seq, item });
     }
     if let Some(terminal) = frame.get("terminal") {
@@ -216,10 +234,15 @@ fn verify_terminal(
     let frames = terminal
         .get("frames")
         .and_then(Value::as_u64)
-        .ok_or_else(|| StreamFailure::new("PROTOCOL", "terminal missing u64 frames".to_string()))?;
+        .ok_or_else(|| {
+            StreamFailure::new(
+                StreamFailureKind::Protocol,
+                "terminal missing u64 frames".to_string(),
+            )
+        })?;
     if frames != frames_seen {
         return Err(StreamFailure::new(
-            "STREAM_TRUNCATED",
+            StreamFailureKind::StreamTruncated,
             format!("terminal frame count {frames} != frames received {frames_seen}"),
         ));
     }
@@ -229,14 +252,14 @@ fn verify_terminal(
         .and_then(Value::as_str)
         .ok_or_else(|| {
             StreamFailure::new(
-                "PROTOCOL",
+                StreamFailureKind::Protocol,
                 "terminal missing string output_hash".to_string(),
             )
         })?;
     let computed = rolling.finish();
     if declared != computed {
         return Err(StreamFailure::new(
-            "STREAM_TRUNCATED",
+            StreamFailureKind::StreamTruncated,
             format!("output_hash mismatch: host {declared} != computed {computed}"),
         ));
     }
@@ -271,30 +294,60 @@ impl RollingHash {
     }
 }
 
+/// The protocol-level reason a host stream failed. The wire codes are a
+/// fixed, enumerable set, so they are a single typed vocabulary here
+/// rather than bare string literals scattered across the executor. The
+/// only open-ended case is a kind echoed verbatim from a host's own error
+/// frame, which `Host` carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamFailureKind {
+    /// Could not reach or talk to the host socket.
+    HostUnreachable,
+    /// The stream ended, reordered, or hashed differently than declared.
+    StreamTruncated,
+    /// A frame violated the wire contract (missing/wrong-typed fields).
+    Protocol,
+    /// A failure originating inside the executor (e.g. request encoding).
+    Internal,
+    /// A kind reported by the host in its own error frame, adopted
+    /// verbatim. Defaults to `HOST_ERROR` when the host omits one.
+    Host(String),
+}
+
+impl StreamFailureKind {
+    fn as_str(&self) -> &str {
+        match self {
+            StreamFailureKind::HostUnreachable => "HOST_UNREACHABLE",
+            StreamFailureKind::StreamTruncated => "STREAM_TRUNCATED",
+            StreamFailureKind::Protocol => "PROTOCOL",
+            StreamFailureKind::Internal => "INTERNAL",
+            StreamFailureKind::Host(kind) => kind.as_str(),
+        }
+    }
+}
+
 /// A structured stream failure, projected onto the in-band error frame
 /// the consumer receives as the stream's terminal.
 #[derive(Debug)]
 struct StreamFailure {
-    kind: String,
+    kind: StreamFailureKind,
     message: String,
 }
 
 impl StreamFailure {
-    fn new(kind: &str, message: String) -> Self {
-        Self {
-            kind: kind.to_string(),
-            message,
-        }
+    fn new(kind: StreamFailureKind, message: String) -> Self {
+        Self { kind, message }
     }
 
     /// Adopt a host-sent `{"error":{...}}` verbatim where present.
     fn from_host_error(error: &Value) -> Self {
+        let kind = error
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("HOST_ERROR")
+            .to_string();
         Self {
-            kind: error
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("HOST_ERROR")
-                .to_string(),
+            kind: StreamFailureKind::Host(kind),
             message: error
                 .get("message")
                 .and_then(Value::as_str)
@@ -311,7 +364,7 @@ impl StreamFailure {
 fn error_frame(failure: &StreamFailure) -> Value {
     json!({
         "error": {
-            "kind": failure.kind,
+            "kind": failure.kind.as_str(),
             "message": failure.message,
         }
     })
@@ -362,7 +415,7 @@ mod tests {
             2,
         )
         .unwrap_err();
-        assert_eq!(err.kind, "STREAM_TRUNCATED");
+        assert_eq!(err.kind, StreamFailureKind::StreamTruncated);
     }
 
     #[test]
@@ -370,14 +423,14 @@ mod tests {
         let rolling = RollingHash::new();
         let err =
             verify_terminal(&json!({"output_hash": rolling.finish()}), &rolling, 0).unwrap_err();
-        assert_eq!(err.kind, "PROTOCOL");
+        assert_eq!(err.kind, StreamFailureKind::Protocol);
     }
 
     #[test]
     fn verify_terminal_rejects_missing_output_hash() {
         let rolling = RollingHash::new();
         let err = verify_terminal(&json!({"frames": 0}), &rolling, 0).unwrap_err();
-        assert_eq!(err.kind, "PROTOCOL");
+        assert_eq!(err.kind, StreamFailureKind::Protocol);
     }
 
     #[test]
@@ -390,7 +443,7 @@ mod tests {
             1,
         )
         .unwrap_err();
-        assert_eq!(err.kind, "STREAM_TRUNCATED");
+        assert_eq!(err.kind, StreamFailureKind::StreamTruncated);
     }
 
     #[test]
@@ -410,7 +463,7 @@ mod tests {
             "terminal": {"frames": 1, "output_hash": "sha256:deadbeef"}
         }))
         .unwrap_err();
-        assert_eq!(err.kind, "PROTOCOL");
+        assert_eq!(err.kind, StreamFailureKind::Protocol);
     }
 
     #[test]
