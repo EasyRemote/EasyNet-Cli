@@ -2223,6 +2223,18 @@ impl AxonAbilityCatalog {
             .get_for_mode(ability, call_mode)
     }
 
+    pub fn control_plane_record_for_version_mode(
+        &self,
+        ability: &str,
+        descriptor_version: &str,
+        call_mode: DescriptorCallMode,
+    ) -> Result<Option<AbilityControlPlaneRecord>, AbilityControlPlaneLookupError> {
+        self.control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .get_version_for_mode(ability, descriptor_version, call_mode)
+    }
+
     /// Resolve the registered descriptor version for `ability` in
     /// `call_mode`, as the wire-facing dispatch paths must stamp it onto
     /// the descriptor-bound envelope and the receipt proof facts.
@@ -2277,7 +2289,7 @@ impl AxonAbilityCatalog {
     pub fn rebind_control_plane_record_with_authority_scope(
         &self,
         request: ControlPlaneAuthorityRebind<'_>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         let owner_label = format!(
             "{}@{}",
             request.authority_scope.owner_projection(),
@@ -2291,7 +2303,6 @@ impl AxonAbilityCatalog {
             implementation: request.implementation,
             owner_label,
         })
-        .map(|_| ())
     }
 
     pub fn remove_control_plane_record_for_authority_mode(

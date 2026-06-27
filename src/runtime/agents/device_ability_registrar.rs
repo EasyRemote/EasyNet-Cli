@@ -28,14 +28,15 @@
 use std::sync::{Arc, OnceLock, Weak};
 
 use easynet_axon::invocation::{
-    AbilityCallModes, AbilityDescriptor, AbilityFn, AbilityOptions, LocalRuntime,
+    AbilityCallModes, AbilityDescriptor, AbilityFn, AbilityOptions, CallMode as AxonCallMode,
+    LocalRuntime,
 };
 use serde::Serialize;
 
 use crate::core::ability_spec::{AbilityExec, AbilityManifest};
 use crate::runtime::ability::{
-    AbilityDescriptorKey, AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
-    RuntimeEnv,
+    AbilityControlPlaneRecord, AbilityDescriptorKey, AbilityImplSource, AuthorityScope,
+    CallMode as DescriptorCallMode, RuntimeEnv,
 };
 use crate::runtime::ability_dispatch::{
     stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityRebind,
@@ -350,6 +351,79 @@ impl DeviceAbilityControlPlaneKey {
     }
 }
 
+struct DeviceRuntimeBinding {
+    runtime_key: String,
+    ability_fn: AbilityFn,
+    options: AbilityOptions,
+    axon_call_mode: AxonCallMode,
+}
+
+impl DeviceRuntimeBinding {
+    fn from_install(
+        install: &DeviceAbilityInstall,
+        record: &AbilityControlPlaneRecord,
+    ) -> anyhow::Result<Self> {
+        Self::from_manifest(install.ability_ura(), install.manifest(), record)
+    }
+
+    fn from_record(
+        row: &DeviceAbilityRecord,
+        manifest: &AbilityManifest,
+        record: &AbilityControlPlaneRecord,
+    ) -> anyhow::Result<Self> {
+        Self::from_manifest(row.ability_ura(), manifest, record)
+    }
+
+    fn from_manifest(
+        runtime_key: &str,
+        manifest: &AbilityManifest,
+        record: &AbilityControlPlaneRecord,
+    ) -> anyhow::Result<Self> {
+        let (ability_fn, options) = build_binding(manifest)?;
+        let call_mode = descriptor_call_mode_for_modes(options.modes);
+        if record.descriptor().call_mode() != call_mode {
+            anyhow::bail!(
+                "device ability runtime binding mode drift for {:?}: manifest implies {:?}, \
+                 control-plane record has {:?}",
+                record.descriptor().name(),
+                call_mode,
+                record.descriptor().call_mode()
+            );
+        }
+        if record.descriptor().version().as_str() != manifest.descriptor_version() {
+            anyhow::bail!(
+                "device ability runtime binding version drift for {:?}: manifest has {}, \
+                 control-plane record has {}",
+                record.descriptor().name(),
+                manifest.descriptor_version(),
+                record.descriptor().version().as_str()
+            );
+        }
+        let axon_call_mode = axon_call_mode_for_descriptor_mode(call_mode);
+        let options = options.with_mode_descriptor_proof(
+            axon_call_mode,
+            record.descriptor().version().as_str(),
+            record.descriptor().schema_hash().0,
+            record.implementation().impl_hash(),
+        );
+        assert_runtime_options_are_proof_bound(&options, axon_call_mode, record)?;
+        Ok(Self {
+            runtime_key: runtime_key.to_string(),
+            ability_fn,
+            options,
+            axon_call_mode,
+        })
+    }
+
+    fn modes(&self) -> AbilityCallModes {
+        self.options.modes
+    }
+
+    fn into_parts(self) -> (String, AbilityFn, AbilityOptions) {
+        (self.runtime_key, self.ability_fn, self.options)
+    }
+}
+
 /// Constructed pending at registry-build time; boot injects the runtime
 /// via [`DeviceAbilityRegistrar::set_runtime`]. Owns the durable store.
 pub struct DeviceAbilityRegistrar {
@@ -443,14 +517,8 @@ impl DeviceAbilityRegistrar {
             );
         }
 
-        // ── build handler + options from exec kind ──────────────────
-        let (ability_fn, options) = build_binding(install.manifest())?;
-        let want = options.modes;
-        let control_plane_key = DeviceAbilityControlPlaneKey::from_install(
-            &install,
-            descriptor_call_mode_for_modes(want),
-        )?;
-        let runtime_key = install.ability_ura().to_string();
+        let call_mode = descriptor_call_mode_for_manifest(install.manifest())?;
+        let control_plane_key = DeviceAbilityControlPlaneKey::from_install(&install, call_mode)?;
 
         // ── durable installing intent (hidden from boot replay) ─────
         let record = DeviceAbilityRecord::new_installing_with_manifest_bytes(
@@ -470,52 +538,97 @@ impl DeviceAbilityRegistrar {
                 )
                 })?;
 
-        // ── replace_ability (binding); rollback staged row on failure ─
-        if let Err(e) = runtime
-            .replace_ability(runtime_key.clone(), ability_fn, options)
-            .await
-        {
-            let rollback = self
-                .store
-                .rollback_install(record.install_id(), overwritten);
-            return Err(append_cleanup_error(
-                anyhow::anyhow!(
-                    "ability.deploy: replace_ability({runtime_key}) for {key} failed: {e}"
-                ),
-                rollback,
-                "restore durable device ability store",
-            ));
-        }
-
-        // ── route + mode visibility (invariant 3, the danger point) ─
-        // ACTIVE iff the runtime descriptor can see exactly this key AND
-        // its registered modes match the call mode we intended to bind.
-        // `has_ability` alone is NOT enough.
-        let state = match runtime.ability_descriptor(&runtime_key).await {
-            Some(desc) if runtime_descriptor_matches(&desc, &runtime_key, want) => {
-                InstallState::Active
-            }
-            _ => InstallState::Installed,
-        };
-
-        if let Err(e) = Self::rebind_control_plane_record(
+        // ── control-plane materialization ───────────────────────────
+        // The returned record is the only authority for runtime proof
+        // binding. Runtime rows must never fabricate descriptor version
+        // or hashes from defaults after this point.
+        let control_plane_record = match Self::rebind_control_plane_record(
             &catalog,
             &control_plane_key,
             install.manifest(),
             record.manifest_hash(),
         ) {
-            let _ = runtime.unregister_ability(&runtime_key).await;
+            Ok(record) => record,
+            Err(e) => {
+                let rollback = self
+                    .store
+                    .rollback_install(record.install_id(), overwritten);
+                return Err(append_cleanup_error(
+                    anyhow::anyhow!("ability.deploy: control-plane rebind({key}) failed: {e}"),
+                    rollback,
+                    "restore durable device ability store",
+                ));
+            }
+        };
+
+        // ── proof-bound runtime binding ─────────────────────────────
+        let binding = match DeviceRuntimeBinding::from_install(&install, &control_plane_record) {
+            Ok(binding) => binding,
+            Err(e) => {
+                catalog.remove_control_plane_record_for_authority_mode(
+                    control_plane_key.authority_root(),
+                    control_plane_key.public_name(),
+                    control_plane_key.call_mode(),
+                );
+                let overwritten_for_restore = overwritten.clone();
+                let rollback = self
+                    .store
+                    .rollback_install(record.install_id(), overwritten);
+                let live_restore = self.restore_live_records(&overwritten_for_restore).await;
+                return Err(append_cleanup_error(
+                    anyhow::anyhow!(
+                        "ability.deploy: proof-bound runtime binding({key}) failed: {e}"
+                    ),
+                    rollback.and(live_restore.map(|_| ())),
+                    "restore durable device ability store and prior live runtime binding",
+                ));
+            }
+        };
+        let want = binding.modes();
+        let axon_call_mode = binding.axon_call_mode;
+        let (runtime_key, ability_fn, options) = binding.into_parts();
+
+        if let Err(e) = runtime
+            .replace_ability(runtime_key.clone(), ability_fn, options)
+            .await
+        {
+            catalog.remove_control_plane_record_for_authority_mode(
+                control_plane_key.authority_root(),
+                control_plane_key.public_name(),
+                control_plane_key.call_mode(),
+            );
             let overwritten_for_restore = overwritten.clone();
             let rollback = self
                 .store
                 .rollback_install(record.install_id(), overwritten);
             let live_restore = self.restore_live_records(&overwritten_for_restore).await;
             return Err(append_cleanup_error(
-                anyhow::anyhow!("ability.deploy: control-plane rebind({key}) failed: {e}"),
+                anyhow::anyhow!(
+                    "ability.deploy: replace_ability({runtime_key}) for {key} failed: {e}"
+                ),
                 rollback.and(live_restore.map(|_| ())),
                 "restore durable device ability store and prior live runtime binding",
             ));
         }
+
+        // ── route + proof visibility (invariant 3, the danger point) ─
+        // ACTIVE iff the runtime descriptor can see exactly this key,
+        // supports the intended call mode, and carries the same proof facts
+        // as the control-plane record. `has_ability` alone is NOT enough.
+        let state = match runtime.ability_descriptor(&runtime_key).await {
+            Some(desc)
+                if runtime_descriptor_matches_bound(
+                    &desc,
+                    &runtime_key,
+                    want,
+                    axon_call_mode,
+                    &control_plane_record,
+                ) =>
+            {
+                InstallState::Active
+            }
+            _ => InstallState::Installed,
+        };
         if let Err(e) = self.store.commit_installed(record.install_id()) {
             let _ = runtime.unregister_ability(&runtime_key).await;
             catalog.remove_control_plane_record_for_authority_mode(
@@ -689,12 +802,19 @@ impl DeviceAbilityRegistrar {
             let manifest = AbilityManifest::from_json_slice(&bytes).map_err(|e| {
                 anyhow::anyhow!("restore {}: parse manifest: {e}", row.public_name())
             })?;
-            let (ability_fn, options) = build_binding(&manifest).map_err(|e| {
-                anyhow::anyhow!("restore {}: build binding: {e}", row.public_name())
-            })?;
-            let modes = options.modes;
+            let control_plane_key = DeviceAbilityControlPlaneKey::from_record(
+                row,
+                descriptor_call_mode_for_manifest(&manifest)?,
+            )?;
+            let control_plane_record =
+                self.rebind_control_plane(&control_plane_key, &manifest, row.manifest_hash())?;
+            let binding = DeviceRuntimeBinding::from_record(row, &manifest, &control_plane_record)
+                .map_err(|e| {
+                    anyhow::anyhow!("restore {}: proof-bound binding: {e}", row.public_name())
+                })?;
+            let (runtime_key, ability_fn, options) = binding.into_parts();
             runtime
-                .replace_ability(row.ability_ura().to_string(), ability_fn, options)
+                .replace_ability(runtime_key, ability_fn, options)
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!(
@@ -702,11 +822,6 @@ impl DeviceAbilityRegistrar {
                         row.public_name()
                     )
                 })?;
-            let control_plane_key = DeviceAbilityControlPlaneKey::from_record(
-                row,
-                descriptor_call_mode_for_modes(modes),
-            )?;
-            self.rebind_control_plane(&control_plane_key, &manifest, row.manifest_hash())?;
             restored += 1;
         }
         Ok(restored)
@@ -729,15 +844,9 @@ impl DeviceAbilityRegistrar {
                     row.public_name()
                 )
             })?;
-            let (_, options) = build_binding(&manifest).map_err(|e| {
-                anyhow::anyhow!(
-                    "infer control-plane mode for {}: build binding: {e}",
-                    row.public_name()
-                )
-            })?;
             let key = DeviceAbilityControlPlaneKey::from_record(
                 row,
-                descriptor_call_mode_for_modes(options.modes),
+                descriptor_call_mode_for_manifest(&manifest)?,
             )?;
             if !keys.contains(&key) {
                 keys.push(key);
@@ -813,40 +922,51 @@ impl DeviceAbilityRegistrar {
                     continue;
                 }
             };
-            let (ability_fn, options) = match build_binding(&manifest) {
-                Ok(pair) => pair,
+            let descriptor_call_mode = match descriptor_call_mode_for_manifest(&manifest) {
+                Ok(mode) => mode,
                 Err(err) => {
-                    report.push_errored(&row, format!("build runtime binding: {err}"));
+                    report.push_errored(&row, format!("infer descriptor call mode: {err}"));
                     continue;
                 }
             };
-            let descriptor_call_mode = descriptor_call_mode_for_modes(options.modes);
+            let control_plane_key =
+                match DeviceAbilityControlPlaneKey::from_record(&row, descriptor_call_mode) {
+                    Ok(key) => key,
+                    Err(err) => {
+                        report.push_errored(&row, format!("derive control-plane key: {err}"));
+                        continue;
+                    }
+                };
+            let control_plane_record =
+                match self.rebind_control_plane(&control_plane_key, &manifest, row.manifest_hash())
+                {
+                    Ok(record) => record,
+                    Err(err) => {
+                        report
+                            .push_errored(&row, format!("rebind control-plane descriptor: {err}"));
+                        continue;
+                    }
+                };
+            let binding =
+                match DeviceRuntimeBinding::from_record(&row, &manifest, &control_plane_record) {
+                    Ok(binding) => binding,
+                    Err(err) => {
+                        let _ = runtime.unregister_ability(row.ability_ura()).await;
+                        report.push_errored(
+                            &row,
+                            format!("build proof-bound runtime binding: {err}"),
+                        );
+                        continue;
+                    }
+                };
+            let (runtime_key, ability_fn, options) = binding.into_parts();
             match runtime
-                .replace_ability(row.ability_ura().to_string(), ability_fn, options)
+                .replace_ability(runtime_key, ability_fn, options)
                 .await
             {
-                Ok(_) => {
-                    match DeviceAbilityControlPlaneKey::from_record(&row, descriptor_call_mode)
-                        .and_then(|control_plane_key| {
-                            self.rebind_control_plane(
-                                &control_plane_key,
-                                &manifest,
-                                row.manifest_hash(),
-                            )
-                        }) {
-                        Ok(()) => {
-                            report.push_registered(&row);
-                        }
-                        Err(err) => {
-                            let _ = runtime.unregister_ability(row.ability_ura()).await;
-                            report.push_errored(
-                                &row,
-                                format!("rebind control-plane descriptor: {err}"),
-                            );
-                        }
-                    }
-                }
+                Ok(_) => report.push_registered(&row),
                 Err(err) => {
+                    let _ = runtime.unregister_ability(row.ability_ura()).await;
                     report.push_errored(&row, format!("replace runtime ability: {err}"));
                 }
             }
@@ -859,7 +979,7 @@ impl DeviceAbilityRegistrar {
         key: &DeviceAbilityControlPlaneKey,
         manifest: &AbilityManifest,
         impl_content_hash: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         let catalog = self.control_plane_catalog("device ability rebind")?;
         Self::rebind_control_plane_record(&catalog, key, manifest, impl_content_hash)
     }
@@ -869,7 +989,7 @@ impl DeviceAbilityRegistrar {
         key: &DeviceAbilityControlPlaneKey,
         manifest: &AbilityManifest,
         impl_content_hash: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<AbilityControlPlaneRecord> {
         catalog.rebind_control_plane_record_with_authority_scope(ControlPlaneAuthorityRebind {
             ability: key.public_name(),
             authority_scope: key.authority_scope()?,
@@ -1023,6 +1143,34 @@ fn descriptor_call_mode_for_modes(modes: AbilityCallModes) -> DescriptorCallMode
     }
 }
 
+fn descriptor_call_mode_for_manifest(
+    manifest: &AbilityManifest,
+) -> anyhow::Result<DescriptorCallMode> {
+    match manifest.exec() {
+        Some(AbilityExec::HostStream(_)) => Ok(DescriptorCallMode::Stream),
+        Some(AbilityExec::Shell(_)) => Err(anyhow::anyhow!(
+            "ability.deploy: shell exec requires a permission broker, bounded output policy, \
+             command allow-list, and receipt-audited operator approval; deploy host_stream \
+             abilities until that broker is wired"
+        )),
+        Some(other) => Err(anyhow::anyhow!(
+            "ability.deploy: device ability exec kind {other:?} is not deployable \
+             (only host_stream is supported on the device deploy path)"
+        )),
+        None => Err(anyhow::anyhow!(
+            "ability.deploy: device ability manifest has no [exec] binding"
+        )),
+    }
+}
+
+fn axon_call_mode_for_descriptor_mode(mode: DescriptorCallMode) -> AxonCallMode {
+    match mode {
+        DescriptorCallMode::Rpc => AxonCallMode::Rpc,
+        DescriptorCallMode::Stream => AxonCallMode::Stream,
+        DescriptorCallMode::Bidi => AxonCallMode::Bidi,
+    }
+}
+
 fn deployed_exec_kind(manifest: &AbilityManifest) -> &'static str {
     match manifest.exec() {
         Some(AbilityExec::HostStream(_)) => "host_stream",
@@ -1042,6 +1190,53 @@ fn runtime_descriptor_matches(desc: &AbilityDescriptor, key: &str, want: Ability
         && desc.options.modes.stream == want.stream
         && desc.options.modes.rpc == want.rpc
         && desc.options.modes.bidi == want.bidi
+}
+
+fn runtime_descriptor_matches_bound(
+    desc: &AbilityDescriptor,
+    key: &str,
+    want: AbilityCallModes,
+    axon_call_mode: AxonCallMode,
+    record: &AbilityControlPlaneRecord,
+) -> bool {
+    runtime_descriptor_matches(desc, key, want)
+        && assert_runtime_options_are_proof_bound(&desc.options, axon_call_mode, record).is_ok()
+}
+
+fn assert_runtime_options_are_proof_bound(
+    options: &AbilityOptions,
+    axon_call_mode: AxonCallMode,
+    record: &AbilityControlPlaneRecord,
+) -> anyhow::Result<()> {
+    let proof = options.proof_for_mode(axon_call_mode);
+    if !proof.is_bound() {
+        anyhow::bail!(
+            "runtime ability {:?} has no descriptor proof for {:?}",
+            record.descriptor().name(),
+            record.descriptor().call_mode()
+        );
+    }
+    if proof.descriptor_version != record.descriptor().version().as_str() {
+        anyhow::bail!(
+            "runtime ability {:?} descriptor version mismatch: runtime {}, control-plane {}",
+            record.descriptor().name(),
+            proof.descriptor_version,
+            record.descriptor().version().as_str()
+        );
+    }
+    if proof.schema_hash != record.descriptor().schema_hash().0 {
+        anyhow::bail!(
+            "runtime ability {:?} schema hash does not match control-plane descriptor",
+            record.descriptor().name()
+        );
+    }
+    if proof.impl_hash != record.implementation().impl_hash() {
+        anyhow::bail!(
+            "runtime ability {:?} impl hash does not match control-plane implementation",
+            record.descriptor().name()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1105,7 +1300,20 @@ mod tests {
     }
 
     fn host_stream_install(store_dir: &std::path::Path, socket: &str) -> DeviceAbilityInstall {
-        let manifest = host_stream_manifest(socket, "er.generate");
+        host_stream_install_with_version(store_dir, socket, None)
+    }
+
+    fn host_stream_install_with_version(
+        store_dir: &std::path::Path,
+        socket: &str,
+        descriptor_version: Option<&str>,
+    ) -> DeviceAbilityInstall {
+        let mut manifest = host_stream_manifest(socket, "er.generate");
+        if let Some(descriptor_version) = descriptor_version {
+            manifest = manifest
+                .with_descriptor_version(descriptor_version)
+                .expect("descriptor version must validate");
+        }
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let manifest_path = store_dir.join("ability.json");
         std::fs::write(&manifest_path, &manifest_bytes).unwrap();
@@ -1265,6 +1473,11 @@ mod tests {
             .unwrap();
         assert!(desc.options.modes.stream, "must be bound stream-mode");
         assert!(!desc.options.modes.rpc, "stream ability is not rpc");
+        let proof = desc.options.proof_for_mode(AxonCallMode::Stream);
+        assert!(
+            proof.is_bound(),
+            "ACTIVE requires descriptor proof, not just runtime visibility"
+        );
     }
 
     #[tokio::test]
@@ -1314,6 +1527,46 @@ mod tests {
         assert_eq!(
             facts.implementation_content_hash.as_deref(),
             Some(content_hash.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn install_binds_runtime_proof_to_manifest_descriptor_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DeviceAbilityStore::open_at(dir.path().join("device-abilities.json"));
+        let (registrar, rt, catalog) = wired_registrar(store);
+
+        let state = registrar
+            .install(host_stream_install_with_version(
+                dir.path(),
+                "/tmp/er-host.sock",
+                Some("2.3.0"),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(state, InstallState::Active);
+        let runtime_desc = rt
+            .ability_descriptor(er_generate_runtime_key())
+            .await
+            .expect("runtime descriptor");
+        let control_plane_record = catalog
+            .control_plane_record_for_version_mode(
+                "er.generate",
+                "2.3.0",
+                DescriptorCallMode::Stream,
+            )
+            .expect("device ability control-plane lookup is unambiguous")
+            .expect("device ability control-plane record");
+        let proof = runtime_desc.options.proof_for_mode(AxonCallMode::Stream);
+        assert_eq!(proof.descriptor_version, "2.3.0");
+        assert_eq!(
+            proof.schema_hash,
+            control_plane_record.descriptor().schema_hash().0
+        );
+        assert_eq!(
+            proof.impl_hash,
+            control_plane_record.implementation().impl_hash()
         );
     }
 
