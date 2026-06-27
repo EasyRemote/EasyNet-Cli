@@ -145,7 +145,19 @@ pub(crate) struct RemoteAbilityInvocationTarget {
     ability_ura: String,
     callee_ura: String,
     public_ability: String,
-    descriptor_version: Option<String>,
+    descriptor_binding: RemoteDescriptorBinding,
+}
+
+/// Descriptor binding state for a remote ability target.
+///
+/// `Bound` means the caller has a descriptor version and may mint a
+/// descriptor-bound origin-caller proof. `DeferredToDestination` means the
+/// local process is only routing an opaque call; the destination resolver must
+/// bind and prove the descriptor before executing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RemoteDescriptorBinding {
+    Bound { version: String },
+    DeferredToDestination,
 }
 
 impl RemoteAbilityInvocationTarget {
@@ -173,8 +185,28 @@ impl RemoteAbilityInvocationTarget {
                 format!(
                     "resolve descriptor version for target-owned selector `{selector}` on `{execution_target_ura}`"
                 )
-            })?;
+        })?;
         Self::from_descriptor_ref(execution_target_ura, &descriptor_ref)
+    }
+
+    /// Project a target-owned selector for a pure remote dispatch.
+    ///
+    /// Use this for surfaces where the local process is not allowed to mint a
+    /// descriptor-bound origin-caller proof because it does not own the remote
+    /// descriptor source of truth. The target remains explicit: execution node,
+    /// callee owner, public ability, and descriptor-binding state are all
+    /// inspectable on the value object.
+    pub(crate) fn for_target_owned_remote_dispatch_selector(
+        execution_target_ura: &str,
+        selector: &str,
+    ) -> anyhow::Result<Self> {
+        validate_forward_target_ura(execution_target_ura)?;
+        let public_ability = crate::ura::owner_local_ability_name(execution_target_ura, selector);
+        let ability_ura = crate::ura::owner_ability_ura(execution_target_ura, &public_ability)
+            .ok_or_else(|| {
+                anyhow!("derive ability URA for {execution_target_ura} {public_ability}")
+            })?;
+        Self::from_ability_ura(execution_target_ura, &ability_ura)
     }
 
     /// Accept an already-canonical Ability URA and bind it to an execution
@@ -192,7 +224,7 @@ impl RemoteAbilityInvocationTarget {
             ability_ura: trimmed.to_string(),
             callee_ura: selector.owner_ura().to_string(),
             public_ability: selector.public_name().to_string(),
-            descriptor_version: None,
+            descriptor_binding: RemoteDescriptorBinding::DeferredToDestination,
         })
     }
 
@@ -208,7 +240,9 @@ impl RemoteAbilityInvocationTarget {
             .rsplit_once('@')
             .ok_or_else(|| anyhow!("descriptor-bound Ability ref is missing `@version`"))?;
         let mut target = Self::from_ability_ura(execution_target_ura, ability_ura)?;
-        target.descriptor_version = Some(descriptor_version.to_string());
+        target.descriptor_binding = RemoteDescriptorBinding::Bound {
+            version: descriptor_version.to_string(),
+        };
         Ok(target)
     }
 
@@ -223,7 +257,10 @@ impl RemoteAbilityInvocationTarget {
     }
 
     pub(crate) fn descriptor_version(&self) -> Option<&str> {
-        self.descriptor_version.as_deref()
+        match &self.descriptor_binding {
+            RemoteDescriptorBinding::Bound { version } => Some(version.as_str()),
+            RemoteDescriptorBinding::DeferredToDestination => None,
+        }
     }
 }
 
@@ -1314,6 +1351,25 @@ mod tests {
             .as_str(),
             "easynet:///r/acme/ability/device.dev-1.fs.read"
         );
+    }
+
+    #[test]
+    fn remote_dispatch_selector_declares_descriptor_binding_deferred_to_destination() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_remote_dispatch_selector(
+            "easynet:///r/acme/device/N1",
+            "claude.chat",
+        )
+        .expect("remote A2A selector should not require a local descriptor source");
+
+        assert_eq!(
+            target.as_str(),
+            "easynet:///r/acme/ability/device.N1.claude.chat"
+        );
+        assert!(matches!(
+            &target.descriptor_binding,
+            RemoteDescriptorBinding::DeferredToDestination
+        ));
+        assert_eq!(target.descriptor_version(), None);
     }
 
     #[test]

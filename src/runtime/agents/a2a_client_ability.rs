@@ -136,7 +136,7 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
         let target_call =
-            match crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+            match crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_remote_dispatch_selector(
                 &target_ura,
                 &ability,
             ) {
