@@ -185,7 +185,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     }
 
     let mut env = ProductionUninstallEnvironment;
-    SelfUninstallPlan::default().execute(&mut env)?;
+    SelfUninstallPlan.execute(&mut env)?;
 
     output::success("EasyNet CLI uninstalled");
     eprintln!();

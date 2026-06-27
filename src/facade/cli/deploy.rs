@@ -48,12 +48,16 @@ pub struct DeployArgs {
     /// binding is `kind = "host_stream"`; other exec kinds are rejected by
     /// the daemon until their runtime boundaries are implemented.
     pub path: String,
-    /// Target device node id. Use 'local' to deploy onto this
-    /// device's own ability registry; any other node id requires
-    /// the federation Invoke transport (the handler returns a
-    /// typed 'federation_not_wired' error in that case until it
-    /// ships).
-    #[arg(long = "node", short = 'n', value_name = "NODE_ID")]
+    /// Target device node id. Defaults to 'local', the only fully
+    /// implemented target in this release. Any other node id requires
+    /// the federation Invoke transport and returns a typed
+    /// 'federation_not_wired' error until that transport ships.
+    #[arg(
+        long = "node",
+        short = 'n',
+        value_name = "NODE_ID",
+        default_value = "local"
+    )]
     pub node: String,
 }
 

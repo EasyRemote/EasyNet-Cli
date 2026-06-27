@@ -2018,7 +2018,7 @@ mod tests {
 
     fn valid_bidi_invocation_json() -> CString {
         let callee_ura = "easynet:///r/acme/device/dev-a";
-        let descriptor_ref = descriptor_ref(&callee_ura, "device.pty.attach", "2.4.0");
+        let descriptor_ref = descriptor_ref(callee_ura, "device.pty.attach", "2.4.0");
         CString::new(
             serde_json::json!({
                 "caller_ura": "easynet:///r/acme/device/dev-a",
