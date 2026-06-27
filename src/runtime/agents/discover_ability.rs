@@ -71,6 +71,7 @@ use serde_json::{json, Value};
 use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::registry::agents::{AgentEntry, AgentRegistry};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
 /// Verb portion of the per-agent discover ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.discover`.
@@ -521,30 +522,77 @@ fn delegate_to_provider(
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let provider = DiscoverProviderName::parse(provider_name)?;
+    DiscoverProviderName::parse(provider_name)?;
     let agents = agent_registry_provider();
-    if !agents.agents.contains_key(provider.agent) {
-        anyhow::bail!(
-            "discover: provider agent {:?} is not registered on this daemon; choose an \
-             agent from `agent.list` or omit provider",
-            provider.agent
-        );
-    }
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
         anyhow::anyhow!(
             "internal_error: dispatch registry handle not yet set; \
              discover provider routing requires the daemon's live registry"
         )
     })?;
-    let provider_registry_name = provider.as_registry_name();
+    let provider = DiscoverProviderTarget::resolve(provider_name, &agents, registry)?;
+    let provider_registry_name = provider.registry_name().to_string();
     registry
-        .invoke_rpc_json(&provider_registry_name, args)
+        .invoke_rpc_target_json(provider.into_invocation_target(args))
         .map_err(|err| {
             anyhow::anyhow!(
                 "discover: provider {provider_registry_name:?} is not registered or failed. Pick a registered \
                  `<agent>.discover` provider, or omit provider to use the builtin matcher. ({err})"
             )
         })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscoverProviderTarget {
+    registry_name: String,
+    ability_ura: String,
+    subject_ura: String,
+}
+
+impl DiscoverProviderTarget {
+    fn resolve(
+        raw: &str,
+        agents: &AgentRegistry,
+        registry: &AxonAbilityCatalog,
+    ) -> anyhow::Result<Self> {
+        let provider = DiscoverProviderName::parse(raw)?;
+        if !agents.agents.contains_key(provider.agent) {
+            anyhow::bail!(
+                "discover: provider agent {:?} is not registered on this daemon; choose an \
+                 agent from `agent.list` or omit provider",
+                provider.agent
+            );
+        }
+        let registry_name = provider.as_registry_name();
+        let record = registry
+            .control_plane_record_for_mode(&registry_name, crate::runtime::ability::CallMode::Rpc)
+            .map_err(|err| anyhow::anyhow!("discover provider control-plane lookup: {err}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "discover: provider {registry_name:?} is not registered in the control plane"
+                )
+            })?;
+        Ok(Self {
+            registry_name,
+            ability_ura: record.descriptor().ability_ura().to_string(),
+            subject_ura: record.authority().scope().authority_root().to_string(),
+        })
+    }
+
+    fn registry_name(&self) -> &str {
+        &self.registry_name
+    }
+
+    fn into_invocation_target(self, args: Value) -> InvocationTarget {
+        InvocationTarget {
+            scope: TargetScope::Local,
+            ability: self.ability_ura,
+            normalized_args: args,
+            call_mode: CallMode::Rpc,
+            subject: Some(self.subject_ura),
+            causal_context: Some(easynet_axon::invocation::CausalContext::None),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -702,12 +750,11 @@ fn resolve_via_federation(
     // [`federated_directory_candidates`] for the projection contract
     // and why other scopes are excluded.
     if matches!(scope, Scope::Public) {
-        // Routed through the feature-agnostic shim so this branch
+        // Routed through the federated-directory reader so this branch
         // compiles regardless of the `axon-pb` feature. With the
-        // feature off the shim returns `Ok(vec![])`, which is
-        // exactly the "no federated entries" case the helper
-        // already handles.
-        match crate::services::federation_invoke_shim::invoke_federation_discover(None, None) {
+        // feature off, the reader returns an explicit capability error
+        // rather than fabricating an empty directory.
+        match crate::services::federated_directory_reader::read_federated_directory(None, None) {
             Ok(entries) => rows.extend(federated_directory_candidates(&entries)),
             Err(error) if rows.is_empty() => {
                 return Ok(error_envelope(
@@ -1278,6 +1325,7 @@ mod tests {
 
     #[test]
     fn register_publishes_discover_manifest_description() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
@@ -1768,6 +1816,7 @@ mod tests {
 
     #[test]
     fn top_k_zero_is_rejected() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
@@ -1818,6 +1867,7 @@ mod tests {
 
     #[test]
     fn source_window_all_rejects_top_k() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
@@ -1832,6 +1882,7 @@ mod tests {
 
     #[test]
     fn provider_arg_delegates_to_named_handler() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         // The discover handler routes to the named provider via the
         // dispatch registry. Pin both halves: (a) the provider IS
         // called, (b) the `provider` field is stripped before the
@@ -1892,7 +1943,41 @@ mod tests {
     }
 
     #[test]
+    fn provider_target_is_descriptor_bound_with_explicit_subject() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc(
+            "userx.discover",
+            Arc::new(|_args| Ok(json!({"candidates": []}))),
+        );
+        let mut agents = AgentRegistry::default();
+        agents
+            .agents
+            .insert("userx".to_string(), AgentEntry::new(AgentType::Codex, None));
+
+        let target =
+            DiscoverProviderTarget::resolve("userx.discover", &agents, &reg).expect("provider");
+        let invocation_target = target.into_invocation_target(json!({"query": "weather"}));
+
+        assert!(
+            crate::ura::AbilitySelector::parse(&invocation_target.ability).is_ok(),
+            "provider delegation must dispatch a descriptor-bound Ability URA"
+        );
+        assert!(
+            invocation_target
+                .subject
+                .as_deref()
+                .is_some_and(|subject| { crate::ura::parse_ura(subject).is_ok() }),
+            "provider delegation must not rely on a missing subject default"
+        );
+        assert!(
+            invocation_target.causal_context.is_some(),
+            "provider delegation must state a causal context, even when it is none"
+        );
+    }
+
+    #[test]
     fn provider_without_dot_is_rejected() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,

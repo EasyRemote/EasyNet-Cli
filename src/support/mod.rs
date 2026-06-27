@@ -100,12 +100,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-/// PR-N1 commit 8/N: CLI bridge from `easynet ability invoke
-/// --node` to the local daemon's `federation.forward_invoke`
-/// gRPC ability. Mirrors the placement of `local_invoke.rs` so a
-/// reader looking for "where does the CLI talk to the daemon"
-/// finds both helpers in one directory; this one is for the
-/// cross-hub path.
 /// `run_blocking()` + `try_run_blocking_in_tokio()` — the single
 /// recipe for driving a future to completion from sync code,
 /// with explicit fallback policy. Replaces three near-identical
@@ -115,8 +109,8 @@
 /// `runtime/local_runtime_invoker.rs`.
 pub mod async_bridge;
 
-// federation_invoke moved under services::invocation_transport and
-// federation_invoke_shim moved under services::federation_invoke_shim.
+// federation_invoke moved under services::invocation_transport, and the
+// product read boundary lives in services::federated_directory_reader.
 // Keeping both out of support prevents this module from reaching upward into
 // services — the production back-edge this split removed.
 

@@ -29,7 +29,9 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::discover::{self, DiscoverArgs, OutputFormat, SourceWindowMode};
+use easynet_cli::facade::cli::discover::{
+    self, DiscoverArgs, DiscoverScopeMode, OutputFormat, SourceWindowMode,
+};
 use easynet_cli::facade::cli::teach::{self, ForgetArgs, LearnArgs, TeachArgs};
 use seven_axes_fixture::SevenAxesHome;
 
@@ -39,7 +41,7 @@ fn discover_weather() -> DiscoverArgs {
     DiscoverArgs {
         intent: "weather forecast".into(),
         limit: 15,
-        local_only: true,
+        scope: DiscoverScopeMode::Local,
         as_agent: None,
         tree: false,
         source_window: SourceWindowMode::Bounded,

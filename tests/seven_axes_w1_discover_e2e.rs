@@ -36,7 +36,9 @@ use std::time::Duration;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::facade::cli::discover::{self, DiscoverArgs, OutputFormat, SourceWindowMode};
+use easynet_cli::facade::cli::discover::{
+    self, DiscoverArgs, DiscoverScopeMode, OutputFormat, SourceWindowMode,
+};
 use easynet_cli::persistence::config;
 use seven_axes_fixture::SevenAxesHome;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -48,7 +50,7 @@ fn args(intent: &str) -> DiscoverArgs {
     DiscoverArgs {
         intent: intent.to_string(),
         limit: 15,
-        local_only: false,
+        scope: DiscoverScopeMode::Realm,
         as_agent: None,
         tree: false,
         source_window: SourceWindowMode::Bounded,

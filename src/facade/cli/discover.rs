@@ -8,8 +8,10 @@
 //
 //                tier 1 self    ┐  one call, scope="device"
 //                tier 2 device  ┘  (local registry walk)
-//                tier 3 user    —  one call, scope="user"
+//                tier 3 realm   —  one call, scope="user"
 //                                  (federation.resolve via the hub)
+//                tier 4 public  —  one call, scope="public"
+//                                  (explicit cross-tenant catalogue)
 //
 //              Tier 4 (scope="public", cross-tenant) is deliberately
 //              not searched by default: realm-wide browsing answers
@@ -62,14 +64,6 @@ use crate::ura::AbilitySelector;
 /// `support::output` leaf layer.
 pub use crate::support::output::OutputFormat;
 
-/// Default bounded source window for each runtime ladder tier.
-///
-/// The CLI ranker needs a wide source set because it intentionally owns
-/// final intent scoring, but the daemon must still receive a bounded
-/// request by default. Ten thousand keeps ordinary catalogs effectively
-/// complete while preserving a concrete memory and latency ceiling.
-const DEFAULT_SOURCE_CANDIDATE_LIMIT: usize = 10_000;
-
 /// Caller-selected source window sent to the runtime discover ability.
 ///
 /// This is a CLI policy type, not the runtime's internal source-window
@@ -78,10 +72,35 @@ const DEFAULT_SOURCE_CANDIDATE_LIMIT: usize = 10_000;
 /// for exhaustive inspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SourceWindowMode {
-    /// Ask each ladder tier for at most a wide bounded source set.
+    /// Ask each ladder tier for at most the final result limit.
     Bounded,
     /// Ask each ladder tier for every available source candidate.
     All,
+}
+
+/// Maximum discovery scope requested by the CLI caller.
+///
+/// This is a product state, not a bag of booleans. `Realm` is the daily
+/// default, `Local` is an explicit offline/device-only run, and `Public` is
+/// the cross-tenant opt-in promised by the runtime ladder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiscoverScopeMode {
+    /// Search only this daemon's local device aggregate.
+    Local,
+    /// Search local device results plus the caller's realm.
+    Realm,
+    /// Search local device results plus the public cross-tenant catalogue.
+    Public,
+}
+
+impl DiscoverScopeMode {
+    fn federated_scope(self) -> Option<&'static str> {
+        match self {
+            Self::Local => None,
+            Self::Realm => Some("user"),
+            Self::Public => Some("public"),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -92,10 +111,9 @@ pub struct DiscoverArgs {
     /// Maximum candidates to print.
     #[arg(long, default_value_t = 15)]
     pub limit: usize,
-    /// Search only this device's tiers (self + device); skip the
-    /// realm directory.
-    #[arg(long)]
-    pub local_only: bool,
+    /// Maximum search scope.
+    #[arg(long, value_enum, default_value_t = DiscoverScopeMode::Realm)]
+    pub scope: DiscoverScopeMode,
     /// Agent name whose own ladder should define the `self` tier.
     /// Omit for a device aggregate view with no implicit self agent.
     #[arg(long, value_name = "AGENT")]
@@ -297,7 +315,7 @@ impl DiscoverReport {
             eprintln!(
                 "{}",
                 style(format!(
-                    "note: realm tier skipped ({}): {}",
+                    "note: federated tier skipped ({}): {}",
                     fed.status, fed.message
                 ))
                 .dim()
@@ -446,7 +464,7 @@ struct DiscoverExecutionPlan {
     ladder: DiscoverLadderTarget,
     source_window: SourceWindowMode,
     source_limit: usize,
-    include_realm: bool,
+    federated_scope: Option<&'static str>,
 }
 
 impl DiscoverExecutionPlan {
@@ -470,8 +488,8 @@ impl DiscoverExecutionPlan {
             self_projection,
             ladder: resolve_ladder_target(args.as_agent.as_deref())?,
             source_window: args.source_window,
-            source_limit: DEFAULT_SOURCE_CANDIDATE_LIMIT.max(args.limit),
-            include_realm: !args.local_only,
+            source_limit: args.limit,
+            federated_scope: args.scope.federated_scope(),
         })
     }
 }
@@ -647,8 +665,8 @@ impl DiscoverRuntimeService {
 
     fn execute(mut self) -> anyhow::Result<DiscoverReport> {
         self.walk_local_tier()?;
-        if self.plan.include_realm {
-            self.walk_realm_tier()?;
+        if let Some(scope) = self.plan.federated_scope {
+            self.walk_federated_tier(scope)?;
         }
         Ok(self.state.finish(&self.plan))
     }
@@ -663,7 +681,7 @@ impl DiscoverRuntimeService {
         Ok(())
     }
 
-    fn walk_realm_tier(&mut self) -> anyhow::Result<()> {
+    fn walk_federated_tier(&mut self, scope: &'static str) -> anyhow::Result<()> {
         let local_invocation_meta = self
             .state
             .invocations
@@ -674,7 +692,7 @@ impl DiscoverRuntimeService {
         let trace_id = trace_id_from_invocation_meta(&local_invocation_meta);
         let Some(causal_parents) = causal_state.parents() else {
             self.state.record_diagnostic(DiscoverDiagnostic {
-                scope: "user".to_string(),
+                scope: scope.to_string(),
                 code: "causal_anchor_pending",
                 message: causal_state
                     .unanchored_reason()
@@ -684,7 +702,7 @@ impl DiscoverRuntimeService {
             return Ok(());
         };
         let (realm_value, realm_invocation_meta) =
-            self.walk_tier_with_trace("user", causal_parents, trace_id.as_deref())?;
+            self.walk_tier_with_trace(scope, causal_parents, trace_id.as_deref())?;
         self.state.record_invocation(realm_invocation_meta);
         self.state.record_source_diagnostic(&realm_value);
         match FederationStatus::from_envelope(&realm_value) {
@@ -695,7 +713,7 @@ impl DiscoverRuntimeService {
                     &self.plan.tokens,
                     LocalSelfProjection::Preserve,
                 );
-                self.state.record_completed_tier("user");
+                self.state.record_completed_tier(scope);
             }
         }
         Ok(())
@@ -991,7 +1009,7 @@ mod tests {
         let err = execute(&DiscoverArgs {
             intent: "read file".to_string(),
             limit: 0,
-            local_only: true,
+            scope: DiscoverScopeMode::Local,
             as_agent: None,
             tree: false,
             source_window: SourceWindowMode::Bounded,
@@ -1165,6 +1183,13 @@ mod tests {
         assert_eq!(args["query"], json!("read files"));
         assert_eq!(args["source_window"], json!("bounded"));
         assert_eq!(args["top_k"], json!(123));
+    }
+
+    #[test]
+    fn discover_scope_mode_maps_to_one_federated_tier() {
+        assert_eq!(DiscoverScopeMode::Local.federated_scope(), None);
+        assert_eq!(DiscoverScopeMode::Realm.federated_scope(), Some("user"));
+        assert_eq!(DiscoverScopeMode::Public.federated_scope(), Some("public"));
     }
 
     #[test]
