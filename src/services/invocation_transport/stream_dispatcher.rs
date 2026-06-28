@@ -31,6 +31,7 @@ use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::deps::{DirectoryPlane, RuntimePlane};
 use crate::services::invocation_transport::descriptor_binding::RuntimeBoundAbility;
 use crate::services::invocation_transport::federation_wrappers;
+use crate::services::invocation_transport::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::services::invocation_transport::invocation_wire::{
     status_from_axon_invoke_error, status_from_dispatch_key_mismatch, target_ura_from_envelope,
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
@@ -339,19 +340,31 @@ impl StreamDispatcher {
             .accepts_loopback_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
             Some(envelope) if loopback_admitted => {
+                let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
+                    &request.metadata,
+                    &envelope,
+                    true,
+                    ability,
+                )?;
                 crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     request.arguments.clone(),
-                    request.metadata.clone(),
+                    metadata,
                 )
             }
             Some(envelope) => {
+                let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
+                    &request.metadata,
+                    &envelope,
+                    false,
+                    ability,
+                )?;
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     request.arguments.clone(),
-                    request.metadata.clone(),
+                    metadata,
                 )
             }
             None => Err(Box::new(

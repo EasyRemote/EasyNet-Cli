@@ -28,7 +28,8 @@ pub use authority::{
     AuthorityBindingKind, AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityPredicate,
     AuthorityScope, HostedAgentAuthority, HostedAgentDelegationClaims,
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding,
-    HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 pub use descriptor::{
     canonical_json_bytes, AbilityControlPlaneKey, AbilityDescriptorKey, AbilityDescriptorRecord,

@@ -100,7 +100,9 @@ use easynet_axon::invocation::{
 };
 
 use crate::runtime::ability::canonical_json_bytes;
-use crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
+use crate::runtime::ability::{
+    HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+};
 use crate::runtime::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
@@ -1351,16 +1353,22 @@ fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
 fn reject_public_hosted_agent_delegation_metadata(
     metadata: Option<&HashMap<String, String>>,
 ) -> Result<(), Status> {
-    let Some(_) = metadata
-        .and_then(|m| m.get(HOSTED_AGENT_DELEGATION_METADATA_KEY))
-        .map(String::as_str)
-        .filter(|value| !value.trim().is_empty())
-    else {
+    let Some(rejected_key) = [
+        HOSTED_AGENT_DELEGATION_METADATA_KEY,
+        HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+    ]
+    .into_iter()
+    .find(|key| {
+        metadata
+            .and_then(|m| m.get(*key))
+            .map(String::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    }) else {
         return Ok(());
     };
 
     Err(Status::permission_denied(format!(
-        "{REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY}: `{HOSTED_AGENT_DELEGATION_METADATA_KEY}` \
+        "{REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY}: `{rejected_key}` \
          is local daemon control metadata and is only accepted on trusted loopback ingress"
     )))
 }
@@ -2036,6 +2044,50 @@ mod tests {
     }
 
     #[test]
+    fn public_signed_caller_cannot_inject_hosted_agent_delegation_request() {
+        let signing_key = SigningKey::from_bytes(&[0x44u8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let caller_ura = hub_ura("peer-hosted-delegation-request-spoof");
+        let daemon_ura = hub_ura("realm");
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
+                .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura.clone()));
+        let mut req = signed_request_with_nonce(
+            &caller_ura,
+            &daemon_ura,
+            "meta.teach",
+            b"{}",
+            &signing_key,
+            [0x44u8; 16],
+        );
+        let request = crate::runtime::ability::HostedAgentDelegationRequest::new(
+            crate::ura::agent_ura("realm", "u", "a"),
+        )
+        .expect("valid delegation request");
+        req.metadata.insert(
+            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            request.metadata_value().expect("request metadata"),
+        );
+
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("public ingress must reject hosted-agent delegation requests");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message()
+                .contains(REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY),
+            "{}",
+            err.message()
+        );
+        assert!(
+            facade.replay_store.is_empty(),
+            "local-only hosted delegation request rejection must happen before nonce recording"
+        );
+    }
+
+    #[test]
     fn loopback_may_carry_hosted_agent_delegation_metadata() {
         let daemon_ura = hub_ura("realm");
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
@@ -2050,6 +2102,28 @@ mod tests {
         facade
             .verify_invoke(&req)
             .expect("trusted loopback may carry local hosted-agent delegation metadata");
+        assert!(facade.replay_store.is_empty());
+    }
+
+    #[test]
+    fn loopback_may_carry_hosted_agent_delegation_request() {
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
+        let mut req = invoke_request(Some(envelope_with_caller(
+            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+        )));
+        let request = crate::runtime::ability::HostedAgentDelegationRequest::new(
+            crate::ura::agent_ura("realm", "u", "a"),
+        )
+        .expect("valid delegation request");
+        req.metadata.insert(
+            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            request.metadata_value().expect("request metadata"),
+        );
+
+        facade
+            .verify_invoke(&req)
+            .expect("trusted loopback may carry local hosted-agent delegation requests");
         assert!(facade.replay_store.is_empty());
     }
 

@@ -53,6 +53,7 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_NAMESPACE_RESOLVE,
 };
+use crate::services::invocation_transport::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::services::invocation_transport::invocation_wire::{
     dispatch_key_mismatch_message, parse_json_args, status_from_axon_invoke_error,
     status_from_dispatch_key_mismatch, target_ura_from_envelope, wrap_json_response,
@@ -428,19 +429,37 @@ impl UnaryDispatcher {
             .accepts_loopback_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
             Some(envelope) if loopback_admitted => {
+                let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
+                    &request.metadata,
+                    &envelope,
+                    true,
+                    ability,
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(status) => return (Err(status), false),
+                };
                 crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     arguments.to_vec(),
-                    request.metadata.clone(),
+                    metadata,
                 )
             }
             Some(envelope) => {
+                let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
+                    &request.metadata,
+                    &envelope,
+                    false,
+                    ability,
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(status) => return (Err(status), false),
+                };
                 crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     arguments.to_vec(),
-                    request.metadata.clone(),
+                    metadata,
                 )
             }
             None => Err(Box::new(

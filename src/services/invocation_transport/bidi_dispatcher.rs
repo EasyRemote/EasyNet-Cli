@@ -54,6 +54,7 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
     ABILITY_FEDERATION_FORWARD_INVOKE,
 };
+use crate::services::invocation_transport::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::services::invocation_transport::invocation_wire::{
     status_from_axon_invoke_error, status_from_dispatch_key_mismatch, target_ura_from_envelope,
     BoxedDownStream,
@@ -667,18 +668,30 @@ impl BidiDispatcher {
             .admission
             .accepts_loopback_envelope(envelope_open.envelope.as_ref());
         let wire = if loopback_admitted {
+            let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
+                &envelope_open.metadata,
+                &wire_envelope,
+                true,
+                &dispatch_ability,
+            )?;
             crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
                 wire_envelope,
                 dispatch_descriptor_ref,
                 envelope_open.initial_args.clone(),
-                envelope_open.metadata.clone(),
+                metadata,
             )
         } else {
+            let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
+                &envelope_open.metadata,
+                &wire_envelope,
+                false,
+                &dispatch_ability,
+            )?;
             crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                 wire_envelope,
                 dispatch_descriptor_ref,
                 envelope_open.initial_args.clone(),
-                envelope_open.metadata.clone(),
+                metadata,
             )
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, *err))?;

@@ -75,6 +75,7 @@ pub mod federated_key_resolver;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_invoke;
 pub mod federation_wrappers;
+pub(crate) mod hosted_agent_delegation;
 pub mod hub_resolver;
 pub mod invocation_wire;
 pub mod invoke_remote_initiator;

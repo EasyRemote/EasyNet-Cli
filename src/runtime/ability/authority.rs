@@ -21,6 +21,8 @@ use super::AbilityControlPlaneError;
 
 const DEFAULT_INVOKE_POLICY_REF: &str = "ability_access_policy";
 pub const HOSTED_AGENT_DELEGATION_METADATA_KEY: &str = "x-easynet-hosted-agent-delegation";
+pub const HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY: &str =
+    "x-easynet-hosted-agent-delegation-request";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityPredicate {
@@ -191,6 +193,79 @@ impl AuthorityBindingKind {
             Self::SelfBinding => "self",
             Self::HostedAgentDelegation => "hosted_agent_delegation",
         }
+    }
+}
+
+/// Unsigned local request to mint hosted-agent delegation authority.
+///
+/// What this is: a daemon-loopback control request from the local CLI to the
+/// daemon transport layer. It names the hosted Agent whose local host authority
+/// should be projected onto the current Axon invocation envelope.
+///
+/// What this is not: authorization proof. Handlers must never consume this
+/// value directly; the transport layer must convert it into signed
+/// [`HostedAgentDelegationClaims`] metadata first.
+///
+/// Invariant 1: `agent_ura` is always a canonical, trimmed Agent URA.
+/// Invariant 2: serialization is JSON, not a bare string, so the metadata
+/// grammar can evolve without overloading arbitrary URA text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedAgentDelegationRequest {
+    agent_ura: String,
+}
+
+impl HostedAgentDelegationRequest {
+    pub fn new(agent_ura: impl Into<String>) -> anyhow::Result<Self> {
+        let request = Self {
+            agent_ura: agent_ura.into(),
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn from_metadata_value(raw: &str) -> anyhow::Result<Self> {
+        let request: Self = serde_json::from_str(raw).map_err(|err| {
+            anyhow::anyhow!("invalid hosted-agent delegation request JSON: {err}")
+        })?;
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn metadata_value(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self)
+            .map_err(|err| anyhow::anyhow!("encode hosted-agent delegation request: {err}"))
+    }
+
+    pub fn agent_ura(&self) -> &str {
+        self.agent_ura.as_str()
+    }
+
+    pub fn into_claims(
+        self,
+        signing_authority: impl Into<String>,
+        envelope: HostedAgentDelegationEnvelopeBinding,
+    ) -> anyhow::Result<HostedAgentDelegationClaims> {
+        HostedAgentDelegationClaims::new(self.agent_ura, signing_authority, envelope)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        let agent_ura = self.agent_ura.trim();
+        if agent_ura.is_empty() {
+            anyhow::bail!("hosted-agent delegation request requires a non-empty Agent URA");
+        }
+        if agent_ura != self.agent_ura {
+            anyhow::bail!("hosted-agent delegation request Agent URA must be trimmed");
+        }
+        let parsed = crate::ura::parse_ura(agent_ura).map_err(|err| {
+            anyhow::anyhow!("hosted-agent delegation Agent URA is invalid: {err}")
+        })?;
+        if parsed.kind != crate::ura::URAKind::Agent {
+            anyhow::bail!(
+                "hosted-agent delegation request requires an Agent URA, got {:?}",
+                parsed.kind
+            );
+        }
+        Ok(())
     }
 }
 
@@ -899,6 +974,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(authority.ability(), "meta.acquire");
+    }
+
+    #[test]
+    fn hosted_agent_delegation_request_round_trips_as_json() {
+        let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
+        let request = HostedAgentDelegationRequest::new(agent_ura.as_str()).unwrap();
+        let raw = request.metadata_value().unwrap();
+
+        let decoded = HostedAgentDelegationRequest::from_metadata_value(&raw).unwrap();
+
+        assert_eq!(decoded.agent_ura(), agent_ura);
+        assert!(
+            raw.contains("agent_ura"),
+            "request metadata must remain structured JSON"
+        );
+    }
+
+    #[test]
+    fn hosted_agent_delegation_request_rejects_non_agent_ura() {
+        let err =
+            HostedAgentDelegationRequest::new("easynet:///r/default/device/local").unwrap_err();
+
+        assert!(err.to_string().contains("Agent URA"), "{err}");
     }
 
     #[test]

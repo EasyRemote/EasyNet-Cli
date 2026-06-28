@@ -283,69 +283,6 @@ impl SelfIdentity for KeyringClient {
     }
 }
 
-/// Signer for daemon-local InvokeRequest construction.
-///
-/// Ordinary callers sign through the keyring daemon. The synthetic
-/// `_system.local` caller is a process-local capability used only for
-/// daemon-internal loopback calls, so it is signed directly by
-/// `runtime::local_invocation_identity`.
-#[cfg(feature = "axon-pb")]
-pub(crate) enum LocalDaemonSigner {
-    Keyring(KeyringClient),
-    ProcessLocalSystem,
-}
-
-#[cfg(feature = "axon-pb")]
-impl LocalDaemonSigner {
-    pub(crate) fn for_caller(caller_ura: &str) -> Self {
-        if caller_ura == crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
-            Self::ProcessLocalSystem
-        } else {
-            Self::Keyring(KeyringClient::default_path())
-        }
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl SelfIdentity for LocalDaemonSigner {
-    fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
-        match self {
-            Self::Keyring(client) => client.sign(self_ura, canonical_bytes),
-            Self::ProcessLocalSystem => {
-                if self_ura != crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
-                    return Err(SelfIdentityError::Rejected {
-                        kind: "invalid_local_system_caller".to_string(),
-                        message: format!("process-local system signer cannot sign for {self_ura}"),
-                    });
-                }
-                use ed25519_dalek::Signer as _;
-                Ok(
-                    crate::runtime::local_invocation_identity::process_local_system_identity()
-                        .signing_key()
-                        .sign(canonical_bytes),
-                )
-            }
-        }
-    }
-
-    fn public_key(&self, self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
-        match self {
-            Self::Keyring(client) => client.public_key(self_ura),
-            Self::ProcessLocalSystem => {
-                if self_ura != crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
-                    return Err(SelfIdentityError::Rejected {
-                        kind: "invalid_local_system_caller".to_string(),
-                        message: format!(
-                            "process-local system signer cannot expose a key for {self_ura}"
-                        ),
-                    });
-                }
-                Ok(crate::runtime::local_invocation_identity::system_verifying_key())
-            }
-        }
-    }
-}
-
 /// Convenience: helper for the join flow that needs to put a fresh
 /// keypair into the vault. Not part of the `SelfIdentity` trait
 /// because routine signing callers must NOT have access to the

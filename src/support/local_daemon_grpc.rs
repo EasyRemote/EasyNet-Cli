@@ -21,9 +21,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(feature = "axon-pb")]
-use crate::runtime::ability::{HostedAgentDelegationClaims, HostedAgentDelegationEnvelopeBinding};
-#[cfg(feature = "axon-pb")]
-use crate::services::self_identity::{LocalDaemonSigner, SelfIdentity};
+use crate::runtime::ability::{
+    HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+};
 
 /// Resolve the local daemon Invocation endpoint. Thin re-export of
 /// [`crate::persistence::daemon_config::resolved_local_uds_path_with_env_override`]
@@ -321,18 +321,6 @@ impl LocalDaemonLoopbackInvocation {
             envelope.trace_id = trace_id.clone();
         }
         Ok(envelope)
-    }
-
-    fn nonce_hex_from_request(
-        request: &easynet_axon::pb::axon::v1::InvokeRequest,
-        function_name: &str,
-    ) -> anyhow::Result<String> {
-        let nonce_hex = request
-            .envelope
-            .as_ref()
-            .map(|env| hex::encode(&env.invocation_nonce))
-            .ok_or_else(|| anyhow::anyhow!("build {function_name} request without envelope"))?;
-        Ok(nonce_hex)
     }
 
     fn timeout_seconds(&self) -> i32 {
@@ -889,7 +877,7 @@ pub(crate) fn invoke_local_daemon_ability_with_hosted_agent_delegation(
     trace_id: Option<&str>,
     hosted_agent_ura: &str,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
-    let delegated = HostedAgentDelegation::parse(hosted_agent_ura)?;
+    let delegated = HostedAgentDelegationRequest::new(hosted_agent_ura)?;
     invoke_local_daemon_ability_with_invocation_meta_inner(LocalDaemonInvocationMetaRequest {
         function_name,
         payload_json,
@@ -903,12 +891,6 @@ pub(crate) fn invoke_local_daemon_ability_with_hosted_agent_delegation(
 }
 
 #[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone)]
-struct HostedAgentDelegation {
-    agent_ura: String,
-}
-
-#[cfg(feature = "axon-pb")]
 struct LocalDaemonInvocationMetaRequest<'a> {
     function_name: &'a str,
     payload_json: serde_json::Value,
@@ -916,41 +898,8 @@ struct LocalDaemonInvocationMetaRequest<'a> {
     causal_parents: &'a [serde_json::Value],
     step_timeout: Option<Duration>,
     trace_id: Option<&'a str>,
-    delegation: Option<HostedAgentDelegation>,
+    delegation: Option<HostedAgentDelegationRequest>,
     callee_agent: Option<&'a str>,
-}
-
-#[cfg(feature = "axon-pb")]
-impl HostedAgentDelegation {
-    fn parse(agent_ura: &str) -> anyhow::Result<Self> {
-        let agent_ura = agent_ura.trim();
-        if agent_ura.is_empty() {
-            anyhow::bail!("hosted agent delegation requires a non-empty Agent URA");
-        }
-        let parsed = crate::ura::parse_ura(agent_ura)
-            .map_err(|err| anyhow::anyhow!("hosted agent delegation URA is invalid: {err}"))?;
-        if parsed.kind != crate::ura::URAKind::Agent {
-            anyhow::bail!(
-                "hosted agent delegation requires an Agent URA, got {:?}",
-                parsed.kind
-            );
-        }
-        Ok(Self {
-            agent_ura: agent_ura.to_string(),
-        })
-    }
-
-    fn metadata_value(
-        &self,
-        envelope: HostedAgentDelegationEnvelopeBinding,
-        signer: &dyn SelfIdentity,
-    ) -> anyhow::Result<String> {
-        let signer_ura = envelope.caller_ura().to_string();
-        let claims =
-            HostedAgentDelegationClaims::new(self.agent_ura.clone(), "host_device", envelope)?;
-        let signature = signer.sign(&signer_ura, &claims.signing_payload_bytes(&signer_ura))?;
-        claims.signed_metadata_value(&signer_ura, &signature)
-    }
 }
 
 /// State machine for projecting daemon invocation metadata after a terminal
@@ -1132,23 +1081,17 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         form: Some(causal_form),
     })
     .with_trace_id(trace_id);
-    let wire_caller_ura = invocation.caller_ura.clone();
     let mut request = invocation.invoke_request()?;
-    let nonce_hex =
-        LocalDaemonLoopbackInvocation::nonce_hex_from_request(&request, &function_name)?;
+    let wire_caller_ura = invocation.caller_ura.clone();
+    let nonce_hex = request
+        .envelope
+        .as_ref()
+        .map(|env| hex::encode(env.invocation_nonce.as_slice()))
+        .ok_or_else(|| anyhow!("build {function_name} request without envelope"))?;
     if let Some(delegation) = delegation.as_ref() {
-        let signer = LocalDaemonSigner::for_caller(&wire_caller_ura);
-        let envelope = HostedAgentDelegationEnvelopeBinding::new(
-            &wire_caller_ura,
-            &callee_ura,
-            &subject_ura,
-            &nonce_hex,
-            &function_name,
-        )?;
-        let metadata_value = delegation.metadata_value(envelope, &signer)?;
         request.metadata.insert(
-            crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
-            metadata_value,
+            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            delegation.metadata_value()?,
         );
     }
 
@@ -1262,7 +1205,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     if let Some(delegation) = delegation {
         meta["delegation"] = serde_json::json!({
             "kind": "hosted_agent",
-            "agent_ura": delegation.agent_ura,
+            "agent_ura": delegation.agent_ura(),
             "signing_authority": "host_device",
             "wire_caller_ura": meta.get("caller_ura").cloned().unwrap_or(Value::Null),
             "wire_callee_ura": meta.get("callee_ura").cloned().unwrap_or(Value::Null),
