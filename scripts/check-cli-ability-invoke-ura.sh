@@ -20,8 +20,14 @@ GROUP_RS="src/facade/cli/groups/ability.rs"
 grep -q 'pub ability_ura: String' "$INVOKE_RS" \
     || fail "CLI invoke args must name the public selector ability_ura"
 
-grep -q 'AbilitySelector::parse(&invoke_args.ability_ura)' "$INVOKE_RS" \
-    || fail "CLI invoke must parse the public selector as an Ability URA"
+grep -q 'InvokeAbilityRef::parse(&invoke_args.ability_ura)' "$INVOKE_RS" \
+    || fail "CLI invoke must parse the public selector through the Ability URA boundary object"
+
+grep -q 'AbilitySelector::parse(raw)' "$INVOKE_RS" \
+    || fail "plain CLI invoke input must still parse as an Ability URA"
+
+grep -q 'AbilitySelector::parse(ability_ura)' "$INVOKE_RS" \
+    || fail "descriptor-ref CLI invoke input must parse the embedded Ability URA"
 
 grep -q 'local_registry_ability()' "$INVOKE_RS" \
     || fail "local CLI invoke must derive daemon registry key from Ability URA"
@@ -30,7 +36,7 @@ grep -q 'ABILITY_URA=' scripts/chat-as-ability-smoke.sh \
     || fail "chat smoke must name the public selector ABILITY_URA"
 
 bad="$(
-    grep -nE 'pub ability: String|invoke_args\.ability\b|ability invoke <ability>|ability invoke <name>|invoke <ability>|Ability \(tool\) name|ability invoke [A-Za-z0-9_][A-Za-z0-9_.-]*([[:space:]]|$)|ability invoke "\$ABILITY"|\bABILITY=' \
+    grep -nE 'pub ability: String|invoke_args\.ability\b|ability invoke <ability>|ability invoke <name>|invoke <ability>|Ability \(tool\) name|ability invoke observe\.health([[:space:]]|$)|ability invoke "\$ABILITY"|\bABILITY=' \
         "$INVOKE_RS" "$GROUP_RS" scripts/control-smoke.sh scripts/chat-as-ability-smoke.sh 2>/dev/null || true
 )"
 if [[ -n "$bad" ]]; then

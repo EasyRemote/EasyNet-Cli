@@ -2160,8 +2160,11 @@ mod tests {
     /// owner segment — name and description deliberately share no token
     /// with the query so the row scores zero unless the owner is ranked.
     fn owner_only_candidate(owner: &str) -> Candidate {
+        let owner_ura = crate::ura::agent_ura("acme", "u", owner);
+        let ability_ura =
+            crate::ura::owner_ability_ura(&owner_ura, "fs.read").expect("agent ability URA");
         Candidate {
-            qualified_name: format!("easynet:///r/acme/agent/u/{owner}/fs.read"),
+            qualified_name: ability_ura,
             owner: owner.to_string(),
             ability: "fs.read".to_string(),
             description: "read a file from disk".to_string(),
