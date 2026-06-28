@@ -45,10 +45,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use easynet_axon::invocation::{make_ability, LocalRuntime};
+use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_axon::pb::axon::v1::InvokeRequest;
+use easynet_cli::runtime::ability_dispatch::{
+    AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, OwnerKind,
+};
 use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
 use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::invocation_transport::invocation_wire::ProtoEnvelope;
@@ -162,13 +165,14 @@ added_at_unix_ms = 0
     let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_URI.to_string()));
 
     let runtime = LocalRuntime::new();
-    runtime
-        .register_ability(
-            ABILITY_REGISTRY_NAME,
-            make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
-        )
-        .await
-        .expect("register device-owned echo ability");
+    let authority_context =
+        AbilityAuthorityContext::for_device_authority_root(DEVICE_URI).expect("device authority");
+    let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        Arc::clone(&runtime),
+        authority_context,
+    );
+    let echo_handler: LocalRpcHandler = Arc::new(Ok);
+    catalog.register_rpc_with_owner(ABILITY_REGISTRY_NAME, OwnerKind::Device, echo_handler);
 
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_session_realm(REALM)

@@ -1295,6 +1295,13 @@ pub struct AxonAbilityCatalog {
     /// authority. Per-call sites migrate to the `_with_owner` variants
     /// commit-by-commit; the shims are deleted at M0 commit 6.
     owner: BTreeMap<String, OwnerKind>,
+    /// Resolved authority scope per static ability.
+    ///
+    /// Static registration resolves this exactly once, at the same boundary
+    /// that writes the handler and control-plane record. Later lookup,
+    /// LocalRuntime sync, and unregister paths read this table instead of
+    /// re-projecting [`OwnerKind`] through the ambient environment.
+    authority_scope: BTreeMap<String, AuthorityScope>,
     /// Authority roots for projecting owner kinds into protocol and runtime
     /// identities. This is a catalog property, not a global lookup, so an
     /// embedded daemon's runtime surface is bound to the device identity it
@@ -1356,6 +1363,7 @@ struct DynamicCatalogue {
     stream_with_env: BTreeMap<String, LocalStreamHandlerWithEnvelope>,
     bidi_with_env: BTreeMap<String, LocalBidiHandlerWithEnvelope>,
     owner: BTreeMap<String, OwnerKind>,
+    authority_scope: BTreeMap<String, AuthorityScope>,
     manifests: BTreeMap<String, Arc<crate::core::ability_spec::AbilityManifest>>,
 }
 
@@ -1369,6 +1377,7 @@ impl DynamicCatalogue {
             stream_with_env: self.stream_with_env.get(ability).map(Arc::clone),
             bidi_with_env: self.bidi_with_env.get(ability).map(Arc::clone),
             owner: self.owner.get(ability).cloned(),
+            authority_scope: self.authority_scope.get(ability).cloned(),
             manifest: self.manifests.get(ability).map(Arc::clone),
         }
     }
@@ -1396,6 +1405,10 @@ impl DynamicCatalogue {
         if let Some(owner) = snapshot.owner {
             self.owner.insert(ability.to_string(), owner);
         }
+        if let Some(authority_scope) = snapshot.authority_scope {
+            self.authority_scope
+                .insert(ability.to_string(), authority_scope);
+        }
         if let Some(manifest) = snapshot.manifest {
             self.manifests.insert(ability.to_string(), manifest);
         }
@@ -1416,6 +1429,7 @@ impl DynamicCatalogue {
         self.stream_with_env.remove(ability);
         self.bidi_with_env.remove(ability);
         self.owner.remove(ability);
+        self.authority_scope.remove(ability);
         self.manifests.remove(ability);
         present
     }
@@ -1435,15 +1449,17 @@ impl DynamicCatalogue {
         };
         if !self.contains_handler(ability) {
             self.owner.remove(ability);
+            self.authority_scope.remove(ability);
             self.manifests.remove(ability);
         }
         removed
     }
 
-    fn install(&mut self, registration: DynamicRegistration) {
+    fn install(&mut self, registration: DynamicRegistration, authority_scope: AuthorityScope) {
         let DynamicRegistration {
             ability,
             owner,
+            authority_scope: _,
             manifest,
             handler,
             implementation: _,
@@ -1451,6 +1467,8 @@ impl DynamicCatalogue {
         let call_mode = handler.call_mode();
         self.remove_mode(&ability, call_mode);
         self.owner.insert(ability.clone(), owner);
+        self.authority_scope
+            .insert(ability.clone(), authority_scope);
         if let Some(manifest) = manifest {
             self.manifests.insert(ability.clone(), manifest);
         }
@@ -1476,6 +1494,7 @@ impl DynamicCatalogue {
     fn contains(&self, ability: &str) -> bool {
         self.contains_handler(ability)
             || self.owner.contains_key(ability)
+            || self.authority_scope.contains_key(ability)
             || self.manifests.contains_key(ability)
     }
 }
@@ -1489,6 +1508,7 @@ struct DynamicAbilitySnapshot {
     stream_with_env: Option<LocalStreamHandlerWithEnvelope>,
     bidi_with_env: Option<LocalBidiHandlerWithEnvelope>,
     owner: Option<OwnerKind>,
+    authority_scope: Option<AuthorityScope>,
     manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
 }
 
@@ -1597,6 +1617,7 @@ impl StaticRegistrationHandler {
 struct StaticRegistration {
     ability: String,
     owner: OwnerKind,
+    authority_scope: Option<AuthorityScope>,
     manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
     implementation: ControlPlaneImplementation,
     handler: StaticRegistrationHandler,
@@ -1611,6 +1632,7 @@ impl StaticRegistration {
         Self {
             ability: ability.into(),
             owner,
+            authority_scope: None,
             manifest: None,
             implementation: ControlPlaneImplementation::native_daemon(),
             handler,
@@ -1627,10 +1649,16 @@ impl StaticRegistration {
         self
     }
 
+    fn with_authority_scope(mut self, authority_scope: AuthorityScope) -> Self {
+        self.authority_scope = Some(authority_scope);
+        self
+    }
+
     fn commit(self, catalog: &mut AxonAbilityCatalog) -> anyhow::Result<()> {
         let Self {
             ability,
             owner,
+            authority_scope,
             manifest,
             implementation,
             handler,
@@ -1638,14 +1666,21 @@ impl StaticRegistration {
         let call_mode = handler.call_mode();
         let target_slot = handler.slot();
         catalog.assert_static_handler_slot_available(&ability, target_slot);
-        catalog.register_control_plane_with_implementation(
+        let authority_scope = match authority_scope {
+            Some(authority_scope) => authority_scope,
+            None => catalog.resolve_authority_scope_for_owner(&ability, &owner)?,
+        };
+        catalog.register_control_plane_with_scope_result(
             &ability,
-            &owner,
+            authority_scope.clone(),
             manifest.as_ref().map(Arc::as_ref),
             call_mode,
             &implementation,
         )?;
         catalog.owner.insert(ability.clone(), owner);
+        catalog
+            .authority_scope
+            .insert(ability.clone(), authority_scope);
         if let Some(manifest) = manifest {
             catalog.manifests.insert(ability.clone(), manifest);
         }
@@ -1658,6 +1693,7 @@ impl StaticRegistration {
 struct DynamicRegistration {
     ability: String,
     owner: OwnerKind,
+    authority_scope: Option<AuthorityScope>,
     manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
     implementation: ControlPlaneImplementation,
     handler: DynamicRegistrationHandler,
@@ -1674,6 +1710,7 @@ impl DynamicRegistration {
         Self {
             ability: ability.into(),
             owner,
+            authority_scope: None,
             manifest,
             implementation,
             handler,
@@ -1815,6 +1852,11 @@ impl DynamicRegistration {
         &self.ability
     }
 
+    fn with_authority_scope(mut self, authority_scope: AuthorityScope) -> Self {
+        self.authority_scope = Some(authority_scope);
+        self
+    }
+
     fn call_mode(&self) -> DescriptorCallMode {
         self.handler.call_mode()
     }
@@ -1852,17 +1894,21 @@ impl DynamicRegistration {
                 self.owner
             );
         }
-        let predicted_control_plane_key = catalog
-            .control_plane_key_for_owner(&ability, &self.owner)?
-            .for_mode(call_mode);
+        let authority_scope = match self.authority_scope.clone() {
+            Some(authority_scope) => authority_scope,
+            None => catalog.resolve_authority_scope_for_owner(&ability, &self.owner)?,
+        };
+        let predicted_control_plane_key =
+            ControlPlaneAbilityKey::new(authority_scope.authority_root(), &ability)
+                .for_mode(call_mode);
         let control_plane_txn = catalog.begin_control_plane_authority_mode_transaction(
             predicted_control_plane_key.authority_root(),
             predicted_control_plane_key.ability(),
             predicted_control_plane_key.call_mode(),
         );
-        let control_plane_key = catalog.register_dynamic_control_plane_result(
+        let control_plane_key = catalog.register_dynamic_control_plane_with_scope_result(
             &ability,
-            &self.owner,
+            authority_scope.clone(),
             self.manifest_ref(),
             call_mode,
             &self.implementation,
@@ -1879,7 +1925,7 @@ impl DynamicRegistration {
                 .dynamic_ext
                 .write()
                 .expect("dynamic_ext RwLock poisoned");
-            dyn_ext.install(self);
+            dyn_ext.install(self, authority_scope);
         }
         txn.mark_side_table_committed()?;
         txn.sync_runtime_or_rollback()
@@ -2133,23 +2179,6 @@ impl AxonAbilityCatalog {
         self.runtime.as_ref().map(Arc::clone)
     }
 
-    fn register_control_plane_with_implementation(
-        &self,
-        ability: &str,
-        owner: &OwnerKind,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
-        call_mode: DescriptorCallMode,
-        implementation: &ControlPlaneImplementation,
-    ) -> anyhow::Result<AbilityControlPlaneRecord> {
-        self.register_control_plane(ControlPlaneRegistrationRequest {
-            ability,
-            owner,
-            manifest,
-            call_mode,
-            implementation: implementation.clone(),
-        })
-    }
-
     fn register_control_plane(
         &self,
         request: ControlPlaneRegistrationRequest<'_>,
@@ -2233,22 +2262,46 @@ impl AxonAbilityCatalog {
             .unwrap_or_else(|error| panic!("static registration failed for {ability:?}: {error}"));
     }
 
-    fn register_dynamic_control_plane_result(
+    fn register_control_plane_with_scope_result(
         &self,
         ability: &str,
-        owner: &OwnerKind,
+        authority_scope: AuthorityScope,
         manifest: Option<&crate::core::ability_spec::AbilityManifest>,
         call_mode: DescriptorCallMode,
         implementation: &ControlPlaneImplementation,
     ) -> anyhow::Result<ControlPlaneModeKey> {
-        match self.register_control_plane_with_implementation(
+        let owner_label = format!(
+            "{}@{}",
+            authority_scope.owner_projection(),
+            authority_scope.authority_root()
+        );
+        let record = self.write_control_plane_record(ResolvedControlPlaneRegistration {
             ability,
-            owner,
+            authority_scope,
+            manifest,
+            call_mode,
+            implementation: implementation.clone(),
+            owner_label,
+        })?;
+        Ok(ControlPlaneModeKey::from_record(&record))
+    }
+
+    fn register_dynamic_control_plane_with_scope_result(
+        &self,
+        ability: &str,
+        authority_scope: AuthorityScope,
+        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        call_mode: DescriptorCallMode,
+        implementation: &ControlPlaneImplementation,
+    ) -> anyhow::Result<ControlPlaneModeKey> {
+        match self.register_control_plane_with_scope_result(
+            ability,
+            authority_scope,
             manifest,
             call_mode,
             implementation,
         ) {
-            Ok(record) => Ok(ControlPlaneModeKey::from_record(&record)),
+            Ok(control_plane_key) => Ok(control_plane_key),
             Err(error) => {
                 let error_message = error.to_string();
                 crate::op_event!(
@@ -2457,30 +2510,34 @@ impl AxonAbilityCatalog {
         }
     }
 
-    fn control_plane_key_for_owner(
+    fn resolve_authority_scope_for_owner(
         &self,
         ability: &str,
         owner: &OwnerKind,
-    ) -> anyhow::Result<ControlPlaneAbilityKey> {
-        let authority_scope = owner
+    ) -> anyhow::Result<AuthorityScope> {
+        owner
             .authority_scope(&self.authority_context)
             .map_err(|error| {
                 anyhow::anyhow!("ability {ability:?} owner authority scope rejected: {error}")
-            })?;
-        Ok(ControlPlaneAbilityKey::new(
-            authority_scope.authority_root(),
-            ability,
-        ))
+            })
     }
 
     fn static_control_plane_key(
         &self,
         ability: &str,
     ) -> anyhow::Result<Option<ControlPlaneAbilityKey>> {
-        self.owner
-            .get(ability)
-            .map(|owner| self.control_plane_key_for_owner(ability, owner))
-            .transpose()
+        if let Some(authority_scope) = self.authority_scope.get(ability) {
+            return Ok(Some(ControlPlaneAbilityKey::new(
+                authority_scope.authority_root(),
+                ability,
+            )));
+        }
+        if self.has_static_handler(ability) {
+            anyhow::bail!(
+                "static ability {ability:?} has handlers but no resolved authority scope"
+            );
+        }
+        Ok(None)
     }
 
     fn dynamic_control_plane_key(
@@ -2491,11 +2548,18 @@ impl AxonAbilityCatalog {
             .dynamic_ext
             .read()
             .expect("dynamic_ext RwLock poisoned");
-        dyn_ext
-            .owner
-            .get(ability)
-            .map(|owner| self.control_plane_key_for_owner(ability, owner))
-            .transpose()
+        if let Some(authority_scope) = dyn_ext.authority_scope.get(ability) {
+            return Ok(Some(ControlPlaneAbilityKey::new(
+                authority_scope.authority_root(),
+                ability,
+            )));
+        }
+        if dyn_ext.contains_handler(ability) {
+            anyhow::bail!(
+                "dynamic ability {ability:?} has handlers but no resolved authority scope"
+            );
+        }
+        Ok(None)
     }
 
     fn handler_control_plane_key(&self, ability: &str) -> anyhow::Result<ControlPlaneAbilityKey> {
@@ -2506,7 +2570,7 @@ impl AxonAbilityCatalog {
             return Ok(key);
         }
         anyhow::bail!(
-            "ability {ability:?} has handlers but no owner table entry; cannot derive authority-scoped runtime key"
+            "ability {ability:?} has handlers but no authority table entry; cannot derive authority-scoped runtime key"
         )
     }
 
@@ -2710,14 +2774,19 @@ impl AxonAbilityCatalog {
     /// the invariant that post-boot extensions never shadow daemon/system
     /// abilities.
     pub fn has_static_ability(&self, ability: &str) -> bool {
+        self.has_static_handler(ability)
+            || self.owner.contains_key(ability)
+            || self.authority_scope.contains_key(ability)
+            || self.manifests.contains_key(ability)
+    }
+
+    fn has_static_handler(&self, ability: &str) -> bool {
         self.rpc.contains_key(ability)
             || self.stream.contains_key(ability)
             || self.bidi.contains_key(ability)
             || self.rpc_with_env.contains_key(ability)
             || self.stream_with_env.contains_key(ability)
             || self.bidi_with_env.contains_key(ability)
-            || self.owner.contains_key(ability)
-            || self.manifests.contains_key(ability)
     }
 
     fn reject_dynamic_shadow_of_static(&self, ability: &str) -> bool {
@@ -2945,6 +3014,23 @@ impl AxonAbilityCatalog {
     ) -> anyhow::Result<()> {
         self.register_static(
             StaticRegistration::new(ability, owner, StaticRegistrationHandler::Stream(handler))
+                .with_manifest(manifest)
+                .with_implementation(implementation),
+        )
+    }
+
+    pub fn register_stream_with_spec_impl_and_authority_scope(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        authority_scope: AuthorityScope,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandler,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        self.register_static(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Stream(handler))
+                .with_authority_scope(authority_scope)
                 .with_manifest(manifest)
                 .with_implementation(implementation),
         )
@@ -3307,6 +3393,7 @@ impl AxonAbilityCatalog {
             || self.stream_with_env.contains_key(ability)
             || self.bidi_with_env.contains_key(ability)
             || self.owner.contains_key(ability)
+            || self.authority_scope.contains_key(ability)
             || self.manifests.contains_key(ability);
         self.rpc.remove(ability);
         self.stream.remove(ability);
@@ -3315,6 +3402,7 @@ impl AxonAbilityCatalog {
         self.stream_with_env.remove(ability);
         self.bidi_with_env.remove(ability);
         self.owner.remove(ability);
+        self.authority_scope.remove(ability);
         self.manifests.remove(ability);
         present
     }
@@ -3394,6 +3482,26 @@ impl AxonAbilityCatalog {
             handler,
             implementation,
         )
+        .commit(self)
+    }
+
+    pub fn hot_register_stream_with_spec_impl_and_authority_scope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        authority_scope: AuthorityScope,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandler,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::stream_with_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            implementation,
+        )
+        .with_authority_scope(authority_scope)
         .commit(self)
     }
 
@@ -5472,19 +5580,21 @@ mod tests {
             serde_json::json!({"type": "object", "properties": {"old": {"type": "boolean"}}}),
         )
         .unwrap();
+        let authority_scope = catalog
+            .resolve_authority_scope_for_owner("plugin.txn", &OwnerKind::Device)
+            .expect("device owner resolves authority scope");
+        let control_plane_key =
+            ControlPlaneAbilityKey::new(authority_scope.authority_root(), "plugin.txn")
+                .for_mode(DescriptorCallMode::Rpc);
         catalog
-            .register_dynamic_control_plane_result(
+            .register_dynamic_control_plane_with_scope_result(
                 "plugin.txn",
-                &OwnerKind::Device,
+                authority_scope.clone(),
                 Some(&old_manifest),
                 DescriptorCallMode::Rpc,
                 &ControlPlaneImplementation::native_daemon(),
             )
             .expect("old control-plane record writes");
-        let control_plane_key = catalog
-            .control_plane_key_for_owner("plugin.txn", &OwnerKind::Device)
-            .expect("device owner has a control-plane key")
-            .for_mode(DescriptorCallMode::Rpc);
         let old_schema_hash = catalog
             .control_plane_record_for_mode("plugin.txn", DescriptorCallMode::Rpc)
             .expect("old lookup succeeds")
@@ -5504,9 +5614,9 @@ mod tests {
         )
         .unwrap();
         catalog
-            .register_dynamic_control_plane_result(
+            .register_dynamic_control_plane_with_scope_result(
                 "plugin.txn",
-                &OwnerKind::Device,
+                authority_scope,
                 Some(&new_manifest),
                 DescriptorCallMode::Rpc,
                 &ControlPlaneImplementation::native_daemon(),
@@ -5562,8 +5672,9 @@ mod tests {
             .schema_hash();
 
         let control_plane_key = catalog
-            .control_plane_key_for_owner("plugin.rollback", &OwnerKind::Device)
-            .expect("device owner has a control-plane key")
+            .dynamic_control_plane_key("plugin.rollback")
+            .expect("dynamic authority scope lookup succeeds")
+            .expect("dynamic ability has a control-plane key")
             .for_mode(DescriptorCallMode::Rpc);
         let prior_dynamic = catalog
             .dynamic_ext
@@ -5582,16 +5693,26 @@ mod tests {
             serde_json::json!({"type": "object", "properties": {"new": {"type": "boolean"}}}),
         )
         .unwrap();
+        let new_authority_scope = catalog
+            .resolve_authority_scope_for_owner("plugin.rollback", &OwnerKind::Device)
+            .expect("device owner resolves authority scope");
         let written_key = catalog
-            .register_dynamic_control_plane_result(
+            .register_dynamic_control_plane_with_scope_result(
                 "plugin.rollback",
-                &OwnerKind::Device,
+                new_authority_scope,
                 Some(&new_manifest),
                 DescriptorCallMode::Rpc,
                 &ControlPlaneImplementation::native_daemon(),
             )
             .expect("new dynamic control-plane write succeeds");
         assert_eq!(written_key, control_plane_key);
+        let written_authority_scope = catalog
+            .control_plane_record_for_mode("plugin.rollback", DescriptorCallMode::Rpc)
+            .expect("written control-plane lookup succeeds")
+            .expect("written control-plane record exists")
+            .authority()
+            .scope()
+            .clone();
         let mut txn = DynamicRegistrationTxn::after_control_plane(
             &catalog,
             written_key,
@@ -5602,12 +5723,15 @@ mod tests {
             .dynamic_ext
             .write()
             .expect("dynamic_ext RwLock poisoned")
-            .install(DynamicRegistration::rpc_with_spec(
-                "plugin.rollback",
-                OwnerKind::Device,
-                new_manifest,
-                Arc::new(|_args| Ok(serde_json::json!({"version": "new"}))),
-            ));
+            .install(
+                DynamicRegistration::rpc_with_spec(
+                    "plugin.rollback",
+                    OwnerKind::Device,
+                    new_manifest,
+                    Arc::new(|_args| Ok(serde_json::json!({"version": "new"}))),
+                ),
+                written_authority_scope,
+            );
         txn.mark_side_table_committed()
             .expect("side table phase is legal");
 

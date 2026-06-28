@@ -44,7 +44,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
-use crate::runtime::ability::{AbilityImplSource, RuntimeEnv};
+use crate::runtime::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
 use crate::runtime::execution::mcp_client::McpClientService;
@@ -1077,6 +1077,7 @@ trait RegistryWriter {
         &mut self,
         name: String,
         owner: OwnerKind,
+        authority_scope: AuthorityScope,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
         implementation: ControlPlaneImplementation,
@@ -1125,12 +1126,19 @@ impl RegistryWriter for StaticWriter<'_> {
         &mut self,
         name: String,
         owner: OwnerKind,
+        authority_scope: AuthorityScope,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
-        self.reg
-            .register_stream_with_spec_and_impl(name, owner, manifest, handler, implementation)
+        self.reg.register_stream_with_spec_impl_and_authority_scope(
+            name,
+            owner,
+            authority_scope,
+            manifest,
+            handler,
+            implementation,
+        )
     }
 
     fn unregister(&mut self, name: &str) -> anyhow::Result<bool> {
@@ -1164,17 +1172,20 @@ impl RegistryWriter for DynamicWriter<'_> {
         &mut self,
         name: String,
         owner: OwnerKind,
+        authority_scope: AuthorityScope,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
-        self.reg.hot_register_stream_with_spec_and_impl(
-            name,
-            owner,
-            manifest,
-            handler,
-            implementation,
-        )
+        self.reg
+            .hot_register_stream_with_spec_impl_and_authority_scope(
+                name,
+                owner,
+                authority_scope,
+                manifest,
+                handler,
+                implementation,
+            )
     }
 
     fn unregister(&mut self, name: &str) -> anyhow::Result<bool> {
@@ -1239,8 +1250,8 @@ fn register_one_tool<W: RegistryWriter>(
             ),
         });
     }
-    let owner_kind =
-        owner_kind_for_descriptor_owner(owner_ura).map_err(|reason| ReflectFailure {
+    let owner_authority =
+        descriptor_owner_authority(owner_ura).map_err(|reason| ReflectFailure {
             server: server_name.to_string(),
             tool: Some(upstream_tool.clone()),
             reason,
@@ -1321,7 +1332,8 @@ fn register_one_tool<W: RegistryWriter>(
     writer
         .register_stream(
             local_name.clone(),
-            owner_kind,
+            owner_authority.owner_kind,
+            owner_authority.authority_scope,
             manifest,
             handler,
             ControlPlaneImplementation::new(AbilityImplSource::Mcp, RuntimeEnv::mcp(server_name)),
@@ -1357,10 +1369,16 @@ fn register_one_tool<W: RegistryWriter>(
     })
 }
 
-fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DescriptorOwnerAuthority {
+    owner_kind: OwnerKind,
+    authority_scope: AuthorityScope,
+}
+
+fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthority, String> {
     let parsed =
         crate::ura::parse_ura(owner_ura).map_err(|e| format!("owner URA parse failed: {e}"))?;
-    match parsed.kind {
+    let (owner_kind, owner_projection, authority_root) = match parsed.kind {
         crate::ura::URAKind::Agent => {
             // DEC-F048: MCP reflective descriptors carry user-configured
             // tooling. A device-sponsored System Agent carries no user
@@ -1376,20 +1394,45 @@ fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String>
             let Some((_, agent_id)) = parsed.agent_ids() else {
                 return Err("owner agent URA is missing agent_id".to_string());
             };
-            Ok(OwnerKind::Agent(agent_id.to_string()))
+            (
+                OwnerKind::Agent(agent_id.to_string()),
+                format!("agent:{agent_id}"),
+                owner_ura.to_string(),
+            )
         }
-        crate::ura::URAKind::Hub => Ok(OwnerKind::Hub),
-        crate::ura::URAKind::Device => Ok(OwnerKind::Device),
+        crate::ura::URAKind::Hub => (OwnerKind::Hub, "hub".to_string(), owner_ura.to_string()),
+        crate::ura::URAKind::Device => (
+            OwnerKind::Device,
+            "device".to_string(),
+            owner_ura.to_string(),
+        ),
         crate::ura::URAKind::User => {
             let Some(user_id) = parsed.user_id() else {
                 return Err("owner user URA is missing user_id".to_string());
             };
-            Ok(OwnerKind::User(user_id.to_string()))
+            (
+                OwnerKind::User(user_id.to_string()),
+                format!("user:{user_id}"),
+                crate::ura::agent_ura(&parsed.realm, user_id, "account"),
+            )
         }
-        other => Err(format!(
-            "owner URA kind {other:?} cannot own a local ability"
-        )),
-    }
+        other => {
+            return Err(format!(
+                "owner URA kind {other:?} cannot own a local ability"
+            ))
+        }
+    };
+    let authority_scope = AuthorityScope::new(owner_projection, authority_root)
+        .map_err(|error| format!("owner authority scope rejected: {error}"))?;
+    Ok(DescriptorOwnerAuthority {
+        owner_kind,
+        authority_scope,
+    })
+}
+
+#[cfg(test)]
+fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String> {
+    descriptor_owner_authority(owner_ura).map(|authority| authority.owner_kind)
 }
 
 /// `NotificationSink` that forwards every upstream

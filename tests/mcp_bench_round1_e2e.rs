@@ -188,11 +188,13 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
     // intermediate frames would be `{type: "progress", ...}`
     // (echo upstream doesn't emit any — that's exercised by
     // mcp_client::tests::rpc_with_progress_routes_interleaved_progress_to_sink).
+    let weather_lookup_ura = easynet_axon::ura::owner_ability_ura(&owner_ura, "weather_lookup")
+        .expect("owner ability URA");
     let mut rx = open_local_stream(
         Arc::clone(&runtime),
         InvocationTarget {
             scope: TargetScope::Local,
-            ability: "weather_lookup".to_string(),
+            ability: weather_lookup_ura,
             normalized_args: serde_json::json!({"location": "Berlin"}),
             call_mode: CallMode::Stream,
             subject: None,

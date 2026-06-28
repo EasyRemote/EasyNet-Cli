@@ -42,7 +42,6 @@ use easynet_cli::runtime::agents::pages::publish::handle_publish;
 use easynet_cli::runtime::agents::pages::state::PUBLISHED_PROJECTS;
 use easynet_cli::runtime::agents::pages::{self, PagesConfig};
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::runtime::local_runtime_invoker::invoke_local_rpc_sync;
 use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project
@@ -480,7 +479,8 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     // same as admin.status / a2a.* — this test predates it).
     let ability = "pages.list".to_string();
     assert!(reg.has_rpc(&ability));
-    let resp = invoke_local_rpc_sync(runtime, local_rpc_target(&ability, json!({})))
+    let resp = reg
+        .invoke_rpc_target_json(local_rpc_target(&ability, json!({})))
         .expect("pages.list should invoke through LocalRuntime");
     assert_eq!(resp["projects"].as_array().map(Vec::len), Some(0));
 }
@@ -501,19 +501,22 @@ fn u15_publish_registers_project_abilities_in_local_runtime() {
     assert!(f.registry.has_rpc(&fetch_ability));
     assert!(f.registry.has_rpc(&api_ability));
 
-    let runtime = f.registry.runtime().expect("runtime");
-    let fetched = invoke_local_rpc_sync(
-        Arc::clone(&runtime),
-        local_rpc_target(&fetch_ability, json!({"path": "/hello-world.html"})),
-    )
-    .expect("fetch should invoke through LocalRuntime");
+    let fetched = f
+        .registry
+        .invoke_rpc_target_json(local_rpc_target(
+            &fetch_ability,
+            json!({"path": "/hello-world.html"}),
+        ))
+        .expect("fetch should invoke through LocalRuntime");
     assert!(fetched.get("bytes_b64").is_some());
 
-    let api_resp = invoke_local_rpc_sync(
-        runtime,
-        local_rpc_target(&api_ability, json!({"body": {}, "method": "GET"})),
-    )
-    .expect("api should invoke through LocalRuntime");
+    let api_resp = f
+        .registry
+        .invoke_rpc_target_json(local_rpc_target(
+            &api_ability,
+            json!({"body": {}, "method": "GET"}),
+        ))
+        .expect("api should invoke through LocalRuntime");
     assert_eq!(api_resp["body"]["pong"], true);
 
     f.unpublish();
