@@ -98,8 +98,9 @@ impl RuntimeCausalContext {
 ///
 /// What this is not: the protocol Invocation primitive, a signing
 /// source, or a canonical byte-layout definition. Call
-/// `runtime_invocation_id` to derive the daemon session key through
-/// Axon's canonical encoder.
+/// `runtime_invocation_id` to derive the daemon-local session key; that
+/// key is version-pinned and is not the Axon canonical invocation
+/// identity (the wire envelope is built on the dispatch path).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeInvocation {
     pub caller: Ura,
@@ -149,17 +150,24 @@ impl RuntimeInvocation {
         Ok(())
     }
 
-    /// Convert the daemon-local record into Axon's descriptor-bound
-    /// canonical envelope and return Axon-owned canonical bytes.
+    /// Encode the record into stable bytes for the daemon-local session
+    /// key (see [`runtime_invocation_id`] and [`SESSION_KEY_DESCRIPTOR_VERSION`]).
+    ///
+    /// These bytes are NOT the Axon canonical invocation identity: the key
+    /// is version-pinned on purpose so the same logical invocation maps to
+    /// one session regardless of which descriptor version the dispatch
+    /// path later negotiates. The wire-canonical envelope is built
+    /// separately on the dispatch path, where it is bound to the
+    /// registered descriptor version. The nonce — not the descriptor
+    /// version — is what distinguishes one invocation from another here.
     ///
     /// The adapter intentionally accepts only `RuntimeCausalContext::Null`.
     /// Legacy scalar/list/merkle variants do not carry enough receipt
     /// material to build Axon `ReceiptRef`s, so accepting them would
     /// create a false proof of canonical equivalence.
-    pub fn axon_canonical_bytes(&self) -> Result<Vec<u8>, RuntimeInvocationError> {
-        let (envelope, _args_bytes) = self.axon_descriptor_bound_envelope(
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-        )?;
+    fn session_key_bytes(&self) -> Result<Vec<u8>, RuntimeInvocationError> {
+        let (envelope, _args_bytes) =
+            self.axon_descriptor_bound_envelope(SESSION_KEY_DESCRIPTOR_VERSION)?;
         Ok(envelope.canonical_bytes())
     }
 
@@ -294,13 +302,29 @@ fn decode_nonce_hex(value: &str) -> Result<[u8; 16], RuntimeInvocationError> {
     Ok(nonce)
 }
 
-/// Compute `invocation_id = sha256(axon_canonical_bytes(inv))`, hex-encoded.
+/// Fixed descriptor version used solely to encode the daemon-local
+/// session key, intentionally independent of the descriptor version the
+/// dispatch path negotiates.
 ///
-/// This is a daemon-local session/receipt key for the adapter record.
-/// The canonical byte layout is Axon-owned; this function only hashes
-/// the bytes returned by Axon SDK.
+/// `runtime_invocation_id` must be derivable from a `RuntimeInvocation`
+/// record alone, before any runtime is consulted, and must be stable
+/// across descriptor-version changes so admission replay and session
+/// idempotency keep mapping one logical invocation to one session. The
+/// canonical wire envelope — which IS bound to the registered version —
+/// is built separately on the dispatch path. Reusing the runtime's
+/// descriptor-version default here would couple a local key to an
+/// unrelated negotiation and read as a fabricated wire version, which is
+/// exactly what this named constant avoids.
+const SESSION_KEY_DESCRIPTOR_VERSION: &str = "1.0.0";
+
+/// Compute `invocation_id = sha256(session_key_bytes(inv))`, hex-encoded.
+///
+/// This is a daemon-local session/receipt key for the adapter record —
+/// NOT the Axon canonical invocation identity (see [`SESSION_KEY_DESCRIPTOR_VERSION`]).
+/// It is deliberately a pure function of the record so the same logical
+/// invocation always resolves to the same session key.
 pub fn runtime_invocation_id(inv: &RuntimeInvocation) -> Result<String, RuntimeInvocationError> {
-    let canonical = inv.axon_canonical_bytes()?;
+    let canonical = inv.session_key_bytes()?;
     Ok(hex::encode(easynet_axon::invocation::sha256(&canonical)))
 }
 
