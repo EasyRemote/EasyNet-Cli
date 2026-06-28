@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::core::ability_spec::{AbilityExec, AbilityManifest};
+use crate::persistence::config::sync_parent_dir;
 use crate::persistence::teach_grants::{
     AcquireStagedGrant, AcquiringArtifactRecoveryState, AcquiringArtifactTxn,
     DescriptorImportRecord, TeachGrant, TeachGrantAdmissionSnapshot,
@@ -591,16 +592,6 @@ fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
 
 fn sha256_hex(bytes: [u8; 32]) -> String {
     format!("sha256:{}", hex::encode(bytes))
-}
-
-fn sync_parent_dir(path: &Path) -> anyhow::Result<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    let dir = std::fs::File::open(parent)
-        .map_err(|e| anyhow::anyhow!("open parent dir {}: {e}", parent.display()))?;
-    dir.sync_all()
-        .map_err(|e| anyhow::anyhow!("fsync parent dir {}: {e}", parent.display()))
 }
 
 fn remove_file_if_exists(path: &Path, action: &str) -> anyhow::Result<()> {

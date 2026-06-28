@@ -21,8 +21,9 @@
 //     hash(ability_ura + manifest_hash). Re-deploying
 //     the same manifest upserts the same row, never a duplicate
 //     (plan invariant 6).
-//   * writes are atomic + fsync'd (tmp file + rename + dir fsync), so
-//     a crash mid-write never leaves a torn store.
+//   * writes are atomic + fsync'd where the platform supports directory
+//     fsync (tmp file + rename + parent-dir sync), so a crash mid-write
+//     never leaves a torn store.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -38,6 +39,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::persistence::config::sync_directory;
 use crate::persistence::file_lock::{ExclusiveFileLock, SharedFileLock};
 
 const STORE_SCHEMA_VERSION: &str = "1";
@@ -569,9 +571,7 @@ impl DeviceAbilityStore {
         }
         fs::rename(&tmp, &self.path)?;
 
-        // fsync the directory so the rename is durable across a crash.
-        let dir_handle = fs::File::open(dir)?;
-        dir_handle.sync_all()?;
+        sync_directory(dir)?;
         Ok(())
     }
 

@@ -155,19 +155,37 @@ pub(crate) fn atomic_write_with_permissions(
         let _ = fs::remove_file(&tmp);
         return Err(e.into());
     }
-    // Fsync the parent directory so the rename itself is durable. This is
-    // a POSIX guarantee: opening a directory as a file and syncing it is
-    // not supported on Windows (the open fails), and NTFS makes the
-    // metadata update durable through the rename, so the step is both
-    // unsupported and unnecessary there.
+    sync_directory(dir)
+}
+
+/// Sync a directory after a metadata mutation such as `rename` or
+/// `hard_link`. POSIX filesystems need this to make the directory entry
+/// durable across power loss. Windows does not support opening a
+/// directory as a regular `File`, and NTFS makes the metadata update
+/// durable through the operation itself, so the step is intentionally a
+/// no-op there.
+pub(crate) fn sync_directory(dir: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
-        let dir_handle = File::open(dir)?;
-        dir_handle.sync_all()?;
+        let dir_handle = File::open(dir)
+            .map_err(|e| anyhow::anyhow!("open dir {} for fsync: {e}", dir.display()))?;
+        dir_handle
+            .sync_all()
+            .map_err(|e| anyhow::anyhow!("fsync dir {}: {e}", dir.display()))?;
     }
     #[cfg(not(unix))]
     let _ = dir;
     Ok(())
+}
+
+/// Sync the parent directory for a path after a file was created,
+/// removed, linked, or renamed. See [`sync_directory`] for platform
+/// semantics.
+pub(crate) fn sync_parent_dir(path: &Path) -> anyhow::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    sync_directory(parent)
 }
 
 /// Convenience wrapper around [`atomic_write_with_permissions`] for the
