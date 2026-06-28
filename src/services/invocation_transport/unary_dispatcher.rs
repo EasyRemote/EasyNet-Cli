@@ -66,9 +66,7 @@ use crate::services::invocation_transport::invoke_remote_initiator::{
     SessionContentEnvelope, SessionRequestError,
 };
 use crate::services::invocation_transport::list_user_pubkeys::handle as handle_list_user_pubkeys;
-use crate::services::invocation_transport::peer_envelope_signer::{
-    build_peer_envelope, sign_peer_request_envelope,
-};
+use crate::services::invocation_transport::peer_envelope_signer::PeerInvokeRequest;
 use crate::services::invocation_transport::register_device_pubkey::handle as handle_register_device_pubkey;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
 use crate::services::invocation_transport::revoke_user_pubkey::handle as handle_revoke_user_pubkey;
@@ -884,35 +882,15 @@ impl UnaryDispatcher {
                 continue;
             };
             let client = Arc::clone(client);
-            let mut peer_request = InvokeRequest {
-                envelope: Some(build_peer_envelope(
-                    caller_envelope,
-                    &peer_entry.agent_ura,
-                    local_realm,
-                )?),
-                function_name: ABILITY_FEDERATION_LIST_USER_DEVICES.to_string(),
-                arguments: inner_arguments.clone(),
-                ..InvokeRequest::default()
-            };
-            let signed_descriptor_ref = if let Some(envelope) = peer_request.envelope.as_mut() {
-                sign_peer_request_envelope(
-                    envelope,
-                    &peer_request.function_name,
-                    None,
-                    &peer_request.arguments,
-                    local_realm,
-                    self.federation.hub_signing_seed.as_ref(),
-                )?
-            } else {
-                None
-            };
-            if let Some(descriptor_ref) = signed_descriptor_ref {
-                peer_request.metadata.insert(
-                    crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                        .to_string(),
-                    descriptor_ref,
-                );
-            }
+            let peer_request = PeerInvokeRequest::new(
+                caller_envelope,
+                &peer_entry.agent_ura,
+                ABILITY_FEDERATION_LIST_USER_DEVICES,
+                inner_arguments.clone(),
+                local_realm,
+                self.federation.hub_signing_seed.as_ref(),
+            )
+            .into_invoke_request()?;
             fanout.push(async move {
                 match client.forward_invoke(&peer_hub_url, peer_request).await {
                     Ok(response) => {
@@ -992,35 +970,15 @@ impl UnaryDispatcher {
                 continue;
             };
             let client = Arc::clone(client);
-            let mut peer_request = InvokeRequest {
-                envelope: Some(build_peer_envelope(
-                    caller_envelope,
-                    &peer_entry.agent_ura,
-                    local_realm,
-                )?),
-                function_name: ABILITY_NAMESPACE_RESOLVE.to_string(),
-                arguments: inner_arguments.clone(),
-                ..InvokeRequest::default()
-            };
-            let signed_descriptor_ref = if let Some(envelope) = peer_request.envelope.as_mut() {
-                sign_peer_request_envelope(
-                    envelope,
-                    &peer_request.function_name,
-                    None,
-                    &peer_request.arguments,
-                    local_realm,
-                    self.federation.hub_signing_seed.as_ref(),
-                )?
-            } else {
-                None
-            };
-            if let Some(descriptor_ref) = signed_descriptor_ref {
-                peer_request.metadata.insert(
-                    crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                        .to_string(),
-                    descriptor_ref,
-                );
-            }
+            let peer_request = PeerInvokeRequest::new(
+                caller_envelope,
+                &peer_entry.agent_ura,
+                ABILITY_NAMESPACE_RESOLVE,
+                inner_arguments.clone(),
+                local_realm,
+                self.federation.hub_signing_seed.as_ref(),
+            )
+            .into_invoke_request()?;
             fanout.push(async move {
                 match client.forward_invoke(&peer_hub_url, peer_request).await {
                     Ok(response) => {
@@ -1357,36 +1315,15 @@ impl UnaryDispatcher {
                  delegation: {err}"
             ))
         })?;
-        let mut peer_request = InvokeRequest {
-            envelope: Some(build_peer_envelope(
-                caller_envelope,
-                &request.target_ura,
-                self.identity.session_realm.as_deref(),
-            )?),
-            function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
-            arguments: nested_arguments,
-            ..InvokeRequest::default()
-        };
-        let signed_descriptor_ref = if let Some(envelope) = peer_request.envelope.as_mut() {
-            sign_peer_request_envelope(
-                envelope,
-                &peer_request.function_name,
-                None,
-                &peer_request.arguments,
-                self.identity.session_realm.as_deref(),
-                self.federation.hub_signing_seed.as_ref(),
-            )?
-        } else {
-            None
-        };
-        if let Some(descriptor_ref) = signed_descriptor_ref {
-            peer_request.metadata.insert(
-                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                    .to_string(),
-                descriptor_ref,
-            );
-        }
-        Ok(peer_request)
+        PeerInvokeRequest::new(
+            caller_envelope,
+            &request.target_ura,
+            ABILITY_FEDERATION_FORWARD_INVOKE,
+            nested_arguments,
+            self.identity.session_realm.as_deref(),
+            self.federation.hub_signing_seed.as_ref(),
+        )
+        .into_invoke_request()
     }
 
     pub(crate) async fn dispatch_forward_invoke_peer(

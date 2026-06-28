@@ -21,6 +21,7 @@ use sha2::Digest as _;
 
 const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
 const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
+const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 #[derive(Serialize)]
 struct DelegationPayload {
@@ -95,7 +96,7 @@ fn signed_request(
         caller,
         callee,
         subject,
-        ability: ability_ref,
+        ability: ability_ref.clone(),
         args_digest: sha2::Sha256::digest(args).into(),
         invocation_nonce: nonce,
         causal_context: CausalContext::None,
@@ -106,7 +107,7 @@ fn signed_request(
     let signature =
         sign_descriptor_bound_invocation(signing_key, &descriptor_bound, key_id_hint.as_str());
 
-    InvokeRequest {
+    let mut request = InvokeRequest {
         envelope: Some(Envelope {
             caller: Some(PbAgentIdentity {
                 ura: caller_ura.to_string(),
@@ -131,7 +132,11 @@ fn signed_request(
         function_name: ability.to_string(),
         arguments: args.to_vec(),
         ..InvokeRequest::default()
-    }
+    };
+    request
+        .metadata
+        .insert(SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(), ability_ref);
+    request
 }
 
 fn delegation_metadata(
@@ -431,6 +436,7 @@ fn stream_and_bidi_verify_delegation_metadata() {
         envelope: stream_base.envelope.clone(),
         function_name: ability.to_string(),
         arguments: b"{}".to_vec(),
+        metadata: stream_base.metadata.clone(),
         ..InvokeServerStreamRequest::default()
     };
     stream_request
@@ -456,6 +462,7 @@ fn stream_and_bidi_verify_delegation_metadata() {
             ..InvocationTarget::default()
         }),
         initial_args: b"{}".to_vec(),
+        metadata: bidi_base.metadata.clone(),
         ..EnvelopeOpen::default()
     };
     open.metadata

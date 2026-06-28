@@ -31,6 +31,8 @@ use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 const REALM: &str = "cli-smoke";
+const SMOKE_SCHEMA_HASH: [u8; 32] = [0x11; 32];
+const SMOKE_IMPL_HASH: [u8; 32] = [0x22; 32];
 
 fn agent(ura: &str) -> AgentIdentity {
     AgentIdentity::new(ura, UraProfile::EasynetStrictV2)
@@ -46,6 +48,14 @@ fn callee_ura() -> String {
 
 fn runtime_ability_ura(ability: &str) -> String {
     easynet_cli::ura::owner_ability_ura(&callee_ura(), ability).expect("callee-owned ability URA")
+}
+
+fn descriptor_proof_options(options: AbilityOptions) -> AbilityOptions {
+    options.with_descriptor_proof(
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        SMOKE_SCHEMA_HASH,
+        SMOKE_IMPL_HASH,
+    )
 }
 
 /// Trust anchor stand-in: returns one known key for every URA.
@@ -121,7 +131,7 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
     //   - reads one inbound message,
     //   - emits one progress frame,
     //   - returns terminal payload echoing what it received.
-    rt.register_bidi_ability(
+    rt.register_ability_with_options(
         runtime_ability_ura("test.echo_bidi"),
         make_ability(|ctx| async move {
             let msg = ctx
@@ -133,6 +143,7 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
                 .map_err(|e| AxonError::internal(format!("emit_progress failed: {e}")))?;
             Ok(msg.payload)
         }),
+        descriptor_proof_options(AbilityOptions::bidi()),
     )
     .await
     .expect("register test.echo_bidi");
@@ -218,9 +229,10 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
 #[tokio::test]
 async fn axon_externally_signed_rejects_args_digest_mismatch() {
     let (rt, ledger, _temp, signing_key) = build_runtime().await;
-    rt.register_ability(
+    rt.register_ability_with_options(
         runtime_ability_ura("test.echo"),
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        descriptor_proof_options(AbilityOptions::default()),
     )
     .await
     .expect("register test.echo");
@@ -270,7 +282,7 @@ async fn axon_call_mode_gate_rejects_rpc_call_to_bidi_ability() {
     rt.register_ability_with_options(
         runtime_ability_ura("test.bidi_only"),
         make_ability(|_| async move { Ok(Vec::new()) }),
-        AbilityOptions::bidi(),
+        descriptor_proof_options(AbilityOptions::bidi()),
     )
     .await
     .expect("BIDI registration accepted");

@@ -1,6 +1,6 @@
 use easynet_axon::invocation::axiom::{
-    canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-    InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UraProfile,
+    AgentIdentity as AxiomAgentIdentity, CausalContext, InvocationEnvelope,
+    SubjectIdentity as AxiomSubjectIdentity, UraProfile,
 };
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
@@ -94,6 +94,7 @@ pub fn build_session_envelope_open_with_seed(
     }
 }
 
+#[allow(deprecated)]
 pub(super) fn sign_envelope_with_seed(
     envelope: &mut Envelope,
     ability: &str,
@@ -146,7 +147,13 @@ pub(super) fn sign_envelope_with_seed(
         causal_context: CausalContext::None,
     };
     let signing_key = SigningKey::from_bytes(seed);
-    let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_env));
+    // `<self>.session` frame-0 signing is a bootstrap MAC over the wire-pinned
+    // session-open tuple, not public Invoke admission or receipt proof
+    // material. Public invocation signing must use descriptor-bound canonical
+    // bytes; this narrow exception remains until the session-open protocol
+    // itself carries a versioned descriptor ref.
+    let signature =
+        signing_key.sign(&easynet_axon::invocation::axiom::canonical_invocation_bytes(&axiom_env));
     let signature_bytes = signature.to_bytes().to_vec();
     envelope.caller_signature = Some(CallerSignature {
         algorithm: "ed25519".to_string(),

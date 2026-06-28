@@ -57,7 +57,7 @@ use easynet_axon::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, 
 use ed25519_dalek::VerifyingKey;
 
 use crate::services::federation_client::FederationClient;
-use crate::services::invocation_transport::peer_envelope_signer::sign_peer_request_envelope;
+use crate::services::invocation_transport::peer_envelope_signer::PeerInvokeRequest;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
 #[cfg(test)]
@@ -420,7 +420,6 @@ impl FederatedKeyResolver {
         let Some(self_realm) = self.self_realm.as_deref() else {
             return Err(caller_key_not_found(agent_ura, "missing_self_realm"));
         };
-        let local_hub_ura = crate::ura::hub_ura(self_realm);
         let peer_hub_ura = crate::ura::hub_ura(&caller_realm);
         let ability =
             crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY;
@@ -430,47 +429,24 @@ impl FederatedKeyResolver {
                     .with_reason("resolve_key_subject_build")
                     .with_message(format!("peer_hub_ura:{peer_hub_ura}:ability:{ability}"))
             })?;
-        let mut request = crate::services::invocation_transport::ProtoEnvelope::targeted(
-            &local_hub_ura,
-            &peer_hub_ura,
-            subject_ura,
+        let request = PeerInvokeRequest::new(
+            None,
+            &subject_ura,
+            ability,
+            args_bytes,
+            Some(self_realm),
+            self.hub_signing_seed.as_ref(),
         )
-        .and_then(|env| env.invoke_request(ability, args_bytes))
-        .map_err(|e| {
+        .into_invoke_request()
+        .map_err(|status| {
             AxonError::new(AxonErrorKind::Internal)
-                .with_reason("resolve_key_envelope_build")
-                .with_message(format!("agent_ura:{agent_ura}:{e}"))
+                .with_reason("resolve_key_peer_request_build")
+                .with_message(format!(
+                    "agent_ura:{agent_ura}:code={:?}:{}",
+                    status.code(),
+                    status.message()
+                ))
         })?;
-        let signed_descriptor_ref = if let Some(envelope) = request.envelope.as_mut() {
-            sign_peer_request_envelope(
-                envelope,
-                ability,
-                None,
-                &request.arguments,
-                Some(self_realm),
-                self.hub_signing_seed.as_ref(),
-            )
-            .map_err(|status| {
-                AxonError::new(AxonErrorKind::Internal)
-                    .with_reason("resolve_key_envelope_sign")
-                    .with_message(format!(
-                        "agent_ura:{agent_ura}:code={:?}:{}",
-                        status.code(),
-                        status.message()
-                    ))
-            })?
-        } else {
-            return Err(AxonError::new(AxonErrorKind::Internal)
-                .with_reason("resolve_key_envelope_missing")
-                .with_message(format!("agent_ura:{agent_ura}")));
-        };
-        if let Some(descriptor_ref) = signed_descriptor_ref {
-            request.metadata.insert(
-                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                    .to_string(),
-                descriptor_ref,
-            );
-        }
 
         // Bridge sync trait → async tonic call.
         let target_hub = peer_hub_endpoint.clone();

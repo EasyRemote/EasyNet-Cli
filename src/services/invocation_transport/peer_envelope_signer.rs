@@ -15,14 +15,73 @@
 
 use tonic::Status;
 
-use easynet_axon::pb::axon::v1::{AgentIdentity, CallerSignature, Envelope, SubjectIdentity};
+use easynet_axon::pb::axon::v1::{
+    AgentIdentity, CallerSignature, Envelope, InvokeRequest, SubjectIdentity,
+};
 
 use crate::runtime::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
-use crate::services::invocation_transport::invocation_wire::try_entity_ref;
+use crate::services::invocation_transport::invocation_wire::{
+    try_entity_ref, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+};
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
+
+pub(crate) struct PeerInvokeRequest<'a> {
+    caller_envelope: Option<&'a Envelope>,
+    target_ura: &'a str,
+    function_name: &'a str,
+    arguments: Vec<u8>,
+    local_realm: Option<&'a str>,
+    hub_signing_seed: Option<&'a SessionSigningSeed>,
+}
+
+impl<'a> PeerInvokeRequest<'a> {
+    pub(crate) fn new(
+        caller_envelope: Option<&'a Envelope>,
+        target_ura: &'a str,
+        function_name: &'a str,
+        arguments: Vec<u8>,
+        local_realm: Option<&'a str>,
+        hub_signing_seed: Option<&'a SessionSigningSeed>,
+    ) -> Self {
+        Self {
+            caller_envelope,
+            target_ura,
+            function_name,
+            arguments,
+            local_realm,
+            hub_signing_seed,
+        }
+    }
+
+    pub(crate) fn into_invoke_request(self) -> Result<InvokeRequest, Status> {
+        let mut envelope =
+            build_peer_envelope(self.caller_envelope, self.target_ura, self.local_realm)?;
+        let descriptor_ref = peer_descriptor_ref_for_envelope(&envelope, self.function_name)?;
+        sign_peer_request_envelope(
+            &mut envelope,
+            self.function_name,
+            &descriptor_ref,
+            &self.arguments,
+            self.local_realm,
+            self.hub_signing_seed,
+        )?;
+
+        let mut request = InvokeRequest {
+            envelope: Some(envelope),
+            function_name: self.function_name.to_string(),
+            arguments: self.arguments,
+            ..InvokeRequest::default()
+        };
+        request.metadata.insert(
+            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
+            descriptor_ref,
+        );
+        Ok(request)
+    }
+}
 
 /// Build the strict envelope the cross-hub dialer attaches to the
 /// rebuilt peer `InvokeRequest`.
@@ -106,20 +165,22 @@ pub(crate) fn build_peer_envelope(
 pub(crate) fn sign_peer_request_envelope(
     envelope: &mut Envelope,
     ability: &str,
-    descriptor_ref: Option<&str>,
+    descriptor_ref: &str,
     arguments: &[u8],
     local_realm: Option<&str>,
     hub_signing_seed: Option<&SessionSigningSeed>,
-) -> Result<Option<String>, Status> {
-    let Some(realm) = local_realm else {
-        return Ok(None);
-    };
-    let Some(descriptor_ref) = descriptor_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
+) -> Result<String, Status> {
+    let realm = local_realm.ok_or_else(|| {
+        Status::failed_precondition(
+            "cross-hub forward_invoke signing requires configured local realm",
+        )
+    })?;
+    let descriptor_ref = descriptor_ref.trim();
+    if descriptor_ref.is_empty() {
+        return Err(Status::invalid_argument(
+            "cross-hub forward_invoke signing requires explicit descriptor ref",
+        ));
+    }
 
     use ed25519_dalek::{Signer as _, SigningKey};
 
@@ -228,7 +289,28 @@ pub(crate) fn sign_peer_request_envelope(
         signature: signature.to_bytes().to_vec(),
         ..CallerSignature::default()
     });
-    Ok(Some(descriptor_ref))
+    Ok(descriptor_ref.to_string())
+}
+
+fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Result<String, Status> {
+    let callee_ura = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| {
+            Status::internal("cross-hub forward_invoke signing: callee URA missing after rewrite")
+        })?;
+    crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        callee_ura,
+        ability,
+        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+    )
+    .map_err(|err| {
+        Status::internal(format!(
+            "cross-hub forward_invoke signing: derive peer descriptor ref for `{ability}`: {err}"
+        ))
+    })
 }
 
 fn descriptor_subject_ura_for(
@@ -426,7 +508,7 @@ mod tests {
             // single-segment name has no valid hub descriptor URA. Use a
             // real federation ability, as every production caller does.
             "federation.discover",
-            Some("easynet:///r/peer/ability/hub.federation.discover@1.0.0"),
+            "easynet:///r/peer/ability/hub.federation.discover@1.0.0",
             br#"{"q":"chat"}"#,
             Some("local"),
             Some(&[3u8; 32]),

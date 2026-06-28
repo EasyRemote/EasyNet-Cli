@@ -1169,23 +1169,23 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         invocation_nonce: vec![7; 16],
         ..Envelope::default()
     };
+    let descriptor_ref = format!(
+        "{}@1.0.0",
+        crate::ura::owner_ability_ura(
+            &crate::ura::hub_ura("local-realm"),
+            ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES
+        )
+        .expect("proxy list descriptor ref")
+    );
     let signed_descriptor_ref = sign_peer_request_envelope(
         &mut envelope,
         ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
-        Some(&format!(
-            "{}@1.0.0",
-            crate::ura::owner_ability_ura(
-                &crate::ura::hub_ura("local-realm"),
-                ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES
-            )
-            .expect("proxy list descriptor ref")
-        )),
+        &descriptor_ref,
         args,
         Some("local-realm"),
         Some(&[0x22; 32]),
     )
-    .expect("sign test envelope")
-    .expect("signed descriptor ref");
+    .expect("sign test envelope");
 
     let mut request = InvokeRequest {
         envelope: Some(envelope),

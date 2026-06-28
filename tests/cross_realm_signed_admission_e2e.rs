@@ -85,6 +85,7 @@ use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
+const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 /// In-process federation client that forwards every `forward_invoke`
 /// to a target `DaemonInvocationService`. Used so daemon B's
@@ -170,7 +171,7 @@ fn signed_request(
         caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
         callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
         subject: subject.clone(),
-        ability: ability_ref,
+        ability: ability_ref.clone(),
         args_digest: sha2::Sha256::digest(args).into(),
         invocation_nonce: nonce,
         causal_context: CausalContext::None,
@@ -207,6 +208,10 @@ fn signed_request(
         envelope: Some(envelope),
         function_name: ability.to_string(),
         arguments: args.to_vec(),
+        metadata: std::collections::HashMap::from([(
+            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
+            ability_ref,
+        )]),
         ..InvokeRequest::default()
     }
 }
