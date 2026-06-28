@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use easynet_axon::invocation::{
     make_ability, AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions, AxonError,
     CallMode as AxonCallMode, LocalRuntime,
@@ -3285,9 +3286,9 @@ impl AxonAbilityCatalog {
                 );
             if let Some(runtime) = self.runtime.as_ref() {
                 self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)
-                    .unwrap_or_else(|error| {
-                        panic!("static ability {ability:?} failed to unregister from LocalRuntime: {error}")
-                    });
+                    .with_context(|| {
+                        format!("static ability {ability:?} failed to unregister from LocalRuntime")
+                    })?;
             }
         }
         Ok(present)
