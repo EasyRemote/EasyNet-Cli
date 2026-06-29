@@ -358,9 +358,9 @@ fn bootstrap_authority_session_subject_without_delegation_metadata_is_admitted()
     let facade = admission_facade(&caller_ura, &signing_key);
 
     for (index, ability) in [
-        "<self>.register_device_pubkey",
-        "<self>.list_user_pubkeys",
-        "<self>.revoke_user_pubkey",
+        "identity.register_pubkey",
+        "identity.list_user_pubkeys",
+        "identity.revoke_user_pubkey",
         "runtime.bootstrap_self_identity",
         "federation.advertise_agent",
     ]
@@ -392,7 +392,7 @@ fn bootstrap_authority_still_rejects_bad_caller_signature() {
         &caller_ura,
         &caller_ura,
         "easynet:///r/bootstrap-authority-bad-sig/session/bootstrap-alice",
-        "<self>.register_device_pubkey",
+        "identity.register_pubkey",
         b"{}",
         &wrong_key,
         [0x65; 16],

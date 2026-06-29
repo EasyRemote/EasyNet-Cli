@@ -782,6 +782,7 @@ mod tests {
         BootstrapPlan {
             realm: realm.into(),
             user_id: "test-user".into(),
+            username: "test-user".into(),
             host_device_ura: host.into(),
             consent: true,
             mcp: false,
@@ -989,6 +990,7 @@ mod tests {
         let plan = BootstrapPlan {
             realm: "acme".into(),
             user_id: "alice".into(),
+            username: "alice".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             mcp: false,
@@ -1100,6 +1102,7 @@ mod tests {
         let plan = BootstrapPlan {
             realm: "acme".into(),
             user_id: "alice".into(),
+            username: "alice".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             mcp: false,

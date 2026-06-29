@@ -29,7 +29,7 @@
 //   exercised by the Online → Upsert path here; the Remove path
 //   (the inverse) is exercised by the streaming-1 unit test
 //   already.
-// - (4) "new peer hub appears in <self>.discover within ~5s" —
+// - (4) "new peer hub appears in <agent>.discover within ~5s" —
 //   exercised end-to-end: the supervisor opens a stream, the
 //   server emits the initial Snapshot, the consumer applies
 //   it, the cell publishes; all within the ~50ms in-process

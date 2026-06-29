@@ -173,7 +173,7 @@
 
 | # | 项 | 核查结论 | 证据 |
 |---|---|---|---|
-| C1 | discover runtime 半边 | ✅ **已实现**:`<self>.discover` 四级阶梯(self→device→user→public),Tier3/4 已接 `federation.resolve`,联邦失败返回类型化 `federation_not_joined`/`federation_unavailable` | `src/runtime/agents/discover_ability.rs:1-30,150,267,359` |
+| C1 | discover runtime 半边 | ✅ **已实现**:`<agent>.discover` 四级阶梯(self→device→user→public),Tier3/4 已接 `federation.resolve`,联邦失败返回类型化 `federation_not_joined`/`federation_unavailable` | `src/runtime/agents/discover_ability.rs:1-30,150,267,359` |
 | C2 | discover CLI 半边 | ✅ 已收口:`easynet discover <intent>` 与 `ability search` 共享 `discover.rs` 单实现,走 `<agent>.discover` ladder,本地排序仍为 name×3/desc×1/owner×1+全命中奖励;JSON 携带 invocation envelope 回显 | `src/facade/cli/discover.rs`;`tests/seven_axes_w1_discover_e2e.rs` |
 | C3 | discover 缺口收口 | ✅ 已收口:cross-owner user-tier 通过 daemon 本地 hub read model 覆盖,测试经公开 `federation.advertise_agent`/`advertise_abilities` 写目录,再由 `<agent>.discover(scope=user)` 读回;顶层动词/envelope 回显已落;v2.0 已删除未消费的 trust 列 | `src/runtime/agents/discover_ability.rs`;`src/services/invocation_transport/daemon_invocation_service.rs`;`tests/seven_axes_w1_discover_e2e.rs` |
 | C4 | `ability invoke` | ✅ 已收口:吃 canonical URA,本地派发 + `--node` 远程,不从裸名 mint URA | `src/facade/cli/invoke.rs:1-20` |
@@ -200,7 +200,7 @@
 
 **T1.1 统一发现路径**
 `ability search` 的候选源从「`meta.list_abilities` + `federation.discover` 双路」
-切换为调用 C1 的 `<self>.discover` 四级阶梯(单一 resolver 路径)。保留现有可解释
+切换为调用 C1 的 `<agent>.discover` 四级阶梯(单一 resolver 路径)。保留现有可解释
 排序算法不变。调用一律改走 `invoke_local_ability_with_invocation_meta`
 (local_invoke.rs:160),使 envelope caller/subject 可回显、可断言(0.1-7)。
 caller 身份 = CLI 当前操作 agent(沿用 daemon 既有 caller 解析,不在 facade 发明身份)。

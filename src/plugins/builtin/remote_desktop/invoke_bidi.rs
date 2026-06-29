@@ -16,7 +16,7 @@ use crate::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::plugins::remote_desktop::input::{
-    apply_input_frame, input_policy_allows, parse_input_frame,
+    apply_input_frame_with_policy, input_policy_allows, input_policy_for_entry, parse_input_frame,
 };
 use crate::plugins::remote_desktop::media::encode::{
     spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
@@ -48,10 +48,11 @@ pub(in crate::plugins::builtin::remote_desktop) fn spawn_bidi_capture_worker(
     config: BidiCaptureWorkerConfig,
 ) {
     let (latest_frame_tx, latest_frame_rx) = watch::channel::<Option<Vec<BidiOutputFrame>>>(None);
+    let input_policy = input_policy_for_entry(config.input_policy, &config.entry);
     spawn_bidi_control_loop(
         config.from_client,
         config.to_client.clone(),
-        config.input_policy,
+        input_policy,
         config.stop_tx,
     );
     spawn_latest_frame_forwarder(
@@ -107,7 +108,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn handle_bidi_input_frame(
             "message": "interactive input is disabled by this remote desktop session policy",
         });
     }
-    let outcome = apply_input_frame(&frame);
+    let outcome = apply_input_frame_with_policy(input_policy, &frame);
     if outcome.applied {
         json!({
             "type": "input_applied",

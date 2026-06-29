@@ -2070,11 +2070,13 @@ while True:
         assert!(reg.has_stream("echo_one"));
         assert!(reg.has_stream("echo_two"));
         assert_eq!(
-            reg.lookup_owner("echo_one"),
+            reg.control_plane_owner("echo_one"),
             Some(OwnerKind::Agent("mcp".to_string()))
         );
-        assert!(reg.manifest_for("echo_one").is_none());
-        assert!(reg.manifest_for_dynamic("echo_one").is_some());
+        // Hot-registered MCP tool: its manifest is present in the
+        // control-plane store (the commit choke point dual-writes static
+        // and dynamic registrations alike).
+        assert!(reg.control_plane_manifest("echo_one").is_some());
         assert_eq!(
             reflected_names_by_server(&result).get("echo").cloned(),
             Some(vec!["echo_one".to_string(), "echo_two".to_string()])

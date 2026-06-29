@@ -20,7 +20,7 @@
 //
 // What it validates from spec §八 acceptance:
 // - (4) "new peer hub added via federated_peers SIGHUP appears in
-//   <self>.discover results within ~5s" — by triggering the poll
+//   <agent>.discover results within ~5s" — by triggering the poll
 //   directly we verify the chain works; the 5s cadence is a
 //   property of the spawned task wrapper, not the data flow.
 //

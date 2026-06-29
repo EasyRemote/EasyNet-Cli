@@ -251,7 +251,7 @@ Code & State & Owner & Meaning & Terminal \\
 \code{S310} & \statecode{HUB\_CREDENTIAL\_VERIFIED} & CLI / Backend & Backend 接受 credential token & No \\
 \code{S320} & \statecode{HUB\_SESSION\_ENDPOINT\_REACHABLE} & CLI & Hub session endpoint TCP/TLS 可达 & No \\
 \code{S330} & \statecode{DAEMON\_BOOTED} & CLI & daemon.sock up, runtime process alive & No \\
-\code{S340} & \statecode{SESSION\_ADMITTED} & CLI daemon / Hub & \code{<self>.session} admission 成功 & No \\
+\code{S340} & \statecode{SESSION\_ADMITTED} & CLI daemon / Hub & \code{session.open} admission 成功 & No \\
 \code{N500} & \statecode{NAMESPACE\_VISIBLE} & Axon / Hub / CLI & device URA 已进入 resolver / PresenceRegistry 可见面 & No \\
 \code{C700} & \statecode{FRONTEND\_CONNECTED} & Backend / Frontend & 后端 read model 投影 ONLINE, 前端显示 connected & No \\
 \code{C710} & \statecode{FRONTEND\_DEGRADED} & Backend / Frontend & DB row 可显示, runtime resolver 有 typed unavailable & No \\
@@ -567,7 +567,7 @@ Transport profile & unary, streaming, bidi, terminal/websocket, download-after-c
 Variant & Predicate & Resolver answer & Dispatch next hop & Canonical failures \\
 \midrule
 \statecode{V0\_LOCAL\_SAME\_DEVICE} & caller、subject、callee 在同一 device runtime & \statecode{FinalRoute(LocalDeviceAbility)} & local ability registry & \statecode{NXDOMAIN}, \statecode{NODATA}, \statecode{UNAUTHORIZED} \\
-\statecode{V1\_SAME\_REALM\_SAME\_USER\_REMOTE\_DEVICE} & 同 realm、同 user、目标 device 在线 & \statecode{FinalRoute(RemoteDeviceAbility)} & hub \code{<self>.invoke\_remote} & \statecode{TARGET\_NOT\_IN\_PRESENCE\_REGISTRY}, \statecode{NOROUTE}, \statecode{STALE} \\
+\statecode{V1\_SAME\_REALM\_SAME\_USER\_REMOTE\_DEVICE} & 同 realm、同 user、目标 device 在线 & \statecode{FinalRoute(RemoteDeviceAbility)} & hub \code{<agent>.invoke\_remote} & \statecode{TARGET\_NOT\_IN\_PRESENCE\_REGISTRY}, \statecode{NOROUTE}, \statecode{STALE} \\
 \statecode{V2\_SAME\_REALM\_CROSS\_USER} & 同 realm、跨 user 共享资源或授权 ability & \statecode{FinalRoute} or \statecode{Negative(UNAUTHORIZED)} & hub remote route & \statecode{UNAUTHORIZED}, \statecode{SUBJECT\_KEY\_UNREGISTERED}, \statecode{DELEGATION\_INVALID} \\
 \statecode{V3\_CROSS\_REALM} & target realm 与 caller realm 不同 & \statecode{Delegation} then peer \statecode{FinalRoute} & trusted peer hub & \statecode{REALM\_NOT\_TRUSTED}, \statecode{PEER\_HUB\_UNAVAILABLE}, \statecode{DELEGATION\_REQUIRED} \\
 \statecode{V4\_HOSTED\_AGENT\_LOCAL\_DEVICE} & ability 属于本机 hosted agent & \statecode{FinalRoute(HostedAgentAbility)} & local agent runtime & \statecode{AGENT\_NOT\_ADVERTISED}, \statecode{AGENT\_NOT\_RUNNING} \\

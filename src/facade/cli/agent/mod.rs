@@ -128,6 +128,13 @@ pub struct AddArgs {
     /// Human-readable label
     #[arg(long)]
     pub label: Option<String>,
+    /// Program to run for an external/custom agent.
+    #[arg(long, value_name = "PROGRAM")]
+    pub command: Option<String>,
+    /// Argument passed to the external/custom agent program. Repeat for
+    /// multiple argv entries.
+    #[arg(long = "arg", value_name = "ARG")]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -394,10 +401,12 @@ use send::*;
 #[cfg(feature = "axon-pb")]
 fn resolve_local_daemon_caller_ura() -> Option<String> {
     let creds = crate::persistence::config::load_credentials().ok()?;
+    let user_id = creds.user_id().ok()?;
     let username = creds.username_slug().ok()?;
     let plan = crate::facade::cli::start::build_bootstrap_plan_from(
         &creds.realm,
         &creds.node_id,
+        user_id,
         username,
     )
     .ok()?;

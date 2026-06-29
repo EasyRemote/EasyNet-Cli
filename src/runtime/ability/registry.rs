@@ -273,6 +273,23 @@ impl AbilityControlPlaneRegistry {
     /// What this is NOT: a bare-name delete. Two authority roots may legally
     /// advertise the same public ability name, so mutation must always name the
     /// owner root that established the record.
+    /// Remove every control-plane row for `ability` across all authority
+    /// roots and call modes. Used where the caller knows only the ability
+    /// name (e.g. test fixtures that simulate an ability whose ownership can
+    /// no longer be resolved). Returns `true` if anything was removed.
+    pub fn remove_for_ability(&mut self, ability: &str) -> bool {
+        let descriptors_removed = self
+            .descriptors
+            .remove_matching(|key| key.ability() == ability);
+        let authorities_removed = self
+            .authorities
+            .remove_matching(|key| key.ability() == ability);
+        let implementations_removed = self
+            .implementations
+            .remove_matching(|key| key.ability() == ability);
+        descriptors_removed || authorities_removed || implementations_removed
+    }
+
     pub fn remove_for_authority(&mut self, authority_root: &str, ability: &str) -> bool {
         let descriptors_removed = self.descriptors.remove_matching(|key| {
             key.authority_root() == authority_root && key.ability() == ability
@@ -534,6 +551,39 @@ impl AbilityControlPlaneRegistry {
         roots.sort();
         roots.dedup();
         roots
+    }
+
+    /// Every registered control-plane key, in the descriptor registry's
+    /// canonical order. This is the row enumerator the catalog/discovery
+    /// read paths need to consume control-plane truth instead of unioning
+    /// the legacy handler maps and side tables (SPEC §9.1.A target item 6).
+    ///
+    /// Keys are returned owned so callers iterate without holding a read
+    /// borrow on the registry, matching the [`names`](Self::names) idiom.
+    pub fn keys(&self) -> Vec<AbilityControlPlaneKey> {
+        self.descriptors.keys().cloned().collect()
+    }
+
+    /// Every registered control-plane record, joined from the descriptor,
+    /// authority, and implementation facets through the shared
+    /// `AbilityControlPlaneKey`. This is the single read API that
+    /// `meta.list_abilities`, catalog projection, and the route resolver
+    /// migrate onto so owner / manifest / authority / call-mode facts all
+    /// come from one row rather than parallel side tables (SPEC §9.1.A
+    /// target items 2 and 6).
+    ///
+    /// A key whose facets are not all present is skipped rather than
+    /// silently faked — a partially-materialized row never surfaces as a
+    /// catalog entry.
+    pub fn records(&self) -> Vec<(AbilityControlPlaneKey, AbilityControlPlaneRecord)> {
+        self.descriptors
+            .keys()
+            .cloned()
+            .filter_map(|key| {
+                let record = self.record_for_key(&key)?;
+                Some((key, record))
+            })
+            .collect()
     }
 
     fn record_for_key(&self, key: &AbilityControlPlaneKey) -> Option<AbilityControlPlaneRecord> {
@@ -909,6 +959,58 @@ mod tests {
             .get("agent.chat")
             .expect_err("mode-agnostic lookup must not pick an arbitrary record");
         assert_eq!(err.matches.len(), 2);
+    }
+
+    /// SPEC §9.1.A Step 1: the row enumerators (`keys`/`records`) surface
+    /// every registered `(authority, ability, call_mode)` row with its
+    /// facets correctly joined, so catalog/discovery readers can consume
+    /// control-plane truth instead of unioning the legacy handler maps.
+    /// Same-name multi-mode abilities must appear as distinct rows.
+    #[test]
+    fn keys_and_records_enumerate_every_authority_mode_row() {
+        let mut registry = AbilityControlPlaneRegistry::default();
+        registry
+            .register(
+                "agent.chat",
+                CallMode::Rpc,
+                None,
+                AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
+                RuntimeEnv::new("env:rpc").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+        registry
+            .register(
+                "agent.chat",
+                CallMode::Stream,
+                None,
+                AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
+                RuntimeEnv::new("env:stream").unwrap(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+
+        let keys = registry.keys();
+        assert_eq!(keys.len(), 2, "both call-mode rows must enumerate");
+
+        let records = registry.records();
+        assert_eq!(records.len(), keys.len(), "records and keys must agree");
+
+        // Each enumerated record's key must match its joined facets — proving
+        // the rows are the same row the typed-key lookups return, not a union
+        // artifact.
+        for (key, record) in &records {
+            assert_eq!(key.ability(), "agent.chat");
+            assert_eq!(key.call_mode(), record.descriptor().call_mode());
+            assert_eq!(
+                key.authority_root(),
+                record.authority().scope().authority_root()
+            );
+        }
+
+        let mut modes: Vec<CallMode> = records.iter().map(|(k, _)| k.call_mode()).collect();
+        modes.sort();
+        assert_eq!(modes, vec![CallMode::Rpc, CallMode::Stream]);
     }
 
     #[test]

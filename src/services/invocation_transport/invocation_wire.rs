@@ -102,6 +102,50 @@ impl ProtoEnvelope {
         })
     }
 
+    pub fn federation_join_genesis(
+        provisional_caller_ura: impl Into<String>,
+        hub_ura: impl Into<String>,
+        membership_ura: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let caller_ura = checked_provisional_ura(provisional_caller_ura.into())?;
+        let hub_ura = checked_ura(hub_ura.into(), "hub_ura")?;
+        let membership_ura = checked_ura(membership_ura.into(), "membership_ura")?;
+
+        let parsed_hub = crate::ura::parse_ura(&hub_ura)
+            .map_err(|e| anyhow::anyhow!("hub_ura is not a valid URA: {e}"))?;
+        if parsed_hub.kind != crate::ura::URAKind::Hub {
+            anyhow::bail!("hub_ura must identify a Hub, got {:?}", parsed_hub.kind);
+        }
+        let parsed_membership = crate::ura::parse_ura(&membership_ura)
+            .map_err(|e| anyhow::anyhow!("membership_ura is not a valid URA: {e}"))?;
+        if parsed_membership.kind != crate::ura::URAKind::Device {
+            anyhow::bail!(
+                "membership_ura must identify a Device, got {:?}",
+                parsed_membership.kind
+            );
+        }
+        if parsed_membership.realm != parsed_hub.realm {
+            anyhow::bail!(
+                "membership_ura realm `{}` does not match hub realm `{}`",
+                parsed_membership.realm,
+                parsed_hub.realm
+            );
+        }
+        try_entity_ref(membership_ura.clone())?;
+
+        Ok(Self {
+            inner: Envelope {
+                caller: Some(agent_identity(caller_ura)),
+                callee: Some(agent_identity(hub_ura)),
+                subject: Some(subject_identity(membership_ura)),
+                request_id: fresh_request_id(),
+                invocation_nonce: fresh_invocation_nonce().to_vec(),
+                causal_context: Some(root_causal_context()),
+                ..Envelope::default()
+            },
+        })
+    }
+
     #[must_use]
     pub fn into_inner(self) -> Envelope {
         self.inner
@@ -220,6 +264,17 @@ fn checked_ura(ura: String, field: &str) -> anyhow::Result<String> {
         anyhow::bail!("{field} must not be empty");
     }
     crate::ura::parse_ura(&ura).map_err(|e| anyhow::anyhow!("{field} is not a valid URA: {e}"))?;
+    Ok(ura)
+}
+
+fn checked_provisional_ura(ura: String) -> anyhow::Result<String> {
+    let ura = ura.trim().to_string();
+    let Some(digest) = ura.strip_prefix("provisional:") else {
+        anyhow::bail!("provisional_caller_ura must start with `provisional:`");
+    };
+    if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        anyhow::bail!("provisional_caller_ura must be `provisional:` plus 64 hex characters");
+    }
     Ok(ura)
 }
 
@@ -492,6 +547,36 @@ mod tests {
             env.causal_context.and_then(|ctx| ctx.form),
             Some(causal_context::Form::None(_))
         ));
+    }
+
+    #[test]
+    fn targeted_rejects_provisional_caller() {
+        let provisional = format!("provisional:{}", "a".repeat(64));
+        let hub = crate::ura::hub_ura("acme");
+        let subject = "easynet:///r/acme/device/dev-a";
+        let err = ProtoEnvelope::targeted(provisional, hub, subject).unwrap_err();
+        assert!(format!("{err}").contains("caller_ura is not a valid URA"));
+    }
+
+    #[test]
+    fn federation_join_genesis_accepts_only_provisional_join_tuple() {
+        let provisional = format!("provisional:{}", "a".repeat(64));
+        let hub = crate::ura::hub_ura("acme");
+        let membership = "easynet:///r/acme/device/dev-a";
+        let env = ProtoEnvelope::federation_join_genesis(&provisional, &hub, membership)
+            .unwrap()
+            .into_inner();
+        assert_eq!(env.caller.unwrap().ura, provisional);
+        assert_eq!(env.callee.unwrap().ura, hub);
+        assert_eq!(env.subject.unwrap().ura, membership);
+
+        let cross_realm = ProtoEnvelope::federation_join_genesis(
+            format!("provisional:{}", "b".repeat(64)),
+            crate::ura::hub_ura("acme"),
+            "easynet:///r/other/device/dev-a",
+        )
+        .unwrap_err();
+        assert!(format!("{cross_realm}").contains("does not match hub realm"));
     }
 
     #[test]

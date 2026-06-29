@@ -592,7 +592,7 @@ mod tests {
 
         assert!(catalog.has_rpc("test.declarative_echo"));
         let manifest = catalog
-            .manifest_for_dynamic("test.declarative_echo")
+            .control_plane_manifest("test.declarative_echo")
             .expect("registered plugin ability manifest");
         assert_eq!(
             manifest.description(),
@@ -641,7 +641,7 @@ mod tests {
 
         assert!(catalog.has_dynamic("test.declarative_echo"));
         let manifest = catalog
-            .manifest_for_dynamic("test.declarative_echo")
+            .control_plane_manifest("test.declarative_echo")
             .expect("hot registered plugin ability manifest");
         assert_eq!(
             manifest.description(),
@@ -769,7 +769,7 @@ mod tests {
             .expect("MCP plugin control-plane record");
         assert_eq!(*record.implementation().source(), AbilityImplSource::Mcp);
         let manifest = catalog
-            .manifest_for_dynamic("test.declarative_mcp")
+            .control_plane_manifest("test.declarative_mcp")
             .expect("hot registered MCP plugin ability manifest");
         assert_eq!(
             manifest.description(),

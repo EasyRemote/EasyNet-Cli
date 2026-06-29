@@ -35,7 +35,7 @@
 // - The presence-registry entry on daemon B is constructed via
 //   another inner `federation.forward_invoke` from B itself targeting
 //   itself — a small scaffolding step before the real cross-hub
-//   call. No `<self>.session` reverse channel is opened; we just
+//   call. No `session.open` reverse channel is opened; we just
 //   need the registry to know about the target URI so the local-
 //   realm fast-path on daemon B can return `target_online: true`.
 //   Wait — the cleaner path is to register via the test's own

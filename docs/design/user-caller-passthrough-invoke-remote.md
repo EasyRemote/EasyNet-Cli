@@ -1,4 +1,4 @@
-# Design: User-Caller Pass-Through for `<self>.invoke_remote`
+# Design: User-Caller Pass-Through for `runtime.invoke_remote`
 
 **Status:** implementing (2026-06-10)
 **Author:** Silan Hu <silan.hu@u.nus.edu>
@@ -29,9 +29,9 @@ Evidence (ledger `inv_1026189adb8b4376`):
    `LocalRuntime::invoke_async` (system/trust-domain), so the inner ability's
    `EnvelopeContext.caller` is `_system`.
 
-The outer `<self>.invoke_remote` frame-0 envelope is *correctly* backend-signed
+The outer `runtime.invoke_remote` frame-0 envelope is *correctly* backend-signed
 over the AXIOM-7 tuple `(caller=backend/hub, callee=device, subject=device,
-ability="<self>.invoke_remote")` — that layer must stay as-is. The user identity
+ability="runtime.invoke_remote")` — that layer must stay as-is. The user identity
 belongs to the **inner** invocation, which today has no wire carrier.
 
 ## Approach — inner signed-envelope pass-through via metadata
@@ -86,7 +86,7 @@ re-deriving it.
   against the user's registered pubkey (the row written by
   `register_device_pubkey` into `realm-trust.toml`). A forged
   `x-easynet-origin-caller` fails signature verify → falls closed.
-- The outer backend signature still gates who may *call* `<self>.invoke_remote`
+- The outer backend signature still gates who may *call* `runtime.invoke_remote`
   at the device boundary; this change does not widen that.
 - Cross-user / cross-realm callers without a valid inner signature continue to
   hit `consent_receipt_required` (the `owner_self_consent` carve-out only matches

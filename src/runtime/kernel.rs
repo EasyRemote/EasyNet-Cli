@@ -102,10 +102,16 @@ impl KernelDispatchOutcome {
 
     fn terminal_state(&self) -> TerminalState {
         match &self.terminal {
-            KernelDispatchTerminal::Succeeded(_) => TerminalState::Succeeded,
-            KernelDispatchTerminal::Failed(reason) => TerminalState::Failed {
-                reason: reason.clone(),
-            },
+            KernelDispatchTerminal::Succeeded(_) => TerminalState::from_axon_terminal(
+                easynet_axon::invocation::InvocationState::Completed,
+                None,
+            )
+            .expect("Completed is an Axon terminal state"),
+            KernelDispatchTerminal::Failed(reason) => TerminalState::from_axon_terminal(
+                easynet_axon::invocation::InvocationState::Failed,
+                Some(reason.clone()),
+            )
+            .expect("Failed is an Axon terminal state"),
         }
     }
 

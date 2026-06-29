@@ -5,7 +5,7 @@
 //
 // Real production implementation of `CliForwardInvoker`. Wraps the
 // daemon's existing `DendriteBridge` (an authenticated gRPC client
-// to the local axon-runtime) and routes `<self>.invoke(target=peer)`
+// to the local axon-runtime) and routes `<agent>.invoke(target=peer)`
 // calls through `federation.forward_invoke`.
 //
 // What this fills in
@@ -22,7 +22,7 @@
 //                       inner JSON.
 //
 // Daemon boot calls `set_forward_invoker(Arc::new(...))` once with
-// the constructed invoker; subsequent `<self>.invoke` calls with a
+// the constructed invoker; subsequent `<agent>.invoke` calls with a
 // federation-shaped target route through this path automatically.
 //
 // Author: Silan.Hu

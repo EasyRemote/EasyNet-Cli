@@ -511,7 +511,7 @@ mod tests {
 
     use super::*;
     use crate::core::ability_spec::AbilityManifest;
-    use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+    use crate::core::agent_spec::AgentSpec;
     use crate::registry::agents::AgentType;
     use crate::runtime::directory::{AgentDirectory, Location, ABILITY_MANIFEST_SUFFIX};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -803,11 +803,7 @@ mod tests {
             .join(format!("{name}-{n}-{}", std::process::id()));
         // Clean any leftover from a previous identical run.
         let _ = std::fs::remove_dir_all(&root);
-        let runtime = match agent_type {
-            AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
-            AgentType::Codex => RuntimeKind::Codex,
-            AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
-        };
+        let runtime = agent_type.runtime_kind();
         let spec = AgentSpec::new(name.to_string(), runtime);
         AgentDirectory::create(&Location::Local { root: root.clone() }, spec)
             .expect("create agent directory");

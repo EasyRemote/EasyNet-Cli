@@ -502,6 +502,21 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
 }
 
 #[test]
+fn build_registry_satisfies_device_baseline_contract() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let device = crate::runtime::ability::conformance::DeviceBaseline::required_abilities();
+    let report = crate::runtime::ability::conformance::RegistryConformance::new(&reg)
+        .check("device", &device);
+
+    assert!(
+        report.is_conformant(),
+        "Device baseline abilities missing or registered under the wrong call mode:\n  {}",
+        report.panic_message()
+    );
+}
+
+#[test]
 fn published_abilities_includes_skill_list_with_real_metadata() {
     let _home = crate::facade::cli::test_support::HomeGuard::new();
     // Load-bearing for the EasyNet frontend's Skills page: the
@@ -821,14 +836,14 @@ fn published_catalogue_does_not_duplicate_device_owner_prefix() {
     );
 }
 
-/// **M5 lint** — `<self>` token never appears as a first
+/// **M5 lint** — the legacy self alias token never appears as a first
 /// segment in the published catalogue. The wire-pinned trio
-/// (`<self>.session`, `<self>.invoke_remote`,
-/// `<self>.register_device_pubkey`) goes through wire-only
+/// (`session.open`, `runtime.invoke_remote`,
+/// `identity.register_pubkey`) goes through wire-only
 /// constants; they are NOT registered into the discoverable
 /// catalogue. If they ever leak, this test fails and the
 /// regression is caught at CI rather than in an LLM seeing
-/// a `<self>.*` entry and getting confused.
+/// a legacy self-alias entry and getting confused.
 #[test]
 fn published_catalogue_never_contains_self_alias() {
     let _home = crate::facade::cli::test_support::HomeGuard::new();
@@ -836,9 +851,13 @@ fn published_catalogue_never_contains_self_alias() {
         .into_iter()
         .map(|meta| meta.name)
         .collect();
-    let leaks: Vec<&String> = names.iter().filter(|n| n.starts_with("<self>")).collect();
+    let legacy_self_prefix = ["<", "self", ">"].concat();
+    let leaks: Vec<&String> = names
+        .iter()
+        .filter(|n| n.starts_with(&legacy_self_prefix))
+        .collect();
     assert!(
         leaks.is_empty(),
-        "post-M5 catalogue must not expose <self>.* names; got {leaks:?}"
+        "post-M5 catalogue must not expose legacy self-alias names; got {leaks:?}"
     );
 }

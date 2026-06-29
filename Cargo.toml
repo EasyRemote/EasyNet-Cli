@@ -338,6 +338,14 @@ once_cell = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 # PR-N1 commit 8/N: CLI bridge for `easynet ability invoke --node`
 # uses a tonic UDS gRPC client to reach the local daemon's
 # Invocation server with `function_name="federation.forward_invoke"`.

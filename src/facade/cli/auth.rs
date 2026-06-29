@@ -335,11 +335,7 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             let realm = c.realm_str().to_string();
             let hub_ura = ura::hub_ura(&realm);
             let device_ura = ura::device_ura(&realm, &c.node_id);
-            let user_ura = c
-                .username
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(|u| ura::user_ura(&realm, u));
+            let user_ura = c.user_ura().ok();
             println!("(no interactive auth session on this host)");
             println!("paired as a device:");
             let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
@@ -1056,6 +1052,87 @@ pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
                 break;
             }
         }
+    }
+    Ok(())
+}
+
+// ── user signing-key register ──────────────────────────────────
+//
+// Wrapper→CLI thesis: a user signing key is a long-lived identity
+// credential, so the DAEMON (the runtime trust source) owns it — not the
+// browser and not the product backend. This command is the CLI facade for
+// that: it generates a fresh user keypair locally and registers the public
+// key by invoking the daemon's `identity.register_pubkey` ability directly
+// over the local UDS socket. The backend's `POST /me/signing-keys` is the
+// browser's equivalent facade onto the same daemon ability — neither one
+// is the source of truth.
+//
+// The local UDS invoke is admitted as the loopback `_system.local` caller
+// (not a device URA), which the daemon's identity-write gate exempts, so a
+// `role:"user"` write is authorized without a delegation proof.
+//
+// A user may hold MULTIPLE signing keys (the trust anchor keys on
+// `(user_ura, public_key_b64)`), so the CLI host's key coexists with the
+// browser's IndexedDB key. This command therefore enables CLI-driven
+// user-as-caller invocation; it does NOT retro-register the browser's key.
+
+#[derive(Debug, Args)]
+pub struct SigningKeyRegisterArgs {
+    /// Print the registered public key (base64) on success.
+    #[arg(long)]
+    pub show_pubkey: bool,
+}
+
+pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<()> {
+    use base64::Engine as _;
+    use ed25519_dalek::SigningKey;
+    use rand::RngCore as _;
+
+    // The user URA's realm MUST equal the daemon realm (the trust-anchor
+    // writer pins user-row realm to the daemon realm; only device rows may
+    // be cross-realm). The credentials realm is the realm this host paired
+    // into, i.e. the co-located daemon's realm.
+    let creds = config::load_credentials()
+        .context("load device credentials (run `easynet device join <token>` first)")?;
+    let user_ura = creds.user_ura()?;
+
+    // Random ed25519 keypair. Unlike the device key (deterministically
+    // derived from realm+node_id), the user key MUST be random: the user
+    // UUID/username is not secret, so a deterministic user key would let
+    // anyone holding the realm+user-id forge the user's signature.
+    let mut seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    let signing_key = SigningKey::from_bytes(&seed);
+    let public_key_b64 = B64.encode(signing_key.verifying_key().to_bytes());
+    let seed_hex = hex::encode(seed);
+
+    // Persist the PRIVATE seed in the local keyring vault under the user
+    // URA so later user-as-caller invokes can sign with it. No role
+    // overlays: a user identity has no hub/realm alias the way a device
+    // does.
+    let keyring = crate::services::self_identity::KeyringClient::default_path();
+    match keyring.put(&user_ura, vec![], seed_hex) {
+        Ok(()) => {}
+        Err(crate::services::self_identity::SelfIdentityError::Rejected { kind, .. })
+            if kind == "already_exists" => {}
+        Err(e) => return Err(anyhow::anyhow!("store user signing key in keyring: {e}")),
+    }
+
+    // Register the PUBLIC key with the daemon trust anchor (loopback-admitted).
+    crate::support::local_invoke::invoke_local_ability_with_subject(
+        "identity.register_pubkey",
+        serde_json::json!({
+            "agent_ura": user_ura,
+            "public_key_b64": public_key_b64,
+            "role": "user",
+        }),
+        Some(user_ura.clone()),
+    )
+    .context("invoke identity.register_pubkey")?;
+
+    output::success(&format!("Registered user signing key for {user_ura}"));
+    if args.show_pubkey {
+        println!("{public_key_b64}");
     }
     Ok(())
 }

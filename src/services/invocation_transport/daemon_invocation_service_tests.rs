@@ -42,7 +42,7 @@ use crate::services::invocation_transport::ledger_projection::{
 use crate::services::invocation_transport::peer_envelope_signer::sign_peer_request_envelope;
 use crate::services::invocation_transport::quota_meter::quota_meters_function;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
-use crate::services::invocation_transport::session_initiator::ABILITY_SELF_SESSION;
+use crate::services::invocation_transport::session_initiator::ABILITY_SESSION_OPEN;
 use crate::services::invocation_transport::target_gate::ROUTE_NEGATIVE_CODE;
 use crate::services::invocation_transport::ProtoEnvelope;
 use crate::services::pending_dispatch::DispatchResult;
@@ -389,7 +389,7 @@ fn assert_route_negative_noroute(message: &str) {
 }
 
 // Shared invoke_remote frame helpers used by stream and bidi tests.
-// ── PR-3 commit 1/3 — <self>.invoke_remote helpers + early returns ────
+// ── PR-3 commit 1/3 — runtime.invoke_remote helpers + early returns ────
 
 use crate::services::invocation_transport::invoke_remote_initiator::{
     InvokeRemoteUp, ABILITY_INVOKE_REMOTE,

@@ -311,9 +311,18 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         credential_verified: Some(credential_verified),
     };
     config::save(&state)?;
+    // The daemon process is up and the local runtime is ready, but the hub
+    // `session.open` bidi has NOT been admitted yet — that handshake runs
+    // asynchronously in the session initiator. Reporting ConnectedOnline here
+    // was a lie: `doctor` showed FRONTEND_CONNECTED even while session.open was
+    // failing in an endless reconnect backoff, because nothing downgraded the
+    // optimistic snapshot. Record the honest "self-session opening, presence
+    // not yet admitted" state (J500); the frame loop promotes to ConnectedOnline
+    // only when the hub returns the session contract, and downgrades to
+    // ConnectedSuspect when the session errors out.
     record_snapshot(JoinConnectionSnapshot::from_credentials(
-        JoinConnectionState::ConnectedOnline,
-        Some(JoinTransition::AdmitPresence),
+        JoinConnectionState::SelfSessionAdmissionPending,
+        Some(JoinTransition::OpenSelfSession),
         &creds,
         "cli.start",
     ));
@@ -339,11 +348,10 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
     output::kv_section(&rows);
 
-    // Welcome line — surface the human identity the daemon is now
-    // operating under. Joined credentials are required to carry the
-    // stable username slug because hosted-agent URAs are user-rooted.
+    // Welcome line — surface the human-readable paired account while the
+    // canonical user URA below stays anchored on credentials.user_id.
     let username = creds.username_slug()?;
-    let user_ura = crate::ura::user_ura(&tenant, username);
+    let user_ura = creds.user_ura()?;
     eprintln!();
     eprintln!(
         "{} {}",
@@ -578,22 +586,26 @@ pub(crate) fn republish_via_federation_best_effort(
 fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
+    let user_id = creds.user_id()?;
     let username = creds.username_slug()?;
-    build_bootstrap_plan_from(&creds.realm, &creds.node_id, username)
+    build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id, username)
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
-/// publish path can construct the plan from a `(realm,
-/// node_id, username)` triple already in scope without re-loading
-/// credentials. The third argument is the stable username slug the
-/// backend resolves for this user and anchors under `user/` / `agent/`
-/// URAs.
+/// publish path can construct the plan from a `(realm, node_id,
+/// user_id, username)` tuple already in scope without re-loading
+/// credentials. `user_id` (UUID) is the immutable subject anchor for
+/// `user/` trust URAs; `username` (slug) is the owner-prefix for
+/// `agent/<username>.<id>` URAs (§15.1-3 dual grammar).
 pub(crate) fn build_bootstrap_plan_from(
     realm: &str,
     node_id: &str,
+    user_id: &str,
     username: &str,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
-    crate::runtime::agents::profiles::bootstrap::build_plan_from_registry(realm, node_id, username)
+    crate::runtime::agents::profiles::bootstrap::build_plan_from_registry(
+        realm, node_id, user_id, username,
+    )
 }
 
 fn bootstrap_local_agent_projection(
@@ -990,8 +1002,10 @@ mod tests {
             deploy_signature: "sig".into(),
             hub_api_base: Some("https://api.example.com".into()),
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         }
     }
 
@@ -1205,12 +1219,12 @@ mod tests {
     }
 
     #[test]
-    fn build_bootstrap_plan_rejects_credentials_without_username() {
+    fn build_bootstrap_plan_rejects_credentials_without_user_id() {
         let mut creds = test_creds();
-        creds.username = None;
-        let err = build_bootstrap_plan(&creds).expect_err("username is required");
+        creds.user_id = None;
+        let err = build_bootstrap_plan(&creds).expect_err("user_id is required");
         assert!(
-            err.to_string().contains("missing username"),
+            err.to_string().contains("missing user_id"),
             "error should surface the credential contract: {err}"
         );
     }
@@ -1226,10 +1240,11 @@ mod tests {
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.
-        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test")
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test", "alice")
             .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(plan.user_id, "user-test");
+        assert_eq!(plan.username, "alice");
         assert_eq!(
             plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"

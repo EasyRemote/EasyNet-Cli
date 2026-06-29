@@ -35,7 +35,7 @@ use super::state::{
 /// Handler invoked when a user calls `pages.publish`. The
 /// handler is registered once at daemon boot under the user-prefixed
 /// ability name; the dispatcher routes per-user calls to the same
-/// closure (`<self>` is the calling daemon's user identity).
+/// closure (`legacy self alias` is the calling daemon's user identity).
 ///
 /// args:
 /// ```json

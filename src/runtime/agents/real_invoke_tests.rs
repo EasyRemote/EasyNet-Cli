@@ -1427,6 +1427,7 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
         hub_endpoint: "axon://hub.test:50051".to_string(),
         realm: "localhost".to_string(),
         username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
         ..Default::default()
     })
     .expect("seed joined credentials");
@@ -1467,6 +1468,7 @@ fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
         hub_endpoint: "axon://hub.test:50051".to_string(),
         realm: "localhost".to_string(),
         username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
         ..Default::default()
     })
     .expect("seed joined credentials");
@@ -2911,6 +2913,60 @@ fn real_browser_capture_viewport_emits_one_placeholder_frame() {
         "v0 mock must emit exactly one placeholder frame"
     );
     assert_eq!(frames[0]["is_placeholder"], true);
+}
+
+#[tokio::test]
+async fn real_browser_attach_session_emits_ready_frame_and_accepts_close() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let open = d
+        .execute_rpc(target(
+            "browser.open_session",
+            json!({"url": "https://example.com"}),
+        ))
+        .expect("open_session ok");
+    let ura = open["session_ura"].as_str().unwrap().to_string();
+
+    let mut target = target(
+        "browser.attach_session",
+        json!({"session_ura": ura.clone()}),
+    );
+    target.call_mode = CallMode::Bidi;
+    let mut bidi = d
+        .execute_bidi(target)
+        .expect("attach_session must open bidi source");
+
+    let ready = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+        .await
+        .expect("ready frame timed out")
+        .expect("ready frame missing")
+        .into_json_value()
+        .expect("ready frame json");
+    assert_eq!(ready["type"], "browser.ready");
+    assert_eq!(ready["session_ura"], ura);
+
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+        .await
+        .expect("initial frame timed out")
+        .expect("initial frame missing")
+        .into_json_value()
+        .expect("initial frame json");
+    assert_eq!(frame["type"], "browser.frame");
+    assert_eq!(frame["frame"]["is_placeholder"], true);
+
+    bidi.to_client
+        .send(json!({"type": "browser.close"}))
+        .await
+        .expect("send close frame");
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+        .await
+        .expect("closed frame timed out")
+        .expect("closed frame missing")
+        .into_json_value()
+        .expect("closed frame json");
+    assert_eq!(closed["type"], "closed");
+    assert_eq!(closed["session_ura"], ura);
 }
 
 #[test]

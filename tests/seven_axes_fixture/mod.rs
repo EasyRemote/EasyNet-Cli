@@ -507,8 +507,10 @@ added_at_unix_ms = 0
             deploy_signature: String::new(),
             hub_api_base: None,
             username: Some("local".to_string()),
+            user_id: Some("user-local".to_string()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         })
         .expect("write credentials for federation-backed discover scope");
         let keyring = start_test_keyring(loopback_caller.clone());

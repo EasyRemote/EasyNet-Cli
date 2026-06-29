@@ -26,7 +26,7 @@ pub enum PluginCallMode {
 }
 
 /// Wire adapter a bidi plugin ability expects when it crosses the
-/// `<self>.session` bridge.
+/// `session.open` bridge.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginBidiWireKind {

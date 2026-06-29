@@ -144,7 +144,7 @@ async fn run_join_prelude(
             crate::op_event!(
                 component = session,
                 kind = federation_join_prelude_ok,
-                message = "proceeding to <self>.session",
+                message = "proceeding to session.open",
             );
         }
         Err(err) => {
@@ -155,7 +155,8 @@ async fn run_join_prelude(
                 kind = federation_join_prelude_soft_failed,
                 code = code,
                 error = msg,
-                message = "proceeding to <self>.session — bidi will surface the error if join was required",
+                message =
+                    "proceeding to session.open — bidi will surface the error if join was required",
             );
         }
     }
@@ -224,6 +225,7 @@ async fn spawn_user_trust_resync(
     user_trust_sync: Option<&UserTrustSync>,
 ) -> Option<AbortOnDrop> {
     let sync = user_trust_sync?;
+    sync_realm_hub_trust_prelude(client, caller_ura, signing_seed, sync).await;
     sync_paired_user_trust_prelude(client, caller_ura, signing_seed, sync).await;
     let sync = sync.clone();
     let resync_caller = caller_ura.to_string();
@@ -231,6 +233,8 @@ async fn spawn_user_trust_resync(
         let mut resync_client = InvocationClient::new(resync_channel);
         loop {
             tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
+            sync_realm_hub_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
+                .await;
             sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
                 .await;
         }
@@ -246,6 +250,13 @@ async fn run_hosted_agent_advertise_prelude(
     let realm = crate::ura::parse_ura(caller_ura)
         .map(|parsed| parsed.realm)
         .unwrap_or_default();
+    // The agent owner-prefix is the USERNAME slug (`<username>.<agent>`, e.g.
+    // `dev.pages`), NOT the user UUID. This is the §15.1-3 dual grammar: subject
+    // URAs anchor on the stable UUID, but owner-prefixed agent/resource URAs keep
+    // the username slug. The backend resolves these owners via
+    // `svc.UsernameForUID` (username), so advertising under the UUID
+    // (`<uuid>.pages`) lands a directory entry the resolver never queries →
+    // `namespace.resolve NXDOMAIN: owner is not online` on `pages.list`/etc.
     let user_segment = std::env::var("EASYNET_PAGES_USER")
         .ok()
         .filter(|v| !v.is_empty())
@@ -674,10 +685,20 @@ fn sign_descriptor_bound_prelude_request(
         .map(|callee| callee.ura.trim())
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| Status::internal(format!("{function_name} prelude missing callee URA")))?;
+    // `function_name` is a bare ability name (`federation.advertise_abilities`),
+    // NOT a `<ability-ura>@<version>` descriptor ref. Build the canonical ref
+    // from (callee hub URA, ability name, default descriptor version) — the hub
+    // ingress treats `federation.*` as descriptor-bound on the wire and rejects
+    // a bare name with `ability_descriptor_ref_malformed`. `require_*` only
+    // VALIDATES an already-formed ref; the prelude must CONSTRUCT one. (Commit
+    // 22187b3f tightened ingress + removed the old resolver but left this egress
+    // site passing the bare name — the egress/ingress asymmetry that wedged
+    // session.open into an advertise_abilities reconnect loop.)
     let descriptor_ref =
-        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             callee_ura,
             function_name,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
         )
         .map_err(|err| {
             Status::internal(format!(
@@ -750,6 +771,105 @@ pub struct UserTrustSync {
 
 const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
 
+async fn sync_realm_hub_trust_prelude(
+    client: &mut InvocationClient<Channel>,
+    caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
+    sync: &UserTrustSync,
+) {
+    let Ok(parsed_caller) = crate::ura::parse_ura(caller_ura) else {
+        return;
+    };
+    if parsed_caller.realm.as_str() != sync.daemon_realm.as_str() {
+        return;
+    }
+
+    let hub_ura = crate::ura::hub_ura(&sync.daemon_realm);
+    let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": hub_ura })) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let request = match signed_prelude_request(
+        caller_ura,
+        &hub_ura,
+        crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+        args,
+        signing_seed,
+    ) {
+        Ok(req) => req,
+        Err(_) => return,
+    };
+    let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
+        Ok(resp) => resp,
+        Err(status) => {
+            let code = status.code();
+            let msg = status.message();
+            crate::op_event!(
+                component = session,
+                kind = hub_trust_sync_resolve_failed,
+                code = code,
+                error = msg,
+                hub_ura = hub_ura,
+            );
+            return;
+        }
+    };
+
+    let pubkeys = resolved_public_keys(&response.result);
+    if pubkeys.is_empty() {
+        crate::op_event!(
+            component = session,
+            kind = hub_trust_sync_resolve_empty,
+            hub_ura = hub_ura,
+            message = "hub returned no hub keys — retaining existing local hub trust anchor",
+        );
+        return;
+    }
+
+    for pubkey_b64 in pubkeys {
+        let register_args = match serde_json::to_vec(&serde_json::json!({
+            "agent_ura": hub_ura,
+            "public_key_b64": pubkey_b64,
+            "role": "hub",
+        })) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match crate::services::invocation_transport::register_device_pubkey::handle(
+            &register_args,
+            &sync.daemon_realm,
+            &sync.trust_anchor_path,
+            &sync.cell,
+        ) {
+            Ok(_) => {
+                crate::op_event!(
+                    component = session,
+                    kind = hub_trust_sync_ok,
+                    hub_ura = hub_ura,
+                );
+            }
+            Err(status) if status.code() == tonic::Code::AlreadyExists => {
+                crate::op_event!(
+                    component = session,
+                    kind = hub_trust_sync_already_present,
+                    hub_ura = hub_ura,
+                );
+            }
+            Err(status) => {
+                let code = status.code();
+                let msg = status.message();
+                crate::op_event!(
+                    component = session,
+                    kind = hub_trust_sync_write_failed,
+                    code = code,
+                    error = msg,
+                    hub_ura = hub_ura,
+                );
+            }
+        }
+    }
+}
+
 async fn sync_paired_user_trust_prelude(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
@@ -759,19 +879,13 @@ async fn sync_paired_user_trust_prelude(
     let Ok(creds) = crate::persistence::config::load_credentials() else {
         return;
     };
-    let Some(username) = creds
-        .username
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
+    let Ok(user_ura) = creds.user_ura() else {
         return;
     };
     let realm = creds.realm.trim();
     if realm != sync.daemon_realm {
         return;
     }
-    let user_ura = crate::ura::user_ura(realm, username);
 
     let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura })) {
         Ok(v) => v,
@@ -803,26 +917,7 @@ async fn sync_paired_user_trust_prelude(
         }
     };
 
-    let parsed = serde_json::from_slice::<serde_json::Value>(&response.result).ok();
-    let mut pubkeys: Vec<String> = parsed
-        .as_ref()
-        .and_then(|v| v.get("public_keys_b64"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|k| k.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    if pubkeys.is_empty() {
-        if let Some(pk) = parsed
-            .as_ref()
-            .and_then(|v| v.get("public_key_b64"))
-            .and_then(|pk| pk.as_str())
-        {
-            pubkeys.push(pk.to_string());
-        }
-    }
+    let pubkeys = resolved_public_keys(&response.result);
     if pubkeys.is_empty() {
         crate::op_event!(
             component = session,
@@ -875,6 +970,35 @@ async fn sync_paired_user_trust_prelude(
             }
         }
     }
+}
+
+fn resolved_public_keys(result: &[u8]) -> Vec<String> {
+    let parsed = serde_json::from_slice::<serde_json::Value>(result).ok();
+    let mut pubkeys: Vec<String> = parsed
+        .as_ref()
+        .and_then(|v| v.get("public_keys_b64"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|k| {
+                    let key = k.as_str()?.trim();
+                    (!key.is_empty()).then(|| key.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if pubkeys.is_empty() {
+        if let Some(pk) = parsed
+            .as_ref()
+            .and_then(|v| v.get("public_key_b64"))
+            .and_then(|pk| pk.as_str())
+            .map(str::trim)
+            .filter(|pk| !pk.is_empty())
+        {
+            pubkeys.push(pk.to_string());
+        }
+    }
+    pubkeys
 }
 
 pub(super) async fn invoke_prelude_unary(
@@ -963,4 +1087,36 @@ pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_public_keys;
+
+    #[test]
+    fn resolved_public_keys_prefers_array_response() {
+        let body = br#"{
+            "public_key_b64": "fallback",
+            "public_keys_b64": [" key-a ", "", 7, "key-b"]
+        }"#;
+
+        assert_eq!(
+            resolved_public_keys(body),
+            vec!["key-a".to_string(), "key-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolved_public_keys_falls_back_to_single_key() {
+        let body = br#"{ "public_key_b64": " single-key " }"#;
+
+        assert_eq!(resolved_public_keys(body), vec!["single-key".to_string()]);
+    }
+
+    #[test]
+    fn resolved_public_keys_ignores_malformed_or_empty_payloads() {
+        assert!(resolved_public_keys(br#"{"public_keys_b64":[]}"#).is_empty());
+        assert!(resolved_public_keys(br#"not-json"#).is_empty());
+        assert!(resolved_public_keys(br#"{ "public_key_b64": " " }"#).is_empty());
+    }
 }

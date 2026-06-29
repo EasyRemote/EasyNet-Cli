@@ -1,18 +1,18 @@
-# Open Question — Deprecating the `<self>` Ability-Name Alias
+# Open Question — Deprecating the `legacy self alias` Ability-Name Alias
 
 **Status:** Open · **Trigger-based revisit** (not date-based) · **Owner:** Silan Hu · **Author:** 凉冰 (architect) · **Date:** 2026-05-05
 
 ## Summary
 
-The literal `<self>` token currently appears as a *namespace prefix* in EasyNet ability names — `<self>.discover`, `<self>.invoke`, `<self>.keyring.sign`, `<self>.session`, `<self>.register_device_pubkey`, `<self>.api_key.create`, and similar. This token is **late-binding sugar** that the dispatcher resolves at call time using the `caller` URA on the AXIOM Invocation envelope. It is *not* a URA, and it does not appear anywhere in the v4.1.5 §A.URA grammar.
+The literal `legacy self alias` token currently appears as a *namespace prefix* in EasyNet ability names — `<agent>.discover`, `<agent>.invoke`, `device.keyring.sign`, `session.open`, `identity.register_pubkey`, `legacy self alias.api_key.create`, and similar. This token is **late-binding sugar** that the dispatcher resolves at call time using the `caller` URA on the AXIOM Invocation envelope. It is *not* a URA, and it does not appear anywhere in the v4.1.5 §A.URA grammar.
 
 Co-locating a dispatch-time variable in the ability-name namespace breaks several invariants that the rest of the system depends on. This document captures **why** the alias is wrong, **where** it leaks, and **the staged path** to remove it. It is filed as an open question rather than an executed PR because the change is protocol-level (device ⇄ hub wire), spans ~30 files / 75 active references, and must coordinate with EasyNet-Axon and the LLM prompt corpus.
 
 ---
 
-## Why `<self>` is the wrong abstraction
+## Why `legacy self alias` is the wrong abstraction
 
-### 1. URAs are self-describing; `<self>` is not
+### 1. URAs are self-describing; `legacy self alias` is not
 
 URA §A.URA-1 invariant: any URA, in isolation, names exactly one actor in the seven-tuple ontology. Given the bare string
 
@@ -22,33 +22,33 @@ easynet:///r/easynet.run/agent/test.claude
 
 a reader can answer *who is this* without any additional context: realm `easynet.run`, user `test`, agent `claude`.
 
-Given the bare string `<self>`, a reader can answer *nothing*. The token is a parameter that gets bound at dispatch time against the caller's URA. The URA grammar has no slot for "depends on caller" precisely because every other AXIOM mechanism — visibility, signing, audit, federation routing — needs the seven-tuple to be a closed value, not a function of context.
+Given the bare string `legacy self alias`, a reader can answer *nothing*. The token is a parameter that gets bound at dispatch time against the caller's URA. The URA grammar has no slot for "depends on caller" precisely because every other AXIOM mechanism — visibility, signing, audit, federation routing — needs the seven-tuple to be a closed value, not a function of context.
 
-`<self>` therefore exists in a category of one: it is a *URA-shaped string* that is not a URA. The rest of the codebase has no way to tell those two cases apart at the type level, so every consumer either does ad-hoc `starts_with("<self>.")` sniffing or silently misroutes the alias.
+`legacy self alias` therefore exists in a category of one: it is a *URA-shaped string* that is not a URA. The rest of the codebase has no way to tell those two cases apart at the type level, so every consumer either does ad-hoc `starts_with("legacy self alias.")` sniffing or silently misroutes the alias.
 
 ### 2. The same prefix is used for two different semantic layers
 
-`<self>.` is currently registered by two mechanisms with entirely different meanings:
+`legacy self alias.` is currently registered by two mechanisms with entirely different meanings:
 
-**Layer A — per-agent self-alias.** Examples: `<self>.discover`, `<self>.invoke`, `<self>.api_key.create`. Registered via `discover_ability::register_for_agent(reg, agent_name, …)` and friends. The dispatcher mounts one copy per LLM sub-agent (`claude`, `codex`, `web-builder`, …) and resolves `<self>` against the caller's agent URA at dispatch time. The handler runs *as that agent*, the receipt's `callee` is that agent's URA, and visibility filtering scopes against that agent.
+**Layer A — per-agent self-alias.** Examples: `<agent>.discover`, `<agent>.invoke`, `legacy self alias.api_key.create`. Registered via `discover_ability::register_for_agent(reg, agent_name, …)` and friends. The dispatcher mounts one copy per LLM sub-agent (`claude`, `codex`, `web-builder`, …) and resolves `legacy self alias` against the caller's agent URA at dispatch time. The handler runs *as that agent*, the receipt's `callee` is that agent's URA, and visibility filtering scopes against that agent.
 
-**Layer B — daemon device-bundle.** Examples: `<self>.keyring.sign`, `<self>.keyring.federate_user_identity_token`, `<self>.session`, `<self>.register_device_pubkey`. Registered via `register_for_owner(reg, "<self>", handle)` directly on the daemon, **without** a sub-agent context. The handler runs once on the daemon (it owns the device-scoped keyring or the long-lived bidi session to the hub); the `callee` is the device URA. Per RFC-002 §3.3 these abilities are *device-bundled* — their owner is conceptually the daemon, the `<self>` prefix is purely historical.
+**Layer B — daemon device-bundle.** Examples: `device.keyring.sign`, `device.keyring.federate_user_identity_token`, `session.open`, `identity.register_pubkey`. Registered via `register_for_owner(reg, "legacy self alias", handle)` directly on the daemon, **without** a sub-agent context. The handler runs once on the daemon (it owns the device-scoped keyring or the long-lived bidi session to the hub); the `callee` is the device URA. Per RFC-002 §3.3 these abilities are *device-bundled* — their owner is conceptually the daemon, the `legacy self alias` prefix is purely historical.
 
 The two layers share a token but have **disjoint owner kinds** (`agent/<u>.<a>` vs `device/<id>`) and **disjoint multiplicity** (one row per sub-agent vs. exactly one row). Telling them apart from the name alone requires knowing the registration site — which the descriptor catalogue does not preserve. As of this writing, `meta_ability::list_abilities_handler` synthesises both layers' descriptors with the device URA as owner, which is correct for Layer B by accident and wrong for Layer A.
 
 ### 3. Every downstream consumer has to re-implement de-aliasing
 
-Search shows ~75 active references to `<self>.` across the daemon, federation, keyring, advertise, CLI, and tests. Each call site that touches an ability name has had to decide independently:
+Search shows ~75 active references to `legacy self alias.` across the daemon, federation, keyring, advertise, CLI, and tests. Each call site that touches an ability name has had to decide independently:
 
-- Does this string need `<self>` resolution before I forward it?
+- Does this string need `legacy self alias` resolution before I forward it?
 - If I am persisting it (descriptor, receipt, audit log, federation advertise payload), do I substitute the resolved actor or keep the alias?
 - If I am rendering it to a human / LLM / hub-side filter, which form do I show?
 
-The answers diverge across modules. `runtime/agents/mod.rs:791,1285,1657,1777` filter on `name.starts_with("<self>.keyring.")` to special-case Layer B. `services/invocation_transport/admission_facade.rs:1710` hard-codes `<self>.session` as a dispatch target. `runtime/agents/discover_ability.rs:232` puts `<self>.discover` into LLM-facing prompt copy. `services/invocation_transport/register_device_pubkey.rs:73` exposes `<self>.register_device_pubkey` as a public constant on the wire. None of these sites can locally tell whether their fix is consistent with the others — every new `<self>` reference adds an O(N) verification burden across the pre-existing N references.
+The answers diverge across modules. `runtime/agents/mod.rs:791,1285,1657,1777` filter on `name.starts_with("device.keyring.")` to special-case Layer B. `services/invocation_transport/admission_facade.rs:1710` hard-codes `session.open` as a dispatch target. `runtime/agents/discover_ability.rs:232` puts `<agent>.discover` into LLM-facing prompt copy. `services/invocation_transport/register_device_pubkey.rs:73` exposes `identity.register_pubkey` as a public constant on the wire. None of these sites can locally tell whether their fix is consistent with the others — every new `legacy self alias` reference adds an O(N) verification burden across the pre-existing N references.
 
 ### 4. The hub side speaks the alias too
 
-`<self>.session` and `<self>.register_device_pubkey` are not internal-only names: they are **on the wire** between device and hub. A device dials the hub with `function_name = "<self>.session"`; the hub-side admission gate accepts that exact string. Renaming on one side without coordinated rename on the other breaks pairing and severs the bidi session. Any clean-up plan must account for this rather than treating it as a single-repo refactor.
+`session.open` and `identity.register_pubkey` are not internal-only names: they are **on the wire** between device and hub. A device dials the hub with `function_name = "session.open"`; the hub-side admission gate accepts that exact string. Renaming on one side without coordinated rename on the other breaks pairing and severs the bidi session. Any clean-up plan must account for this rather than treating it as a single-repo refactor.
 
 ---
 
@@ -58,9 +58,9 @@ The terminal state encodes two principles:
 
 **P1 — Owner is named at the registration site, not derived from the name.** The ability registry stores `(name, handler, owner_uri)`. `register_for_agent(reg, agent_name, …)` stamps the agent URA; `register_for_owner(reg, OwnerKind::Device, …)` stamps the device URA; `openai_compat_ability::register` stamps the realm hub URA. `meta_ability::list_abilities_handler` reads the stored owner verbatim, never sniffs prefixes.
 
-**P2 — Ability names embed the owner explicitly.** Layer A becomes `<agent-name>.discover` / `<agent-name>.invoke` / `<agent-name>.api_key.create` (one row per sub-agent, name varies). Layer B becomes `device.keyring.sign` / `device.session` / `device.register_device_pubkey` (one row total, name fixed). The literal string `<self>` does not appear in any descriptor, receipt, advertise payload, or wire field.
+**P2 — Ability names embed the owner explicitly.** Layer A becomes `<agent-name>.discover` / `<agent-name>.invoke` / `<agent-name>.api_key.create` (one row per sub-agent, name varies). Layer B uses first-class daemon namespaces: `device.keyring.sign`, `session.open`, `runtime.invoke_remote`, and `identity.register_pubkey`. The literal string `legacy self alias` does not appear in any descriptor, receipt, advertise payload, or wire field.
 
-After P2, every ability name in the catalogue carries enough information to answer "whose verb is this" by inspection, and the `<self>` resolution code path is deleted, not optional.
+After P2, every ability name in the catalogue carries enough information to answer "whose verb is this" by inspection, and the `legacy self alias` resolution code path is deleted, not optional.
 
 ---
 
@@ -68,25 +68,25 @@ After P2, every ability name in the catalogue carries enough information to answ
 
 ### C1 — Two-sided wire contract
 
-`<self>.session` and `<self>.register_device_pubkey` cross the device ⇄ hub boundary. A rename on the device side without a matching rename on the hub side breaks pairing for every paired device. The rename must therefore proceed in **double-name** mode for at least one release window:
+`session.open` and `identity.register_pubkey` cross the device ⇄ hub boundary. A rename on the device side without a matching rename on the hub side breaks pairing for every paired device. The rename must therefore proceed in **double-name** mode for at least one release window:
 
-1. Hub registers both `<self>.session` and `device.session` as the same handler.
+1. Hub registers both `session.open` and `device.session` as the same handler.
 2. Devices migrate to dialing `device.session`.
-3. Once telemetry confirms no device dials `<self>.session` for one full release cycle, the hub drops the legacy alias.
+3. Once telemetry confirms no device dials `session.open` for one full release cycle, the hub drops the legacy alias.
 
-The same pattern applies to `<self>.register_device_pubkey` and any other on-wire `<self>.*` name.
+The same pattern applies to `identity.register_pubkey` and any other on-wire `legacy self alias.*` name.
 
 ### C2 — LLM prompt corpus
 
-Layer A names appear in LLM-facing system prompts and skill descriptions: `discover_ability::register_for_agent` writes copy that tells the LLM to call `<self>.discover` to enumerate its own abilities. Renaming Layer A to `<agent-name>.<verb>` requires (a) updating the prompt template generator to substitute the concrete agent name, and (b) re-validating the LLM's discover-then-invoke flow under each supported model (RFC-006 adapter layer). This is the most reviewable but least automatable step.
+Layer A names appear in LLM-facing system prompts and skill descriptions: `discover_ability::register_for_agent` writes copy that tells the LLM to call `<agent>.discover` to enumerate its own abilities. Renaming Layer A to `<agent-name>.<verb>` requires (a) updating the prompt template generator to substitute the concrete agent name, and (b) re-validating the LLM's discover-then-invoke flow under each supported model (RFC-006 adapter layer). This is the most reviewable but least automatable step.
 
 ### C3 — Persistent receipts and audit logs
 
-Existing `InvocationReceipt` records on disk contain `function_name = "<self>.discover"` etc. The migration must not invalidate or rewrite historical receipts: the receipt store is append-only and the alias is part of the historical wire fact. Audit-trail tooling (the receipt-link doc in `open-questions/axon-invocation-receipt-link.md`) needs to read both the legacy and post-migration form.
+Existing `InvocationReceipt` records on disk contain `function_name = "<agent>.discover"` etc. The migration must not invalidate or rewrite historical receipts: the receipt store is append-only and the alias is part of the historical wire fact. Audit-trail tooling (the receipt-link doc in `open-questions/axon-invocation-receipt-link.md`) needs to read both the legacy and post-migration form.
 
 ### C4 — Federation directory and advertise payloads
 
-`federation.advertise_abilities` ships descriptors out to the realm hub, and the hub's directory keys agents by descriptor names. If a device advertises `<self>.discover` for `claude`, the hub directory has one entry; if the same device renamed to `claude.discover` advertises again, the hub gets a *new* entry without retiring the old one — directory drift. The advertise path must coordinate the rename with a `federation.unpublish_ability` for the old name in the same publish-pass.
+`federation.advertise_abilities` ships descriptors out to the realm hub, and the hub's directory keys agents by descriptor names. If a device advertises `<agent>.discover` for `claude`, the hub directory has one entry; if the same device renamed to `claude.discover` advertises again, the hub gets a *new* entry without retiring the old one — directory drift. The advertise path must coordinate the rename with a `federation.unpublish_ability` for the old name in the same publish-pass.
 
 ---
 
@@ -100,7 +100,7 @@ Existing `InvocationReceipt` records on disk contain `function_name = "<self>.di
 
 **Ship criteria:**
 1. Daemon Axon catalogue registration APIs (rpc/bidi/stream/envelope variants) accept an `OwnerKind` parameter or pre-resolved `owner_uri`.
-2. `meta_ability::list_abilities_handler` reads owner from the registry, deletes the `name.starts_with("01HUB.")` branch and the `device_owner` fallback for `<self>.*`.
+2. `meta_ability::list_abilities_handler` reads owner from the registry, deletes the `name.starts_with("01HUB.")` branch and the `device_owner` fallback for `legacy self alias.*`.
 3. CLI render layer (`facade/cli/abilities.rs`) is unchanged because its input is already correct owner URAs.
 4. New regression test: every registered ability name resolves to a parseable v4.1.5 URA via the registry's owner table.
 
@@ -108,7 +108,7 @@ This stage closes the open hole in this PR's design — that owner resolution ha
 
 ### Stage 1 — Rename Layer A (per-agent self-alias)
 
-**Goal:** Layer A ability names become `<agent-name>.<verb>` (e.g. `claude.discover`, `codex.invoke`). The `<self>` prefix in Layer A is deleted.
+**Goal:** Layer A ability names become `<agent-name>.<verb>` (e.g. `claude.discover`, `codex.invoke`). The `legacy self alias` prefix in Layer A is deleted.
 
 **Scope:**
 - `discover_ability::register_for_agent`, `invoke_ability::register_for_agent`, `api_key_ability::register_for_agent`, and any other per-agent registrar.
@@ -119,33 +119,36 @@ This stage closes the open hole in this PR's design — that owner resolution ha
 1. Each per-agent registrar mounts under the agent's own name. The prompt template substitutes that name.
 2. LLM smoke test (`cargo test --features axon-pb -- discover_then_invoke_e2e`) passes for each supported sub-agent type.
 3. Receipts written after this stage carry the new name; no double-write.
-4. No `"<self>"` literal in any active code path under `runtime/agents/`, except B-layer references.
+4. No `"legacy self alias"` literal in any active code path under `runtime/agents/`, except B-layer references.
 
 **Wire impact:** none — Layer A is dispatcher-internal.
 
-### Stage 2 — Rename Layer B (device-bundle), with hub coordination
+### Stage 2 — Rename Layer B (device-bundle), no compatibility aliases
 
-**Goal:** Layer B ability names become `device.<namespace>.<verb>` (e.g. `device.keyring.sign`, `device.session`, `device.register_device_pubkey`). Both device and hub accept old + new names during a transition window, then drop the old.
+**Goal:** Layer B ability names use their final daemon namespaces directly:
+`device.keyring.*`, `session.open`, `runtime.invoke_remote`, and
+`identity.{register_pubkey,list_user_pubkeys,revoke_user_pubkey}`. No old+new
+dual registration window.
 
 **Scope:**
-- `runtime/agents/mod.rs:571` (keyring registration), all keyring abilities, `<self>.session`, `<self>.register_device_pubkey`, `<self>.api_key.*` (where it is in fact device-bundled), `<self>.pages.*`.
+- `runtime/agents/mod.rs:571` (keyring registration), all keyring abilities, `session.open`, `identity.register_pubkey`, `legacy self alias.api_key.*` (where it is in fact device-bundled), `legacy self alias.pages.*`.
 - `services/invocation_transport/admission_facade.rs:1710`, `services/invocation_transport/register_device_pubkey.rs:73` and friends.
 - `EasyNet-Axon` hub-side admission and bidi acceptors.
-- `EasyNet` Go SDK if it carries any `<self>.*` constants.
+- `EasyNet` Go SDK if it carries any `legacy self alias.*` constants.
 
 **Ship criteria:**
-1. Hub registers both names as aliases of the same handler. Cross-repo PRs land in the same release window.
-2. Device migrates to the new names; CLI / federation / keyring all dial `device.*`.
-3. After one full release cycle with no `<self>.*` dials observed in hub admission telemetry, hub drops the legacy aliases.
-4. `services/invocation_transport/register_device_pubkey.rs` exposes `ABILITY_DEVICE_REGISTER_DEVICE_PUBKEY` as the canonical constant; the legacy const stays for one release as `#[deprecated]`.
+1. Hub/daemon registers only the final names.
+2. Device, CLI, federation, and backend call only the final names.
+3. No `legacy self alias.*` dials are accepted.
+4. `services/invocation_transport/register_device_pubkey.rs` exposes only `ABILITY_IDENTITY_REGISTER_PUBKEY`.
 
-**Wire impact:** breaking for any third-party device speaking `<self>.session` raw. Documented in the AXON-RFC-001 v4.1.6 changelog (this RFC bump becomes the carrier).
+**Wire impact:** breaking for any third-party device speaking `session.open` raw. Documented in the AXON-RFC-001 v4.1.6 changelog (this RFC bump becomes the carrier).
 
 ### Stage 3 — Cleanup
 
-1. Delete every `name.starts_with("<self>.")` filter and every `<self>` literal from `src/`.
-2. Add a lint (cargo-deny or a custom `cargo xtask check-uri-shapes`) that fails the build if `<self>` reappears in an ability name string.
-3. Receipt / audit reader retains the ability to *display* legacy `<self>.*` names from historical receipts (read-only; do not normalise the historical record).
+1. Delete every `name.starts_with("legacy self alias.")` filter and every `legacy self alias` literal from `src/`.
+2. Add a lint (cargo-deny or a custom `cargo xtask check-uri-shapes`) that fails the build if `legacy self alias` reappears in an ability name string.
+3. Receipt / audit reader retains the ability to *display* legacy `legacy self alias.*` names from historical receipts (read-only; do not normalise the historical record).
 4. Mark this open-question doc as **Closed**, link the RFC bump and the cross-repo PRs.
 
 ### Stage 4 — System namespace partitioning (the deeper structural fix)
@@ -195,9 +198,9 @@ Stage 4 makes the conflation impossible: `fleet.list_nodes` becomes `device.flee
 
 Until Stage 0 lands:
 
-1. **Do not add new `<self>.*` ability names.** New device-bundle abilities are named `device.<verb>` from the start; new per-agent abilities are named `<agent>.<verb>`. The alias is closed for new contributions.
-2. **Do not extend `<self>` semantics across new dispatch paths.** Specifically, do not introduce code that resolves `<self>` against a non-`caller` URA (e.g. against `subject` or against a delegation chain). Keeping the existing two-layer split frozen makes the eventual migration a pure rename.
-3. **Render-layer treatment** (this PR's `facade/cli/abilities.rs`): the (DEVICE / AGENT / USER) projection of the `owner_agent_uri` is correct as-is; do not add `<self>`-aware special-casing. When the registry-side invariant from Stage 0 lands, the rendering already aligns.
+1. **Do not add new `legacy self alias.*` ability names.** New device-bundle abilities are named `device.<verb>` from the start; new per-agent abilities are named `<agent>.<verb>`. The alias is closed for new contributions.
+2. **Do not extend `legacy self alias` semantics across new dispatch paths.** Specifically, do not introduce code that resolves `legacy self alias` against a non-`caller` URA (e.g. against `subject` or against a delegation chain). Keeping the existing two-layer split frozen makes the eventual migration a pure rename.
+3. **Render-layer treatment** (this PR's `facade/cli/abilities.rs`): the (DEVICE / AGENT / USER) projection of the `owner_agent_uri` is correct as-is; do not add `legacy self alias`-aware special-casing. When the registry-side invariant from Stage 0 lands, the rendering already aligns.
 4. **Owner sniffing in `meta_ability::list_abilities_handler`** stays as currently written — synth uses `01HUB.` prefix sniff for hub URAs and `host_device_agent_uri` for everything else. This is not the terminal state but is the correct behaviour given the current registration API. Stage 0 deletes the sniff.
 5. **`SYSTEM_NAMESPACES` skip list (`session_initiator.rs`) must be kept in sync with new system namespaces.** Adding a new system verb without updating the list re-introduces the 29-fake-agents bug on the Frontend Agents page. Stage 4 deletes the list entirely; until then, a code review checklist item enforces the sync.
 
@@ -205,24 +208,24 @@ Until Stage 0 lands:
 
 ## Hot-fixes already shipped
 
-The following narrow, in-place fixes have landed on the path to the staged migration. They reduce live-fire damage from the unresolved `<self>` / flat-namespace design without committing to any wire change.
+The following narrow, in-place fixes have landed on the path to the staged migration. They reduce live-fire damage from the unresolved `legacy self alias` / flat-namespace design without committing to any wire change.
 
-### HF-1 — Keyring rename `<self>.keyring.*` → `device.keyring.*` (2026-05-05)
+### HF-1 — Keyring rename `device.keyring.*` → `device.keyring.*` (2026-05-05)
 
-* EasyNet-Cli `runtime/agents/mod.rs` registers keyring under owner `"device"` instead of the legacy `"<self>"` literal. 11 catalogue rows shift accordingly.
-* All `name.starts_with("<self>.keyring.")` filters and the test-fixture `format!("<self>.keyring.{verb}")` updated.
+* EasyNet-Cli `runtime/agents/mod.rs` registers keyring under owner `"device"` instead of the legacy `"legacy self alias"` literal. 11 catalogue rows shift accordingly.
+* All `name.starts_with("device.keyring.")` filters and the test-fixture `format!("device.keyring.{verb}")` updated.
 * Doc / error-message references in `runtime/keyring/`, `runtime/agents/meta_ability.rs`, `services/invocation_transport/federation_wrappers.rs` updated.
 * `services/invocation_transport/session_initiator.rs::SYSTEM_NAMESPACES` adds `"device"` to the skip set so the new namespace does not get advertised as an agent.
-* EasyNet/backend `daemon_grpc/remote_routing.go::daemonInternalAbility()` adds a `device.*` arm alongside the existing `<self>.*` arm so hub-mode invocations of `device.keyring.federate_user_identity_token` route to raw Invoke instead of being wrapped in `invoke_remote`.
-* EasyNet/backend wire-pinned constants (`AbilityInvokeRemote`, `abilityRegisterDevicePubkey`) marked with `TODO(RFC-001 v4.1.6)` comments; literals unchanged.
+* EasyNet/backend no longer owns an ability-name classifier; it submits complete Invocations and lets the CLI daemon resolve locality.
+* EasyNet/backend wire-pinned constants use `runtime.invoke_remote` only for explicit low-level bidi helper tests and `identity.register_pubkey` for trust seeding.
 
-Wire impact: zero. Keyring is daemon-internal; the rename does not cross the device ⇄ hub boundary. Backend test `TestRemoteRoutingClient_RoutesDeviceAbilityToInnerInvoke` pins the routing.
+Wire impact: breaking for legacy callers by design. Keyring and identity trust writes are daemon-internal; backend routing is pinned by service-context tests and daemon catch-all tests, not by a backend classifier.
 
 ### HF-2 — Frontend Agents page restored (2026-05-05)
 
 The session-prelude algorithm in `services/invocation_transport/session_initiator.rs` derives "agents this device hosts" by splitting `ability_catalog` entries on the first `.` and taking the first segment as the agent name. This conflates system namespaces (`fs`, `fleet`, `voice`, …) with real sub-agent identities. Without filtering, the device advertises ~29 fake agents to the hub on every session reconnect, displacing real sub-agents from the Frontend Agents page.
 
-Fix: explicit `SYSTEM_NAMESPACES` constant listing all 24 system namespaces plus `01HUB`, `device`, `<self>`. The prelude scanner skips any entry whose first segment is in this set. Number of agents advertised drops 29 → 4 (the real `codex`, `web-builder`, plus synthesised `pages` / `files`).
+Fix: explicit `SYSTEM_NAMESPACES` constant listing all 24 system namespaces plus `01HUB`, `device`, `legacy self alias`. The prelude scanner skips any entry whose first segment is in this set. Number of agents advertised drops 29 → 4 (the real `codex`, `web-builder`, plus synthesised `pages` / `files`).
 
 Wire impact: zero. The change affects what the device chooses to advertise, not the wire dispatch table.
 
@@ -252,8 +255,8 @@ None of these substitute for the staged migration. Stage 0 still needs to ship t
 
 The change spans:
 
-- ~15 `<self>.*` registration call sites (Stage 1 + Stage 2)
-- ~75 active `<self>.*` references in `src/` (Stage 1 + Stage 2)
+- ~15 `legacy self alias.*` registration call sites (Stage 1 + Stage 2)
+- ~75 active `legacy self alias.*` references in `src/` (Stage 1 + Stage 2)
 - ~95 system ability names, ~50 register sites, ~1170 string occurrences across ~96 files for Stage 4 (system namespace partitioning)
 - ~44 affected backend files for Stage 4
 - LLM prompt corpus and skill copy
@@ -263,7 +266,7 @@ The change spans:
 - Frontend hardcoded ability-name references
 - Cross-repo coordination with at least one release-window double-write
 
-That is not one PR's worth of work, and it is not work that can land without an architecture-level decision on Stage 2's wire-break window. Filing it as an open question makes the rationale visible to anyone who reaches for `<self>.foo` for a new ability and lets the eventual implementer cite this doc rather than re-derive the analysis.
+That is not one PR's worth of work, and it is not work that can land without an architecture-level decision on Stage 2's wire-break window. Filing it as an open question makes the rationale visible to anyone who reaches for `legacy self alias.foo` for a new ability and lets the eventual implementer cite this doc rather than re-derive the analysis.
 
 The trigger to revisit is not a date but a decision: when Silan ratifies the migration window for AXON-RFC-001 v4.1.6 (the carrier RFC for the protocol-level rename), this doc moves from `open-questions/` to `decisions/` and the staged plan becomes a sequence of PRs.
 
@@ -273,9 +276,9 @@ The trigger to revisit is not a date but a decision: when Silan ratifies the mig
 
 | Date       | Event                                                              |
 |------------|--------------------------------------------------------------------|
-| 2026-05-05 | Filed by 凉冰 during the `easynet ability list` rendering audit. The audit established that the descriptor synth in `meta_ability` was stamping `<self>.*` abilities with the device URA — coincidentally correct for Layer B (RFC-002 keyring), structurally wrong for Layer A (per-agent self-alias). The proper fix is removing `<self>` from the namespace, not patching synth. |
-| 2026-05-05 | HF-1 shipped: keyring renamed `<self>.keyring.*` → `device.keyring.*` (EasyNet-Cli) plus matching `device.*` routing arm in EasyNet/backend. Wire-pinned `<self>.session` / `<self>.invoke_remote` / `<self>.register_device_pubkey` constants flagged with TODO comments pointing at this doc. |
+| 2026-05-05 | Filed by 凉冰 during the `easynet ability list` rendering audit. The audit established that the descriptor synth in `meta_ability` was stamping `legacy self alias.*` abilities with the device URA — coincidentally correct for Layer B (RFC-002 keyring), structurally wrong for Layer A (per-agent self-alias). The proper fix is removing `legacy self alias` from the namespace, not patching synth. |
+| 2026-05-05 | HF-1 shipped: keyring renamed `device.keyring.*` → `device.keyring.*` (EasyNet-Cli) plus matching `device.*` routing arm in EasyNet/backend. Wire-pinned `session.open` / `runtime.invoke_remote` / `identity.register_pubkey` constants flagged with TODO comments pointing at this doc. |
 | 2026-05-05 | HF-2 shipped: `session_initiator.rs::SYSTEM_NAMESPACES` skip set added after HF-1 caused the Frontend Agents page to display only fake system-namespace agents. Drop from 29 → 4 advertised agents (real `codex`, `web-builder` + synthesised `pages`, `files`). |
 | 2026-05-05 | HF-3 shipped: `EASYNET_PAGES_USER` default changed from literal `"self"` to `credentials.username` fallback; `self.api_key.*` rows now correctly emit as `<canonical-user>.api_key.*` on paired daemons. |
-| 2026-05-05 | Stage 4 added to the migration plan after HF-2 surfaced the deeper issue: namespace conflation, not just the `<self>` token, is the structural problem. The flat namespace must partition under `device.*` / `hub.*` for the prelude algorithm to use a structural test instead of a skip list. |
+| 2026-05-05 | Stage 4 added to the migration plan after HF-2 surfaced the deeper issue: namespace conflation, not just the `legacy self alias` token, is the structural problem. The flat namespace must partition under `device.*` / `hub.*` for the prelude algorithm to use a structural test instead of a skip list. |
 | —          | Revisit: when Silan ratifies the RFC-001 v4.1.6 migration window covering the wire-break (Stages 2 + 4 share the carrier). Trigger-based, no calendar date. |

@@ -459,7 +459,7 @@ pub fn handle_peer_list(handle: &KeyringHandle, _args: Value) -> Result<Value> {
 
 /// Register all 10 keyring abilities under `<owner>.keyring.<verb>`.
 ///
-/// `owner` is the agent name they publish under (typically `"<self>"`
+/// `owner` is the agent name they publish under (typically `"legacy self alias"`
 /// for the daemon's self-bundle).
 pub fn register_for_owner(reg: &mut AxonAbilityCatalog, owner: &str, handle: Arc<KeyringHandle>) {
     let name = |verb: &str| format!("{owner}.keyring.{verb}");

@@ -35,6 +35,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use easynet_axon::invocation::InvocationState;
+
 /// Unified Resource Address.
 ///
 /// URAs are canonical `easynet:///r/<realm>/...` addresses. New code
@@ -339,12 +341,70 @@ pub fn fresh_nonce_hex() -> String {
 
 /// Terminal state of a runtime invocation — the runtime decision that
 /// closes the timeline (AXIOM §6.1 I2 terminal monotonic).
+///
+/// Axon `InvocationState` is the canonical terminal-state vocabulary.
+/// This enum is the daemon-local receipt projection retained for older
+/// schedule/kernel receipts; use [`TerminalState::from_axon_terminal`]
+/// instead of hand-mapping success/failure at call sites.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TerminalState {
     Succeeded,
     Failed { reason: String },
     Cancelled,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum TerminalStateProjectionError {
+    #[error("Axon invocation state `{state}` is not terminal")]
+    NonTerminal { state: &'static str },
+}
+
+impl TerminalState {
+    #[must_use]
+    pub fn axon_terminal_state(&self) -> InvocationState {
+        match self {
+            Self::Succeeded => InvocationState::Completed,
+            Self::Failed { .. } => InvocationState::Failed,
+            Self::Cancelled => InvocationState::Cancelled,
+        }
+    }
+
+    pub fn from_axon_terminal(
+        state: InvocationState,
+        reason: Option<String>,
+    ) -> Result<Self, TerminalStateProjectionError> {
+        if !state.is_terminal() {
+            return Err(TerminalStateProjectionError::NonTerminal {
+                state: state.as_str(),
+            });
+        }
+        Ok(match state {
+            InvocationState::Completed => Self::Succeeded,
+            InvocationState::Failed => Self::Failed {
+                reason: reason.unwrap_or_else(|| "axon invocation failed".to_string()),
+            },
+            InvocationState::TimedOut => Self::Failed {
+                reason: reason.unwrap_or_else(|| "axon invocation timed out".to_string()),
+            },
+            InvocationState::Cancelled => Self::Cancelled,
+            InvocationState::Unspecified
+            | InvocationState::Accepted
+            | InvocationState::Admitted
+            | InvocationState::Dispatched
+            | InvocationState::Running => {
+                unreachable!("is_terminal() gate rejects non-terminal states")
+            }
+        })
+    }
+}
+
+impl TryFrom<InvocationState> for TerminalState {
+    type Error = TerminalStateProjectionError;
+
+    fn try_from(state: InvocationState) -> Result<Self, Self::Error> {
+        Self::from_axon_terminal(state, None)
+    }
 }
 
 /// Prior-receipt reference carried by a Receipt. Mirrors the four
@@ -429,6 +489,58 @@ mod tests {
             runtime_invocation_id(&a).unwrap(),
             runtime_invocation_id(&b).unwrap()
         );
+    }
+
+    #[test]
+    fn terminal_state_projects_every_axon_terminal_state() {
+        let completed = TerminalState::try_from(InvocationState::Completed).unwrap();
+        assert_eq!(completed, TerminalState::Succeeded);
+        assert_eq!(completed.axon_terminal_state(), InvocationState::Completed);
+
+        let failed = TerminalState::from_axon_terminal(
+            InvocationState::Failed,
+            Some("handler failed".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            failed,
+            TerminalState::Failed {
+                reason: "handler failed".to_string()
+            }
+        );
+        assert_eq!(failed.axon_terminal_state(), InvocationState::Failed);
+
+        let timed_out = TerminalState::from_axon_terminal(InvocationState::TimedOut, None).unwrap();
+        assert_eq!(
+            timed_out,
+            TerminalState::Failed {
+                reason: "axon invocation timed out".to_string()
+            }
+        );
+        assert_eq!(timed_out.axon_terminal_state(), InvocationState::Failed);
+
+        let cancelled = TerminalState::try_from(InvocationState::Cancelled).unwrap();
+        assert_eq!(cancelled, TerminalState::Cancelled);
+        assert_eq!(cancelled.axon_terminal_state(), InvocationState::Cancelled);
+    }
+
+    #[test]
+    fn terminal_state_rejects_non_terminal_axon_states() {
+        for state in [
+            InvocationState::Unspecified,
+            InvocationState::Accepted,
+            InvocationState::Admitted,
+            InvocationState::Dispatched,
+            InvocationState::Running,
+        ] {
+            let err = TerminalState::try_from(state).expect_err("non-terminal must reject");
+            assert_eq!(
+                err,
+                TerminalStateProjectionError::NonTerminal {
+                    state: state.as_str()
+                }
+            );
+        }
     }
 
     #[test]

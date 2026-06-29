@@ -42,6 +42,7 @@ use easynet_cli::runtime::agents::pages::publish::handle_publish;
 use easynet_cli::runtime::agents::pages::state::PUBLISHED_PROJECTS;
 use easynet_cli::runtime::agents::pages::{self, PagesConfig};
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::ura;
 use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project
@@ -473,12 +474,31 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     let reg = Arc::new(reg);
     assert!(handle.set(Arc::clone(&reg)).is_ok());
 
-    // Management abilities register under their registry-relative
-    // name; the owner travels in the `OwnerKind` side table, not in
-    // the registry key (bare-name convention unified in 779d295,
-    // same as admin.status / a2a.* — this test predates it).
-    let ability = "pages.list".to_string();
+    // Backend routes `pages.list` through the synthetic hosted agent
+    // `agent/<user>.pages`. The local dispatch key stays `pages.list`, but
+    // the control-plane authority root must be the pages agent, not the
+    // user's account-agent fallback.
+    let pages_agent = ura::agent_ura("easynet.run", user, "pages");
+    let ability = ura::local_dispatch_ability_key(&pages_agent, "pages.list");
+    assert_eq!(ability, "pages.list");
     assert!(reg.has_rpc(&ability));
+    let facts = reg
+        .runtime_binding_facts_for_mode(&ability, easynet_cli::runtime::ability::CallMode::Rpc)
+        .expect("runtime facts lookup")
+        .expect("pages.list runtime facts");
+    assert_eq!(facts.authority_owner_projection, "agent:pages");
+    assert_eq!(facts.authority_root, pages_agent);
+    let public_name = ura::owner_local_ability_name(&facts.authority_root, "pages.list");
+    let runtime_ability = ura::owner_ability_ura(&facts.authority_root, &public_name)
+        .expect("pages.list runtime ability URA");
+    assert_eq!(
+        runtime_ability,
+        "easynet:///r/easynet.run/ability/alice-runtime.pages.list"
+    );
+    assert!(
+        futures::executor::block_on(runtime.has_ability(&runtime_ability)),
+        "pages.list must be installed in Axon LocalRuntime under the same canonical ability URA the carrier dispatch path probes"
+    );
     let resp = reg
         .invoke_rpc_target_json(local_rpc_target(&ability, json!({})))
         .expect("pages.list should invoke through LocalRuntime");

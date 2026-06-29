@@ -118,11 +118,14 @@ pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<St
             ensure_ability_owner_matches_callee(callee_ura, &selector)?;
             selector.ability_ura().to_string()
         }
-        Err(_) => crate::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
-            AxonError::invalid_argument(format!(
-                "derive descriptor-bound ability URA for callee `{callee_ura}` ability `{ability}`"
-            ))
-        })?,
+        Err(_) => {
+            let public_ability = public_ability_name_for_wire(callee_ura, ability);
+            crate::ura::owner_ability_ura(callee_ura, &public_ability).ok_or_else(|| {
+                AxonError::invalid_argument(format!(
+                    "derive descriptor-bound ability URA for callee `{callee_ura}` ability `{ability}`"
+                ))
+            })?
+        }
     };
     Ok(ability_ura)
 }
@@ -167,6 +170,19 @@ pub(crate) fn ability_descriptor_ref_for_wire(
     }
     let ability_ura = ability_ura_for_wire(callee_ura, ability)?;
     Ok(format!("{ability_ura}@{descriptor_version}"))
+}
+
+fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
+    let ability = ability.trim();
+    let Ok(callee) = crate::ura::parse_ura(callee_ura) else {
+        return ability.to_string();
+    };
+    match callee.kind {
+        crate::ura::URAKind::Agent => crate::ura::owner_local_ability_name(callee_ura, ability),
+        crate::ura::URAKind::Hub => ability.strip_prefix("hub.").unwrap_or(ability).to_string(),
+        crate::ura::URAKind::Device => ability.to_string(),
+        _ => ability.to_string(),
+    }
 }
 
 pub(crate) fn require_descriptor_ref_for_wire(
@@ -265,5 +281,74 @@ mod tests {
         let err = require_descriptor_ref_for_wire(&callee, "fs.read").unwrap_err();
 
         assert!(err.to_string().contains("explicit descriptor ref"), "{err}");
+    }
+
+    /// Regression: the session prelude (`sign_descriptor_bound_prelude_request`)
+    /// gets a BARE ability name (`federation.advertise_abilities`, no `@version`)
+    /// and must CONSTRUCT a canonical descriptor ref from it — the builder
+    /// accepts a bare name + version, whereas `require_descriptor_ref_for_wire`
+    /// (the validator) rejects it with "explicit descriptor ref" (asserted
+    /// above). Passing the bare name to the validator was the egress/ingress
+    /// asymmetry that wedged session.open into an advertise_abilities reconnect
+    /// loop (commit 22187b3f tightened ingress, left this egress site behind).
+    #[test]
+    fn builder_constructs_ref_from_bare_ability_name_where_validator_rejects() {
+        let callee = crate::ura::device_ura("acme", "host-a");
+
+        // Validator rejects the bare name (this is the failing path the prelude hit).
+        assert!(require_descriptor_ref_for_wire(&callee, "fs.read").is_err());
+
+        // Builder turns the SAME bare name into a canonical `<ability-ura>@<version>`.
+        let built = ability_descriptor_ref_for_wire(
+            &callee,
+            "fs.read",
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        )
+        .expect("builder accepts a bare ability name plus an explicit version");
+
+        let expected_ura = crate::ura::owner_ability_ura(&callee, "fs.read").unwrap();
+        assert_eq!(
+            built,
+            format!(
+                "{expected_ura}@{}",
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            )
+        );
+        // The built ref carries EXACTLY one `@`, which is what the hub ingress
+        // (`ability_descriptor_ref_malformed` guard) requires.
+        assert_eq!(built.matches('@').count(), 1);
+    }
+
+    #[test]
+    fn bare_agent_prefixed_name_projects_to_owner_local_ability_ura() {
+        let callee = crate::ura::agent_ura("localhost", "dev", "pages");
+        let ability_ura = ability_ura_for_wire(&callee, "pages.list")
+            .expect("agent-owned registry key should project to public ability URA");
+
+        assert_eq!(ability_ura, "easynet:///r/localhost/ability/dev.pages.list");
+    }
+
+    #[test]
+    fn bare_device_domain_name_is_preserved_in_ability_ura() {
+        let callee = crate::ura::device_ura("localhost", "dev-a");
+        let ability_ura = ability_ura_for_wire(&callee, "device.inspect")
+            .expect("device-domain ability should remain explicit");
+
+        assert_eq!(
+            ability_ura,
+            "easynet:///r/localhost/ability/device.dev-a.device.inspect"
+        );
+    }
+
+    #[test]
+    fn bare_hub_prefixed_name_projects_to_owner_local_ability_ura() {
+        let callee = crate::ura::hub_ura("localhost");
+        let ability_ura = ability_ura_for_wire(&callee, "hub.openai.list_models")
+            .expect("hub-owned registry key should project to public ability URA");
+
+        assert_eq!(
+            ability_ura,
+            "easynet:///r/localhost/ability/hub.openai.list_models"
+        );
     }
 }

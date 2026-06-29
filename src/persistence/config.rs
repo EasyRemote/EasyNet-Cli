@@ -16,7 +16,8 @@
 //
 //   2. `Credentials` (credentials.json) — long-lived, survives reboots:
 //      `easynet join` → save_credentials()  |  `easynet reset` → delete_credentials()
-//      Fields: node_id, credential_token, hub_endpoint, realm, deploy_signature.
+//      Fields: node_id, credential_token/join_receipt_hash, hub_endpoint,
+//      realm, user_id, username, deploy_signature.
 //      Unix permissions: 0o600 (contains credential_token and deploy_signature).
 //
 //   3. `DeviceSettings` (device_settings.json) — user-controlled knobs:
@@ -429,9 +430,14 @@ pub struct Credentials {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_api_base: Option<String>,
     /// Stable username slug for the user this device is paired to.
-    /// Required for user-rooted and agent-rooted URAs.
+    /// Required for display and current agent/resource owner slugs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// Immutable product user id (`users.id`) for runtime user-subject URAs.
+    /// This is the canonical anchor for `identity.*_user_pubkey` and
+    /// user-as-caller trust paths; username must not be used as that subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
     /// Realm hub's Ed25519 pubkey (base64), captured during pairing
     /// preflight. Cross-machine cold-start fix (hub in US, CLI in
     /// SG): the device's `auto_wire_self_realm_trust` step needs
@@ -446,10 +452,17 @@ pub struct Credentials {
     /// public TLS listener. Self-hosted hubs with private/self-
     /// signed CAs populate this during pairing preflight so the
     /// join flow can persist a local CA pin before the daemon
-    /// opens `<self>.session`. Publicly-trusted hubs leave it
+    /// opens `session.open`. Publicly-trusted hubs leave it
     /// empty and runtime dials fall back to native OS roots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_tls_ca_pem_b64: Option<String>,
+    /// Federation-native join lineage root returned by
+    /// `federation.join`. Token-pairing credentials leave this
+    /// empty; URA join credentials use it as their completeness
+    /// anchor because no backend pairing token/user row is involved
+    /// in Phase 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_receipt_hash: Option<String>,
 }
 
 impl Credentials {
@@ -487,15 +500,44 @@ impl Credentials {
             })
     }
 
+    /// Return the immutable product user id carried by device credentials.
+    pub fn user_id(&self) -> anyhow::Result<&str> {
+        self.user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "credentials file is missing user_id — run `easynet join <token>` to re-pair"
+                )
+            })
+    }
+
+    /// Return the canonical runtime user-subject URA for this credential.
+    pub fn user_ura(&self) -> anyhow::Result<String> {
+        Ok(crate::ura::user_ura(self.realm_str(), self.user_id()?))
+    }
+
+    pub fn join_receipt_hash(&self) -> Option<&str> {
+        self.join_receipt_hash
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     fn validate_complete(&self) -> anyhow::Result<()> {
-        if self.node_id.is_empty()
-            || self.credential_token.is_empty()
-            || self.hub_endpoint.is_empty()
-            || self.realm.is_empty()
-        {
+        if self.node_id.is_empty() || self.hub_endpoint.is_empty() || self.realm.is_empty() {
             anyhow::bail!("credentials file is incomplete — run `easynet join <token>` to re-pair");
         }
-        self.username_slug()?;
+        if self.credential_token.trim().is_empty() && self.join_receipt_hash().is_none() {
+            anyhow::bail!(
+                "credentials file is missing credential_token or join_receipt_hash — run `easynet join <token>` to re-pair"
+            );
+        }
+        if self.join_receipt_hash().is_none() {
+            self.username_slug()?;
+            self.user_id()?;
+        }
         Ok(())
     }
 }
@@ -645,10 +687,38 @@ pub fn delete_credentials() -> anyhow::Result<()> {
 pub struct DeviceSettings {
     #[serde(default)]
     pub session_bridge_exec_enabled: bool,
+    /// Stable per-machine install id. Generated once and persisted in
+    /// `device_settings.json` (which survives `easynet reset`, unlike
+    /// `credentials.json`), so the hub can recognise a returning machine on
+    /// re-pair and reuse its `node_id` + keypair + trust row instead of
+    /// minting a fresh identity each time (device-id churn). `None` until the
+    /// first `load_or_create_install_id()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
 }
 
 fn device_settings_path() -> PathBuf {
     state_dir().join("device_settings.json")
+}
+
+/// Return this machine's stable install id, generating and persisting one on
+/// first use. Survives `easynet reset` (it lives in `device_settings.json`,
+/// not `credentials.json`), so re-pairing the same host presents the same
+/// install id and the hub can reuse the prior `node_id`.
+pub fn load_or_create_install_id() -> anyhow::Result<String> {
+    let mut settings = load_device_settings();
+    if let Some(id) = settings
+        .install_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(id.to_string());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    settings.install_id = Some(id.clone());
+    save_device_settings(&settings)?;
+    Ok(id)
 }
 
 pub fn load_device_settings() -> DeviceSettings {
@@ -713,8 +783,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: Some("https://api.example.com/".into()),
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
         assert_eq!(creds.api_base(), "https://api.example.com");
     }
@@ -833,8 +905,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
         assert_eq!(creds.api_base(), "https://my-hub.example.org");
     }
@@ -886,8 +960,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: None,
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
 
         let err = save_credentials(&creds).expect_err("missing username must not persist");
@@ -895,6 +971,50 @@ mod tests {
             err.to_string().contains("missing username"),
             "error should name the missing username contract: {err}"
         );
+    }
+
+    #[test]
+    fn save_credentials_rejects_missing_user_id() {
+        let _g = HomeGuard::new();
+        let creds = Credentials {
+            node_id: "node".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "axon://hub.example:7700".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+
+        let err = save_credentials(&creds).expect_err("missing user_id must not persist");
+        assert!(
+            err.to_string().contains("missing user_id"),
+            "error should name the missing user_id contract: {err}"
+        );
+    }
+
+    #[test]
+    fn save_credentials_accepts_federation_join_receipt_without_user_binding() {
+        let _g = HomeGuard::new();
+        let creds = Credentials {
+            node_id: "node".into(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+
+        save_credentials(&creds).expect("federation-native credentials save");
     }
 
     #[test]
@@ -908,8 +1028,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
 
         save_credentials(&creds).expect("save credentials");
@@ -933,6 +1055,7 @@ mod tests {
   "credential_token": "token",
   "hub_endpoint": "axon://hub.example:7700",
   "realm": "tenant",
+  "user_id": "user-alice",
   "deploy_signature": ""
 }
 "#,
@@ -943,6 +1066,31 @@ mod tests {
         assert!(
             err.to_string().contains("missing username"),
             "error should name the missing username contract: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_rejects_file_without_user_id() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            credentials_path(),
+            r#"{
+  "node_id": "node",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "tenant",
+  "deploy_signature": "",
+  "username": "alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let err = load_credentials().expect_err("missing user_id must fail on load");
+        assert!(
+            err.to_string().contains("missing user_id"),
+            "error should name the missing user_id contract: {err}"
         );
     }
 
@@ -958,7 +1106,8 @@ mod tests {
   "hub_endpoint": "axon://hub.example:7700",
   "tenant_id": "tenant",
   "deploy_signature": "",
-  "username": "alice"
+  "username": "alice",
+  "user_id": "user-alice"
 }
 "#,
         )
@@ -1072,5 +1221,28 @@ mod tests {
         assert_eq!(first, legacy);
         assert_eq!(second, legacy);
         assert_eq!(third, legacy);
+    }
+
+    #[test]
+    fn install_id_is_generated_once_and_stable_across_calls_and_reset() {
+        let _g = HomeGuard::new();
+
+        // First call generates and persists.
+        let first = load_or_create_install_id().expect("first install id");
+        assert!(!first.is_empty());
+        assert!(load_device_settings().install_id.as_deref() == Some(first.as_str()));
+
+        // Second call returns the SAME id (idempotent), not a new uuid.
+        let second = load_or_create_install_id().expect("second install id");
+        assert_eq!(first, second, "install id must be stable across calls");
+
+        // `reset` only deletes credentials.json — device_settings.json (and thus
+        // the install id) survives, so a re-pair presents the same id.
+        let _ = delete_credentials();
+        let after_reset = load_or_create_install_id().expect("install id after reset");
+        assert_eq!(
+            first, after_reset,
+            "install id must survive reset (lives in device_settings.json)"
+        );
     }
 }

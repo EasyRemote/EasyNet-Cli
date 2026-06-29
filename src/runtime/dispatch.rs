@@ -1519,9 +1519,11 @@ mod tests {
         let a = adapter_for(AgentType::ClaudeCode);
         let b = adapter_for(AgentType::Codex);
         let c = adapter_for(AgentType::CodexAppServer);
+        let d = adapter_for(AgentType::External);
         assert_eq!(a.runtime_id(), "claude-code");
         assert_eq!(b.runtime_id(), "codex");
         assert_eq!(c.runtime_id(), "codex-app-server");
+        assert_eq!(d.runtime_id(), "external");
     }
 
     // ── spec-over-entry precedence (PR-3b.5 / 3b.5.1) ───────────────────

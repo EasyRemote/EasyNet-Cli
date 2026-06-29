@@ -8,7 +8,7 @@
 //!   * `LocalRuntime` + `register_*_ability` (call-mode taxonomy)
 //!   * `KeyResolver` trait for callee-side admission
 //!   * `invoke_descriptor_bound_bidi_request_async` with an externally-signed
-//!     descriptor-bound request (the entry CLI's `<self>.invoke_remote` will
+//!     descriptor-bound request (the entry CLI's `runtime.invoke_remote` will
 //!     route through the same request-level shape)
 //!   * `LedgerSink` auto-persistence (the entry that replaces CLI's
 //!     in-memory `SharedReceiptStore`)

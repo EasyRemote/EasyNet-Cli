@@ -125,7 +125,10 @@ pub fn system_ability_owner(
     ability_name: &str,
 ) -> Option<crate::runtime::ability_dispatch::OwnerKind> {
     let registry = build_system_registry();
-    registry.lookup_owner(ability_name)
+    // SPEC §9.1.A Step 5: ownership truth comes from the control-plane
+    // record, not the legacy `owner` side table (equivalence pinned by
+    // `control_plane_owner_matches_legacy_lookup_for_static_ability`).
+    registry.control_plane_owner(ability_name)
 }
 
 fn published_abilities_from_registry(registry: &AxonAbilityCatalog) -> Vec<SystemAbilityMetadata> {
@@ -142,7 +145,9 @@ fn published_abilities_from_registry_for_owner(
         .filter(|name| is_publishable_catalog_name(name))
         .filter(|name| {
             owner
-                .map(|expected| registry.lookup_owner(name).as_ref() == Some(expected))
+                // SPEC §9.1.A Step 5: owner filter reads the control-plane
+                // record, not the legacy `owner` side table.
+                .map(|expected| registry.control_plane_owner(name).as_ref() == Some(expected))
                 .unwrap_or(true)
         })
         .filter(|name| !name.ends_with(".chat"))
@@ -323,6 +328,7 @@ pub fn description_for(name: &str) -> &'static str {
         "browser.send_input" => browser_session_ability::send_input_description(),
         "browser.capture_viewport" => browser_session_ability::capture_viewport_description(),
         "browser.close_session" => browser_session_ability::close_session_description(),
+        "browser.attach_session" => browser_session_ability::attach_session_description(),
         "admin.status" => admin_status_ability::description(),
         "ability.publish" => ability_publish_ability::publish_description(),
         "ability.unpublish" => ability_publish_ability::unpublish_description(),
@@ -503,6 +509,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "browser.send_input" => browser_session_ability::send_input_input_schema(),
         "browser.capture_viewport" => browser_session_ability::capture_viewport_input_schema(),
         "browser.close_session" => browser_session_ability::close_session_input_schema(),
+        "browser.attach_session" => browser_session_ability::attach_session_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
         "ability.publish" => ability_publish_ability::publish_input_schema(),
         "ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
@@ -899,6 +906,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // system WebView) under the caller's identity. Same
         // class as media/* verbs.
         | "browser.open_session"
+        | "browser.attach_session"
         | "browser.send_input"
         | "browser.capture_viewport"
         | "browser.close_session"

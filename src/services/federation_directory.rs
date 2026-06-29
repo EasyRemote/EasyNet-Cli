@@ -500,7 +500,7 @@ impl DirectoryView {
 /// Mirrors `SharedTrustAnchor` (commit 9/N) and
 /// `SharedFederatedPeers` (commit 10/N). The inner
 /// `Arc<BTreeMap<...>>` is the snapshot; readers
-/// (`<self>.discover` Tier 3 fan-out, future `listDevices`
+/// (`<agent>.discover` Tier 3 fan-out, future `listDevices`
 /// aggregation) call `.snapshot()` for an `Arc` clone that stays
 /// stable for the duration of one read even if a per-peer
 /// RemoteDirectoryClient task replaces the map mid-RPC.
@@ -614,7 +614,7 @@ impl Default for SharedFederatedDirectoryView {
 ///   first hit.
 ///
 /// Returns `None` when no peer has the URA. The caller (e.g. the
-/// `<self>.discover` Tier-3 arm or backend `listDevices`)
+/// `<agent>.discover` Tier-3 arm or backend `listDevices`)
 /// projects the entry into its surface shape.
 #[must_use]
 pub fn lookup_in_federated_view(
@@ -636,7 +636,7 @@ pub fn lookup_in_federated_view(
 /// Project the entire federated directory into a flat
 /// `Vec<DirectoryEntry>` for surfaces that want to enumerate
 /// every reachable device — `easynet device list`,
-/// `<self>.discover` with no specific URA filter, the backend
+/// `<agent>.discover` with no specific URA filter, the backend
 /// `listDevices` aggregation. Each entry already carries its
 /// `origin_realm` per §2.4.
 ///
@@ -793,7 +793,7 @@ pub async fn poll_once(
 /// `SharedFederatedPeers`. Owns its own `SubscriberFsm` and a
 /// shared handle to the daemon-wide `SharedFederatedDirectoryView`
 /// cell; received frames feed into the cell so daemon-wide
-/// readers (`<self>.discover` Tier 3 in N3-4, `listDevices`
+/// readers (`<agent>.discover` Tier 3 in N3-4, `listDevices`
 /// aggregation in N3-6) see this peer's contribution.
 ///
 /// This commit (N3-3) lands the **scaffold**: the struct, the

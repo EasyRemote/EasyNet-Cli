@@ -24,6 +24,7 @@ pub(crate) enum AgentRuntimeKind {
     ClaudeCode,
     Codex,
     CodexAppServer,
+    External,
 }
 
 impl AgentRuntimeKind {
@@ -38,6 +39,7 @@ impl std::fmt::Display for AgentRuntimeKind {
             Self::ClaudeCode => write!(f, "claude-code"),
             Self::Codex => write!(f, "codex"),
             Self::CodexAppServer => write!(f, "codex-app-server"),
+            Self::External => write!(f, "external"),
         }
     }
 }
@@ -50,8 +52,9 @@ impl FromStr for AgentRuntimeKind {
             "claude-code" | "claude" => Ok(Self::ClaudeCode),
             "codex" => Ok(Self::Codex),
             "codex-app-server" | "codex-appserver" => Ok(Self::CodexAppServer),
+            "external" | "custom" => Ok(Self::External),
             _ => anyhow::bail!(
-                "unknown agent runtime: {value} (expected: claude-code, codex, codex-app-server)"
+                "unknown agent runtime: {value} (expected: claude-code, codex, codex-app-server, external)"
             ),
         }
     }

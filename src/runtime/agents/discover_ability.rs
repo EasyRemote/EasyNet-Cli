@@ -1,4 +1,4 @@
-// EasyNet CLI — <self>.discover ability handler
+// EasyNet CLI — <agent>.discover ability handler
 // =================================================================
 //
 // File: src/runtime/agents/discover_ability.rs
@@ -23,7 +23,7 @@
 //                                `federation_unavailable` envelopes so the
 //                                LLM falls through gracefully.
 //
-// Why "<self>.discover" and not the legacy "easynet.discover"
+// Why "<agent>.discover" and not the legacy "easynet.discover"
 // -----------------------------------------------------------
 // The ability-only model says every ability belongs to some owner.
 // `easynet.*` was a single shared registration, which made the
@@ -1347,7 +1347,7 @@ mod tests {
         );
 
         let manifest = reg
-            .manifest_for("claude.discover")
+            .control_plane_manifest("claude.discover")
             .expect("discover registration must publish its manifest");
         assert_eq!(manifest.description(), description());
         assert_eq!(manifest.input_schema(), &input_schema());

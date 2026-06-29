@@ -46,7 +46,7 @@ Skill 支撑 Ability 实现(资源面,不可寻址)。  EasyNet backend/browser 
   跨仓 fixture(F-038 类)漂移在结构上不再可能——因为只有一个形状源。
 - **backend 零协议 fork**:`internal/axon/` 7,765 行被 Axon Go SDK 替换殆尽;
   backend 向 daemon 提交完整七元组 Invocation,daemon 拥有 callee 本地性解析/转发;
-  `<self>.invoke_remote` 包装与手抄 struct 退役。
+  `runtime.invoke_remote` 包装与手抄 struct 退役。
 - **会话/槽位状态机显式化**:DeviceSessionState + CloseClass 一等公民,转移单点发
   op_event;hub 槽位带 claimant 指纹,乒乓类事故在源头被识别为 claimant_conflict。
 - **三仓守卫对称**:URA 裸构造防回潮阀 Cli 9 脚本 + backend 1 + Frontend 1;
@@ -93,7 +93,7 @@ Skill 支撑 Ability 实现(资源面,不可寻址)。  EasyNet backend/browser 
 ## §2 架构问题定性(九类 + 模式债)
 
 ### A1. 会话平面:隐式状态机 + 顶替无源头防御(F-008 / F-009)
-**本质**:`<self>.session` 生命周期无类型表示(状态 = dial 函数控制流位置);hub 槽位
+**本质**:`session.open` 生命周期无类型表示(状态 = dial 函数控制流位置);hub 槽位
 只认 URA 不认申领者,「同设备换代」与「双设备打架」不可区分。
 **已付利息**:2026-06-11 的 5428 次乒乓重连事故;F-049 心跳断裂的诊断过程再次付费
 (阶段不可观测,只能 grep 日志 kind)。device 侧放大器已修(b2ba441 + F-003),根架构未动。
@@ -239,7 +239,7 @@ DEC-F046 拍板签名路线。→ T0.5a–c / T0.6 / T2.3 / T5.11 / T5.1(F-045 �
 |---|---|---|---|---|
 | T2.1-pre | **dispatch 帧 mini-RFC**(设计件,T2.1 施工硬前置):① proto schema——SessionDispatch::{Request,Result} 字段 ↔ canonical Invocation 七元组逐字段映射,origin-caller claim 与 receipt 回程归位;② 版本协商——契约版本号载于 frame0 admission receipt,**与 T1.1 同一设计(frame0 只动一次)**;③ JSON 残留面清单(status/boot/lifecycle/diagnostics 哪些帧留下);④ 滚动升级序(双读单写一版,新旧 hub×device 四象限行为表) | Axon+Cli | M → T2.0✅ | mini-RFC 经 CTO 评审;字段映射表零「待定」格;四象限表完整 |
 | T2.1 | **F-004 载体归一**:按 T2.1-pre 设计施工(proto 定义落 Axon,Cli 消费——boundary Rule 1);JSON 降级诊断面。性能基准(T0.4)做对照而非 gate——边界违例本身已构成改造理由 | Cli(+Axon proto) | L → T2.1-pre, T0.4 | 基准对比落档;新旧帧互通一个版本;352+ transport 测试迁移;Fed-MVP 基线随新帧重生(T0.3 终态);「单一形状源」= F-038 类漂移结构性不可能 |
-| T2.1b | **F-040 收口(🟢 execution-ready;Cli unary 臂已落)**:backend 改为向 daemon Invocation 面提交完整七元组;退役 `<self>.invoke_remote` 包装与手抄 struct。**施工准备件已落**(docs/t2.1b-backend-cutover-prep-2026-06-12.md,2026-06-12):消费面 9+6 文件盘点齐——真切口仅 daemon_grpc 一层(handler 经 routing client 隔离零感知);降级层 remote_routing 路由矩阵随 callee 本地性解析归 daemon 而退役;五步序列单批可完。**当前 Cli WIP 已补齐 step-4 unary 远端臂**:resolver-selected remote host 进入 `dispatch_remote_rpc_selected_route`;v1 走 canonical carrier, v0 只保留一版 JSON fallback 且不伪造 origin-caller claim;forward_invoke 与 canonical Invoke 共享 `dispatch_frame_to_presence` 单-settle 核心。**剩余真工作在 BE cutover**:daemon_grpc 改投 Invocation 七元组、删除 invoke_remote.go 与 remote_routing 降级矩阵、contract test 改面。**搭车 F-044 勘正**:陈旧 cliipc 注释实为 **3 处**(client.go:12 / servicecontext.go:179 / mapping.go:348 新发现) | EasyNet BE(+Cli) | M → T2.1 | invoke_remote.go(546)删除;contract test 改打 Invocation 面;grep cliipc 零命中(3 处);Cli `invocation_transport` 回归绿 |
+| T2.1b | **F-040 收口(🟢 execution-ready;Cli unary 臂已落)**:backend 改为向 daemon Invocation 面提交完整七元组;退役 `runtime.invoke_remote` 包装与手抄 struct。**施工准备件已落**(docs/t2.1b-backend-cutover-prep-2026-06-12.md,2026-06-12):消费面 9+6 文件盘点齐——真切口仅 daemon_grpc 一层(handler 经 routing client 隔离零感知);降级层 remote_routing 路由矩阵随 callee 本地性解析归 daemon 而退役;五步序列单批可完。**当前 Cli WIP 已补齐 step-4 unary 远端臂**:resolver-selected remote host 进入 `dispatch_remote_rpc_selected_route`;v1 走 canonical carrier, v0 只保留一版 JSON fallback 且不伪造 origin-caller claim;forward_invoke 与 canonical Invoke 共享 `dispatch_frame_to_presence` 单-settle 核心。**剩余真工作在 BE cutover**:daemon_grpc 改投 Invocation 七元组、删除 invoke_remote.go 与 remote_routing 降级矩阵、contract test 改面。**搭车 F-044 勘正**:陈旧 cliipc 注释实为 **3 处**(client.go:12 / servicecontext.go:179 / mapping.go:348 新发现) | EasyNet BE(+Cli) | M → T2.1 | invoke_remote.go(546)删除;contract test 改打 Invocation 面;grep cliipc 零命中(3 处);Cli `invocation_transport` 回归绿 |
 | T2.2a | **✅ 已完成(2026-06-12;「验收收尾」改判被兑现)**:urns.go 实已 SDK 门面(48 委托/0 拼接);9/9 SDK-covered 验收抽查通过(盘点 §三·六,Cli 7665536),密码学旗标双双排除。**F-041 搭车落地(EasyNet b8b2114)**:backend+Frontend 双阀,三态验证,入 conformance CI | EasyNet BE+FE | 完成 | ✓ 阀注入即红验证过 |
 | T2.2b | **✅ 已完成(2026-06-12)**:admission fork 验明薄委托;**F-017 收口(EasyNet 8bc917d)**:SubjectGate 注入对象替双全局+init() 暗读——boot 显式读 env、SetEnforcement 运行时翻转、sink 构造期入结构化日志;5 生产点+streambridge 必填字段+urautil 显式收参;测试自建 gate 零复位+翻转钉死;32/32 | EasyNet BE | 完成 | ✓ 运行时可重配 ✓ 测试无复位 |
 | T2.2c | **🟡 F-015 C 批,2/3 收口(2026-06-12)**:① descriptor 读面上移——SDK 读写同档互逆(Axon b58d124c + EasyNet 2edbc56,−71 行 wire 知识);② OriginCaller 钉 SDK 类型——NewOriginCallerClaim 单一编码+校验边界(Axon fe6060e7),backend 三表示收一、legacy metadata 双写退役(EasyNet 7a0feed,−80 行;Cli origin_caller.rs from_metadata 回退面成死代码,transport 释放后删)。**余**:answer codec 批(盘点 §三-2 重定义待 CTO 签;Rust 产者半边待 pbjson 基建批) | EasyNet BE | M → 盘点签字 | descriptor 读写同源 ✓;claim 单编码边界 ✓;余项随 §三-2 裁决 |

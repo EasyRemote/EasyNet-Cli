@@ -16,6 +16,7 @@
 #![cfg(target_os = "macos")]
 
 use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -34,12 +35,15 @@ use objc2_core_video::{
 use objc2_foundation::{
     NSArray, NSError, NSMutableDictionary, NSNumber, NSObject, NSObjectProtocol, NSString,
 };
+use serde_json::{json, Value};
+use tokio::sync::broadcast;
 
 use crate::persistence::resources::ResourceEntry;
 use crate::runtime::agents::media::camera_snapshot::{
-    EncodedFrame, REASON_PERMISSION_DENIED, REASON_RESOURCE_UNAVAILABLE,
+    build_camera_stream_frame, CameraStreamOptions, EncodedFrame, REASON_PERMISSION_DENIED,
+    REASON_RESOURCE_UNAVAILABLE,
 };
-use crate::runtime::agents::media_abilities::ABILITY_CAMERA_SNAPSHOT;
+use crate::runtime::agents::media_abilities::{ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE};
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {}
@@ -89,7 +93,11 @@ define_class!(
             _connection: &AnyObject,
         ) {
             let candidate = match unsafe { sample_buffer.image_buffer() } {
-                Some(image_buffer) => encode_bgra_pixel_buffer_as_jpeg(&image_buffer),
+                Some(image_buffer) => encode_bgra_pixel_buffer_as_jpeg(
+                    &image_buffer,
+                    ABILITY_CAMERA_SNAPSHOT,
+                    true,
+                ),
                 None => Err(anyhow::anyhow!(
                     "{ABILITY_CAMERA_SNAPSHOT}: AVFoundation sample contained no image buffer; \
                      reason={REASON_RESOURCE_UNAVAILABLE}"
@@ -138,6 +146,101 @@ impl VideoFrameDelegate {
             sender: Mutex::new(Some(sender)),
             started_at: Instant::now(),
             best_frame: Mutex::new(None),
+        });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+struct LiveVideoFrameDelegateIvars {
+    sender: broadcast::Sender<Value>,
+    hardware_id: String,
+    frame_interval: Duration,
+    last_sent_at: Mutex<Option<Instant>>,
+    seq: AtomicU64,
+    failed: AtomicBool,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "EasyNetAVFoundationLiveVideoFrameDelegate"]
+    #[ivars = LiveVideoFrameDelegateIvars]
+    struct LiveVideoFrameDelegate;
+
+    impl LiveVideoFrameDelegate {
+        #[unsafe(method(captureOutput:didOutputSampleBuffer:fromConnection:))]
+        unsafe fn capture_output(
+            &self,
+            _output: &AnyObject,
+            sample_buffer: &objc2_core_media::CMSampleBuffer,
+            _connection: &AnyObject,
+        ) {
+            let ivars = self.ivars();
+            if ivars.sender.receiver_count() == 0 {
+                return;
+            }
+            let now = Instant::now();
+            {
+                let mut last_sent_at = match ivars.last_sent_at.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                if last_sent_at
+                    .map(|previous| now.duration_since(previous) < ivars.frame_interval)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                *last_sent_at = Some(now);
+            }
+
+            let frame = match unsafe { sample_buffer.image_buffer() } {
+                Some(image_buffer) => encode_bgra_pixel_buffer_as_jpeg(
+                    &image_buffer,
+                    ABILITY_CAMERA_SUBSCRIBE,
+                    false,
+                )
+                .map(|candidate| candidate.frame),
+                None => Err(anyhow::anyhow!(
+                    "{ABILITY_CAMERA_SUBSCRIBE}: AVFoundation sample contained no image buffer; \
+                     reason={REASON_RESOURCE_UNAVAILABLE}"
+                )),
+            };
+
+            match frame {
+                Ok(frame) => {
+                    let seq = ivars.seq.fetch_add(1, Ordering::Relaxed);
+                    let value = build_camera_stream_frame(seq, &ivars.hardware_id, frame);
+                    let _ = ivars.sender.send(value);
+                }
+                Err(err) => {
+                    if !ivars.failed.swap(true, Ordering::Relaxed) {
+                        let _ = ivars.sender.send(json!({
+                            "type": "error",
+                            "message": err.to_string(),
+                            "reason": REASON_RESOURCE_UNAVAILABLE,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe impl NSObjectProtocol for LiveVideoFrameDelegate {}
+);
+
+impl LiveVideoFrameDelegate {
+    fn new(
+        sender: broadcast::Sender<Value>,
+        hardware_id: String,
+        frame_interval: Duration,
+    ) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(LiveVideoFrameDelegateIvars {
+            sender,
+            hardware_id,
+            frame_interval,
+            last_sent_at: Mutex::new(None),
+            seq: AtomicU64::new(0),
+            failed: AtomicBool::new(false),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -217,6 +320,133 @@ pub fn capture_jpeg(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
     }
 
     frame
+}
+
+pub fn open_jpeg_stream(
+    entry: ResourceEntry,
+    options: CameraStreamOptions,
+) -> anyhow::Result<broadcast::Receiver<Value>> {
+    ensure_camera_authorized().map_err(rewrite_subscribe_error)?;
+
+    let (tx, rx) = broadcast::channel::<Value>(8);
+    let worker_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("easynet-camera-avfoundation".into())
+        .spawn(move || {
+            if let Err(err) = run_jpeg_stream(entry, options, worker_tx.clone()) {
+                let _ = worker_tx.send(json!({
+                    "type": "error",
+                    "message": rewrite_subscribe_error(err).to_string(),
+                    "reason": REASON_RESOURCE_UNAVAILABLE,
+                }));
+            }
+        })
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "{ABILITY_CAMERA_SUBSCRIBE}: failed to spawn AVFoundation camera worker: {e}; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+    Ok(rx)
+}
+
+fn run_jpeg_stream(
+    entry: ResourceEntry,
+    options: CameraStreamOptions,
+    sender: broadcast::Sender<Value>,
+) -> anyhow::Result<()> {
+    let media_type = NSString::from_str(AV_MEDIA_TYPE_VIDEO);
+    let device = select_camera_device(&media_type, &entry)?;
+    let input = device_input(&device)?;
+
+    let session: Retained<AnyObject> = unsafe { msg_send![class!(AVCaptureSession), new] };
+    let output: Retained<AnyObject> = unsafe { msg_send![class!(AVCaptureVideoDataOutput), new] };
+    let settings = bgra_video_settings();
+    let delegate = LiveVideoFrameDelegate::new(
+        sender.clone(),
+        entry.hardware_id.clone(),
+        Duration::from_secs_f64(1.0 / options.fps as f64),
+    );
+    let queue = capture_queue();
+
+    unsafe {
+        let _: () = msg_send![&*session, beginConfiguration];
+
+        let preset = live_session_preset(&options);
+        let can_set_preset: bool = msg_send![&*session, canSetSessionPreset: &*preset];
+        if can_set_preset {
+            let _: () = msg_send![&*session, setSessionPreset: &*preset];
+        }
+
+        let can_add_input: bool = msg_send![&*session, canAddInput: &*input];
+        if !can_add_input {
+            anyhow::bail!(
+                "{ABILITY_CAMERA_SUBSCRIBE}: AVFoundation cannot add camera input; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            );
+        }
+        let _: () = msg_send![&*session, addInput: &*input];
+
+        let _: () = msg_send![&*output, setAlwaysDiscardsLateVideoFrames: true];
+        let _: () = msg_send![&*output, setVideoSettings: &*settings];
+        let _: () = msg_send![&*output, setSampleBufferDelegate: &*delegate, queue: &*queue];
+
+        let can_add_output: bool = msg_send![&*session, canAddOutput: &*output];
+        if !can_add_output {
+            anyhow::bail!(
+                "{ABILITY_CAMERA_SUBSCRIBE}: AVFoundation cannot add video output; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            );
+        }
+        let _: () = msg_send![&*session, addOutput: &*output];
+        let _: () = msg_send![&*session, commitConfiguration];
+        let _: () = msg_send![&*session, startRunning];
+    }
+
+    while sender.receiver_count() > 0 {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    unsafe {
+        let _: () = msg_send![&*session, stopRunning];
+        let _: () = msg_send![
+            &*output,
+            setSampleBufferDelegate: ptr::null::<AnyObject>(),
+            queue: ptr::null::<AnyObject>()
+        ];
+    }
+
+    drop(delegate);
+    drop(queue);
+    drop(output);
+    drop(input);
+    drop(device);
+    drop(session);
+    Ok(())
+}
+
+fn live_session_preset(options: &CameraStreamOptions) -> Retained<NSString> {
+    let preset = match options.resolution {
+        Some(resolution) if resolution.width <= 640 && resolution.height <= 480 => {
+            "AVCaptureSessionPreset640x480"
+        }
+        Some(resolution) if resolution.width <= 1280 && resolution.height <= 720 => {
+            "AVCaptureSessionPreset1280x720"
+        }
+        Some(resolution) if resolution.width <= 1920 && resolution.height <= 1080 => {
+            "AVCaptureSessionPreset1920x1080"
+        }
+        _ => "AVCaptureSessionPresetHigh",
+    };
+    NSString::from_str(preset)
+}
+
+fn rewrite_subscribe_error(err: anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{}",
+        err.to_string()
+            .replacen(ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE, 1)
+    )
 }
 
 fn ensure_camera_authorized() -> anyhow::Result<()> {
@@ -346,11 +576,13 @@ unsafe fn cfstring_as_object(
 
 fn encode_bgra_pixel_buffer_as_jpeg(
     pixel_buffer: &objc2_core_video::CVPixelBuffer,
+    ability: &'static str,
+    reject_all_black: bool,
 ) -> anyhow::Result<FrameCandidate> {
     let pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
     if pixel_format != kCVPixelFormatType_32BGRA {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SNAPSHOT}: AVFoundation returned unsupported pixel format 0x{pixel_format:08x}; \
+            "{ability}: AVFoundation returned unsupported pixel format 0x{pixel_format:08x}; \
              reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }
@@ -359,18 +591,20 @@ fn encode_bgra_pixel_buffer_as_jpeg(
     let lock_result = unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, lock_flags) };
     if lock_result != kCVReturnSuccess {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SNAPSHOT}: CVPixelBufferLockBaseAddress failed with {lock_result}; \
+            "{ability}: CVPixelBufferLockBaseAddress failed with {lock_result}; \
              reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }
 
-    let result = encode_locked_bgra_pixel_buffer(pixel_buffer);
+    let result = encode_locked_bgra_pixel_buffer(pixel_buffer, ability, reject_all_black);
     let _ = unsafe { CVPixelBufferUnlockBaseAddress(pixel_buffer, lock_flags) };
     result
 }
 
 fn encode_locked_bgra_pixel_buffer(
     pixel_buffer: &objc2_core_video::CVPixelBuffer,
+    ability: &'static str,
+    reject_all_black: bool,
 ) -> anyhow::Result<FrameCandidate> {
     let width = CVPixelBufferGetWidth(pixel_buffer);
     let height = CVPixelBufferGetHeight(pixel_buffer);
@@ -378,13 +612,13 @@ fn encode_locked_bgra_pixel_buffer(
     let base = CVPixelBufferGetBaseAddress(pixel_buffer);
     if width == 0 || height == 0 || stride < width.saturating_mul(4) || base.is_null() {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SNAPSHOT}: AVFoundation returned invalid pixel buffer dimensions \
+            "{ability}: AVFoundation returned invalid pixel buffer dimensions \
              {width}x{height} stride={stride}; reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }
     if width > u16::MAX as usize || height > u16::MAX as usize {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SNAPSHOT}: camera frame {width}x{height} is too large to JPEG-encode; \
+            "{ability}: camera frame {width}x{height} is too large to JPEG-encode; \
              reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }
@@ -408,9 +642,9 @@ fn encode_locked_bgra_pixel_buffer(
             rgb.push(b);
         }
     }
-    if rgb.iter().all(|&b| b == 0) {
+    if reject_all_black && rgb.iter().all(|&b| b == 0) {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SNAPSHOT}: camera returned an all-black frame; \
+            "{ability}: camera returned an all-black frame; \
              reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }

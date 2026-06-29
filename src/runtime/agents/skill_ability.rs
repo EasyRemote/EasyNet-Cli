@@ -173,7 +173,8 @@ fn managed_skill_dir_for_agent_type(
     match agent_type {
         crate::registry::agents::AgentType::ClaudeCode => root.join(".claude").join("skills"),
         crate::registry::agents::AgentType::Codex
-        | crate::registry::agents::AgentType::CodexAppServer => root.join("skills"),
+        | crate::registry::agents::AgentType::CodexAppServer
+        | crate::registry::agents::AgentType::External => root.join("skills"),
     }
 }
 

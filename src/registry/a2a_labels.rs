@@ -221,7 +221,7 @@ fn test_entry_with_agent_directory(
     agent_type: super::agents::AgentType,
     model: Option<&str>,
 ) -> super::agents::AgentEntry {
-    use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+    use crate::core::agent_spec::AgentSpec;
     use crate::runtime::directory::{AgentDirectory, Location};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -231,11 +231,7 @@ fn test_entry_with_agent_directory(
         .join(format!("{name}-{n}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
 
-    let runtime = match agent_type {
-        super::agents::AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
-        super::agents::AgentType::Codex => RuntimeKind::Codex,
-        super::agents::AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
-    };
+    let runtime = agent_type.runtime_kind();
     AgentDirectory::create(
         &Location::Local { root: root.clone() },
         AgentSpec::new(name.to_string(), runtime),

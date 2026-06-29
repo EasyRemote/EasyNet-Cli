@@ -229,7 +229,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     // two are different protocols on different ports:
     //
     //   * `[daemon].hub_endpoint`        ← creds.hub_endpoint
-    //     = device dials hub for `<self>.session` (gRPC plaintext
+    //     = device dials hub for `session.open` (gRPC plaintext
     //       on :50051 in dev / TLS axon:// in prod)
     //
     //   * `[daemon.federated_peers].<t>` ← peer_hub
@@ -238,7 +238,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     //
     // Conflating them broke single-host host-mode v4.1.5: the
     // 50443 guess overrode the working :50051 dial target, the
-    // daemon's `<self>.session` bidi never connected, and the
+    // daemon's `session.open` bidi never connected, and the
     // device never showed ONLINE. Idempotent on a no-op.
     let updated = match upsert_daemon_hub_endpoint_in_toml(&with_peer, &creds.hub_endpoint) {
         Ok(s) => s,
@@ -279,17 +279,17 @@ pub fn auto_wire_federated_peer_from_credentials(
 /// LB-52 Gap 3 — mirror the just-paired device's own `(ura, pubkey,
 /// role=Device)` entry into the local realm-trust.toml so a
 /// co-located hub-mode daemon admits this device on
-/// `<self>.session` without a separate
-/// `<self>.register_device_pubkey` round-trip.
+/// `session.open` without a separate
+/// `identity.register_pubkey` round-trip.
 ///
 /// Why this exists
 /// ---------------
 /// The canonical writer for trust-anchor entries is the backend's
-/// pairing flow calling `<self>.register_device_pubkey` (PR-7
+/// pairing flow calling `identity.register_pubkey` (PR-7
 /// commit 5/N). In single-machine demo / answer-sheet topologies,
 /// the backend is mocked or absent, so the trust anchor stays
 /// empty and the local daemon rejects its own paired device's
-/// `<self>.session` admission. This helper closes that gap by
+/// `session.open` admission. This helper closes that gap by
 /// pre-populating the device's self-entry on `easynet device join`,
 /// derived deterministically from `(realm, node_id)` via the
 /// same `derive_owner_public_key_b64` the runtime publish path
@@ -314,7 +314,7 @@ pub fn auto_wire_federated_peer_from_credentials(
 /// production daemon path `/etc/easynet/realm-trust.toml` is
 /// admin-owned and not writable by the unprivileged join flow;
 /// operators on production deploys rely on the backend's
-/// `<self>.register_device_pubkey` writer instead.
+/// `identity.register_pubkey` writer instead.
 pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyhow::Result<()> {
     if creds.realm.trim().is_empty() || creds.node_id.trim().is_empty() {
         return Ok(());
@@ -425,7 +425,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // Best-effort SIGHUP so a co-located hub-mode daemon picks up
     // the new entry without a restart (PR-7 commit 5/N
     // SharedTrustAnchor cell, same SIGHUP-aware reload path the
-    // canonical `<self>.register_device_pubkey` writer uses). The
+    // canonical `identity.register_pubkey` writer uses). The
     // SIGHUP also reloads `[daemon.federated_peers]`; one signal
     // covers both files.
     if let Err(err) = sighup_running_daemon_best_effort() {
@@ -447,7 +447,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
 /// `/etc/easynet/realm-trust.toml` location is intentionally NOT
 /// the join-time fallback: it requires root and operators on
 /// production deploys go through the backend's
-/// `<self>.register_device_pubkey` writer, not this helper.
+/// `identity.register_pubkey` writer, not this helper.
 /// Read backend's hub identity file at `~/.easynet-hub/<realm>/identity.json`
 /// and project its private-key seed → ed25519 pubkey base64. Returns
 /// `None` when the file is absent, malformed, or the seed is the
@@ -584,7 +584,7 @@ fn upsert_hub_trusted_agent(
 /// Generic [[trusted_agent]] upsert. Device rows stay append-only;
 /// hub rows are upgraded in place so legacy v4.1.4 entries gain the
 /// schema-B `origin_realm` / `hub_endpoint` / `tls_ca_pem_path`
-/// fields required by device-mode `<self>.session` bootstrap.
+/// fields required by device-mode `session.open` bootstrap.
 struct TrustedAgentUpsert<'a> {
     raw: &'a str,
     agent_ura: &'a str,
@@ -994,8 +994,10 @@ listen_tcp = "127.0.0.1:50443"
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("auto-wire");
 
@@ -1030,8 +1032,10 @@ listen_tcp = "127.0.0.1:50443"
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
     }
@@ -1075,7 +1079,7 @@ listen_tcp = "127.0.0.1:50443"
     fn upsert_self_trusted_agent_idempotent_when_ura_already_present() {
         // An existing row with our URA is left untouched even if
         // the pubkey differs — the canonical
-        // `<self>.register_device_pubkey` writer (or an operator
+        // `identity.register_pubkey` writer (or an operator
         // edit) is authoritative.
         let raw = r#"
 [[trusted_agent]]
@@ -1135,8 +1139,10 @@ added_at_unix_ms = 1
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
         auto_wire_self_realm_trust_from_credentials(&creds)
             .expect("empty node_id is a no-op (no panic, no write)");
@@ -1175,8 +1181,10 @@ added_at_unix_ms = 1
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
 
         let err = auto_wire_self_realm_trust_from_credentials(&creds)
@@ -1292,10 +1300,12 @@ added_at_unix_ms = 1
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: Some(
                 base64::engine::general_purpose::STANDARD.encode(staged_ca_pem),
             ),
+            join_receipt_hash: None,
         };
         auto_wire_self_realm_trust_from_credentials(&creds).expect("auto-wire ok");
 
@@ -1329,7 +1339,7 @@ added_at_unix_ms = 1
             device_row.get("public_key_b64").and_then(|v| v.as_str()),
             Some(expected_dev_pk.as_str()),
             "device pubkey must be the deterministic derivation (matches what \
-             <self>.register_device_pubkey would write)"
+             identity.register_pubkey would write)"
         );
 
         let hub_row = arr

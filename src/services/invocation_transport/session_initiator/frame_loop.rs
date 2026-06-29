@@ -166,6 +166,40 @@ fn apply_session_contract(frame: &InvokeBidiDown, outbound: &SessionUpSender, hu
         version = negotiated,
         displaced_prior = displaced_prior,
     );
+    // The hub accepted `session.open` and returned the session contract — this
+    // is the FIRST moment presence is truly admitted on the hub. Promote the
+    // connection snapshot to ConnectedOnline here, not at daemon boot: `cli.start`
+    // records the honest "self-session opening" (J500) state, and only this
+    // hub-confirmed contract earns FRONTEND_CONNECTED. Without this, `doctor`
+    // would under-report a healthy session as still "opening".
+    record_connection_state(
+        crate::runtime::join_connection_state::JoinConnectionState::ConnectedOnline,
+        crate::runtime::join_connection_state::JoinTransition::AdmitPresence,
+        "session.contract_negotiated",
+    );
+}
+
+/// Re-record the process-global join-connection snapshot at `state`, preserving
+/// the realm/node/hub identity fields from the latest snapshot (recorded by
+/// `cli.start`). The session initiator only knows the live transport result, not
+/// the full credential bundle, so it derives the new state from what boot already
+/// published rather than reconstructing it.
+pub(super) fn record_connection_state(
+    state: crate::runtime::join_connection_state::JoinConnectionState,
+    transition: crate::runtime::join_connection_state::JoinTransition,
+    source: &str,
+) {
+    let prior = crate::runtime::join_connection_state::latest_snapshot();
+    crate::runtime::join_connection_state::record_snapshot(
+        crate::runtime::join_connection_state::JoinConnectionSnapshot::from_parts(
+            state,
+            Some(transition),
+            prior.realm,
+            prior.node_id,
+            prior.hub_endpoint,
+            source.to_string(),
+        ),
+    );
 }
 
 struct OutboxGuard {

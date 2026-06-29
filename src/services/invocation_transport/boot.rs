@@ -66,7 +66,7 @@
 // devices. Once device-mode transport config exists, local gRPC
 // listener readiness is daemon-owned: the daemon reports its UDS
 // Invocation surface as ready when it is actually listening. Hub
-// `<self>.session` admission is observed in a background task and
+// `session.open` admission is observed in a background task and
 // logged as an admission signal, but transient hub latency must not
 // make the local control plane kill an otherwise healthy daemon
 // before it can reconnect and republish owner projections.
@@ -100,6 +100,8 @@ use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
 mod identity;
 mod listeners;
+#[cfg(unix)]
+mod local_peer;
 mod paths;
 mod presence_seed;
 mod trust;
@@ -122,7 +124,7 @@ use trust::{
 
 /// Maximum decoded gRPC message size for InvocationServer/Client on
 /// both directions. tonic's default cap is 4 MiB which aborted
-/// `<self>.session` the moment any frame envelope grew past it (real
+/// `session.open` the moment any frame envelope grew past it (real
 /// trigger: file-transfer uploads ≥ 1 MB whose accumulated down
 /// frames cross 4 MiB). 64 MiB is deliberately a transport-envelope
 /// cap, not an ability payload cap: large files and snapshots must be
@@ -152,7 +154,7 @@ const INITIAL_SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(15);
 /// Axon runtime instead of skipping runtime registration.
 /// Owns the session supervisor's cancel oneshot. Dropping it (at
 /// daemon shutdown) resolves the supervisor's `cancel` branch, so the
-/// in-flight `<self>.session` dial drains cleanly instead of being
+/// in-flight `session.open` dial drains cleanly instead of being
 /// killed at the process level (the hub then sees a clean Eof, not a
 /// StreamReset). An empty handle (hub mode, unconfigured, no device
 /// identity) is a no-op on drop.
@@ -244,7 +246,7 @@ pub fn start_daemon_invocation_transport(
     );
     // PR-7 commit 5/N: wrap the boot-time anchor in a reload-friendly
     // cell. The same cell is handed to the admission facade *and* to
-    // `<self>.register_device_pubkey`'s handler context — a successful
+    // `identity.register_pubkey`'s handler context — a successful
     // register call atomically writes the file and republishes the
     // cell so the next admission sees the new entry without a daemon
     // restart.
@@ -541,7 +543,7 @@ pub fn start_daemon_invocation_transport(
     }
 
     // **PR-N6 C4**. Device-mode daemon's `forward_invoke` escalates
-    // up the long-lived `<self>.session` bidi to the hub instead of
+    // up the long-lived `session.open` bidi to the hub instead of
     // consulting its (always-empty) local PresenceRegistry. Three
     // collaborators wired here:
     //
@@ -582,8 +584,8 @@ pub fn start_daemon_invocation_transport(
         }
         service = service.with_session_escalation(Arc::clone(&handle));
         // One DeviceTrustSync per daemon: the self-targeted
-        // `<self>.invoke_remote` dispatch arm (service) and the
-        // `<self>.session` dispatcher both warm the anchor through
+        // `runtime.invoke_remote` dispatch arm (service) and the
+        // `session.open` dispatcher both warm the anchor through
         // this instance, sharing its single-flight map and negative
         // cache. It rides the session escalation channel built above.
         let device_trust_sync = Arc::new(
@@ -608,7 +610,7 @@ pub fn start_daemon_invocation_transport(
     // populates the federated directory cell by calling each
     // peer's `federation.discover` ability on a fixed cadence.
     // Cadence is 5 seconds — fast enough for the spec §八
-    // scenario (4) "new peer SIGHUP appears in <self>.discover
+    // scenario (4) "new peer SIGHUP appears in <agent>.discover
     // within ~5s" + slow enough that peer hubs aren't pounded.
     // The task reads the federated_peers cell each round so a
     // SIGHUP-driven add/drop is naturally picked up; no
@@ -667,7 +669,7 @@ pub fn start_daemon_invocation_transport(
     }
 
     // Device-mode: dial the configured hub and hold a long-lived
-    // `<self>.session` bidi open for the daemon's lifetime. This is
+    // `session.open` bidi open for the daemon's lifetime. This is
     // what makes "device 连 hub + 保活" a real-world fact rather than
     // a library-level capability. Spec §1.3 ties the outbound dial
     // to device mode only.
@@ -723,7 +725,7 @@ pub fn start_daemon_invocation_transport(
                 component = daemon_invocation,
                 kind = device_mode_session_supervisor_not_started,
                 reason = "missing_hub_endpoint_or_device_identity",
-                message = "device-mode daemon missing either hub_endpoint or credentials.json device identity; outbound `<self>.session` not started",
+                message = "device-mode daemon missing either hub_endpoint or credentials.json device identity; outbound `session.open` not started",
             );
         }
     }
@@ -733,7 +735,7 @@ pub fn start_daemon_invocation_transport(
 
 /// Device-mode hot-advertise adapter for `agent.start`.
 ///
-/// It reuses the already-open `<self>.session` bidi instead of
+/// It reuses the already-open `session.open` bidi instead of
 /// opening a second hub client from the lifecycle handler. The
 /// lifecycle layer only sees the [`HotAgentAdvertiser`] trait; this
 /// adapter owns the session-specific wire shape and caller identity.
@@ -794,7 +796,7 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         };
         // ISS-002: carry the abilities advertise alongside the identity
         // advertise so a hot ability add/remove reaches the hub on the
-        // same `<self>.session` escalation, immediately — not at the
+        // same `session.open` escalation, immediately — not at the
         // next heartbeat. Identity is advertised first (the abilities
         // projection references the agent record); the abilities
         // advertise is best-effort and reported via the outcome error.
@@ -852,7 +854,7 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
     fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest) -> HotAgentAdvertiseOutcome {
         // ISS-002 (agent.stop, symmetric to advertise): remove the agent
         // identity from the hub directory via `federation.revoke` on the
-        // same `<self>.session` escalation. `escalate_with_timeout`
+        // same `session.open` escalation. `escalate_with_timeout`
         // builds the hub ability URA from the ability name + session
         // realm, so only the JSON args are passed here.
         let body = serde_json::json!({
@@ -909,7 +911,7 @@ fn render_session_request_error(error: &SessionRequestError) -> String {
     }
 }
 
-/// Spawn the long-lived device-side `<self>.session` supervisor. The
+/// Spawn the long-lived device-side `session.open` supervisor. The
 /// supervisor dials the hub at boot, holds the bidi open, and
 /// reconnects with exponential backoff on failure (250ms → 30s).
 /// Runs forever on the daemon's tokio runtime; cancelled implicitly
@@ -1020,7 +1022,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
     // anchor and can never learn a new key). The Arc is the daemon's
     // single DeviceTrustSync, built next to the escalation consumer
     // in `start_daemon_invocation_transport` and shared with the
-    // service's self-targeted `<self>.invoke_remote` dispatch arm.
+    // service's self-targeted `runtime.invoke_remote` dispatch arm.
     if let Some(sync) = device_trust_sync {
         local_dispatcher = local_dispatcher.with_device_trust_sync(sync);
     }
@@ -1552,7 +1554,7 @@ mod tests {
         // hub_endpoint, deploy_signature, hub_api_base, username,
         // hub_pubkey_b64, hub_tls_ca_pem_b64) must still parse into a
         // device identity. A `deny_unknown_fields` projection silently
-        // collapsed this to `None`, which stopped the `<self>.session`
+        // collapsed this to `None`, which stopped the `session.open`
         // supervisor and rendered the device REMOVED on the hub.
         let raw = r#"{
   "node_id": "01a5b007-f9c3-41f9-aa6f-7531267651bc",
@@ -1574,7 +1576,7 @@ mod tests {
         );
         assert!(
             identity.signing_seed.is_some(),
-            "device identity must carry a signing seed so `<self>.session` can dial the hub"
+            "device identity must carry a signing seed so `session.open` can dial the hub"
         );
     }
 

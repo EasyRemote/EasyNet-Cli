@@ -99,7 +99,7 @@ pub mod session_failure;
 #[cfg(feature = "axon-pb")]
 pub mod invocation_transport;
 
-/// In-memory registry of live `<self>.session` reverse-channel
+/// In-memory registry of live `session.open` reverse-channel
 /// senders keyed by caller URI. RFC-003 PR-1 spec §3 — hub-side
 /// liveness model that replaces unary heartbeats. Gated on `axon-pb`
 /// because the dispatch sender type holds the proto-generated
@@ -117,8 +117,8 @@ pub mod presence_registry;
 /// `axon-pb` feature gates.
 pub mod realm_trust_anchor;
 
-/// Cross-call correlation table for `<self>.invoke_remote` (PR-3
-/// writer) and `<self>.session` (PR-2 completer). Outside
+/// Cross-call correlation table for `runtime.invoke_remote` (PR-3
+/// writer) and `session.open` (PR-2 completer). Outside
 /// `presence_registry` because the concerns differ: presence is
 /// "who is online right now"; pending_dispatch is "outstanding
 /// cross-device calls awaiting reply". Pure data — no feature gate.
@@ -144,7 +144,7 @@ pub mod ability_catalog_store;
 /// liveness for device URIs; this store maps hosted agent URIs back
 /// to their host device URI so `federation.resolve` can surface
 /// `/agent/<user>.<agent>` rows while deriving online/offline from
-/// the host's live `<self>.session`.
+/// the host's live `session.open`.
 pub mod advertised_agent_store;
 
 /// AXON-RFC-001 v4.1.7 hub-broadcast contract — caches hub-owned
@@ -172,7 +172,7 @@ pub mod nonce_replay_store;
 pub mod usage_quota_store;
 
 /// Reload-friendly wrapper around the daemon's `RealmTrustAnchor`.
-/// `<self>.register_device_pubkey` (PR-7 commit 5/N) appends an
+/// `identity.register_pubkey` appends an
 /// entry, persists via atomic rename, then `replace`s the cell so
 /// the admission gate's next read reflects the new entry. Built
 /// once at boot and shared by clone between the admission facade
@@ -243,7 +243,8 @@ mod tests {
 
         assert!(!meters("federation.heartbeat"));
         assert!(!meters("federation.forward_invoke"));
-        assert!(!meters("<self>.register_device_pubkey"));
-        assert!(!meters("<self>.session"));
+        assert!(!meters("identity.register_pubkey"));
+        assert!(!meters("identity.register_pubkey"));
+        assert!(!meters("session.open"));
     }
 }

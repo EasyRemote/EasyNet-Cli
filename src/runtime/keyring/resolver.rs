@@ -149,7 +149,7 @@ pub fn default_chain(keyring: Arc<KeyringHandle>) -> ChainResolver {
 ///      realm but the user has not opted into binding (INV-5
 ///      privacy default).
 ///
-/// Used by `<self>.discover` Tier-3 to filter cross-realm
+/// Used by `<agent>.discover` Tier-3 to filter cross-realm
 /// directory entries: only show devices whose URA's realm has
 /// a binding for the calling user.
 pub struct FederatedUserResolver {

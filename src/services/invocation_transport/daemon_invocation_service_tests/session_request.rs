@@ -885,10 +885,48 @@ async fn dispatch_session_request_routes_selected_route_when_cross_realm_target_
 }
 
 #[tokio::test]
-async fn dispatch_session_request_routes_peer_delegation_when_target_realm_differs() {
-    // Cross-realm target with no federation client wired
-    // surfaces target_offline from the peer-delegation arm.
+async fn dispatch_session_request_cross_realm_without_peer_route_surfaces_resolver_negative() {
+    // The hub-side Request path uses the same resolver-owned
+    // forward selection as unary Invoke. Cross-realm does not imply
+    // peer dispatch by itself; the resolver must first select a
+    // concrete peer hub route.
     let svc = make_service().with_session_realm("realm-X");
+    let outcome = svc
+        .bidi_dispatcher()
+        .dispatch_session_request(
+            &session_request_ability_ura("realm-X", ABILITY_FEDERATION_FORWARD_INVOKE),
+            &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
+        )
+        .await;
+    match outcome {
+        RequestOutcome::Err {
+            error: SessionRequestError::UpstreamFailure { reason },
+        } => {
+            assert!(
+                reason.contains(ROUTE_NEGATIVE_CODE) && reason.contains("NEGATIVE_REASON_NOROUTE"),
+                "expected resolver NOROUTE, got: {reason}"
+            );
+        }
+        other => panic!(
+            "cross-realm target without peer route must surface resolver negative, got {other:?}"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn dispatch_session_request_routes_peer_delegation_without_client_as_target_offline() {
+    // Once the resolver has selected a peer route, a missing
+    // federation client is a dispatch-plane offline condition and the
+    // Request result remains the device-facing `TargetOffline` shape.
+    let mut peers = BTreeMap::new();
+    peers.insert(
+        "peer-realm".to_string(),
+        "https://peer-hub.example:50443".to_string(),
+    );
+    let svc = make_service()
+        .with_session_realm("realm-X")
+        .with_federated_peers(peers);
+
     let outcome = svc
         .bidi_dispatcher()
         .dispatch_session_request(
@@ -901,8 +939,8 @@ async fn dispatch_session_request_routes_peer_delegation_when_target_realm_diffe
             error: SessionRequestError::TargetOffline,
         } => {}
         other => panic!(
-            "cross-realm target with no federation client must surface \
-             TargetOffline (peer-delegation fall-through), got {other:?}"
+            "selected peer route without federation client must surface TargetOffline, \
+             got {other:?}"
         ),
     }
 }

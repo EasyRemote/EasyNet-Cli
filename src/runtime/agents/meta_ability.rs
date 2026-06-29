@@ -294,7 +294,12 @@ fn list_abilities_handler(
             // from the kind. Falling through to None on missing
             // metadata is intentional — synth drops entries it
             // cannot stamp authoritatively.
-            let owner_string = match registry.lookup_owner(&name) {
+            //
+            // SPEC §9.1.A Step 4: owner truth now comes from the
+            // control-plane record (`control_plane_owner`), not the legacy
+            // `owner` side table — proven equivalent for every owner kind by
+            // `control_plane_owner_matches_legacy_lookup_for_static_ability`.
+            let owner_string = match registry.control_plane_owner(&name) {
                 Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => hub_owner_ura.clone(),
                 Some(crate::runtime::ability_dispatch::OwnerKind::Device) => {
                     device_owner_ura.clone()
@@ -328,7 +333,13 @@ fn list_abilities_handler(
             // name-only stub the synth has emitted since the
             // 2026-05-05 owner-aware refactor.
             if let Ok(d) = AbilityDescriptor::new(public_name.clone(), owner, Visibility::Scoped) {
-                let descriptor = match registry.manifest_for_dynamic(&name) {
+                // SPEC §9.1.A Step 4: manifest body now comes from the
+                // control-plane-keyed store (`control_plane_manifest`),
+                // which the commit choke point dual-writes for BOTH static
+                // and hot/dynamic registrations — so it unions the same set
+                // `manifest_for_dynamic` did. Equivalence pinned by
+                // `control_plane_manifest_matches_legacy_for_static_ability`.
+                let descriptor = match registry.control_plane_manifest(&name) {
                     Some(manifest) => {
                         let mut d = d
                             .with_description(manifest.description())
@@ -772,6 +783,7 @@ mod tests {
             hub_endpoint: "axon://hub.test:50051".to_string(),
             realm: realm.to_string(),
             username: Some(username.to_string()),
+            user_id: Some(format!("user-{username}")),
             ..Default::default()
         })
         .expect("seed credentials");

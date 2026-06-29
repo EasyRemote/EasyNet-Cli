@@ -194,7 +194,7 @@ impl PluginRuntimeManager {
     /// Shared daemon-local bidi wire profile registry.
     ///
     /// The handle is stable for the daemon lifetime. Reload mutates its
-    /// internal plugin snapshot so gRPC and `<self>.session` dispatchers observe
+    /// internal plugin snapshot so gRPC and `session.open` dispatchers observe
     /// the same plugin load state as `AxonAbilityCatalog` without restarting.
     pub fn ability_wire_registry(&self) -> Arc<AbilityWireRegistry> {
         Arc::clone(&self.wire_registry)

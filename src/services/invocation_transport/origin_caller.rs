@@ -3,13 +3,13 @@
 //
 // File: src/services/invocation_transport/origin_caller.rs
 // Description: Validate the typed origin-caller claim attached to an
-//              `<self>.invoke_remote` request and rebuild the
+//              `runtime.invoke_remote` request and rebuild the
 //              descriptor-bound inner invocation envelope with the real
 //              originating principal as caller.
 //
 // Why this exists
 // ---------------
-// The outer `<self>.invoke_remote` envelope is the transport request.
+// The outer `runtime.invoke_remote` envelope is the transport request.
 // The origin-caller claim is the authority material for the inner
 // descriptor-bound invocation. When present, the executing daemon
 // verifies the claim against Axon descriptor-bound canonical bytes and

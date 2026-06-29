@@ -33,7 +33,11 @@ use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{
-    default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig,
+    default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
+};
+use easynet_cli::runtime::ability::conformance::{
+    BaselineConformanceReport, DaemonInvocationSurface, DeviceBaseline, HubBaseline,
+    RegistryConformance, RuntimeAdminConformance,
 };
 use easynet_cli::runtime::agents;
 use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
@@ -84,6 +88,44 @@ fn report_device_ability_replay(
     Ok(())
 }
 
+fn collect_baseline_failure(failures: &mut Vec<String>, report: BaselineConformanceReport) {
+    if !report.is_conformant() {
+        failures.push(report.panic_message());
+    }
+}
+
+fn assert_daemon_baseline_conformance(
+    mode: DaemonMode,
+    registry: &easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog,
+) -> Result<(), String> {
+    let registry_conformance = RegistryConformance::new(registry);
+    let mut failures = Vec::new();
+
+    if matches!(mode, DaemonMode::Device | DaemonMode::Both) {
+        let device = DeviceBaseline::required_abilities();
+        collect_baseline_failure(&mut failures, registry_conformance.check("device", &device));
+    }
+
+    if matches!(mode, DaemonMode::Hub | DaemonMode::Both) {
+        let hub = HubBaseline::required_abilities();
+        collect_baseline_failure(&mut failures, registry_conformance.check("hub", hub));
+        collect_baseline_failure(
+            &mut failures,
+            DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
+        );
+        collect_baseline_failure(
+            &mut failures,
+            RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
+        );
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n"))
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     // Refuse non-empty argv. `easynet-daemon` does not parse
@@ -124,15 +166,15 @@ async fn main() -> anyhow::Result<()> {
     )));
     boot_bus.emit_ok("kernel");
 
-    boot_bus.emit_started("control-server");
-    let control_server = match server::spawn_booting(boot_bus.clone()) {
-        Ok(handle) => {
-            boot_bus.emit_ok("control-server");
-            handle
+    boot_bus.emit_started("daemon-config");
+    let daemon_config = match DaemonConfig::load(&default_config_path()) {
+        Ok(config) => {
+            boot_bus.emit_ok("daemon-config");
+            config
         }
         Err(err) => {
-            boot_bus.emit_failed("control-server", err.to_string());
-            return Err(err);
+            boot_bus.emit_failed("daemon-config", err.to_string());
+            return Err(err.into());
         }
     };
 
@@ -276,6 +318,25 @@ async fn main() -> anyhow::Result<()> {
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
 
+    boot_bus.emit_started("ability-conformance");
+    if let Err(message) = assert_daemon_baseline_conformance(daemon_config.mode(), &registry) {
+        boot_bus.emit_failed("ability-conformance", message.clone());
+        panic!("{message}");
+    }
+    boot_bus.emit_ok("ability-conformance");
+
+    boot_bus.emit_started("control-server");
+    let control_server = match server::spawn_booting(boot_bus.clone()) {
+        Ok(handle) => {
+            boot_bus.emit_ok("control-server");
+            handle
+        }
+        Err(err) => {
+            boot_bus.emit_failed("control-server", err.to_string());
+            return Err(err);
+        }
+    };
+
     // Attach the live runtime to the device-ability registrar and replay
     // any durably-installed device abilities back into it. This is the
     // boot half of the `ability.deploy` install transaction: without it
@@ -310,7 +371,7 @@ async fn main() -> anyhow::Result<()> {
     // exist. That keeps the PR-1 "load config before any listener
     // bind" invariant honest whenever the feature-gated transport is compiled in.
     // Hold the session-shutdown handle for the daemon's lifetime;
-    // dropping it at shutdown drains the live `<self>.session` dial
+    // dropping it at shutdown drains the live `session.open` dial
     // (F-007 — was Box::leak'd). Bound directly from the boot result:
     // Ok yields the handle, Err returns, so there is no never-read
     // placeholder.
@@ -454,7 +515,7 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_ready();
 
     wait_for_shutdown_signal().await;
-    // Cancel the session supervisor (drains the live `<self>.session`
+    // Cancel the session supervisor (drains the live `session.open`
     // dial -> clean Eof at the hub) before tearing down control sockets.
     #[cfg(feature = "axon-pb")]
     drop(session_shutdown);

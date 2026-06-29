@@ -10,7 +10,7 @@
 
 ## 0. 核心观察(为什么归一是「回家」而不是「迁移」)
 
-`<self>.session` 的 bidi 协议**本来就有 canonical 载体**:
+`session.open` 的 bidi 协议**本来就有 canonical 载体**:
 
 - `InvokeBidiUp` frame 0 = `EnvelopeOpen`,携带完整 AXIOM 七元组 `Envelope`
   (caller/callee/subject/nonce/causal_context/args_digest/ability)+ canonical args;
@@ -112,7 +112,7 @@ message SessionOpenExt {
 
 | 面 | 处置 |
 |---|---|
-| `<self>.session` 业务帧(本 RFC 范围) | proto 化,JSON 形状删除 |
+| `session.open` 业务帧(本 RFC 范围) | proto 化,JSON 形状删除 |
 | control.sock(boot/status/诊断) | 保持 JSON——已有书面不变量「Nothing on control.sock dispatches product abilities」(easynet-daemon.rs),非 invocation 载体 |
 | 会话 keepalive/控制 | 已是 BidiControl proto,无变化 |
 | 跨仓 fixture(Fed-MVP session_dispatch.json) | 最后一次随新帧重生为 proto schema_compat 向量,JSON 基线退役 |

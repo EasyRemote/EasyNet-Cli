@@ -51,13 +51,16 @@
 
 use std::fs;
 use std::path::PathBuf;
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_os = "macos"))]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
+use tokio::sync::broadcast;
 
 use crate::persistence::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use crate::persistence::resources::{ResourceEntry, ResourceType};
@@ -74,6 +77,10 @@ use crate::runtime::agents::media_abilities::{ABILITY_CAMERA_SNAPSHOT, ABILITY_C
 /// frame. 2 MiB keeps the base64-expanded body below the 4 MiB IPC
 /// frame limit while allowing normal laptop camera frames through.
 const MAX_INLINE_BYTES: usize = 2 * 1024 * 1024;
+const BROADCAST_CAPACITY: usize = 8;
+const DEFAULT_CAMERA_FPS: u32 = 30;
+const MIN_CAMERA_FPS: u32 = 1;
+const MAX_CAMERA_FPS: u32 = 60;
 #[cfg(not(target_os = "macos"))]
 const NOKHWA_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -105,11 +112,41 @@ pub trait SnapshotBackend: Send + Sync {
     /// (so the receipt can record what was captured even when the
     /// requested resolution couldn't be honoured).
     fn capture_jpeg(&self, entry: &ResourceEntry) -> anyhow::Result<EncodedFrame>;
+
+    /// Open a realtime preview stream. Frames are shaped like
+    /// `camera.snapshot` receipts but are transient: the live path
+    /// must not persist capture artifacts.
+    fn open_stream(
+        &self,
+        entry: ResourceEntry,
+        options: CameraStreamOptions,
+    ) -> anyhow::Result<broadcast::Receiver<Value>>;
 }
 
 #[derive(Debug, Clone)]
 pub struct EncodedFrame {
     pub jpeg_bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CameraStreamOptions {
+    pub fps: u32,
+    pub resolution: Option<CameraVideoResolution>,
+}
+
+impl Default for CameraStreamOptions {
+    fn default() -> Self {
+        Self {
+            fps: DEFAULT_CAMERA_FPS,
+            resolution: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CameraVideoResolution {
     pub width: u32,
     pub height: u32,
 }
@@ -151,6 +188,20 @@ impl SnapshotBackend for NokhwaBackend {
 
         #[cfg(not(target_os = "macos"))]
         capture_jpeg_with_nokhwa_with_timeout(entry)
+    }
+
+    fn open_stream(
+        &self,
+        entry: ResourceEntry,
+        options: CameraStreamOptions,
+    ) -> anyhow::Result<broadcast::Receiver<Value>> {
+        #[cfg(target_os = "macos")]
+        {
+            super::avfoundation_camera::open_jpeg_stream(entry, options)
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        open_stream_with_nokhwa(entry, options)
     }
 }
 
@@ -269,6 +320,57 @@ fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFram
     })
 }
 
+#[cfg(not(target_os = "macos"))]
+fn open_stream_with_nokhwa(
+    entry: ResourceEntry,
+    options: CameraStreamOptions,
+) -> anyhow::Result<broadcast::Receiver<Value>> {
+    let (tx, rx) = broadcast::channel::<Value>(BROADCAST_CAPACITY);
+    let worker_entry = entry.clone();
+    std::thread::Builder::new()
+        .name("easynet-camera-nokhwa".into())
+        .spawn(move || {
+            let interval = Duration::from_secs_f64(1.0 / options.fps as f64);
+            let seq = AtomicU64::new(0);
+            loop {
+                if tx.receiver_count() == 0 {
+                    break;
+                }
+                let started = Instant::now();
+                match capture_jpeg_with_nokhwa(&worker_entry) {
+                    Ok(frame) => {
+                        let value = build_camera_stream_frame(
+                            seq.fetch_add(1, Ordering::Relaxed),
+                            &worker_entry.hardware_id,
+                            frame,
+                        );
+                        if tx.send(value).is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = tx.send(json!({
+                            "type": "error",
+                            "message": rewrite_ability_in_message(err, ABILITY_CAMERA_SUBSCRIBE).to_string(),
+                            "reason": REASON_RESOURCE_UNAVAILABLE,
+                        }));
+                        break;
+                    }
+                }
+                if let Some(remaining) = interval.checked_sub(started.elapsed()) {
+                    std::thread::sleep(remaining);
+                }
+            }
+        })
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "{ABILITY_CAMERA_SUBSCRIBE}: failed to spawn camera worker: {e}; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+    Ok(rx)
+}
+
 fn persist_camera_snapshot(
     entry: &ResourceEntry,
     captured_at: &str,
@@ -360,57 +462,64 @@ impl SnapshotBackend for SyntheticBackend {
             height: H,
         })
     }
+
+    fn open_stream(
+        &self,
+        entry: ResourceEntry,
+        _options: CameraStreamOptions,
+    ) -> anyhow::Result<broadcast::Receiver<Value>> {
+        let (tx, rx) = broadcast::channel::<Value>(BROADCAST_CAPACITY);
+        let frame = self.capture_jpeg(&entry)?;
+        let _ = tx.send(build_camera_stream_frame(0, &entry.hardware_id, frame));
+        let keepalive_tx = tx.clone();
+        std::thread::Builder::new()
+            .name("easynet-camera-synthetic".into())
+            .spawn(move || {
+                while keepalive_tx.receiver_count() > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            })
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "{ABILITY_CAMERA_SUBSCRIBE}: failed to spawn synthetic camera worker: {e}; \
+                     reason={REASON_RESOURCE_UNAVAILABLE}"
+                )
+            })?;
+        Ok(rx)
+    }
 }
 
 // ── Registration ─────────────────────────────────────────────
 
-/// Register `camera.snapshot` with a real envelope-aware handler
-/// backed by `backend`. The default constructor uses the synthetic
-/// backend; a future bin may swap in a real one by calling this
-/// with a different `Arc<dyn SnapshotBackend>`.
+/// Register `camera.snapshot` and `camera.subscribe` with real
+/// envelope-aware handlers backed by `backend`.
 ///
 /// `media_abilities::register` deliberately skips the camera names
 /// once this real module exists, so each dispatch slot has one
-/// handler family. `camera.subscribe` is still backed by a single
-/// captured preview frame for now, but it is registered as Stream
-/// to match its RFC-006 class and generated descriptor.
+/// handler family. `camera.subscribe` opens a realtime in-memory
+/// preview stream; it never persists the preview frames.
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn SnapshotBackend>) {
-    let subscribe_preview_backend = Arc::clone(&backend);
+    let subscribe_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_CAMERA_SNAPSHOT,
         OwnerKind::Device,
-        Arc::new(move |env: EnvelopeContext, args: Value| {
-            handler(ABILITY_CAMERA_SNAPSHOT, &backend, env, args)
-        }),
+        Arc::new(move |env: EnvelopeContext, args: Value| snapshot_handler(&backend, env, args)),
     );
     reg.register_stream_with_envelope_and_owner(
         ABILITY_CAMERA_SUBSCRIBE,
         OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| {
-            let mut value = handler(
-                ABILITY_CAMERA_SUBSCRIBE,
-                &subscribe_preview_backend,
-                env,
-                args,
-            )
-            .map_err(rewrite_subscribe_preview_error)?;
-            if let Value::Object(ref mut object) = value {
-                object.insert("preview".to_string(), json!(true));
-                object.insert(
-                    "source_ability".to_string(),
-                    json!(ABILITY_CAMERA_SUBSCRIBE),
-                );
-            }
-            Ok(StreamSource::Snapshot(vec![value]))
+            subscribe_handler(&subscribe_backend, env, args)
         }),
     );
 }
 
-fn rewrite_subscribe_preview_error(err: anyhow::Error) -> anyhow::Error {
+#[cfg(not(target_os = "macos"))]
+fn rewrite_ability_in_message(err: anyhow::Error, ability: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{}",
         err.to_string()
-            .replacen(ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE, 1)
+            .replacen(ABILITY_CAMERA_SNAPSHOT, ability, 1)
     )
 }
 
@@ -428,22 +537,12 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 
 // ── Handler core ─────────────────────────────────────────────
 
-fn handler(
-    ability: &str,
+fn snapshot_handler(
     backend: &Arc<dyn SnapshotBackend>,
     env: EnvelopeContext,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let entry = resolve_required_resource_subject(
-        &env,
-        &args,
-        ResourceSubjectSpec {
-            ability,
-            required_subject: "a camera",
-            allowed_kinds: &[ResourceType::Camera],
-            allowed_label: "a camera",
-        },
-    )?;
+    let entry = resolve_camera_subject(&env, &args, ABILITY_CAMERA_SNAPSHOT)?;
 
     // Capture + encode.
     let EncodedFrame {
@@ -504,6 +603,131 @@ fn handler(
         // device produced this byte stream" for the auditor.
         "hardware_id":     entry.hardware_id,
     }))
+}
+
+fn subscribe_handler(
+    backend: &Arc<dyn SnapshotBackend>,
+    env: EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<StreamSource> {
+    let entry = resolve_camera_subject(&env, &args, ABILITY_CAMERA_SUBSCRIBE)?;
+    let options = parse_stream_options(&args)?;
+    let rx = backend.open_stream(entry, options)?;
+    Ok(StreamSource::Live(rx))
+}
+
+fn resolve_camera_subject(
+    env: &EnvelopeContext,
+    args: &Value,
+    ability: &'static str,
+) -> anyhow::Result<ResourceEntry> {
+    resolve_required_resource_subject(
+        env,
+        args,
+        ResourceSubjectSpec {
+            ability,
+            required_subject: "a camera",
+            allowed_kinds: &[ResourceType::Camera],
+            allowed_label: "a camera",
+        },
+    )
+}
+
+pub(crate) fn build_camera_stream_frame(seq: u64, hardware_id: &str, frame: EncodedFrame) -> Value {
+    let image_bytes_b64 = BASE64_STANDARD.encode(&frame.jpeg_bytes);
+    json!({
+        "seq":             seq,
+        "preview":         true,
+        "source_ability":  ABILITY_CAMERA_SUBSCRIBE,
+        "content_type":    "image/jpeg",
+        "width":           frame.width,
+        "height":          frame.height,
+        "byte_size":       frame.jpeg_bytes.len(),
+        "captured_at":     chrono::Utc::now().to_rfc3339(),
+        "image_bytes_b64": image_bytes_b64,
+        "hardware_id":     hardware_id,
+    })
+}
+
+fn parse_stream_options(args: &Value) -> anyhow::Result<CameraStreamOptions> {
+    let mut options = CameraStreamOptions::default();
+    if let Value::Object(map) = args {
+        if let Some(value) = map.get("fps") {
+            let fps = value.as_u64().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{ABILITY_CAMERA_SUBSCRIBE}: fps must be an integer; \
+                     reason=invalid_argument"
+                )
+            })?;
+            if !(MIN_CAMERA_FPS as u64..=MAX_CAMERA_FPS as u64).contains(&fps) {
+                anyhow::bail!(
+                    "{ABILITY_CAMERA_SUBSCRIBE}: fps {fps} outside {MIN_CAMERA_FPS}..={MAX_CAMERA_FPS}; \
+                     reason=invalid_argument"
+                );
+            }
+            options.fps = fps as u32;
+        }
+        if let Some(value) = map.get("resolution") {
+            options.resolution = parse_resolution(value)?;
+        }
+    }
+    Ok(options)
+}
+
+fn parse_resolution(value: &Value) -> anyhow::Result<Option<CameraVideoResolution>> {
+    let Some(raw) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+        anyhow::bail!(
+            "{ABILITY_CAMERA_SUBSCRIBE}: resolution must be a string; \
+             reason=invalid_argument"
+        );
+    };
+    if raw.eq_ignore_ascii_case("native") {
+        return Ok(None);
+    }
+    let lowered = raw.to_ascii_lowercase();
+    let resolution = match lowered.as_str() {
+        "480p" => CameraVideoResolution {
+            width: 640,
+            height: 480,
+        },
+        "720p" => CameraVideoResolution {
+            width: 1280,
+            height: 720,
+        },
+        "1080p" => CameraVideoResolution {
+            width: 1920,
+            height: 1080,
+        },
+        _ => {
+            let Some((w, h)) = lowered.split_once('x') else {
+                anyhow::bail!(
+                    "{ABILITY_CAMERA_SUBSCRIBE}: resolution {raw:?} must be native, 480p, 720p, 1080p, or <width>x<height>; \
+                     reason=invalid_argument"
+                );
+            };
+            CameraVideoResolution {
+                width: parse_positive_u32(w, "resolution width")?,
+                height: parse_positive_u32(h, "resolution height")?,
+            }
+        }
+    };
+    Ok(Some(resolution))
+}
+
+fn parse_positive_u32(raw: &str, name: &str) -> anyhow::Result<u32> {
+    let value = raw.parse::<u32>().map_err(|_| {
+        anyhow::anyhow!(
+            "{ABILITY_CAMERA_SUBSCRIBE}: {name} must be an integer; \
+             reason=invalid_argument"
+        )
+    })?;
+    if value == 0 {
+        anyhow::bail!(
+            "{ABILITY_CAMERA_SUBSCRIBE}: {name} must be positive; \
+             reason=invalid_argument"
+        );
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -653,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn camera_subscribe_stream_preview_returns_one_snapshot_frame() {
+    fn camera_subscribe_returns_live_preview_stream() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_camera(&mut file, "h-cam-preview");
@@ -670,9 +894,17 @@ mod tests {
             subject: Some(ura),
             causal_context: None,
         };
-        let frames = dispatcher.execute_stream(target).unwrap().into_snapshot();
-        assert_eq!(frames.len(), 1);
-        let resp = &frames[0];
+        let source = dispatcher.execute_stream(target).unwrap();
+        let (snapshot, mut rx) = match source {
+            StreamSource::Live(rx) => (Vec::new(), rx),
+            StreamSource::SnapshotThenLive(snapshot, rx) => (snapshot, rx),
+            other => panic!("camera.subscribe must return live stream, got {other:?}"),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let resp = match snapshot.first() {
+            Some(frame) => frame.clone(),
+            None => rt.block_on(async { rx.recv().await.unwrap() }),
+        };
 
         assert_eq!(resp["preview"], true);
         assert_eq!(resp["source_ability"], ABILITY_CAMERA_SUBSCRIBE);

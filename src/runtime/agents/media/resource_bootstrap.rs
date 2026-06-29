@@ -199,6 +199,8 @@ fn discover_displays() -> Vec<DiscoveredResource> {
                 .unwrap_or_else(|| format!("Display {}", idx + 1));
             let width = monitor.width().ok();
             let height = monitor.height().ok();
+            let x = monitor.x().ok();
+            let y = monitor.y().ok();
             let is_primary = monitor.is_primary().ok();
             let fallback_id = format!(
                 "display:xcap:{idx}:{}x{}:{name}",
@@ -215,6 +217,8 @@ fn discover_displays() -> Vec<DiscoveredResource> {
                     "backend": "xcap",
                     "monitor_index": idx,
                     "monitor_id": id,
+                    "x": x,
+                    "y": y,
                     "width": width,
                     "height": height,
                     "is_primary": is_primary,
@@ -278,6 +282,8 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        let x = window.x().ok().map(i64::from);
+        let y = window.y().ok().map(i64::from);
         let width = window.width().ok();
         let height = window.height().ok();
         if !is_remote_capture_candidate(&app_name, width, height) {
@@ -293,12 +299,14 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             None => app_name.clone(),
         };
         let area = screen_target_area(width, height);
+        let bounds = ScreenTargetBounds::new(x, y, width, height);
         apps.entry(app_name.clone()).or_default().record_window(
             id,
             pid,
             title.as_deref(),
             area,
             focused == Some(true),
+            bounds,
         );
         out.push(DiscoveredResource {
             kind: ResourceType::Window,
@@ -315,6 +323,8 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
                 "pid": pid,
                 "app_name": app_name,
                 "title": title,
+                "x": x,
+                "y": y,
                 "width": width,
                 "height": height,
                 "focused": focused,
@@ -338,9 +348,32 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
             "primary_window_id": app.primary_window_id,
             "primary_pid": app.primary_pid,
             "primary_title": app.primary_title,
+            "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
+            "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
+            "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
+            "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
         }),
     }));
     Ok(out)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScreenTargetBounds {
+    x: Option<i64>,
+    y: Option<i64>,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+impl ScreenTargetBounds {
+    fn new(x: Option<i64>, y: Option<i64>, width: Option<u32>, height: Option<u32>) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -349,6 +382,7 @@ struct AppAggregate {
     primary_window_id: Option<u32>,
     primary_pid: Option<u32>,
     primary_title: Option<String>,
+    primary_bounds: Option<ScreenTargetBounds>,
     primary_area: u64,
 }
 
@@ -360,6 +394,7 @@ impl AppAggregate {
         title: Option<&str>,
         area: u64,
         focused: bool,
+        bounds: ScreenTargetBounds,
     ) {
         self.window_count += 1;
         let better_primary =
@@ -368,6 +403,7 @@ impl AppAggregate {
             self.primary_window_id = Some(window_id);
             self.primary_pid = pid;
             self.primary_title = title.map(ToOwned::to_owned);
+            self.primary_bounds = Some(bounds);
             self.primary_area = area;
         }
     }
@@ -383,7 +419,7 @@ mod macos_screen_targets {
     use std::ffi::{c_char, c_void, CStr, CString};
     use std::ptr;
 
-    use super::{screen_target_area, AppAggregate, DiscoveredResource};
+    use super::{screen_target_area, AppAggregate, DiscoveredResource, ScreenTargetBounds};
     use crate::persistence::resources::ResourceType;
 
     type CFArrayRef = *const c_void;
@@ -578,12 +614,19 @@ mod macos_screen_targets {
                 None => app_name.clone(),
             };
             let area = screen_target_area(Some(width), Some(height));
+            let bounds = ScreenTargetBounds::new(
+                Some(rect.origin.x.round() as i64),
+                Some(rect.origin.y.round() as i64),
+                Some(width),
+                Some(height),
+            );
             apps.entry(app_name.clone()).or_default().record_window(
                 window_id,
                 pid,
                 title.as_deref(),
                 area,
                 false,
+                bounds,
             );
             out.push(DiscoveredResource {
                 kind: ResourceType::Window,
@@ -626,6 +669,10 @@ mod macos_screen_targets {
                 "primary_window_id": app.primary_window_id,
                 "primary_pid": app.primary_pid,
                 "primary_title": app.primary_title,
+                "primary_x": app.primary_bounds.and_then(|bounds| bounds.x),
+                "primary_y": app.primary_bounds.and_then(|bounds| bounds.y),
+                "primary_width": app.primary_bounds.and_then(|bounds| bounds.width),
+                "primary_height": app.primary_bounds.and_then(|bounds| bounds.height),
             }),
         }));
         Ok(out)
@@ -987,5 +1034,37 @@ mod tests {
 
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].hardware_id, "window:xcap:10:100");
+    }
+
+    #[test]
+    fn app_aggregate_preserves_primary_window_bounds() {
+        let mut aggregate = AppAggregate::default();
+        aggregate.record_window(
+            10,
+            Some(100),
+            Some("Small"),
+            10_000,
+            false,
+            ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
+        );
+        aggregate.record_window(
+            11,
+            Some(100),
+            Some("Focused"),
+            9_000,
+            true,
+            ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
+        );
+
+        assert_eq!(aggregate.primary_window_id, Some(11));
+        assert_eq!(
+            aggregate.primary_bounds,
+            Some(ScreenTargetBounds::new(
+                Some(300),
+                Some(400),
+                Some(90),
+                Some(100)
+            ))
+        );
     }
 }

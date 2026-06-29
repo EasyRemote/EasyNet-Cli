@@ -77,6 +77,11 @@ pub enum RuntimeKind {
     ClaudeCode,
     Codex,
     CodexAppServer,
+    /// User-defined external-process runtime. The agent's own
+    /// `command`/`args` point at any executable that answers an NL
+    /// prompt over stdin/stdout. The dynamic-extension seam: new harness
+    /// agents are configuration, not new enum variants.
+    External,
 }
 
 impl RuntimeKind {
@@ -90,6 +95,7 @@ impl RuntimeKind {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::CodexAppServer => "codex-app-server",
+            Self::External => "external",
         }
     }
 }
@@ -486,6 +492,7 @@ mod tests {
             RuntimeKind::CodexAppServer.as_wire_str(),
             "codex-app-server"
         );
+        assert_eq!(RuntimeKind::External.as_wire_str(), "external");
     }
 
     // ── failure path ────────────────────────────────────────────────────────

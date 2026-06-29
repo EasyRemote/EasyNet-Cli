@@ -159,6 +159,20 @@ fn start_agent_handler(
         .get("label")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let custom_command = args
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let custom_args: Vec<String> = args
+        .get("command_args")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let materialize_directory = args
         .get("materialize_directory")
         .and_then(Value::as_bool)
@@ -256,7 +270,7 @@ fn start_agent_handler(
 
     let mut entry = if let Some(entry) = provided_entry {
         entry
-    } else if let Some(existing) = existing_entry {
+    } else if let Some(existing) = existing_entry.clone() {
         if materialize_directory {
             let mut updated = existing;
             updated.agent_type = agent_type;
@@ -277,6 +291,26 @@ fn start_agent_handler(
     if let Some(directory) = materialized_directory.as_ref() {
         normalize_v2_entry(&mut entry);
         entry.root_path = Some(directory.root().to_path_buf());
+    }
+    if agent_type == AgentType::External {
+        if let Some(command) = custom_command
+            .as_ref()
+            .or_else(|| existing_entry.as_ref().map(|entry| &entry.command))
+            .filter(|command| !command.is_empty())
+        {
+            entry.command = command.clone();
+        }
+        if !custom_args.is_empty() {
+            entry.args = custom_args.clone();
+        } else if let Some(existing) = existing_entry.as_ref() {
+            entry.args = existing.args.clone();
+        }
+        if entry.command.is_empty() {
+            anyhow::bail!(
+                "agent.start: external agents require `command`; use \
+                 `easynet agent add <name> --type external --command <program> [--arg ...]`"
+            );
+        }
     }
     if label.is_some() {
         entry.with_label(label.clone());
@@ -541,11 +575,7 @@ fn build_hot_agent_descriptors(
 }
 
 fn runtime_kind_from(t: AgentType) -> RuntimeKind {
-    match t {
-        AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
-        AgentType::Codex => RuntimeKind::Codex,
-        AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
-    }
+    t.runtime_kind()
 }
 
 fn normalize_v2_entry(entry: &mut AgentEntry) {
@@ -851,30 +881,35 @@ fn sync_hosted_agents_for_registry(
 }
 
 fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> BootstrapPlan {
-    let (realm, user_id, host_device_ura) = config::load_credentials()
+    let (realm, user_id, username, host_device_ura) = config::load_credentials()
         .ok()
         .map(|creds| {
             let realm = creds.realm.trim().to_string();
             let node_id = creds.node_id.trim().to_string();
             let user_id = creds
-                .username
+                .user_id
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .unwrap_or("")
                 .to_string();
+            let username = creds
+                .username_slug()
+                .map(str::to_string)
+                .unwrap_or_default();
             let host_device_ura = if realm.is_empty() || node_id.is_empty() {
                 String::new()
             } else {
                 crate::ura::device_ura(&realm, &node_id)
             };
-            (realm, user_id, host_device_ura)
+            (realm, user_id, username, host_device_ura)
         })
-        .unwrap_or_else(|| (String::new(), String::new(), String::new()));
+        .unwrap_or_else(|| (String::new(), String::new(), String::new(), String::new()));
 
     BootstrapPlan {
         realm,
         user_id,
+        username,
         host_device_ura,
         consent: true,
         mcp: false,
@@ -905,21 +940,21 @@ fn agent_ura_for_name(name: &str) -> anyhow::Result<String> {
     if let Some(ura) = local_agents_ura_for_name(name) {
         return Ok(ura);
     }
-    let (realm, user_id) = crate::persistence::config::load_credentials()
+    let (realm, username) = crate::persistence::config::load_credentials()
         .and_then(|creds| {
-            let user_id = creds.username_slug()?.to_string();
+            let username = creds.username_slug()?.to_string();
             let realm = creds.realm.trim().to_string();
             if realm.is_empty() {
                 anyhow::bail!("credentials file is missing realm");
             }
-            Ok((realm, user_id))
+            Ok((realm, username))
         })
         .map_err(|err| {
             anyhow::anyhow!(
                 "agent.start requires joined credentials before deriving hosted-agent URA: {err}"
             )
         })?;
-    Ok(crate::ura::agent_ura(&realm, &user_id, name))
+    Ok(crate::ura::agent_ura(&realm, &username, name))
 }
 
 fn local_agents_ura_for_name(name: &str) -> Option<String> {
@@ -1138,6 +1173,7 @@ mod tests {
             hub_endpoint: "axon://hub.test:50051".to_string(),
             realm: "localhost".to_string(),
             username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
             ..Default::default()
         })
         .expect("seed joined credentials");
@@ -1377,6 +1413,47 @@ mod tests {
         let err = start_agent_handler(json!({"agent_type": "claude-code"}), &empty_hot_registrar())
             .unwrap_err();
         assert!(format!("{err}").contains("name"));
+    }
+
+    #[test]
+    fn start_agent_persists_external_command_and_args() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let resp = start_agent_handler(
+                json!({
+                    "name": "semop",
+                    "agent_type": "external",
+                    "command": "/bin/cat",
+                    "command_args": ["--number"],
+                    "materialize_directory": true,
+                }),
+                &empty_hot_registrar(),
+            )
+            .unwrap();
+            assert_eq!(resp["agent_type"], "external");
+            let registry = agents::load_agents().unwrap();
+            let stored = registry.agents.get("semop").unwrap();
+            assert_eq!(stored.agent_type, AgentType::External);
+            assert_eq!(stored.command, "/bin/cat");
+            assert_eq!(stored.args, vec!["--number".to_string()]);
+        });
+    }
+
+    #[test]
+    fn start_agent_rejects_external_without_command() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let err = start_agent_handler(
+                json!({
+                    "name": "semop",
+                    "agent_type": "external",
+                    "materialize_directory": true,
+                }),
+                &empty_hot_registrar(),
+            )
+            .unwrap_err();
+            assert!(format!("{err}").contains("external agents require `command`"));
+        });
     }
 
     #[test]

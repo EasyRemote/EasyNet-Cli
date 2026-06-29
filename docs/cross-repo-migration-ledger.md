@@ -44,7 +44,7 @@ by reading both encoders.
 
 | Plan item | Priority | Status | Evidence | Remainder |
 |---|---|---|---|---|
-| daemon Invocation builder completeness | P1 | **DONE end-to-end for backend producer + CLI consumer** | All 7 AXIOM fields set in 3 builders (`backend/internal/daemon_grpc/mapping.go`, `invoke_remote.go`). Backend serializes true user-signed `DelegationProof` values into `x-easynet-delegation` and backend-signed `SessionAuthority` values into `x-easynet-session-authority`, rejects ambiguous authority, and pins decode/verify in daemon gRPC and invoke_remote frame tests. EasyNet-Cli daemon admission now parses and verifies both metadata forms in `src/services/invocation_transport/admission_facade.rs`; `tests/admission_delegation_metadata.rs` proves unary, server-stream, and bidi frame-0 consumer paths. `<self>.invoke_remote` additionally verifies inner `(caller, subject, target, ability)` authority before writing `SessionDispatch`, and preserves metadata in the session dispatch frame. | Keep `InvokeRemote` receipt/control down-frames intentionally non-user-visible unless a future audit requirement needs HTTP-layer admission receipt exposure. |
+| daemon Invocation builder completeness | P1 | **DONE end-to-end for backend producer + CLI consumer** | All 7 AXIOM fields set in 3 builders (`backend/internal/daemon_grpc/mapping.go`, `invoke_remote.go`). Backend serializes true user-signed `DelegationProof` values into `x-easynet-delegation` and backend-signed `SessionAuthority` values into `x-easynet-session-authority`, rejects ambiguous authority, and pins decode/verify in daemon gRPC and invoke_remote frame tests. EasyNet-Cli daemon admission now parses and verifies both metadata forms in `src/services/invocation_transport/admission_facade.rs`; `tests/admission_delegation_metadata.rs` proves unary, server-stream, and bidi frame-0 consumer paths. `runtime.invoke_remote` additionally verifies inner `(caller, subject, target, ability)` authority before writing `SessionDispatch`, and preserves metadata in the session dispatch frame. | Keep `InvokeRemote` receipt/control down-frames intentionally non-user-visible unless a future audit requirement needs HTTP-layer admission receipt exposure. |
 | No JSON control dependency | P1 | **DONE** | `internal/cliipc` absent; backend dials `daemon.sock` via gRPC only (`servicecontext.go:154-227`); JSON path retired (comments only). | None. |
 | Product state boundary | P1 | **DONE** | Backend calls daemon for all execution, stores DB projections; owns no admission/receipt semantics (`invokeAbilityLogic.go:94`, `remote_routing.go:179`). | None. |
 
@@ -84,7 +84,7 @@ InvokeRemote receipt/control audit policy  ──(only if HTTP-layer receipts be
   authority/audit principal, not execution location. **Backend producer** — done;
   it emits serialized `SessionAuthority` metadata for backend sessions and
   reserves `DelegationProof` for user-signed delegation, including the
-  `<self>.invoke_remote` inner metadata path.
+  `runtime.invoke_remote` inner metadata path.
 - **Daemon authority consumer** — DONE in EasyNet-Cli; `x-easynet-session-authority`
   and `x-easynet-delegation` are parsed and verified across unary,
   server-stream, bidi frame-0 admission paths, and invoke_remote inner dispatch

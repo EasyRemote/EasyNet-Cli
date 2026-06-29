@@ -9,12 +9,12 @@
 //! easynet.run's web tier and is out of scope for the CLI repo.
 //! Instead we synthesise the post-pairing state (credentials +
 //! keyring + agent registry) directly and prove that the chat
-//! round-trip works through `<self>.invoke` on each "device".
+//! round-trip works through `<agent>.invoke` on each "device".
 //!
 //! Because the test crosses many layers it lives at the CLI's
 //! integration-test surface (`tests/`), not as a unit test. It
 //! takes the longest path the CLI exposes: keyring (RFC-002) →
-//! agent registry → `<self>.invoke` → forward routing
+//! agent registry → `<agent>.invoke` → forward routing
 //! (RFC-002 §5.2, RFC-002.2 §2.3) → fake remote daemon handler.
 
 use easynet_axon::invocation::LocalRuntime;
@@ -187,7 +187,7 @@ fn user_join_two_devices_chat_round_trip() {
     });
 
     // ── Step 5: build device1's invoke pipeline. agent1 calls
-    //    `<self>.invoke(ability=<device-owned chat Ability URA>,
+    //    `<agent>.invoke(ability=<device-owned chat Ability URA>,
     //    args={message: "hello"})`. The dispatch derives the
     //    target device URA and owner-local public ability from the
     //    Ability URA, recognises the federation target, asks the

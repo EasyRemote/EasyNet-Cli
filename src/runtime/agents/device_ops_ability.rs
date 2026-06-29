@@ -712,7 +712,7 @@ mod tests {
             ABILITY_UNINSTALL_ABILITY,
         ] {
             let manifest = reg
-                .manifest_for(ability)
+                .control_plane_manifest(ability)
                 .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
             assert_eq!(
                 manifest.input_schema().get("type").and_then(Value::as_str),

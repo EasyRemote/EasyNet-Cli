@@ -655,7 +655,9 @@ fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agent
 fn skills_dir_for(root: &std::path::Path, agent_type: agents::AgentType) -> PathBuf {
     match agent_type {
         agents::AgentType::ClaudeCode => root.join(".claude").join("skills"),
-        agents::AgentType::Codex | agents::AgentType::CodexAppServer => root.join("skills"),
+        agents::AgentType::Codex
+        | agents::AgentType::CodexAppServer
+        | agents::AgentType::External => root.join("skills"),
     }
 }
 
@@ -669,7 +671,9 @@ fn skill_dir_candidates_for(
             root.join(".claude").join("skills").join(skill_name),
             root.join("skills").join(skill_name),
         ],
-        agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
+        agents::AgentType::Codex
+        | agents::AgentType::CodexAppServer
+        | agents::AgentType::External => {
             vec![root.join("skills").join(skill_name)]
         }
     };

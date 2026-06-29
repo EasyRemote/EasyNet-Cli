@@ -4,7 +4,7 @@ use rand::RngCore as _;
 
 use super::{SESSION_BACKOFF_INITIAL, SESSION_BACKOFF_MAX};
 
-/// Minimum uptime for a cleanly-closed `<self>.session` to count as
+/// Minimum uptime for a cleanly-closed `session.open` to count as
 /// healthy and earn a backoff reset.
 ///
 /// A clean down-stream EOF is NOT sufficient evidence of a healthy
@@ -25,7 +25,7 @@ use super::{SESSION_BACKOFF_INITIAL, SESSION_BACKOFF_MAX};
 /// `SESSION_BACKOFF_MAX`.
 pub const SESSION_HEALTHY_MIN_UPTIME: Duration = Duration::from_secs(30);
 
-/// Device-side fingerprint of a cleanly-closed `<self>.session`,
+/// Device-side fingerprint of a cleanly-closed `session.open`,
 /// reported by `dial_and_run_session*` on `Ok`.
 ///
 /// This is the evidence record for diagnosing hub-side close causes
@@ -46,7 +46,7 @@ pub struct SessionCloseStats {
     pub frames_received: u64,
 }
 
-/// First-class classification of a clean `<self>.session` close
+/// First-class classification of a clean `session.open` close
 /// (F-008 / T1.1: the close class drives backoff policy and ops
 /// alerting; while it lived as prose + ad-hoc comparisons, the
 /// 2026-06-11 displacement ping-pong stayed invisible until 5,428
@@ -101,7 +101,7 @@ impl SessionCloseStats {
     }
 }
 
-/// Typed phase of one supervised `<self>.session` (F-008 / T1.1).
+/// Typed phase of one supervised `session.open` (F-008 / T1.1).
 ///
 /// The supervisor's control flow DRIVES transitions; the phase type
 /// makes "what stage is this device in" a queryable, observable fact

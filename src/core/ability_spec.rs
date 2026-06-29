@@ -221,8 +221,8 @@ pub struct AbilityManifest {
     /// route.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     exec: Option<AbilityExec>,
-    /// Optional access policy. Drives `<self>.discover` filtering and
-    /// the `<self>.invoke` permission check. Absence is treated as the
+    /// Optional access policy. Drives `<agent>.discover` filtering and
+    /// the `<agent>.invoke` permission check. Absence is treated as the
     /// default policy (`AccessPolicy::default()`), which sets
     /// `visibility = "device"` — the same trust boundary as "agents
     /// running on the same physical device under one user".
@@ -344,7 +344,7 @@ impl CostMeta {
 ///
 /// The model is monotonic: each tier strictly includes the smaller
 /// ones (`device` includes `self`, `public` includes both). This
-/// matches the `<self>.discover(scope: ...)` ladder — Tier 1 returns
+/// matches the `<agent>.discover(scope: ...)` ladder — Tier 1 returns
 /// `self`+, Tier 2 returns `device`+, Tier 3 returns `public`.
 ///
 /// Default is `Device` rather than `Self` because two agents on the
@@ -457,7 +457,7 @@ impl Visibility {
     }
 
     /// Stable string form used in JSON discovery payloads (the
-    /// `visibility` field of a `<self>.discover` candidate). Mirrors
+    /// `visibility` field of a `<agent>.discover` candidate). Mirrors
     /// the TOML serde rename rules so the wire form and the on-disk
     /// form agree.
     pub fn as_wire_str(self) -> &'static str {

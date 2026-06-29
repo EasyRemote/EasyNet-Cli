@@ -30,7 +30,7 @@ fn caller_is_device_owner(caller: Option<&str>) -> bool {
     }
     match parsed.kind {
         crate::ura::URAKind::Device => parsed.device_id() == Some(creds.node_id.trim()),
-        crate::ura::URAKind::User => creds.username.as_deref().map(str::trim) == parsed.user_id(),
+        crate::ura::URAKind::User => creds.user_id().ok() == parsed.user_id(),
         _ => false,
     }
 }
@@ -220,6 +220,7 @@ mod tests {
             hub_endpoint: "https://127.0.0.1:50443".into(),
             realm: realm.to_string(),
             username: Some(username.to_string()),
+            user_id: Some(format!("user-{username}")),
             ..Default::default()
         })
         .expect("save credentials");
@@ -230,8 +231,8 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         let env = EnvelopeContext::for_test(
-            "easynet:///r/acme/user/alice",
-            "easynet:///r/acme/user/alice",
+            "easynet:///r/acme/user/user-alice",
+            "easynet:///r/acme/user/user-alice",
         );
         let grant =
             RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s1", &env).unwrap();
@@ -257,10 +258,10 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         for caller in [
-            "easynet:///r/acme/user/mallory",       // different user
-            "easynet:///r/other/user/alice",        // different realm
-            "easynet:///r/acme/device/dev-2",       // different device
-            "easynet:///r/acme/agent/alice.helper", // agents never self-consent
+            "easynet:///r/acme/user/mallory",            // different user
+            "easynet:///r/other/user/user-alice",        // different realm
+            "easynet:///r/acme/device/dev-2",            // different device
+            "easynet:///r/acme/agent/user-alice.helper", // agents never self-consent
         ] {
             let env = EnvelopeContext::for_test(caller, "easynet:///r/acme/device/dev-1");
             let err = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s3", &env)
@@ -277,12 +278,12 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         let env = EnvelopeContext::for_test(
-            "easynet:///r/acme/user/alice",
-            "easynet:///r/acme/user/alice",
+            "easynet:///r/acme/user/user-alice",
+            "easynet:///r/acme/user/user-alice",
         )
         .with_causal_context(json!({
             "kind": "scalar",
-            "receipt_ura": "easynet:///r/acme/resource/alice.invocations/1",
+            "receipt_ura": "easynet:///r/acme/resource/user-alice.invocations/1",
             "receipt_hash": "ab",
         }));
         let grant =

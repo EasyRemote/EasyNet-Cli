@@ -28,10 +28,10 @@ use crate::services::invocation_transport::federation_wrappers::{
 use crate::services::invocation_transport::invocation_wire::{
     DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
 };
-use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
+use crate::services::invocation_transport::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
-use crate::services::invocation_transport::register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
-use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;
+use crate::services::invocation_transport::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::services::invocation_transport::target_gate::RESOLVE_SELECTED_HOST_UNAVAILABLE_CODE;
 
 pub(crate) fn build_unary_ledger_record(
@@ -352,11 +352,11 @@ fn has_non_empty_metadata(request: &InvokeRequest, key: &str) -> bool {
 fn bootstrap_authority_ability_for_ledger(function: &str) -> bool {
     matches!(
         function,
-        ABILITY_SELF_REGISTER_DEVICE_PUBKEY
+        ABILITY_IDENTITY_REGISTER_PUBKEY
             | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
             | ABILITY_FEDERATION_ADVERTISE_AGENT
-            | ABILITY_SELF_LIST_USER_PUBKEYS
-            | ABILITY_SELF_REVOKE_USER_PUBKEY
+            | ABILITY_IDENTITY_LIST_USER_PUBKEYS
+            | ABILITY_IDENTITY_REVOKE_USER_PUBKEY
     )
 }
 

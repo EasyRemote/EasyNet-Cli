@@ -30,7 +30,7 @@ hub projection 只是签名的发现投影。`agent.start` 一直注册在本地
 
 ### 3. profile 模型(经一次过度修正后的正解)
 **第一版我把投影路径默认设成 `ShadowRead`(只有执行宿主==本机才 AuthoritativeLocal),这是错的。**
-真机暴露:backend 经 **hub daemon** 走 `<self>.invoke_remote` 解析 `device.f9904e66.terminal.list`,
+真机暴露:backend 经 **hub daemon** 走 `runtime.invoke_remote` 解析 `device.f9904e66.terminal.list`,
 hub 的 `daemon_ura=.../hub` ≠ 设备 URA → 走投影 → 被我标成 ShadowRead → `ROUTE_PROFILE_BLOCKED`。
 但 hub 对"这条 device-owned ability 在哪台设备、转发过去"**本就是权威**——这不是 shadow read。
 
@@ -69,7 +69,7 @@ device-local 分支保留,价值收窄为唯一关键点:**设备解析自己的
 ## 拓扑要点(真机调试得到)
 本地是**两个 daemon**:device daemon(`~/.easynet`,mode=device,`device/f9904e66`)+
 hub daemon(`EasyNet/.dev-hub-home/.easynet`,mode=hub,听 50443)。backend(caller=`.../hub`)
-经 hub 走 `<self>.invoke_remote` 转发到 device。所以 `terminal.list` 的 resolve **发生在 hub**,
+经 hub 走 `runtime.invoke_remote` 转发到 device。所以 `terminal.list` 的 resolve **发生在 hub**,
 hub 的 daemon_ura 是 hub 不是 device —— 这正是第一版 ShadowRead 误判的来源。修正后 hub 投影路径
 产 AuthoritativeLocal、正常转发给 device。
 
@@ -102,7 +102,7 @@ hub 的 daemon_ura 是 hub 不是 device —— 这正是第一版 ShadowRead �
 ### 根因 B:runtime.bootstrap_self_identity NXDOMAIN(hub 身份注册失败)
 backend(身份=hub)在 device daemon 上调 `runtime.bootstrap_self_identity`,daemon unary catch-all
 把它丢进 owner-resolve,owner=hub 不在 device presence → `NXDOMAIN owner is not online`。
-`runtime.*` 是节点内部 admin 握手(像 `<self>.*`),不该走 owner 解析。
+`runtime.*` 是节点内部 admin 握手(像 `legacy self alias.*`),不该走 owner 解析。
 - 修:`is_runtime_admin_ability`(`runtime.` 前缀)+ `dispatch_runtime_admin_ability`:直接在 LocalRuntime
   按 ability 名 dispatch,绕过 owner-presence resolve,由 SDK admin surface 自己做权限校验。
 - 测试:success 测试去掉 `publish_test_route` 仍通过(证明绕过 owner 解析);no-admin → `NotFound: not installed`。

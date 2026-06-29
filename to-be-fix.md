@@ -287,15 +287,17 @@
 - 落点:backend/internal/receipt/(仅记录与查询) · 规范 · 低中
 - 方向:边界决定(信任 Axon 已验)写进 boundary 文档;或补链验证调用。
 
-### F-040 backend 把产品跨设备调用包成 daemon-internal 的 `<self>.invoke_remote`,wire 形状逐字节手抄 【已核验,2026-06-12 边界镜头】
-- 落点:backend/internal/daemon_grpc/invoke_remote.go:58(`const AbilityInvokeRemote = "<self>.invoke_remote"`);
-  文件头注释自认:「daemon-internal — the daemon's <self>.invoke_remote dispatcher owns it」
+### F-040 backend 把产品跨设备调用包成 daemon-internal 的 `runtime.invoke_remote`,wire 形状逐字节手抄 【已核验,2026-06-12 边界镜头】
+- 落点:backend/internal/daemon_grpc/invoke_remote.go:58(`const AbilityInvokeRemote = "runtime.invoke_remote"`);
+  文件头注释自认:「daemon-internal — the daemon's runtime.invoke_remote dispatcher owns it」
   「Wire shape mirrors the Rust initiator … 1:1: struct names + JSON tags are byte-identical here,
   with no translation layer」 · 架构/边界 · **中高**
 - 违反(runtime-boundary skill 两条明文):①「Ordinary product calls should not be wrapped as
-  `<self>.invoke_remote` at the backend boundary」;② Cli 拥有的 JSON 帧形状在 Go 里手抄副本 =
+  `runtime.invoke_remote` at the backend boundary」;② Cli 拥有的 JSON 帧形状在 Go 里手抄副本 =
   协议形状第二真源(与 F-015 同病,平面不同:F-015 fork 协议层,本条 fork 派发帧层)。
-- 缓和:contract test 对真 daemon 回环验证;注释记录 v4.1.6 计划改名 `device.invoke_remote`。
+- 现状:本轮已把默认 backend Axon 调用改回完整 Invoke,由 CLI daemon 的
+  namespace.resolve / session.open / runtime.invoke_remote 路径负责本地性与转发;
+  backend 不再按 ability 名分类。
 - 方向:并入清洁目标迁移——backend 向 daemon Invocation 面提交**完整 Invocation**(七元组),
   daemon 拥有 callee 本地性解析/转发;过渡期至少把共享帧形状挪到生成代码(随 F-004 载体归一)。
   与 F-004/F-038 同批设计,不单独修。
@@ -669,7 +671,7 @@
   提供」在 Cli 已达成;② AdmissionFacade 委托 `run_admission`+`canonical_invocation_bytes`
   (DEC-009),非复刻;③ FFI C ABI 七元组完整(subject/nonce/causal_context 必填,Axon JSON
   surface),无静默默认;④ Frontend parseURA 是 skill 钦定镜像。
-  **新债与升格**:F-040 入册(backend 包 `<self>.invoke_remote` + 帧形状逐字节手抄);
+  **新债与升格**:F-040 入册(backend 包 `runtime.invoke_remote` + 帧形状逐字节手抄);
   F-004 升格为「第二 invocation 载体」边界债,与 F-038/F-040 同病归批;
   F-015 定性升格:从「未用 SDK」到「协议真源二元化」(Rule 1 拒绝类)。
 - **2026-06-12 第 9 轮**(loop 重启,cron 0d1d80b5;边界维度铺满):
@@ -974,9 +976,8 @@
   1168b09/6e34457)。**零新债**。daemon catch-all 远端臂仍在制。
 - **2026-06-12 第 50 轮(循环会话,(b) 裁定消化)**:承认第 49 轮的反向命中——运载问题
   的答案在已批 spec §0.2:48 字面里,路由前未查批文,违自家决策密度家规(记忆原则再固化)。
-  (b) 终形入 prep 件 §七:**backend 切换再简化**——RemoteRoutingClient 整体退役(分类器/
-  transportCaller/origin 提取全归 daemon),handler 请求原样直交 canonical 面;删除清单
-  不变,时点 = daemon catch-all 远端臂落地(载体施工中)。ec0b7a60 形仍服务跨域腿。
+  (b) 终形已落地:**backend 切换再简化**——backend 路由 adapter 整体退役(分类器/
+  transportCaller/origin 提取全归 daemon),handler 请求原样直交 canonical 面。ec0b7a60 形仍服务跨域腿。
 - **2026-06-12 第 48 轮(循环会话)**:增量审计 Axon aa0bb5f2(domain→wire receipt 投影,
   DEC-F004 审计 5)——try_* 读者的出站镜像全集(身份/因果四形/callee 签名/六变体
   authority binding 双 proof 体),审计承载字段逐字过线(canonical bytes 覆盖

@@ -10,8 +10,8 @@
 //                * federation reads — resolve / resolve_key / discover /
 //                  list_user_devices (+ backend proxy variants) / revoke
 //                * RFC-005 namespace.resolve (+ backend proxy variant)
-//                * identity verbs — <self>.register_device_pubkey /
-//                  revoke_user_pubkey / list_user_pubkeys
+//                * identity verbs — identity.register_pubkey /
+//                  identity.revoke_user_pubkey / identity.list_user_pubkeys
 //                * runtime.* node-internal admin handshakes
 //                * the resolve-first LocalRuntime catch-all
 //
@@ -31,6 +31,7 @@ use futures::StreamExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use tonic::{Response, Status};
 
 use easynet_axon::pb::axon::v1::{
@@ -68,17 +69,23 @@ use crate::services::invocation_transport::invoke_remote_initiator::{
 use crate::services::invocation_transport::list_user_pubkeys::handle as handle_list_user_pubkeys;
 use crate::services::invocation_transport::peer_envelope_signer::PeerInvokeRequest;
 use crate::services::invocation_transport::register_device_pubkey::handle as handle_register_device_pubkey;
-use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
-use crate::services::invocation_transport::revoke_user_pubkey::handle as handle_revoke_user_pubkey;
+use crate::services::invocation_transport::register_device_pubkey::parse_register_pubkey_intent;
+use crate::services::invocation_transport::revoke_user_pubkey::{
+    handle_with_outcome as handle_revoke_user_pubkey_with_outcome, parse_revoke_user_pubkey_intent,
+};
 use crate::services::invocation_transport::route_resolver::{
-    DelegatedInvokeRoute, SelectedInvokeRoute,
+    DelegatedInvokeRoute, ForwardInvokeRouteSelection, ResolveRouteFailure, SelectedInvokeRoute,
+};
+use crate::services::invocation_transport::runtime_trust::RuntimeTrust;
+use crate::services::invocation_transport::runtime_trust_invalidator::{
+    RuntimeTrustConnectionStateProjector, RuntimeTrustInvalidator,
 };
 use crate::services::invocation_transport::target_gate::{
-    envelope_with_selected_callee, route_negative_status, route_owner_mismatch_message,
-    route_profile_blocked_status, selected_host_unavailable_message, TargetGate,
-    ROUTE_SELECTED_REMOTE_HOST_CODE,
+    envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
+    selected_host_unavailable_message, TargetGate,
 };
 use crate::services::pending_dispatch::DispatchResult;
+use crate::services::realm_trust_anchor::TrustedAgentRole;
 use crate::services::session_failure::SessionFailure;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -119,6 +126,60 @@ fn rpc_dispatch_outcome_response(
         ))),
     };
     (response, axon_started)
+}
+
+fn forward_invoke_route_failure_status(failure: ResolveRouteFailure) -> Status {
+    if matches!(
+        failure.reason,
+        easynet_axon::pb::axon::v1::NegativeReason::Refused
+    ) {
+        return Status::invalid_argument(format!("federation.forward_invoke: {}", failure.detail));
+    }
+    route_negative_status(failure)
+}
+
+fn validate_federation_join_request(
+    request: &federation_wrappers::JoinRequest,
+    daemon_realm: &str,
+) -> Result<(), Status> {
+    if request.realm.trim() != daemon_realm {
+        return Err(Status::invalid_argument(format!(
+            "federation.join: request realm `{}` does not match daemon realm `{daemon_realm}`",
+            request.realm
+        )));
+    }
+    let parsed = crate::ura::parse_ura(request.membership_ura.trim()).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation.join: membership_ura `{}` is not a canonical device URA: {err}",
+            request.membership_ura
+        ))
+    })?;
+    if parsed.kind != crate::ura::URAKind::Device {
+        return Err(Status::invalid_argument(format!(
+            "federation.join: membership_ura `{}` must identify a device, got {:?}",
+            request.membership_ura, parsed.kind
+        )));
+    }
+    if parsed.realm != request.realm.trim() {
+        return Err(Status::invalid_argument(format!(
+            "federation.join: membership realm `{}` does not match request realm `{}`",
+            parsed.realm, request.realm
+        )));
+    }
+    Ok(())
+}
+
+fn public_key_hex_to_b64(public_key_hex: &str) -> Result<String, Status> {
+    let raw = hex::decode(public_key_hex.trim()).map_err(|err| {
+        Status::invalid_argument(format!("federation.join: public_key_hex is not hex: {err}"))
+    })?;
+    if raw.len() != 32 {
+        return Err(Status::invalid_argument(format!(
+            "federation.join: public_key_hex must decode to 32 bytes, got {}",
+            raw.len()
+        )));
+    }
+    Ok(B64.encode(raw))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,7 +230,7 @@ impl UnarySelfTargetSubject {
 }
 
 /// Hard ceiling on one presence-dispatch round-trip: the time between
-/// pushing a `Dispatch` frame down a device's `<self>.session` and
+/// pushing a `Dispatch` frame down a device's `session.open` and
 /// that device's `Result` frame completing the pending entry. The
 /// presence-offline watcher already fail-fasts waiters whose session
 /// drops; this deadline covers every other never-reply shape (a
@@ -252,6 +313,18 @@ impl UnaryDispatcher {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::JoinRequest = parse_json_args(arguments)?;
+        let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "federation.join: this hub was booted without the trust-write surface",
+            )
+        })?;
+        validate_federation_join_request(&request, &ctx.daemon_realm)?;
+        let public_key_b64 = public_key_hex_to_b64(&request.public_key_hex)?;
+        RuntimeTrust::new(&ctx.daemon_realm, &ctx.trust_anchor_path, &ctx.cell).register_pubkey(
+            request.membership_ura.clone(),
+            public_key_b64,
+            TrustedAgentRole::Device,
+        )?;
         let response = federation_wrappers::handle_join(&request);
         wrap_json_response(&response)
     }
@@ -291,6 +364,11 @@ impl UnaryDispatcher {
             Some(self.directory.ability_catalog.as_ref()),
             now_unix_ms(),
         );
+        wrap_json_response(&response)
+    }
+
+    pub(crate) fn dispatch_federation_status(&self) -> Result<Response<InvokeResponse>, Status> {
+        let response = federation_wrappers::handle_status();
         wrap_json_response(&response)
     }
 
@@ -343,14 +421,17 @@ impl UnaryDispatcher {
         };
         // step-4 / T2.1b: locality is the daemon's decision, not the
         // caller's. A resolver-selected remote host dispatches through
-        // that device's `<self>.session`. Like the federation-wrapper
+        // that device's `session.open`. Like the federation-wrapper
         // arms, this is a service-handler path — the manual unary
         // record runs (axon_took_it = false); the executing device's
         // own runtime holds the canonical ledger row.
-        if !self
+        let execution_host_is_self = self
             .gate
             .matches_self_target_ura(&selected_route.execution_host_ura)
-            .await
+            .await;
+        if selected_route
+            .dispatch_target(execution_host_is_self)
+            .is_presence_session()
         {
             return (
                 self.dispatch_remote_rpc_selected_route(request, &selected_route)
@@ -485,7 +566,7 @@ impl UnaryDispatcher {
     ///
     /// `runtime.*` abilities (e.g. `runtime.bootstrap_self_identity`) are
     /// node-internal control-plane handshakes hosted by whichever daemon
-    /// receives them — exactly like `<self>.*`. Their wire `callee` is the
+    /// receives them — exactly like `legacy self alias.*`. Their wire `callee` is the
     /// caller's *claimed* authority owner (a backend sets it to the hub
     /// URA), which is not a routable owner on this daemon's presence
     /// directory. Routing them through owner resolution therefore returns
@@ -525,15 +606,24 @@ impl UnaryDispatcher {
 
     pub(crate) fn dispatch_register_device_pubkey(
         &self,
+        caller_envelope: Option<&Envelope>,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
-        let ctx = self.identity.register_pubkey.as_ref().ok_or_else(|| {
+        let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
             Status::failed_precondition(
-                "<self>.register_device_pubkey: this daemon was booted without the trust-write \
+                "identity.register_pubkey: this daemon was booted without the trust-write \
                  surface (use `with_register_pubkey(...)` at boot to enable). PR-7 production \
                  daemons always wire this; an unwired daemon is a smoke-test or fixture build.",
             )
         })?;
+        let intent = parse_register_pubkey_intent(arguments)?;
+        let write_gate =
+            crate::services::invocation_transport::identity_write_gate::IdentityWriteGate::new(
+                self.admission.trust_anchor_snapshot(),
+                self.admission.daemon_ura().map(str::to_string),
+                ctx.daemon_realm.clone(),
+            );
+        write_gate.authorize_register_pubkey(caller_envelope, &intent)?;
         let body = handle_register_device_pubkey(
             arguments,
             &ctx.daemon_realm,
@@ -552,22 +642,54 @@ impl UnaryDispatcher {
     /// uses; the revoke surface only mutates user-role entries.
     pub(crate) fn dispatch_revoke_user_pubkey(
         &self,
+        caller_envelope: Option<&Envelope>,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
-        let ctx = self.identity.register_pubkey.as_ref().ok_or_else(|| {
+        let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
             Status::failed_precondition(
-                "<self>.revoke_user_pubkey: this daemon was booted without the trust-write \
+                "identity.revoke_user_pubkey: this daemon was booted without the trust-write \
                  surface (use `with_register_pubkey(...)` at boot to enable).",
             )
         })?;
-        let body = handle_revoke_user_pubkey(
+        let intent = parse_revoke_user_pubkey_intent(arguments)?;
+        let write_gate =
+            crate::services::invocation_transport::identity_write_gate::IdentityWriteGate::new(
+                self.admission.trust_anchor_snapshot(),
+                self.admission.daemon_ura().map(str::to_string),
+                ctx.daemon_realm.clone(),
+            );
+        write_gate.authorize_revoke_user_pubkey(caller_envelope, &intent)?;
+        let outcome = handle_revoke_user_pubkey_with_outcome(
             arguments,
             &ctx.daemon_realm,
             &ctx.trust_anchor_path,
             &ctx.cell,
         )?;
+        let invalidation = RuntimeTrustInvalidator::new(
+            self.directory.presence.clone(),
+            self.directory.advertised_agents.clone(),
+        )
+        .with_connection_state_projector(
+            RuntimeTrustConnectionStateProjector::from_local_credentials("daemon.runtime_trust"),
+        )
+        .invalidate_revoked_subject(
+            intent.agent_ura(),
+            Some(intent.public_key_b64()),
+            outcome.removed,
+        );
+        if invalidation.removed_any_presence() || invalidation.removed_any_hosted_agent() {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = runtime_trust_revoke_invalidated_presence,
+                subject_ura = intent.agent_ura(),
+                direct_presence_removed = invalidation.direct_presence_removed,
+                hosted_agents_removed = invalidation.hosted_agents_removed,
+                hosted_hosts_revoked = invalidation.hosted_hosts_revoked,
+                connection_state_recorded = invalidation.connection_state_recorded,
+            );
+        }
         Ok(Response::new(InvokeResponse {
-            result: body,
+            result: outcome.body,
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
             ..InvokeResponse::default()
@@ -582,13 +704,13 @@ impl UnaryDispatcher {
         &self,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
-        let ctx = self.identity.register_pubkey.as_ref().ok_or_else(|| {
+        let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
             Status::failed_precondition(
-                "<self>.list_user_pubkeys: this daemon was booted without the trust \
+                "identity.list_user_pubkeys: this daemon was booted without the trust \
                  surface; no listing available.",
             )
         })?;
-        let body = handle_list_user_pubkeys(arguments, &ctx.cell)?;
+        let body = handle_list_user_pubkeys(arguments, ctx.reader())?;
         Ok(Response::new(InvokeResponse {
             result: body,
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
@@ -1030,22 +1152,14 @@ impl UnaryDispatcher {
         );
         wrap_json_response(&response)
     }
-    /// RFC-005 route-first `federation.forward_invoke` dispatch:
+    /// RFC-005 route-first `federation.forward_invoke` dispatch.
     ///
-    /// 1. Decode the inner payload and validate that its canonical
-    ///    `ability_ura` belongs to the supplied `target_ura`.
-    /// 2. Ask `namespace.resolve` for a local `FinalRoute`.
-    /// 3. If a route is selected locally, dispatch only by selected
-    ///    `execution_host_ura`, `callee_ura`, and `dispatch_name`.
-    ///    `target_ura` remains an owner consistency proof, never an
-    ///    execution endpoint.
-    /// 4. If local resolution is negative in the local realm, either
-    ///    return the typed resolver failure or fan out to configured
-    ///    same-realm peers.
-    /// 5. If the target realm is remote and no local FinalRoute exists,
-    ///    ask `namespace.resolve` for a `PeerHub` delegation and issue
-    ///    the same `federation.forward_invoke` request to the selected
-    ///    peer hub.
+    /// The dispatcher never parses `target_ura` to decide locality. It
+    /// decodes the inner payload, asks [`DaemonRouteResolver`] for one
+    /// closed selection (`Local` final route or `Peer` delegation), then
+    /// executes that selected state. Same-realm misses and cross-realm
+    /// delegation policy therefore stay in the resolver instead of being
+    /// reimplemented by every transport surface.
     pub(crate) async fn dispatch_federation_forward_invoke(
         &self,
         caller_envelope: Option<&Envelope>,
@@ -1055,7 +1169,7 @@ impl UnaryDispatcher {
         // owns no PresenceRegistry of its own (mode = device),
         // it cannot execute a resolver-selected local-session
         // dispatch. Send the call up the existing
-        // `<self>.session` bidi to the hub, await the matching
+        // `session.open` bidi to the hub, await the matching
         // RequestResult, and surface its outcome on the unary
         // wire. Hub-mode and `both`-mode daemons leave
         // `escalation = None` and take the existing arm.
@@ -1064,54 +1178,6 @@ impl UnaryDispatcher {
         }
 
         let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
-
-        // RFC-005 owner proof: route the exact target owner the
-        // caller supplied. Legacy `/agent/<bare-id>` device aliases
-        // are intentionally not repaired here; callers must address
-        // devices with canonical `/device/<id>` owner URAs.
-
-        let target_realm = parse_realm_from_ura(&request.target_ura);
-        let local_realm = self.identity.session_realm.as_deref();
-
-        let is_local_realm = match (target_realm.as_deref(), local_realm) {
-            (Some(target), Some(local)) => target == local,
-            // Daemon has no realm context wired (smoke-test
-            // build) — preserve PR-1 staging behavior and treat
-            // every target as local.
-            (_, None) => true,
-            // Malformed target URA — fall through to the local
-            // target-offline shape so a typo never accidentally hits the
-            // cross-hub path.
-            (None, Some(_)) => true,
-        };
-        let has_target_presence = self
-            .directory
-            .presence
-            .lookup(&request.target_ura)
-            .is_some();
-
-        // Observable trace for operators debugging answer-sheet /
-        // demo runs — proves which dispatch arm fired without
-        // requiring an envelope-level packet capture. Cheap (one
-        // eprintln per call) and the only daemon-A-side signal
-        // that distinguishes "took cross-realm arm" from "took
-        // local-presence arm" when the inner ability happens to
-        // be a hub-served one (e.g. federation.heartbeat).
-        // Render `Option<&str>` as a stable string so SRE pipelines
-        // grep `target_realm=<value>` (or `=<none>` for the absent
-        // case) without seeing Rust's `Some("…")` / `None` Debug
-        // literal sneaking into the field value.
-        let target_realm_field = target_realm.as_deref().unwrap_or("<none>");
-        let local_realm_field = local_realm.unwrap_or("<none>");
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = forward_invoke_dispatch,
-            target_ura = request.target_ura,
-            target_realm = target_realm_field,
-            local_realm = local_realm_field,
-            is_local_realm = is_local_realm,
-            has_target_presence = has_target_presence,
-        );
 
         // Decode the inner payload up front. The
         // `correlation_call_id` field is required by DEC-N4 §2.1
@@ -1123,61 +1189,52 @@ impl UnaryDispatcher {
         let inner_payload = decode_inner_payload(&request.inner_envelope_b64)?;
         let correlation_call_id = inner_payload.call_id.clone();
 
-        // RFC-005 route-first dispatch selection. `request.target_ura`
-        // proves owner intent and realm placement, but it is not an
-        // execution endpoint. Once namespace.resolve returns a
-        // FinalRoute, every local decision is made from the selected
-        // route: self dispatch checks selected `execution_host_ura`,
-        // session dispatch pushes to selected `execution_host_ura`,
-        // and the frame carries selected `callee_ura` +
-        // `dispatch_name`.
-        let selected_local_route = match self
-            .resolve_forward_invoke_route(&request, &inner_payload)
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = forward_invoke_dispatch,
+            target_ura = request.target_ura.as_str(),
+            ability_ura = inner_payload.ability_ura.as_str(),
+        );
+
+        match self
+            .resolve_forward_invoke_selection(&request, &inner_payload)
             .await
         {
-            Ok(route) => Some(route),
-            Err(err) => {
-                if is_local_realm {
-                    return Err(err);
-                }
-                None
-            }
-        };
-
-        if let Some(selected_route) = selected_local_route {
-            let selected_host_is_self = self
-                .gate
-                .matches_self_target_ura(&selected_route.execution_host_ura)
-                .await;
-            let selected_host_present = self
-                .directory
-                .presence
-                .lookup(&selected_route.execution_host_ura)
-                .is_some();
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = forward_invoke_selected_route,
-                target_ura = request.target_ura,
-                route_ura = selected_route.route_ura.as_str(),
-                callee_ura = selected_route.callee_ura.as_str(),
-                execution_host_ura = selected_route.execution_host_ura.as_str(),
-                dispatch_name = selected_route.dispatch_name.as_str(),
-                selected_host_is_self = selected_host_is_self,
-                selected_host_present = selected_host_present,
-            );
-
-            if selected_host_is_self {
-                return self
-                    .dispatch_self_targeted_forward_invoke(
-                        &inner_payload,
-                        &selected_route,
-                        &correlation_call_id,
-                    )
+            Ok(ForwardInvokeRouteSelection::Local(selected_route)) => {
+                let selected_host_is_self = self
+                    .gate
+                    .matches_self_target_ura(&selected_route.execution_host_ura)
                     .await;
-            }
+                let dispatch_target = selected_route.dispatch_target(selected_host_is_self);
+                let selected_host_present = self
+                    .directory
+                    .presence
+                    .lookup(&selected_route.execution_host_ura)
+                    .is_some();
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = forward_invoke_selected_route,
+                    selection = "local",
+                    target_ura = request.target_ura.as_str(),
+                    route_ura = selected_route.route_ura.as_str(),
+                    callee_ura = selected_route.callee_ura.as_str(),
+                    execution_host_ura = selected_route.execution_host_ura.as_str(),
+                    dispatch_name = selected_route.dispatch_name.as_str(),
+                    selected_host_is_self = selected_host_is_self,
+                    selected_host_present = selected_host_present,
+                );
 
-            match self
-                .dispatch_local_presence_forward_invoke(
+                if dispatch_target.is_local_runtime() {
+                    return self
+                        .dispatch_self_targeted_forward_invoke(
+                            &inner_payload,
+                            &selected_route,
+                            &correlation_call_id,
+                        )
+                        .await;
+                }
+
+                self.dispatch_local_presence_forward_invoke(
                     &inner_payload,
                     &selected_route,
                     &correlation_call_id,
@@ -1185,116 +1242,61 @@ impl UnaryDispatcher {
                     caller_envelope,
                 )
                 .await
-            {
-                Ok(response) => return Ok(response),
-                Err(status) => return Err(status),
             }
-        }
-
-        // Cross-realm path. Missing federation client OR
-        // missing peer entry both surface as
-        // `failed_precondition(target_offline)` per DEC-N4 §2.1
-        // — the older "Ok with target_online:false" shape is
-        // gone. DEC-N5 §1 still requires a caller-hub
-        // ForwardReceipt with `result_digest = None` for every
-        // target_offline outcome.
-        let record_offline_receipt = || {};
-        let Some(client) = self.federation.client.as_ref() else {
-            record_offline_receipt();
-            return Err(Status::failed_precondition(
-                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-            ));
-        };
-        // Cross-realm dispatch derives the authoritative target realm
-        // from the resolver's `NextHop::PeerHub` delegation answer
-        // (`delegation.realm`), not from the URA-parsed `target_realm`:
-        // the latter only feeds the `is_local_realm` arm above, which
-        // already collapses every `None`/local realm to a local arm —
-        // so reaching this cross-realm tail proves `target_realm` was
-        // `Some` and equal to a non-local realm. We intentionally do
-        // not re-thread it here.
-        let delegated_route = match self
-            .resolve_cross_realm_forward_delegation(&request, &inner_payload)
-            .await
-        {
-            Ok(route) => route,
-            Err(status) => {
-                record_offline_receipt();
-                return Err(status);
+            Ok(ForwardInvokeRouteSelection::Peer(delegated_route)) => {
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = forward_invoke_selected_route,
+                    selection = "peer",
+                    target_ura = request.target_ura.as_str(),
+                    target_realm = delegated_route.realm.as_str(),
+                    peer_hub_ura = delegated_route.hub_ura.as_str(),
+                );
+                self.emit_forward_delegation_auto_route_events(&delegated_route);
+                let Some(client) = self.federation.client.as_ref() else {
+                    return Err(Status::failed_precondition(
+                        federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                    ));
+                };
+                let target_hub_endpoint = delegated_route.primary_endpoint().ok_or_else(|| {
+                    Status::failed_precondition(
+                        federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                    )
+                })?;
+                let peer_request =
+                    self.build_forward_invoke_peer_request(caller_envelope, &request)?;
+                self.dispatch_forward_invoke_peer(
+                    client,
+                    target_hub_endpoint,
+                    peer_request,
+                    &request.target_ura,
+                    &correlation_call_id,
+                    "cross_realm",
+                )
+                .await
             }
-        };
-        let target_hub_endpoint = delegated_route.primary_endpoint().ok_or_else(|| {
-            Status::failed_precondition(federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON)
-        })?;
-        let peer_request = self.build_forward_invoke_peer_request(caller_envelope, &request)?;
-        let result = self
-            .dispatch_forward_invoke_peer(
-                client,
-                target_hub_endpoint,
-                peer_request,
-                &request.target_ura,
-                &correlation_call_id,
-                "cross_realm",
-            )
-            .await;
-        if result.is_err() {
-            record_offline_receipt();
+            Err(status) => Err(status),
         }
-        result
     }
 
-    pub(crate) async fn resolve_forward_invoke_route(
+    pub(crate) async fn resolve_forward_invoke_selection(
         &self,
         request: &federation_wrappers::ForwardInvokeRequest,
         inner_payload: &InnerPayload,
-    ) -> Result<SelectedInvokeRoute, Status> {
-        let selector =
-            crate::ura::AbilitySelector::parse(&inner_payload.ability_ura).map_err(|err| {
-                Status::invalid_argument(format!(
-                    "federation.forward_invoke: invalid canonical ability_ura `{}`: {err}",
-                    inner_payload.ability_ura,
-                ))
-            })?;
-        // Hosted-agent abilities are owned by an AGENT but execute on
-        // the device that hosts it — whether `target` hosts the agent
-        // is the resolver's to confirm (checked against the resolved
-        // execution host below), not a local string equality.
-        let owner_is_agent = crate::ura::parse_ura(selector.owner_ura())
-            .map(|parsed| parsed.kind == crate::ura::URAKind::Agent)
-            .unwrap_or(false);
-        if selector.owner_ura() != request.target_ura && !owner_is_agent {
-            return Err(Status::invalid_argument(format!(
-                "federation.forward_invoke: ability_ura `{}` does not belong to target `{}`",
-                inner_payload.ability_ura, request.target_ura,
-            )));
-        }
-
-        let selected_route = self
+    ) -> Result<ForwardInvokeRouteSelection, Status> {
+        let selection = self
             .gate
             .route_resolver()
             .await
-            .resolve_route(&inner_payload.ability_ura, "")
-            .map_err(route_negative_status)?;
+            .resolve_forward_invoke_route(&request.target_ura, &inner_payload.ability_ura)
+            .map_err(forward_invoke_route_failure_status)?;
 
-        if !selected_route.is_authoritative_local_or_better() {
-            return Err(route_profile_blocked_status(&selected_route));
+        if let ForwardInvokeRouteSelection::Local(selected_route) = &selection {
+            if !selected_route.is_authoritative_local_or_better() {
+                return Err(route_profile_blocked_status(selected_route));
+            }
         }
-        // The forward target must be either the route's OWNER (the
-        // pre-existing contract: device/hub/agent-targeted forwards)
-        // or its EXECUTION HOST (hosted-agent abilities addressed via
-        // the device that hosts them). Anything else is a
-        // mis-addressed forward.
-        let target_matches = selected_route.owner_ura == request.target_ura
-            || selected_route.execution_host_ura == request.target_ura;
-        if !target_matches {
-            return Err(Status::invalid_argument(route_owner_mismatch_message(
-                &selected_route.execution_host_ura,
-                &inner_payload.ability_ura,
-                &request.target_ura,
-            )));
-        }
-
-        Ok(selected_route)
+        Ok(selection)
     }
 
     fn build_forward_invoke_peer_request(
@@ -1391,39 +1393,7 @@ impl UnaryDispatcher {
         }
     }
 
-    pub(crate) async fn resolve_cross_realm_forward_delegation(
-        &self,
-        request: &federation_wrappers::ForwardInvokeRequest,
-        inner_payload: &InnerPayload,
-    ) -> Result<DelegatedInvokeRoute, Status> {
-        let selector =
-            crate::ura::AbilitySelector::parse(&inner_payload.ability_ura).map_err(|err| {
-                Status::invalid_argument(format!(
-                    "federation.forward_invoke: invalid canonical ability_ura `{}`: {err}",
-                    inner_payload.ability_ura,
-                ))
-            })?;
-        if selector.owner_ura() != request.target_ura {
-            return Err(Status::invalid_argument(format!(
-                "federation.forward_invoke: ability_ura `{}` does not belong to target `{}`",
-                inner_payload.ability_ura, request.target_ura,
-            )));
-        }
-
-        let delegation = self
-            .gate
-            .route_resolver()
-            .await
-            .resolve_delegation(&inner_payload.ability_ura, "")
-            .map_err(route_negative_status)?
-            .ok_or_else(|| {
-                Status::failed_precondition(format!(
-                    "{ROUTE_SELECTED_REMOTE_HOST_CODE}: federation.forward_invoke expected \
-                     cross-realm namespace.resolve delegation for `{}`",
-                    inner_payload.ability_ura,
-                ))
-            })?;
-
+    fn emit_forward_delegation_auto_route_events(&self, delegation: &DelegatedInvokeRoute) {
         for endpoint in &delegation.endpoints {
             if endpoint
                 .metadata
@@ -1447,8 +1417,6 @@ impl UnaryDispatcher {
                 }
             }
         }
-
-        Ok(delegation)
     }
 
     /// Shared presence-dispatch core (DEC-F004 single-settle
@@ -1461,7 +1429,7 @@ impl UnaryDispatcher {
     ///
     /// `register_pending_for(execution_host_ura)` keeps the
     /// presence-offline watcher able to fail-fast this entry the
-    /// moment the host's `<self>.session` drops mid-call;
+    /// moment the host's `session.open` drops mid-call;
     /// [`PRESENCE_DISPATCH_REPLY_TIMEOUT`] backstops every reply that
     /// neither completes nor goes offline (structured
     /// `DeadlineExceeded` instead of an open-ended hang).
@@ -1585,7 +1553,7 @@ impl UnaryDispatcher {
 
     /// step-4 / T2.1b: the canonical-face remote arm. A catch-all
     /// `Invoke` whose resolver-selected execution host is another
-    /// device dispatches through that device's `<self>.session` — the
+    /// device dispatches through that device's `session.open` — the
     /// same single-settle core as forward_invoke, but the caller's
     /// envelope travels verbatim (transplant, not translation):
     /// content, authority fields and the presigned caller signature
@@ -1928,9 +1896,9 @@ impl UnaryDispatcher {
         wrap_json_response(&response)
     }
 
-    /// Self-targeted `<self>.invoke_remote` shortcut.
+    /// Self-targeted `runtime.invoke_remote` shortcut.
     ///
-    /// When the daemon receives `<self>.invoke_remote` whose
+    /// When the daemon receives `runtime.invoke_remote` whose
     /// subject_device equals its own URA, dispatch the ability
     /// through the shared Axon `LocalRuntime` and return the result
     /// on a one-shot down stream. This fires in two scenarios:
@@ -1970,7 +1938,7 @@ impl UnaryDispatcher {
 
         let Some(runtime) = self.runtime.local_runtime.as_ref() else {
             return Err(Status::failed_precondition(
-                "<self>.invoke_remote: self-targeted dispatch cannot run because \
+                "runtime.invoke_remote: self-targeted dispatch cannot run because \
                  Axon LocalRuntime is not wired at boot",
             ));
         };
@@ -1993,7 +1961,7 @@ impl UnaryDispatcher {
                     // A present-but-malformed authority must fail closed, not
                     // silently downgrade to _system.
                     return invoke_remote_inband_error_response(format!(
-                        "<self>.invoke_remote: invalid origin caller claim: {err}"
+                        "runtime.invoke_remote: invalid origin caller claim: {err}"
                     ));
                 }
             };
@@ -2005,17 +1973,22 @@ impl UnaryDispatcher {
                 caller_ura = origin.caller_ura.as_str(),
                 ability = dispatch_ability.as_str(),
             );
-            // Cross-device callers: warm the anchor from the hub on a
-            // miss (resolve_key trust sync), mirroring the
-            // `<self>.session` dispatcher arm. Admission below stays
+            // Device and same-realm user callers: warm the anchor from the
+            // hub on a miss (resolve_key trust sync), mirroring the
+            // `session.open` dispatcher arm. Admission below stays
             // local-anchor-authoritative; a failed sync just lets the
             // dispatch fail closed with the precise admission error.
             if let Some(sync) = self.sessions.device_trust_sync.as_ref() {
-                sync.ensure_caller_key(&origin.caller_ura).await;
+                let signer_pubkey_b64 = B64.encode(&origin.signer_pubkey);
+                sync.ensure_caller_key_with_presented_pubkey(
+                    &origin.caller_ura,
+                    Some(&signer_pubkey_b64),
+                )
+                .await;
             }
             if selected_route.dispatch_name != origin.public_ability() {
                 return invoke_remote_inband_error_response(dispatch_key_mismatch_message(
-                    "<self>.invoke_remote",
+                    "runtime.invoke_remote",
                     origin.public_ability(),
                     &selected_route.dispatch_name,
                     &selected_route.route_ura,
@@ -2029,7 +2002,7 @@ impl UnaryDispatcher {
                 Ok(wire) => wire,
                 Err(err) => {
                     return invoke_remote_inband_error_response(format!(
-                        "<self>.invoke_remote: invalid origin caller dispatch: {err}"
+                        "runtime.invoke_remote: invalid origin caller dispatch: {err}"
                     ));
                 }
             };
@@ -2070,7 +2043,7 @@ impl UnaryDispatcher {
     }
 
     /// PR-N6 C4: device-mode `forward_invoke` escalation. Sends
-    /// the call up the open `<self>.session` bidi to the hub via
+    /// the call up the open `session.open` bidi to the hub via
     /// the supplied escalation handle, awaits the matching
     /// `RequestResult`, and translates the typed outcome onto the
     /// existing unary wire shape callers already understand.

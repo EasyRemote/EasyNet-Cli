@@ -41,7 +41,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "scattered format construction should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/invoke_local_ability\(&ability\.local_registry_ability\(\), args_v\)/invoke_local_ability(&ability, args_v)/' "$SB/src/facade/cli/pages.rs"
+perl -0pi -e 's/&target,\n        args,/&ability.local_registry_ability(),\n        args,/' "$SB/src/facade/cli/pages.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

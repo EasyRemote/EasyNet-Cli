@@ -61,7 +61,7 @@
 // **Invariant 2 (loopback bypass)**: When the caller URA matches
 // the daemon's configured URA, admission accepts without consulting
 // the trust anchor or the replay store. The daemon trusts itself —
-// `<self>.*` abilities and admin RPCs originate from the daemon's
+// `legacy self alias.*` abilities and admin RPCs originate from the daemon's
 // own process and need not sign.
 //
 // **Invariant 3 (strict public crypto)**: Every external caller role
@@ -112,12 +112,13 @@ use crate::services::invocation_transport::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
 use crate::services::invocation_transport::federation_wrappers::{
-    ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+    ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_JOIN,
+    ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
-use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
-use crate::services::invocation_transport::register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
-use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;
+use crate::services::invocation_transport::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+use crate::services::invocation_transport::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
@@ -212,7 +213,7 @@ pub struct AdmissionFacade {
     /// always present so SIGHUP can enable quota after boot; it is
     /// disabled internally when `[daemon.quota]` is absent. Loopback
     /// self calls remain exempt here because the daemon must not
-    /// throttle its own `<self>.*` administrative surface.
+    /// throttle its own `legacy self alias.*` administrative surface.
     quota: SharedUsageQuotaGate,
 }
 
@@ -249,7 +250,7 @@ impl AdmissionFacade {
     ///
     /// The trust anchor is wrapped in a fresh `SharedTrustAnchor`
     /// cell — every `verify_*` call snapshots the current anchor,
-    /// so a future writer (`<self>.register_device_pubkey`,
+    /// so a future writer (`identity.register_pubkey`,
     /// PR-7 commit 5/N) that holds a clone of the cell can publish
     /// updates without restarting the facade. Callers that already
     /// hold a `SharedTrustAnchor` and need to share it with the
@@ -266,7 +267,7 @@ impl AdmissionFacade {
 
     /// Construct a facade against a shared trust-anchor cell. Used
     /// by `start_daemon_invocation_transport` so the same cell is shared
-    /// with the `<self>.register_device_pubkey` handler — a
+    /// with the `identity.register_pubkey` handler — a
     /// successful register publishes the new anchor and the next
     /// admission snapshot reflects it without daemon restart.
     #[must_use]
@@ -305,7 +306,7 @@ impl AdmissionFacade {
     /// Verify delegation metadata against an already-constructed
     /// envelope without re-running caller signature / nonce policy checks.
     ///
-    /// Used by `<self>.invoke_remote` for the inner ability request:
+    /// Used by `runtime.invoke_remote` for the inner ability request:
     /// the outer invoke_remote frame has already passed strict
     /// admission, and the inner JSON carries the user/resource
     /// subject plus non-AXIOM metadata. This method verifies only the
@@ -392,7 +393,7 @@ impl AdmissionFacade {
         let caller_ura = caller_ura_required(envelope)?;
 
         // The daemon never meters itself: loopback/self calls
-        // (`<self>.*` abilities, admin RPCs) bypass quota exactly as
+        // (`legacy self alias.*` abilities, admin RPCs) bypass quota exactly as
         // they bypass the trust anchor.
         if self.is_loopback(caller_ura) {
             return Ok(None);
@@ -576,6 +577,10 @@ impl AdmissionFacade {
     ) -> Result<(), Status> {
         let caller_ura = caller_ura_required(envelope)?;
 
+        if caller_ura.starts_with("provisional:") {
+            return Self::verify_provisional_federation_join(envelope, ability, args);
+        }
+
         // Invariant 2: loopback bypass. Daemon trusts itself.
         if self.is_loopback(caller_ura) {
             return Ok(());
@@ -723,6 +728,90 @@ impl AdmissionFacade {
         }
     }
 
+    fn verify_provisional_federation_join(
+        envelope: &Envelope,
+        ability: &str,
+        args: &[u8],
+    ) -> Result<(), Status> {
+        if ability != ABILITY_FEDERATION_JOIN {
+            return Err(permission_denied_unknown_caller(
+                envelope
+                    .caller
+                    .as_ref()
+                    .map(|caller| caller.ura.as_str())
+                    .unwrap_or("provisional:<missing>"),
+            ));
+        }
+        let caller = caller_ura_required(envelope)?;
+        let digest = caller.strip_prefix("provisional:").ok_or_else(|| {
+            Status::invalid_argument("federation.join provisional caller missing prefix")
+        })?;
+        if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(Status::invalid_argument(
+                "federation.join provisional caller must be `provisional:` plus 64 hex characters",
+            ));
+        }
+        let callee_ura = envelope
+            .callee
+            .as_ref()
+            .map(|callee| callee.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| Status::invalid_argument("federation.join missing hub callee"))?;
+        let subject_ura = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument("federation.join missing membership subject")
+            })?;
+        let callee = crate::ura::parse_ura(callee_ura).map_err(|err| {
+            Status::invalid_argument(format!("federation.join callee is not a hub URA: {err}"))
+        })?;
+        if callee.kind != crate::ura::URAKind::Hub {
+            return Err(Status::invalid_argument(format!(
+                "federation.join callee must identify a hub, got {:?}",
+                callee.kind
+            )));
+        }
+        let subject = crate::ura::parse_ura(subject_ura).map_err(|err| {
+            Status::invalid_argument(format!(
+                "federation.join subject is not a device URA: {err}"
+            ))
+        })?;
+        if subject.kind != crate::ura::URAKind::Device {
+            return Err(Status::invalid_argument(format!(
+                "federation.join subject must identify a device, got {:?}",
+                subject.kind
+            )));
+        }
+        let request: crate::services::invocation_transport::federation_wrappers::JoinRequest =
+            serde_json::from_slice(args).map_err(|err| {
+                Status::invalid_argument(format!("federation.join args JSON decode failed: {err}"))
+            })?;
+        if request.realm != callee.realm || request.realm != subject.realm {
+            return Err(Status::invalid_argument(format!(
+                "federation.join realm mismatch: request={}, callee={}, subject={}",
+                request.realm, callee.realm, subject.realm
+            )));
+        }
+        if request.membership_ura != subject_ura {
+            return Err(Status::invalid_argument(
+                "federation.join membership_ura must match envelope subject",
+            ));
+        }
+        let public_key = hex::decode(request.public_key_hex.trim()).map_err(|err| {
+            Status::invalid_argument(format!("federation.join public_key_hex is not hex: {err}"))
+        })?;
+        if public_key.len() != 32 {
+            return Err(Status::invalid_argument(format!(
+                "federation.join public_key_hex must decode to 32 bytes, got {}",
+                public_key.len()
+            )));
+        }
+        Ok(())
+    }
+
     fn is_loopback(&self, caller_ura: &str) -> bool {
         // Off-box transports never get the bypass, even on an exact
         // daemon-URA match: the same URA an attacker can put in
@@ -789,7 +878,7 @@ impl AdmissionFacade {
 /// Important: federated callers are not uniformly `.../agent/...`;
 /// peer hubs use Axon's canonical hub identity shape and device sessions
 /// register under `.../device/<id>`. Reuse the same realm parser as
-/// `<self>.register_device_pubkey` so all canonical role tails stay
+/// `identity.register_pubkey` so all canonical role tails stay
 /// accepted and retired aliases stay rejected.
 fn parse_realm_from_ura(ura: &str) -> Option<String> {
     crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura(ura)
@@ -804,11 +893,11 @@ fn parse_realm_from_ura(ura: &str) -> Option<String> {
 fn bootstrap_authority_ability(ability: &str) -> bool {
     matches!(
         ability,
-        ABILITY_SELF_REGISTER_DEVICE_PUBKEY
+        ABILITY_IDENTITY_REGISTER_PUBKEY
             | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
             | ABILITY_FEDERATION_ADVERTISE_AGENT
-            | ABILITY_SELF_LIST_USER_PUBKEYS
-            | ABILITY_SELF_REVOKE_USER_PUBKEY
+            | ABILITY_IDENTITY_LIST_USER_PUBKEYS
+            | ABILITY_IDENTITY_REVOKE_USER_PUBKEY
     )
 }
 
@@ -878,12 +967,10 @@ fn verify_delegation_metadata(
     });
 
     match (raw_delegation, raw_session) {
-        (Some(_), Some(_)) => {
-            Err(Status::invalid_argument(format!(
-                "{REASON_AUTHORITY_FORMAT_INVALID}: invocation carries both `{DELEGATION_METADATA_KEY}` \
+        (Some(_), Some(_)) => Err(Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: invocation carries both `{DELEGATION_METADATA_KEY}` \
                  and `{SESSION_AUTHORITY_METADATA_KEY}`"
-            )))
-        }
+        ))),
         (Some(raw_proof), None) => {
             let payload = parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
             verify_delegation_bindings(&payload, envelope, ability)
@@ -1345,7 +1432,7 @@ fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
 fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
     Status::permission_denied(format!(
         "{REASON_CALLER_UNKNOWN}: caller URA `{caller_ura}` is not in the realm trust anchor; \
-         pairing-flow registration via `<self>.register_device_pubkey` \
+         pairing-flow registration via `identity.register_pubkey` \
          (PR-7 commit 5/N) populates the trust set",
     ))
 }
@@ -1776,7 +1863,7 @@ mod tests {
 
     #[test]
     fn loopback_repeat_remains_admitted() {
-        // A daemon may invoke `<self>.foo` many times with the same
+        // A daemon may invoke `legacy self alias.foo` many times with the same
         // body; loopback bypass is unconditional, so repeated calls
         // never trigger the replay path.
         let facade = AdmissionFacade::new(
@@ -1899,7 +1986,7 @@ mod tests {
 
         let daemon_ura = hub_ura("realm");
         // A cap of 1, but the daemon calling itself must never be
-        // metered — it would otherwise self-throttle its own `<self>.*`
+        // metered — it would otherwise self-throttle its own `legacy self alias.*`
         // abilities.
         let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
         let facade = AdmissionFacade::new(
@@ -2436,7 +2523,7 @@ mod tests {
             caller_ura,
             // Wire-pinned self-session spelling until EasyNet-Axon
             // ships device.session acceptance (RFC-001 v4.1.6).
-            "<self>.session",
+            "session.open",
             b"",
             &signing_key,
             [0x5Au8; 16],

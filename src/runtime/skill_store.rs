@@ -299,6 +299,7 @@ pub(crate) fn global_skill_pools_for(
         agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
             vec![("codex-global", home.join(".agents").join("skills"))]
         }
+        agents::AgentType::External => Vec::new(),
     }
 }
 

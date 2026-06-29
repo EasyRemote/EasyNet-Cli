@@ -589,8 +589,10 @@ fn project_model_id_with_identity(
     identity: Option<&OpenAICompatIdentity>,
 ) -> Option<String> {
     let identity = identity?;
+    // SPEC §9.1.A Step 5: agent ownership comes from the control-plane
+    // record, not the legacy `owner` side table.
     let Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) =
-        registry.lookup_owner(ability_name)
+        registry.control_plane_owner(ability_name)
     else {
         return None;
     };

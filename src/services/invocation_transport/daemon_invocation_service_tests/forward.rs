@@ -499,11 +499,12 @@ async fn forward_invoke_same_realm_route_negative_does_not_peer_fanout_when_conf
 }
 
 #[tokio::test]
-async fn forward_invoke_cross_realm_with_no_client_returns_target_offline() {
-    // C1a / DEC-N4 §2.1: cross-realm target + no federation
-    // client wired ⇒ `Status::failed_precondition` with the
-    // wire-stable `target_offline` reason. The older
-    // "Ok with target_online:false" shape is gone.
+async fn forward_invoke_cross_realm_without_peer_route_surfaces_resolver_noroute_before_client() {
+    // Route-first invariant: the resolver must select a peer
+    // delegation before the dispatcher checks whether a federation
+    // client is wired. An unmapped realm is therefore a typed
+    // `NEGATIVE_REASON_NOROUTE`, not an opaque transport
+    // `target_offline`.
     let svc = make_service().with_session_realm("test-realm");
 
     let err = svc
@@ -513,7 +514,32 @@ async fn forward_invoke_cross_realm_with_no_client_returns_target_offline() {
             &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
         )
         .await
-        .expect_err("cross-realm without client surfaces target_offline");
+        .expect_err("cross-realm without peer route surfaces resolver NOROUTE");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert_route_negative_noroute(err.message());
+}
+
+#[tokio::test]
+async fn forward_invoke_cross_realm_with_peer_route_but_no_client_returns_target_offline() {
+    // Once the resolver has selected a concrete peer hub route, missing
+    // federation transport is a dispatch-plane offline condition.
+    let mut peers = BTreeMap::new();
+    peers.insert(
+        "peer-realm".to_string(),
+        "https://peer-hub.example:50443".to_string(),
+    );
+    let svc = make_service()
+        .with_session_realm("test-realm")
+        .with_federated_peers(peers);
+
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_federation_forward_invoke(
+            None,
+            &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
+        )
+        .await
+        .expect_err("selected peer route without client surfaces target_offline");
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     assert_eq!(
         err.message(),

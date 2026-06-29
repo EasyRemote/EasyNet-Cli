@@ -4,13 +4,13 @@
 // File: src/services/invocation_transport/session_escalation.rs
 // Description: Lets a device-mode daemon's `dispatch_federation_
 //              forward_invoke` send a `SessionDispatch::Request`
-//              frame up the long-lived `<self>.session` bidi to its
+//              frame up the long-lived `session.open` bidi to its
 //              hub, then `await` the matching `RequestResult` on a
 //              `tokio::sync::oneshot` channel.
 //
 // Why this module exists
 // ----------------------
-// Device-mode daemons only dial outbound `<self>.session` and never
+// Device-mode daemons only dial outbound `session.open` and never
 // accept inbound bidi; their local `PresenceRegistry` is empty by
 // construction (no peer ever calls `presence.insert` on a
 // device-mode daemon's registry). The hub holds the authoritative
@@ -120,7 +120,7 @@ impl SessionEscalationHandle {
         let ability_ura = crate::ura::hub_ability_ura(&self.session_realm, ability.trim());
 
         // Operator log marker for the device-mode forward_invoke
-        // escalation up the `<self>.session` bidi. SRE pipelines
+        // escalation up the `session.open` bidi. SRE pipelines
         // grep `kind=forward_invoke_escalated_up_session_bidi` to
         // confirm the device-mode daemon actually escalated to the
         // hub rather than answering from local presence. The
@@ -240,7 +240,7 @@ impl EscalationCorrelation {
 }
 
 /// Reload-friendly handle on the device's *current*
-/// `<self>.session` bidi up sender. The session supervisor
+/// `session.open` bidi up sender. The session supervisor
 /// publishes a fresh sender via [`set`] on every successful
 /// reconnect; clears via [`clear`] on disconnect. The
 /// outbox-aware consumer task ([`spawn_escalation_consumer_with_outbox`])
@@ -298,7 +298,7 @@ impl SharedSessionOutbox {
     /// Snapshot the current sender as a clone (cheap; tokio
     /// channel senders are `Arc`-shaped). Returns `None` when no
     /// live session is published — the consumer surfaces
-    /// `UpstreamFailure { reason: "no live <self>.session bidi" }`.
+    /// `UpstreamFailure { reason: "no live session.open bidi" }`.
     #[must_use]
     pub fn snapshot(&self) -> Option<SessionUpSender> {
         let guard = match self.inner.lock() {
@@ -345,7 +345,7 @@ pub fn spawn_escalation_consumer_with_outbox(
                 // instead of waiting for a hub reconnect.
                 let _ = reply.send(RequestOutcome::Err {
                     error: SessionRequestError::UpstreamFailure {
-                        reason: "no live <self>.session bidi to escalate forward_invoke up; \
+                        reason: "no live session.open bidi to escalate forward_invoke up; \
                                  device-mode daemon's session supervisor has not (yet) \
                                  reconnected"
                             .to_string(),
@@ -643,7 +643,7 @@ mod tests {
                 error: SessionRequestError::UpstreamFailure { reason },
             } => {
                 assert!(
-                    reason.contains("no live <self>.session bidi"),
+                    reason.contains("no live session.open bidi"),
                     "reason should cite missing session; got {reason}",
                 );
             }
@@ -737,7 +737,7 @@ mod tests {
                 error: SessionRequestError::UpstreamFailure { reason },
             } => {
                 assert!(
-                    reason.contains("no live <self>.session bidi"),
+                    reason.contains("no live session.open bidi"),
                     "reason should cite missing session; got {reason}",
                 );
             }

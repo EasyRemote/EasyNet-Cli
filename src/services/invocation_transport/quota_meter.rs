@@ -22,7 +22,7 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
     ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
-    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_STATUS,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE,
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
@@ -30,10 +30,10 @@ use crate::services::invocation_transport::federation_wrappers::{
 use crate::services::invocation_transport::invocation_wire::parse_json_args;
 use crate::services::invocation_transport::invoke_remote_initiator::decode_inner_payload;
 use crate::services::invocation_transport::invoke_remote_initiator::ABILITY_INVOKE_REMOTE;
-use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
-use crate::services::invocation_transport::register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
-use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;
-use crate::services::invocation_transport::session_initiator::ABILITY_SELF_SESSION;
+use crate::services::invocation_transport::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+use crate::services::invocation_transport::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+use crate::services::invocation_transport::session_initiator::ABILITY_SESSION_OPEN;
 
 fn is_quota_exempt_system_ability(function: &str) -> bool {
     matches!(
@@ -49,14 +49,15 @@ fn is_quota_exempt_system_ability(function: &str) -> bool {
             | ABILITY_FEDERATION_DISCOVER
             | ABILITY_FEDERATION_LIST_USER_DEVICES
             | ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES
+            | ABILITY_FEDERATION_STATUS
             | ABILITY_FEDERATION_REVOKE
             | ABILITY_FEDERATION_FORWARD_INVOKE
             | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
             | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
-            | ABILITY_SELF_REGISTER_DEVICE_PUBKEY
-            | ABILITY_SELF_REVOKE_USER_PUBKEY
-            | ABILITY_SELF_LIST_USER_PUBKEYS
-            | ABILITY_SELF_SESSION
+            | ABILITY_IDENTITY_REGISTER_PUBKEY
+            | ABILITY_IDENTITY_REVOKE_USER_PUBKEY
+            | ABILITY_IDENTITY_LIST_USER_PUBKEYS
+            | ABILITY_SESSION_OPEN
             | ABILITY_INVOKE_REMOTE
             | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
     )

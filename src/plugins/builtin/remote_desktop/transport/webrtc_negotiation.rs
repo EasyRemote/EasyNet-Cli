@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::plugins::remote_desktop::constants::{
     ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX, REASON_SESSION_NOT_FOUND,
 };
+use crate::plugins::remote_desktop::input::input_policy_for_entry;
 use crate::plugins::remote_desktop::media::{
     webrtc_transport_backend_for_entry, MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
 };
@@ -68,6 +69,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn negotiate_remote_offer(
     let options = capture_options_from_video_constraints(&video)?;
     let target_bitrate_kbps = bitrate_kbps_from_video_constraints(&video);
     let max_frame_queue_depth = frame_queue_depth_from_video_constraints(&video);
+    let input_policy = input_policy_for_entry(input_policy, &entry);
     let answer = start_direct_webrtc_endpoint(StartDirectWebRtcEndpointRequest {
         sessions: request.plugin.session_store(),
         transports: request.plugin.transport_manager(),

@@ -48,12 +48,19 @@ pub struct BootstrapPlan {
     /// Empty when the daemon hasn't joined yet; hosted-agent URA
     /// minting is skipped until a canonical realm exists.
     pub realm: String,
-    /// User UUID from credentials (`username` field, which carries
-    /// the user-uuid in v4.1.4). All hosted agents this daemon
-    /// owns are anchored under this user. Empty pre-join, in which
-    /// case hosted-agent URA minting is skipped until a canonical
-    /// user identity exists.
+    /// Immutable product user id (UUID) from credentials. This is the
+    /// SUBJECT anchor for user/ trust URAs — NOT the hosted-agent
+    /// owner-prefix. Kept for any genuine subject need; minting uses
+    /// `username` below. Empty pre-join.
     pub user_id: String,
+    /// Stable username slug from credentials. This is the OWNER-PREFIX for
+    /// every hosted-agent URA this daemon mints (`<username>.<id>`), per the
+    /// §15.1-3 dual grammar. The backend resolves hosted agents via
+    /// `svc.UsernameForUID` (the username slug), so minting under `user_id`
+    /// (the UUID) produces a directory entry the resolver never queries →
+    /// `namespace.resolve NXDOMAIN`. Empty pre-join; minting is skipped until
+    /// a canonical username exists.
+    pub username: String,
     /// Device-profile URA from credentials.json. Empty pre-join.
     /// When non-empty, `local-agents.json::host_device_agent_ura`
     /// is set to this on save.
@@ -85,6 +92,7 @@ pub struct LlmSubAgent {
 pub fn build_plan_from_registry(
     tenant_id: &str,
     node_id: &str,
+    user_id: &str,
     username: &str,
 ) -> anyhow::Result<BootstrapPlan> {
     let registry = crate::registry::agents::load_agents()
@@ -101,7 +109,8 @@ pub fn build_plan_from_registry(
 
     Ok(BootstrapPlan {
         realm: tenant_id.to_string(),
-        user_id: username.to_string(),
+        user_id: user_id.to_string(),
+        username: username.to_string(),
         host_device_ura: crate::ura::device_ura(tenant_id, node_id),
         consent: true,
         mcp: false,
@@ -218,12 +227,12 @@ pub fn bootstrap_local_agents<M: UraMinter>(
     if !plan.host_device_ura.is_empty() {
         file.host_device_agent_ura = plan.host_device_ura.clone();
     }
-    if plan.realm.is_empty() || plan.user_id.is_empty() {
+    if plan.realm.is_empty() || plan.username.is_empty() {
         return Vec::new();
     }
 
     file.hosted_agents
-        .retain(|e| is_current_agent_ura(&e.agent_ura, &plan.realm, &plan.user_id));
+        .retain(|e| is_current_agent_ura(&e.agent_ura, &plan.realm, &plan.username));
     if !file.host_device_agent_ura.is_empty() {
         let signing_authority = format!("hosted_by:{}", file.host_device_agent_ura);
         for entry in &mut file.hosted_agents {
@@ -242,7 +251,7 @@ pub fn bootstrap_local_agents<M: UraMinter>(
             Some(ura) => (ura, true),
             None => {
                 let id = minter.mint_id(profile, name);
-                let ura = crate::ura::agent_ura(&plan.realm, &plan.user_id, &id);
+                let ura = crate::ura::agent_ura(&plan.realm, &plan.username, &id);
                 upsert_hosted_agent(file, profile, name, &ura);
                 (ura, false)
             }
@@ -297,7 +306,7 @@ pub fn hosted_uras(file: &LocalAgentsFile) -> Vec<(String, String, String)> {
 /// current realm and user. Bootstrap reuses only rows that satisfy
 /// this predicate; malformed, non-agent, and stale-realm rows are
 /// local projection garbage under the clean RFC-005 identity model.
-fn is_current_agent_ura(ura: &str, realm: &str, user_id: &str) -> bool {
+fn is_current_agent_ura(ura: &str, realm: &str, username: &str) -> bool {
     let Ok(parsed) = crate::ura::parse_ura(ura) else {
         return false;
     };
@@ -309,7 +318,7 @@ fn is_current_agent_ura(ura: &str, realm: &str, user_id: &str) -> bool {
     // for them and a device-owned agent never belongs to "the
     // current user" — None → false is the correct verdict, not an
     // unhandled grammar case (F-047 point 8).
-    parsed.realm == realm && parsed.agent_ids().map(|(user, _)| user) == Some(user_id)
+    parsed.realm == realm && parsed.agent_ids().map(|(user, _)| user) == Some(username)
 }
 
 #[cfg(test)]
@@ -342,6 +351,7 @@ mod tests {
         BootstrapPlan {
             realm: "acme".into(),
             user_id: "u1".into(),
+            username: "u1".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent,
             mcp,
@@ -674,5 +684,37 @@ mod tests {
             "u1"
         ));
         assert!(!is_current_agent_ura("agent://self", "acme", "u1"));
+    }
+
+    #[test]
+    fn hosted_agent_ura_owner_prefix_is_username_not_user_id() {
+        // §15.1-3 dual grammar: the hosted-agent owner-prefix is the USERNAME
+        // slug; the user UUID is the subject anchor and must NEVER appear in the
+        // agent-URA owner slot. The backend resolves hosted agents via
+        // svc.UsernameForUID (username), so a user_id-prefixed URA lands a
+        // directory entry the resolver never queries → namespace.resolve
+        // NXDOMAIN. Here username and user_id are structurally distinct so a
+        // regression that re-crosses them trips this assertion.
+        let mut plan = plan_with(true, false, &[("claude", "claude-code")]);
+        plan.username = "dev".into();
+        plan.user_id = "f6b0cf60-dead-beef-0000-000000000000".into();
+
+        let mut file = LocalAgentsFile::default();
+        let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
+
+        assert!(!outcomes.is_empty(), "expected hosted agents to be minted");
+        for o in &outcomes {
+            assert!(
+                o.agent_ura
+                    .starts_with(&format!("{}dev.", crate::ura::realm_agent_prefix("acme"))),
+                "owner-prefix must be the username slug, got {}",
+                o.agent_ura
+            );
+            assert!(
+                !o.agent_ura.contains(&plan.user_id),
+                "user_id (UUID) must NOT leak into the owner-prefix: {}",
+                o.agent_ura
+            );
+        }
     }
 }

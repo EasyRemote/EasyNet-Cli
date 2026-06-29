@@ -1,4 +1,4 @@
-//! Cross-device `<self>.invoke_remote` end-to-end integration test
+//! Cross-device `runtime.invoke_remote` end-to-end integration test
 //! ================================================================
 //!
 //! File: tests/cross_device_invoke_remote_e2e.rs
@@ -7,7 +7,7 @@
 //!          transport plane is wire-correct end-to-end on a real
 //!          tonic gRPC server via UDS, with two simulated devices,
 //!          a hub-side `DaemonInvocationService`, and a real
-//!          `<self>.invoke_remote` round-trip.
+//!          `runtime.invoke_remote` round-trip.
 //!
 //! What this test exercises (the real bytes, not mocks)
 //! ----------------------------------------------------
@@ -15,19 +15,19 @@
 //!    `DaemonInvocationService` with `PendingDispatchMap`
 //!    injected, on a tempfile UDS.
 //! 2. Two simulated devices each open a real `InvokeBidi` RPC
-//!    against `<self>.session` and hold the bidi for the test
+//!    against `session.open` and hold the bidi for the test
 //!    duration. The hub registers each in the `PresenceRegistry`.
 //! 3. One device opens a separate per-call `InvokeBidi` against
-//!    `<self>.invoke_remote` targeting the other device.
+//!    `runtime.invoke_remote` targeting the other device.
 //! 4. Hub's `dispatch_invoke_remote` registers a pending entry,
 //!    pushes a `SessionDispatch::Dispatch` frame down the
 //!    target's reverse channel.
-//! 5. The target's `<self>.session` test client reads the frame,
+//! 5. The target's `session.open` test client reads the frame,
 //!    replies with a known `SessionDispatch::Result` carrying a
 //!    test-marker payload.
 //! 6. Hub's `drain_session_up_stream` parses the reply, calls
 //!    `pending.complete(call_id, ...)`.
-//! 7. The originating `<self>.invoke_remote` stream yields a
+//! 7. The originating `runtime.invoke_remote` stream yields a
 //!    terminal `InvokeRemoteDown::Result` carrying the same
 //!    test-marker payload.
 //! 8. Test asserts the round-trip completes within a bounded
@@ -73,7 +73,7 @@ use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
 };
 use easynet_cli::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
 use easynet_cli::services::invocation_transport::session_initiator::{
-    SessionFrameDispatcher, SessionUpSender, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
+    SessionFrameDispatcher, SessionUpSender, ABILITY_SESSION_OPEN, SESSION_STREAM_ID,
 };
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
 use easynet_cli::services::presence_registry::{OfflineReason, PresenceEvent, PresenceRegistry};
@@ -515,7 +515,7 @@ fn build_test_echo_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
     runtime
 }
 
-/// A device-side `<self>.session` bidi held open for the duration
+/// A device-side `session.open` bidi held open for the duration
 /// of the test. Owns the up-stream sender (so the test can push
 /// frames) and the JoinHandle of the spawned drain task. On Drop
 /// the up-sender is dropped first — tonic closes the request stream
@@ -571,7 +571,7 @@ async fn open_device_session(channel: Channel, caller_ura: &str) -> DeviceSessio
         caller_ura,
         caller_ura,
         caller_ura,
-        ABILITY_SELF_SESSION,
+        ABILITY_SESSION_OPEN,
         b"",
     );
     let envelope_open = InvokeBidiUp {
@@ -580,7 +580,7 @@ async fn open_device_session(channel: Channel, caller_ura: &str) -> DeviceSessio
             metadata: signed.metadata(),
             envelope: Some(signed.envelope),
             target: Some(InvocationTarget {
-                ability_name: ABILITY_SELF_SESSION.to_string(),
+                ability_name: ABILITY_SESSION_OPEN.to_string(),
                 ..InvocationTarget::default()
             }),
             streams: vec![StreamDescriptor {
@@ -630,7 +630,7 @@ async fn open_device_session_with_drain(
         caller_ura,
         caller_ura,
         caller_ura,
-        ABILITY_SELF_SESSION,
+        ABILITY_SESSION_OPEN,
         b"",
     );
     let envelope_open = InvokeBidiUp {
@@ -639,7 +639,7 @@ async fn open_device_session_with_drain(
             metadata: signed.metadata(),
             envelope: Some(signed.envelope),
             target: Some(InvocationTarget {
-                ability_name: ABILITY_SELF_SESSION.to_string(),
+                ability_name: ABILITY_SESSION_OPEN.to_string(),
                 ..InvocationTarget::default()
             }),
             streams: vec![StreamDescriptor {
@@ -1083,12 +1083,12 @@ async fn run_round_trip() {
     let hub = start_in_process_hub().await;
     let socket_path = hub.socket_path();
 
-    // Step 1: open device A's `<self>.session`. Hub registers
+    // Step 1: open device A's `session.open`. Hub registers
     // DEVICE_A_URI in its PresenceRegistry.
     let channel_a = connect_to_hub(socket_path).await;
     let _device_a = open_device_session(channel_a.clone(), DEVICE_A_URI).await;
 
-    // Step 2: open device B's `<self>.session` with a drain so
+    // Step 2: open device B's `session.open` with a drain so
     // we can see the SessionDispatch::Dispatch frame the hub
     // pushes when device A invokes ability on B.
     let channel_b = connect_to_hub(socket_path).await;
@@ -1150,7 +1150,7 @@ async fn run_round_trip() {
         ability
     });
 
-    // Step 4: device A invokes <self>.invoke_remote(target=B,
+    // Step 4: device A invokes runtime.invoke_remote(target=B,
     // ability_ura=device-B test.echo, args=...). Open a per-call bidi.
     let channel_caller = connect_to_hub(socket_path).await;
     let mut caller_client = InvocationClient::new(channel_caller);

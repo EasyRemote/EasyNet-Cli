@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 #
 # Contract tests for scripts/check-cli-flat-command-boundary.sh.
+#
+# F-039 was reversed: `join` / `start` / `stop` are first-class top-level
+# Quickstart commands, NOT retired aliases. The boundary guard therefore now
+# asserts that BOTH the Quickstart shortcuts AND the layered groups exist.
+# These contract tests verify that inverted intent: the guard passes on the
+# real tree, and fails when any required command (Quickstart or layered) is
+# removed.
 
 set -euo pipefail
 
@@ -24,37 +31,34 @@ run_check() {
     ( cd "$sandbox" && CHECK_CLI_FLAT_COMMAND_BOUNDARY_ROOT="$sandbox" bash "$SCRIPT" )
 }
 
+# Happy path: the real tree has the Quickstart shortcuts + layered groups.
 SB="$(make_sandbox)"
-run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: layered CLI boundary should pass"; }
+run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: full CLI surface should pass"; }
 rm -rf "$SB"
 
+# Removing the Quickstart `start` shortcut must fail (the guard now requires it).
 SB="$(make_sandbox)"
-perl -0pi -e 's#Command::Auth\(args\) => groups::auth::dispatch\(args\),#Command::Start(args) => start::run(args),\n        Command::Auth(args) => groups::auth::dispatch(args),#' "$SB/src/facade/cli/mod.rs"
+perl -0pi -e 's#\n[[:space:]]*Start\(start::StartArgs\),##' "$SB/src/facade/cli/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "top-level Command::Start arm should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "missing Quickstart 'start' should exit 1 (got $rc)"
 
+# Removing the Quickstart `join` shortcut must fail.
 SB="$(make_sandbox)"
-cat >>"$SB/src/facade/cli/mod.rs" <<'RS'
-
-const BAD_HELP_ROW: &str = "start                Start the local Axon runtime (alias of 'runtime start')";
-RS
+perl -0pi -e 's#\n[[:space:]]*Join\(join::JoinArgs\),##' "$SB/src/facade/cli/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "help-template alias wording should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "missing Quickstart 'join' should exit 1 (got $rc)"
 
+# Removing the layered `Device` group must fail (no behavioural drift: the
+# layered home must stay so both spellings share the same impl).
 SB="$(make_sandbox)"
-cat >>"$SB/src/facade/cli/presentation/banner.rs" <<'RS'
-
-fn bad_flat_hint() -> &'static str {
-    "run easynet start"
-}
-RS
+perl -0pi -e 's#\n[[:space:]]*Device\(groups::device::DeviceArgs\),##' "$SB/src/facade/cli/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "user-facing flat command hint should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "missing layered 'device' group should exit 1 (got $rc)"
 
 echo "test_check_cli_flat_command_boundary.sh: all cases passed"

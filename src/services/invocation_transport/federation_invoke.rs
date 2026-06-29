@@ -243,6 +243,29 @@ pub(crate) fn invoke_via_federation_forward_target(
         target,
         args,
         caller_ura,
+        &[],
+        Duration::from_secs(30),
+    )
+}
+
+/// Forward a device-targeted call while preserving the caller's causal
+/// lineage. Used by paths that are themselves dispatching an
+/// already-placed invocation (e.g. the EAL device branch), so the
+/// receipt DAG keeps real edges instead of re-rooting at the forward hop
+/// (refactor SPEC §15.1 item 1, seven-tuple invariant). Originating CLI
+/// commands keep calling [`invoke_via_federation_forward_target`], which
+/// passes no parents.
+pub(crate) fn invoke_via_federation_forward_target_with_causal_parents(
+    target: &RemoteAbilityInvocationTarget,
+    args: Value,
+    caller_ura: Option<&str>,
+    causal_parents: &[Value],
+) -> anyhow::Result<Value> {
+    invoke_via_federation_forward_target_with_timeout(
+        target,
+        args,
+        caller_ura,
+        causal_parents,
         Duration::from_secs(30),
     )
 }
@@ -251,6 +274,7 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     target: &RemoteAbilityInvocationTarget,
     args: Value,
     caller_ura: Option<&str>,
+    causal_parents: &[Value],
     timeout: Duration,
 ) -> anyhow::Result<Value> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
@@ -297,15 +321,22 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
         .context("serialise inner ability call as forward_invoke payload")?;
     let inner_envelope_b64 = BASE64_STANDARD.encode(&inner_envelope_bytes);
 
-    // DEC-N4 §2.1 audit-chain + deadline fields. The CLI bridge
-    // is the lowest-level synchronous initiator; it has no prior
-    // `ForwardReceipt` to chain (those are PR-N5 territory). The
-    // caller-side timeout is propagated as `forward_deadline_ms`, so
-    // the peer hub can bound the forwarded work instead of applying
-    // a silent default that disagrees with the CLI surface.
-    // Once `<self>.invoke_remote` initiator becomes the upstream
-    // caller (instead of a direct CLI dial), it will populate
-    // both with real values per PR-N5 §1 / DEC-N5 §3.
+    // DEC-N4 §2.1 audit-chain + deadline fields. When the caller is an
+    // originating CLI command there is no prior `ForwardReceipt` to chain
+    // and `causal_parents` is empty, so this stays a root hop. When the
+    // caller is itself dispatching an already-placed invocation (the EAL
+    // device branch), the parent anchors flow in via `causal_parents` and
+    // are carried here instead of being silently dropped — preserving the
+    // seven-tuple's causal placement across the forward hop (refactor
+    // SPEC §15.1 item 1).
+    //
+    // The bytes are the canonical JSON encoding of the parent anchor list
+    // (empty list -> empty bytes, identical to the prior root behaviour).
+    // The daemon-side typed decode that stamps these onto
+    // `InvocationReceipt.causal_context.list` is PR-N5 territory; until it
+    // lands the bytes ride opaquely, but they are no longer thrown away at
+    // the initiator. `forward_deadline_ms` carries the caller-side timeout
+    // so the peer hub bounds the forwarded work.
     //
     // Build the request through the canonical `ForwardInvokeRequest`
     // type rather than a hand-rolled `json!` object. The type carries
@@ -316,7 +347,7 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     let forward_request = easynet_axon::ForwardInvokeRequest {
         target_ura: target.execution_target_ura().to_string(),
         inner_envelope_b64,
-        causal_context_bytes: Vec::new(),
+        causal_context_bytes: encode_causal_parents_for_forward(causal_parents)?,
         forward_deadline_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
         origin_caller,
     };
@@ -414,6 +445,24 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     })
 }
 
+/// Encode the caller's causal parent anchors into the opaque
+/// `ForwardInvokeRequest.causal_context_bytes` blob.
+///
+/// An empty parent list is a root hop and yields empty bytes, identical to
+/// the prior unconditional `Vec::new()` — so originating CLI calls are
+/// unchanged. A non-empty list is carried as canonical JSON so the lineage
+/// survives the forward hop instead of being dropped (refactor SPEC §15.1
+/// item 1). The daemon-side typed decode that stamps these onto
+/// `InvocationReceipt.causal_context.list` is PR-N5 territory; the bytes
+/// ride opaquely until then but are no longer discarded at the initiator.
+fn encode_causal_parents_for_forward(causal_parents: &[Value]) -> anyhow::Result<Vec<u8>> {
+    if causal_parents.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::to_vec(causal_parents)
+        .context("serialise causal parents for forward_invoke causal_context_bytes")
+}
+
 fn decode_forward_invoke_response_value(body: &InvokeResponse) -> anyhow::Result<Value> {
     ensure_completed_invoke_response("federation.forward_invoke", body)?;
 
@@ -435,7 +484,10 @@ fn decode_forward_invoke_response_value(body: &InvokeResponse) -> anyhow::Result
     decode_forward_result_bytes(&envelope.result_bytes)
 }
 
-fn ensure_completed_invoke_response(surface: &str, body: &InvokeResponse) -> anyhow::Result<()> {
+pub(crate) fn ensure_completed_invoke_response(
+    surface: &str,
+    body: &InvokeResponse,
+) -> anyhow::Result<()> {
     let completed = easynet_axon::invocation::InvocationState::Completed.to_wire_i32();
     if body.state == completed {
         return Ok(());
@@ -945,7 +997,7 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
 /// DEC-N4 §2.1 correlation field. Format: `cli-<nanos-hex>` —
 /// nanoseconds since Unix epoch, hex-encoded, prefixed so log
 /// scraping can tell CLI-minted ids apart from daemon-minted
-/// ones (`<self>.invoke_remote` initiator path uses a different
+/// ones (`runtime.invoke_remote` initiator path uses a different
 /// prefix). Collision space is `2^64` per second of clock
 /// resolution; for the CLI's typical hand-driven cadence the
 /// risk is negligible.
@@ -1562,5 +1614,33 @@ mod tests {
 
         assert!(rendered.contains("AXON_FORWARD_HOP_FAILED"));
         assert!(!rendered.contains("forward diagnostics:"));
+    }
+
+    /// SPEC §15.1 item 1 regression: an originating (parent-less) forward
+    /// hop stays a root (empty bytes, unchanged from before), while a
+    /// forwarding hop that carries causal parents encodes them onto
+    /// `causal_context_bytes` instead of dropping them. Pairs with the EAL
+    /// device-branch threading in `eal::interpreter::dispatch`.
+    #[test]
+    fn causal_parents_are_carried_onto_forward_request_not_dropped() {
+        // Root hop: no parents -> empty bytes, identical to the prior
+        // unconditional `Vec::new()`.
+        assert!(encode_causal_parents_for_forward(&[])
+            .expect("root encodes")
+            .is_empty());
+
+        // Forwarding hop: parents are preserved and round-trip back.
+        let parents = vec![
+            json!({"receipt_ura": "easynet:///r/acme/receipt/r1", "receipt_hash": "sha256:aa"}),
+            json!({"receipt_ura": "easynet:///r/acme/receipt/r2", "receipt_hash": "sha256:bb"}),
+        ];
+        let bytes = encode_causal_parents_for_forward(&parents).expect("parents encode");
+        assert!(
+            !bytes.is_empty(),
+            "non-empty causal parents must not be dropped to empty bytes"
+        );
+        let decoded: Vec<Value> =
+            serde_json::from_slice(&bytes).expect("causal_context_bytes round-trips to parents");
+        assert_eq!(decoded, parents);
     }
 }

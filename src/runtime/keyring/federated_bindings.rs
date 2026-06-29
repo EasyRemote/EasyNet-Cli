@@ -9,7 +9,7 @@
 //              issued by realm A, an entry is written here mapping
 //              `(source_realm, source_user_ura, source_user_pubkey)
 //              → realm_B_user_id`. Future cross-realm
-//              `<self>.discover` calls filter their results
+//              `<agent>.discover` calls filter their results
 //              through the binding to surface "the user's own
 //              devices, both realms".
 //

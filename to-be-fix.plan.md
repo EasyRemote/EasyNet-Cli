@@ -37,9 +37,9 @@
 ### EasyNet-Cli(Rust daemon + CLI)【已核验,本会话深度上下文】
 | Feature | 落点 | 状态机性质 |
 |---|---|---|
-| **`<self>.session` 设备会话**(本轮深挖,见 §2.1) | session_initiator.rs / boot.rs | **隐式**(控制流即状态) |
+| **`session.open` 设备会话**(本轮深挖,见 §2.1) | session_initiator.rs / boot.rs | **隐式**(控制流即状态) |
 | **hub 侧会话槽位 / presence** (§2.2) | presence_registry.rs / daemon_invocation_service.rs | 半显式(slot+session_id) |
-| `<self>.invoke_remote` 关联派发 | daemon_invocation_service.rs + PendingDispatchMap | 关联表(call_id) |
+| `runtime.invoke_remote` 关联派发 | daemon_invocation_service.rs + PendingDispatchMap | 关联表(call_id) |
 | federation.forward_invoke(含 --node CLI) | federation_wrappers.rs / support/federation_invoke.rs | 转发管道 |
 | Session escalation(device→hub 反向请求) | session_escalation.rs | 关联表 + outbox 快照 |
 | Device/User trust sync(on-miss 取键) | device_trust_sync.rs(单飞+负缓存) | 半显式(负缓存表) |
@@ -62,7 +62,7 @@
 
 ## §2 状态机深挖(本轮:EasyNet-Cli invocation transport 平面)【已核验】
 
-### §2.1 设备会话生命周期(`<self>.session`)
+### §2.1 设备会话生命周期(`session.open`)
 
 **现状(隐式,状态 = 控制流位置):**
 

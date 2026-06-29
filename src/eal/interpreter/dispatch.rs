@@ -40,6 +40,7 @@ fn dispatch_remote_via_forward_invoke(
     node_id: &str,
     ability_name: &str,
     arguments: &Value,
+    causal_parents: &[Value],
 ) -> Result<Value, EalError> {
     #[cfg(feature = "axon-pb")]
     {
@@ -90,10 +91,11 @@ fn dispatch_remote_via_forward_invoke(
             ability_name,
         )
         .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
-        crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target(
+        crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
             &target_call,
             arguments.clone(),
             caller_ura.as_deref(),
+            causal_parents,
         )
         .map_err(|e| {
             EalError::Unavailable(format!("forward_invoke {ability_name} → {target_ura}: {e}"))
@@ -101,7 +103,7 @@ fn dispatch_remote_via_forward_invoke(
     }
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = (tenant, node_id, ability_name, arguments);
+        let _ = (tenant, node_id, ability_name, arguments, causal_parents);
         Err(EalError::Unavailable(
             "EAL device-targeted dispatch requires the `axon-pb` feature; \
              rebuild with `--features axon-pb` (production builds always do)."
@@ -181,8 +183,17 @@ impl StepDispatcher for AgentAwareDispatcher {
             ),
             IrTarget::Device { node_id } => {
                 let _ = timeout_ms;
-                dispatch_remote_via_forward_invoke(run.tenant, node_id, ability.as_str(), arguments)
-                    .map(Into::into)
+                // Thread the live causal parents onto the device forward hop
+                // too — the sibling agent branch already lowers them, and
+                // dropping them here re-rooted the receipt DAG (SPEC §15.1-1).
+                dispatch_remote_via_forward_invoke(
+                    run.tenant,
+                    node_id,
+                    ability.as_str(),
+                    arguments,
+                    causal_parents,
+                )
+                .map(Into::into)
             }
         }
     }

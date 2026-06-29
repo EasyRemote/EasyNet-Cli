@@ -325,6 +325,88 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 }
 
 #[tokio::test]
+async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapshot() {
+    use crate::runtime::ability_dispatch::{
+        AbilityAuthorityContext, AxonAbilityCatalog, LocalStreamHandler, OwnerKind, StreamSource,
+    };
+    use easynet_axon::invocation::LocalRuntime;
+    use futures::StreamExt;
+
+    let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        LocalRuntime::new(),
+        AbilityAuthorityContext::for_device_authority_root(TEST_DAEMON_URI)
+            .expect("test daemon URI is a valid device authority root"),
+    );
+    let handler: LocalStreamHandler = Arc::new(|_args| {
+        Ok(StreamSource::Snapshot(vec![serde_json::json!({
+            "MARKER-SNAPSHOT": "progress-before-empty-terminal"
+        })]))
+    });
+    catalog.register_stream_with_owner("browser.snapshot_once", OwnerKind::Device, handler);
+    let rt = catalog.runtime().expect("catalog attaches a LocalRuntime");
+    let svc = make_service().with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, "browser.snapshot_once");
+
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URI,
+                )
+                .expect("valid unsigned loopback stream envelope")
+                .into_inner(),
+            ),
+            function_name: "browser.snapshot_once".to_string(),
+            arguments: br#"{}"#.to_vec(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("registered snapshot stream returns Ok");
+
+    let mut stream = resp.into_inner();
+    let first = stream
+        .next()
+        .await
+        .expect("snapshot progress frame")
+        .expect("snapshot progress frame is Ok");
+    assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert!(
+        !first.terminal,
+        "StreamSource::Snapshot progress frame must not be terminal"
+    );
+    let first_json: serde_json::Value =
+        serde_json::from_slice(&first.payload).expect("snapshot JSON frame");
+    assert_eq!(
+        first_json
+            .get("MARKER-SNAPSHOT")
+            .and_then(|value| value.as_str()),
+        Some("progress-before-empty-terminal")
+    );
+
+    let second = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("empty terminal frame arrives within 2s")
+        .expect("empty terminal frame is projected")
+        .expect("empty terminal frame is Ok");
+    assert_eq!(second.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert!(
+        second.terminal,
+        "daemon projection must preserve terminal=true even when payload is empty"
+    );
+    assert!(
+        second.payload.is_empty(),
+        "finite StreamSource completion is represented by an empty terminal payload"
+    );
+
+    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("stream closes promptly after terminal");
+    assert!(close.is_none());
+}
+
+#[tokio::test]
 async fn invoke_stream_dispatches_non_default_descriptor_version() {
     // Regression for the version-convergence gap: a stream ability
     // registered at a NON-default descriptor version must dispatch. The

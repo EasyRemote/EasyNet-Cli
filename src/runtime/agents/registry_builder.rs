@@ -585,7 +585,7 @@ fn build_registry_with_services_result_inner(
         // explicitly from the `pages_identity` argument — no
         // env-var read here.
         //
-        // M5 of the system-namespace migration banned the `<self>`
+        // M5 of the system-namespace migration banned the `legacy self alias`
         // placeholder; an unpaired daemon (`pages_identity.user`
         // is None) skips the user-rooted family entirely. The
         // ability surface returns once pairing completes and the
@@ -704,7 +704,7 @@ fn build_registry_with_services_result_inner(
     // resolver layer copes with absence by treating every URA
     // as Unknown.
     //
-    // The legacy owner string was `<self>` — a "this device"
+    // The legacy owner string was `legacy self alias` — a "this device"
     // alias. v4.1.5 onward names the actor explicitly: keyring
     // belongs to the device, so the owner is `device`. The
     // catalogue now lists these as `device.keyring.<verb>`,

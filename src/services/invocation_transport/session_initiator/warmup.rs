@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-/// Best-effort REST backstop before each `<self>.session` dial.
+/// Best-effort REST backstop before each `session.open` dial.
 ///
 /// Hub restarts can lose the in-memory trust view before the device's
 /// next gRPC reconnect. The backend already exposes
 /// `/api/v1/devices/verify-credential` as the idempotent path that
-/// replays `<self>.register_device_pubkey` into the hub daemon. Calling
+/// replays `identity.register_pubkey` into the hub daemon. Calling
 /// it here keeps the reconnect loop self-healing: if the Hub forgot this
 /// device, the trust entry is restored before `federation.join` and
 /// `federation.advertise_abilities` run. Failures are advisory; the
@@ -25,7 +25,7 @@ pub(super) async fn warm_device_credential_for_session(caller_ura: &str) {
                 component = session,
                 kind = credential_verify_warmup_ok,
                 api_base = api_base,
-                message = "device credential verified before <self>.session dial",
+                message = "device credential verified before session.open dial",
             );
         }
         CredentialWarmupOutcome::Skipped { reason } => {

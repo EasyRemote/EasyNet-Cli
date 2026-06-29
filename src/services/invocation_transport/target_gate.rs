@@ -242,10 +242,10 @@ fn credentials_match_agent_target(target: &AgentTargetIdentity) -> bool {
     crate::persistence::config::load_credentials()
         .ok()
         .and_then(|creds| {
-            let username = creds.username_slug().ok()?.to_string();
-            Some((creds.realm, username))
+            let user_id = creds.user_id().ok()?.to_string();
+            Some((creds.realm, user_id))
         })
-        .map(|(realm, username)| realm.trim() == target.realm && username.trim() == target.user_id)
+        .map(|(realm, user_id)| realm.trim() == target.realm && user_id.trim() == target.user_id)
         .unwrap_or(false)
 }
 

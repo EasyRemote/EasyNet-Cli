@@ -265,7 +265,7 @@ fn map_local_bidi_handler_file_transfer_error_becomes_failed_receipt_with_payloa
 fn terminal_receipt_extracts_admission_failure_code_from_reason() {
     let frame = build_bidi_terminal_receipt(
         easynet_axon::invocation::InvocationState::Failed,
-        "CALLER_SIGNATURE_INVALID: rejected <self>.session",
+        "CALLER_SIGNATURE_INVALID: rejected session.open",
     );
     match frame {
         InvokeBidiDown {
@@ -814,7 +814,7 @@ fn invoke_remote_up_request_serde_round_trip_via_session_dispatch_pin() {
 // ctor). The same constraint that `#[ignore]`-marked
 // `invoke_bidi_test_deferred_to_pr2_tier1` above applies here:
 // those paths land as Tier 1 integration tests once PR-2's
-// `<self>.session` accept enables a real round-trip. Until
+// `session.open` accept enables a real round-trip. Until
 // then the helpers below pin the units this method composes.
 //
 // Coverage assertion: every early-return code path of
@@ -832,6 +832,62 @@ fn invoke_remote_up_request_serde_round_trip_via_session_dispatch_pin() {
 //     which is integration-tested
 //   * pending oneshot dropped → covered by pending_dispatch
 //     `dropped_completer_surfaces_to_handle_as_recv_error`
+
+#[tokio::test]
+async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
+    let presence = Arc::new(PresenceRegistry::new());
+    let admission = AdmissionFacade::new(
+        Arc::new(RealmTrustAnchor::default()),
+        Some(TEST_DAEMON_URI.to_string()),
+    );
+    let pending_stream = Arc::new(PendingStreamDispatchMap::new());
+    let _svc = DaemonInvocationService::new(Arc::clone(&presence), admission)
+        .with_pending_stream(Arc::clone(&pending_stream));
+
+    let target_ura = "easynet:///r/test-realm/device/target-stream";
+    let mut handle = pending_stream.register_pending_for(target_ura);
+    assert_eq!(
+        pending_stream.try_push_chunk(handle.call_id(), b"partial".to_vec()),
+        crate::services::pending_dispatch::StreamDeliver::Delivered
+    );
+
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let (sender, _rx) = tokio::sync::mpsc::channel::<
+                Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+            >(1);
+            presence.insert(target_ura.to_string(), sender);
+            presence.remove(
+                target_ura,
+                crate::services::presence_registry::OfflineReason::StreamClosed,
+            );
+
+            match tokio::time::timeout(std::time::Duration::from_millis(20), handle.recv()).await {
+                Ok(Some(crate::services::pending_dispatch::DispatchStreamEvent::Chunk(bytes))) => {
+                    assert_eq!(bytes, b"partial");
+                }
+                Ok(Some(crate::services::pending_dispatch::DispatchStreamEvent::Terminal(
+                    result,
+                ))) => break result,
+                Ok(None) => panic!("stream handle closed before terminal failure"),
+                Err(_) => {
+                    if pending_stream.outstanding() == 0 {
+                        panic!("pending stream entry was removed without terminal delivery");
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("presence offline watcher cancels the pending stream");
+
+    assert!(terminal.payload.is_empty());
+    assert_eq!(terminal.error.as_deref(), Some("target_offline"));
+    let failure = terminal.failure.expect("typed terminal failure");
+    assert_eq!(failure.code, "TARGET_OFFLINE");
+    assert!(failure.retryable);
+    assert_eq!(pending_stream.outstanding(), 0);
+}
 
 // ── PR-N1 commit 3a/N: federation client plumbing tests ──
 

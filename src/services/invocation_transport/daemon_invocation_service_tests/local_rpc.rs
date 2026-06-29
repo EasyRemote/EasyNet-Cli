@@ -41,12 +41,13 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
         hub_endpoint: "axon://hub.test:50051".to_string(),
         realm: "test-realm".to_string(),
         username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
         ..Default::default()
     })
     .expect("seed credentials");
     let svc = make_service().with_session_realm("test-realm");
 
-    let agent_target = "easynet:///r/test-realm/agent/dev.liangbing";
+    let agent_target = "easynet:///r/test-realm/agent/user-dev.liangbing";
 
     // Pre-write: no agents.json row → slow tier must miss too.
     assert!(
@@ -73,7 +74,7 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
     );
     assert!(
         !svc.target_gate()
-            .matches_self_target_ura("easynet:///r/other-realm/agent/dev.liangbing")
+            .matches_self_target_ura("easynet:///r/other-realm/agent/user-dev.liangbing")
             .await,
         "same bare agent name in another realm must not be treated as local"
     );
@@ -89,7 +90,7 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
     // turning into a blanket "any agent URA is self-target".
     assert!(
         !svc.target_gate()
-            .matches_self_target_ura("easynet:///r/test-realm/agent/dev.unknown")
+            .matches_self_target_ura("easynet:///r/test-realm/agent/user-dev.unknown")
             .await,
         "slow tier must only accept agents present in agents.json"
     );
@@ -108,20 +109,20 @@ async fn matches_self_target_ura_uses_exact_local_agents_identity() {
         &mut local,
         "llm",
         "liangbing",
-        "easynet:///r/test-realm/agent/dev.liangbing",
+        "easynet:///r/test-realm/agent/user-dev.liangbing",
     );
     save(&local).expect("seed local-agents.json");
 
     let svc = make_service().with_session_realm("test-realm");
     assert!(
         svc.target_gate()
-            .matches_self_target_ura("easynet:///r/test-realm/agent/dev.liangbing")
+            .matches_self_target_ura("easynet:///r/test-realm/agent/user-dev.liangbing")
             .await,
         "exact hosted Agent identity from local-agents.json must be local"
     );
     assert!(
         !svc.target_gate()
-            .matches_self_target_ura("easynet:///r/other-realm/agent/dev.liangbing")
+            .matches_self_target_ura("easynet:///r/other-realm/agent/user-dev.liangbing")
             .await,
         "local-agents identity must include the realm"
     );
@@ -135,7 +136,7 @@ async fn matches_self_target_ura_uses_exact_local_agents_identity() {
 
 #[tokio::test]
 async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registered() {
-    // RFC-005 acceptance: `<self>.invoke_remote` self-target
+    // RFC-005 acceptance: `runtime.invoke_remote` self-target
     // execution is selected by `namespace.resolve`, then
     // dispatched through Axon LocalRuntime using the selected
     // route's callee + dispatch key.
@@ -144,7 +145,7 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
 
-    let owner_ura = "easynet:///r/test-realm/agent/dev.liangbing";
+    let owner_ura = "easynet:///r/test-realm/agent/user-dev.liangbing";
     let ability_ura = crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
     let rt = LocalRuntime::new();
     rt.register_ability_with_options(
@@ -215,9 +216,9 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
 #[tokio::test]
 async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     // Honest-report 2026-06-11 item 15: the self-targeted
-    // `<self>.invoke_remote` arm must consult the daemon's
+    // `runtime.invoke_remote` arm must consult the daemon's
     // DeviceTrustSync before verifying a device-signed origin
-    // claim, exactly like the `<self>.session` dispatcher arm —
+    // claim, exactly like the `session.open` dispatcher arm —
     // first-contact cross-device callers warm the anchor instead
     // of failing closed on a cold one. Admission itself must STAY
     // fail-closed: the fabricated signature below cannot admit.
@@ -234,7 +235,7 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     }
 
     let _hg = crate::facade::cli::test_support::HomeGuard::new();
-    let owner_ura = "easynet:///r/test-realm/agent/dev.liangbing";
+    let owner_ura = "easynet:///r/test-realm/agent/user-dev.liangbing";
     let ability_ura = crate::ura::owner_ability_ura(owner_ura, "chat").expect("agent ability URA");
     let rt = LocalRuntime::new();
     rt.register_ability_with_options(
@@ -327,7 +328,7 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     // Without the `matches_self_target_ura` guard the Axon
     // arm intercepts every call whose ability is registered
     // locally, regardless of `subject_device`. That caused
-    // the Web UI's `<self>.invoke_remote(subject_device=peer,
+    // the Web UI's `runtime.invoke_remote(subject_device=peer,
     // ability=agent.list)` to return THIS daemon's
     // agents instead of the peer's — the agent-list page
     // lit up with the wrong rows.

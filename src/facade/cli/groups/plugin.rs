@@ -267,6 +267,7 @@ mod tests {
             realm: "acme".to_string(),
             hub_endpoint: "axon://hub.example:50051".to_string(),
             username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
             ..Default::default()
         })
         .expect("write test credentials");

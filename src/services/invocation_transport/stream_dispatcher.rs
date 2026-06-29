@@ -385,15 +385,16 @@ impl StreamDispatcher {
             while let Some(frame_result) = handle.next_frame().await {
                 match frame_result {
                     Ok(frame) => {
-                        if frame.terminal && frame.payload.is_empty() {
-                            break;
-                        }
                         let terminal = frame.terminal;
                         let content_type = if frame.content_type.is_empty() {
                             FEDERATION_RESULT_CONTENT_TYPE.to_string()
                         } else {
                             frame.content_type
                         };
+                        // Payload emptiness is business content; `terminal`
+                        // is lifecycle state. Preserve Axon's terminal frame
+                        // even for finite streams that complete with
+                        // `Ok(Vec::new())`.
                         let chunk = InvokeStreamChunk {
                             content_type,
                             payload: frame.payload,
@@ -444,10 +445,13 @@ impl StreamDispatcher {
         if !selected_route.is_authoritative_local_or_better() {
             return Err(route_profile_blocked_status(&selected_route));
         }
-        if !self
+        let execution_host_is_self = self
             .gate
             .matches_self_target_ura(&selected_route.execution_host_ura)
-            .await
+            .await;
+        if !selected_route
+            .dispatch_target(execution_host_is_self)
+            .is_local_runtime()
         {
             return Err(route_selected_remote_host_status(
                 "InvokeStream",

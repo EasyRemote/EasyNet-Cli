@@ -5,7 +5,7 @@
 // Description: Canonical runtime mapping from ability name to bidi wire codec.
 //
 // Protocol Responsibility:
-// - Names the local bidi wire adapter used by daemon gRPC and `<self>.session`.
+// - Names the local bidi wire adapter used by daemon gRPC and `session.open`.
 // - Keeps built-in ability adapters and plugin-declared adapters behind one
 //   runtime query surface.
 //
@@ -144,12 +144,15 @@ pub fn is_bidi_wire_ability(ability: &str) -> bool {
     bidi_wire_kind_for(ability).is_some()
 }
 
-fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
+pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
     if ability == crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH {
         return Some(AbilityBidiWireKind::Pty);
     }
     if ability == crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER {
         return Some(AbilityBidiWireKind::FileTransfer);
+    }
+    if ability == crate::runtime::agents::browser_session_ability::ABILITY_ATTACH_SESSION {
+        return Some(AbilityBidiWireKind::JsonFrames);
     }
     None
 }
@@ -179,6 +182,12 @@ mod tests {
                 crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
             ),
             Some(AbilityBidiWireKind::FileTransfer)
+        );
+        assert_eq!(
+            registry.bidi_wire_kind_for(
+                crate::runtime::agents::browser_session_ability::ABILITY_ATTACH_SESSION
+            ),
+            Some(AbilityBidiWireKind::JsonFrames)
         );
     }
 

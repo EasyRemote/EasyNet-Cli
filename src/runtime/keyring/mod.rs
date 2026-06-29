@@ -29,7 +29,7 @@ pub mod store;
 /// Cross-realm user identity binding token (RFC-N PR-N4
 /// commit 1/N). Builds on RFC-002 keyring primitives + PR-N2's
 /// FederatedKeyResolver to let user U on realm A be recognised
-/// as their realm B identity for federated `<self>.discover`.
+/// as their realm B identity for federated `<agent>.discover`.
 /// Wire shape + canonical bytes contract + verify helper; the
 /// `device.keyring.federate_user_identity_token` and
 /// `device.keyring.consume_federate_user_token` ability handlers
@@ -41,7 +41,7 @@ pub mod user_binding_chain;
 /// to `user_binding_chain.rs`: realm B's
 /// `device.keyring.consume_federate_user_token` writes here
 /// after the four-check verify chain passes; later
-/// `<self>.discover` Tier-3 reads the bindings to filter
+/// `<agent>.discover` Tier-3 reads the bindings to filter
 /// cross-realm devices by user identity.
 pub mod federated_bindings;
 

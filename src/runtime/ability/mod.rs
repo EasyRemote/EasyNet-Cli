@@ -18,6 +18,7 @@
 //   into one handler map.
 
 pub mod authority;
+pub mod conformance;
 pub mod descriptor;
 pub mod error;
 pub mod impl_binding;

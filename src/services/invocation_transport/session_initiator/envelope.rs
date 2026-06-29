@@ -1,7 +1,3 @@
-use easynet_axon::invocation::axiom::{
-    AgentIdentity as AxiomAgentIdentity, CausalContext, InvocationEnvelope,
-    SubjectIdentity as AxiomSubjectIdentity, UraProfile,
-};
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
     AgentIdentity, CallerSignature, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
@@ -9,11 +5,9 @@ use easynet_axon::pb::axon::v1::{
 };
 use ed25519_dalek::{Signer as _, SigningKey};
 use rand::RngCore as _;
-use sha2::{Digest, Sha256};
-use tonic::Status;
 
 use super::{
-    claimant_boot_nonce, ABILITY_SELF_SESSION, DEVICE_DISPATCH_CONTRACT_VERSION, SESSION_STREAM_ID,
+    claimant_boot_nonce, ABILITY_SESSION_OPEN, DEVICE_DISPATCH_CONTRACT_VERSION, SESSION_STREAM_ID,
 };
 use crate::services::invocation_transport::DEFAULT_URA_PROFILE;
 
@@ -21,7 +15,7 @@ use crate::services::invocation_transport::DEFAULT_URA_PROFILE;
 pub type SessionSigningSeed = [u8; 32];
 
 /// Build the EnvelopeOpen frame 0 a device sends to open
-/// `<self>.session`. Public so PR-2 commit 1/N's hub-side
+/// `session.open`. Public so PR-2 commit 1/N's hub-side
 /// acceptor tests can construct a matching expected frame, and
 /// so the integration test in PR-3 commit 3/3 can drive a mock
 /// device through the same shape.
@@ -44,7 +38,7 @@ pub fn build_session_envelope_open_with_seed(
             ura: caller_ura.to_string(),
             profile: DEFAULT_URA_PROFILE.to_string(),
         }),
-        // `<self>.session` is the device presenting its own long-
+        // `session.open` is the device presenting its own long-
         // lived reverse channel; callee + subject both point at the
         // caller device so the signed tuple is stable and self-
         // describing even before a future hub-URA contract lands.
@@ -59,9 +53,52 @@ pub fn build_session_envelope_open_with_seed(
         ..Envelope::default()
     };
 
+    // Descriptor-bound frame-0 signing (mirrors the unary prelude in
+    // `prelude.rs::sign_descriptor_bound_prelude_request`). The hub's tightened
+    // bidi ingress runs the SAME strict signature gate as unary and rejects an
+    // empty `EnvelopeOpen.metadata` with "signed public Invoke for `session.open`
+    // is missing `x-easynet-signed-descriptor-ref`". `session.open`'s callee ==
+    // caller device URA (above), so the descriptor ref's owner matches the route
+    // by construction, and the gate re-derives the exact canonical bytes we sign
+    // here via `descriptor_bound_from_wire_parts`. Signing the old axiom bytes
+    // (the previous `sign_envelope_with_seed` path) would satisfy the metadata
+    // presence check but fail signature verification — the sign target MUST be
+    // the descriptor-bound canonical bytes.
+    let mut session_metadata = std::collections::HashMap::new();
     let mac = if let Some(seed) = signing_seed {
-        sign_envelope_with_seed(&mut envelope, ABILITY_SELF_SESSION, &initial_args, &seed)
-            .expect("self.session frame-0 envelope is complete")
+        let descriptor_ref =
+            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                caller_ura,
+                ABILITY_SESSION_OPEN,
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            )
+            .expect("session.open descriptor ref is well-formed for the device's own URA");
+        if envelope.invocation_nonce.len() != 16 {
+            let mut nonce = [0_u8; 16];
+            rand::rngs::OsRng.fill_bytes(&mut nonce);
+            envelope.invocation_nonce = nonce.to_vec();
+        }
+        let descriptor_bound =
+            crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+                envelope.clone(),
+                descriptor_ref.clone(),
+                &initial_args,
+                crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+            )
+            .expect("session.open descriptor-bound envelope is complete");
+        let signing_key = SigningKey::from_bytes(&seed);
+        let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
+        envelope.caller_signature = Some(CallerSignature {
+            algorithm: "ed25519".to_string(),
+            signature: signature.to_bytes().to_vec(),
+            key_id_hint: caller_ura.to_string(),
+        });
+        session_metadata.insert(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            descriptor_ref,
+        );
+        signature.to_bytes().to_vec()
     } else {
         Vec::new()
     };
@@ -72,7 +109,7 @@ pub fn build_session_envelope_open_with_seed(
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
             envelope: Some(envelope),
             target: Some(InvocationTarget {
-                ability_name: ABILITY_SELF_SESSION.to_string(),
+                ability_name: ABILITY_SESSION_OPEN.to_string(),
                 ..InvocationTarget::default()
             }),
             initial_args,
@@ -89,76 +126,8 @@ pub fn build_session_envelope_open_with_seed(
                 contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
                 claimant_boot_nonce: claimant_boot_nonce().to_vec(),
             }),
+            metadata: session_metadata,
             ..EnvelopeOpen::default()
         })),
     }
-}
-
-#[allow(deprecated)]
-pub(super) fn sign_envelope_with_seed(
-    envelope: &mut Envelope,
-    ability: &str,
-    arguments: &[u8],
-    seed: &SessionSigningSeed,
-) -> Result<Vec<u8>, Status> {
-    if ability.trim().is_empty() {
-        return Err(Status::invalid_argument("session signing ability is empty"));
-    }
-    if envelope.invocation_nonce.len() != 16 {
-        let mut nonce = [0_u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        envelope.invocation_nonce = nonce.to_vec();
-    }
-    let invocation_nonce: [u8; 16] =
-        envelope
-            .invocation_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                Status::internal("session signing nonce must be exactly 16 bytes after refresh")
-            })?;
-    let caller_ura = envelope
-        .caller
-        .as_ref()
-        .map(|caller| caller.ura.trim())
-        .filter(|ura| !ura.is_empty())
-        .ok_or_else(|| Status::invalid_argument("session signing caller URA missing"))?;
-    let callee_ura = envelope
-        .callee
-        .as_ref()
-        .map(|callee| callee.ura.trim())
-        .filter(|ura| !ura.is_empty())
-        .ok_or_else(|| Status::invalid_argument("session signing callee URA missing"))?;
-    let subject_ura = envelope
-        .subject
-        .as_ref()
-        .map(|subject| subject.ura.trim())
-        .filter(|ura| !ura.is_empty())
-        .ok_or_else(|| Status::invalid_argument("session signing subject URA missing"))?;
-
-    let args_digest: [u8; 32] = Sha256::digest(arguments).into();
-    let axiom_env = InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-        subject: AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2),
-        ability: ability.to_string(),
-        args_digest,
-        invocation_nonce,
-        causal_context: CausalContext::None,
-    };
-    let signing_key = SigningKey::from_bytes(seed);
-    // `<self>.session` frame-0 signing is a bootstrap MAC over the wire-pinned
-    // session-open tuple, not public Invoke admission or receipt proof
-    // material. Public invocation signing must use descriptor-bound canonical
-    // bytes; this narrow exception remains until the session-open protocol
-    // itself carries a versioned descriptor ref.
-    let signature =
-        signing_key.sign(&easynet_axon::invocation::axiom::canonical_invocation_bytes(&axiom_env));
-    let signature_bytes = signature.to_bytes().to_vec();
-    envelope.caller_signature = Some(CallerSignature {
-        algorithm: "ed25519".to_string(),
-        signature: signature_bytes.clone(),
-        key_id_hint: caller_ura.to_string(),
-    });
-    Ok(signature_bytes)
 }

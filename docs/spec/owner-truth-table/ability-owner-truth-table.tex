@@ -120,7 +120,7 @@ Every value referenced in this document conforms to the v4.1.5 URA
 grammar. The grammar is closed: the parser
 (\codew{src/uri.rs::parse\_ura}) rejects any string outside the six
 shapes below. Other "URA-shaped" tokens that have appeared in practice
-(\codew{<self>}, \codew{<unjoined>}, \code{agent://self}) are
+(\codew{legacy self alias}, \codew{<unjoined>}, \code{agent://self}) are
 \emph{not} URAs and must not propagate past the registration boundary.
 
 \subsection*{Ontology}
@@ -158,7 +158,7 @@ shapes below. Other "URA-shaped" tokens that have appeared in practice
   \item[\textbf{P1} --- URAs are self-describing] Any URA, in
   isolation, names exactly one actor in the seven-tuple ontology.
   Nothing about who \emph{calls} the URA changes what it names. A
-  string that requires caller context to resolve (\codew{<self>}, the
+  string that requires caller context to resolve (\codew{legacy self alias}, the
   literal placeholder \code{self}, an \code{agent://self} URN) is
   therefore not a URA, and must not appear in any persisted descriptor,
   advertise payload, or receipt field.
@@ -244,7 +244,7 @@ authoritative source for the owner per~P2.
       \codew{invoke_ability::register_for_agent}\newline
       \codew{api_key_ability::register} \\
 
-  5 & \codew{device.keyring.*}, \codew{device.session}, \codew{device.register_device_pubkey} &
+  5 & \codew{device.keyring.*}, \codew{session.open}, \codew{identity.register_pubkey} &
       \code{device/<id>} &
       \code{=callee} (RFC-002 §3.3) &
       \codew{keyring::abilities::register_for_owner}\newline
@@ -581,12 +581,12 @@ no sub-agent wrapper. The catalogue carries exactly one row each.
   it, no AXIOM Invoke can be signed and federation breaks at the
   signing-authority check.
 
-  \item[\codew{device.session}] The long-lived bidi RPC session
+  \item[\codew{session.open}] The long-lived bidi RPC session
   the device dials to its realm hub on boot. All
   hub$\to$device forward-Invokes ride this session. Without it the
   hub has no way to push work down to the device.
 
-  \item[\codew{device.register_device_pubkey}]
+  \item[\codew{identity.register_pubkey}]
   Pairing-flow primitive: writes the device's Ed25519 public key
   into the hub's realm trust anchor. Without it, the hub's
   admission gate would reject every signed Invoke from the

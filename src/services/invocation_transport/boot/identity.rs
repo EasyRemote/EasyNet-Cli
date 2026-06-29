@@ -21,7 +21,7 @@ pub(super) struct DaemonIdentity {
 /// the whole file the moment any such field appears, silently
 /// collapsing `load_daemon_identity()` to `None` (the `.ok()?` at the
 /// call site). That drops the daemon's device identity, so the
-/// device-mode `<self>.session` supervisor never starts, the hub
+/// device-mode `session.open` supervisor never starts, the hub
 /// never sees the device's presence, and the backend renders it
 /// REMOVED. This is a projection, not a schema gate: tolerate unknown
 /// fields and read only what we own.

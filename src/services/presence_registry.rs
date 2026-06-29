@@ -3,7 +3,7 @@
 //
 // File: src/services/presence_registry.rs
 // Description: In-memory, sharded, broadcast-equipped registry of
-//              live `<self>.session` reverse channels keyed by
+//              live `session.open` reverse channels keyed by
 //              caller URA. Hub-side liveness model for the new
 //              transport plane.
 //
@@ -14,14 +14,14 @@
 // out of sync with the actual transport (devices could be reachable
 // while heartbeats failed and vice versa). RFC-003 collapses
 // liveness onto the transport itself: a device is *alive* exactly
-// when its `<self>.session` `InvokeBidi` stream is open. When the
+// when its `session.open` `InvokeBidi` stream is open. When the
 // stream closes for any reason, the registry drops the entry and
 // emits an `Offline` event downstream consumers (subscribe_directory
 // pumps, federation.* wrappers, the daemon's audit log) all share.
 //
 // This module is the single canonical home for that state. PR-1
 // spec §3 (`pr-drafts/PR-0-spec-daemon-invocation-server.md`) pins
-// the surface; PR-2 will populate it from the real `<self>.session`
+// the surface; PR-2 will populate it from the real `session.open`
 // accept handler; PR-1 lands the structure plus its tests so PR-2
 // reviewers can read it standing still.
 //
@@ -30,7 +30,7 @@
 // - `PresenceRegistry` — the registry itself, owned by the daemon
 //   `DaemonInvocationService` via `Arc`
 // - `DispatchSender` — type alias for the per-device mpsc sender
-//   that `<self>.invoke_remote` and `federation.forward_invoke`
+//   that `runtime.invoke_remote` and `federation.forward_invoke`
 //   push reverse-channel frames into
 // - `PresenceEvent` — what subscribers receive; either `Online` or
 //   `Offline`, with the URA plus (for Offline) a typed reason
@@ -60,7 +60,7 @@
 // 4. **Bounded backpressure**. The per-device mpsc has capacity
 //    `DISPATCH_CHANNEL_CAPACITY = 256`. A slow consumer cannot
 //    accumulate frames in the hub's memory; `forward_invoke` and
-//    `<self>.invoke_remote` push paths handle `try_send` failure
+//    `runtime.invoke_remote` push paths handle `try_send` failure
 //    by removing the slow device with `OfflineReason::SendFailed`,
 //    which collapses backpressure into a presence event.
 // 5. **Lossy broadcast**. The events broadcast channel has capacity
@@ -114,23 +114,23 @@ pub fn presence_registry_shards() -> usize {
 }
 
 /// Sender end of the per-device mpsc that downstream call paths
-/// (`<self>.invoke_remote`, `federation.forward_invoke`) push
+/// (`runtime.invoke_remote`, `federation.forward_invoke`) push
 /// reverse-channel frames into. The receiving end is held by the
-/// device's `<self>.session` task.
+/// device's `session.open` task.
 ///
 /// Frames are tonic results so a stream-level error (e.g., admission
 /// gate revocation) can propagate to the device cleanly. The receiver
 /// converts these into the outbound `InvokeBidiDown` stream.
 pub type DispatchSender = mpsc::Sender<Result<DispatchFrame, tonic::Status>>;
 
-/// Monotonic identity of one admitted `<self>.session`.
+/// Monotonic identity of one admitted `session.open`.
 ///
 /// Session ids are process-local and exist only to let stale tasks
 /// prove which registry entry they own when removing after a race
 /// with displacement/reconnect.
 pub type PresenceSessionId = u64;
 
-/// One frame heading down a `<self>.session` reverse channel.
+/// One frame heading down a `session.open` reverse channel.
 ///
 /// A thin newtype around the proto-generated `InvokeBidiDown` so
 /// downstream call paths describe their pushes in terms of presence
@@ -197,7 +197,7 @@ impl std::fmt::Display for OfflineReason {
 /// log writers) drive their state from this stream.
 #[derive(Debug, Clone)]
 pub enum PresenceEvent {
-    /// A new `<self>.session` was accepted for the given URA. If a
+    /// A new `session.open` was accepted for the given URA. If a
     /// previous session existed for the same URA it is implicitly
     /// offline (this event was preceded by an `Offline` for the
     /// displaced sender — the registry guarantees the order).
@@ -224,6 +224,10 @@ struct PresenceSlot {
     /// Carrier contract the device declared on frame 0 (DEC-F004).
     /// 0 = legacy JSON device; 1 = carrier-v1 proto frames.
     contract: SessionContract,
+    /// Trust evidence attached to the admission decision that
+    /// created this live slot. This is not a second liveness map:
+    /// it is metadata on the one canonical presence row.
+    trust: SessionTrustContext,
 }
 
 /// Frame-0 session negotiation facts (DEC-F004 / mini-RFC §2): the
@@ -243,6 +247,42 @@ impl SessionContract {
     }
 }
 
+/// Runtime-trust evidence for one admitted `session.open`.
+///
+/// User URAs can carry multiple active public keys. The admission
+/// gate pins the presented key before accepting a user session; the
+/// presence slot stores that admitted key so a later
+/// `identity.revoke_user_pubkey` disconnects only a session that was
+/// actually admitted by the revoked key.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionTrustContext {
+    admitted_public_key_b64: Option<String>,
+}
+
+impl SessionTrustContext {
+    #[must_use]
+    pub fn user_pubkey(public_key_b64: impl Into<String>) -> Self {
+        let public_key_b64 = public_key_b64.into().trim().to_string();
+        if public_key_b64.is_empty() {
+            return Self::default();
+        }
+        Self {
+            admitted_public_key_b64: Some(public_key_b64),
+        }
+    }
+
+    #[must_use]
+    pub fn admitted_public_key_b64(&self) -> Option<&str> {
+        self.admitted_public_key_b64.as_deref()
+    }
+
+    #[must_use]
+    fn matches_admitted_key(&self, public_key_b64: &str) -> bool {
+        self.admitted_public_key_b64()
+            .is_some_and(|admitted| admitted == public_key_b64.trim())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PresenceRegistration {
     pub session_id: PresenceSessionId,
@@ -256,7 +296,7 @@ pub struct PresenceRegistration {
     pub displaced_claimant_nonce: Option<Vec<u8>>,
 }
 
-/// Concurrent registry of live `<self>.session` reverse channels.
+/// Concurrent registry of live `session.open` reverse channels.
 ///
 /// The registry is the single owner of the mapping
 /// `device URA -> DispatchSender` and the canonical source of
@@ -300,7 +340,7 @@ impl PresenceRegistry {
         }
     }
 
-    /// Register a new `<self>.session` for `ura`.
+    /// Register a new `session.open` for `ura`.
     ///
     /// Emits `PresenceEvent::Offline { reason: StreamClosed }` for
     /// any displaced prior sender, then `PresenceEvent::Online`
@@ -323,7 +363,7 @@ impl PresenceRegistry {
         self.insert_tracked(ura, sender).displaced
     }
 
-    /// Register a new `<self>.session` and return the registry-owned
+    /// Register a new `session.open` and return the registry-owned
     /// `session_id` alongside any displaced prior sender. Legacy
     /// (contract-v0) registration; frame-0 negotiated sessions use
     /// [`PresenceRegistry::insert_negotiated`].
@@ -331,7 +371,7 @@ impl PresenceRegistry {
         self.insert_negotiated(ura, sender, SessionContract::legacy())
     }
 
-    /// Register a new `<self>.session` carrying the frame-0 carrier
+    /// Register a new `session.open` carrying the frame-0 carrier
     /// negotiation facts (DEC-F004). The slot remembers the declared
     /// contract so the hub's dispatch write path can pick the frame
     /// encoding per device, and the prior claimant's fingerprint is
@@ -342,6 +382,18 @@ impl PresenceRegistry {
         sender: DispatchSender,
         contract: SessionContract,
     ) -> PresenceRegistration {
+        self.insert_negotiated_with_trust(ura, sender, contract, SessionTrustContext::default())
+    }
+
+    /// Register a negotiated `session.open` together with the
+    /// trust evidence admitted for that session.
+    pub fn insert_negotiated_with_trust(
+        &self,
+        ura: String,
+        sender: DispatchSender,
+        contract: SessionContract,
+        trust: SessionTrustContext,
+    ) -> PresenceRegistration {
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         let prior = self.by_ura.insert(
             ura.clone(),
@@ -349,6 +401,7 @@ impl PresenceRegistry {
                 session_id,
                 sender,
                 contract,
+                trust,
             },
         );
         let displaced_claimant_nonce = prior
@@ -475,6 +528,33 @@ impl PresenceRegistry {
     /// `federation.revoke` and operator tooling.
     pub fn force_revoke(&self, ura: &str) -> Option<DispatchSender> {
         self.remove(ura, OfflineReason::AdminRevoked)
+    }
+
+    /// Force-remove a session only when the live slot was admitted
+    /// with `public_key_b64`.
+    ///
+    /// This is the runtime half of user-key revocation. A missing
+    /// slot, a non-user legacy slot with no admitted key, or a slot
+    /// admitted by a different key is a no-op and emits no offline
+    /// event.
+    pub fn force_revoke_if_admitted_key(
+        &self,
+        ura: &str,
+        public_key_b64: &str,
+    ) -> Option<DispatchSender> {
+        let prior = self
+            .by_ura
+            .remove_if(ura, |_uri, slot| {
+                slot.trust.matches_admitted_key(public_key_b64)
+            })
+            .map(|(_k, slot)| slot.sender);
+        if prior.is_some() {
+            let _ = self.events.send(PresenceEvent::Offline {
+                ura: ura.to_string(),
+                reason: OfflineReason::AdminRevoked,
+            });
+        }
+        prior
     }
 }
 
@@ -722,6 +802,41 @@ mod tests {
         let prior = registry.force_revoke(&ura);
         assert!(prior.is_some());
         assert!(registry.lookup(&ura).is_none());
+    }
+
+    #[test]
+    fn force_revoke_if_admitted_key_removes_matching_user_slot() {
+        let registry = PresenceRegistry::new();
+        let ura = "easynet:///r/realm/user/alice".to_string();
+        let key = "pubkey-a";
+        registry.insert_negotiated_with_trust(
+            ura.clone(),
+            make_dispatch_sender(),
+            SessionContract::legacy(),
+            SessionTrustContext::user_pubkey(key),
+        );
+
+        let prior = registry.force_revoke_if_admitted_key(&ura, key);
+
+        assert!(prior.is_some());
+        assert!(registry.lookup(&ura).is_none());
+    }
+
+    #[test]
+    fn force_revoke_if_admitted_key_keeps_different_key_slot() {
+        let registry = PresenceRegistry::new();
+        let ura = "easynet:///r/realm/user/alice".to_string();
+        registry.insert_negotiated_with_trust(
+            ura.clone(),
+            make_dispatch_sender(),
+            SessionContract::legacy(),
+            SessionTrustContext::user_pubkey("pubkey-b"),
+        );
+
+        let prior = registry.force_revoke_if_admitted_key(&ura, "pubkey-a");
+
+        assert!(prior.is_none());
+        assert!(registry.lookup(&ura).is_some());
     }
 
     #[tokio::test]

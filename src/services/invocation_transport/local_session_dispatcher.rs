@@ -1,9 +1,9 @@
-// EasyNet CLI — `<self>.session` device-side LocalAxonSessionDispatcher
+// EasyNet CLI — `session.open` device-side LocalAxonSessionDispatcher
 // =================================================================
 //
 // File: src/services/invocation_transport/local_session_dispatcher.rs
 //
-// Device-side `<self>.session` dispatcher. It decodes
+// Device-side `session.open` dispatcher. It decodes
 // `SessionDispatch::Dispatch{call_id, ability, args}`, routes the
 // ability through the daemon's boot-threaded Axon `LocalRuntime`, then
 // encodes the outcome back as `SessionDispatch::Result`.
@@ -11,7 +11,7 @@
 // Args contract
 // -------------
 // `SessionDispatch::Dispatch.args` stays wire-opaque at the
-// `<self>.invoke_remote` layer, but the in-process local registry is
+// `runtime.invoke_remote` layer, but the in-process local registry is
 // JSON-shaped today (`serde_json::Value`). The device-side session
 // handler therefore interprets the bytes as JSON exactly at the
 // final execution boundary. Malformed JSON is surfaced back to the
@@ -47,7 +47,7 @@ use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::InvokeBidiUp;
 use easynet_axon::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
 
-/// Device-side `<self>.session` dispatcher. Executes inbound
+/// Device-side `session.open` dispatcher. Executes inbound
 /// Dispatch frames against the daemon's shared Axon `LocalRuntime`,
 /// returning the result payload or typed failure over the existing
 /// `SessionDispatch::Result` wire shape.
@@ -94,13 +94,30 @@ pub struct LocalAxonSessionDispatcher {
     /// declarations are projected into this table at boot so the dispatcher
     /// does not query package state through process-global helpers.
     ability_wire: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
-    /// On-miss device key sync for cross-device origin-caller claims
-    /// (see `device_trust_sync`). `None` outside device-mode boot.
+    /// On-miss caller key sync for device and same-realm user
+    /// origin-caller claims (see `device_trust_sync`). `None` outside
+    /// device-mode boot.
     device_trust_sync:
         Option<Arc<crate::services::invocation_transport::device_trust_sync::DeviceTrustSync>>,
 }
 
 type LocalBidiWireKind = crate::runtime::ability_wire::AbilityBidiWireKind;
+
+fn local_bidi_wire_kind_for(
+    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    ability: &str,
+) -> Option<LocalBidiWireKind> {
+    registry
+        .bidi_wire_kind_for(ability)
+        .or_else(|| crate::runtime::ability_wire::core_bidi_wire_kind_for(ability))
+}
+
+fn local_is_bidi_wire_ability(
+    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    ability: &str,
+) -> bool {
+    local_bidi_wire_kind_for(registry, ability).is_some()
+}
 
 #[derive(Clone)]
 struct ActiveRemoteBidi {
@@ -158,10 +175,10 @@ impl SessionSelfTargetSubject {
     fn validate(value: &str, field: &str) -> Result<(), String> {
         let value = value.trim();
         if value.is_empty() {
-            return Err(format!("<self>.session: {field} must not be empty"));
+            return Err(format!("session.open: {field} must not be empty"));
         }
         crate::ura::parse_ura(value)
-            .map_err(|err| format!("<self>.session: {field} `{value}` is not a valid URA: {err}"))
+            .map_err(|err| format!("session.open: {field} `{value}` is not a valid URA: {err}"))
             .map(|_| ())
     }
 }
@@ -271,9 +288,20 @@ impl LocalAxonSessionDispatcher {
         } else {
             easynet_axon::invocation::CallMode::Rpc
         };
-        let descriptor_ref = bound_ability
-            .descriptor_ref_for_mode("carrier-v1 DispatchCall", &target_ura, call_mode, None)
-            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
+        let descriptor_ref = match bound_ability
+            .signed_descriptor_ref_from_metadata(
+                "carrier-v1 DispatchCall",
+                &target_ura,
+                call_mode,
+                &request.metadata,
+            )
+            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?
+        {
+            Some(descriptor_ref) => descriptor_ref,
+            None => bound_ability
+                .descriptor_ref_for_mode("carrier-v1 DispatchCall", &target_ura, call_mode, None)
+                .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?,
+        };
         let wire = crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
             envelope,
             descriptor_ref.into_descriptor_ref(),
@@ -616,7 +644,7 @@ impl LocalAxonSessionDispatcher {
         ability: &str,
     ) -> bool {
         matches!(
-            registry.bidi_wire_kind_for(ability),
+            local_bidi_wire_kind_for(registry, ability),
             Some(LocalBidiWireKind::JsonFrames)
         )
     }
@@ -756,7 +784,7 @@ impl LocalAxonSessionDispatcher {
     /// `invoke_async` (and therefore the wired `LedgerSink`) when
     /// the runtime hosts the ability. Boot wires this from the
     /// same `Arc<LocalRuntime>` the service uses for Phase 4's
-    /// `<self>.invoke_remote` arm.
+    /// `runtime.invoke_remote` arm.
     #[must_use]
     pub fn with_local_runtime(
         mut self,
@@ -821,7 +849,7 @@ impl LocalAxonSessionDispatcher {
                 Err(err) => {
                     return Some(Self::session_error_result(
                         call_id,
-                        format!("<self>.session: invalid origin caller claim: {err}"),
+                        format!("session.open: invalid origin caller claim: {err}"),
                     ));
                 }
             };
@@ -834,17 +862,22 @@ impl LocalAxonSessionDispatcher {
                 caller_ura = origin.caller_ura.as_str(),
                 ability = ability,
             );
-            // Cross-device callers: warm the anchor from the hub on a
-            // miss (resolve_key trust sync). Admission below stays
+            // Device and same-realm user callers: warm the anchor from the
+            // hub on a miss (resolve_key trust sync). Admission below stays
             // local-anchor-authoritative; a failed sync just lets the
             // dispatch fail closed with the precise admission error.
             if let Some(sync) = self.device_trust_sync.as_ref() {
-                sync.ensure_caller_key(&origin.caller_ura).await;
+                let signer_pubkey_b64 = B64.encode(&origin.signer_pubkey);
+                sync.ensure_caller_key_with_presented_pubkey(
+                    &origin.caller_ura,
+                    Some(&signer_pubkey_b64),
+                )
+                .await;
             }
             let Some(inner_callee) = Self::non_empty_ura(callee_ura) else {
                 return Some(Self::session_error_result(
                     call_id,
-                    format!("<self>.session: missing callee URA for ability `{ability}`"),
+                    format!("session.open: missing callee URA for ability `{ability}`"),
                 ));
             };
             let inner_subject = match Self::self_target_subject(subject_ura, inner_callee) {
@@ -855,7 +888,7 @@ impl LocalAxonSessionDispatcher {
                 return Some(Self::session_error_result(
                     call_id,
                     crate::services::invocation_transport::invocation_wire::dispatch_key_mismatch_message(
-                        "<self>.session",
+                        "session.open",
                         origin.public_ability(),
                         ability,
                         ability,
@@ -871,7 +904,7 @@ impl LocalAxonSessionDispatcher {
                 Err(err) => {
                     return Some(Self::session_error_result(
                         call_id,
-                        format!("<self>.session: invalid origin caller dispatch: {err}"),
+                        format!("session.open: invalid origin caller dispatch: {err}"),
                     ));
                 }
             };
@@ -880,7 +913,7 @@ impl LocalAxonSessionDispatcher {
             let Some(callee) = Self::non_empty_ura(callee_ura) else {
                 return Some(Self::session_error_result(
                     call_id,
-                    format!("<self>.session: missing callee URA for ability `{ability}`"),
+                    format!("session.open: missing callee URA for ability `{ability}`"),
                 ));
             };
             let subject = match Self::self_target_subject(subject_ura, callee) {
@@ -920,7 +953,7 @@ impl LocalAxonSessionDispatcher {
         let runtime = self.local_runtime.as_ref()?;
         let Some(callee) = Self::non_empty_ura(callee_ura) else {
             return Some(Err(format!(
-                "<self>.session: missing callee URA for stream ability `{ability}`"
+                "session.open: missing callee URA for stream ability `{ability}`"
             )));
         };
         let subject = match Self::self_target_subject(subject_ura, callee) {
@@ -1020,7 +1053,7 @@ impl LocalAxonSessionDispatcher {
                         sent_terminal = true;
                         Self::session_error_result(
                             call_id,
-                            format!("<self>.session: stream frame failed: {err}"),
+                            format!("session.open: stream frame failed: {err}"),
                         )
                     }
                 };
@@ -1093,20 +1126,20 @@ impl LocalAxonSessionDispatcher {
     ) -> Result<(), String> {
         if content.is_encrypted() {
             return Err(format!(
-                "<self>.session: ability `{ability}` received encrypted args \
+                "session.open: ability `{ability}` received encrypted args \
                  (encryption={}, key_id={:?}) but no session decryptor is wired",
                 content.encryption, content.key_id
             ));
         }
         if !content.content_type.is_empty() && content.content_type != "application/json" {
             return Err(format!(
-                "<self>.session: ability `{ability}` received unsupported args content_type {:?}",
+                "session.open: ability `{ability}` received unsupported args content_type {:?}",
                 content.content_type
             ));
         }
         if !content.encoding.is_empty() && content.encoding != "identity" {
             return Err(format!(
-                "<self>.session: ability `{ability}` received unsupported args encoding {:?}",
+                "session.open: ability `{ability}` received unsupported args encoding {:?}",
                 content.encoding
             ));
         }
@@ -1291,12 +1324,12 @@ impl LocalAxonSessionDispatcher {
             call_id = call_id,
             ability = ability,
         );
-        if !self.ability_wire.is_bidi_wire_ability(&ability) {
+        if !local_is_bidi_wire_ability(&self.ability_wire, &ability) {
             return Self::send_bidi_result(
                 outbound,
                 &Self::session_error_result(
                     call_id,
-                    format!("remote bidi ability `{ability}` is not wired on <self>.session"),
+                    format!("remote bidi ability `{ability}` is not wired on session.open"),
                 ),
                 None,
             )
@@ -1315,7 +1348,7 @@ impl LocalAxonSessionDispatcher {
                 outbound,
                 &Self::session_error_result(
                     call_id,
-                    "<self>.session: LocalRuntime is not wired for remote bidi",
+                    "session.open: LocalRuntime is not wired for remote bidi",
                 ),
                 None,
             )
@@ -1350,13 +1383,29 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let descriptor_ref = match bound_ability.descriptor_ref_for_mode(
+        let descriptor_ref = match bound_ability.signed_descriptor_ref_from_metadata(
             "carrier-v1 BidiOpen",
             &target_ura,
             easynet_axon::invocation::CallMode::Bidi,
-            None,
+            &request.metadata,
         ) {
-            Ok(ref_) => ref_,
+            Ok(Some(ref_)) => ref_,
+            Ok(None) => match bound_ability.descriptor_ref_for_mode(
+                "carrier-v1 BidiOpen",
+                &target_ura,
+                easynet_axon::invocation::CallMode::Bidi,
+                None,
+            ) {
+                Ok(ref_) => ref_,
+                Err(status) => {
+                    return Self::send_bidi_result(
+                        outbound,
+                        &Self::session_error_result(call_id, status.message()),
+                        None,
+                    )
+                    .await;
+                }
+            },
             Err(status) => {
                 return Self::send_bidi_result(
                     outbound,
@@ -1395,7 +1444,7 @@ impl LocalAxonSessionDispatcher {
                         outbound,
                         &Self::session_error_result(
                             call_id,
-                            format!("<self>.session: remote bidi open failed: {err}"),
+                            format!("session.open: remote bidi open failed: {err}"),
                         ),
                         None,
                     )
@@ -1480,12 +1529,12 @@ impl LocalAxonSessionDispatcher {
             metadata: _metadata,
         } = request;
         let ability = ability.as_str();
-        if !self.ability_wire.is_bidi_wire_ability(ability) {
+        if !local_is_bidi_wire_ability(&self.ability_wire, ability) {
             return Self::send_dispatch_up(
                 outbound,
                 &Self::file_transfer_terminal_error(
                     call_id,
-                    format!("remote bidi ability `{ability}` is not wired on <self>.session"),
+                    format!("remote bidi ability `{ability}` is not wired on session.open"),
                 ),
             )
             .await;
@@ -1504,7 +1553,7 @@ impl LocalAxonSessionDispatcher {
                 outbound,
                 &Self::file_transfer_terminal_error(
                     call_id,
-                    "<self>.session: LocalRuntime is not wired for remote bidi",
+                    "session.open: LocalRuntime is not wired for remote bidi",
                 ),
             )
             .await;
@@ -1515,7 +1564,7 @@ impl LocalAxonSessionDispatcher {
                 outbound,
                 &Self::file_transfer_terminal_error(
                     call_id,
-                    format!("<self>.session: missing callee URA for bidi ability `{ability}`"),
+                    format!("session.open: missing callee URA for bidi ability `{ability}`"),
                 ),
             )
             .await;
@@ -1545,7 +1594,7 @@ impl LocalAxonSessionDispatcher {
                     outbound,
                     &Self::file_transfer_terminal_error(
                         call_id,
-                        format!("<self>.session: remote bidi open failed: {err}"),
+                        format!("session.open: remote bidi open failed: {err}"),
                     ),
                 )
                 .await;
@@ -1593,7 +1642,7 @@ impl LocalAxonSessionDispatcher {
                     Err(err) => {
                         let dispatch = LocalAxonSessionDispatcher::file_transfer_terminal_error(
                             call_id,
-                            format!("<self>.session: remote file_transfer frame failed: {err}"),
+                            format!("session.open: remote file_transfer frame failed: {err}"),
                         );
                         let _ = LocalAxonSessionDispatcher::send_bidi_result(
                             &outbound, &dispatch, None,
@@ -1632,7 +1681,7 @@ impl LocalAxonSessionDispatcher {
                                     Some(LocalAxonSessionDispatcher::file_transfer_terminal_error(
                                         call_id,
                                         format!(
-                                            "<self>.session: remote bidi output map failed: {err}"
+                                            "session.open: remote bidi output map failed: {err}"
                                         ),
                                     ))
                                 }
@@ -1640,7 +1689,7 @@ impl LocalAxonSessionDispatcher {
                         }
                         Err(err) => Some(LocalAxonSessionDispatcher::file_transfer_terminal_error(
                             call_id,
-                            format!("<self>.session: remote bidi output was not JSON: {err}"),
+                            format!("session.open: remote bidi output was not JSON: {err}"),
                         )),
                     }
                 };
@@ -2038,7 +2087,7 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                     None => Self::session_error_result(
                         call_id,
                         format!(
-                            "<self>.session: ability `{ability}` is not registered \
+                            "session.open: ability `{ability}` is not registered \
                              in Axon LocalRuntime"
                         ),
                     ),
@@ -2060,6 +2109,17 @@ mod tests {
     use std::time::Duration;
 
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
+
+    #[test]
+    fn session_bidi_gate_recognizes_core_browser_attach_wire() {
+        let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
+        let ability = crate::runtime::agents::browser_session_ability::ABILITY_ATTACH_SESSION;
+
+        assert!(local_is_bidi_wire_ability(&registry, ability));
+        assert!(LocalAxonSessionDispatcher::is_json_frame_bidi_with(
+            &registry, ability
+        ));
+    }
 
     // Descriptor proof a test ability must carry so Axon's receipt-proof
     // normalizer admits its dispatch. Production stamps these from the
@@ -2213,7 +2273,7 @@ mod tests {
         let descriptor_bound =
             crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
                 envelope.clone(),
-                signed_descriptor_ref,
+                signed_descriptor_ref.clone(),
                 &args,
                 crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
             )
@@ -2225,15 +2285,22 @@ mod tests {
             key_id_hint: String::new(),
         });
 
+        let mut request = InvokeRequest {
+            envelope: Some(envelope),
+            function_name: request_ability.to_string(),
+            arguments: args,
+            ..Default::default()
+        };
+        request.metadata.insert(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            signed_descriptor_ref,
+        );
+
         InvokeBidiDown {
             payload: Some(DownPayload::DispatchCall(DispatchCall {
                 call_id,
-                request: Some(InvokeRequest {
-                    envelope: Some(envelope),
-                    function_name: request_ability.to_string(),
-                    arguments: args,
-                    ..Default::default()
-                }),
+                request: Some(request),
                 open_bidi: false,
             })),
             ..InvokeBidiDown::default()

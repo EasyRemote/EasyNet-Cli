@@ -133,6 +133,55 @@ impl LocalRuntimeAuthority for LocalRuntimeAuthoritySnapshot {
     }
 }
 
+/// Closed daemon-internal route-locality classification.
+///
+/// This is the semantic value dispatchers should consume. Axon
+/// `RouteReason` remains the wire projection exposed through
+/// ResolveAnswer JSON, but the daemon must not infer route locality
+/// from protobuf strings, owner URA shape, or ad hoc dispatcher branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectedRouteKind {
+    LocalDevice,
+    SameRealmDevice,
+    HubOwned,
+    HostedAgent,
+}
+
+impl SelectedRouteKind {
+    #[must_use]
+    pub(crate) fn route_reason(self) -> axon_pb::RouteReason {
+        match self {
+            Self::LocalDevice | Self::SameRealmDevice => axon_pb::RouteReason::LocalDevice,
+            Self::HubOwned => axon_pb::RouteReason::LocalHub,
+            Self::HostedAgent => axon_pb::RouteReason::HostedAgent,
+        }
+    }
+}
+
+/// Dispatcher-facing execution target for a selected route.
+///
+/// `SelectedRouteKind` answers *what locality was selected*; this target
+/// answers *which daemon-owned execution plane must consume it*. The only
+/// extra input is whether the selected execution host is this daemon, which is
+/// a process-local fact supplied by `TargetGate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectedRouteDispatchTarget {
+    LocalRuntime,
+    PresenceSession,
+}
+
+impl SelectedRouteDispatchTarget {
+    #[must_use]
+    pub(crate) fn is_local_runtime(self) -> bool {
+        matches!(self, Self::LocalRuntime)
+    }
+
+    #[must_use]
+    pub(crate) fn is_presence_session(self) -> bool {
+        matches!(self, Self::PresenceSession)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SelectedInvokeRoute {
     pub query_name: String,
@@ -144,7 +193,7 @@ pub(crate) struct SelectedInvokeRoute {
     pub route_ura: String,
     pub dispatch_name: String,
     pub release_profile: axon_pb::ResolverReleaseProfile,
-    reason: axon_pb::RouteReason,
+    kind: SelectedRouteKind,
     ability_record: Value,
     route_record: Value,
     owner_record: Value,
@@ -166,6 +215,35 @@ impl SelectedInvokeRoute {
     }
 
     #[must_use]
+    pub(crate) fn kind(&self) -> SelectedRouteKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub(crate) fn route_reason(&self) -> axon_pb::RouteReason {
+        self.kind().route_reason()
+    }
+
+    #[must_use]
+    pub(crate) fn dispatch_target(
+        &self,
+        execution_host_is_self: bool,
+    ) -> SelectedRouteDispatchTarget {
+        match self.kind {
+            SelectedRouteKind::LocalDevice => SelectedRouteDispatchTarget::LocalRuntime,
+            SelectedRouteKind::SameRealmDevice
+            | SelectedRouteKind::HubOwned
+            | SelectedRouteKind::HostedAgent => {
+                if execution_host_is_self {
+                    SelectedRouteDispatchTarget::LocalRuntime
+                } else {
+                    SelectedRouteDispatchTarget::PresenceSession
+                }
+            }
+        }
+    }
+
+    #[must_use]
     pub(crate) fn final_route_answer_json(&self) -> Value {
         let authority = authority_for_query(&self.query_name);
         let gates = json!({
@@ -180,7 +258,7 @@ impl SelectedInvokeRoute {
             "nextHop": next_hop.clone(),
             "priority": 0,
             "weight": 1,
-            "reason": self.reason.as_str_name(),
+            "reason": self.route_reason().as_str_name(),
             "health": axon_pb::RouteHealth::Healthy.as_str_name(),
             "authority": authority.clone(),
             "gates": gates,
@@ -210,15 +288,15 @@ impl SelectedInvokeRoute {
     }
 
     fn next_hop_json(&self) -> Value {
-        match self.reason {
-            axon_pb::RouteReason::LocalHub => json!({
+        match self.kind {
+            SelectedRouteKind::HubOwned => json!({
                 "localHubAbility": {
                     "abilityUra": self.ability_ura,
                     "routeUra": self.route_ura,
                     "dispatchName": self.dispatch_name,
                 }
             }),
-            axon_pb::RouteReason::HostedAgent => json!({
+            SelectedRouteKind::HostedAgent => json!({
                 "hostedAgentViaDevice": {
                     "agentUra": self.callee_ura,
                     "hostDeviceUra": self.execution_host_ura,
@@ -228,7 +306,7 @@ impl SelectedInvokeRoute {
                     "dispatchName": self.dispatch_name,
                 }
             }),
-            _ => json!({
+            SelectedRouteKind::LocalDevice | SelectedRouteKind::SameRealmDevice => json!({
                 "localDeviceAbility": {
                     "deviceUra": self.execution_host_ura,
                     "abilityUra": self.ability_ura,
@@ -248,6 +326,29 @@ pub(crate) struct DelegatedInvokeRoute {
     pub hub_ura: String,
     pub endpoints: Vec<DelegatedPeerEndpoint>,
     pub release_profile: axon_pb::ResolverReleaseProfile,
+}
+
+/// Resolver-owned route selection for `federation.forward_invoke`.
+///
+/// Forward invoke is the only daemon surface that may either execute via a
+/// local final route or delegate to a peer hub. Keeping that branch here
+/// prevents dispatchers from parsing `target_ura` and re-implementing locality
+/// policy outside the resolver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ForwardInvokeRouteSelection {
+    Local(SelectedInvokeRoute),
+    Peer(DelegatedInvokeRoute),
+}
+
+fn route_owner_mismatch_detail(
+    selected_owner_ura: &str,
+    ability_ura: &str,
+    expected_target_ura: &str,
+) -> String {
+    format!(
+        "namespace.resolve selected owner `{selected_owner_ura}` for ability `{ability_ura}` \
+         but request target was `{expected_target_ura}`"
+    )
 }
 
 impl DelegatedInvokeRoute {
@@ -618,7 +719,7 @@ impl<'a> DaemonRouteResolver<'a> {
                     device_local,
                     device_local.device_ura.as_str(),
                     None,
-                    axon_pb::RouteReason::LocalDevice,
+                    SelectedRouteKind::LocalDevice,
                 );
             }
 
@@ -628,7 +729,25 @@ impl<'a> DaemonRouteResolver<'a> {
                     device_local,
                     device_local.device_ura.as_str(),
                     host_node_id.as_deref(),
-                    axon_pb::RouteReason::HostedAgent,
+                    SelectedRouteKind::HostedAgent,
+                );
+            }
+
+            let is_agent_owner = crate::ura::parse_ura(&selector.owner_ura)
+                .ok()
+                .is_some_and(|parsed| parsed.kind == crate::ura::URAKind::Agent);
+            if is_agent_owner
+                && device_local
+                    .authority
+                    .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
+                    .is_some()
+            {
+                return self.resolve_route_from_local_runtime(
+                    &selector,
+                    device_local,
+                    device_local.device_ura.as_str(),
+                    None,
+                    SelectedRouteKind::HostedAgent,
                 );
             }
         }
@@ -645,7 +764,7 @@ impl<'a> DaemonRouteResolver<'a> {
         device_local: &LocalNamespaceAuthoritySource,
         execution_host_ura: &str,
         host_node_id: Option<&str>,
-        reason: axon_pb::RouteReason,
+        kind: SelectedRouteKind,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
         let ability = device_local
             .authority
@@ -684,7 +803,7 @@ impl<'a> DaemonRouteResolver<'a> {
             route_ura,
             dispatch_name: ability.dispatch_name,
             release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
-            reason,
+            kind,
             ability_record,
             route_record,
             owner_record,
@@ -816,7 +935,7 @@ impl<'a> DaemonRouteResolver<'a> {
             route_ura: selected.route_ura,
             dispatch_name: selected.dispatch_name,
             release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
-            reason: selected.reason,
+            kind: selected.kind,
             ability_record,
             route_record,
             owner_record,
@@ -888,6 +1007,74 @@ impl<'a> DaemonRouteResolver<'a> {
             endpoints: vec![endpoint],
             release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
         }))
+    }
+
+    pub(crate) fn resolve_forward_invoke_route(
+        &self,
+        target_ura: &str,
+        ability_ura: &str,
+    ) -> Result<ForwardInvokeRouteSelection, ResolveRouteFailure> {
+        let selector =
+            route_selector_from_query(ability_ura, "").ok_or_else(|| ResolveRouteFailure {
+                query_name: ability_ura.to_string(),
+                reason: axon_pb::NegativeReason::Refused,
+                detail: "federation.forward_invoke requires a full canonical ability_ura"
+                    .to_string(),
+            })?;
+        let owner_is_agent = crate::ura::parse_ura(&selector.owner_ura)
+            .map(|parsed| parsed.kind == crate::ura::URAKind::Agent)
+            .unwrap_or(false);
+        if selector.owner_ura != target_ura && !owner_is_agent {
+            return Err(ResolveRouteFailure {
+                query_name: selector.query_name,
+                reason: axon_pb::NegativeReason::Refused,
+                detail: format!(
+                    "ability_ura `{ability_ura}` does not belong to target `{target_ura}`",
+                ),
+            });
+        }
+
+        match self.resolve_route(ability_ura, "") {
+            Ok(selected_route) => {
+                let target_matches = selected_route.owner_ura == target_ura
+                    || selected_route.execution_host_ura == target_ura;
+                if !target_matches {
+                    return Err(ResolveRouteFailure {
+                        query_name: selected_route.query_name.clone(),
+                        reason: axon_pb::NegativeReason::Refused,
+                        detail: route_owner_mismatch_detail(
+                            &selected_route.execution_host_ura,
+                            ability_ura,
+                            target_ura,
+                        ),
+                    });
+                }
+                Ok(ForwardInvokeRouteSelection::Local(selected_route))
+            }
+            Err(local_failure) => {
+                let Some(peer_source) = self.peer_delegation.as_ref() else {
+                    return Err(local_failure);
+                };
+                let parsed_owner = crate::ura::parse_ura(&selector.owner_ura).map_err(|err| {
+                    ResolveRouteFailure {
+                        query_name: selector.query_name.clone(),
+                        reason: axon_pb::NegativeReason::Refused,
+                        detail: format!("owner URA is invalid: {err}"),
+                    }
+                })?;
+                if parsed_owner.realm == peer_source.local_realm {
+                    return Err(local_failure);
+                }
+                self.resolve_delegation(ability_ura, "")?
+                    .map(ForwardInvokeRouteSelection::Peer)
+                    .ok_or(ResolveRouteFailure {
+                        query_name: selector.query_name,
+                        reason: axon_pb::NegativeReason::Noroute,
+                        detail: "cross-realm forward invoke had no peer delegation route"
+                            .to_string(),
+                    })
+            }
+        }
     }
 
     fn delegation_answer_or_negative(&self, query_name: &str, ability_name: &str) -> Option<Value> {
@@ -981,16 +1168,17 @@ fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<Rou
         });
     }
     let owner_ura = query_name.trim();
-    let public_name = ability_name.trim();
-    if owner_ura.is_empty() || public_name.is_empty() {
+    let ability_name = ability_name.trim();
+    if owner_ura.is_empty() || ability_name.is_empty() {
         return None;
     }
-    let ability_ura = crate::ura::owner_ability_ura(owner_ura, public_name)?;
+    let public_name = crate::ura::owner_local_ability_name(owner_ura, ability_name);
+    let ability_ura = crate::ura::owner_ability_ura(owner_ura, &public_name)?;
     Some(RouteSelector {
         query_name: format!("{owner_ura}#{public_name}"),
         owner_ura: owner_ura.to_string(),
         ability_ura,
-        public_name: public_name.to_string(),
+        public_name,
     })
 }
 
@@ -999,7 +1187,7 @@ fn selected_execution_for_owner(
     owner_ura: &str,
     owner_host_node_id: Option<&str>,
     advertised_agents: Option<&AdvertisedAgentStore>,
-) -> Result<(axon_pb::RouteReason, String, String, Option<String>), ResolveRouteFailure> {
+) -> Result<(SelectedRouteKind, String, String, Option<String>), ResolveRouteFailure> {
     match crate::ura::parse_ura(owner_ura).map(|parsed| parsed.kind) {
         Ok(crate::ura::URAKind::Hub) => {
             let realm = crate::ura::parse_ura(owner_ura)
@@ -1007,12 +1195,7 @@ fn selected_execution_for_owner(
                 .map(|parsed| parsed.realm)
                 .unwrap_or_default();
             let hub_ura = crate::ura::hub_ura(&realm);
-            Ok((
-                axon_pb::RouteReason::LocalHub,
-                hub_ura.clone(),
-                hub_ura,
-                None,
-            ))
+            Ok((SelectedRouteKind::HubOwned, hub_ura.clone(), hub_ura, None))
         }
         Ok(crate::ura::URAKind::Agent) => {
             let Some(host_device_ura) = advertised_agent_host_ura(advertised_agents, owner_ura)
@@ -1024,7 +1207,7 @@ fn selected_execution_for_owner(
                 });
             };
             Ok((
-                axon_pb::RouteReason::HostedAgent,
+                SelectedRouteKind::HostedAgent,
                 owner_ura.to_string(),
                 host_device_ura,
                 owner_host_node_id
@@ -1033,7 +1216,7 @@ fn selected_execution_for_owner(
             ))
         }
         Ok(crate::ura::URAKind::Device) => Ok((
-            axon_pb::RouteReason::LocalDevice,
+            SelectedRouteKind::SameRealmDevice,
             owner_ura.to_string(),
             owner_ura.to_string(),
             None,
@@ -1061,7 +1244,7 @@ struct SelectedAbilityRoute {
     callee_ura: String,
     execution_host_ura: String,
     host_node_id: Option<String>,
-    reason: axon_pb::RouteReason,
+    kind: SelectedRouteKind,
 }
 
 impl SelectedAbilityRoute {
@@ -1093,7 +1276,7 @@ impl SelectedAbilityRoute {
                 detail: "ability projection is missing executable route_summary_ref".to_string(),
             })?
             .to_string();
-        let (reason, callee_ura, execution_host_ura, host_node_id) = selected_execution_for_owner(
+        let (kind, callee_ura, execution_host_ura, host_node_id) = selected_execution_for_owner(
             query_name,
             owner_ura,
             owner_host_node_id,
@@ -1106,7 +1289,7 @@ impl SelectedAbilityRoute {
             callee_ura,
             execution_host_ura,
             host_node_id,
-            reason,
+            kind,
         })
     }
 
@@ -1569,7 +1752,14 @@ mod tests {
             .resolve_route(&owner_ura, "agent.list")
             .expect("device-owned ability online must resolve a final route");
 
-        assert_eq!(route.reason, axon_pb::RouteReason::LocalDevice);
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
+        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalDevice);
+        assert_eq!(
+            route.dispatch_target(false),
+            SelectedRouteDispatchTarget::LocalRuntime,
+            "a route proven from local runtime authority must remain local even if a caller \
+             supplies a stale self-host hint"
+        );
         assert_eq!(route.owner_ura, owner_ura);
         assert_eq!(route.execution_host_ura, owner_ura);
         assert_eq!(route.callee_ura, owner_ura);
@@ -1610,7 +1800,7 @@ mod tests {
             let expected_ability_ura =
                 crate::ura::owner_ability_ura(&owner_ura, ability).expect("ability ura");
 
-            assert_eq!(route.reason, axon_pb::RouteReason::LocalDevice);
+            assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
             assert_eq!(route.owner_ura, owner_ura);
             assert_eq!(route.callee_ura, owner_ura);
             assert_eq!(route.execution_host_ura, owner_ura);
@@ -1706,7 +1896,7 @@ mod tests {
 
         let ability_ura =
             crate::ura::owner_ability_ura(&owner_ura, "agent.start").expect("ability ura");
-        assert_eq!(route.reason, axon_pb::RouteReason::LocalDevice);
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
         assert_eq!(route.owner_ura, owner_ura);
         assert_eq!(route.callee_ura, owner_ura);
         assert_eq!(route.execution_host_ura, owner_ura);
@@ -1755,7 +1945,7 @@ mod tests {
             .resolve_route(&owner_ura, "agent.start")
             .expect("device-local authority must not depend on projection presence");
 
-        assert_eq!(route.reason, axon_pb::RouteReason::LocalDevice);
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
         assert_eq!(route.owner_ura, owner_ura);
         assert_eq!(route.execution_host_ura, owner_ura);
     }
@@ -1783,7 +1973,16 @@ mod tests {
             .resolve_route(&agent_ura, "chat")
             .expect("hosted agent on this device must resolve a route");
 
-        assert_eq!(route.reason, axon_pb::RouteReason::HostedAgent);
+        assert_eq!(route.kind(), SelectedRouteKind::HostedAgent);
+        assert_eq!(route.route_reason(), axon_pb::RouteReason::HostedAgent);
+        assert_eq!(
+            route.dispatch_target(true),
+            SelectedRouteDispatchTarget::LocalRuntime
+        );
+        assert_eq!(
+            route.dispatch_target(false),
+            SelectedRouteDispatchTarget::PresenceSession
+        );
         assert_eq!(route.owner_ura, agent_ura);
         assert_eq!(route.callee_ura, agent_ura);
         assert_eq!(route.execution_host_ura, host_ura);
@@ -1796,10 +1995,70 @@ mod tests {
     }
 
     #[test]
-    fn projection_route_for_present_owner_is_authoritative_local() {
+    fn hosted_agent_runtime_binding_can_route_without_local_agent_placement() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let host_ura = device_owner_ura();
+        let agent_ura = crate::ura::agent_ura("test-realm", "dev", "pages");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["list"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_runtime_authority(host_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&agent_ura, "pages.list")
+            .expect("hosted agent registry key must resolve through owner-local public name");
+
+        assert_eq!(route.kind(), SelectedRouteKind::HostedAgent);
+        assert_eq!(route.execution_host_ura, host_ura);
+        assert_eq!(
+            route.ability_ura,
+            "easynet:///r/test-realm/ability/dev.pages.list"
+        );
+        assert_eq!(route.dispatch_name, "pages.list");
+        assert_eq!(route.query_name, format!("{agent_ura}#list"));
+    }
+
+    #[test]
+    fn hub_owned_ability_projects_hub_route_kind() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let hub_ura = crate::ura::hub_ura("test-realm");
+        mark_online(&registry, &hub_ura);
+        let ability_ura = publish_ability(&catalog, &hub_ura, &hub_ura, "federation", "status");
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .at(TEST_NOW_MS)
+            .resolve_route(&hub_ura, "federation.status")
+            .expect("hub-owned ability must resolve through the hub route kind");
+
+        assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
+        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalHub);
+        assert_eq!(
+            route.dispatch_target(true),
+            SelectedRouteDispatchTarget::LocalRuntime
+        );
+        assert_eq!(route.owner_ura, hub_ura);
+        assert_eq!(route.callee_ura, hub_ura);
+        assert_eq!(route.execution_host_ura, hub_ura);
+        assert_eq!(route.ability_ura, ability_ura);
+
+        let answer = route.final_route_answer_json();
+        assert_eq!(
+            answer["selectedRoute"]["reason"],
+            axon_pb::RouteReason::LocalHub.as_str_name()
+        );
+        assert!(answer["nextHop"]["localHubAbility"].is_object());
+        assert_eq!(
+            answer["nextHop"]["localHubAbility"]["dispatchName"],
+            "federation.status"
+        );
+    }
+
+    #[test]
+    fn projection_route_for_present_device_owner_is_same_realm_device() {
         // A device-owned ability advertised in the catalog whose owner is
         // present, resolved by a node that is NOT the owner's own daemon
-        // (e.g. the hub resolving `<self>.invoke_remote` for a device it
+        // (e.g. the hub resolving `runtime.invoke_remote` for a device it
         // hosts). Selecting where a live owner's ability dispatches — and
         // forwarding to the owning device — is exactly what this resolver
         // is authoritative for, so the route is AuthoritativeLocal. The
@@ -1817,6 +2076,15 @@ mod tests {
             .resolve_route(&owner_ura, "agent.list")
             .expect("projection route resolves");
 
+        assert_eq!(route.kind(), SelectedRouteKind::SameRealmDevice);
+        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalDevice);
+        assert_eq!(
+            route.dispatch_target(false),
+            SelectedRouteDispatchTarget::PresenceSession
+        );
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.callee_ura, owner_ura);
+        assert_eq!(route.execution_host_ura, owner_ura);
         assert!(route.is_authoritative_local_or_better());
     }
 

@@ -208,12 +208,35 @@ pub struct TrustedAgent {
     pub tls_ca_pem_path: Option<PathBuf>,
 }
 
+/// Tombstone for a user public key that was explicitly revoked.
+///
+/// Revocation is persisted alongside active trust rows instead of being
+/// inferred from "missing from `[[trusted_agent]]`". That gives the runtime
+/// trust aggregate a durable read model for security-sensitive surfaces:
+/// `rotation_epoch`, revoked-key count, and "this exact key may not be
+/// re-admitted after revocation".
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RevokedUserPubkey {
+    /// Canonical user URA whose key was revoked.
+    pub(crate) agent_ura: String,
+    /// Base64 Ed25519 verifying key that has been tombstoned.
+    pub(crate) public_key_b64: String,
+    /// Wall-clock timestamp when the local daemon recorded the revocation.
+    pub(crate) revoked_at_unix_ms: u64,
+    /// Monotonic per-user revocation epoch. The next successful revoke for
+    /// the same user stores `max(existing rotation_epoch) + 1`.
+    pub(crate) rotation_epoch: u64,
+}
+
 /// Internal TOML shape; private so the public `RealmTrustAnchor`
 /// owns its index data structure choice.
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct RawTrustAnchor {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     trusted_agent: Vec<TrustedAgent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    revoked_user_pubkey: Vec<RevokedUserPubkey>,
 }
 
 /// Trust set the daemon consults at admission time. Built once at
@@ -258,6 +281,10 @@ pub struct RealmTrustAnchor {
     /// kept short (a typical user has 2-5 devices); a linear
     /// pubkey scan during admission is fine.
     users: HashMap<String, Vec<TrustedAgent>>,
+    /// Persisted revocation tombstones for user-role pubkeys. This is
+    /// separate from active `users` so a missing active key can be
+    /// distinguished from an explicitly revoked key.
+    revoked_users: HashMap<String, Vec<RevokedUserPubkey>>,
 }
 
 fn role_label(role: TrustedAgentRole) -> &'static str {
@@ -306,6 +333,13 @@ fn canonicalize_entry(mut entry: TrustedAgent) -> Result<TrustedAgent, RealmTrus
     Ok(entry)
 }
 
+fn canonicalize_revoked_user_key(
+    mut entry: RevokedUserPubkey,
+) -> Result<RevokedUserPubkey, RealmTrustError> {
+    entry.agent_ura = canonical_ura_for_role(&entry.agent_ura, TrustedAgentRole::User)?;
+    Ok(entry)
+}
+
 impl RealmTrustAnchor {
     /// Load from `path` and return an empty anchor if the file is
     /// missing. Use this at daemon boot — staging environments
@@ -333,11 +367,25 @@ impl RealmTrustAnchor {
     }
 
     /// Construct directly from already-deserialised entries. Public
-    /// within the crate so PR-7's pairing flow can build an anchor
-    /// from in-memory entries during a write-and-reload cycle and
-    /// tests can build small fixtures.
+    /// within crate tests so fixture-heavy admission and federation
+    /// suites can build small anchors without TOML round-trips.
+    #[cfg(test)]
     pub(crate) fn from_entries(entries: Vec<TrustedAgent>) -> Result<Self, RealmTrustError> {
+        Self::from_parts(entries, Vec::new())
+    }
+
+    /// Construct from both active trust rows and persisted revocation
+    /// tombstones. Mutation code uses this to rebuild a complete aggregate
+    /// from a snapshot before applying one transaction.
+    pub(crate) fn from_parts(
+        entries: Vec<TrustedAgent>,
+        revoked_user_pubkeys: Vec<RevokedUserPubkey>,
+    ) -> Result<Self, RealmTrustError> {
         let mut anchor = Self::default();
+        for revoked in revoked_user_pubkeys {
+            let revoked = canonicalize_revoked_user_key(revoked)?;
+            anchor.insert_revoked_canonicalized(revoked)?;
+        }
         for entry in entries {
             let entry = canonicalize_entry(entry)?;
             anchor.insert_canonicalized(entry)?;
@@ -352,6 +400,11 @@ impl RealmTrustAnchor {
     fn insert_canonicalized(&mut self, entry: TrustedAgent) -> Result<(), RealmTrustError> {
         match entry.role {
             TrustedAgentRole::User => {
+                if self.is_user_pubkey_revoked(&entry.agent_ura, &entry.public_key_b64) {
+                    return Err(RealmTrustError::RevokedUserPubkey {
+                        agent_ura: entry.agent_ura,
+                    });
+                }
                 let bucket = self.users.entry(entry.agent_ura.clone()).or_default();
                 // (URA, pubkey) composite uniqueness: same key
                 // registered twice under one user URA is operator
@@ -378,13 +431,33 @@ impl RealmTrustAnchor {
         Ok(())
     }
 
+    fn insert_revoked_canonicalized(
+        &mut self,
+        entry: RevokedUserPubkey,
+    ) -> Result<(), RealmTrustError> {
+        let bucket = self
+            .revoked_users
+            .entry(entry.agent_ura.clone())
+            .or_default();
+        if bucket
+            .iter()
+            .any(|e| e.public_key_b64 == entry.public_key_b64)
+        {
+            return Err(RealmTrustError::DuplicateRevokedUserPubkey {
+                agent_ura: entry.agent_ura,
+            });
+        }
+        bucket.push(entry);
+        Ok(())
+    }
+
     fn parse(raw: &str, path: &Path) -> Result<Self, RealmTrustError> {
         let parsed: RawTrustAnchor =
             toml::from_str(raw).map_err(|source| RealmTrustError::ParseFailed {
                 path: path.to_path_buf(),
                 source,
             })?;
-        Self::from_entries(parsed.trusted_agent)
+        Self::from_parts(parsed.trusted_agent, parsed.revoked_user_pubkey)
     }
 
     /// Look up the trust entry for an agent URA.
@@ -449,6 +522,32 @@ impl RealmTrustAnchor {
             .get(user_ura)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Current revocation epoch for a user. Epoch starts at 0 and advances
+    /// only on successful user-key revocations.
+    #[must_use]
+    pub(crate) fn user_rotation_epoch(&self, user_ura: &str) -> u64 {
+        self.revoked_users
+            .get(user_ura)
+            .and_then(|bucket| bucket.iter().map(|e| e.rotation_epoch).max())
+            .unwrap_or(0)
+    }
+
+    /// Number of tombstoned keys for a user. Read models expose this as
+    /// evidence that a missing key was explicitly revoked, not simply absent.
+    #[must_use]
+    pub(crate) fn revoked_user_pubkey_count(&self, user_ura: &str) -> usize {
+        self.revoked_users.get(user_ura).map_or(0, Vec::len)
+    }
+
+    /// Returns true when a (user URA, pubkey) pair has a persisted
+    /// revocation tombstone.
+    #[must_use]
+    pub(crate) fn is_user_pubkey_revoked(&self, user_ura: &str, public_key_b64: &str) -> bool {
+        self.revoked_users
+            .get(user_ura)
+            .is_some_and(|bucket| bucket.iter().any(|e| e.public_key_b64 == public_key_b64))
     }
 
     /// PR-N1 commit 2/N: cross-hub dialer peer lookup. Returns the
@@ -548,27 +647,30 @@ impl RealmTrustAnchor {
         }
     }
 
-    /// DEC-EU §revocation. Remove the (user_ura, pubkey) entry from
-    /// the user bucket. Returns `Ok(true)` when an entry was
-    /// removed, `Ok(false)` when no matching row existed (idempotent
-    /// revoke for browsers that retry after a partial failure).
+    /// DEC-EU §revocation. Remove the active (user_ura, pubkey) entry and
+    /// append a persisted tombstone in the same aggregate mutation. Returns
+    /// `Ok(Some(tombstone))` when an active key was revoked, `Ok(None)` when
+    /// no matching active row existed (idempotent revoke for clients that
+    /// retry after a partial failure).
     ///
-    /// Only user-role buckets are mutable through this API; removing
-    /// hub / backend / device entries requires a different surface
-    /// (operator-curated by hand), since those are realm-shaping
-    /// decisions, not user-managed credentials.
-    pub fn remove_user_pubkey(
+    /// Only user-role buckets are mutable through this API; removing hub /
+    /// backend / device entries requires a different surface
+    /// (operator-curated by hand), since those are realm-shaping decisions,
+    /// not user-managed credentials.
+    pub(crate) fn revoke_user_pubkey(
         &mut self,
         user_ura: &str,
         public_key_b64: &str,
-    ) -> Result<bool, RealmTrustError> {
+        revoked_at_unix_ms: u64,
+    ) -> Result<Option<RevokedUserPubkey>, RealmTrustError> {
         // Validate through the same canonical user-URA gate as
         // append_agent. Revocation is keyed by the exact user URA;
         // aliases are rejected instead of repaired.
         let canonical = canonical_ura_for_role(user_ura, TrustedAgentRole::User)?;
+        let next_epoch = self.user_rotation_epoch(&canonical).saturating_add(1);
         let bucket = match self.users.get_mut(&canonical) {
-            Some(b) => b,
-            None => return Ok(false),
+            Some(bucket) => bucket,
+            None => return Ok(None),
         };
         let before = bucket.len();
         bucket.retain(|e| e.public_key_b64 != public_key_b64);
@@ -576,7 +678,17 @@ impl RealmTrustAnchor {
         if bucket.is_empty() {
             self.users.remove(&canonical);
         }
-        Ok(removed)
+        if !removed {
+            return Ok(None);
+        }
+        let tombstone = RevokedUserPubkey {
+            agent_ura: canonical,
+            public_key_b64: public_key_b64.to_string(),
+            revoked_at_unix_ms,
+            rotation_epoch: next_epoch,
+        };
+        self.insert_revoked_canonicalized(tombstone.clone())?;
+        Ok(Some(tombstone))
     }
 
     /// Snapshot of the trust set as a sorted slice. Sort order is
@@ -599,6 +711,24 @@ impl RealmTrustAnchor {
         out
     }
 
+    /// Snapshot of persisted user-key revocations as a stable sorted list.
+    /// Sort order mirrors active entries and then preserves epoch order for
+    /// easier operator review.
+    #[must_use]
+    pub(crate) fn revoked_user_pubkeys_sorted(&self) -> Vec<RevokedUserPubkey> {
+        let mut out = Vec::new();
+        for bucket in self.revoked_users.values() {
+            out.extend(bucket.iter().cloned());
+        }
+        out.sort_by(|a, b| {
+            a.agent_ura
+                .cmp(&b.agent_ura)
+                .then_with(|| a.rotation_epoch.cmp(&b.rotation_epoch))
+                .then_with(|| a.public_key_b64.cmp(&b.public_key_b64))
+        });
+        out
+    }
+
     /// Persist the trust anchor to `path` atomically: write to a
     /// sibling tempfile (`<path>.tmp`), fsync, then `rename(2)` on
     /// top of the existing file. POSIX guarantees rename is atomic
@@ -606,7 +736,7 @@ impl RealmTrustAnchor {
     /// write leaves either the prior file or the new file —
     /// never a partial truncation.
     ///
-    /// PR-7 commit 5/N's `<self>.register_device_pubkey` ability
+    /// PR-7 commit 5/N's `identity.register_pubkey` ability
     /// calls `save` after each successful `append_agent` and then
     /// signals SIGHUP to the daemon to trigger reload (the daemon
     /// boot loop's signal handler re-runs `load_or_empty` against
@@ -618,6 +748,7 @@ impl RealmTrustAnchor {
     pub fn save(&self, path: &Path) -> Result<(), RealmTrustError> {
         let raw = RawTrustAnchor {
             trusted_agent: self.entries_sorted(),
+            revoked_user_pubkey: self.revoked_user_pubkeys_sorted(),
         };
         let body =
             toml::to_string_pretty(&raw).map_err(|source| RealmTrustError::SerializeFailed {
@@ -722,6 +853,18 @@ pub enum RealmTrustError {
          device); the same pubkey twice is operator error."
     )]
     DuplicateUserPubkey { agent_ura: String },
+
+    #[error(
+        "realm trust anchor invariant 1'' violated: user `{agent_ura}` already has a revocation \
+         tombstone for this public key."
+    )]
+    DuplicateRevokedUserPubkey { agent_ura: String },
+
+    #[error(
+        "realm trust anchor invariant 3 violated: user `{agent_ura}` cannot re-register a \
+         public key that has a persisted revocation tombstone."
+    )]
+    RevokedUserPubkey { agent_ura: String },
 
     #[error("trusted {role} URA `{agent_ura}` is invalid: {detail}")]
     InvalidUraForRole {
@@ -1412,7 +1555,7 @@ added_at_unix_ms = 1714492800000
     }
 
     #[test]
-    fn remove_user_pubkey_drops_only_the_named_key() {
+    fn revoke_user_pubkey_drops_only_the_named_key_and_records_tombstone() {
         let alice = "easynet:///r/realm/user/alice";
         let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
@@ -1433,15 +1576,23 @@ added_at_unix_ms = 1714492800000
         }
         assert_eq!(anchor.lookup_user_all(alice).len(), 2);
 
-        let removed = anchor.remove_user_pubkey(alice, pk_a).expect("remove pk_a");
-        assert!(removed);
+        let tombstone = anchor
+            .revoke_user_pubkey(alice, pk_a, 1_714_493_000_000)
+            .expect("revoke pk_a")
+            .expect("active key revoked");
         assert_eq!(anchor.lookup_user_all(alice).len(), 1);
         assert!(anchor.lookup_user_by_pubkey(alice, pk_a).is_none());
         assert!(anchor.lookup_user_by_pubkey(alice, pk_b).is_some());
+        assert_eq!(tombstone.public_key_b64, pk_a);
+        assert_eq!(tombstone.revoked_at_unix_ms, 1_714_493_000_000);
+        assert_eq!(tombstone.rotation_epoch, 1);
+        assert_eq!(anchor.user_rotation_epoch(alice), 1);
+        assert_eq!(anchor.revoked_user_pubkey_count(alice), 1);
+        assert!(anchor.is_user_pubkey_revoked(alice, pk_a));
     }
 
     #[test]
-    fn remove_user_pubkey_collapses_bucket_when_last_key_revoked() {
+    fn revoke_user_pubkey_collapses_bucket_when_last_key_revoked() {
         let alice = "easynet:///r/realm/user/alice";
         let pk = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         let mut anchor = RealmTrustAnchor::default();
@@ -1456,21 +1607,28 @@ added_at_unix_ms = 1714492800000
                 tls_ca_pem_path: None,
             })
             .expect("append");
-        assert!(anchor.remove_user_pubkey(alice, pk).expect("remove"));
-        // Bucket gone; subsequent removes return Ok(false) instead
-        // of an error (idempotent retry contract).
-        assert!(!anchor.remove_user_pubkey(alice, pk).expect("re-remove"));
+        assert!(anchor
+            .revoke_user_pubkey(alice, pk, 1_714_493_000_000)
+            .expect("remove")
+            .is_some());
+        // Bucket gone; subsequent revokes return Ok(None) instead of an error
+        // and do not append another tombstone (idempotent retry contract).
+        assert!(anchor
+            .revoke_user_pubkey(alice, pk, 1_714_493_100_000)
+            .expect("re-remove")
+            .is_none());
         assert_eq!(anchor.lookup_user_all(alice).len(), 0);
+        assert_eq!(anchor.revoked_user_pubkey_count(alice), 1);
         assert!(anchor.is_empty());
     }
 
     #[test]
-    fn remove_user_pubkey_unknown_ura_is_noop() {
+    fn revoke_user_pubkey_unknown_ura_is_noop() {
         let mut anchor = RealmTrustAnchor::default();
         let ok = anchor
-            .remove_user_pubkey("easynet:///r/realm/user/missing", "AAAA")
+            .revoke_user_pubkey("easynet:///r/realm/user/missing", "AAAA", 1_714_493_000_000)
             .expect("noop ok");
-        assert!(!ok);
+        assert!(ok.is_none());
     }
 
     #[test]
@@ -1540,6 +1698,74 @@ added_at_unix_ms = 1714492800000
         assert_eq!(loaded.lookup_user_all(alice).len(), 2);
         assert!(loaded.lookup_user_by_pubkey(alice, pk_a).is_some());
         assert!(loaded.lookup_user_by_pubkey(alice, pk_b).is_some());
+    }
+
+    #[test]
+    fn revoked_user_pubkey_round_trips_through_save_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+        let alice = "easynet:///r/realm/user/alice";
+        let pk = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("append");
+        anchor
+            .revoke_user_pubkey(alice, pk, 1_714_493_000_000)
+            .expect("revoke")
+            .expect("tombstone");
+
+        anchor.save(&path).expect("save");
+        let loaded = RealmTrustAnchor::try_load_strict(&path).expect("load");
+
+        assert_eq!(loaded.lookup_user_all(alice).len(), 0);
+        assert_eq!(loaded.revoked_user_pubkey_count(alice), 1);
+        assert_eq!(loaded.user_rotation_epoch(alice), 1);
+        assert!(loaded.is_user_pubkey_revoked(alice, pk));
+    }
+
+    #[test]
+    fn revoked_user_pubkey_cannot_be_registered_again() {
+        let alice = "easynet:///r/realm/user/alice";
+        let pk = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("append");
+        anchor
+            .revoke_user_pubkey(alice, pk, 1_714_493_000_000)
+            .expect("revoke")
+            .expect("tombstone");
+
+        match anchor.append_agent(TrustedAgent {
+            agent_ura: alice.to_string(),
+            public_key_b64: pk.to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_714_493_100_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }) {
+            Err(RealmTrustError::RevokedUserPubkey { agent_ura }) => assert_eq!(agent_ura, alice),
+            other => panic!("expected RevokedUserPubkey, got {other:?}"),
+        }
     }
 
     #[test]

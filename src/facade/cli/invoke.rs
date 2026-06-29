@@ -177,6 +177,8 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                     &target_call,
                     arguments,
                     caller_ura.as_deref(),
+                    // Originating CLI invoke: no inbound causal parent to chain.
+                    &[],
                     timeout,
                 )?;
             (value, format!("federation.forward_invoke target={target}"))

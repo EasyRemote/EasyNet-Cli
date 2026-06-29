@@ -407,7 +407,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 |---|---|---|
 | `UnaryDispatcher` | 按 function_name 路由 Invoke；持 federation wrappers / namespace.resolve / identity abilities / LocalRuntime arm | `unary_dispatcher.rs:186-194` |
 | `StreamDispatcher` | 路由 InvokeStream；持 federation.subscribe_directory v1/v2 + LocalRuntime stream arm | `stream_dispatcher.rs:44-48` |
-| `BidiDispatcher` | 路由 InvokeBidi；持 `<self>.invoke_remote` / `<self>.session` / LocalRuntime bidi arm | `bidi_dispatcher.rs:92-100` |
+| `BidiDispatcher` | 路由 InvokeBidi；持 `runtime.invoke_remote` / `session.open` / LocalRuntime bidi arm | `bidi_dispatcher.rs:92-100` |
 | `TargetGate` | 共享 resolve-first RFC-005 路由门；持 route_resolver / admission / planes；dispatch 前守 locality | `target_gate.rs:39-46` |
 
 ### 5.3 线缆类型与路由结果
@@ -418,9 +418,9 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 | `SelectedInvokeRoute` | struct | namespace.resolve 的结果：callee_ura / execution_host_ura / dispatch_name / ability_ura / route profile | `route_resolver.rs:137-242` |
 | `DelegatedInvokeRoute` | struct | 跨 realm 委派答案：peer hubs / NextHop / realm | `route_resolver.rs:244-317` |
 | `DaemonRouteResolver` | struct | per-call namespace.resolve 引擎 | `route_resolver.rs:371-479` |
-| `SessionDispatch` | enum | `<self>.session` 帧线缆封套：Dispatch / Result / BidiInput | `invoke_remote_initiator.rs:251-347` |
+| `SessionDispatch` | enum | `session.open` 帧线缆封套：Dispatch / Result / BidiInput | `invoke_remote_initiator.rs:251-347` |
 | `InvokeRemoteUp` / `InvokeRemoteDown` | enum | device 侧请求 / hub 侧 down 形 | `invoke_remote_initiator.rs:165-218` |
-| `SessionRequestError` | enum | `<self>.session` 结构化错误：UnreachableRoute / NoCapacity / Timeout | `invoke_remote_initiator.rs:367-426` |
+| `SessionRequestError` | enum | `session.open` 结构化错误：UnreachableRoute / NoCapacity / Timeout | `invoke_remote_initiator.rs:367-426` |
 
 ### 5.4 传输层 trait
 
@@ -428,7 +428,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 |---|---|---|
 | `Invocation`（tonic） | 来自 easynet-axon 的 gRPC service trait；三方法；`DaemonInvocationService` 实现 | `daemon_invocation_service.rs:709-919` |
 | `LocalRuntimeAuthority` | 本地运行时能力元数据查询接口 | `route_resolver.rs:59-135` |
-| `SessionFrameDispatcher` | `<self>.session` 入站帧的可插拔 handler | `session_initiator.rs:292-322` |
+| `SessionFrameDispatcher` | `session.open` 入站帧的可插拔 handler | `session_initiator.rs:292-322` |
 | `FederationClient` | 跨 hub dial 接口（外部 trait，gRPC shim 实现于 `federation_client.rs`） | —— |
 
 ### 5.5 传输层状态机（生命周期逻辑分散的实证）
@@ -437,7 +437,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 - **Dispatch Contract Negotiation（DEC-F004 v0→v1）：** Legacy_v0(JSON) ↔ v1_Carrier(proto)；frame-0 协商 `min(device, HUB=1)`。`bidi_dispatcher.rs:1419-1429`，`HUB_DISPATCH_CONTRACT_VERSION=1`。
 - **Remote Bidi Session：** Open → Active → Closed。`local_session_dispatcher.rs:67`。
 - **Local Bidi Frame Mapping：** BinaryChunk→stdin / Control(Eof)→EOF / Control(PtyResize)→resize。`bidi_dispatcher.rs:626-835`。
-- **Escalation：** Local（presence 在）vs Escalation（无本地 presence，经 `<self>.session` forward 到 hub）。`daemon_invocation_service.rs:526-534`。
+- **Escalation：** Local（presence 在）vs Escalation（无本地 presence，经 `session.open` forward 到 hub）。`daemon_invocation_service.rs:526-534`。
 
 **这五个状态机分散在三个几何派发器里、各自实现自己的生命周期——这就是"lifecycle logic duplicated across geometries"的字面证据。** 终局是把它们收敛进一个 `InvocationLifecycle` sink（见第 9 章）。
 

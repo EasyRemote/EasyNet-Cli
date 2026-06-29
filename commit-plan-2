@@ -36,7 +36,7 @@ the internal Axon/EAL/MCP machinery.
 
 The remaining work has three axes:
 
-1. **Naming / ontology cleanup** — now mostly reduced to the `<self>.*` /
+1. **Naming / ontology cleanup** — now mostly reduced to the `legacy self alias.*` /
    flat-verb migration, which is coupled to the SessionDispatch carrier
    unification (to-be-fix.spec §A2), not a standalone rename.
 2. **Audit / capability completeness** — chain verification shipped; what
@@ -50,7 +50,7 @@ The remaining work has three axes:
 |---|---|
 | Daemon Invocation migration | Closed for product calls, with one diagnosed carrier violation: SessionDispatch JSON business frames are a second invocation carrier (to-be-fix.spec §A2, F-004/F-038/F-040). Guards stay green (`scripts/check-daemon-invocation-migration.sh`). |
 | URA / namespace resolution | DONE via RFC-005: `axon-ura` owner-token parser, namespace resolver contract, resolve-before-invoke in backend, hub-as-FIB, release profiles. |
-| `<self>` alias + flat namespaces | OPEN. 80 non-test `<self>` literals remain. Rescoped: no compat window; execute coupled with carrier unification; must also cover the new `<user>.*` owner-qualified names. |
+| `legacy self alias` alias + flat namespaces | OPEN. 80 non-test `legacy self alias` literals remain. Rescoped: no compat window; execute coupled with carrier unification; must also cover the new `<user>.*` owner-qualified names. |
 | Ability / Skill ontology | DONE. Axon README has a formal "Ability vs Skill" distinction (README.md §"Ability vs Skill: Formal Distinction"); CLI README carries no stale phrasing. |
 | Receipt verifier closure | DONE (offline); cross-process fetch CONFIRMED BLOCKED on protocol ground (2026-06-12): the ledger stores an InvocationReceiptChainSummary, not canonical receipts — the Axon receipt fetch/store contract must land before any CLI export can feed `verify_chain`. Backend projection audit still open. |
 | Hosted-agent signer binding | RAISED to P0.5 and rescoped. Trigger condition fired (hosted-agent forwarding shipped, `0b6c7ad`); build on the landed authority forms (`a583a3fb`, ledger `authority_binding` `e6f434ca`), not from scratch. |
@@ -124,9 +124,9 @@ Remaining Axis A work:
 
 | Work | Current State | Target | Notes |
 |---|---|---|---|
-| `<self>.*` / flat-verb migration | 80 non-test `<self>` literals; `device./hub./system.` prefixes recognized (`core/ability_spec.rs:108`) but registration not fully canonical. `<user>.*` owner-qualified names now exist (e.g. `<user>.pages.list`). | Device bundle uses `device.*`; per-agent verbs use `<agent>.*`; user-owned verbs use `<user>.*`. Historical receipts only display legacy names. | No dual-name window (Invariant 12). `<self>.session` / `<self>.invoke_remote` are carrier-plane verbs — they migrate as part of spec §A2 carrier unification, not as renames. |
+| `legacy self alias.*` / flat-verb migration | 80 non-test `legacy self alias` literals; `device./hub./system.` prefixes recognized (`core/ability_spec.rs:108`) but registration not fully canonical. `<user>.*` owner-qualified names now exist (e.g. `<user>.pages.list`). | Device bundle uses `device.*`; per-agent verbs use `<agent>.*`; user-owned verbs use `<user>.*`. Historical receipts only display legacy names. | No dual-name window (Invariant 12). `session.open` / `runtime.invoke_remote` are carrier-plane verbs — they migrate as part of spec §A2 carrier unification, not as renames. |
 | Owner at registration (was A3) | DONE: `OwnerKind` recorded per registration (`runtime/ability_dispatch.rs:611,688`). | Confirm owner-URA (not just kind) is what catalog/meta surfaces project. | Verification, not implementation. |
-| Legacy-name lint (was A12) | URA guard checks exist (Axon `e8c84155`); CLI flat-command boundary script exists. | Lint fails on new active `<self>.*` registrations once migration cuts over. | Lands with the migration commit, not after a window. |
+| Legacy-name lint (was A12) | URA guard checks exist (Axon `e8c84155`); CLI flat-command boundary script exists. | Lint fails on new active `legacy self alias.*` registrations once migration cuts over. | Lands with the migration commit, not after a window. |
 | Backend directory v1 decode (was A10) | Subsumed: `internal/axon/` was rewritten under RFC-005, but remains a 7,765-line protocol fork. | Fork retired via the A→D batch replacement. | Owned by to-be-fix.spec §A4 (F-015/F-017/F-040). Referenced only. |
 
 ### Axis B — Audit And Verifiability (mostly landed)
@@ -205,7 +205,7 @@ the change-amplifier mistake this axis exists to fix.
 
 | Item | Owner | Why it appears in this plan |
 |---|---|---|
-| Carrier unification — SessionDispatch JSON business frames are a second invocation carrier; backend hand-copies the struct in Go | to-be-fix.spec §A2 (F-004, F-038, F-040) | P0. Coupled with the `<self>` migration (Axis A) and gated on the Axis E split. Prerequisite already specced: caller inventory + baseline benchmark. |
+| Carrier unification — SessionDispatch JSON business frames are a second invocation carrier; backend hand-copies the struct in Go | to-be-fix.spec §A2 (F-004, F-038, F-040) | P0. Coupled with the `legacy self alias` migration (Axis A) and gated on the Axis E split. Prerequisite already specced: caller inventory + baseline benchmark. |
 | Backend protocol fork replacement (7,765-line `internal/axon/`) | to-be-fix.spec §A4 (F-015, F-017, F-040) | P0/P1. Four batches (URA → admission → invoke → federation), freeze→replace→delete per batch. Heaviest single debt in the three repos. |
 | Session-plane state machine (implicit device-session lifecycle; hub slot accepts any claimant) | to-be-fix.spec §A1 (F-008, F-009) | P0.5. The 2026-06-11 ping-pong incident (5,428 reconnects) paid the interest; device-side amplifier fixed (`b2ba441`, F-003 jitter), root architecture open. |
 | LocalRuntime lock topology | to-be-fix.spec §A3 (F-011) | P1, benchmark-first. |
@@ -278,7 +278,7 @@ in the same quiet window per the round-54 coordination point).
 | Old | New | Item | Reason |
 |---|---|---|---|
 | P0.5 | DONE | Receipt verifier closure | `verify_chain` shipped; remaining read-surface work is P1. |
-| P0 grouped | P0.5, rescoped | `<self>` / flat namespace migration | Resolver landed (RFC-005); rename remainder is coupled to carrier unification and runs under no-compat rules. |
+| P0 grouped | P0.5, rescoped | `legacy self alias` / flat namespace migration | Resolver landed (RFC-005); rename remainder is coupled to carrier unification and runs under no-compat rules. |
 | P0 | **P0, first** | Invocation service split (E1–E2) | File grew 1,743 lines in a week; every upcoming train (carrier, namespace, discovery) lands in it. |
 | Missing | **P0** | Carrier unification (spec §A2) | Newly diagnosed second invocation carrier; F-038 drift already materialized cross-repo. |
 | Missing | P0/P1 | Backend fork replacement (spec §A4) | Protocol evolution currently costs double edits with no compile-time drift signal. |
@@ -293,7 +293,7 @@ in the same quiet window per the round-54 coordination point).
 
 ### Gate A — Namespace Migration (rescoped)
 
-- No active `<self>.*` ability names after cutover; lint enforces in the
+- No active `legacy self alias.*` ability names after cutover; lint enforces in the
   same change (no window).
 - No flat daemon system verbs outside `device.*` / `hub.*`; `<user>.*` /
   `<agent>.*` owner-qualified names are registered with explicit OwnerKind.

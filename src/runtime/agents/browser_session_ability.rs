@@ -38,12 +38,15 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
+use crate::runtime::ability_dispatch::{
+    AxonAbilityCatalog, BidiOutputFrame, BidiSource, StreamSource, BIDI_CHANNEL_BOUND,
+};
 
 pub const ABILITY_OPEN_SESSION: &str = "browser.open_session";
 pub const ABILITY_SEND_INPUT: &str = "browser.send_input";
 pub const ABILITY_CAPTURE_VIEWPORT: &str = "browser.capture_viewport";
 pub const ABILITY_CLOSE_SESSION: &str = "browser.close_session";
+pub const ABILITY_ATTACH_SESSION: &str = "browser.attach_session";
 
 const DEFAULT_VIEWPORT_W: u32 = 1280;
 const DEFAULT_VIEWPORT_H: u32 = 800;
@@ -60,6 +63,7 @@ const PLACEHOLDER_WEBP: &[u8] = &[
 
 #[derive(Debug, Clone)]
 struct SessionState {
+    url: String,
     viewport_width: u32,
     viewport_height: u32,
     last_input_at_ms: u64,
@@ -121,6 +125,10 @@ pub fn capture_viewport_description() -> &'static str {
 
 pub fn close_session_description() -> &'static str {
     "[V0 MOCK — NOT YET FUNCTIONAL; replaced by real WebView in RFC-013 W1] Close a WebView session created by browser.open_session. Idempotent: closing an already-closed (or never-opened) session returns success with status='already_closed'. Forces the session's frame stream to terminate and removes the session row from the device-local store."
+}
+
+pub fn attach_session_description() -> &'static str {
+    "[V0 MOCK — RETURNS PLACEHOLDER FRAMES, NOT REAL VIEWPORT CONTENT; replaced by real WebView in RFC-013 W1/W2] Attach a bidirectional JSON-frame stream to a WebView session created by browser.open_session. Downstream emits browser.ready and browser.frame messages; upstream accepts input and close control frames."
 }
 
 pub fn open_session_input_schema() -> Value {
@@ -237,7 +245,22 @@ pub fn close_session_input_schema() -> Value {
     })
 }
 
-/// Register the four browser.* verbs on the local registry.
+pub fn attach_session_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session_ura"],
+        "properties": {
+            "session_ura": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Session URA returned by browser.open_session."
+            }
+        }
+    })
+}
+
+/// Register the browser.* verbs on the local registry.
 ///
 /// **M0 owner-kind note**: like voice_call_ability, all four verbs
 /// mount as `OwnerKind::Device`. RFC-013 may re-classify capture as
@@ -270,6 +293,12 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         ABILITY_CLOSE_SESSION,
         OwnerKind::Device,
         Arc::new(move |args| close_service.close_session(args)),
+    );
+    let attach_service = Arc::clone(&service);
+    reg.register_bidi_with_owner(
+        ABILITY_ATTACH_SESSION,
+        OwnerKind::Device,
+        Arc::new(move |args| attach_service.attach_session(args)),
     );
 }
 
@@ -313,6 +342,7 @@ impl BrowserSessionService {
         let created_at_ms = now_ms();
 
         let state = SessionState {
+            url: url.clone(),
             viewport_width,
             viewport_height,
             last_input_at_ms: created_at_ms,
@@ -362,6 +392,15 @@ impl BrowserSessionService {
             anyhow::anyhow!("browser.send_input: session {session_ura:?} not found")
         })?;
         session.last_input_at_ms = received_at_ms;
+        if kind == "navigate" {
+            if let Some(url) = event
+                .get("url")
+                .and_then(Value::as_str)
+                .filter(|url| url_ok(url))
+            {
+                session.url = url.to_string();
+            }
+        }
 
         // v0: log the event and ack. RFC-013 will route this through the
         // platform-specific input synthesizer (NSEvent / SendInput / GDK).
@@ -420,6 +459,95 @@ impl BrowserSessionService {
         Ok(StreamSource::Snapshot(vec![frame]))
     }
 
+    fn attach_session(self: &Arc<Self>, args: Value) -> anyhow::Result<BidiSource> {
+        let session_ura = require_str(&args, "session_ura", ABILITY_ATTACH_SESSION)?.to_string();
+        let initial_frame = self.next_render_frame(&session_ura).ok_or_else(|| {
+            anyhow::anyhow!("{ABILITY_ATTACH_SESSION}: session {session_ura:?} not found")
+        })?;
+        let (to_client, mut input_rx) = tokio::sync::mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+        let (output_tx, from_client) =
+            tokio::sync::mpsc::channel::<BidiOutputFrame>(BIDI_CHANNEL_BOUND);
+        let service = Arc::clone(self);
+
+        tokio::spawn(async move {
+            if output_tx
+                .send(BidiOutputFrame::json(json!({
+                    "type": "browser.ready",
+                    "session_ura": session_ura,
+                    "frame": Value::Null,
+                })))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            if output_tx
+                .send(BidiOutputFrame::json(json!({
+                    "type": "browser.frame",
+                    "frame": initial_frame,
+                })))
+                .await
+                .is_err()
+            {
+                return;
+            }
+
+            while let Some(frame) = input_rx.recv().await {
+                let frame_type = frame
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                match frame_type {
+                    "close" | "browser.close" => {
+                        let _ = service.close_session(json!({ "session_ura": session_ura }));
+                        let _ = output_tx
+                            .send(BidiOutputFrame::json(json!({
+                                "type": "closed",
+                                "session_ura": session_ura,
+                            })))
+                            .await;
+                        break;
+                    }
+                    "input" => {
+                        let event = frame.get("event").cloned().unwrap_or(Value::Null);
+                        match service.send_input(json!({
+                            "session_ura": session_ura,
+                            "event": event,
+                        })) {
+                            Ok(ack) => {
+                                let next_frame = service.next_render_frame(&session_ura);
+                                let _ = output_tx
+                                    .send(BidiOutputFrame::json(json!({
+                                        "type": "browser.input_ack",
+                                        "accepted": true,
+                                        "ack": ack,
+                                        "frame": next_frame,
+                                    })))
+                                    .await;
+                            }
+                            Err(err) => {
+                                let _ = output_tx
+                                    .send(BidiOutputFrame::json(json!({
+                                        "type": "error",
+                                        "code": "BROWSER_INPUT_FAILED",
+                                        "message": err.to_string(),
+                                    })))
+                                    .await;
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        Ok(BidiSource {
+            to_client,
+            from_client,
+        })
+    }
+
     fn close_session(&self, args: Value) -> anyhow::Result<Value> {
         let session_ura = require_str(&args, "session_ura", "browser.close_session")?.to_string();
         let removed = self.sessions.lock().unwrap().remove(&session_ura);
@@ -441,6 +569,45 @@ impl BrowserSessionService {
             "closed_at_ms": now_ms(),
         }))
     }
+
+    fn next_render_frame(&self, session_ura: &str) -> Option<Value> {
+        let (sequence, url, viewport_width, viewport_height) = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let session = sessions.get_mut(session_ura)?;
+            let sequence = session.sequence;
+            session.sequence = session.sequence.saturating_add(1);
+            (
+                sequence,
+                session.url.clone(),
+                session.viewport_width,
+                session.viewport_height,
+            )
+        };
+        Some(json!({
+            "type": "browser.render_frame",
+            "sequence": sequence,
+            "url": url,
+            "title": "Remote Browser",
+            "content_type": "image/webp",
+            "encoding": "base64",
+            "data": BASE64_STANDARD.encode(PLACEHOLDER_WEBP),
+            "viewport": {
+                "width_px": viewport_width,
+                "height_px": viewport_height,
+                "device_scale_factor": 1,
+            },
+            "scroll": {
+                "x": 0,
+                "y": 0,
+                "max_x": 0,
+                "max_y": 0,
+            },
+            "captured_at_ms": now_ms(),
+            "interactive": true,
+            "input_ability": ABILITY_ATTACH_SESSION,
+            "is_placeholder": true,
+        }))
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -449,6 +616,7 @@ impl BrowserSessionService {
 mod tests {
     use super::*;
     use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+    use std::sync::Arc;
 
     fn open_url(service: &BrowserSessionService, url: &str) -> Value {
         service
@@ -607,7 +775,75 @@ mod tests {
     }
 
     #[test]
-    fn register_mounts_all_four_verbs() {
+    fn attach_session_requires_known_session() {
+        let service = Arc::new(BrowserSessionService::default());
+        let err = service
+            .attach_session(json!({
+                "session_ura": "easynet:///r/local/resource/daemon.browser/bogus",
+            }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn attach_session_emits_ready_frame_and_input_ack() {
+        let service = Arc::new(BrowserSessionService::default());
+        let opened = service
+            .open_session(json!({
+                "url": "https://example.com",
+                "viewport_width": 1024,
+                "viewport_height": 768,
+            }))
+            .unwrap();
+        let ura = session_ura_from(&opened);
+        let mut source = service
+            .attach_session(json!({ "session_ura": ura }))
+            .expect("attach ok");
+
+        let ready = source
+            .from_client
+            .recv()
+            .await
+            .expect("ready frame")
+            .into_json_value()
+            .expect("ready json");
+        assert_eq!(ready["type"], "browser.ready");
+
+        let frame = source
+            .from_client
+            .recv()
+            .await
+            .expect("browser frame")
+            .into_json_value()
+            .expect("frame json");
+        assert_eq!(frame["type"], "browser.frame");
+        assert_eq!(frame["frame"]["type"], "browser.render_frame");
+        assert_eq!(frame["frame"]["viewport"]["width_px"], 1024);
+        assert_eq!(frame["frame"]["viewport"]["height_px"], 768);
+
+        source
+            .to_client
+            .send(json!({
+                "type": "input",
+                "event": { "kind": "click", "x": 1, "y": 2 },
+            }))
+            .await
+            .expect("send input");
+        let ack = source
+            .from_client
+            .recv()
+            .await
+            .expect("input ack")
+            .into_json_value()
+            .expect("ack json");
+        assert_eq!(ack["type"], "browser.input_ack");
+        assert_eq!(ack["accepted"], true);
+        assert_eq!(ack["frame"]["type"], "browser.render_frame");
+    }
+
+    #[test]
+    fn register_mounts_all_browser_verbs() {
         let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         let names = reg.list_abilities();
@@ -616,11 +852,16 @@ mod tests {
             ABILITY_SEND_INPUT,
             ABILITY_CAPTURE_VIEWPORT,
             ABILITY_CLOSE_SESSION,
+            ABILITY_ATTACH_SESSION,
         ] {
             assert!(
                 names.iter().any(|n| n == verb),
                 "missing {verb} after register()"
             );
         }
+        assert!(
+            reg.has_bidi(ABILITY_ATTACH_SESSION),
+            "{ABILITY_ATTACH_SESSION} must be registered as bidi"
+        );
     }
 }

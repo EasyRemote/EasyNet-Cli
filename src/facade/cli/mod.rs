@@ -268,6 +268,11 @@ const HELP_TEMPLATE: &str = "\
 \x1b[1;36mUsage:\x1b[0m {usage}
 
 \x1b[1;36mCommands:\x1b[0m
+  \x1b[1;36m[Quickstart]\x1b[0m
+    \x1b[1mjoin\x1b[0m                 Pair THIS host with a Hub via a one-time token
+    \x1b[1mstart\x1b[0m                Start the local Axon runtime as a background daemon
+    \x1b[1mstop\x1b[0m                 Stop the local Axon runtime
+
   \x1b[1;36m[Identity]\x1b[0m
     \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
     \x1b[1mtrust\x1b[0m                Inspect the realm trust anchor — whose keys admission accepts
@@ -288,7 +293,7 @@ const HELP_TEMPLATE: &str = "\
     \x1b[1mcontext\x1b[0m              Track clipboard history and map project folders
 
   \x1b[1;36m[Runtime]\x1b[0m
-    \x1b[1mruntime\x1b[0m              Manage the local Axon runtime (start, stop, status)
+    \x1b[1mruntime\x1b[0m              Manage the local EasyNet daemon runtime
     \x1b[1mplugin\x1b[0m               Manage daemon ability-extension plugin packages
     \x1b[1mmcp\x1b[0m                  MCP server — expose device abilities to AI assistants
     \x1b[1mfederation\x1b[0m           Inspect cross-hub peers and trusted hubs
@@ -324,15 +329,29 @@ pub enum Command {
     #[command(display_order = 11)]
     Trust(groups::trust::TrustArgs),
 
+    // ── Quickstart (1-3) ─────────────────────────────────────────────────
+    // The device-lifecycle verbs (join / start / stop) are the product's
+    // highest-frequency actions, so they are first-class top-level commands
+    // grouped together at the top of `--help` under [Quickstart], NOT nested
+    // under `device` / `runtime`. They forward to the same `JoinArgs` /
+    // `StartArgs` / `StopArgs` types and `run` functions the layered forms
+    // (`device join`, `runtime start`, `runtime stop`) call, so the two
+    // spellings are behaviourally identical. Display orders 1-3 keep them
+    // ahead of every layered group; the hand-rendered HELP_TEMPLATE places
+    // them in their own [Quickstart] section.
+    /// Pair THIS host with a Hub via a one-time token.
+    #[command(display_order = 1)]
+    Join(join::JoinArgs),
+
+    /// Start the local Axon runtime as a background daemon.
+    #[command(display_order = 2)]
+    Start(start::StartArgs),
+
+    /// Stop the local Axon runtime.
+    #[command(display_order = 3)]
+    Stop(stop::StopArgs),
+
     // ── Network (20-29) ──────────────────────────────────────────────────
-    // Top-level lifecycle shortcuts (join / start / stop). The layered
-    // forms (`device join`, `runtime start`, `runtime stop`) remain the
-    // canonical homes; these aliases forward to the same `JoinArgs` /
-    // `StartArgs` / `StopArgs` types and the same `run` functions, so
-    // there is no behavioural drift — clap parses one struct, the
-    // dispatcher hands off to the same impl regardless of spelling.
-    // `start` / `stop` live in the Runtime bucket below alongside
-    // `runtime`.
     /// Manage remote devices — pair, list, exec, terminal.
     #[command(display_order = 21)]
     Device(groups::device::DeviceArgs),
@@ -387,7 +406,7 @@ pub enum Command {
     LlmApi(llm_api::LlmApiArgs),
 
     // ── Runtime (40-49) ──────────────────────────────────────────────────
-    /// Manage the local Axon runtime (start, stop, status).
+    /// Manage the local EasyNet daemon runtime (start, stop, status).
     #[command(display_order = 40)]
     Runtime(groups::runtime::RuntimeArgs),
 
@@ -435,6 +454,9 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // layered forms (`device join`, `runtime start`, `runtime stop`)
         // call. `start` mirrors the runtime group's banner render so the
         // two spellings produce identical output.
+        Command::Join(args) => join::run(args),
+        Command::Start(args) => start::run(args),
+        Command::Stop(args) => stop::run(args),
 
         // Layered groups
         Command::Auth(args) => groups::auth::dispatch(args),

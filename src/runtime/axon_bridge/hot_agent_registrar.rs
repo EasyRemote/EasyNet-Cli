@@ -175,7 +175,7 @@ pub struct HotAgentRegistrar {
     ///
     /// Runtime registration is local; hub visibility is separate.
     /// Device-mode boot wires this after the long-lived
-    /// `<self>.session` escalation channel exists. Tests and
+    /// `session.open` escalation channel exists. Tests and
     /// non-device modes leave it empty, in which case
     /// `agent.start` still succeeds locally and the next
     /// reconnect/boot advertise sweep repairs hub visibility.
@@ -266,7 +266,7 @@ pub struct HotAgentRevokeRequest {
 /// The registrar owns the trait object so runtime lifecycle code
 /// does not depend on `services::invocation_transport` concrete
 /// session types. Device-mode boot supplies an implementation backed
-/// by the current `<self>.session` bidi; tests can supply a recorder.
+/// by the current `session.open` bidi; tests can supply a recorder.
 pub trait HotAgentAdvertiser: Send + Sync {
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
         -> HotAgentAdvertiseOutcome;
@@ -941,7 +941,7 @@ mod tests {
         // After `set_runtime`, calling `register_agent("liangbing", entry)`
         // MUST make `runtime.has_ability("liangbing.chat") == true` —
         // the load-bearing property the dispatcher's Phase-4 arm
-        // (`<self>.invoke_remote`) and the host's session-receive
+        // (`runtime.invoke_remote`) and the host's session-receive
         // Axon arm (`LocalAxonSessionDispatcher`) both gate on.
         //
         // Pre-this-PR, `agent.start` only wrote `agents.json`

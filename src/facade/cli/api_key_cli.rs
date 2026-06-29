@@ -64,7 +64,7 @@ fn current_user() -> anyhow::Result<String> {
     // Production: read username from `EASYNET_PAGES_USER` env (e2e
     // / multi-user dev rigs) or `credentials.json` (paired
     // device). M5 of the system-namespace migration banned the
-    // `<self>` placeholder — an unpaired daemon has no
+    // `legacy self alias` placeholder — an unpaired daemon has no
     // user-rooted ability surface, so the CLI MUST surface the
     // missing-identity error rather than silently dialling
     // `self.api_key.*` (which the registry no longer answers).

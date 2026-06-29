@@ -73,8 +73,10 @@ fn creds(tenant: &str, node: &str) -> Credentials {
         deploy_signature: String::new(),
         hub_api_base: None,
         username: Some("alice".into()),
+        user_id: Some("user-alice".into()),
         hub_pubkey_b64: None,
         hub_tls_ca_pem_b64: None,
+        join_receipt_hash: None,
     }
 }
 

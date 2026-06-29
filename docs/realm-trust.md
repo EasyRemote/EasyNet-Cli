@@ -36,7 +36,7 @@ added_at_unix_ms = 1714492801234
 ## Write path
 
 The intended write path is the daemon ability
-`<self>.register_device_pubkey`, which:
+`identity.register_pubkey`, which:
 
 1. validates the target URA belongs to the daemon's realm,
 2. appends the entry atomically (`*.tmp` + fsync + rename),

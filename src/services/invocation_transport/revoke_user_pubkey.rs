@@ -1,5 +1,5 @@
-// EasyNet CLI — `<self>.revoke_user_pubkey` ability handler
-// ===========================================================
+// EasyNet CLI — `identity.revoke_user_pubkey` ability handler
+// ============================================================
 //
 // File: src/services/invocation_transport/revoke_user_pubkey.rs
 // DEC-EU §revocation. Removes a (user_ura, public_key_b64) entry
@@ -7,7 +7,7 @@
 // trust-anchor cell so subsequent admission calls cannot use the
 // revoked key.
 //
-// Sister surface to `<self>.register_device_pubkey`. Where register
+// Sister surface to `identity.register_pubkey`. Where register
 // admits multiple roles (device / backend / hub / user), revoke is
 // intentionally user-only — operator-curated hub / device entries
 // are managed by hand in the TOML, never through a daemon ability.
@@ -38,23 +38,44 @@
 // Copyright (c) 2026-2027 EasyNet. All rights reserved.
 
 use std::path::Path;
-use std::sync::Arc;
 
-use base64::prelude::*;
-use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use tonic::Status;
 
-use crate::services::realm_trust_anchor::{RealmTrustAnchor, RealmTrustError, TrustedAgent};
+use crate::services::invocation_transport::runtime_trust::RuntimeTrust;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
-/// Wire-stable ability name. The backend pins this verbatim.
-pub const ABILITY_SELF_REVOKE_USER_PUBKEY: &str = "<self>.revoke_user_pubkey";
+/// Canonical daemon identity/trust ability name.
+pub const ABILITY_IDENTITY_REVOKE_USER_PUBKEY: &str = "identity.revoke_user_pubkey";
 
 #[derive(Debug, Deserialize)]
 struct RevokeArgs {
     agent_ura: String,
     public_key_b64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RevokeUserPubkeyIntent {
+    agent_ura: String,
+    public_key_b64: String,
+}
+
+impl RevokeUserPubkeyIntent {
+    pub(crate) fn agent_ura(&self) -> &str {
+        &self.agent_ura
+    }
+
+    pub(crate) fn public_key_b64(&self) -> &str {
+        &self.public_key_b64
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(agent_ura: String, public_key_b64: String) -> Self {
+        Self {
+            agent_ura,
+            public_key_b64,
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -63,117 +84,83 @@ pub struct RevokeResponse {
     pub removed: bool,
 }
 
+pub(crate) struct RevokeWriteOutcome {
+    pub(crate) body: Vec<u8>,
+    pub(crate) removed: bool,
+}
+
 pub fn handle(
     arguments: &[u8],
     daemon_realm: &str,
     trust_anchor_path: &Path,
     cell: &SharedTrustAnchor,
 ) -> Result<Vec<u8>, Status> {
+    Ok(handle_with_outcome(arguments, daemon_realm, trust_anchor_path, cell)?.body)
+}
+
+pub(crate) fn handle_with_outcome(
+    arguments: &[u8],
+    daemon_realm: &str,
+    trust_anchor_path: &Path,
+    cell: &SharedTrustAnchor,
+) -> Result<RevokeWriteOutcome, Status> {
     let args: RevokeArgs = serde_json::from_slice(arguments).map_err(|err| {
         Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: arguments JSON decode failed: {err}"
+            "identity.revoke_user_pubkey: arguments JSON decode failed: {err}"
         ))
     })?;
 
     if args.agent_ura.is_empty() {
         return Err(Status::invalid_argument(
-            "<self>.revoke_user_pubkey: agent_ura is required",
+            "identity.revoke_user_pubkey: agent_ura is required",
         ));
     }
     if args.public_key_b64.is_empty() {
         return Err(Status::invalid_argument(
-            "<self>.revoke_user_pubkey: public_key_b64 is required",
+            "identity.revoke_user_pubkey: public_key_b64 is required",
         ));
     }
-    validate_public_key_b64(&args.public_key_b64)?;
+    let removed = RuntimeTrust::new(daemon_realm, trust_anchor_path, cell)
+        .revoke_user_pubkey(&args.agent_ura, &args.public_key_b64)?;
 
-    let parsed_realm = parse_realm_from_ura(&args.agent_ura).ok_or_else(|| {
-        Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: agent_ura `{}` does not match the canonical user URA",
-            args.agent_ura,
-        ))
-    })?;
-    if parsed_realm != daemon_realm {
-        return Err(Status::permission_denied(format!(
-            "<self>.revoke_user_pubkey: agent_ura realm `{parsed_realm}` must match daemon \
-             realm `{daemon_realm}` (cross-realm user roaming is DEC-EU §multi-realm followup)",
-        )));
-    }
-
-    // Snapshot, mutate, atomic save, publish — same pattern as
-    // register_device_pubkey so a SIGHUP-triggered reload sees the
-    // same authoritative state.
-    let snapshot = cell.snapshot();
-    let mut next_entries: Vec<TrustedAgent> = snapshot.entries_sorted();
-    let mut next_anchor =
-        RealmTrustAnchor::from_entries(next_entries.split_off(0)).map_err(realm_error_to_status)?;
-    let removed = next_anchor
-        .remove_user_pubkey(&args.agent_ura, &args.public_key_b64)
-        .map_err(realm_error_to_status)?;
-
-    next_anchor
-        .save(trust_anchor_path)
-        .map_err(realm_error_to_status)?;
-    cell.replace(Arc::new(next_anchor));
-
-    serde_json::to_vec(&RevokeResponse { ok: true, removed }).map_err(|err| {
+    let body = serde_json::to_vec(&RevokeResponse { ok: true, removed }).map_err(|err| {
         Status::internal(format!(
-            "<self>.revoke_user_pubkey: response JSON encode failed: {err}"
-        ))
-    })
-}
-
-fn validate_public_key_b64(raw: &str) -> Result<(), Status> {
-    let decoded = BASE64_STANDARD.decode(raw).map_err(|err| {
-        Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: public_key_b64 is not valid base64: {err}"
+            "identity.revoke_user_pubkey: response JSON encode failed: {err}"
         ))
     })?;
-    let bytes: [u8; 32] = decoded.as_slice().try_into().map_err(|_| {
-        Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: public_key_b64 must decode to exactly 32 bytes, got {}",
-            decoded.len()
-        ))
-    })?;
-    VerifyingKey::from_bytes(&bytes).map_err(|err| {
-        Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: public_key_b64 is not a valid Ed25519 verifying key: {err}"
-        ))
-    })?;
-    Ok(())
+    Ok(RevokeWriteOutcome { body, removed })
 }
 
-/// Strip the canonical `easynet:///r/{realm}/...` prefix and return
-/// the realm component. Mirrors register_device_pubkey's parser so
-/// the two surfaces accept the same URA shape.
-fn parse_realm_from_ura(ura: &str) -> Option<String> {
-    crate::ura::parse_ura(ura).ok().map(|parsed| parsed.realm)
-}
-
-fn realm_error_to_status(err: RealmTrustError) -> Status {
-    match err {
-        RealmTrustError::InvalidUraForRole {
-            agent_ura,
-            role,
-            detail,
-        } => Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: {role} URA `{agent_ura}` invalid: {detail}"
-        )),
-        RealmTrustError::WriteFailed { path, source } => Status::internal(format!(
-            "<self>.revoke_user_pubkey: write {path:?}: {source}"
-        )),
-        RealmTrustError::SerializeFailed { path, source } => Status::internal(format!(
-            "<self>.revoke_user_pubkey: serialize {path:?}: {source}"
-        )),
-        other => Status::internal(format!("<self>.revoke_user_pubkey: {other}")),
+pub(crate) fn parse_revoke_user_pubkey_intent(
+    arguments: &[u8],
+) -> Result<RevokeUserPubkeyIntent, Status> {
+    let args: RevokeArgs = serde_json::from_slice(arguments).map_err(|err| {
+        Status::invalid_argument(format!(
+            "identity.revoke_user_pubkey: arguments JSON decode failed: {err}"
+        ))
+    })?;
+    if args.agent_ura.is_empty() {
+        return Err(Status::invalid_argument(
+            "identity.revoke_user_pubkey: agent_ura is required",
+        ));
     }
+    if args.public_key_b64.is_empty() {
+        return Err(Status::invalid_argument(
+            "identity.revoke_user_pubkey: public_key_b64 is required",
+        ));
+    }
+    Ok(RevokeUserPubkeyIntent {
+        agent_ura: args.agent_ura,
+        public_key_b64: args.public_key_b64,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::realm_trust_anchor::TrustedAgentRole;
+    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use crate::services::trust_anchor_cell::SharedTrustAnchor;
+    use base64::prelude::*;
     use serde_json::json;
     use std::sync::Arc;
     use tempfile::tempdir;

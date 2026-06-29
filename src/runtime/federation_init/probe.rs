@@ -5,7 +5,7 @@
 //
 // Process-wide observability slot for the federation init outcome.
 // Daemon boot writes the outcome here once; the
-// `<self>.federation.status` ability reads it. Operators use the
+// `federation.status` ability reads it. Operators use the
 // status string to diagnose "why isn't my agent reachable from
 // laptop B" without needing to grep daemon logs.
 //
@@ -51,7 +51,7 @@ impl FederationStatusProbe {
     }
 
     /// Render the outcome as the wire shape returned by
-    /// `<self>.federation.status`. Stable schema:
+    /// `federation.status`. Stable schema:
     ///
     /// ```json
     /// {

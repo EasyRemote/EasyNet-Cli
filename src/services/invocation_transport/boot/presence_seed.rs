@@ -36,7 +36,7 @@ fn seed_device_mode_self_presence(daemon_ura: Option<&str>, presence: &Arc<Prese
     // hub-mode daemon process) the backend never reaches the hub's
     // presence — it queries this daemon's local one instead.
     // Pre-this-fix: device daemon's local presence was empty because
-    // <self>.session is an OUTBOUND dial (the daemon dials the hub),
+    // session.open is an OUTBOUND dial (the daemon dials the hub),
     // not an inbound register, so nothing populated the local table.
     // backend's `federation.resolve` then returned no agents; every
     // device showed REMOVED in /api/v1/devices despite the bidi
@@ -89,7 +89,7 @@ fn seed_device_mode_self_presence(daemon_ura: Option<&str>, presence: &Arc<Prese
 /// `forward_invoke` targeting that URA survives the presence
 /// registry lookup gate without a real device pair flow.
 ///
-/// Channel capacity 8 mirrors the `<self>.session` accept
+/// Channel capacity 8 mirrors the `session.open` accept
 /// path. A drain task discards every queued frame so the
 /// channel never reports full or closed; the demo's
 /// transport-plane proof terminates at "frame queued for

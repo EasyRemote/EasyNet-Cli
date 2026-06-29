@@ -27,7 +27,7 @@
 //!     + `LedgerSink` at daemon boot.
 //!   * Phase 3 — registration sites write directly to the shared
 //!     `LocalRuntime`; there is no legacy registry mirror.
-//!   * Phase 4 — `dispatch_shim`: `<self>.invoke_remote` /
+//!   * Phase 4 — `dispatch_shim`: `runtime.invoke_remote` /
 //!     `federation.forward_invoke` dispatch arms route through the
 //!     `local_runtime_request` factory and Axon's public
 //!     descriptor-bound request APIs instead of CLI's bespoke

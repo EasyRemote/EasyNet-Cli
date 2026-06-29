@@ -207,7 +207,7 @@ pub const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
         unavailable_reason: None,
     };
 
@@ -227,7 +227,7 @@ pub const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display"],
+        supported_subjects: &["display", "window", "application"],
         unavailable_reason: Some("native_media_plugin_required_for_flagship_quality"),
     };
 
@@ -332,6 +332,7 @@ pub fn production_backend_for_entry(
                 && backend.transport_ready()
                 && backend.production_ready()
                 && backend.supports_entry(entry)
+                && native_compatible_screen_entry(entry)
         })
 }
 
@@ -341,9 +342,7 @@ pub fn webrtc_transport_backend_for_entry(
     if let Some(native) = production_backend_for_entry(entry) {
         return Some(native);
     }
-    if entry.kind == ResourceType::Display
-        && entry.metadata.get("backend").and_then(Value::as_str) == Some("xcap")
-    {
+    if xcap_compatible_screen_entry(entry) {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -385,12 +384,71 @@ mod macos_screen_capture_tcc {
 pub fn select_builtin_h264_backend(
     entry: &ResourceEntry,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
-    if entry.kind == ResourceType::Display
-        && entry.metadata.get("backend").and_then(Value::as_str) == Some("xcap")
-    {
+    if xcap_compatible_screen_entry(entry) {
         return Some(XCAP_OPENH264_BACKEND);
     }
     None
+}
+
+fn xcap_compatible_screen_entry(entry: &ResourceEntry) -> bool {
+    let backend = entry.metadata.get("backend").and_then(Value::as_str);
+    match entry.kind {
+        ResourceType::Display => backend == Some("xcap"),
+        ResourceType::Window | ResourceType::Application => {
+            let capture_target = entry.metadata.get("capture_target").and_then(Value::as_str);
+            let expected_target = match entry.kind {
+                ResourceType::Window => "window",
+                ResourceType::Application => "application",
+                _ => unreachable!("checked above"),
+            };
+            capture_target == Some(expected_target)
+                && matches!(backend, Some("xcap" | "macos_core_graphics"))
+                && screen_target_metadata_resolvable(entry)
+        }
+        _ => false,
+    }
+}
+
+fn native_compatible_screen_entry(entry: &ResourceEntry) -> bool {
+    match entry.kind {
+        ResourceType::Display => true,
+        ResourceType::Window | ResourceType::Application => {
+            screen_target_metadata_resolvable(entry)
+        }
+        _ => false,
+    }
+}
+
+fn screen_target_metadata_resolvable(entry: &ResourceEntry) -> bool {
+    match entry.kind {
+        ResourceType::Application => {
+            non_empty_metadata_str(entry, "app_name")
+                || entry
+                    .metadata
+                    .get("primary_pid")
+                    .and_then(Value::as_i64)
+                    .is_some()
+        }
+        ResourceType::Window => {
+            entry
+                .metadata
+                .get("window_id")
+                .and_then(Value::as_u64)
+                .is_some()
+                || (entry.metadata.get("pid").and_then(Value::as_i64).is_some()
+                    && non_empty_metadata_str(entry, "app_name")
+                    && non_empty_metadata_str(entry, "title"))
+        }
+        _ => false,
+    }
+}
+
+fn non_empty_metadata_str(entry: &ResourceEntry, key: &str) -> bool {
+    entry
+        .metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -412,6 +470,26 @@ mod tests {
         }
     }
 
+    fn discovered_window_entry(backend: &str) -> ResourceEntry {
+        ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/window.test".into(),
+            owner_agent: "easynet:///r/acme/device/01DEV".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: format!("window:{backend}:123:456"),
+            display_name: "Cursor - main.rs".into(),
+            metadata: json!({
+                "backend": backend,
+                "capture_target": "window",
+                "app_name": "Cursor",
+                "window_id": 456,
+                "pid": 123,
+                "title": "main.rs",
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        }
+    }
+
     #[test]
     fn selects_only_available_xcap_display_backend() {
         let backend = select_builtin_h264_backend(&xcap_display_entry()).unwrap();
@@ -420,6 +498,33 @@ mod tests {
         assert_eq!(backend.sdk_id(), REMOTE_DESKTOP_MEDIA_SDK_ID);
         assert_eq!(backend.effective_fps(144), XCAP_MACOS_RECORDER_MAX_FPS);
         assert!(!backend.external_binary_required());
+    }
+
+    #[test]
+    fn selects_xcap_baseline_for_discovered_window_targets() {
+        let backend = select_builtin_h264_backend(&discovered_window_entry("xcap")).unwrap();
+
+        assert_eq!(backend.backend_id(), XCAP_OPENH264_BACKEND_ID);
+        assert!(backend.supports_entry(&discovered_window_entry("xcap")));
+    }
+
+    #[test]
+    fn discovered_window_targets_can_negotiate_direct_webrtc() {
+        let backend =
+            webrtc_transport_backend_for_entry(&discovered_window_entry("macos_core_graphics"))
+                .expect("bootstrapped window targets must have a WebRTC-capable media path");
+
+        assert!(backend.is_webrtc_transport());
+        assert!(backend.supports_entry(&discovered_window_entry("macos_core_graphics")));
+    }
+
+    #[test]
+    fn empty_window_metadata_is_not_treated_as_capturable() {
+        let mut entry = discovered_window_entry("xcap");
+        entry.metadata = json!({});
+
+        assert!(select_builtin_h264_backend(&entry).is_none());
+        assert!(webrtc_transport_backend_for_entry(&entry).is_none());
     }
 
     #[test]

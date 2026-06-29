@@ -31,6 +31,13 @@ pub enum AgentType {
     ClaudeCode,
     Codex,
     CodexAppServer,
+    /// A user-defined external agent runtime. Unlike the LLM-CLI
+    /// variants, this one is not tied to a specific binary: the agent's
+    /// own `command`/`args` point at any executable whose chat brain reads
+    /// the NL prompt on stdin and writes the answer on stdout. This is
+    /// the dynamic-extension seam: registering a new harness agent is
+    /// configuration, not a new enum variant.
+    External,
 }
 
 impl std::fmt::Display for AgentType {
@@ -39,6 +46,7 @@ impl std::fmt::Display for AgentType {
             Self::ClaudeCode => write!(f, "claude-code"),
             Self::Codex => write!(f, "codex"),
             Self::CodexAppServer => write!(f, "codex-app-server"),
+            Self::External => write!(f, "external"),
         }
     }
 }
@@ -50,9 +58,21 @@ impl std::str::FromStr for AgentType {
             "claude-code" | "claude" => Ok(Self::ClaudeCode),
             "codex" => Ok(Self::Codex),
             "codex-app-server" | "codex-appserver" => Ok(Self::CodexAppServer),
+            "external" | "custom" => Ok(Self::External),
             _ => anyhow::bail!(
-                "unknown agent type: {s} (expected: claude-code, codex, codex-app-server)"
+                "unknown agent type: {s} (expected: claude-code, codex, codex-app-server, external)"
             ),
+        }
+    }
+}
+
+impl AgentType {
+    pub(crate) fn runtime_kind(self) -> RuntimeKind {
+        match self {
+            Self::ClaudeCode => RuntimeKind::ClaudeCode,
+            Self::Codex => RuntimeKind::Codex,
+            Self::CodexAppServer => RuntimeKind::CodexAppServer,
+            Self::External => RuntimeKind::External,
         }
     }
 }
@@ -239,6 +259,11 @@ impl AgentEntry {
             ),
             AgentType::Codex => ("codex".to_string(), vec!["exec".to_string()]),
             AgentType::CodexAppServer => ("codex".to_string(), vec!["app-server".to_string()]),
+            // External agents have no default binary: the operator
+            // supplies `command`/`args` at `agent add` time. Leaving
+            // them empty here keeps `new` total without inventing a
+            // default that would later look like an executable.
+            AgentType::External => (String::new(), Vec::new()),
         };
         Self {
             schema_version: CURRENT_REGISTRY_SCHEMA,
@@ -397,11 +422,7 @@ fn migrate_one_entry(name: &str, entry: &mut AgentEntry) -> anyhow::Result<()> {
     let root = config::agents_root().join(name);
 
     // Build a spec that captures the v1 state without loss.
-    let runtime = match entry.agent_type {
-        AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
-        AgentType::Codex => RuntimeKind::Codex,
-        AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
-    };
+    let runtime = entry.agent_type.runtime_kind();
     let mut spec = AgentSpec::new(name, runtime);
     spec.model = entry.model.clone();
     // v1 timeout defaults (300) are the same as the runtime
@@ -599,6 +620,19 @@ pub fn save_agents(registry: &AgentRegistry) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_agent_type_round_trips_and_has_no_default_command() {
+        // Dynamic-extension contract: `external` parses, displays, and
+        // serializes as "external", and carries no built-in binary.
+        let t: AgentType = "external".parse().unwrap();
+        assert_eq!(t, AgentType::External);
+        assert_eq!(AgentType::External.to_string(), "external");
+        assert_eq!("custom".parse::<AgentType>().unwrap(), AgentType::External);
+        let entry = AgentEntry::new(AgentType::External, None);
+        assert!(entry.command.is_empty());
+        assert!(entry.args.is_empty());
+    }
 
     #[test]
     fn validate_agent_name_accepts_well_formed_names() {
