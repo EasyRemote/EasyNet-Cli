@@ -232,6 +232,8 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // this cycle" rather than blocking the rest of publish — the
     // outcome row surfaces the reason.
     let live_registry = crate::runtime::agents::build_registry();
+    let hint_snapshot =
+        crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(&live_registry);
     match crate::registry::agents::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
@@ -261,10 +263,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                             let mut d = d
                                 .with_description(spec.description())
                                 .with_input_schema(spec.parameters().clone())
-                                .with_hints(crate::runtime::agents::discovery_hints_for(
-                                    &live_registry,
-                                    registry_name,
-                                ))
+                                .with_hints(hint_snapshot.for_name(registry_name))
                                 .with_source(format!("agent:{name}"));
                             d = d.with_metadata_entry("host_node_id", host_node_id.clone());
                             d = d.with_metadata_entry("runtime", entry.agent_type.to_string());

@@ -35,6 +35,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use serde_json::{json, Value};
 
 use crate::registry::agents;
@@ -76,10 +79,9 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     // that shape (see `cliInstalledRow` in
     // backend/internal/logic/skill/listInstalledLogic.go), and this
     // ability now becomes the definitive source.
-    use crate::runtime::skill_store::{
-        global_skill_pools_for, read_install_record, scan_global_pool_into, InstallRecord,
-    };
+    use crate::runtime::skill_store::{global_skill_pools_for, read_install_record, InstallRecord};
     let mut rows: Vec<InstallRecord> = Vec::new();
+    let mut global_pool_cache = GlobalSkillPoolCache::default();
 
     for (name, entry) in &registry.agents {
         if let Some(filter) = &scope.owner_agent_id {
@@ -130,10 +132,12 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         // Source 2 — agent-native global pools (~/.claude/skills,
         // ~/.agents/skills). These are populated by external tooling
         // and have no install.json; metadata is synthesised from
-        // SKILL.md frontmatter (or directory name fallback) inside
-        // scan_global_pool_into.
+        // SKILL.md frontmatter (or directory name fallback). The
+        // expensive filesystem scan is cached by pool path and each
+        // matching agent receives a cheap projection with its agent_id
+        // stamped onto the row.
         for (label, pool_dir) in global_skill_pools_for(entry.agent_type) {
-            scan_global_pool_into(name, label, &pool_dir, &mut rows);
+            rows.extend(global_pool_cache.rows_for_agent(name, label, &pool_dir));
         }
     }
     if let Some(skill_name) = &scope.skill_name {
@@ -164,6 +168,42 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         .collect();
 
     Ok(json!({ "items": items }))
+}
+
+#[derive(Default)]
+struct GlobalSkillPoolCache {
+    templates_by_dir: BTreeMap<PathBuf, Vec<crate::runtime::skill_store::InstallRecord>>,
+}
+
+impl GlobalSkillPoolCache {
+    fn rows_for_agent(
+        &mut self,
+        agent_name: &str,
+        pool_label: &str,
+        pool_dir: &std::path::Path,
+    ) -> Vec<crate::runtime::skill_store::InstallRecord> {
+        let templates = self
+            .templates_by_dir
+            .entry(pool_dir.to_path_buf())
+            .or_insert_with(|| {
+                let mut templates = Vec::new();
+                crate::runtime::skill_store::scan_global_pool_into(
+                    "",
+                    pool_label,
+                    pool_dir,
+                    &mut templates,
+                );
+                templates
+            });
+        templates
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                row.agent_id = agent_name.to_string();
+                row
+            })
+            .collect()
+    }
 }
 
 fn managed_skill_dir_for_agent_type(
@@ -374,5 +414,33 @@ mod tests {
             let dir = managed_skill_dir_for_agent_type(root, agent_type);
             assert_eq!(dir, root.join("skills"));
         }
+    }
+
+    #[test]
+    fn global_skill_pool_cache_scans_once_and_projects_per_agent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("summarize");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: summarize\ndescription: Summarize text\n---\n",
+        )
+        .expect("skill md");
+
+        let mut cache = GlobalSkillPoolCache::default();
+        let first = cache.rows_for_agent("alice", "claude-global", dir.path());
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].agent_id, "alice");
+        assert_eq!(first[0].name, "summarize");
+
+        std::fs::remove_file(skill_dir.join("SKILL.md")).expect("remove marker");
+        let second = cache.rows_for_agent("bob", "claude-global", dir.path());
+        assert_eq!(
+            second.len(),
+            1,
+            "second projection must reuse the cached scan instead of rescanning the pool"
+        );
+        assert_eq!(second[0].agent_id, "bob");
+        assert_eq!(second[0].name, "summarize");
     }
 }

@@ -1030,6 +1030,8 @@ fn build_hosted_agent_ability_descriptors(
     live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
 ) -> Vec<AbilityDescriptor> {
     let mut descriptors = Vec::new();
+    let hint_snapshot =
+        crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(live_registry);
     for spec in crate::runtime::abilities::abilities_for_publication(agent_name, entry) {
         let registry_name = spec.name();
         let owner_local_name = crate::runtime::abilities::public_agent_ability_name(
@@ -1047,10 +1049,7 @@ fn build_hosted_agent_ability_descriptors(
         descriptor = descriptor
             .with_description(spec.description())
             .with_input_schema(spec.parameters().clone())
-            .with_hints(crate::runtime::agents::discovery_hints_for(
-                live_registry,
-                registry_name,
-            ))
+            .with_hints(hint_snapshot.for_name(registry_name))
             .with_source(format!("agent:{agent_name}"))
             .with_metadata_entry("runtime", entry.agent_type.to_string())
             .with_metadata_entry("agent_type", entry.agent_type.to_string())

@@ -530,6 +530,8 @@ fn build_hot_agent_descriptors(
     agent_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     let live_registry = crate::runtime::agents::build_registry();
+    let hint_snapshot =
+        crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(&live_registry);
     let mut descriptors = Vec::new();
     for spec in crate::runtime::abilities::abilities_for_publication(name, entry) {
         let registry_name = spec.name();
@@ -544,10 +546,7 @@ fn build_hot_agent_descriptors(
                 let mut desc = desc
                     .with_description(spec.description())
                     .with_input_schema(spec.parameters().clone())
-                    .with_hints(crate::runtime::agents::discovery_hints_for(
-                        &live_registry,
-                        registry_name,
-                    ))
+                    .with_hints(hint_snapshot.for_name(registry_name))
                     .with_source(format!("agent:{name}"))
                     .with_metadata_entry("runtime", entry.agent_type.to_string())
                     .with_metadata_entry("agent_type", entry.agent_type.to_string())

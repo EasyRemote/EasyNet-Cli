@@ -228,6 +228,8 @@ fn list_abilities_handler(
     // `abilities/*.toml`, and (c) any future ability whose author
     // forgot to thread it through the profile catalogue.
     if let Some(registry) = registry_handle.get() {
+        let hint_snapshot =
+            crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(registry);
         // Owner URAs for the synthesised descriptors below. These
         // entries are abilities registered into `AxonAbilityCatalog`
         // that no static profile descriptor covers (RFC-002
@@ -283,7 +285,8 @@ fn list_abilities_handler(
         // canonical without reading process-wide env state on
         // each invocation.
         let user_segment = pages_user.map(str::to_string);
-        for name in registry.list_abilities() {
+        for row in registry.ability_catalog_snapshot() {
+            let name = row.name;
             // Keep the live registry on the same public-catalogue surface as
             // `published_abilities`, `easynet ability list`, and advertise.
             if !crate::runtime::agents::is_publishable_catalog_name(&name) {
@@ -299,7 +302,7 @@ fn list_abilities_handler(
             // control-plane record (`control_plane_owner`), not the legacy
             // `owner` side table — proven equivalent for every owner kind by
             // `control_plane_owner_matches_legacy_lookup_for_static_ability`.
-            let owner_string = match registry.control_plane_owner(&name) {
+            let owner_string = match row.owner {
                 Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => hub_owner_ura.clone(),
                 Some(crate::runtime::ability_dispatch::OwnerKind::Device) => {
                     device_owner_ura.clone()
@@ -319,7 +322,7 @@ fn list_abilities_handler(
                 continue;
             };
             let public_name = crate::ura::owner_local_ability_name(owner, &name);
-            let transport_hints = crate::runtime::agents::discovery_hints_for(registry, &name);
+            let transport_hints = hint_snapshot.for_name(&name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
             // (chat ability + the family that follows it), surface
@@ -339,7 +342,7 @@ fn list_abilities_handler(
                 // and hot/dynamic registrations — so it unions the same set
                 // `manifest_for_dynamic` did. Equivalence pinned by
                 // `control_plane_manifest_matches_legacy_for_static_ability`.
-                let descriptor = match registry.control_plane_manifest(&name) {
+                let descriptor = match row.manifest {
                     Some(manifest) => {
                         let mut d = d
                             .with_description(manifest.description())
@@ -370,7 +373,7 @@ fn list_abilities_handler(
             }
         }
 
-        synthesize_hot_hosted_agent_descriptors(&mut catalog, registry, &local);
+        synthesize_hot_hosted_agent_descriptors(&mut catalog, &local, &hint_snapshot);
     }
 
     // Final pass — service-health metadata. Applied uniformly over
@@ -586,8 +589,8 @@ fn merge_owner_scope(
 
 fn synthesize_hot_hosted_agent_descriptors(
     catalog: &mut std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor>,
-    registry: &AxonAbilityCatalog,
     local: &crate::persistence::local_agents::LocalAgentsFile,
+    hint_snapshot: &crate::runtime::agents::AbilityDiscoveryHintSnapshot,
 ) {
     use crate::runtime::ability_descriptor::Visibility;
 
@@ -627,10 +630,7 @@ fn synthesize_hot_hosted_agent_descriptors(
             descriptor = descriptor
                 .with_description(spec.description())
                 .with_input_schema(spec.parameters().clone())
-                .with_hints(crate::runtime::agents::discovery_hints_for(
-                    registry,
-                    spec.name(),
-                ))
+                .with_hints(hint_snapshot.for_name(spec.name()))
                 .with_source(format!("agent:{agent_name}"))
                 .with_metadata_entry("runtime", entry.agent_type.to_string())
                 .with_metadata_entry("agent_type", entry.agent_type.to_string())

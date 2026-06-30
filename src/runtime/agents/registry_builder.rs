@@ -71,6 +71,16 @@ fn build_registry_uncached() -> Arc<AxonAbilityCatalog> {
 }
 
 pub(super) fn build_system_registry() -> Arc<AxonAbilityCatalog> {
+    #[cfg(not(test))]
+    {
+        static SNAPSHOT: std::sync::OnceLock<Arc<AxonAbilityCatalog>> = std::sync::OnceLock::new();
+        Arc::clone(SNAPSHOT.get_or_init(build_system_registry_uncached))
+    }
+    #[cfg(test)]
+    build_system_registry_uncached()
+}
+
+fn build_system_registry_uncached() -> Arc<AxonAbilityCatalog> {
     build_registry_with_services_result_inner(
         RegistryBuildConfig::new(RegistryBuildServices::fresh(), &AgentRegistry::default()),
         PluginRegistryMode::None,

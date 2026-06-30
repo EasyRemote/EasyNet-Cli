@@ -40,7 +40,6 @@ use serde_json::{json, Value};
 use crate::persistence::config;
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::directory::AgentDirectory;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_LIST_AGENTS: &str = "agent.list";
@@ -81,24 +80,17 @@ fn agent_rows(
                 .root_path
                 .clone()
                 .unwrap_or_else(|| config::agents_root().join(name));
-            let (spec_model, spec_timeout_secs) = match AgentDirectory::open(&root) {
-                Ok(dir) => (dir.spec().model.clone(), dir.spec().timeout_secs),
-                Err(_) => (None, None),
-            };
-            let model = spec_model.or_else(|| e.model.clone());
-            let timeout_secs = spec_timeout_secs.unwrap_or(e.timeout_secs);
             let ura =
                 crate::persistence::local_agents::lookup_hosted_ura(local_agents, "llm", name);
             json!({
                 "name": name,
                 "ura": ura.map(Value::String).unwrap_or(Value::Null),
                 "runtime": e.agent_type.to_string(),
-                "model": model.map(Value::String).unwrap_or(Value::Null),
+                "model": e.model.clone().map(Value::String).unwrap_or(Value::Null),
                 "label": e.label.clone().map(Value::String).unwrap_or(Value::Null),
-                "timeout_secs": timeout_secs,
+                "timeout_secs": e.timeout_secs,
                 "root_path": root.to_string_lossy(),
                 "root_exists": root.exists(),
-                "entry": e,
             })
         })
         .collect();
@@ -201,6 +193,24 @@ mod tests {
         let row = &resp["agents"][0];
         assert_eq!(row["model"], Value::Null);
         assert_eq!(row["label"], Value::Null);
+    }
+
+    #[test]
+    fn list_agents_does_not_leak_registry_entry_shape() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "minimal".to_string(),
+            AgentEntry::new(AgentType::Codex, None),
+        );
+
+        let rows = agent_rows(
+            &registry,
+            &crate::persistence::local_agents::LocalAgentsFile::default(),
+        );
+
+        assert!(rows[0].get("entry").is_none());
+        assert_eq!(rows[0]["runtime"], "codex");
+        assert!(rows[0].get("timeout_secs").is_some());
     }
 
     #[test]

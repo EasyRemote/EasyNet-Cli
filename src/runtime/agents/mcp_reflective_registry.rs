@@ -1119,7 +1119,7 @@ struct StaticWriter<'a> {
 
 impl RegistryWriter for StaticWriter<'_> {
     fn has(&self, name: &str) -> bool {
-        self.reg.has_rpc(name) || self.reg.has_stream(name) || self.reg.has_bidi(name)
+        self.reg.has_registered_handler(name)
     }
 
     fn register_stream(
@@ -1165,7 +1165,7 @@ struct DynamicWriter<'a> {
 
 impl RegistryWriter for DynamicWriter<'_> {
     fn has(&self, name: &str) -> bool {
-        self.reg.has_rpc(name) || self.reg.has_stream(name) || self.reg.has_bidi(name)
+        self.reg.has_registered_handler(name)
     }
 
     fn register_stream(

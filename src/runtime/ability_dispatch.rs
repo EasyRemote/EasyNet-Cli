@@ -1408,6 +1408,76 @@ impl ControlPlaneModeKey {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AbilityCatalogSnapshotRow {
+    pub name: String,
+    pub owner: Option<OwnerKind>,
+    pub manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+}
+
+#[derive(Debug, Clone)]
+struct AbilityCatalogSnapshotBuilder {
+    owner: Option<OwnerKind>,
+    ambiguous_owner: bool,
+    manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+    ambiguous_manifest: bool,
+}
+
+impl AbilityCatalogSnapshotBuilder {
+    fn new(owner: Option<OwnerKind>) -> Self {
+        Self {
+            owner,
+            ambiguous_owner: false,
+            manifest: None,
+            ambiguous_manifest: false,
+        }
+    }
+
+    fn observe_owner(&mut self, next: Option<OwnerKind>) {
+        if self.ambiguous_owner {
+            return;
+        }
+        match (&self.owner, next) {
+            (None, owner) => self.owner = owner,
+            (Some(current), Some(next)) if *current == next => {}
+            (Some(_), Some(_)) | (Some(_), None) => {
+                self.owner = None;
+                self.ambiguous_owner = true;
+            }
+        }
+    }
+
+    fn observe_manifest(&mut self, next: Option<Arc<crate::core::ability_spec::AbilityManifest>>) {
+        let Some(next) = next else {
+            return;
+        };
+        match self.manifest.as_ref() {
+            None if !self.ambiguous_manifest => self.manifest = Some(next),
+            Some(current) if current.descriptor_version() == next.descriptor_version() => {}
+            Some(_) | None => {
+                self.manifest = None;
+                self.ambiguous_manifest = true;
+            }
+        }
+    }
+
+    fn into_row(self, name: String) -> AbilityCatalogSnapshotRow {
+        AbilityCatalogSnapshotRow {
+            name,
+            owner: if self.ambiguous_owner {
+                None
+            } else {
+                self.owner
+            },
+            manifest: if self.ambiguous_manifest {
+                None
+            } else {
+                self.manifest
+            },
+        }
+    }
+}
+
 /// Axon ability catalogue. Keyed by full ability name. v1 shape is
 /// a `BTreeMap` for deterministic iteration order; the catalogue is
 /// read-mostly (built once at daemon start, queried for metadata), so
@@ -1696,6 +1766,10 @@ impl ExecutionIndex {
     fn has_bidi(&self, ability: &str) -> bool {
         let handlers = self.handlers_for_ability(ability);
         handlers.bidi.is_some() || handlers.bidi_with_env.is_some()
+    }
+
+    fn has_any_handler(&self, ability: &str) -> bool {
+        !self.handlers_for_ability(ability).is_empty()
     }
 
     fn extend_rpc_names(&self, names: &mut BTreeSet<String>) {
@@ -4153,6 +4227,70 @@ impl AxonAbilityCatalog {
             .names()
     }
 
+    /// Deterministic catalogue read-model: public ability name -> registered
+    /// descriptor call modes.
+    ///
+    /// This is deliberately a control-plane snapshot, not a runtime probe.
+    /// Catalogue renderers (`meta.list_abilities`, MCP/A2A projections, CLI
+    /// list views) need to know whether an ability is unary, stream, or bidi,
+    /// but asking `LocalRuntime::ability_options` once per ability/mode turns
+    /// a pure list operation into an async fan-out. The control-plane registry
+    /// already owns the validated descriptor rows; read those rows once and
+    /// let callers derive advisory hints from the snapshot.
+    pub fn call_modes_by_ability(&self) -> BTreeMap<String, BTreeSet<DescriptorCallMode>> {
+        let mut modes = BTreeMap::<String, BTreeSet<DescriptorCallMode>>::new();
+        for (key, _record) in self
+            .control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .records()
+        {
+            modes
+                .entry(key.ability().to_string())
+                .or_default()
+                .insert(key.call_mode());
+        }
+        modes
+    }
+
+    /// Complete catalogue read model keyed by public ability name.
+    ///
+    /// This is the owner/manifest companion to [`Self::call_modes_by_ability`].
+    /// Read paths that render descriptors should consume this snapshot instead
+    /// of calling `control_plane_owner` and `control_plane_manifest` per name:
+    /// those APIs preserve precise single-record lookup semantics for dispatch
+    /// and tests, while catalogue projection needs one bounded scan.
+    pub fn ability_catalog_snapshot(&self) -> Vec<AbilityCatalogSnapshotRow> {
+        let control_plane = self
+            .control_plane
+            .read()
+            .expect("control_plane RwLock poisoned");
+        let manifests = self
+            .control_plane_manifests
+            .read()
+            .expect("control_plane_manifests RwLock poisoned");
+        let mut rows: BTreeMap<String, AbilityCatalogSnapshotBuilder> = BTreeMap::new();
+
+        for (key, record) in control_plane.records() {
+            let owner = owner_kind_from_projection(record.authority().scope().owner_projection());
+            let manifest = manifests.get(&key).map(Arc::clone);
+            rows.entry(key.ability().to_string())
+                .and_modify(|row| {
+                    row.observe_owner(owner.clone());
+                    row.observe_manifest(manifest.clone());
+                })
+                .or_insert_with(|| {
+                    let mut row = AbilityCatalogSnapshotBuilder::new(owner);
+                    row.observe_manifest(manifest);
+                    row
+                });
+        }
+
+        rows.into_iter()
+            .map(|(name, row)| row.into_row(name))
+            .collect()
+    }
+
     /// Returns Some when an RPC handler is registered for `ability`.
     pub fn get_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
         self.resolve_rpc(ability)
@@ -4192,6 +4330,20 @@ impl AxonAbilityCatalog {
             .expect("execution_index RwLock poisoned")
             .extend_rpc_names(&mut names);
         names.into_iter().collect()
+    }
+
+    /// True iff any local handler is registered for `ability` in the
+    /// catalogue's execution index.
+    ///
+    /// Unlike [`Self::has_rpc`], [`Self::has_stream`], and [`Self::has_bidi`],
+    /// this is a pure catalogue check and never probes `LocalRuntime`.
+    /// Use it for metadata/collision decisions where the caller only needs
+    /// to know whether the public name is already occupied.
+    pub fn has_registered_handler(&self, ability: &str) -> bool {
+        self.execution_index
+            .read()
+            .expect("execution_index RwLock poisoned")
+            .has_any_handler(ability)
     }
 
     /// Owned-clone counterpart that consults the unified execution index.
@@ -4964,6 +5116,66 @@ mod tests {
         assert!(
             !reg.list_abilities().contains(&"fs.read".to_string()),
             "list_abilities must read control-plane, not the handler map union"
+        );
+    }
+
+    #[test]
+    fn call_modes_by_ability_reads_control_plane_rows_once() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("agent.chat", OwnerKind::Agent("agent".into()), ok_handler());
+        reg.register_stream_with_owner(
+            "agent.chat",
+            OwnerKind::Agent("agent".into()),
+            Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
+        );
+        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
+
+        let modes = reg.call_modes_by_ability();
+        assert_eq!(
+            modes.get("agent.chat"),
+            Some(&BTreeSet::from([
+                DescriptorCallMode::Rpc,
+                DescriptorCallMode::Stream
+            ])),
+            "same-name multi-mode abilities must be represented without probing LocalRuntime"
+        );
+        assert_eq!(
+            modes.get("terminal.attach"),
+            Some(&BTreeSet::from([DescriptorCallMode::Bidi])),
+            "bidi-only rows must remain visible to catalogue hint projection"
+        );
+    }
+
+    #[test]
+    fn ability_catalog_snapshot_projects_owner_and_manifest_in_one_pass() {
+        let mut reg = AxonAbilityCatalog::new();
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "read",
+            "read a local file",
+            json!({"type": "object"}),
+        )
+        .unwrap();
+        reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
+        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
+
+        let rows = reg.ability_catalog_snapshot();
+        let fs = rows
+            .iter()
+            .find(|row| row.name == "fs.read")
+            .expect("fs.read row");
+        assert_eq!(fs.owner, Some(OwnerKind::Device));
+        assert_eq!(
+            fs.manifest.as_ref().map(|m| m.description()),
+            Some("read a local file")
+        );
+        let terminal = rows
+            .iter()
+            .find(|row| row.name == "terminal.attach")
+            .expect("terminal.attach row");
+        assert_eq!(terminal.owner, Some(OwnerKind::Device));
+        assert!(
+            terminal.manifest.is_none(),
+            "handler-only registrations must not fabricate manifest bodies"
         );
     }
 

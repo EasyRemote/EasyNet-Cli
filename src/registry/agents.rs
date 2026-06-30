@@ -13,9 +13,11 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -291,8 +293,82 @@ fn agents_path() -> PathBuf {
     config::state_dir().join("agents.json")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentsFileSignature {
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    ctime_nsec: i64,
+    #[cfg(unix)]
+    mtime_nsec: i64,
+}
+
+#[derive(Debug, Clone)]
+struct CachedAgentRegistry {
+    signature: Option<AgentsFileSignature>,
+    registry: AgentRegistry,
+}
+
+fn agent_registry_cache() -> &'static Mutex<HashMap<PathBuf, CachedAgentRegistry>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedAgentRegistry>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn agents_file_signature(path: &Path) -> Option<AgentsFileSignature> {
+    let meta = fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(AgentsFileSignature {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            inode: meta.ino(),
+            ctime_nsec: meta.ctime_nsec(),
+            mtime_nsec: meta.mtime_nsec(),
+        })
+    }
+    #[cfg(not(unix))]
+    Some(AgentsFileSignature {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+    })
+}
+
+fn cached_agents(path: &Path, signature: &Option<AgentsFileSignature>) -> Option<AgentRegistry> {
+    let cache = agent_registry_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(path)
+        .filter(|entry| &entry.signature == signature)
+        .map(|entry| entry.registry.clone())
+}
+
+fn store_agents_cache(
+    path: &Path,
+    signature: Option<AgentsFileSignature>,
+    registry: &AgentRegistry,
+) {
+    let mut cache = agent_registry_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(
+        path.to_path_buf(),
+        CachedAgentRegistry {
+            signature,
+            registry: registry.clone(),
+        },
+    );
+}
+
 pub fn load_agents() -> anyhow::Result<AgentRegistry> {
     let path = agents_path();
+    let initial_signature = agents_file_signature(&path);
+    if let Some(registry) = cached_agents(&path, &initial_signature) {
+        return Ok(registry);
+    }
     // Read directly and classify the error, rather than `exists()`-then-
     // `read_to_string()`. The two-step form races with `easynet reset`
     // and `easynet agent remove` running in another terminal: the file
@@ -303,14 +379,22 @@ pub fn load_agents() -> anyhow::Result<AgentRegistry> {
     let data = match fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(AgentRegistry::default());
+            let registry = AgentRegistry::default();
+            store_agents_cache(&path, None, &registry);
+            return Ok(registry);
         }
         Err(e) => {
             return Err(anyhow::Error::new(e).context(format!("read {}", path.display())));
         }
     };
     if data.trim().is_empty() {
-        return Ok(AgentRegistry::default());
+        let registry = AgentRegistry::default();
+        store_agents_cache(
+            &path,
+            agents_file_signature(&path).or(initial_signature),
+            &registry,
+        );
+        return Ok(registry);
     }
     let mut registry: AgentRegistry =
         serde_json::from_str(&data).with_context(|| format!("parse {}", path.display()))?;
@@ -345,8 +429,14 @@ pub fn load_agents() -> anyhow::Result<AgentRegistry> {
         // file in its v1 state, which the next run will re-migrate
         // — safe because migration is idempotent on its own inputs.
         save_agents(&registry)?;
+        return Ok(registry);
     }
 
+    store_agents_cache(
+        &path,
+        agents_file_signature(&path).or(initial_signature),
+        &registry,
+    );
     Ok(registry)
 }
 
@@ -614,6 +704,7 @@ pub fn save_agents(registry: &AgentRegistry) -> anyhow::Result<()> {
         json.as_bytes(),
         config::WritePermissions::OwnerReadWrite,
     )?;
+    store_agents_cache(&path, agents_file_signature(&path), registry);
     Ok(())
 }
 
@@ -914,6 +1005,39 @@ mod tests {
         assert_eq!(reg.agents["alice"].schema_version, 2);
         let bak = agents_path().with_extension("json.v1.bak");
         assert!(!bak.exists(), "v2-on-disk registry must not trigger backup");
+    }
+
+    #[test]
+    fn load_agents_cache_observes_external_registry_rewrite() {
+        let _g = HomeGuard::new();
+        seed_v1_registry(
+            r#"{
+                "agents": {
+                    "alice": {
+                        "schema_version": 2,
+                        "root_path": "/tmp/easynet-test-alice",
+                        "agent_type": "claude-code"
+                    }
+                }
+            }"#,
+        );
+        let first = load_agents().unwrap();
+        assert!(first.agents.contains_key("alice"));
+
+        seed_v1_registry(
+            r#"{
+                "agents": {
+                    "bravo": {
+                        "schema_version": 2,
+                        "root_path": "/tmp/easynet-test-bravo",
+                        "agent_type": "codex"
+                    }
+                }
+            }"#,
+        );
+        let second = load_agents().unwrap();
+        assert!(!second.agents.contains_key("alice"));
+        assert!(second.agents.contains_key("bravo"));
     }
 
     #[test]

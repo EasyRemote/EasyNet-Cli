@@ -17,6 +17,10 @@ use super::{
     registry_builder::build_system_registry, schedule_ability, session_ability, shell_run_ability,
     skill_install_ability, skill_publish_ability, teach_ability, think_ability, voice_call_ability,
 };
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::runtime::ability::CallMode as DescriptorCallMode;
+use crate::runtime::ability_descriptor::AbilityHints;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Public list of every v1 system-ability *name*. Used by
@@ -139,17 +143,19 @@ fn published_abilities_from_registry_for_owner(
     registry: &AxonAbilityCatalog,
     owner: Option<&crate::runtime::ability_dispatch::OwnerKind>,
 ) -> Vec<SystemAbilityMetadata> {
-    registry
-        .list_abilities()
+    let hint_snapshot = AbilityDiscoveryHintSnapshot::from_registry(registry);
+    let catalog_snapshot = registry.ability_catalog_snapshot();
+    catalog_snapshot
         .into_iter()
-        .filter(|name| is_publishable_catalog_name(name))
-        .filter(|name| {
+        .filter(|row| is_publishable_catalog_name(&row.name))
+        .filter(|row| {
             owner
                 // SPEC §9.1.A Step 5: owner filter reads the control-plane
                 // record, not the legacy `owner` side table.
-                .map(|expected| registry.control_plane_owner(name).as_ref() == Some(expected))
+                .map(|expected| row.owner.as_ref() == Some(expected))
                 .unwrap_or(true)
         })
+        .map(|row| row.name)
         .filter(|name| !name.ends_with(".chat"))
         // RFC-002 §3.3 keyring abilities are owner-namespaced under
         // `device` and self-described by `keyring::abilities` — they
@@ -160,7 +166,7 @@ fn published_abilities_from_registry_for_owner(
         .map(|name| SystemAbilityMetadata {
             description: description_for_owned(&name),
             input_schema: input_schema_for(&name),
-            hints: discovery_hints_for(registry, &name),
+            hints: hint_snapshot.for_name(&name),
             name,
         })
         .collect()
@@ -175,10 +181,40 @@ pub fn descriptor_path_for(name: &str) -> String {
         .unwrap_or_else(|| format!("abilities/system/{name}.ability.toml"))
 }
 
-pub(crate) fn discovery_hints_for(
-    registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
+/// One catalogue-local call-mode index used while rendering descriptor hints.
+///
+/// The previous implementation derived hints by calling
+/// `registry.has_rpc/has_stream/has_bidi` for each ability. With a runtime
+/// attached those helpers synchronously queried `LocalRuntime::ability_options`,
+/// so a pure list operation fanned out into three async runtime reads per row.
+/// This snapshot is the bounded read model: one control-plane pass, then O(1)
+/// local lookups for every rendered descriptor.
+#[derive(Debug, Clone)]
+pub(crate) struct AbilityDiscoveryHintSnapshot {
+    modes_by_ability: BTreeMap<String, BTreeSet<DescriptorCallMode>>,
+}
+
+impl AbilityDiscoveryHintSnapshot {
+    pub(crate) fn from_registry(registry: &AxonAbilityCatalog) -> Self {
+        Self {
+            modes_by_ability: registry.call_modes_by_ability(),
+        }
+    }
+
+    pub(crate) fn for_name(&self, name: &str) -> AbilityHints {
+        discovery_hints_from_modes(name, self.modes_by_ability.get(name))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn discovery_hints_for(registry: &AxonAbilityCatalog, name: &str) -> AbilityHints {
+    AbilityDiscoveryHintSnapshot::from_registry(registry).for_name(name)
+}
+
+fn discovery_hints_from_modes(
     name: &str,
-) -> crate::runtime::ability_descriptor::AbilityHints {
+    modes: Option<&BTreeSet<DescriptorCallMode>>,
+) -> AbilityHints {
     if name.ends_with(".chat") {
         // Hosted chat abilities are registered on the local stream
         // surface today, but the user-facing control-plane path still
@@ -198,9 +234,9 @@ pub(crate) fn discovery_hints_for(
             ..Default::default()
         };
     }
-    let has_rpc = registry.has_rpc(name);
-    let has_stream = registry.has_stream(name);
-    let has_bidi = registry.has_bidi(name);
+    let has_rpc = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Rpc));
+    let has_stream = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Stream));
+    let has_bidi = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Bidi));
     // Derive the purity hints from the ability's semantic layer — one
     // source of truth (classify_ability). Introspection/Observation are
     // pure reads (read_only + idempotent: re-issuing yields the same
@@ -216,7 +252,7 @@ pub(crate) fn discovery_hints_for(
         Some(AbilityLayer::Control) => (false, true),
         Some(AbilityLayer::Operational) | None => (false, false),
     };
-    crate::runtime::ability_descriptor::AbilityHints {
+    AbilityHints {
         read_only,
         idempotent,
         streaming_only: has_stream && !has_rpc && !has_bidi,
