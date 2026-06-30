@@ -33,8 +33,8 @@ use crate::services::invocation_transport::descriptor_binding::RuntimeBoundAbili
 use crate::services::invocation_transport::federation_wrappers;
 use crate::services::invocation_transport::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::services::invocation_transport::invocation_wire::{
-    status_from_axon_invoke_error, status_from_dispatch_key_mismatch, target_ura_from_envelope,
-    BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
+    status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
+    FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::services::invocation_transport::route_resolver::SelectedInvokeRoute;
 use crate::services::invocation_transport::target_gate::{
@@ -317,24 +317,12 @@ impl StreamDispatcher {
                 Some(&selected_route.route_ura),
             )?
             .into_descriptor_ref();
-        let signed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        bound_ability.require_wire_target_matches(
+            "InvokeStream",
             &selected_route.callee_ura,
             ability,
-        )
-        .map_err(|err| {
-            Status::invalid_argument(format!(
-                "InvokeStream: signed ability `{ability}` is not valid for callee `{}`: {err}",
-                selected_route.callee_ura
-            ))
-        })?;
-        if signed_ability_ura != selected_ability_ura {
-            return Err(status_from_dispatch_key_mismatch(
-                "InvokeStream",
-                ability,
-                &selected_ability_ura,
-                &selected_route.route_ura,
-            ));
-        }
+            &selected_route.route_ura,
+        )?;
         let loopback_admitted = self
             .admission
             .accepts_loopback_envelope(request.envelope.as_ref());

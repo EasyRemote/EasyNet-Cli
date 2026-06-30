@@ -516,6 +516,39 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
 }
 
 #[tokio::test]
+async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name() {
+    use easynet_axon::invocation::{make_ability, LocalRuntime};
+
+    let _hg = crate::facade::cli::test_support::HomeGuard::new();
+    let rt = LocalRuntime::new();
+    let ability = "demo.descriptor_bound_unary";
+    let runtime_ability = crate::ura::owner_ability_ura(TEST_DAEMON_URI, ability).unwrap();
+    rt.register_ability_with_options(
+        runtime_ability,
+        make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        test_rpc_options(),
+    )
+    .await
+    .unwrap();
+
+    let svc = make_service()
+        .with_session_realm("test-realm")
+        .with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, ability);
+
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URI, ability);
+    let request = invoke_request(&descriptor_ref, r#"{"descriptor":"function-name"}"#).into_inner();
+    let (result, axon_took_it) = svc
+        .unary_dispatcher()
+        .dispatch_local_rpc_selected_route(&request)
+        .await;
+
+    assert!(axon_took_it, "descriptor-ref route must reach Axon");
+    let response = result.expect("descriptor-ref function_name dispatches");
+    assert_eq!(response.into_inner().result, request.arguments);
+}
+
+#[tokio::test]
 async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     use easynet_axon::invocation::{make_ability, InvocationLedger, LedgerSink, LocalRuntime};
 

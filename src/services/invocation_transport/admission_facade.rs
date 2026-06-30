@@ -1545,14 +1545,10 @@ fn ensure_signed_descriptor_ref_matches_route(
         )
         .map_err(axon_error_to_status)
         .and_then(|canonical_ref| {
-            canonical_ref
-                .rsplit_once('@')
-                .map(|(ability_ura, _)| ability_ura.to_string())
-                .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "signed descriptor ref route check requires descriptor version",
-                    )
-                })
+            crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+                &canonical_ref,
+            )
+            .map_err(axon_error_to_status)
         })?;
     let routed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
         callee_ura,

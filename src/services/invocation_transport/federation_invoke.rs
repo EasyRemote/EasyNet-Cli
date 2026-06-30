@@ -206,10 +206,19 @@ impl RemoteAbilityInvocationTarget {
     ) -> anyhow::Result<Self> {
         let canonical = easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref)
             .map_err(|err| anyhow!("invalid descriptor-bound Ability ref: {err}"))?;
-        let (ability_ura, descriptor_version) = canonical
-            .rsplit_once('@')
-            .ok_or_else(|| anyhow!("descriptor-bound Ability ref is missing `@version`"))?;
-        let mut target = Self::from_ability_ura(execution_target_ura, ability_ura)?;
+        let ability_ura =
+            crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+                &canonical,
+            )
+            .map_err(|err| anyhow!("descriptor-bound Ability ref is missing ability URA: {err}"))?;
+        let descriptor_version =
+            crate::runtime::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref(
+                &canonical,
+            )
+            .map_err(|err| {
+                anyhow!("descriptor-bound Ability ref is missing descriptor version: {err}")
+            })?;
+        let mut target = Self::from_ability_ura(execution_target_ura, &ability_ura)?;
         target.descriptor_binding = RemoteDescriptorBinding::Bound {
             version: descriptor_version.to_string(),
         };

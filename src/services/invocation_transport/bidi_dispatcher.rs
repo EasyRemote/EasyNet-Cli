@@ -56,8 +56,7 @@ use crate::services::invocation_transport::federation_wrappers::{
 };
 use crate::services::invocation_transport::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::services::invocation_transport::invocation_wire::{
-    status_from_axon_invoke_error, status_from_dispatch_key_mismatch, target_ura_from_envelope,
-    BoxedDownStream,
+    status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
 };
 use crate::services::invocation_transport::invoke_remote_initiator::{
     build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
@@ -104,9 +103,31 @@ fn local_bidi_wire_kind_for(
     registry: &crate::runtime::ability_wire::AbilityWireRegistry,
     ability: &str,
 ) -> Option<LocalBidiWireKind> {
+    local_bidi_wire_kind_for_registry_key(registry, ability).or_else(|| {
+        descriptor_ref_local_registry_key(ability)
+            .and_then(|key| local_bidi_wire_kind_for_registry_key(registry, &key))
+    })
+}
+
+fn local_bidi_wire_kind_for_registry_key(
+    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    ability: &str,
+) -> Option<LocalBidiWireKind> {
     registry
         .bidi_wire_kind_for(ability)
         .or_else(|| crate::runtime::ability_wire::core_bidi_wire_kind_for(ability))
+}
+
+fn descriptor_ref_local_registry_key(ability: &str) -> Option<String> {
+    let descriptor_ref =
+        easynet_axon::invocation::canonical_ability_descriptor_ref(ability).ok()?;
+    let ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+        &descriptor_ref,
+    )
+    .ok()?;
+    crate::ura::AbilitySelector::parse(&ability_ura)
+        .ok()
+        .map(|selector| selector.local_registry_ability().to_string())
 }
 
 fn local_is_bidi_wire_ability(
@@ -716,6 +737,17 @@ impl BidiDispatcher {
                 Some(&selected_route.route_ura),
             )?
             .into_descriptor_ref();
+        let signed_ability = envelope_open
+            .target
+            .as_ref()
+            .map(|target| target.ability_name.as_str())
+            .unwrap_or_default();
+        bound_ability.require_wire_target_matches(
+            "InvokeBidi",
+            &selected_route.callee_ura,
+            signed_ability,
+            &selected_route.route_ura,
+        )?;
         let wire_envelope = envelope_open
             .envelope
             .clone()
@@ -761,30 +793,6 @@ impl BidiDispatcher {
                 selected_route.dispatch_name
             ))
         })?;
-        let signed_ability = envelope_open
-            .target
-            .as_ref()
-            .map(|target| target.ability_name.as_str())
-            .unwrap_or_default();
-        let signed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
-            &selected_route.callee_ura,
-            signed_ability,
-        )
-        .map_err(|err| {
-            Status::invalid_argument(format!(
-                "InvokeBidi: signed target ability `{signed_ability}` is not a canonical \
-                     ability for callee `{}`: {err}",
-                selected_route.callee_ura
-            ))
-        })?;
-        if signed_ability_ura != dispatch_ability {
-            return Err(status_from_dispatch_key_mismatch(
-                "InvokeBidi",
-                signed_ability,
-                &dispatch_ability,
-                &selected_route.route_ura,
-            ));
-        }
         let handle =
             crate::runtime::axon_bridge::dispatch_shim::open_bidi_external_signed(runtime, wire)
                 .await
@@ -3352,6 +3360,24 @@ mod tests {
         assert!(local_is_bidi_wire_ability(&registry, ability));
         assert_eq!(
             local_bidi_wire_kind_for(&registry, ability),
+            Some(LocalBidiWireKind::JsonFrames)
+        );
+    }
+
+    #[test]
+    fn invoke_bidi_gate_recognizes_descriptor_ref_wire_target() {
+        let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
+        let ability = crate::runtime::agents::browser_session_ability::ABILITY_ATTACH_SESSION;
+        let owner_ura = crate::ura::device_ura("test-realm", "dev-a");
+        let ability_ura = crate::ura::owner_ability_ura(&owner_ura, ability).unwrap();
+        let descriptor_ref = format!(
+            "{ability_ura}@{}",
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        );
+
+        assert!(local_is_bidi_wire_ability(&registry, &descriptor_ref));
+        assert_eq!(
+            local_bidi_wire_kind_for(&registry, &descriptor_ref),
             Some(LocalBidiWireKind::JsonFrames)
         );
     }

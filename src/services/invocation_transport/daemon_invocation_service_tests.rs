@@ -265,6 +265,19 @@ fn test_envelope() -> Envelope {
         .into_inner()
 }
 
+#[test]
+fn route_table_match_projects_descriptor_ref_to_public_name() {
+    let ability =
+        crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE;
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URI, ability);
+    let envelope = test_envelope();
+
+    assert_eq!(
+        dispatch_function_name_for_route_table(&descriptor_ref, Some(&envelope)),
+        ability
+    );
+}
+
 fn test_device_signing_key() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&TEST_DEVICE_SIGNING_SEED)
 }

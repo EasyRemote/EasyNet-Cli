@@ -17,7 +17,9 @@ use std::collections::HashMap;
 use easynet_axon::invocation::{AbilityOptions, CallMode, LocalRuntime};
 use tonic::Status;
 
-use crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
+use crate::services::invocation_transport::invocation_wire::{
+    status_from_dispatch_key_mismatch, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+};
 use crate::services::invocation_transport::route_resolver::SelectedInvokeRoute;
 
 /// Runtime registration plus descriptor proof context for one ability.
@@ -137,6 +139,42 @@ impl RuntimeBoundAbility {
         Ok(DescriptorBoundAbilityRef { descriptor_ref })
     }
 
+    /// Normalize a request-supplied callable target and prove that it
+    /// names the same governed ability selected by the daemon resolver.
+    ///
+    /// `wire_target` is intentionally accepted in both historic forms:
+    /// an owner-local public ability name (`fs.read`, `chat`) or a
+    /// descriptor-bound ability ref (`easynet:///.../ability/...@1.0.0`).
+    /// The dispatcher may route on either form, but it must execute only
+    /// the runtime ability selected by the daemon resolver.
+    pub(crate) fn require_wire_target_matches(
+        &self,
+        surface: &'static str,
+        callee_ura: &str,
+        wire_target: &str,
+        route_ura: &str,
+    ) -> Result<String, Status> {
+        let signed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            callee_ura,
+            wire_target,
+        )
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "{surface}: signed ability `{wire_target}` is not valid for callee \
+                     `{callee_ura}`: {err}"
+            ))
+        })?;
+        if signed_ability_ura != self.runtime_ability_ura {
+            return Err(status_from_dispatch_key_mismatch(
+                surface,
+                wire_target,
+                &self.runtime_ability_ura,
+                route_ura,
+            ));
+        }
+        Ok(signed_ability_ura)
+    }
+
     pub(crate) fn signed_descriptor_ref_from_metadata(
         &self,
         surface: &'static str,
@@ -169,13 +207,13 @@ impl RuntimeBoundAbility {
                      `{callee_ura}`: {err}"
                 ))
             })?;
-        let signed_ability_ura = descriptor_ref
-            .rsplit_once('@')
-            .map(|(ability_ura, _)| ability_ura)
-            .ok_or_else(|| {
+        let signed_ability_ura =
+            crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+                &descriptor_ref,
+            )
+            .map_err(|err| {
                 Status::invalid_argument(format!(
-                    "{surface}: signed descriptor ref `{descriptor_ref}` is missing a \
-                     descriptor version"
+                    "{surface}: signed descriptor ref `{descriptor_ref}` is invalid: {err}"
                 ))
             })?;
         if signed_ability_ura != self.runtime_ability_ura {

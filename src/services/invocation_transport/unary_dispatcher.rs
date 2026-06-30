@@ -57,8 +57,7 @@ use crate::services::invocation_transport::federation_wrappers::{
 use crate::services::invocation_transport::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::services::invocation_transport::invocation_wire::{
     dispatch_key_mismatch_message, parse_json_args, status_from_axon_invoke_error,
-    status_from_dispatch_key_mismatch, target_ura_from_envelope, wrap_json_response,
-    BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
+    target_ura_from_envelope, wrap_json_response, BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::services::invocation_transport::invoke_remote_initiator::{
     build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
@@ -448,24 +447,34 @@ impl UnaryDispatcher {
                 false,
             );
         };
-        let selected_ability_ura = selected_route.ability_ura.clone();
-        let selected_descriptor_ref = match RuntimeBoundAbility::from_selected_route(
+        let bound_ability = match RuntimeBoundAbility::from_selected_route(
             "easynet-daemon",
             runtime,
             &selected_route,
         )
         .await
-        .and_then(|bound_ability| {
-            bound_ability.descriptor_ref_for_mode(
-                "easynet-daemon",
-                &selected_route.callee_ura,
-                easynet_axon::invocation::CallMode::Rpc,
-                Some(&selected_route.route_ura),
-            )
-        }) {
+        {
+            Ok(bound_ability) => bound_ability,
+            Err(status) => return (Err(status), false),
+        };
+        let selected_ability_ura = selected_route.ability_ura.clone();
+        let selected_descriptor_ref = match bound_ability.descriptor_ref_for_mode(
+            "easynet-daemon",
+            &selected_route.callee_ura,
+            easynet_axon::invocation::CallMode::Rpc,
+            Some(&selected_route.route_ura),
+        ) {
             Ok(ref_) => ref_.into_descriptor_ref(),
             Err(status) => return (Err(status), false),
         };
+        if let Err(status) = bound_ability.require_wire_target_matches(
+            "Invoke",
+            &selected_route.callee_ura,
+            ability,
+            &selected_route.route_ura,
+        ) {
+            return (Err(status), false);
+        }
         crate::op_event!(
             component = daemon_invocation,
             kind = dispatch_local_rpc_selected_route,
@@ -476,33 +485,6 @@ impl UnaryDispatcher {
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             route_ura = selected_route.route_ura.as_str(),
         );
-        let signed_ability_ura =
-            match crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
-                &selected_route.callee_ura,
-                ability,
-            ) {
-                Ok(ability_ura) => ability_ura,
-                Err(err) => {
-                    return (
-                        Err(Status::invalid_argument(format!(
-                            "Invoke: signed ability `{ability}` is not valid for callee `{}`: {err}",
-                            selected_route.callee_ura
-                        ))),
-                        false,
-                    );
-                }
-            };
-        if signed_ability_ura != selected_ability_ura {
-            return (
-                Err(status_from_dispatch_key_mismatch(
-                    "Invoke",
-                    ability,
-                    &selected_ability_ura,
-                    &selected_route.route_ura,
-                )),
-                false,
-            );
-        }
         let loopback_admitted = self
             .admission
             .accepts_loopback_envelope(request.envelope.as_ref());

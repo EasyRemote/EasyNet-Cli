@@ -1220,9 +1220,11 @@ fn ability_selector_from_descriptor_ref(
 ) -> Option<crate::ura::AbilitySelector> {
     let descriptor_ref =
         easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref).ok()?;
-    let ability_ura =
-        easynet_axon::invocation::axiom::ability_ura_from_descriptor_ref(&descriptor_ref).ok()?;
-    crate::ura::AbilitySelector::parse(ability_ura).ok()
+    let ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+        &descriptor_ref,
+    )
+    .ok()?;
+    crate::ura::AbilitySelector::parse(&ability_ura).ok()
 }
 
 fn selected_execution_for_owner(

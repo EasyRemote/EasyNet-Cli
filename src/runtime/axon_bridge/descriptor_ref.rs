@@ -52,6 +52,24 @@ impl From<DescriptorVersionError> for AxonError {
     }
 }
 
+pub(crate) fn ability_ura_from_descriptor_ref(descriptor_ref: &str) -> Result<String, AxonError> {
+    let canonical = canonical_ability_descriptor_ref(descriptor_ref)?;
+    let (ability_ura, _) = canonical.split_once('@').ok_or_else(|| {
+        AxonError::invalid_argument("ability_descriptor_ref_malformed".to_string())
+    })?;
+    Ok(ability_ura.to_string())
+}
+
+pub(crate) fn descriptor_version_from_descriptor_ref(
+    descriptor_ref: &str,
+) -> Result<String, AxonError> {
+    let canonical = canonical_ability_descriptor_ref(descriptor_ref)?;
+    let (_, descriptor_version) = canonical.split_once('@').ok_or_else(|| {
+        AxonError::invalid_argument("ability_descriptor_ref_malformed".to_string())
+    })?;
+    Ok(descriptor_version.to_string())
+}
+
 /// Read the descriptor version the runtime registered for `runtime_ability`
 /// in `mode`.
 ///
@@ -101,10 +119,8 @@ pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<St
     }
 
     if let Ok(descriptor_ref) = canonical_ability_descriptor_ref(ability) {
-        let (ability_ura, _) = descriptor_ref.rsplit_once('@').ok_or_else(|| {
-            AxonError::invalid_argument("descriptor-bound ability ref missing version")
-        })?;
-        let selector = crate::ura::AbilitySelector::parse(ability_ura).map_err(|err| {
+        let ability_ura = ability_ura_from_descriptor_ref(&descriptor_ref)?;
+        let selector = crate::ura::AbilitySelector::parse(&ability_ura).map_err(|err| {
             AxonError::invalid_argument(format!(
                 "descriptor-bound ability ref carries invalid ability URA `{ability_ura}`: {err}"
             ))
@@ -149,10 +165,8 @@ pub(crate) fn ability_descriptor_ref_for_wire(
     }
 
     if let Ok(descriptor_ref) = canonical_ability_descriptor_ref(ability) {
-        let (ability_ura, _) = descriptor_ref.rsplit_once('@').ok_or_else(|| {
-            AxonError::invalid_argument("descriptor-bound ability ref missing version")
-        })?;
-        crate::ura::AbilitySelector::parse(ability_ura)
+        let ability_ura = ability_ura_from_descriptor_ref(&descriptor_ref)?;
+        crate::ura::AbilitySelector::parse(&ability_ura)
             .map_err(|err| {
                 AxonError::invalid_argument(format!(
                     "descriptor-bound ability ref carries invalid ability URA `{ability_ura}`: {err}"
@@ -206,10 +220,8 @@ pub(crate) fn require_descriptor_ref_for_wire(
             "descriptor-bound ability must be an explicit descriptor ref: {err}"
         ))
     })?;
-    let (ability_ura, _) = descriptor_ref.rsplit_once('@').ok_or_else(|| {
-        AxonError::invalid_argument("descriptor-bound ability ref missing version")
-    })?;
-    let selector = crate::ura::AbilitySelector::parse(ability_ura).map_err(|err| {
+    let ability_ura = ability_ura_from_descriptor_ref(&descriptor_ref)?;
+    let selector = crate::ura::AbilitySelector::parse(&ability_ura).map_err(|err| {
         AxonError::invalid_argument(format!(
             "descriptor-bound ability ref carries invalid ability URA `{ability_ura}`: {err}"
         ))

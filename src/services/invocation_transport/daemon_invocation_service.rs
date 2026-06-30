@@ -266,6 +266,37 @@ impl DaemonStreamRoute {
 }
 
 pub(crate) const DAEMON_INVOCATION_STREAM_ROUTES: &[DaemonStreamRoute] = DaemonStreamRoute::ALL;
+
+fn dispatch_function_name_for_route_table(
+    function_name: &str,
+    envelope: Option<&easynet_axon::pb::axon::v1::Envelope>,
+) -> String {
+    descriptor_ref_public_name_for_callee(function_name, envelope)
+        .unwrap_or_else(|| function_name.to_string())
+}
+
+fn descriptor_ref_public_name_for_callee(
+    function_name: &str,
+    envelope: Option<&easynet_axon::pb::axon::v1::Envelope>,
+) -> Option<String> {
+    let callee_ura = envelope?
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.trim())
+        .filter(|callee| !callee.is_empty())?;
+    let descriptor_ref =
+        easynet_axon::invocation::canonical_ability_descriptor_ref(function_name).ok()?;
+    let ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+        &descriptor_ref,
+    )
+    .ok()?;
+    let selector = crate::ura::AbilitySelector::parse(&ability_ura).ok()?;
+    if selector.owner_ura() != callee_ura {
+        return None;
+    }
+    Some(selector.public_name().to_string())
+}
+
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{
     InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
@@ -894,6 +925,8 @@ impl Invocation for DaemonInvocationService {
             return result;
         }
         let function = inner.function_name.as_str();
+        let route_function =
+            dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
         // #185: meter the caller after the transport policy gate. This
         // is not an Axon runtime-admitted token; descriptor-bound local
         // dispatch still enters LocalRuntime through public Axon
@@ -928,11 +961,11 @@ impl Invocation for DaemonInvocationService {
         // path). Distinct from `axon_took_it`, which means "Axon already wrote a
         // row" — here nothing should be written at all.
         let mut skip_ledger_record = false;
-        let result = if function == ABILITY_INVOCATION_RECORD_GET {
+        let result = if route_function == ABILITY_INVOCATION_RECORD_GET {
             skip_ledger_record = true;
             self.dispatch_invocation_record_get(&inner.arguments)
         } else {
-            match DaemonUnaryRoute::from_function(function) {
+            match DaemonUnaryRoute::from_function(&route_function) {
                 Some(DaemonUnaryRoute::FederationJoin) => {
                     unary.dispatch_federation_join(&inner.arguments)
                 }
@@ -996,9 +1029,9 @@ impl Invocation for DaemonInvocationService {
                 Some(DaemonUnaryRoute::IdentityListUserPubkeys) => {
                     unary.dispatch_list_user_pubkeys(&inner.arguments)
                 }
-                None if DaemonStreamRoute::from_function(function).is_some() => {
+                None if DaemonStreamRoute::from_function(&route_function).is_some() => {
                     Err(Status::invalid_argument(format!(
-                        "{function} is a server-stream ability and must be invoked via InvokeStream, not Invoke"
+                        "{route_function} is a server-stream ability and must be invoked via InvokeStream, not Invoke"
                     )))
                 }
                 // `runtime.*` are node-internal admin handshakes hosted by the
@@ -1057,9 +1090,11 @@ impl Invocation for DaemonInvocationService {
         let inner = request.into_inner();
         self.admission.verify_invoke_stream(&inner)?;
         let function = inner.function_name.as_str();
+        let route_function =
+            dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
 
         let streams = self.stream_dispatcher();
-        match DaemonStreamRoute::from_function(function) {
+        match DaemonStreamRoute::from_function(&route_function) {
             Some(DaemonStreamRoute::FederationSubscribeDirectory) => {
                 streams.dispatch_subscribe_directory_initial()
             }

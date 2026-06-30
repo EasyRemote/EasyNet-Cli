@@ -12,13 +12,16 @@ use crate::runtime::ability_dispatch::EnvelopeContext;
 const POLICY_LOCAL_USER_CONSENT: &str = "local_user_consent";
 const POLICY_OWNER_SELF_CONSENT: &str = "owner_self_consent";
 
-/// Whether `caller` is this device's owner: the user this device is
-/// paired to (console invokes sign as the user URA) or the device
-/// identity itself (daemon-local CLI invokes). Realm must match the
-/// pairing realm. Unpaired devices (no credentials) own nothing —
-/// fail-closed.
+/// Whether `caller` is this device's owner: the paired user URA, the
+/// device URA, or the daemon's process-local `_system.local` caller
+/// used by local loopback invokes. User/device callers must match the
+/// pairing realm. `_system.local` is accepted only when the device is
+/// paired; unpaired devices own nothing and fail closed.
 fn caller_is_device_owner(caller: Option<&str>) -> bool {
     let Some(caller) = caller else { return false };
+    if caller == crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
+        return crate::persistence::config::load_credentials().is_ok();
+    }
     let Ok(parsed) = crate::ura::parse_ura(caller) else {
         return false;
     };
@@ -91,10 +94,11 @@ impl RemoteDesktopConsentGrant {
     ///      compares that receipt, but does not verify its signature;
     ///      Axon admission owns verification.
     ///   2. No receipt, but the caller IS this device's owner (the
-    ///      paired user, or the device identity itself): the signed,
-    ///      admission-verified invocation is itself the owner's
-    ///      approval act — viewing your own screen needs no second
-    ///      approval artefact. Grants under `owner_self_consent`.
+    ///      paired user, the device identity itself, or this daemon's
+    ///      process-local `_system.local` loopback caller): the signed,
+    ///      admission-verified invocation is itself the owner's approval
+    ///      act — viewing your own screen needs no second approval
+    ///      artefact. Grants under `owner_self_consent`.
     ///
     /// Any other caller without a receipt is refused
     /// (`consent_receipt_required`), so cross-user and cross-realm
@@ -251,6 +255,36 @@ mod tests {
         let grant =
             RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s2", &env).unwrap();
         assert_eq!(grant.policy, POLICY_OWNER_SELF_CONSENT);
+    }
+
+    #[test]
+    fn local_system_caller_grants_self_consent_for_paired_device() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        pair_device("acme", "dev-1", "alice");
+        let env = EnvelopeContext::for_test(
+            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            "easynet:///r/acme/resource/display-1",
+        );
+        let grant = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s-local", &env)
+            .unwrap();
+        assert_eq!(grant.policy, POLICY_OWNER_SELF_CONSENT);
+        assert_eq!(
+            grant.approval_actor_ura.as_deref(),
+            Some(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA)
+        );
+    }
+
+    #[test]
+    fn unpaired_local_system_caller_still_requires_consent_receipt() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let env = EnvelopeContext::for_test(
+            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            "easynet:///r/acme/resource/display-1",
+        );
+        let err =
+            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s-unpaired", &env)
+                .unwrap_err();
+        assert!(err.to_string().contains("consent_receipt_required"));
     }
 
     #[test]

@@ -249,10 +249,12 @@ impl InvokeAbilityRef {
         if raw.contains('@') {
             let descriptor_ref = easynet_axon::invocation::canonical_ability_descriptor_ref(raw)
                 .map_err(|err| anyhow::anyhow!("parse <ability-ura>@<version>: {err}"))?;
-            let (ability_ura, _) = descriptor_ref
-                .rsplit_once('@')
-                .ok_or_else(|| anyhow::anyhow!("descriptor ref is missing `@version`"))?;
-            let selector = AbilitySelector::parse(ability_ura)
+            let ability_ura =
+                crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+                    &descriptor_ref,
+                )
+                .map_err(|err| anyhow::anyhow!("parse ability URA inside descriptor ref: {err}"))?;
+            let selector = AbilitySelector::parse(&ability_ura)
                 .with_context(|| "parse ability URA inside descriptor ref")?;
             return Ok(Self {
                 selector,

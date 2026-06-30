@@ -325,6 +325,57 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 }
 
 #[tokio::test]
+async fn invoke_stream_accepts_descriptor_ref_function_name() {
+    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode, LocalRuntime};
+    use futures::StreamExt;
+
+    let ability = "browser.descriptor_stream";
+    let rt = LocalRuntime::new();
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, ability).expect("stream ability URA");
+    rt.register_ability_with_options(
+        runtime_ability,
+        make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            [0x11; 32],
+            [0x22; 32],
+        ),
+    )
+    .await
+    .unwrap();
+
+    let svc = make_service().with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, ability);
+
+    let arguments = br#"{"descriptor":"stream-function-name"}"#.to_vec();
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URI, ability);
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URI,
+                )
+                .expect("valid unsigned loopback stream envelope")
+                .into_inner(),
+            ),
+            function_name: descriptor_ref,
+            arguments: arguments.clone(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("descriptor-ref stream function_name dispatches");
+
+    let mut stream = resp.into_inner();
+    let first = stream.next().await.expect("one frame").expect("frame Ok");
+    assert!(first.terminal);
+    assert_eq!(first.payload, arguments);
+}
+
+#[tokio::test]
 async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapshot() {
     use crate::runtime::ability_dispatch::{
         AbilityAuthorityContext, AxonAbilityCatalog, LocalStreamHandler, OwnerKind, StreamSource,
