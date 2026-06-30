@@ -172,6 +172,11 @@ pub struct ExecutionTrace {
     /// no step produced an invocation record (offline run).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ability_graph: Vec<Value>,
+    /// Ordered archival records produced by EAL `emit` statements.
+    /// These are mission-local outputs for downstream answer/report
+    /// stages. They are not child invocations and carry no receipts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emissions: Vec<EmissionRecord>,
     /// Number of steps whose traces were dropped due to the
     /// in-memory cap (see `TRACE_CAP_TOTAL`). Zero means every step
     /// is present in `step_traces`. Nonzero means there are exactly
@@ -242,6 +247,18 @@ pub enum StepOutcome {
     Completed,
     Failed,
     Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmissionRecord {
+    pub seq: usize,
+    pub name: String,
+    pub kind: String,
+    pub value: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // ── Public execution result ──

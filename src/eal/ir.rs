@@ -230,6 +230,26 @@ pub struct IrLoop {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IrLoopTag;
 
+/// Archival EAL `emit` record lowered into Mission IR.
+///
+/// Emits are intentionally not `IrStep`s: they do not dispatch, retry,
+/// produce receipts, or alter phase scheduling. The interpreter resolves
+/// them from captured call outputs at mission completion and copies the
+/// resolved records into `ExecutionTrace::emissions`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrEmit {
+    pub name: String,
+    pub kind: String,
+    pub value: IrEmitValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum IrEmitValue {
+    Literal { value: serde_json::Value },
+    Binding { binding: String },
+}
+
 /// Serializer helper for the singleton `IrLoopTag`. Serializes to
 /// the fixed wire string `"loop"`; a different value on
 /// deserialization is a hard error. Chat / Handoff tag serdes lived
@@ -297,6 +317,8 @@ pub struct MissionIr {
     pub name: String,
     pub steps: Vec<IrStep>,
     pub phases: Vec<PhaseRange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emits: Vec<IrEmit>,
     #[serde(default)]
     pub constraints: IrConstraints,
 }

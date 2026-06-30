@@ -548,6 +548,7 @@ fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<Str
         match s {
             Statement::LetCall { call, .. } => visit_call(call, out),
             Statement::Call(c) => visit_call(c, out),
+            Statement::Emit(e) => visit_field_value(&e.value),
             Statement::Loop(b) => {
                 for s in &b.body {
                     visit_stmt(s, out);

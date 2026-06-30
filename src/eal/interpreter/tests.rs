@@ -200,6 +200,72 @@ mod cases {
     }
 
     #[test]
+    fn emit_records_resolved_binding_and_literal_without_extra_dispatch() {
+        let ir = planner::compile(
+            &parser::parse(
+                r#"mission "emit-contract" {
+                    let rows = alice.produce(prompt: "hi")
+                    emit "terminal_rows" kind answer value rows.output
+                    emit "operator_chain" kind context value "produce"
+                }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let dispatcher = MockDispatcher::new(0);
+        let calls = Arc::clone(&dispatcher.call_count);
+        let report =
+            execute_with_dispatcher_for_trace(&dispatcher, "test", &ir, "run-emit-1".into())
+                .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "emit must not dispatch");
+        assert_eq!(report.trace.emissions.len(), 2);
+        assert_eq!(report.trace.emissions[0].seq, 1);
+        assert_eq!(report.trace.emissions[0].name, "terminal_rows");
+        assert_eq!(report.trace.emissions[0].kind, "answer");
+        assert_eq!(
+            report.trace.emissions[0].source_binding.as_deref(),
+            Some("rows")
+        );
+        assert_eq!(report.trace.emissions[0].value["function"], "produce");
+        assert!(report.trace.emissions[0].error.is_none());
+        assert_eq!(report.trace.emissions[1].value, "produce");
+    }
+
+    #[test]
+    fn emit_records_missing_binding_when_producer_fails() {
+        let ir = planner::compile(
+            &parser::parse(
+                r#"mission "emit-missing" {
+                    let rows = alice.fail(prompt: "hi")
+                    emit "terminal_rows" kind answer value rows.output
+                }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let dispatcher = MockDispatcher::new(0).with_fail_functions(&["fail"]);
+        let report =
+            execute_with_dispatcher_for_trace(&dispatcher, "test", &ir, "run-emit-2".into())
+                .unwrap();
+
+        assert_eq!(report.trace.outcome, MissionOutcome::Partial);
+        assert_eq!(report.trace.emissions.len(), 1);
+        assert_eq!(report.trace.emissions[0].value, serde_json::Value::Null);
+        assert_eq!(
+            report.trace.emissions[0].source_binding.as_deref(),
+            Some("rows")
+        );
+        assert!(
+            report.trace.emissions[0]
+                .error
+                .as_deref()
+                .is_some_and(|msg| msg.contains("was not captured")),
+            "missing binding must be explicit in the emission record"
+        );
+    }
+
+    #[test]
     fn capped_trace_buffer_head_boundary_saturates_exactly() {
         // Pushing exactly TRACE_CAP_HEAD entries must fill the head
         // and leave the tail empty — no entries dropped, no tail use.
@@ -947,6 +1013,7 @@ mod cases {
             outcome: MissionOutcome::Completed,
             step_traces: vec![],
             ability_graph: vec![],
+            emissions: vec![],
             traces_truncated: 0,
         };
 

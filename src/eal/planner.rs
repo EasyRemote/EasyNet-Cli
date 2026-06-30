@@ -66,7 +66,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Compile an EAL program to Mission IR v2.
 pub fn compile(program: &EalProgram) -> anyhow::Result<MissionIr> {
-    let analyzed = analyze(program)?;
+    let analyzed_mission = analyze_mission(program)?;
+    let analyzed = analyzed_mission.items;
 
     // Loops are sequential blocks with their own internal iteration
     // semantics (RFC §3.1); they are not participants in the outer
@@ -145,8 +146,20 @@ pub fn compile(program: &EalProgram) -> anyhow::Result<MissionIr> {
         name: program.mission.name.clone(),
         steps: ir_steps,
         phases,
+        emits: analyzed_mission.emits,
         constraints: IrConstraints::default(),
     })
+}
+
+fn analyze_mission(program: &EalProgram) -> anyhow::Result<AnalyzedMission> {
+    let mut anon_counter = 0u32;
+    analyze_statements_inner(&program.mission.statements, &mut anon_counter, &[], true)
+}
+
+#[derive(Debug)]
+struct AnalyzedMission {
+    items: Vec<AnalyzedItem>,
+    emits: Vec<IrEmit>,
 }
 
 /// Private, per-compile-call record. Not a `pub(crate)` type — if a
@@ -218,8 +231,9 @@ struct AnalyzedLoop {
 /// First pass: semantic analysis. Walks the AST once, builds the
 /// symbol table + dependency graph, rejects every semantic error
 /// the language guarantees to catch before IR lowering.
+#[cfg(test)]
 fn analyze(program: &EalProgram) -> anyhow::Result<Vec<AnalyzedItem>> {
-    analyze_statements(&program.mission.statements, &mut 0u32)
+    Ok(analyze_mission(program)?.items)
 }
 
 /// Worker shared between the top-level mission and a loop's inner
@@ -229,7 +243,7 @@ fn analyze_statements(
     stmts: &[Statement],
     anon_counter: &mut u32,
 ) -> anyhow::Result<Vec<AnalyzedItem>> {
-    analyze_statements_with_seed(stmts, anon_counter, &[])
+    Ok(analyze_statements_inner(stmts, anon_counter, &[], false)?.items)
 }
 
 /// Same as `analyze_statements` but seeds the local symbol table
@@ -248,6 +262,15 @@ fn analyze_statements_with_seed(
     anon_counter: &mut u32,
     seed_bindings: &[String],
 ) -> anyhow::Result<Vec<AnalyzedItem>> {
+    Ok(analyze_statements_inner(stmts, anon_counter, seed_bindings, false)?.items)
+}
+
+fn analyze_statements_inner(
+    stmts: &[Statement],
+    anon_counter: &mut u32,
+    seed_bindings: &[String],
+    allow_emit: bool,
+) -> anyhow::Result<AnalyzedMission> {
     let mut symbols: HashMap<String, usize> = HashMap::new();
     // Sentinel indices `usize::MAX - i` for seed bindings so they
     // cannot collide with real item indices (0..items.len()). The
@@ -258,6 +281,7 @@ fn analyze_statements_with_seed(
         symbols.insert(b.clone(), usize::MAX - i);
     }
     let mut items: Vec<AnalyzedItem> = Vec::new();
+    let mut emits: Vec<IrEmit> = Vec::new();
 
     for stmt in stmts {
         match stmt {
@@ -286,11 +310,19 @@ fn analyze_statements_with_seed(
                 }
                 items.push(AnalyzedItem::Loop(analyzed));
             }
+            Statement::Emit(e) => {
+                anyhow::ensure!(
+                    allow_emit,
+                    "emit '{}' is only supported at top-level mission scope in EAL v1",
+                    e.name
+                );
+                emits.push(analyze_emit(e, &symbols)?);
+            }
         }
     }
 
     detect_cycles(&items)?;
-    Ok(items)
+    Ok(AnalyzedMission { items, emits })
 }
 
 /// Analyse one `Statement::Loop` → `AnalyzedLoop`.
@@ -441,6 +473,32 @@ fn analyze_call(
         call: call.clone(),
         deps,
     })
+}
+
+fn analyze_emit(emit: &EmitStatement, symbols: &HashMap<String, usize>) -> anyhow::Result<IrEmit> {
+    if let FieldValue::VarRef { var_name } = &emit.value {
+        anyhow::ensure!(
+            symbols.contains_key(var_name),
+            "emit '{}': undefined variable '{var_name}'",
+            emit.name
+        );
+    }
+    Ok(IrEmit {
+        name: emit.name.clone(),
+        kind: emit.kind.clone(),
+        value: emit_value_to_ir(&emit.value)?,
+    })
+}
+
+fn emit_value_to_ir(value: &FieldValue) -> anyhow::Result<IrEmitValue> {
+    match value {
+        FieldValue::VarRef { var_name } => Ok(IrEmitValue::Binding {
+            binding: var_name.clone(),
+        }),
+        other => Ok(IrEmitValue::Literal {
+            value: field_value_to_json(other)?,
+        }),
+    }
 }
 
 fn detect_cycles(items: &[AnalyzedItem]) -> anyhow::Result<()> {
@@ -760,6 +818,71 @@ mod tests {
     fn linear_chain() {
         let ir = compile(&parser::parse(r#"mission "t" { let a = call "x" on "n" let b = call "y" on "n" with { i = a.output } let c = call "z" on "n" with { i = b.output } }"#).unwrap()).unwrap();
         assert_eq!(ir.phases.len(), 3);
+    }
+
+    #[test]
+    fn emit_lowers_to_ir_without_adding_a_step() {
+        let ir = compile(
+            &parser::parse(
+                r#"mission "t" {
+                    let rows = alice.map(prompt: "x")
+                    emit "terminal_rows" kind answer value rows.output
+                    emit "note" kind context value "static"
+                }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(ir.steps.len(), 1, "emit must not become an executable step");
+        assert_eq!(ir.emits.len(), 2);
+        assert_eq!(ir.emits[0].name, "terminal_rows");
+        assert_eq!(ir.emits[0].kind, "answer");
+        match &ir.emits[0].value {
+            IrEmitValue::Binding { binding } => assert_eq!(binding, "rows"),
+            other => panic!("expected binding emit, got {other:?}"),
+        }
+        match &ir.emits[1].value {
+            IrEmitValue::Literal { value } => assert_eq!(value, "static"),
+            other => panic!("expected literal emit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_forward_reference_is_rejected() {
+        let p = parser::parse(
+            r#"mission "t" {
+                emit "terminal_rows" kind answer value rows.output
+                let rows = alice.map(prompt: "x")
+            }"#,
+        )
+        .unwrap();
+        let err = compile(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("undefined variable 'rows'"),
+            "emit must not forward-reference future bindings; got: {err}"
+        );
+    }
+
+    #[test]
+    fn emit_inside_loop_is_rejected_for_v1() {
+        let p = parser::parse(
+            r#"mission "t" {
+                loop max_iters: 2 {
+                    body {
+                        let rows = alice.map(prompt: "x")
+                        emit "rows" kind answer value rows.output
+                    }
+                    verify { alice.check(prompt: "ok") }
+                }
+            }"#,
+        )
+        .unwrap();
+        let err = compile(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("only supported at top-level mission scope"),
+            "loop-local emit must be rejected until scoped semantics exist; got: {err}"
+        );
     }
 
     #[test]

@@ -7,7 +7,8 @@
 //              clipboard history, user-mapped project folders, and
 //              favorites that back the Frontend "Context" page.
 //
-//   * `context.clipboard.list`   — newest-first clip entries + tracking flag
+//   * `context.clipboard.list`   — newest-first unique clip entries +
+//                                  duplicate counts + tracking flag
 //   * `context.clipboard.get`    — one clip, with base64 PNG for images
 //   * `context.clipboard.track`  — enable/disable capture (persisted;
 //                                  the tracker thread re-reads per tick)
@@ -147,7 +148,7 @@ fn clipboard_list_handler(args: Value) -> anyhow::Result<Value> {
         .and_then(Value::as_u64)
         .unwrap_or(100)
         .max(1) as usize;
-    let entries: Vec<Value> = context_store::list_clips(limit)
+    let entries: Vec<Value> = context_store::list_clip_summaries(limit)
         .iter()
         .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
         .collect();
@@ -249,7 +250,7 @@ fn require_str(args: &Value, key: &str, ability: &str) -> anyhow::Result<String>
 pub fn description_for(name: &str) -> Option<&'static str> {
     Some(match name {
         ABILITY_CLIPBOARD_LIST => {
-            "List captured clipboard history (newest first) with the tracking flag."
+            "List captured clipboard history as newest-first unique entries with duplicate counts and the tracking flag."
         }
         ABILITY_CLIPBOARD_GET => "Read one clipboard entry; image entries include base64 PNG data.",
         ABILITY_CLIPBOARD_TRACK => "Enable or disable clipboard history tracking on this device.",
@@ -275,7 +276,7 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
         ABILITY_CLIPBOARD_LIST => json!({
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "Max entries to return (default 100, cap 200)."}
+                "limit": {"type": "integer", "description": "Max unique entries to return (default 100, cap 200)."}
             },
             "additionalProperties": false,
         }),
@@ -440,6 +441,37 @@ mod tests {
         );
         assert!(clipboard_remove_handler(json!({"id": "clip-1"})).is_err());
         assert!(clipboard_remove_handler(json!({})).is_err());
+    }
+
+    #[test]
+    fn clipboard_list_collapses_duplicates_and_marks_counts() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        for (id, text) in [
+            ("clip-old", "same text"),
+            ("clip-other", "other text"),
+            ("clip-new", "same text"),
+        ] {
+            context_store::append_clip(&context_store::ClipEntry {
+                id: id.into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                device: "easynet:///r/localhost/device/d1".into(),
+                kind: "text".into(),
+                text: Some(text.into()),
+                image_file: None,
+                preview: text.into(),
+            })
+            .unwrap();
+        }
+
+        let out = clipboard_list_handler(json!({"limit": 10})).unwrap();
+        let entries = out["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["id"], "clip-new");
+        assert_eq!(entries[0]["occurrence_count"], 2);
+        assert_eq!(entries[0]["duplicate_count"], 1);
+        assert_eq!(entries[1]["id"], "clip-other");
+        assert_eq!(entries[1]["occurrence_count"], 1);
+        assert_eq!(entries[1]["duplicate_count"], 0);
     }
 
     #[test]

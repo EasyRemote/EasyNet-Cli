@@ -5,7 +5,7 @@
 // Description: Tokenizer for the EAL language.
 //
 // Token Categories:
-//   Keywords:    mission, let, call, on, with, timeout, retries, on_failure, optional
+//   Keywords:    mission, let, call, emit, on, with, timeout, retries, on_failure, optional
 //   Policies:    abort, skip, retry, continue
 //   Literals:    "string", 42, 3.14, true/false
 //   Identifiers: variable names (e.g., photo, config)
@@ -29,6 +29,7 @@ pub enum Token {
     Mission,
     Let,
     Call,
+    Emit,
     On,
     With,
     Timeout,
@@ -234,6 +235,7 @@ impl<'a> Lexer<'a> {
             "mission" => Token::Mission,
             "let" => Token::Let,
             "call" => Token::Call,
+            "emit" => Token::Emit,
             "on" => Token::On,
             "with" => Token::With,
             "timeout" => Token::Timeout,
