@@ -658,7 +658,10 @@ impl<'a> DaemonRouteResolver<'a> {
         let query_name = json_string(query, "queryName", "query_name");
         let ability_name = json_string(query, "abilityName", "ability_name");
         let qtype = json_resolve_type(query).unwrap_or_else(|| {
-            if !ability_name.is_empty() || is_ability_ura(&query_name) {
+            if !ability_name.is_empty()
+                || is_descriptor_ref(&query_name)
+                || is_ability_ura(&query_name)
+            {
                 axon_pb::ResolveType::Route
             } else {
                 axon_pb::ResolveType::DirectoryListing
@@ -1158,19 +1161,32 @@ struct RouteSelector {
 }
 
 fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<RouteSelector> {
-    if is_ability_ura(query_name) && ability_name.trim().is_empty() {
-        let selector = crate::ura::AbilitySelector::parse(query_name).ok()?;
-        return Some(RouteSelector {
-            query_name: query_name.to_string(),
-            owner_ura: selector.owner_ura().to_string(),
-            ability_ura: selector.ability_ura().to_string(),
-            public_name: selector.public_name().to_string(),
-        });
+    if ability_name.trim().is_empty() {
+        if let Some(selector) = ability_selector_from_descriptor_ref(query_name) {
+            return Some(RouteSelector {
+                query_name: selector.ability_ura().to_string(),
+                owner_ura: selector.owner_ura().to_string(),
+                ability_ura: selector.ability_ura().to_string(),
+                public_name: selector.public_name().to_string(),
+            });
+        }
+        if is_ability_ura(query_name) {
+            let selector = crate::ura::AbilitySelector::parse(query_name).ok()?;
+            return Some(RouteSelector {
+                query_name: query_name.to_string(),
+                owner_ura: selector.owner_ura().to_string(),
+                ability_ura: selector.ability_ura().to_string(),
+                public_name: selector.public_name().to_string(),
+            });
+        }
     }
     let owner_ura = query_name.trim();
     let ability_name = ability_name.trim();
     if owner_ura.is_empty() || ability_name.is_empty() {
         return None;
+    }
+    if let Some(selector) = route_selector_from_descriptor_ref(owner_ura, ability_name) {
+        return Some(selector);
     }
     let public_name = crate::ura::owner_local_ability_name(owner_ura, ability_name);
     let ability_ura = crate::ura::owner_ability_ura(owner_ura, &public_name)?;
@@ -1180,6 +1196,33 @@ fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<Rou
         ability_ura,
         public_name,
     })
+}
+
+fn route_selector_from_descriptor_ref(
+    owner_ura: &str,
+    descriptor_ref: &str,
+) -> Option<RouteSelector> {
+    let selector = ability_selector_from_descriptor_ref(descriptor_ref)?;
+    if selector.owner_ura() != owner_ura {
+        return None;
+    }
+    let public_name = selector.public_name().to_string();
+    Some(RouteSelector {
+        query_name: format!("{owner_ura}#{public_name}"),
+        owner_ura: owner_ura.to_string(),
+        ability_ura: selector.ability_ura().to_string(),
+        public_name,
+    })
+}
+
+fn ability_selector_from_descriptor_ref(
+    descriptor_ref: &str,
+) -> Option<crate::ura::AbilitySelector> {
+    let descriptor_ref =
+        easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref).ok()?;
+    let ability_ura =
+        easynet_axon::invocation::axiom::ability_ura_from_descriptor_ref(&descriptor_ref).ok()?;
+    crate::ura::AbilitySelector::parse(ability_ura).ok()
 }
 
 fn selected_execution_for_owner(
@@ -1309,6 +1352,10 @@ fn is_ability_ura(value: &str) -> bool {
     crate::ura::parse_ura(value)
         .map(|parsed| parsed.kind == crate::ura::URAKind::Ability)
         .unwrap_or(false)
+}
+
+fn is_descriptor_ref(value: &str) -> bool {
+    easynet_axon::invocation::canonical_ability_descriptor_ref(value).is_ok()
 }
 
 fn json_string(value: &Value, camel: &str, snake: &str) -> String {
@@ -1778,6 +1825,56 @@ mod tests {
     }
 
     #[test]
+    fn device_owned_descriptor_ref_resolves_same_final_route() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        let ability_ura =
+            crate::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let descriptor_ref = format!("{ability_ura}@1.0.0");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&owner_ura, &descriptor_ref)
+            .expect("descriptor-bound device ability must resolve through the same route gate");
+
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.callee_ura, owner_ura);
+        assert_eq!(route.execution_host_ura, owner_ura);
+        assert_eq!(route.ability_ura, ability_ura);
+        assert_eq!(route.route_ura, format!("route-ref::{ability_ura}"));
+        assert_eq!(route.dispatch_name, "agent.list");
+        assert_eq!(route.query_name, format!("{owner_ura}#agent.list"));
+    }
+
+    #[test]
+    fn descriptor_ref_query_without_ability_resolves_same_final_route() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        let ability_ura =
+            crate::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let descriptor_ref = format!("{ability_ura}@1.0.0");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&descriptor_ref, "")
+            .expect("descriptor-bound ability query must resolve through the same route gate");
+
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.ability_ura, ability_ura);
+        assert_eq!(route.dispatch_name, "agent.list");
+    }
+
+    #[test]
     fn device_profile_terminal_and_resource_abilities_resolve_from_local_authority() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
@@ -2014,6 +2111,32 @@ mod tests {
             route.ability_ura,
             "easynet:///r/test-realm/ability/dev.pages.list"
         );
+        assert_eq!(route.dispatch_name, "pages.list");
+        assert_eq!(route.query_name, format!("{agent_ura}#list"));
+    }
+
+    #[test]
+    fn hosted_agent_descriptor_ref_resolves_owner_local_public_name() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let host_ura = device_owner_ura();
+        let agent_ura = crate::ura::agent_ura("test-realm", "dev", "pages");
+        let ability_ura =
+            crate::ura::owner_ability_ura(&agent_ura, "list").expect("agent ability ura");
+        let descriptor_ref = format!("{ability_ura}@1.0.0");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["list"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_runtime_authority(host_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&agent_ura, &descriptor_ref)
+            .expect("descriptor-bound hosted-agent ability must resolve through local authority");
+
+        assert_eq!(route.kind(), SelectedRouteKind::HostedAgent);
+        assert_eq!(route.owner_ura, agent_ura);
+        assert_eq!(route.callee_ura, agent_ura);
+        assert_eq!(route.execution_host_ura, host_ura);
+        assert_eq!(route.ability_ura, ability_ura);
         assert_eq!(route.dispatch_name, "pages.list");
         assert_eq!(route.query_name, format!("{agent_ura}#list"));
     }
