@@ -107,6 +107,36 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
 }
 
 #[test]
+fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
+    let reg = super::registry_builder::build_registry();
+    let rows = reg.ability_catalog_snapshot();
+
+    for ability in [
+        "mic.subscribe",
+        "camera.snapshot",
+        "camera.subscribe",
+        "screen.snapshot",
+        "screen.subscribe",
+        "remote_desktop.create_session",
+        "remote_desktop.attach",
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row.name == ability)
+            .unwrap_or_else(|| panic!("{ability} must be registered at daemon boot"));
+        let manifest = row
+            .manifest
+            .as_ref()
+            .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
+        assert_eq!(
+            manifest.input_schema()["type"],
+            serde_json::json!("object"),
+            "{ability} must expose an object input schema"
+        );
+    }
+}
+
+#[test]
 fn terminal_list_is_owner_kind_device() {
     let _home = crate::facade::cli::test_support::HomeGuard::new();
     use crate::runtime::ability_dispatch::OwnerKind;

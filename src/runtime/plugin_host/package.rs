@@ -78,6 +78,33 @@ pub struct BuiltinPluginAbilitySpec {
     pub input_schema: fn() -> Value,
 }
 
+impl BuiltinPluginAbilitySpec {
+    /// Project this compiled builtin plugin spec into the daemon registry
+    /// manifest shape used by `meta.list_abilities`.
+    ///
+    /// Builtin plugin ability names are full daemon names
+    /// (`remote_desktop.create_session`), while `AbilityManifest` names are
+    /// verb-local. The catalog key remains the full ability name at
+    /// registration; only the manifest body stores the local verb.
+    pub fn to_registry_manifest(&self) -> Result<crate::core::ability_spec::AbilityManifest> {
+        let verb = self.name.rsplit('.').next().ok_or_else(|| {
+            PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.to_string(),
+                reason: "ability name has no verb segment".to_string(),
+            }
+        })?;
+        crate::core::ability_spec::AbilityManifest::new(
+            verb,
+            (self.description)(),
+            (self.input_schema)(),
+        )
+        .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+            ability: self.name.to_string(),
+            reason: source.to_string(),
+        })
+    }
+}
+
 /// Descriptor metadata loaded from the package ability descriptor surface.
 ///
 /// What this is NOT: a handler binding. It is the discovery/schema projection

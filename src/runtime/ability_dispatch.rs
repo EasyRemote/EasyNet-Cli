@@ -3643,6 +3643,25 @@ impl AxonAbilityCatalog {
         ));
     }
 
+    /// Register a bidi handler with explicit owner and manifest.
+    ///
+    /// Mirrors [`Self::register_rpc_with_spec`] and
+    /// [`Self::register_stream_with_spec`] for abilities whose data plane is
+    /// bidirectional but whose discovery contract is still a normal
+    /// `AbilityManifest`.
+    pub fn register_bidi_with_spec(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalBidiHandler,
+    ) {
+        self.register_static_or_panic(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Bidi(handler))
+                .with_manifest(manifest),
+        );
+    }
+
     /// Register a bidi handler under `ability`. Same single-writer
     /// model as `register_rpc` / `register_stream`.
     ///

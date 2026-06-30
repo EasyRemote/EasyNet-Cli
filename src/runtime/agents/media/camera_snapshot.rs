@@ -69,7 +69,9 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, Stre
 use crate::runtime::agents::media::resource_subject::{
     self, resolve_required_resource_subject, ResourceSubjectSpec,
 };
-use crate::runtime::agents::media_abilities::{ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE};
+use crate::runtime::agents::media_abilities::{
+    self, ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE,
+};
 
 /// Maximum inline image size, in encoded JPEG bytes (NOT the base64
 /// expansion). Above this the handler refuses with an explicit
@@ -500,14 +502,16 @@ impl SnapshotBackend for SyntheticBackend {
 /// preview stream; it never persists the preview frames.
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn SnapshotBackend>) {
     let subscribe_backend = Arc::clone(&backend);
-    reg.register_rpc_with_envelope_and_owner(
+    reg.register_rpc_with_envelope_and_spec(
         ABILITY_CAMERA_SNAPSHOT,
         OwnerKind::Device,
+        media_abilities::registry_manifest(ABILITY_CAMERA_SNAPSHOT),
         Arc::new(move |env: EnvelopeContext, args: Value| snapshot_handler(&backend, env, args)),
     );
-    reg.register_stream_with_envelope_and_owner(
+    reg.register_stream_with_envelope_and_spec(
         ABILITY_CAMERA_SUBSCRIBE,
         OwnerKind::Device,
+        media_abilities::registry_manifest(ABILITY_CAMERA_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             subscribe_handler(&subscribe_backend, env, args)
         }),
@@ -764,6 +768,29 @@ mod tests {
     /// device.
     fn register_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticBackend));
+    }
+
+    #[test]
+    fn registration_publishes_camera_manifests_to_catalog_snapshot() {
+        let mut reg = AxonAbilityCatalog::new();
+        register_synthetic(&mut reg);
+        let rows = reg.ability_catalog_snapshot();
+
+        for ability in [ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE] {
+            let manifest = rows
+                .iter()
+                .find(|row| row.name == ability)
+                .and_then(|row| row.manifest.as_ref())
+                .unwrap_or_else(|| panic!("{ability} must publish schema manifest"));
+            assert_eq!(
+                manifest.description(),
+                media_abilities::description(ability).expect("camera description")
+            );
+            assert_eq!(
+                manifest.input_schema(),
+                &media_abilities::input_schema(ability).expect("camera schema")
+            );
+        }
     }
 
     /// Synthetic-backend smoke: capture against a hand-built

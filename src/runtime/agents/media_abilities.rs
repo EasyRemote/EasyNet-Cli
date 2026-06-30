@@ -245,6 +245,21 @@ pub fn input_schema(name: &str) -> Option<Value> {
     row(name).map(|r| (r.input_schema)())
 }
 
+/// Registry manifest for a media ability.
+///
+/// The `ABILITIES` table is the authoritative media contract; live handler
+/// registration must project through this helper instead of registering a
+/// handler-only control-plane row and letting `meta.list_abilities` degrade to
+/// a schema-less descriptor.
+pub(crate) fn registry_manifest(name: &'static str) -> crate::core::ability_spec::AbilityManifest {
+    let row = row(name).unwrap_or_else(|| panic!("{name} must be a registered media ability"));
+    crate::runtime::agents::system_ability_manifest::registry_manifest(
+        row.name,
+        row.description,
+        (row.input_schema)(),
+    )
+}
+
 /// RFC-006 metadata for a media ability, or `None` if not a media
 /// ability. No `Value` allocation; cheapest of the three.
 pub fn rfc006(name: &str) -> Option<Rfc006Metadata> {
@@ -289,23 +304,26 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         // passes `row.name` verbatim.
         match row.shape {
             DispatchShape::Rpc => {
-                reg.register_rpc_with_owner(
+                reg.register_rpc_with_spec(
                     row.name,
                     OwnerKind::Device,
+                    registry_manifest(row.name),
                     Arc::new(|args| query_stub(row.name, args)),
                 );
             }
             DispatchShape::Stream => {
-                reg.register_stream_with_owner(
+                reg.register_stream_with_spec(
                     row.name,
                     OwnerKind::Device,
+                    registry_manifest(row.name),
                     Arc::new(|args| stream_stub(row.name, args)),
                 );
             }
             DispatchShape::Bidi => {
-                reg.register_bidi_with_owner(
+                reg.register_bidi_with_spec(
                     row.name,
                     OwnerKind::Device,
+                    registry_manifest(row.name),
                     Arc::new(|args| bidi_stub(row.name, args)),
                 );
             }
@@ -556,6 +574,26 @@ mod tests {
     }
 
     #[test]
+    fn stub_registration_publishes_media_manifests() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg);
+        let rows = reg.ability_catalog_snapshot();
+
+        for row in ABILITIES {
+            if has_real_media_handler(row.name) {
+                continue;
+            }
+            let manifest = rows
+                .iter()
+                .find(|catalog_row| catalog_row.name == row.name)
+                .and_then(|catalog_row| catalog_row.manifest.as_ref())
+                .unwrap_or_else(|| panic!("{} must publish a media manifest", row.name));
+            assert_eq!(manifest.description(), row.description);
+            assert_eq!(manifest.input_schema(), &(row.input_schema)());
+        }
+    }
+
+    #[test]
     fn projections_resolve_every_row_in_the_table() {
         // Single-source pin: every name in `ABILITIES` must
         // resolve through all three projections. Catches a
@@ -566,6 +604,8 @@ mod tests {
         for row in ABILITIES {
             assert_eq!(description(row.name), Some(row.description));
             assert_eq!(rfc006(row.name).and_then(|m| m.class), Some(row.class));
+            let manifest = registry_manifest(row.name);
+            assert_eq!(manifest.description(), row.description);
             assert!(
                 input_schema(row.name).is_some(),
                 "input_schema for {} returned None",

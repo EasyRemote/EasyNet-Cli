@@ -52,7 +52,7 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, Stre
 use crate::runtime::agents::media::resource_subject::{
     self, resolve_required_resource_subject, ResourceSubjectSpec,
 };
-use crate::runtime::agents::media_abilities::ABILITY_MIC_SUBSCRIBE;
+use crate::runtime::agents::media_abilities::{self, ABILITY_MIC_SUBSCRIBE};
 
 pub const REASON_SUBJECT_REQUIRED: &str = resource_subject::REASON_SUBJECT_REQUIRED;
 pub const REASON_SUBJECT_IN_ARGS: &str = resource_subject::REASON_SUBJECT_IN_ARGS;
@@ -312,9 +312,10 @@ impl MicBackend for SyntheticMicBackend {
 // ── Registration ─────────────────────────────────────────────
 
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn MicBackend>) {
-    reg.register_stream_with_envelope_and_owner(
-        "mic.subscribe",
+    reg.register_stream_with_envelope_and_spec(
+        ABILITY_MIC_SUBSCRIBE,
         OwnerKind::Device,
+        media_abilities::registry_manifest(ABILITY_MIC_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );
 }
@@ -519,6 +520,27 @@ mod tests {
 
     fn register_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticMicBackend));
+    }
+
+    #[test]
+    fn registration_publishes_mic_manifest_to_catalog_snapshot() {
+        let mut reg = AxonAbilityCatalog::new();
+        register_synthetic(&mut reg);
+        let rows = reg.ability_catalog_snapshot();
+        let manifest = rows
+            .iter()
+            .find(|row| row.name == ABILITY_MIC_SUBSCRIBE)
+            .and_then(|row| row.manifest.as_ref())
+            .expect("mic.subscribe must publish schema manifest");
+
+        assert_eq!(
+            manifest.description(),
+            media_abilities::description(ABILITY_MIC_SUBSCRIBE).expect("mic description")
+        );
+        assert_eq!(
+            manifest.input_schema(),
+            &media_abilities::input_schema(ABILITY_MIC_SUBSCRIBE).expect("mic schema")
+        );
     }
 
     #[test]

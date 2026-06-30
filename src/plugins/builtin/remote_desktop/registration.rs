@@ -84,32 +84,40 @@ impl RemoteDesktopAbilityBinding {
         reg: &mut AxonAbilityCatalog,
         plugin: Arc<RemoteDesktopPlugin>,
     ) {
+        let manifest = || {
+            spec.to_registry_manifest()
+                .expect("compiled remote desktop ability spec must project to registry manifest")
+        };
         match self {
             Self::Rpc { handler } => {
-                reg.register_rpc_with_envelope_and_owner(
+                reg.register_rpc_with_envelope_and_spec(
                     spec.name,
                     OwnerKind::Device,
+                    manifest(),
                     Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
                 );
             }
             Self::StatelessRpc { handler } => {
-                reg.register_rpc_with_envelope_and_owner(
+                reg.register_rpc_with_envelope_and_spec(
                     spec.name,
                     OwnerKind::Device,
+                    manifest(),
                     Arc::new(handler),
                 );
             }
             Self::Stream { handler } => {
-                reg.register_stream_with_envelope_and_owner(
+                reg.register_stream_with_envelope_and_spec(
                     spec.name,
                     OwnerKind::Device,
+                    manifest(),
                     Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
                 );
             }
             Self::Bidi { handler } => {
-                reg.register_bidi_with_envelope_and_owner(
+                reg.register_bidi_with_envelope_and_spec(
                     spec.name,
                     OwnerKind::Device,
+                    manifest(),
                     Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
                 );
             }
@@ -286,6 +294,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn register_with_screen_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::agents::media::screen_snapshot::SyntheticScreenBackend;
 
     #[test]
     fn every_remote_desktop_spec_is_projected_from_binding_table() {
@@ -309,5 +318,31 @@ mod tests {
                 binding.spec.name
             );
         }
+    }
+
+    #[test]
+    fn registration_publishes_remote_desktop_manifest_to_catalog_snapshot() {
+        let mut reg = AxonAbilityCatalog::new();
+        register_with_screen_backend(
+            &mut reg,
+            Arc::new(SyntheticScreenBackend),
+            crate::plugins::remote_desktop::test_support::test_runtime_limits(),
+        );
+
+        let rows = reg.ability_catalog_snapshot();
+        let create_session = rows
+            .iter()
+            .find(|row| row.name == ABILITY_CREATE_SESSION)
+            .expect("remote_desktop.create_session must be catalogued");
+        let manifest = create_session
+            .manifest
+            .as_ref()
+            .expect("remote_desktop.create_session must publish schema manifest");
+
+        assert_eq!(manifest.description(), schema::create_session_description());
+        assert_eq!(
+            manifest.input_schema(),
+            &schema::create_session_input_schema()
+        );
     }
 }
