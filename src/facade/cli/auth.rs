@@ -34,12 +34,14 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::facade::cli::ability_catalog_row::AbilityCatalogueRow;
 use crate::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
 };
+use crate::services::self_identity::{KeyringClient, SelfIdentity, SelfIdentityError};
 use crate::support::output;
 use crate::ura;
 
@@ -1084,8 +1086,6 @@ pub struct SigningKeyRegisterArgs {
 }
 
 pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<()> {
-    use base64::Engine as _;
-    use ed25519_dalek::SigningKey;
     use rand::RngCore as _;
 
     // The user URA's realm MUST equal the daemon realm (the trust-anchor
@@ -1096,39 +1096,42 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
         .context("load device credentials (run `easynet device join <token>` first)")?;
     let user_ura = creds.user_ura()?;
 
-    // Random ed25519 keypair. Unlike the device key (deterministically
-    // derived from realm+node_id), the user key MUST be random: the user
-    // UUID/username is not secret, so a deterministic user key would let
-    // anyone holding the realm+user-id forge the user's signature.
-    let mut seed = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut seed);
-    let signing_key = SigningKey::from_bytes(&seed);
-    let public_key_b64 = B64.encode(signing_key.verifying_key().to_bytes());
-    let seed_hex = hex::encode(seed);
+    let keyring = KeyringClient::default_path();
+    let key = ensure_user_signing_key(&keyring, &user_ura, |seed| {
+        // Random ed25519 keypair. Unlike the device key
+        // (deterministically derived from realm+node_id), the user key
+        // MUST be random: the user UUID/username is not secret, so a
+        // deterministic user key would let anyone holding the
+        // realm+user-id forge the user's signature.
+        rand::rngs::OsRng.fill_bytes(seed);
+    })?;
+    let public_key_b64 = key.public_key_b64;
 
-    // Persist the PRIVATE seed in the local keyring vault under the user
-    // URA so later user-as-caller invokes can sign with it. No role
-    // overlays: a user identity has no hub/realm alias the way a device
-    // does.
-    let keyring = crate::services::self_identity::KeyringClient::default_path();
-    match keyring.put(&user_ura, vec![], seed_hex) {
-        Ok(()) => {}
-        Err(crate::services::self_identity::SelfIdentityError::Rejected { kind, .. })
-            if kind == "already_exists" => {}
-        Err(e) => return Err(anyhow::anyhow!("store user signing key in keyring: {e}")),
+    // Register the PUBLIC key with the daemon trust anchor
+    // (loopback-admitted). The public key must be derived from the
+    // keyring's persisted seed, never from a fresh seed that failed to
+    // persist because the user already had a local signing key.
+    if !registered_user_pubkey(&user_ura, &public_key_b64)? {
+        let register_result = crate::support::local_invoke::invoke_local_ability_with_subject(
+            "identity.register_pubkey",
+            serde_json::json!({
+                "agent_ura": user_ura.as_str(),
+                "public_key_b64": public_key_b64.as_str(),
+                "role": "user",
+            }),
+            Some(user_ura.clone()),
+        );
+        if let Err(err) = register_result {
+            if registered_user_pubkey(&user_ura, &public_key_b64).unwrap_or(false) {
+                output::detail(
+                    "identity",
+                    "user signing key was already registered by a concurrent caller",
+                );
+            } else {
+                return Err(err).context("invoke identity.register_pubkey");
+            }
+        }
     }
-
-    // Register the PUBLIC key with the daemon trust anchor (loopback-admitted).
-    crate::support::local_invoke::invoke_local_ability_with_subject(
-        "identity.register_pubkey",
-        serde_json::json!({
-            "agent_ura": user_ura,
-            "public_key_b64": public_key_b64,
-            "role": "user",
-        }),
-        Some(user_ura.clone()),
-    )
-    .context("invoke identity.register_pubkey")?;
 
     output::success(&format!("Registered user signing key for {user_ura}"));
     if args.show_pubkey {
@@ -1137,9 +1140,135 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
     Ok(())
 }
 
+struct UserSigningKey {
+    public_key_b64: String,
+}
+
+trait UserSigningKeyStore {
+    fn public_key(&self, user_ura: &str) -> Result<VerifyingKey, SelfIdentityError>;
+    fn put_seed(&self, user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError>;
+}
+
+impl UserSigningKeyStore for KeyringClient {
+    fn public_key(&self, user_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
+        SelfIdentity::public_key(self, user_ura)
+    }
+
+    fn put_seed(&self, user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError> {
+        self.put(user_ura, Vec::new(), seed_hex)
+    }
+}
+
+fn ensure_user_signing_key(
+    store: &impl UserSigningKeyStore,
+    user_ura: &str,
+    fill_seed: impl FnOnce(&mut [u8; 32]),
+) -> anyhow::Result<UserSigningKey> {
+    match store.public_key(user_ura) {
+        Ok(public_key) => {
+            return Ok(UserSigningKey {
+                public_key_b64: public_key_b64(public_key),
+            });
+        }
+        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "not_found" => {}
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "read existing user signing key from keyring: {err}"
+            ));
+        }
+    }
+
+    let mut seed = [0u8; 32];
+    fill_seed(&mut seed);
+    let generated_public_key = SigningKey::from_bytes(&seed).verifying_key();
+    match store.put_seed(user_ura, hex::encode(seed)) {
+        Ok(()) => Ok(UserSigningKey {
+            public_key_b64: public_key_b64(generated_public_key),
+        }),
+        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => {
+            let public_key = store.public_key(user_ura).map_err(|err| {
+                anyhow::anyhow!(
+                    "keyring reported an existing user signing key but could not derive it: {err}"
+                )
+            })?;
+            Ok(UserSigningKey {
+                public_key_b64: public_key_b64(public_key),
+            })
+        }
+        Err(err) => Err(anyhow::anyhow!("store user signing key in keyring: {err}")),
+    }
+}
+
+fn public_key_b64(public_key: VerifyingKey) -> String {
+    B64.encode(public_key.to_bytes())
+}
+
+fn registered_user_pubkey(user_ura: &str, public_key_b64: &str) -> anyhow::Result<bool> {
+    let response = crate::support::local_invoke::invoke_local_ability(
+        "identity.list_user_pubkeys",
+        serde_json::json!({ "agent_ura": user_ura }),
+    )
+    .context("invoke identity.list_user_pubkeys")?;
+    let keys = response
+        .get("keys")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("identity.list_user_pubkeys returned no keys array"))?;
+    Ok(keys.iter().any(|key| {
+        key.get("public_key_b64")
+            .and_then(serde_json::Value::as_str)
+            == Some(public_key_b64)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    fn rejected(kind: &str) -> SelfIdentityError {
+        SelfIdentityError::Rejected {
+            kind: kind.to_string(),
+            message: format!("{kind} from fake keyring"),
+        }
+    }
+
+    fn verifying_key(seed: [u8; 32]) -> VerifyingKey {
+        SigningKey::from_bytes(&seed).verifying_key()
+    }
+
+    struct FakeUserSigningKeyStore {
+        public_key_results: RefCell<VecDeque<Result<VerifyingKey, SelfIdentityError>>>,
+        put_results: RefCell<VecDeque<Result<(), SelfIdentityError>>>,
+        put_seeds: RefCell<Vec<String>>,
+    }
+
+    impl FakeUserSigningKeyStore {
+        fn new(
+            public_key_results: impl IntoIterator<Item = Result<VerifyingKey, SelfIdentityError>>,
+            put_results: impl IntoIterator<Item = Result<(), SelfIdentityError>>,
+        ) -> Self {
+            Self {
+                public_key_results: RefCell::new(public_key_results.into_iter().collect()),
+                put_results: RefCell::new(put_results.into_iter().collect()),
+                put_seeds: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl UserSigningKeyStore for FakeUserSigningKeyStore {
+        fn public_key(&self, _user_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
+            self.public_key_results
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or_else(|| Err(rejected("not_found")))
+        }
+
+        fn put_seed(&self, _user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError> {
+            self.put_seeds.borrow_mut().push(seed_hex);
+            self.put_results.borrow_mut().pop_front().unwrap_or(Ok(()))
+        }
+    }
 
     #[test]
     fn ability_item_projection_maps_ura_descriptor_shape() {
@@ -1191,6 +1320,64 @@ mod tests {
             err.to_string()
                 .contains("canonical advertised ability name"),
             "error should explain the canonical tool-name contract: {err}"
+        );
+    }
+
+    #[test]
+    fn ensure_user_signing_key_reuses_keyring_key_without_generation() {
+        let existing_key = verifying_key([0x11; 32]);
+        let expected_public_key_b64 = B64.encode(existing_key.to_bytes());
+        let store = FakeUserSigningKeyStore::new([Ok(existing_key)], []);
+
+        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |_| {
+            panic!("existing key must not generate a replacement seed");
+        })
+        .unwrap();
+
+        assert_eq!(key.public_key_b64, expected_public_key_b64);
+        assert!(
+            store.put_seeds.borrow().is_empty(),
+            "existing key must not write a replacement seed"
+        );
+    }
+
+    #[test]
+    fn ensure_user_signing_key_generates_and_persists_missing_key() {
+        let generated_seed = [0x22; 32];
+        let expected_public_key_b64 = B64.encode(verifying_key(generated_seed).to_bytes());
+        let store = FakeUserSigningKeyStore::new([Err(rejected("not_found"))], [Ok(())]);
+
+        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |seed| {
+            *seed = generated_seed;
+        })
+        .unwrap();
+
+        assert_eq!(key.public_key_b64, expected_public_key_b64);
+        assert_eq!(
+            store.put_seeds.borrow().as_slice(),
+            &[hex::encode(generated_seed)]
+        );
+    }
+
+    #[test]
+    fn ensure_user_signing_key_uses_existing_key_after_concurrent_insert() {
+        let existing_key = verifying_key([0x33; 32]);
+        let expected_public_key_b64 = B64.encode(existing_key.to_bytes());
+        let discarded_seed = [0x44; 32];
+        let store = FakeUserSigningKeyStore::new(
+            [Err(rejected("not_found")), Ok(existing_key)],
+            [Err(rejected("already_exists"))],
+        );
+
+        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |seed| {
+            *seed = discarded_seed;
+        })
+        .unwrap();
+
+        assert_eq!(key.public_key_b64, expected_public_key_b64);
+        assert_eq!(
+            store.put_seeds.borrow().as_slice(),
+            &[hex::encode(discarded_seed)]
         );
     }
 }
