@@ -66,9 +66,10 @@ pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
 /// shape matches `EasyNet/backend/internal/types/custom_types.go`
 /// `InstalledSkill` so the backend can decode the response and
 /// forward to the frontend without re-shaping fields. Each item
-/// carries `agent_id` even though the request was filtered, because
-/// the union of pools is fan-out per agent and the backend's wire
-/// schema requires the field on every row.
+/// carries `agent_id`: managed/scoped rows carry the concrete local
+/// agent id, while unscoped global-pool rows carry `global:<pool>` so
+/// the list stays one row per global skill rather than multiplying by
+/// the number of agents that can consume the pool.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
     let registry = agents::load_agents()?;
     let local_agents = crate::persistence::local_agents::load().ok();
@@ -82,6 +83,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     use crate::runtime::skill_store::{global_skill_pools_for, read_install_record, InstallRecord};
     let mut rows: Vec<InstallRecord> = Vec::new();
     let mut global_pool_cache = GlobalSkillPoolCache::default();
+    let mut emitted_unscoped_global_pools = std::collections::BTreeSet::new();
     let hosted_agent_index = HostedAgentUraIndex::from_local_agents(local_agents.as_ref());
 
     for (name, entry) in &registry.agents {
@@ -133,12 +135,16 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         // Source 2 — agent-native global pools (~/.claude/skills,
         // ~/.agents/skills). These are populated by external tooling
         // and have no install.json; metadata is synthesised from
-        // SKILL.md frontmatter (or directory name fallback). The
-        // expensive filesystem scan is cached by pool path and each
-        // matching agent receives a cheap projection with its agent_id
-        // stamped onto the row.
+        // SKILL.md frontmatter (or directory name fallback). Unscoped
+        // inventory lists each global pool once; scoped inventory projects
+        // the pool onto the selected agent so skill.read_file/write_file
+        // still receive an owner-shaped row.
         for (label, pool_dir) in global_skill_pools_for(entry.agent_type) {
-            rows.extend(global_pool_cache.rows_for_agent(name, label, &pool_dir));
+            if scope.is_agent_scoped() {
+                rows.extend(global_pool_cache.rows_for_agent(name, label, &pool_dir));
+            } else if emitted_unscoped_global_pools.insert(pool_dir.clone()) {
+                rows.extend(global_pool_cache.rows_for_global_pool(label, &pool_dir));
+            }
         }
     }
     if let Some(skill_name) = &scope.skill_name {
@@ -177,14 +183,43 @@ struct GlobalSkillPoolCache {
 }
 
 impl GlobalSkillPoolCache {
+    fn rows_for_global_pool(
+        &mut self,
+        pool_label: &str,
+        pool_dir: &std::path::Path,
+    ) -> Vec<crate::runtime::skill_store::InstallRecord> {
+        self.templates_for(pool_label, pool_dir)
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                row.agent_id = format!("global:{pool_label}");
+                row
+            })
+            .collect()
+    }
+
     fn rows_for_agent(
         &mut self,
         agent_name: &str,
         pool_label: &str,
         pool_dir: &std::path::Path,
     ) -> Vec<crate::runtime::skill_store::InstallRecord> {
-        let templates = self
-            .templates_by_dir
+        self.templates_for(pool_label, pool_dir)
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                row.agent_id = agent_name.to_string();
+                row
+            })
+            .collect()
+    }
+
+    fn templates_for(
+        &mut self,
+        pool_label: &str,
+        pool_dir: &std::path::Path,
+    ) -> &Vec<crate::runtime::skill_store::InstallRecord> {
+        self.templates_by_dir
             .entry(pool_dir.to_path_buf())
             .or_insert_with(|| {
                 let mut templates = Vec::new();
@@ -195,15 +230,7 @@ impl GlobalSkillPoolCache {
                     &mut templates,
                 );
                 templates
-            });
-        templates
-            .iter()
-            .cloned()
-            .map(|mut row| {
-                row.agent_id = agent_name.to_string();
-                row
             })
-            .collect()
     }
 }
 
@@ -301,6 +328,10 @@ impl SkillListScope {
             _ => None,
         }
     }
+
+    fn is_agent_scoped(&self) -> bool {
+        self.owner_agent_id.is_some() || self.agent_ura.is_some()
+    }
 }
 
 fn string_arg(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
@@ -379,8 +410,9 @@ pub fn list_input_schema() -> Value {
 
 /// Human-readable blurb for discovery surfaces.
 pub fn list_description() -> &'static str {
-    "List installed skills across registered agents. Combines managed skill installs \
-     with agent-native global pools and returns InstalledSkill rows."
+    "List installed skills. Unscoped calls return managed agent installs plus one row \
+     per global skill pool entry; agent-scoped calls project global pool entries onto \
+     the selected agent and return InstalledSkill rows."
 }
 
 #[cfg(test)]
@@ -460,6 +492,78 @@ mod tests {
         );
         assert_eq!(second[0].agent_id, "bob");
         assert_eq!(second[0].name, "summarize");
+    }
+
+    #[test]
+    fn global_skill_pool_cache_projects_unscoped_pool_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("summarize");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: summarize\ndescription: Summarize text\n---\n",
+        )
+        .expect("skill md");
+
+        let mut cache = GlobalSkillPoolCache::default();
+        let rows = cache.rows_for_global_pool("claude-global", dir.path());
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].agent_id, "global:claude-global");
+        assert_eq!(rows[0].name, "summarize");
+    }
+
+    #[test]
+    fn list_handler_emits_unscoped_global_pool_once_across_agents() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let home = std::path::PathBuf::from(std::env::var("HOME").expect("home"));
+        let skill_dir = home.join(".claude").join("skills").join("summarize");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: summarize\ndescription: Summarize text\n---\n",
+        )
+        .expect("skill md");
+
+        let mut registry = crate::registry::agents::AgentRegistry::default();
+        registry.agents.insert(
+            "alice".to_string(),
+            crate::registry::agents::AgentEntry::new(
+                crate::registry::agents::AgentType::ClaudeCode,
+                None,
+            ),
+        );
+        registry.agents.insert(
+            "bob".to_string(),
+            crate::registry::agents::AgentEntry::new(
+                crate::registry::agents::AgentType::ClaudeCode,
+                None,
+            ),
+        );
+        crate::registry::agents::save_agents(&registry).expect("save registry");
+
+        let unscoped = list_handler_for_args(json!({})).expect("unscoped list");
+        let unscoped_items = unscoped["items"].as_array().expect("items");
+        let global_rows: Vec<_> = unscoped_items
+            .iter()
+            .filter(|row| row["name"] == "summarize")
+            .collect();
+        assert_eq!(
+            global_rows.len(),
+            1,
+            "unscoped global skill listing must not multiply by agent count"
+        );
+        assert_eq!(global_rows[0]["agent_id"], "global:claude-global");
+
+        let scoped =
+            list_handler_for_args(json!({"owner_agent_id": "alice"})).expect("scoped list");
+        let scoped_items = scoped["items"].as_array().expect("items");
+        let scoped_rows: Vec<_> = scoped_items
+            .iter()
+            .filter(|row| row["name"] == "summarize")
+            .collect();
+        assert_eq!(scoped_rows.len(), 1);
+        assert_eq!(scoped_rows[0]["agent_id"], "alice");
     }
 
     #[test]
