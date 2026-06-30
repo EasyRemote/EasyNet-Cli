@@ -485,15 +485,17 @@ struct PeerDelegationSource<'a> {
     allow_directory_auto_route: bool,
 }
 
-/// This device's own namespace authority, injected when the daemon
-/// resolves a route for its own device URA.
+/// This daemon's own namespace authority, injected when the daemon
+/// resolves a route for a local runtime owner. Device-mode daemons use
+/// their device URA; hub-mode daemons without a paired device identity
+/// use their canonical hub URA.
 ///
 /// Owned by value (not borrowed) so the resolver is self-contained: the
 /// daemon captures a runtime snapshot at the async call site and hands
 /// ownership to the resolver, sidestepping a borrow that would otherwise
 /// have to outlive the snapshot's stack frame.
 struct LocalNamespaceAuthoritySource {
-    device_ura: String,
+    local_authority_ura: String,
     authority: Box<dyn LocalRuntimeAuthority>,
     hosted_agents: LocalHostedAgentPlacements,
 }
@@ -590,20 +592,21 @@ impl<'a> DaemonRouteResolver<'a> {
     /// (RFC-005 §4 / D105).
     ///
     /// When the resolver is asked for a route whose owner is exactly this
-    /// device, or an Agent hosted by this device, it proves the ability
-    /// and route from `authority` (the live local dispatch table) instead
-    /// of requiring a hub projection row. This is what lets a device
-    /// dispatch its own control-plane abilities (e.g. `agent.start`) and
-    /// hosted-agent abilities (e.g. `testbot.discover`) before any
-    /// projection has been published to the hub.
+    /// daemon authority, or an Agent hosted by this daemon authority, it
+    /// proves the ability and route from `authority` (the live local
+    /// dispatch table) instead of requiring a hub projection row. This is
+    /// what lets a device dispatch its own control-plane abilities (e.g.
+    /// `agent.start`) and lets a hub-mode daemon dispatch built-in hosted
+    /// agents (e.g. `dev.pages`) before any projection has been
+    /// published.
     #[must_use]
     pub(crate) fn with_local_runtime_authority(
         mut self,
-        device_ura: impl Into<String>,
+        local_authority_ura: impl Into<String>,
         authority: Box<dyn LocalRuntimeAuthority>,
     ) -> Self {
         self.device_local = Some(LocalNamespaceAuthoritySource {
-            device_ura: device_ura.into(),
+            local_authority_ura: local_authority_ura.into(),
             authority,
             hosted_agents: LocalHostedAgentPlacements::load(),
         });
@@ -643,9 +646,12 @@ impl<'a> DaemonRouteResolver<'a> {
     /// injected. The directory listing path uses it to include the static
     /// device profile only for this device's own surface.
     fn self_device_ura(&self) -> Option<&str> {
-        self.device_local
-            .as_ref()
-            .map(|device_local| device_local.device_ura.as_str())
+        self.device_local.as_ref().and_then(|device_local| {
+            crate::ura::parse_ura(&device_local.local_authority_ura)
+                .ok()
+                .filter(|parsed| parsed.kind == crate::ura::URAKind::Device)
+                .map(|_| device_local.local_authority_ura.as_str())
+        })
     }
 
     #[must_use]
@@ -716,13 +722,14 @@ impl<'a> DaemonRouteResolver<'a> {
         // control-plane owner and any Agent owner whose canonical URA is
         // pinned to this device by local-agents.json.
         if let Some(device_local) = self.device_local.as_ref() {
-            if device_local.device_ura == selector.owner_ura {
+            if device_local.local_authority_ura == selector.owner_ura {
+                let kind = local_authority_route_kind(&device_local.local_authority_ura);
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
-                    device_local.device_ura.as_str(),
+                    device_local.local_authority_ura.as_str(),
                     None,
-                    SelectedRouteKind::LocalDevice,
+                    kind,
                 );
             }
 
@@ -730,7 +737,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
-                    device_local.device_ura.as_str(),
+                    device_local.local_authority_ura.as_str(),
                     host_node_id.as_deref(),
                     SelectedRouteKind::HostedAgent,
                 );
@@ -748,7 +755,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
-                    device_local.device_ura.as_str(),
+                    device_local.local_authority_ura.as_str(),
                     None,
                     SelectedRouteKind::HostedAgent,
                 );
@@ -825,7 +832,7 @@ impl<'a> DaemonRouteResolver<'a> {
 
         if let Some(placement) = device_local
             .hosted_agents
-            .local_host_for(&selector.owner_ura, &device_local.device_ura)
+            .local_host_for(&selector.owner_ura, &device_local.local_authority_ura)
         {
             return Some(placement.host_node_id.clone());
         }
@@ -833,11 +840,11 @@ impl<'a> DaemonRouteResolver<'a> {
         let hosted_by_this_device = parsed
             .device_agent_ids()
             .and_then(|(device_id, _)| {
-                device_id_from_device_ura(&device_local.device_ura)
+                device_id_from_device_ura(&device_local.local_authority_ura)
                     .filter(|self_id| self_id.as_str() == device_id)
             })
             .is_some();
-        hosted_by_this_device.then(|| device_id_from_device_ura(&device_local.device_ura))
+        hosted_by_this_device.then(|| device_id_from_device_ura(&device_local.local_authority_ura))
     }
 
     /// Resolve a route for an owner from the resolver's directory: live
@@ -1401,6 +1408,17 @@ fn device_id_from_device_ura(device_ura: &str) -> Option<String> {
         .ok()
         .filter(|parsed| parsed.kind == crate::ura::URAKind::Device)
         .and_then(|parsed| parsed.device_id().map(str::to_string))
+}
+
+fn local_authority_route_kind(local_authority_ura: &str) -> SelectedRouteKind {
+    if crate::ura::parse_ura(local_authority_ura)
+        .ok()
+        .is_some_and(|parsed| parsed.kind == crate::ura::URAKind::Hub)
+    {
+        SelectedRouteKind::HubOwned
+    } else {
+        SelectedRouteKind::LocalDevice
+    }
 }
 
 fn id_record(name: &str, now_unix_ms: i64) -> Value {
@@ -2115,6 +2133,58 @@ mod tests {
         );
         assert_eq!(route.dispatch_name, "pages.list");
         assert_eq!(route.query_name, format!("{agent_ura}#list"));
+    }
+
+    #[test]
+    fn hub_local_authority_can_route_builtin_pages_agent_without_projection() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let host_ura = crate::ura::hub_ura("test-realm");
+        let agent_ura = crate::ura::agent_ura("test-realm", "dev", "pages");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["list"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_runtime_authority(host_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&agent_ura, "pages.list")
+            .expect("hub-mode local runtime authority must route built-in pages agent");
+
+        assert_eq!(route.kind(), SelectedRouteKind::HostedAgent);
+        assert_eq!(route.execution_host_ura, host_ura);
+        assert_eq!(
+            route.ability_ura,
+            "easynet:///r/test-realm/ability/dev.pages.list"
+        );
+        assert_eq!(route.dispatch_name, "pages.list");
+        assert_eq!(route.query_name, format!("{agent_ura}#list"));
+        assert!(catalog.is_empty());
+    }
+
+    #[test]
+    fn hub_local_authority_resolves_hub_owned_ability_as_hub_route() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let host_ura = crate::ura::hub_ura("test-realm");
+        let authority =
+            FakeLocalRuntimeAuthority::with_owner_keys(&host_ura, &["federation.status"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_runtime_authority(host_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&host_ura, "federation.status")
+            .expect("hub-owned runtime ability must resolve through local hub authority");
+
+        assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
+        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalHub);
+        assert_eq!(
+            route.dispatch_target(true),
+            SelectedRouteDispatchTarget::LocalRuntime
+        );
+        assert_eq!(route.owner_ura, host_ura);
+        assert_eq!(route.callee_ura, route.owner_ura);
+        assert_eq!(route.execution_host_ura, route.owner_ura);
+        assert_eq!(route.dispatch_name, "federation.status");
+        assert!(catalog.is_empty());
     }
 
     #[test]

@@ -111,6 +111,11 @@ pub fn all_descriptors_for_host(
     mcp_uri: Option<&str>,
     llm_uras: &[(String, String)], // (sub_agent_name, ura)
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    let llm_catalog = if llm_uras.is_empty() {
+        None
+    } else {
+        Some(llm::LlmProfileAbilityCatalog::load())
+    };
     let mut out = Vec::new();
     out.extend(device::descriptors_for(device_ura));
     if let Some(ura) = consent_ura {
@@ -120,7 +125,10 @@ pub fn all_descriptors_for_host(
         out.extend(mcp::descriptors_for(ura));
     }
     for (_name, ura) in llm_uras {
-        out.extend(llm::descriptors_for(ura));
+        let catalog = llm_catalog
+            .as_ref()
+            .expect("llm_catalog is present when llm_uras is non-empty");
+        out.extend(llm::descriptors_for_with_catalog(ura, None, catalog));
     }
     out
 }

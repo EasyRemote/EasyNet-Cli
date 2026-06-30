@@ -21,6 +21,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::HashSet;
+
 use tonic::Status;
 
 use crate::services::invocation_transport::admission_facade::AdmissionFacade;
@@ -42,6 +44,7 @@ pub(crate) struct TargetGate {
     federation: FederationDial,
     identity: IdentityPlane,
     runtime: RuntimePlane,
+    local_agent_targets: LocalAgentTargetIndex,
 }
 
 impl TargetGate {
@@ -58,14 +61,15 @@ impl TargetGate {
             federation,
             identity,
             runtime,
+            local_agent_targets: LocalAgentTargetIndex::load(),
         }
     }
 
     /// Build the RFC-005 route resolver wired with every authority this
     /// daemon owns: local presence, hosted-agent placement, owner
-    /// projection, optional peer delegation, and — when the daemon runs as
-    /// a device with a live `LocalRuntime` — the daemon's local runtime
-    /// namespace authority (RFC-005 §4 / D105).
+    /// projection, optional peer delegation, and — when the daemon has a
+    /// live `LocalRuntime` — the daemon's local runtime namespace
+    /// authority (RFC-005 §4 / D105).
     ///
     /// The local runtime authority is a snapshot of the dispatch table
     /// captured here, so routes for this device and its hosted agents are
@@ -91,13 +95,15 @@ impl TargetGate {
                 self.federation.allow_directory_auto_route,
             );
         }
-        if let (Some(device_ura), Some(runtime)) = (
-            self.admission.daemon_ura(),
-            self.runtime.local_runtime.as_ref(),
-        ) {
-            let snapshot = LocalRuntimeAuthoritySnapshot::capture(runtime).await;
-            resolver =
-                resolver.with_local_runtime_authority(device_ura.to_string(), Box::new(snapshot));
+        if let Some(runtime) = self.runtime.local_runtime.as_ref() {
+            if let Some(local_authority_ura) = local_runtime_authority_ura(
+                self.admission.daemon_ura(),
+                self.identity.session_realm.as_deref(),
+            ) {
+                let snapshot = LocalRuntimeAuthoritySnapshot::capture(runtime).await;
+                resolver =
+                    resolver.with_local_runtime_authority(local_authority_ura, Box::new(snapshot));
+            }
         }
         resolver
     }
@@ -118,17 +124,18 @@ impl TargetGate {
     ///       the device. Recognise it here so the local fast path
     ///       fires instead of falling through to "target offline".
     ///
-    /// Match for (3) uses the hosted-agent identity, not just the
-    /// bare `<agentID>`. A daemon only treats an Agent URA as local
-    /// when either:
-    ///   * `local-agents.json` contains the same `(realm,user,agent)`
+    /// Match for (3) uses the hosted-agent identity, not just the bare
+    /// `<agentID>`. A daemon treats an Agent URA as local only when the
+    /// target is proven by the local hosted-agent read model:
+    ///   * `local-agents.json` contains the exact `(realm,user,agent)`
     ///     tuple; or
-    ///   * the tuple matches this daemon's credentials and the agent is
-    ///     currently dispatchable through LocalRuntime or `agents.json`.
+    ///   * the tuple matches this daemon's credential identity and the
+    ///     exact bare `agentID` exists in `agents.json`.
     ///
-    /// The second branch preserves post-boot `agent.start`
-    /// behaviour before publish has written `local-agents.json`, but it
-    /// is still scoped to the exact realm and user from credentials.
+    /// The predicate intentionally does not scan LocalRuntime ability
+    /// names. Ability names prove dispatch bindings for already-selected
+    /// owners; they do not prove agent ownership, and scanning them here
+    /// made every route-locality check scale with the full ability table.
     pub(crate) async fn matches_self_target_ura(&self, target_ura: &str) -> bool {
         if self
             .admission
@@ -146,37 +153,26 @@ impl TargetGate {
             return true;
         }
         if let Some(agent_target) = parse_agent_target_identity(target_ura) {
-            if local_agents_hosts_agent_target(&agent_target) {
+            if self.local_agent_targets.hosts_target(&agent_target) {
                 return true;
             }
 
-            let identity_matches_credentials = credentials_match_agent_target(&agent_target);
-            let mut list_abilities_miss = "not_checked";
-            let mut agents_json_miss = "not_checked";
-            if identity_matches_credentials {
-                if let Some(runtime) = self.runtime.local_runtime.as_ref() {
-                    let agent_dot = format!("{}.", agent_target.agent_id);
-                    let agent_dot_owned = format!(".{}.", agent_target.agent_id);
-                    // Awaited rather than block_on'd: this method runs
-                    // inside the gRPC `Invoke{,Stream,Bidi}` async impls.
-                    if runtime.list_abilities().await.iter().any(|descriptor| {
-                        descriptor.name.starts_with(&agent_dot)
-                            || descriptor.name.contains(&agent_dot_owned)
-                    }) {
-                        return true;
-                    }
-                    list_abilities_miss = "true";
-                }
-                if crate::registry::agents::load_agents()
-                    .map(|reg| reg.agents.contains_key(&agent_target.agent_id))
-                    .unwrap_or(false)
-                {
-                    return true;
-                }
-                agents_json_miss = "true";
+            let identity_matches_credentials = self
+                .local_agent_targets
+                .credentials_match_target(&agent_target);
+            let registered_agent_match = self
+                .local_agent_targets
+                .has_registered_agent_id(&agent_target.agent_id);
+            if identity_matches_credentials && registered_agent_match {
+                return true;
             }
 
             let credential_identity_miss = if identity_matches_credentials {
+                "false"
+            } else {
+                "true"
+            };
+            let agent_registry_miss = if registered_agent_match {
                 "false"
             } else {
                 "true"
@@ -190,8 +186,7 @@ impl TargetGate {
                 agent_id = agent_target.agent_id.as_str(),
                 local_agents_miss = "true",
                 credential_identity_miss = credential_identity_miss,
-                list_abilities_miss = list_abilities_miss,
-                agents_json_miss = agents_json_miss,
+                agent_registry_miss = agent_registry_miss,
                 message = "matches_self_target_ura: agent URA not local; \
                           no exact local hosted Agent identity matched. Call \
                           will fall through to PresenceRegistry lookup.",
@@ -201,11 +196,49 @@ impl TargetGate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct AgentTargetIdentity {
     realm: String,
     user_id: String,
     agent_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalCredentialIdentity {
+    realm: String,
+    user_id: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LocalAgentTargetIndex {
+    hosted_agent_targets: HashSet<AgentTargetIdentity>,
+    credential_identity: Option<LocalCredentialIdentity>,
+    registered_agent_ids: HashSet<String>,
+}
+
+impl LocalAgentTargetIndex {
+    fn load() -> Self {
+        Self {
+            hosted_agent_targets: load_hosted_agent_targets(),
+            credential_identity: load_local_credential_identity(),
+            registered_agent_ids: load_registered_agent_ids(),
+        }
+    }
+
+    fn hosts_target(&self, target: &AgentTargetIdentity) -> bool {
+        self.hosted_agent_targets.contains(target)
+    }
+
+    fn credentials_match_target(&self, target: &AgentTargetIdentity) -> bool {
+        self.credential_identity
+            .as_ref()
+            .map(|identity| identity.realm == target.realm && identity.user_id == target.user_id)
+            .unwrap_or(false)
+    }
+
+    fn has_registered_agent_id(&self, agent_id: &str) -> bool {
+        self.registered_agent_ids.contains(agent_id)
+    }
 }
 
 /// Extract the full hosted-agent identity from an
@@ -228,35 +261,76 @@ fn parse_agent_target_identity(target_ura: &str) -> Option<AgentTargetIdentity> 
     })
 }
 
-fn local_agents_hosts_agent_target(target: &AgentTargetIdentity) -> bool {
+fn load_hosted_agent_targets() -> HashSet<AgentTargetIdentity> {
     crate::persistence::local_agents::load()
         .map(|file| {
             file.hosted_agents
-                .iter()
-                .any(|entry| agent_ura_matches_target(&entry.agent_ura, target))
+                .into_iter()
+                .filter_map(|entry| parse_agent_target_identity(&entry.agent_ura))
+                .collect()
         })
-        .unwrap_or(false)
+        .unwrap_or_default()
 }
 
-fn credentials_match_agent_target(target: &AgentTargetIdentity) -> bool {
+fn load_local_credential_identity() -> Option<LocalCredentialIdentity> {
     crate::persistence::config::load_credentials()
         .ok()
         .and_then(|creds| {
-            let user_id = creds.user_id().ok()?.to_string();
-            Some((creds.realm, user_id))
+            let realm = creds.realm.trim().to_string();
+            let user_id = creds.user_id().ok()?.trim().to_string();
+            if realm.is_empty() || user_id.is_empty() {
+                return None;
+            }
+            Some(LocalCredentialIdentity { realm, user_id })
         })
-        .map(|(realm, user_id)| realm.trim() == target.realm && user_id.trim() == target.user_id)
-        .unwrap_or(false)
 }
 
-fn agent_ura_matches_target(ura: &str, target: &AgentTargetIdentity) -> bool {
-    crate::ura::parse_ura(ura)
-        .map(|parsed| {
-            parsed.kind == crate::ura::URAKind::Agent
-                && parsed.realm == target.realm
-                && parsed.agent_ids() == Some((target.user_id.as_str(), target.agent_id.as_str()))
-        })
-        .unwrap_or(false)
+fn load_registered_agent_ids() -> HashSet<String> {
+    crate::registry::agents::load_agents()
+        .map(|registry| registry.agents.into_keys().collect())
+        .unwrap_or_default()
+}
+
+fn local_runtime_authority_ura(
+    daemon_ura: Option<&str>,
+    session_realm: Option<&str>,
+) -> Option<String> {
+    if let Some(daemon_ura) = daemon_ura.map(str::trim).filter(|ura| !ura.is_empty()) {
+        return Some(daemon_ura.to_string());
+    }
+    session_realm
+        .map(str::trim)
+        .filter(|realm| !realm.is_empty())
+        .map(crate::ura::hub_ura)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_runtime_authority_ura;
+
+    #[test]
+    fn local_runtime_authority_prefers_daemon_ura() {
+        let device_ura = "easynet:///r/test-realm/device/dev-1";
+
+        assert_eq!(
+            local_runtime_authority_ura(Some(device_ura), Some("test-realm")),
+            Some(device_ura.to_string())
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_falls_back_to_hub_ura_for_hub_mode_daemon() {
+        assert_eq!(
+            local_runtime_authority_ura(None, Some("test-realm")),
+            Some(crate::ura::hub_ura("test-realm"))
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_rejects_empty_inputs() {
+        assert_eq!(local_runtime_authority_ura(Some("  "), Some("  ")), None);
+        assert_eq!(local_runtime_authority_ura(None, None), None);
+    }
 }
 
 // ── Route-outcome wire mapping ─────────────────────────────────────

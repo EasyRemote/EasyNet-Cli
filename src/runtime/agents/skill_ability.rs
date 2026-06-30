@@ -82,6 +82,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     use crate::runtime::skill_store::{global_skill_pools_for, read_install_record, InstallRecord};
     let mut rows: Vec<InstallRecord> = Vec::new();
     let mut global_pool_cache = GlobalSkillPoolCache::default();
+    let hosted_agent_index = HostedAgentUraIndex::from_local_agents(local_agents.as_ref());
 
     for (name, entry) in &registry.agents {
         if let Some(filter) = &scope.owner_agent_id {
@@ -154,7 +155,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         .map(|r| {
             let mut value = serde_json::to_value(&r).unwrap_or(Value::Null);
             if let Some(resource_ura) = scoped_skill_resource_ura(
-                local_agents.as_ref(),
+                &hosted_agent_index,
                 scope.agent_ura_for_row(&r.agent_id),
                 &r.agent_id,
                 &r.name,
@@ -203,6 +204,32 @@ impl GlobalSkillPoolCache {
                 row
             })
             .collect()
+    }
+}
+
+#[derive(Default)]
+struct HostedAgentUraIndex {
+    by_agent_name: BTreeMap<String, String>,
+}
+
+impl HostedAgentUraIndex {
+    fn from_local_agents(
+        local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+    ) -> Self {
+        let Some(local_agents) = local_agents else {
+            return Self::default();
+        };
+        Self {
+            by_agent_name: local_agents
+                .hosted_agents
+                .iter()
+                .map(|entry| (entry.name.clone(), entry.agent_ura.clone()))
+                .collect(),
+        }
+    }
+
+    fn hosted_ura_for(&self, agent_name: &str) -> Option<&str> {
+        self.by_agent_name.get(agent_name).map(String::as_str)
     }
 }
 
@@ -315,26 +342,17 @@ fn owner_name_for_agent_ura(
 }
 
 fn scoped_skill_resource_ura(
-    local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+    hosted_agent_index: &HostedAgentUraIndex,
     explicit_agent_ura: Option<&str>,
     agent_name: &str,
     skill_name: &str,
 ) -> Option<String> {
-    let agent_ura = explicit_agent_ura
-        .map(str::to_string)
-        .or_else(|| hosted_agent_ura(local_agents?, agent_name))?;
+    let agent_ura = explicit_agent_ura.map(str::to_string).or_else(|| {
+        hosted_agent_index
+            .hosted_ura_for(agent_name)
+            .map(str::to_string)
+    })?;
     crate::runtime::owner_projection::skill_resource_ura(&agent_ura, skill_name)
-}
-
-fn hosted_agent_ura(
-    local_agents: &crate::persistence::local_agents::LocalAgentsFile,
-    agent_name: &str,
-) -> Option<String> {
-    local_agents
-        .hosted_agents
-        .iter()
-        .find(|entry| entry.name == agent_name)
-        .map(|entry| entry.agent_ura.clone())
 }
 
 /// JSON Schema for the input.
@@ -442,5 +460,26 @@ mod tests {
         );
         assert_eq!(second[0].agent_id, "bob");
         assert_eq!(second[0].name, "summarize");
+    }
+
+    #[test]
+    fn hosted_agent_ura_index_resolves_rows_without_scanning_local_agents_per_row() {
+        let local = crate::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            hosted_agents: vec![crate::persistence::local_agents::HostedAgentEntry {
+                profile: "llm".to_string(),
+                name: "claude".to_string(),
+                agent_ura: "easynet:///r/acme/agent/u1.claude".to_string(),
+                signing_authority: "hosted_by:easynet:///r/acme/device/dev-1".to_string(),
+                first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        let index = HostedAgentUraIndex::from_local_agents(Some(&local));
+
+        assert_eq!(
+            index.hosted_ura_for("claude"),
+            Some("easynet:///r/acme/agent/u1.claude")
+        );
+        assert_eq!(index.hosted_ura_for("codex"), None);
     }
 }

@@ -162,6 +162,31 @@ pub fn invoke_local_ability_with_subject(
     )
 }
 
+pub fn invoke_local_ability_with_subject_timeout(
+    ability: &str,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_with_subject_timeout(
+        ability, args, subject, timeout,
+    )
+}
+
+/// Explicit local projection for stream-mode abilities when a scalar caller
+/// needs one JSON value. This opens InvokeStream directly and returns the first
+/// non-empty payload frame; it never probes unary first.
+pub fn invoke_local_stream_ability_first_payload(
+    ability: &str,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_stream_first_payload_with_subject(
+        ability, args, subject, timeout,
+    )
+}
+
 /// Invoke a canonical local Ability URA target through the daemon.
 ///
 /// This path preserves the full descriptor owner identity in the signed

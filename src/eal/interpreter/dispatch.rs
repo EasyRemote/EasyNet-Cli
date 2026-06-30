@@ -41,6 +41,7 @@ fn dispatch_remote_via_forward_invoke(
     ability_name: &str,
     arguments: &Value,
     causal_parents: &[Value],
+    timeout_ms: Option<u64>,
 ) -> Result<Value, EalError> {
     #[cfg(feature = "axon-pb")]
     {
@@ -61,13 +62,10 @@ fn dispatch_remote_via_forward_invoke(
                 .as_deref()
                 .is_some_and(|n| !n.is_empty() && trimmed == n);
         if is_local {
-            return crate::support::local_invoke::invoke_local_ability(
-                ability_name,
-                arguments.clone(),
-            )
-            .map_err(|e| {
-                EalError::Unavailable(format!("invoke_local_ability {ability_name} (local): {e}"))
-            });
+            let timeout = timeout_ms
+                .map(std::time::Duration::from_millis)
+                .unwrap_or_else(|| std::time::Duration::from_secs(30));
+            return dispatch_local_device_ability(ability_name, arguments, timeout);
         }
 
         let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
@@ -103,7 +101,14 @@ fn dispatch_remote_via_forward_invoke(
     }
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = (tenant, node_id, ability_name, arguments, causal_parents);
+        let _ = (
+            tenant,
+            node_id,
+            ability_name,
+            arguments,
+            causal_parents,
+            timeout_ms,
+        );
         Err(EalError::Unavailable(
             "EAL device-targeted dispatch requires the `axon-pb` feature; \
              rebuild with `--features axon-pb` (production builds always do)."
@@ -111,6 +116,71 @@ fn dispatch_remote_via_forward_invoke(
         ))
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalDeviceDispatchMode {
+    Rpc,
+    StreamFirstPayload,
+    BidiUnsupported,
+}
+
+fn dispatch_local_device_ability(
+    ability_name: &str,
+    arguments: &Value,
+    timeout: std::time::Duration,
+) -> Result<Value, EalError> {
+    match local_device_dispatch_mode(ability_name) {
+        LocalDeviceDispatchMode::Rpc => {
+            crate::support::local_invoke::invoke_local_ability_with_subject_timeout(
+                ability_name,
+                arguments.clone(),
+                None,
+                timeout,
+            )
+            .map_err(|e| {
+                EalError::Unavailable(format!("invoke_local_ability {ability_name} (local): {e}"))
+            })
+        }
+        LocalDeviceDispatchMode::StreamFirstPayload => {
+            crate::support::local_invoke::invoke_local_stream_ability_first_payload(
+                ability_name,
+                arguments.clone(),
+                None,
+                timeout,
+            )
+            .map_err(|e| {
+                EalError::Unavailable(format!(
+                    "invoke_local_stream_ability {ability_name} (local): {e}"
+                ))
+            })
+        }
+        LocalDeviceDispatchMode::BidiUnsupported => Err(EalError::Validation(format!(
+            "local ability `{ability_name}` is bidirectional; EAL scalar call steps cannot open \
+             InvokeBidi sessions"
+        ))),
+    }
+}
+
+fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
+    crate::runtime::agents::published_abilities()
+        .into_iter()
+        .find(|meta| meta.name == ability_name)
+        .map(|meta| dispatch_mode_from_hints(&meta.hints))
+        .unwrap_or(LocalDeviceDispatchMode::Rpc)
+}
+
+fn dispatch_mode_from_hints(
+    hints: &crate::runtime::ability_descriptor::AbilityHints,
+) -> LocalDeviceDispatchMode {
+    if hints.bidi_only {
+        LocalDeviceDispatchMode::BidiUnsupported
+    } else if hints.streaming_only {
+        LocalDeviceDispatchMode::StreamFirstPayload
+    } else {
+        LocalDeviceDispatchMode::Rpc
+    }
+}
+
 /// Per-mission-run dispatch context.
 ///
 /// `trace_id` is the mission run's id (minted once per run in
@@ -182,7 +252,6 @@ impl StepDispatcher for AgentAwareDispatcher {
                 run.trace_id,
             ),
             IrTarget::Device { node_id } => {
-                let _ = timeout_ms;
                 // Thread the live causal parents onto the device forward hop
                 // too — the sibling agent branch already lowers them, and
                 // dropping them here re-rooted the receipt DAG (SPEC §15.1-1).
@@ -192,6 +261,7 @@ impl StepDispatcher for AgentAwareDispatcher {
                     ability.as_str(),
                     arguments,
                     causal_parents,
+                    timeout_ms,
                 )
                 .map(Into::into)
             }
@@ -455,5 +525,33 @@ fn try_dispatch_via_daemon(
             LocalInvokeErrorKind::AbilityUnregistered => DaemonDispatch::AbilityNotFound,
             LocalInvokeErrorKind::Failed => DaemonDispatch::Error(format!("{err}")),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch_mode_from_hints, LocalDeviceDispatchMode};
+    use crate::runtime::ability_descriptor::AbilityHints;
+
+    #[test]
+    fn local_device_dispatch_mode_is_derived_from_descriptor_hints() {
+        assert_eq!(
+            dispatch_mode_from_hints(&AbilityHints::default()),
+            LocalDeviceDispatchMode::Rpc
+        );
+        assert_eq!(
+            dispatch_mode_from_hints(&AbilityHints {
+                streaming_only: true,
+                ..Default::default()
+            }),
+            LocalDeviceDispatchMode::StreamFirstPayload
+        );
+        assert_eq!(
+            dispatch_mode_from_hints(&AbilityHints {
+                bidi_only: true,
+                ..Default::default()
+            }),
+            LocalDeviceDispatchMode::BidiUnsupported
+        );
     }
 }

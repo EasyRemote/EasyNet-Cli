@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Response, Status};
 
-use easynet_axon::pb::axon::v1::{InvokeServerStreamRequest, InvokeStreamChunk};
+use easynet_axon::pb::axon::v1::{InvokeServerStreamRequest, InvokeStreamChunk, ResponseHeader};
 
 use crate::services::invocation_transport::admission_facade::AdmissionFacade;
 use crate::services::invocation_transport::deps::{DirectoryPlane, RuntimePlane};
@@ -369,7 +369,11 @@ impl StreamDispatcher {
 
         let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
         let ability_name = selected_ability_ura;
+        let invocation_id = handle.invocation_id().to_string();
+        let selected_node_id = selected_route.route_ura.clone();
         tokio::spawn(async move {
+            let mut sequence = 0_u64;
+            let mut admission_receipt_sent = false;
             while let Some(frame_result) = handle.next_frame().await {
                 match frame_result {
                     Ok(frame) => {
@@ -383,12 +387,52 @@ impl StreamDispatcher {
                         // is lifecycle state. Preserve Axon's terminal frame
                         // even for finite streams that complete with
                         // `Ok(Vec::new())`.
+                        let receipts = handle.receipts().await;
+                        let admission_receipt = if admission_receipt_sent {
+                            None
+                        } else {
+                            admission_receipt_sent = true;
+                            receipts
+                                .iter()
+                                .find(|receipt| {
+                                    receipt.state
+                                        == easynet_axon::invocation::InvocationState::Admitted
+                                })
+                                .map(easynet_axon::invocation::wire::receipt_to_wire)
+                        };
+                        let terminal_receipt = if terminal {
+                            receipts
+                                .iter()
+                                .rev()
+                                .find(|receipt| receipt.state.is_terminal())
+                                .map(easynet_axon::invocation::wire::receipt_to_wire)
+                        } else {
+                            None
+                        };
+                        let state = if terminal {
+                            easynet_axon::invocation::InvocationState::Completed
+                        } else {
+                            easynet_axon::invocation::InvocationState::Running
+                        };
                         let chunk = InvokeStreamChunk {
+                            header: Some(ResponseHeader {
+                                request_id: invocation_id.clone(),
+                                status: state.as_str().to_string(),
+                                ..ResponseHeader::default()
+                            }),
+                            invocation_id: invocation_id.clone(),
+                            selected_node_id: selected_node_id.clone(),
+                            scheduling_reason: "local-runtime".to_string(),
+                            state: state.to_wire_i32(),
                             content_type,
                             payload: frame.payload,
+                            sequence,
                             terminal,
+                            admission_receipt,
+                            terminal_receipt,
                             ..InvokeStreamChunk::default()
                         };
+                        sequence = sequence.saturating_add(1);
                         if tx.send(Ok(chunk)).await.is_err() || terminal {
                             break;
                         }

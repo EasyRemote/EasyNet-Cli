@@ -583,6 +583,40 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
 }
 
 #[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    subject: Option<String>,
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let subject_policy = LocalDaemonSubjectPolicy::explicit_or_self_target(subject)?;
+    invoke_local_daemon_ability_with_callee_and_subject(
+        function_name,
+        payload_json,
+        None,
+        subject_policy,
+        timeout,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_stream_first_payload_with_subject(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    subject: Option<String>,
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let subject_policy = LocalDaemonSubjectPolicy::explicit_or_self_target(subject)?;
+    invoke_local_daemon_ability_stream_first_payload_with_target(
+        function_name,
+        payload_json,
+        None,
+        subject_policy,
+        timeout,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
@@ -641,7 +675,7 @@ fn invoke_local_daemon_ability_stream_with_target(
     timeout: Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::local_invoke::LocalStreamFrame>> {
-    use anyhow::{anyhow, Context};
+    use anyhow::Context;
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
@@ -684,7 +718,7 @@ fn invoke_local_daemon_ability_stream_with_target(
             .invoke_stream(request)
             .await
             .map_err(|status| {
-                anyhow!(
+                anyhow::anyhow!(
                     "daemon error streaming {function_name} through Axon \
                      (code={:?}): {}",
                     status.code(),
@@ -764,7 +798,7 @@ fn invoke_local_daemon_ability_with_callee_and_subject(
     subject_policy: LocalDaemonSubjectPolicy,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    use anyhow::{anyhow, Context};
+    use anyhow::Context;
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
@@ -804,7 +838,7 @@ fn invoke_local_daemon_ability_with_callee_and_subject(
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         let response = client.invoke(request).await.map_err(|status| {
-            anyhow!(
+            anyhow::anyhow!(
                 "daemon error invoking {function_name} through Axon \
                  (code={:?}): {}",
                 status.code(),
@@ -817,6 +851,61 @@ fn invoke_local_daemon_ability_with_callee_and_subject(
         }
         serde_json::from_slice(&body.result)
             .with_context(|| format!("decode {function_name} Axon response"))
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_local_daemon_ability_stream_first_payload_with_target(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_override: Option<&str>,
+    subject_policy: LocalDaemonSubjectPolicy,
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::Context;
+
+    let socket_path = resolve_socket_path();
+    if !probe_accepting(&socket_path) {
+        return Err(anyhow::Error::new(
+            crate::support::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+                "daemon not running (local Axon gRPC listener unreachable at {}). \
+                 Start it with `easynet runtime start`.",
+                socket_path.display()
+            )),
+        ));
+    }
+
+    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+        function_name,
+        payload_json,
+        callee_override,
+        subject_policy,
+        timeout,
+    )?;
+    let function_name = invocation.function_name.clone();
+    let stream_request = invocation.stream_request()?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for local Axon daemon stream invoke")?;
+
+    runtime.block_on(async move {
+        let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
+            .await
+            .with_context(|| {
+                format!(
+                    "connect to local Axon daemon gRPC endpoint at {}",
+                    socket_path.display()
+                )
+            })?;
+        let mut client =
+            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let projection =
+            invoke_local_daemon_first_stream_payload(&mut client, stream_request, &function_name)
+                .await?;
+        let value = projection.value;
+        Ok::<_, anyhow::Error>(value)
     })
 }
 
@@ -1014,6 +1103,96 @@ use crate::support::invocation_receipt_projection::{
 };
 
 #[cfg(feature = "axon-pb")]
+const STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES: usize = 64;
+
+#[cfg(feature = "axon-pb")]
+type LocalInvocationGrpcClient =
+    easynet_axon::pb::axon::v1::invocation_client::InvocationClient<tonic::transport::Channel>;
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug)]
+struct LocalDaemonStreamProjection {
+    value: serde_json::Value,
+}
+
+#[cfg(feature = "axon-pb")]
+async fn invoke_local_daemon_json(
+    client: &mut LocalInvocationGrpcClient,
+    request: easynet_axon::pb::axon::v1::InvokeRequest,
+    function_name: &str,
+) -> anyhow::Result<(serde_json::Value, String)> {
+    use anyhow::{anyhow, Context};
+    use serde_json::Value;
+
+    let response = client.invoke(request).await.map_err(|status| {
+        anyhow!(
+            "daemon error invoking {function_name} through Axon \
+             (code={:?}): {}",
+            status.code(),
+            status.message()
+        )
+    })?;
+    let body = response.into_inner();
+    let request_id = body
+        .header
+        .as_ref()
+        .map(|header| header.request_id.clone())
+        .unwrap_or_default();
+    let value = if body.result.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body.result)
+            .with_context(|| format!("decode {function_name} Axon response"))?
+    };
+    Ok((value, request_id))
+}
+
+#[cfg(feature = "axon-pb")]
+async fn invoke_local_daemon_first_stream_payload(
+    client: &mut LocalInvocationGrpcClient,
+    request: easynet_axon::pb::axon::v1::InvokeServerStreamRequest,
+    function_name: &str,
+) -> anyhow::Result<LocalDaemonStreamProjection> {
+    use anyhow::{anyhow, bail, Context};
+
+    let mut stream = client
+        .invoke_stream(request)
+        .await
+        .map_err(|status| {
+            anyhow!(
+                "daemon error streaming {function_name} through Axon \
+                 (code={:?}): {}",
+                status.code(),
+                status.message()
+            )
+        })?
+        .into_inner();
+
+    let mut frames_seen = 0_usize;
+    while let Some(chunk) = stream
+        .message()
+        .await
+        .with_context(|| format!("read {function_name} InvokeStream chunk from local daemon"))?
+    {
+        frames_seen = frames_seen.saturating_add(1);
+        if !chunk.payload.is_empty() {
+            let value = serde_json::from_slice(&chunk.payload)
+                .with_context(|| format!("decode {function_name} first stream payload JSON"))?;
+            return Ok(LocalDaemonStreamProjection { value });
+        }
+        if frames_seen >= STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES {
+            bail!(
+                "stream projection for {function_name} did not produce a JSON payload \
+                 within {STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES} frames; \
+                 scalar projection requires a payload frame"
+            );
+        }
+    }
+
+    bail!("stream projection for {function_name} ended before a JSON payload frame")
+}
+
+#[cfg(feature = "axon-pb")]
 fn invoke_local_daemon_ability_with_invocation_meta_inner(
     request: LocalDaemonInvocationMetaRequest<'_>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
@@ -1125,27 +1304,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         })?;
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
-        let response = client.invoke(request).await.map_err(|status| {
-            anyhow!(
-                "daemon error invoking {invoke_fn} through Axon \
-                 (code={:?}): {}",
-                status.code(),
-                status.message()
-            )
-        })?;
-        let body = response.into_inner();
-        let request_id = body
-            .header
-            .as_ref()
-            .map(|header| header.request_id.clone())
-            .unwrap_or_default();
-        let value = if body.result.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&body.result)
-                .with_context(|| format!("decode {invoke_fn} Axon response"))?
-        };
-        Ok::<_, anyhow::Error>((value, request_id))
+        invoke_local_daemon_json(&mut client, request, &invoke_fn).await
     })?;
     if request_id.is_empty() {
         bail!(
@@ -1320,6 +1479,30 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
     _subject: Option<String>,
 ) -> anyhow::Result<serde_json::Value> {
     invoke_local_daemon_ability(function_name, payload_json)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    _subject: Option<String>,
+    _timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    invoke_local_daemon_ability(function_name, payload_json)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_stream_first_payload_with_subject(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _subject: Option<String>,
+    _timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::bail!(
+        "streaming `{}` through the local Axon daemon requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`",
+        function_name
+    )
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -1526,5 +1709,13 @@ mod tests {
             .diagnostic()
             .expect("anchor diagnostic")
             .contains("no complete terminal receipt anchor"));
+    }
+
+    #[test]
+    fn stream_first_payload_projection_has_bounded_empty_frame_budget() {
+        assert!(
+            STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES > 0
+                && STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES <= 64
+        );
     }
 }

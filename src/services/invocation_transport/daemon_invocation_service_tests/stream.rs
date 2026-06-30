@@ -294,6 +294,38 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     let mut stream = resp.into_inner();
     let first = stream.next().await.expect("one frame").expect("frame Ok");
     assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert_eq!(
+        first
+            .header
+            .as_ref()
+            .map(|header| header.request_id.as_str()),
+        Some(first.invocation_id.as_str()),
+        "InvokeStream chunks must expose the Axon request id for ledger lookup"
+    );
+    assert!(
+        first.invocation_id.starts_with("inv_"),
+        "local stream invocation id must be projected"
+    );
+    assert!(
+        first
+            .selected_node_id
+            .starts_with("route-ref::easynet:///r/test-realm/ability/device.test-daemon."),
+        "selected_node_id should carry the chosen route ref, got {}",
+        first.selected_node_id
+    );
+    assert_eq!(first.sequence, 0);
+    assert_eq!(
+        first.state,
+        easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+    );
+    assert!(
+        first.admission_receipt.is_some(),
+        "first stream chunk must expose the admission receipt"
+    );
+    assert!(
+        first.terminal_receipt.is_some(),
+        "terminal stream chunk must expose the terminal receipt"
+    );
     assert!(
         first.terminal,
         "local snapshot stream must preserve terminal=true on the daemon InvokeStream chunk"

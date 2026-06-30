@@ -15,7 +15,7 @@ resources = [
   "window",
   "application",
 ]
-platforms = ["macos"]
+platforms = ["macos", "linux"]
 
 [limits]
 max_sessions = 128
