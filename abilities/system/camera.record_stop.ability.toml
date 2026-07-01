@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "camera.record_stop"
+description = "Stop a camera recording session and persist the captured device-camera artifact. Subject MUST be the same camera resource_ura used for camera.record_start."
+
+[input_schema]
+type = "object"
+required = ["recording_session_id"]
+additionalProperties = false
+
+[input_schema.properties.recording_session_id]
+type = "string"
+minLength = 1

@@ -1,5 +1,5 @@
-// EasyNet CLI — media handlers (PR3a onwards)
-// =============================================
+// EasyNet CLI — media handlers
+// ============================
 //
 // File: src/runtime/agents/media/mod.rs
 //
@@ -29,11 +29,11 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-/// `camera.snapshot` (RFC-005 v3.2 A3) — real handler. PR3a's
-/// vertical slice from ability invocation through resource
-/// resolution to base64-encoded JPEG receipt body. Synthetic
-/// frame backend (no hardware); the real cpal/nokhwa swap is a
-/// later PR.
+/// `camera.snapshot`, `camera.subscribe`, `camera.record_start`, and
+/// `camera.record_stop` — real camera handlers. Production uses
+/// native AVFoundation still capture on macOS and nokhwa-backed
+/// camera IO on other platforms; tests use `SyntheticBackend` so the
+/// suite remains hardware-free.
 pub mod camera_snapshot;
 
 #[cfg(target_os = "macos")]

@@ -126,8 +126,8 @@ pub mod http_executor;
 pub mod http_request_ability;
 pub mod invocation_history_ability;
 pub mod invoke_ability;
-/// RFC-005 v3.2 A9 — `meta.list_resources`. Resource discovery
-/// surface for the eight media abilities above. Reads
+/// `meta.list_resources`. Resource discovery surface for the media
+/// abilities above. Reads
 /// `~/.easynet/resources.json` via `persistence::resources` and
 /// projects to the wire shape; no device backend needed, so it
 /// ships fully working.
@@ -142,12 +142,11 @@ pub mod mcp_reflective_registry;
 /// the `camera.snapshot` vertical slice with a deterministic
 /// synthetic backend; PR3 lands cpal/nokhwa/screen.
 pub mod media;
-/// RFC-005 v3.2 A1–A8 — eight physical-channel media abilities
-/// (mic.subscribe, camera.subscribe/snapshot, screen.subscribe/
-/// snapshot, speaker.publish, voice.subscribe, voice.transcribe).
-/// PR2 ships every handler as a stub that enforces
-/// INV-SUBJECT-ENVELOPE; PR3 / PR3a swap individual stubs out for
-/// real implementations.
+/// RFC-005 v3.2 physical-channel media abilities
+/// (mic.subscribe, camera.subscribe/snapshot/record_start/record_stop,
+/// screen.subscribe/snapshot, speaker.publish, voice.subscribe,
+/// voice.transcribe). Real modules replace the shared stubs one
+/// ability family at a time.
 pub mod media_abilities;
 pub mod meta_ability;
 pub mod mission_ability;

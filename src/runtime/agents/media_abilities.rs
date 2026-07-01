@@ -1,10 +1,10 @@
-// EasyNet CLI — Media abilities (RFC-005 v3.2 A1-A8)
-// ====================================================
+// EasyNet CLI — Media abilities (RFC-005 v3.2 A1-A10)
+// =====================================================
 //
 // File: src/runtime/agents/media_abilities.rs
 //
-// Eight physical-channel abilities, all `subject = resource_ura`,
-// all RFC-006 class ∈ {Stream, Query}. Per the binding invariants
+// Physical-channel abilities, all `subject = resource_ura`.
+// Per the binding invariants
 // in plan v3.2:
 //
 //   A1 mic.subscribe        Stream  (server-stream)  device
@@ -15,6 +15,8 @@
 //   A6 voice.subscribe      Stream  (server-stream)  llm
 //   A7 voice.transcribe     Stream  (true bidi)      llm
 //   A8 screen.snapshot      Query   (rpc)            device
+//   A9 camera.record_start  Transition (rpc)         device
+//   A10 camera.record_stop  Transition (rpc)         device
 //
 // Single source of truth: a const `ABILITIES` table holds every
 // ability's name + description + input_schema + RFC-006 class +
@@ -83,6 +85,8 @@ use crate::runtime::agents::ability_toml::Rfc006Metadata;
 pub const ABILITY_MIC_SUBSCRIBE: &str = "mic.subscribe";
 pub const ABILITY_CAMERA_SUBSCRIBE: &str = "camera.subscribe";
 pub const ABILITY_CAMERA_SNAPSHOT: &str = "camera.snapshot";
+pub const ABILITY_CAMERA_RECORD_START: &str = "camera.record_start";
+pub const ABILITY_CAMERA_RECORD_STOP: &str = "camera.record_stop";
 pub const ABILITY_SCREEN_SUBSCRIBE: &str = "screen.subscribe";
 pub const ABILITY_SCREEN_SNAPSHOT: &str = "screen.snapshot";
 pub const ABILITY_SPEAKER_PUBLISH: &str = "speaker.publish";
@@ -130,7 +134,7 @@ struct AbilityRow {
     shape: DispatchShape,
 }
 
-/// All eight media abilities in declaration order. Adding a 9th
+/// All media abilities in declaration order. Adding another
 /// media ability means appending one row here — `register` and
 /// `metadata(name)` both pick it up automatically; mod.rs's three
 /// description/schema/rfc006 tables already delegate via
@@ -162,6 +166,25 @@ const ABILITIES: &[AbilityRow] = &[
                       payloadstore_ura, captured_at } in the receipt body.",
         input_schema: snapshot_args_no_region,
         class: AbilityClass::Query,
+        shape: DispatchShape::Rpc,
+    },
+    AbilityRow {
+        name: ABILITY_CAMERA_RECORD_START,
+        description: "Start a bounded recording session for a camera resource. \
+                      Subject MUST be a camera resource_ura. Returns a \
+                      recording_session_id that must be passed to \
+                      camera.record_stop.",
+        input_schema: camera_record_start_args,
+        class: AbilityClass::Transition,
+        shape: DispatchShape::Rpc,
+    },
+    AbilityRow {
+        name: ABILITY_CAMERA_RECORD_STOP,
+        description: "Stop a camera recording session and persist the captured \
+                      device-camera artifact. Subject MUST be the same camera \
+                      resource_ura used for camera.record_start.",
+        input_schema: camera_record_stop_args,
+        class: AbilityClass::Transition,
         shape: DispatchShape::Rpc,
     },
     AbilityRow {
@@ -337,6 +360,8 @@ fn has_real_media_handler(name: &str) -> bool {
         ABILITY_MIC_SUBSCRIBE
             | ABILITY_CAMERA_SUBSCRIBE
             | ABILITY_CAMERA_SNAPSHOT
+            | ABILITY_CAMERA_RECORD_START
+            | ABILITY_CAMERA_RECORD_STOP
             | ABILITY_SCREEN_SUBSCRIBE
             | ABILITY_SCREEN_SNAPSHOT
     )
@@ -481,6 +506,31 @@ fn snapshot_args_no_region() -> Value {
         "additionalProperties": false,
         "properties": {
             "format": { "type": "string", "enum": ["jpeg", "png"] }
+        }
+    })
+}
+
+fn camera_record_start_args() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "fps":             { "type": "integer", "minimum": 1, "maximum": 60 },
+            "resolution":      { "type": "string" },
+            "codec":           { "type": "string", "enum": ["mjpeg"] },
+            "max_duration_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
+            "max_bytes":       { "type": "integer", "minimum": 1048576, "maximum": 268435456 }
+        }
+    })
+}
+
+fn camera_record_stop_args() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recording_session_id"],
+        "properties": {
+            "recording_session_id": { "type": "string", "minLength": 1 }
         }
     })
 }
@@ -631,7 +681,12 @@ mod tests {
         // copy-paste cannot accidentally drop the guard.
         let bad = json!({"subject": "easynet:///r/x/resource/y"});
 
-        for ability in [ABILITY_CAMERA_SNAPSHOT, ABILITY_SCREEN_SNAPSHOT] {
+        for ability in [
+            ABILITY_CAMERA_SNAPSHOT,
+            ABILITY_CAMERA_RECORD_START,
+            ABILITY_CAMERA_RECORD_STOP,
+            ABILITY_SCREEN_SNAPSHOT,
+        ] {
             let err = query_stub(ability, bad.clone()).unwrap_err().to_string();
             assert!(
                 err.contains(REASON_SUBJECT_IN_ARGS),
@@ -661,10 +716,10 @@ mod tests {
 
     #[test]
     fn handlers_without_subject_in_args_reach_unimplemented_branch() {
-        // Without the subject-in-args poison, the stubs fall
-        // through to the "not yet wired" error. PR3 will replace
-        // that branch with real device IO.
-        let err = query_stub(ABILITY_CAMERA_SNAPSHOT, json!({}))
+        // Without the subject-in-args poison, the still-unwired
+        // stubs fall through to the "not yet wired" error. Real
+        // camera handlers are skipped by the stub registrar.
+        let err = query_stub(ABILITY_SPEAKER_PUBLISH, json!({}))
             .unwrap_err()
             .to_string();
         assert!(
@@ -674,11 +729,26 @@ mod tests {
     }
 
     #[test]
-    fn all_eight_abilities_classify_as_query_or_stream() {
-        // Sanity pin: no media ability is Transition. A future
-        // change reclassifying one (e.g. a stateful media.session)
-        // fires this and forces an explicit decision.
+    fn recording_abilities_are_explicit_transitions() {
+        assert_eq!(
+            rfc006(ABILITY_CAMERA_RECORD_START).unwrap().class,
+            Some(AbilityClass::Transition)
+        );
+        assert_eq!(
+            rfc006(ABILITY_CAMERA_RECORD_STOP).unwrap().class,
+            Some(AbilityClass::Transition)
+        );
+    }
+
+    #[test]
+    fn non_recording_media_abilities_classify_as_query_or_stream() {
         for row in ABILITIES {
+            if matches!(
+                row.name,
+                ABILITY_CAMERA_RECORD_START | ABILITY_CAMERA_RECORD_STOP
+            ) {
+                continue;
+            }
             assert!(
                 matches!(row.class, AbilityClass::Query | AbilityClass::Stream),
                 "{} classified as Transition; would need transition_id, state_type, etc.",

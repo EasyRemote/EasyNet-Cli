@@ -1,11 +1,11 @@
-// EasyNet CLI — camera.snapshot real handler (RFC-005 v3.2 A3)
-// ==============================================================
+// EasyNet CLI - camera media handlers (RFC-005 v3.2 A3/A4)
+// =========================================================
 //
 // File: src/runtime/agents/media/camera_snapshot.rs
 //
-// PR3a vertical slice. Replaces the `query_stub` in
-// `media_abilities.rs` for the `camera.snapshot` name with a real
-// envelope-aware handler that:
+// Replaces the `query_stub` entries in `media_abilities.rs` for
+// `camera.snapshot`, `camera.subscribe`, `camera.record_start`, and
+// `camera.record_stop` with envelope-aware real handlers that:
 //
 //   1. Reads `EnvelopeContext.subject` (per **INV-SUBJECT-ENVELOPE**:
 //      handler MUST get subject from the envelope, NOT from args).
@@ -15,47 +15,46 @@
 //        * subject absent     → InvalidArgument with reason="subject_required"
 //        * URA not in table   → terminal failure with reason="resource_not_found"
 //        * type ≠ camera      → terminal failure with reason="resource_type_mismatch"
-//        * (PR3a synthetic backend skips the "binding alive" check
-//          — every present entry is "available"; the real
-//          cpal/nokhwa swap adds the device-still-plugged-in test
-//          and returns reason="resource_unavailable" when the
-//          camera was unplugged after the table was last scanned.)
-//   4. Captures one frame via the configured backend
-//      (`SyntheticBackend` in PR3a — produces a deterministic
-//       64×48 JPEG so the wire path is testable without hardware
-//       or macOS permission prompts).
+//        * resource present but unavailable → "resource_unavailable"
+//   4. Captures a still photo via the configured backend. Production
+//      uses AVFoundation `AVCapturePhotoOutput` on macOS and nokhwa on
+//      non-macOS. Tests use `SyntheticBackend` for hardware-free runs.
 //   5. base64-encodes the JPEG bytes (per the design discussion —
 //      base64 inline is the right tradeoff for snapshot-shaped
 //      receipts up to a small-blob threshold; large-image overflow
 //      to PayloadStore is the next consumer's PR).
-//   6. Returns the receipt body shape declared in
+//   6. Returns the snapshot receipt body shape declared in
 //      `media_abilities::ABILITY_CAMERA_SNAPSHOT`'s description:
 //      `{ image_bytes_b64, captured_at, content_type, width,
 //         height, hardware_id, local_path }`.
+//   7. Opens a live in-memory JPEG preview stream for
+//      `camera.subscribe`; stream frames are transient and are not
+//      persisted by the daemon.
+//   8. Drives bounded `camera.record_start`/`camera.record_stop`
+//      sessions from the same live frame source and persists the
+//      resulting MJPEG capture through the context store.
 //
-// What's NOT in PR3a
-// ------------------
-// * Real camera capture (cpal/nokhwa). The `SnapshotBackend` trait
-//   is the seam: a future PR drops in a `NokhwaBackend` impl
-//   without touching the dispatch / receipt code.
+// What's not in this module
+// -------------------------
 // * PayloadStore overflow path for >2 MiB images. Returns a
-//   clear "image too large for inline; payloadstore path not yet
-//   wired" error so a future operator hitting the limit gets a
-//   pointer instead of a silent truncation.
-// * Args parsing for `format` / `region`. PR3a accepts whatever
-//   args are passed (only `subject` matters) and always emits
-//   JPEG. Wiring the format selector is a follow-up.
+//   clear "image too large for inline" error rather than silently
+//   truncating an Axon frame.
+// * Alternate image formats. Snapshot and subscribe both emit JPEG.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-use std::fs;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-#[cfg(not(target_os = "macos"))]
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::AtomicU64;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -70,7 +69,8 @@ use crate::runtime::agents::media::resource_subject::{
     self, resolve_required_resource_subject, ResourceSubjectSpec,
 };
 use crate::runtime::agents::media_abilities::{
-    self, ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE,
+    self, ABILITY_CAMERA_RECORD_START, ABILITY_CAMERA_RECORD_STOP, ABILITY_CAMERA_SNAPSHOT,
+    ABILITY_CAMERA_SUBSCRIBE,
 };
 
 /// Maximum inline image size, in encoded JPEG bytes (NOT the base64
@@ -83,6 +83,12 @@ const BROADCAST_CAPACITY: usize = 8;
 const DEFAULT_CAMERA_FPS: u32 = 30;
 const MIN_CAMERA_FPS: u32 = 1;
 const MAX_CAMERA_FPS: u32 = 60;
+const DEFAULT_RECORDING_MAX_DURATION_MS: u64 = 5 * 60 * 1000;
+const MAX_RECORDING_MAX_DURATION_MS: u64 = 30 * 60 * 1000;
+const DEFAULT_RECORDING_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_RECORDING_MAX_BYTES: u64 = 256 * 1024 * 1024;
+const RECORDING_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const RECORDING_BOUNDARY: &str = "easynet-camera-frame";
 #[cfg(not(target_os = "macos"))]
 const NOKHWA_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -104,10 +110,9 @@ pub const REASON_IMAGE_TOO_LARGE: &str = "image_too_large_for_inline";
 
 // ── Backend trait ────────────────────────────────────────────
 
-/// One-shot camera capture. The trait is the seam between this
-/// PR (which provides `SyntheticBackend`) and a future PR (which
-/// drops in `NokhwaBackend` or similar without touching the
-/// dispatch / receipt-shaping code above).
+/// One-shot and live camera capture backend. Production registers
+/// `NokhwaBackend`; tests register `SyntheticBackend` so dispatcher
+/// and receipt semantics are validated without hardware.
 pub trait SnapshotBackend: Send + Sync {
     /// Capture one frame from the resource described by `entry`.
     /// Returns the encoded JPEG bytes plus the actual dimensions
@@ -153,12 +158,59 @@ pub struct CameraVideoResolution {
     pub height: u32,
 }
 
-// ── Nokhwa backend (real, PR3) ───────────────────────────────
+#[derive(Debug, Clone)]
+struct CameraRecordingOptions {
+    stream: CameraStreamOptions,
+    max_duration_ms: u64,
+    max_bytes: u64,
+}
 
-/// Real camera backend backed by `nokhwa`. Opens the platform's
-/// default backend (AVFoundation on macOS, V4L2 on Linux), grabs
-/// one device-selected frame, decodes to RGB, and re-encodes as
-/// JPEG to match the receipt body shape camera.snapshot promises.
+#[derive(Debug)]
+struct CameraRecordingSession {
+    id: String,
+    device_ura: String,
+    resource_ura: String,
+    hardware_id: String,
+    started_at: String,
+    stop: Arc<AtomicBool>,
+    done: Option<Receiver<anyhow::Result<CameraRecordingArtifact>>>,
+}
+
+#[derive(Debug)]
+struct CameraRecordingStopLease {
+    id: String,
+    device_ura: String,
+    resource_ura: String,
+    hardware_id: String,
+    started_at: String,
+    done: Receiver<anyhow::Result<CameraRecordingArtifact>>,
+}
+
+#[derive(Debug)]
+struct CameraRecordingArtifact {
+    temp_path: PathBuf,
+    stopped_at: String,
+    duration_ms: u64,
+    frame_count: u64,
+    byte_size: u64,
+    width: Option<u32>,
+    height: Option<u32>,
+    stop_reason: &'static str,
+}
+
+static CAMERA_RECORDING_SESSIONS: OnceLock<Mutex<HashMap<String, CameraRecordingSession>>> =
+    OnceLock::new();
+
+fn recording_sessions() -> &'static Mutex<HashMap<String, CameraRecordingSession>> {
+    CAMERA_RECORDING_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+// ── Production camera backend ────────────────────────────────
+
+/// Real camera backend. On macOS, still photos and live preview use
+/// direct AVFoundation bindings. On non-macOS, nokhwa opens the
+/// platform camera backend, decodes to RGB, and re-encodes as JPEG
+/// to match the receipt body shape camera.snapshot promises.
 ///
 /// `hardware_id` ↔ camera index mapping
 /// ------------------------------------
@@ -226,6 +278,20 @@ fn capture_jpeg_with_nokhwa_with_timeout(entry: &ResourceEntry) -> anyhow::Resul
 
 #[cfg(not(target_os = "macos"))]
 fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
+    let mut cam =
+        open_camera_with_nokhwa(entry, ABILITY_CAMERA_SNAPSHOT, None, DEFAULT_CAMERA_FPS)?;
+    open_nokhwa_stream(&mut cam, ABILITY_CAMERA_SNAPSHOT)?;
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    capture_open_nokhwa_frame(&mut cam, ABILITY_CAMERA_SNAPSHOT, true)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_camera_with_nokhwa(
+    entry: &ResourceEntry,
+    ability: &'static str,
+    resolution: Option<CameraVideoResolution>,
+    fps: u32,
+) -> anyhow::Result<nokhwa::Camera> {
     use nokhwa::pixel_format::RgbFormat;
     use nokhwa::utils::{
         CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution,
@@ -238,22 +304,27 @@ fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFram
         .and_then(|v| v.as_u64())
         .map(|n| n as u32)
         .unwrap_or(0);
+    let preferred = resolution.unwrap_or(CameraVideoResolution {
+        width: 1280,
+        height: 720,
+    });
+    let fps = fps.clamp(MIN_CAMERA_FPS, MAX_CAMERA_FPS);
 
     let candidate_formats = [
         RequestedFormatType::Closest(CameraFormat::new(
-            Resolution::new(1280, 720),
+            Resolution::new(preferred.width, preferred.height),
             FrameFormat::NV12,
-            30,
+            fps,
         )),
         RequestedFormatType::Closest(CameraFormat::new(
             Resolution::new(640, 480),
             FrameFormat::NV12,
-            30,
+            fps,
         )),
         RequestedFormatType::Closest(CameraFormat::new(
-            Resolution::new(1280, 720),
+            Resolution::new(preferred.width, preferred.height),
             FrameFormat::MJPEG,
-            30,
+            fps,
         )),
         RequestedFormatType::AbsoluteHighestResolution,
         RequestedFormatType::None,
@@ -270,38 +341,52 @@ fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFram
             Err(err) => last_err = Some(format!("{requested}: {err}")),
         }
     }
-    let mut cam = cam.ok_or_else(|| {
+    let cam = cam.ok_or_else(|| {
         anyhow::anyhow!(
-            "{ABILITY_CAMERA_SNAPSHOT}: nokhwa Camera::new(index={index}) failed: \
+            "{ability}: nokhwa Camera::new(index={index}) failed: \
                  {}; reason={REASON_RESOURCE_UNAVAILABLE}",
             last_err.unwrap_or_else(|| "no compatible format candidates".to_string())
         )
     })?;
+    Ok(cam)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_nokhwa_stream(cam: &mut nokhwa::Camera, ability: &'static str) -> anyhow::Result<()> {
     cam.open_stream().map_err(|e| {
         anyhow::anyhow!(
-            "{ABILITY_CAMERA_SNAPSHOT}: nokhwa open_stream failed: {e}; \
+            "{ability}: nokhwa open_stream failed: {e}; \
                  reason={REASON_RESOURCE_UNAVAILABLE}"
         )
-    })?;
-    std::thread::sleep(std::time::Duration::from_millis(350));
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_open_nokhwa_frame(
+    cam: &mut nokhwa::Camera,
+    ability: &'static str,
+    reject_all_black: bool,
+) -> anyhow::Result<EncodedFrame> {
+    use nokhwa::pixel_format::RgbFormat;
+
     let buf = cam.frame().map_err(|e| {
         anyhow::anyhow!(
-            "{ABILITY_CAMERA_SNAPSHOT}: nokhwa frame() failed: {e}; \
+            "{ability}: nokhwa frame() failed: {e}; \
                  reason={REASON_RESOURCE_UNAVAILABLE}"
         )
     })?;
     let rgb_image = buf.decode_image::<RgbFormat>().map_err(|e| {
         anyhow::anyhow!(
-            "{ABILITY_CAMERA_SNAPSHOT}: nokhwa decode_image failed: {e}; \
+            "{ability}: nokhwa decode_image failed: {e}; \
                  reason={REASON_RESOURCE_UNAVAILABLE}"
         )
     })?;
     let width = rgb_image.width();
     let height = rgb_image.height();
     let rgb = rgb_image.into_raw();
-    if rgb.iter().all(|&b| b == 0) {
+    if reject_all_black && rgb.iter().all(|&b| b == 0) {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SNAPSHOT}: camera returned an all-black frame; \
+            "{ability}: camera returned an all-black frame; \
                  reason={REASON_RESOURCE_UNAVAILABLE}"
         );
     }
@@ -334,12 +419,36 @@ fn open_stream_with_nokhwa(
         .spawn(move || {
             let interval = Duration::from_secs_f64(1.0 / options.fps as f64);
             let seq = AtomicU64::new(0);
+            let mut cam = match open_camera_with_nokhwa(
+                &worker_entry,
+                ABILITY_CAMERA_SUBSCRIBE,
+                options.resolution,
+                options.fps,
+            ) {
+                Ok(cam) => cam,
+                Err(err) => {
+                    let _ = tx.send(json!({
+                        "type": "error",
+                        "message": err.to_string(),
+                        "reason": REASON_RESOURCE_UNAVAILABLE,
+                    }));
+                    return;
+                }
+            };
+            if let Err(err) = open_nokhwa_stream(&mut cam, ABILITY_CAMERA_SUBSCRIBE) {
+                let _ = tx.send(json!({
+                    "type": "error",
+                    "message": err.to_string(),
+                    "reason": REASON_RESOURCE_UNAVAILABLE,
+                }));
+                return;
+            }
             loop {
                 if tx.receiver_count() == 0 {
                     break;
                 }
                 let started = Instant::now();
-                match capture_jpeg_with_nokhwa(&worker_entry) {
+                match capture_open_nokhwa_frame(&mut cam, ABILITY_CAMERA_SUBSCRIBE, false) {
                     Ok(frame) => {
                         let value = build_camera_stream_frame(
                             seq.fetch_add(1, Ordering::Relaxed),
@@ -353,7 +462,7 @@ fn open_stream_with_nokhwa(
                     Err(err) => {
                         let _ = tx.send(json!({
                             "type": "error",
-                            "message": rewrite_ability_in_message(err, ABILITY_CAMERA_SUBSCRIBE).to_string(),
+                            "message": err.to_string(),
                             "reason": REASON_RESOURCE_UNAVAILABLE,
                         }));
                         break;
@@ -409,7 +518,7 @@ fn safe_path_component(input: &str) -> String {
         .collect()
 }
 
-// ── Synthetic backend (PR3a, kept for tests) ─────────────────
+// ── Synthetic backend (tests) ────────────────────────────────
 
 /// Deterministic synthetic-frame backend. Produces a 64×48
 /// solid-colour JPEG seeded from the `hardware_id` so two
@@ -493,15 +602,17 @@ impl SnapshotBackend for SyntheticBackend {
 
 // ── Registration ─────────────────────────────────────────────
 
-/// Register `camera.snapshot` and `camera.subscribe` with real
-/// envelope-aware handlers backed by `backend`.
+/// Register camera snapshot, preview stream, and recording transition
+/// handlers backed by `backend`.
 ///
 /// `media_abilities::register` deliberately skips the camera names
 /// once this real module exists, so each dispatch slot has one
 /// handler family. `camera.subscribe` opens a realtime in-memory
-/// preview stream; it never persists the preview frames.
+/// preview stream; recording consumes that same stream source and
+/// persists only the explicit recording artifact.
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn SnapshotBackend>) {
     let subscribe_backend = Arc::clone(&backend);
+    let record_start_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_CAMERA_SNAPSHOT,
         OwnerKind::Device,
@@ -516,18 +627,23 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
             subscribe_handler(&subscribe_backend, env, args)
         }),
     );
+    reg.register_rpc_with_envelope_and_spec(
+        ABILITY_CAMERA_RECORD_START,
+        OwnerKind::Device,
+        media_abilities::registry_manifest(ABILITY_CAMERA_RECORD_START),
+        Arc::new(move |env: EnvelopeContext, args: Value| {
+            record_start_handler(&record_start_backend, env, args)
+        }),
+    );
+    reg.register_rpc_with_envelope_and_spec(
+        ABILITY_CAMERA_RECORD_STOP,
+        OwnerKind::Device,
+        media_abilities::registry_manifest(ABILITY_CAMERA_RECORD_STOP),
+        Arc::new(record_stop_handler),
+    );
 }
 
-#[cfg(not(target_os = "macos"))]
-fn rewrite_ability_in_message(err: anyhow::Error, ability: &str) -> anyhow::Error {
-    anyhow::anyhow!(
-        "{}",
-        err.to_string()
-            .replacen(ABILITY_CAMERA_SNAPSHOT, ability, 1)
-    )
-}
-
-/// Register with the real `NokhwaBackend` (PR3 default). The
+/// Register with the production `NokhwaBackend`. The
 /// daemon boot path calls this after `media_abilities::register`,
 /// which now skips camera names to keep registration ownership
 /// explicit.
@@ -558,8 +674,8 @@ fn snapshot_handler(
     if jpeg_bytes.len() > MAX_INLINE_BYTES {
         anyhow::bail!(
             "{ABILITY_CAMERA_SNAPSHOT}: encoded image {} bytes exceeds \
-             inline cap {MAX_INLINE_BYTES}; payloadstore path not yet \
-             wired in PR3a; reason={REASON_IMAGE_TOO_LARGE}",
+             inline cap {MAX_INLINE_BYTES}; use a payloadstore-backed capture path; \
+             reason={REASON_IMAGE_TOO_LARGE}",
             jpeg_bytes.len()
         );
     }
@@ -615,9 +731,208 @@ fn subscribe_handler(
     args: Value,
 ) -> anyhow::Result<StreamSource> {
     let entry = resolve_camera_subject(&env, &args, ABILITY_CAMERA_SUBSCRIBE)?;
-    let options = parse_stream_options(&args)?;
+    let options = parse_stream_options_for(ABILITY_CAMERA_SUBSCRIBE, &args)?;
     let rx = backend.open_stream(entry, options)?;
     Ok(StreamSource::Live(rx))
+}
+
+fn record_start_handler(
+    backend: &Arc<dyn SnapshotBackend>,
+    env: EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let entry = resolve_camera_subject(&env, &args, ABILITY_CAMERA_RECORD_START)?;
+    let options = parse_recording_options(&args)?;
+    let session_id = format!("camera-rec-{}", uuid::Uuid::new_v4().simple());
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel();
+    let temp_path = recording_temp_path(&session_id)?;
+    let worker_backend = Arc::clone(backend);
+    let worker_entry = entry.clone();
+    let worker_stop = Arc::clone(&stop);
+    let worker_options = options.clone();
+
+    let session = CameraRecordingSession {
+        id: session_id.clone(),
+        device_ura: env.callee().to_string(),
+        resource_ura: entry.resource_ura.clone(),
+        hardware_id: entry.hardware_id.clone(),
+        started_at: started_at.clone(),
+        stop,
+        done: Some(done_rx),
+    };
+    {
+        let mut sessions = recording_sessions().lock().map_err(|_| {
+            anyhow::anyhow!("{ABILITY_CAMERA_RECORD_START}: recording session lock poisoned")
+        })?;
+        if sessions
+            .values()
+            .any(|existing| existing.resource_ura == entry.resource_ura)
+        {
+            anyhow::bail!(
+                "{ABILITY_CAMERA_RECORD_START}: camera resource already has an active recording; \
+                 reason=recording_already_active"
+            );
+        }
+        sessions.insert(session_id.clone(), session);
+    }
+
+    if let Err(e) = std::thread::Builder::new()
+        .name("easynet-camera-recording".into())
+        .spawn(move || {
+            let result = run_recording_worker(
+                worker_backend,
+                worker_entry,
+                worker_options,
+                worker_stop,
+                temp_path,
+            );
+            let _ = done_tx.send(result);
+        })
+    {
+        remove_recording_session(&session_id);
+        anyhow::bail!(
+            "{ABILITY_CAMERA_RECORD_START}: failed to spawn camera recording worker: {e}; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+
+    Ok(json!({
+        "recording_session_id": session_id,
+        "state": "recording",
+        "started_at": started_at,
+        "subject_ura": entry.resource_ura,
+        "hardware_id": entry.hardware_id,
+        "content_type": recording_content_type(),
+        "max_duration_ms": options.max_duration_ms,
+        "max_bytes": options.max_bytes,
+    }))
+}
+
+fn record_stop_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
+    let entry = resolve_camera_subject(&env, &args, ABILITY_CAMERA_RECORD_STOP)?;
+    let session_id =
+        required_string_arg(&args, "recording_session_id", ABILITY_CAMERA_RECORD_STOP)?;
+    let stop_lease = {
+        let mut sessions = recording_sessions().lock().map_err(|_| {
+            anyhow::anyhow!("{ABILITY_CAMERA_RECORD_STOP}: recording session lock poisoned")
+        })?;
+        let Some(existing) = sessions.get_mut(&session_id) else {
+            anyhow::bail!(
+                "{ABILITY_CAMERA_RECORD_STOP}: unknown recording_session_id {session_id:?}; \
+                 reason=recording_session_not_found"
+            );
+        };
+        if existing.resource_ura != entry.resource_ura {
+            anyhow::bail!(
+                "{ABILITY_CAMERA_RECORD_STOP}: recording_session_id {session_id:?} belongs to {}, not {}; \
+                 reason=recording_subject_mismatch",
+                existing.resource_ura,
+                entry.resource_ura
+            );
+        }
+        existing.stop.store(true, Ordering::Relaxed);
+        let Some(done) = existing.done.take() else {
+            anyhow::bail!(
+                "{ABILITY_CAMERA_RECORD_STOP}: recording_session_id {session_id:?} is already stopping; \
+                 reason=recording_stop_in_progress"
+            );
+        };
+        CameraRecordingStopLease {
+            id: existing.id.clone(),
+            device_ura: existing.device_ura.clone(),
+            resource_ura: existing.resource_ura.clone(),
+            hardware_id: existing.hardware_id.clone(),
+            started_at: existing.started_at.clone(),
+            done,
+        }
+    };
+    let artifact = match stop_lease.done.recv_timeout(RECORDING_STOP_TIMEOUT) {
+        Ok(result) => {
+            remove_recording_session(&stop_lease.id);
+            result?
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let lease_id = stop_lease.id.clone();
+            restore_recording_stop_lease(stop_lease);
+            anyhow::bail!(
+                "{ABILITY_CAMERA_RECORD_STOP}: timed out waiting for recording session {lease_id} to stop; \
+                 reason=recording_stop_timeout"
+            );
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            let lease_id = stop_lease.id.clone();
+            remove_recording_session(&lease_id);
+            anyhow::bail!(
+                "{ABILITY_CAMERA_RECORD_STOP}: recording worker disconnected for session {lease_id}; \
+                 reason=recording_worker_disconnected"
+            );
+        }
+    };
+    let bytes = fs::read(&artifact.temp_path).map_err(|e| {
+        anyhow::anyhow!(
+            "{ABILITY_CAMERA_RECORD_STOP}: read recording artifact {} failed: {e}; \
+             reason={REASON_RESOURCE_UNAVAILABLE}",
+            artifact.temp_path.display()
+        )
+    })?;
+    let capture = crate::persistence::context_store::record_capture(
+        crate::persistence::context_store::CaptureRecord {
+            device: &stop_lease.device_ura,
+            ability: ABILITY_CAMERA_RECORD_STOP,
+            ext: "mjpeg",
+            bytes: &bytes,
+            content_type: recording_content_type(),
+            width: artifact.width,
+            height: artifact.height,
+            duration_ms: Some(artifact.duration_ms),
+            preview: format!(
+                "Camera recording {} frame{}",
+                artifact.frame_count,
+                if artifact.frame_count == 1 { "" } else { "s" }
+            ),
+        },
+    )?;
+    let _ = fs::remove_file(&artifact.temp_path);
+    let local_path = crate::persistence::context_store::captures_dir()
+        .join(ABILITY_CAMERA_RECORD_STOP)
+        .join(&capture.file);
+
+    Ok(json!({
+        "recording_session_id": stop_lease.id,
+        "state": "stopped",
+        "started_at": stop_lease.started_at,
+        "stopped_at": artifact.stopped_at,
+        "duration_ms": artifact.duration_ms,
+        "frame_count": artifact.frame_count,
+        "byte_size": artifact.byte_size,
+        "content_type": recording_content_type(),
+        "local_path": local_path.display().to_string(),
+        "capture_id": capture.id,
+        "capture_file": capture.file,
+        "subject_ura": stop_lease.resource_ura,
+        "hardware_id": stop_lease.hardware_id,
+        "width": artifact.width,
+        "height": artifact.height,
+        "stop_reason": artifact.stop_reason,
+    }))
+}
+
+fn remove_recording_session(session_id: &str) {
+    if let Ok(mut sessions) = recording_sessions().lock() {
+        sessions.remove(session_id);
+    }
+}
+
+fn restore_recording_stop_lease(stop_lease: CameraRecordingStopLease) {
+    if let Ok(mut sessions) = recording_sessions().lock() {
+        if let Some(session) = sessions.get_mut(&stop_lease.id) {
+            if session.done.is_none() {
+                session.done = Some(stop_lease.done);
+            }
+        }
+    }
 }
 
 fn resolve_camera_subject(
@@ -653,35 +968,230 @@ pub(crate) fn build_camera_stream_frame(seq: u64, hardware_id: &str, frame: Enco
     })
 }
 
-fn parse_stream_options(args: &Value) -> anyhow::Result<CameraStreamOptions> {
+fn run_recording_worker(
+    backend: Arc<dyn SnapshotBackend>,
+    entry: ResourceEntry,
+    options: CameraRecordingOptions,
+    stop: Arc<AtomicBool>,
+    temp_path: PathBuf,
+) -> anyhow::Result<CameraRecordingArtifact> {
+    if let Some(parent) = temp_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut rx = backend.open_stream(entry, options.stream.clone())?;
+    let started = Instant::now();
+    let mut writer = BufWriter::new(File::create(&temp_path)?);
+    let mut frame_count = 0u64;
+    let mut byte_size = 0u64;
+    let mut width = None;
+    let mut height = None;
+    let mut stop_reason = "stopped";
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if started.elapsed().as_millis() as u64 >= options.max_duration_ms {
+            stop_reason = "duration_limit";
+            break;
+        }
+        match rx.try_recv() {
+            Ok(value) => {
+                if value.get("type").and_then(Value::as_str) == Some("error") {
+                    anyhow::bail!(
+                        "{ABILITY_CAMERA_RECORD_START}: camera stream failed while recording: {}; \
+                         reason={REASON_RESOURCE_UNAVAILABLE}",
+                        value
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("camera stream failed")
+                    );
+                }
+                let frame = recording_frame_from_value(&value)?;
+                write_mjpeg_part(&mut writer, &frame.jpeg_bytes)?;
+                frame_count += 1;
+                byte_size += frame.jpeg_bytes.len() as u64;
+                width = Some(frame.width);
+                height = Some(frame.height);
+                if byte_size >= options.max_bytes {
+                    stop_reason = "byte_limit";
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                stop_reason = "stream_closed";
+                break;
+            }
+        }
+    }
+
+    if frame_count == 0 {
+        anyhow::bail!(
+            "{ABILITY_CAMERA_RECORD_STOP}: recording produced no camera frames; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+    write!(writer, "--{RECORDING_BOUNDARY}--\r\n")?;
+    writer.flush()?;
+    let stopped_at = chrono::Utc::now().to_rfc3339();
+    let byte_size = fs::metadata(&temp_path)?.len();
+    Ok(CameraRecordingArtifact {
+        temp_path,
+        stopped_at,
+        duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+        frame_count,
+        byte_size,
+        width,
+        height,
+        stop_reason,
+    })
+}
+
+fn recording_frame_from_value(value: &Value) -> anyhow::Result<EncodedFrame> {
+    let image_bytes_b64 = value
+        .get("image_bytes_b64")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{ABILITY_CAMERA_RECORD_START}: camera frame did not include image_bytes_b64; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+    let jpeg_bytes = BASE64_STANDARD.decode(image_bytes_b64)?;
+    let width = value.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let height = value.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if width == 0 || height == 0 {
+        anyhow::bail!(
+            "{ABILITY_CAMERA_RECORD_START}: camera frame had invalid dimensions {width}x{height}; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+    Ok(EncodedFrame {
+        jpeg_bytes,
+        width,
+        height,
+    })
+}
+
+fn write_mjpeg_part(writer: &mut BufWriter<File>, jpeg_bytes: &[u8]) -> anyhow::Result<()> {
+    write!(
+        writer,
+        "--{RECORDING_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+        jpeg_bytes.len()
+    )?;
+    writer.write_all(jpeg_bytes)?;
+    writer.write_all(b"\r\n")?;
+    Ok(())
+}
+
+fn recording_temp_path(session_id: &str) -> anyhow::Result<PathBuf> {
+    if !session_id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        anyhow::bail!("{ABILITY_CAMERA_RECORD_START}: invalid recording session id");
+    }
+    Ok(state_dir()
+        .join("captures")
+        .join("camera-recording-sessions")
+        .join(format!("{session_id}.mjpeg.tmp")))
+}
+
+fn recording_content_type() -> &'static str {
+    "multipart/x-mixed-replace; boundary=easynet-camera-frame"
+}
+
+fn parse_recording_options(args: &Value) -> anyhow::Result<CameraRecordingOptions> {
+    let stream = parse_stream_options_for(ABILITY_CAMERA_RECORD_START, args)?;
+    let max_duration_ms = optional_u64_arg(args, "max_duration_ms")?
+        .unwrap_or(DEFAULT_RECORDING_MAX_DURATION_MS)
+        .clamp(1_000, MAX_RECORDING_MAX_DURATION_MS);
+    let max_bytes = optional_u64_arg(args, "max_bytes")?
+        .unwrap_or(DEFAULT_RECORDING_MAX_BYTES)
+        .clamp(1_048_576, MAX_RECORDING_MAX_BYTES);
+    if let Value::Object(map) = args {
+        if let Some(codec) = map.get("codec") {
+            let codec = codec.as_str().unwrap_or_default();
+            if codec != "mjpeg" {
+                anyhow::bail!(
+                    "{ABILITY_CAMERA_RECORD_START}: codec must be \"mjpeg\"; \
+                     reason=invalid_argument"
+                );
+            }
+        }
+    }
+    Ok(CameraRecordingOptions {
+        stream,
+        max_duration_ms,
+        max_bytes,
+    })
+}
+
+fn optional_u64_arg(args: &Value, key: &str) -> anyhow::Result<Option<u64>> {
+    let Value::Object(map) = args else {
+        return Ok(None);
+    };
+    let Some(value) = map.get(key) else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("{key} must be a non-negative integer"))
+}
+
+fn required_string_arg(args: &Value, key: &str, ability: &'static str) -> anyhow::Result<String> {
+    let value = args
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("{ability}: `{key}` is required; reason=invalid_argument")
+        })?;
+    Ok(value.to_string())
+}
+
+fn parse_stream_options_for(
+    ability: &'static str,
+    args: &Value,
+) -> anyhow::Result<CameraStreamOptions> {
     let mut options = CameraStreamOptions::default();
     if let Value::Object(map) = args {
         if let Some(value) = map.get("fps") {
             let fps = value.as_u64().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "{ABILITY_CAMERA_SUBSCRIBE}: fps must be an integer; \
+                    "{ability}: fps must be an integer; \
                      reason=invalid_argument"
                 )
             })?;
             if !(MIN_CAMERA_FPS as u64..=MAX_CAMERA_FPS as u64).contains(&fps) {
                 anyhow::bail!(
-                    "{ABILITY_CAMERA_SUBSCRIBE}: fps {fps} outside {MIN_CAMERA_FPS}..={MAX_CAMERA_FPS}; \
+                    "{ability}: fps {fps} outside {MIN_CAMERA_FPS}..={MAX_CAMERA_FPS}; \
                      reason=invalid_argument"
                 );
             }
             options.fps = fps as u32;
         }
         if let Some(value) = map.get("resolution") {
-            options.resolution = parse_resolution(value)?;
+            options.resolution = parse_resolution_for(ability, value)?;
         }
     }
     Ok(options)
 }
 
-fn parse_resolution(value: &Value) -> anyhow::Result<Option<CameraVideoResolution>> {
+fn parse_resolution_for(
+    ability: &'static str,
+    value: &Value,
+) -> anyhow::Result<Option<CameraVideoResolution>> {
     let Some(raw) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SUBSCRIBE}: resolution must be a string; \
+            "{ability}: resolution must be a string; \
              reason=invalid_argument"
         );
     };
@@ -705,29 +1215,29 @@ fn parse_resolution(value: &Value) -> anyhow::Result<Option<CameraVideoResolutio
         _ => {
             let Some((w, h)) = lowered.split_once('x') else {
                 anyhow::bail!(
-                    "{ABILITY_CAMERA_SUBSCRIBE}: resolution {raw:?} must be native, 480p, 720p, 1080p, or <width>x<height>; \
+                    "{ability}: resolution {raw:?} must be native, 480p, 720p, 1080p, or <width>x<height>; \
                      reason=invalid_argument"
                 );
             };
             CameraVideoResolution {
-                width: parse_positive_u32(w, "resolution width")?,
-                height: parse_positive_u32(h, "resolution height")?,
+                width: parse_positive_u32(ability, w, "resolution width")?,
+                height: parse_positive_u32(ability, h, "resolution height")?,
             }
         }
     };
     Ok(Some(resolution))
 }
 
-fn parse_positive_u32(raw: &str, name: &str) -> anyhow::Result<u32> {
+fn parse_positive_u32(ability: &'static str, raw: &str, name: &str) -> anyhow::Result<u32> {
     let value = raw.parse::<u32>().map_err(|_| {
         anyhow::anyhow!(
-            "{ABILITY_CAMERA_SUBSCRIBE}: {name} must be an integer; \
+            "{ability}: {name} must be an integer; \
              reason=invalid_argument"
         )
     })?;
     if value == 0 {
         anyhow::bail!(
-            "{ABILITY_CAMERA_SUBSCRIBE}: {name} must be positive; \
+            "{ability}: {name} must be positive; \
              reason=invalid_argument"
         );
     }
@@ -770,13 +1280,22 @@ mod tests {
         register_with_backend(reg, Arc::new(SyntheticBackend));
     }
 
+    fn clear_recording_sessions_for_test() {
+        recording_sessions().lock().unwrap().clear();
+    }
+
     #[test]
     fn registration_publishes_camera_manifests_to_catalog_snapshot() {
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
         let rows = reg.ability_catalog_snapshot();
 
-        for ability in [ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE] {
+        for ability in [
+            ABILITY_CAMERA_SNAPSHOT,
+            ABILITY_CAMERA_SUBSCRIBE,
+            ABILITY_CAMERA_RECORD_START,
+            ABILITY_CAMERA_RECORD_STOP,
+        ] {
             let manifest = rows
                 .iter()
                 .find(|row| row.name == ability)
@@ -941,6 +1460,121 @@ mod tests {
     }
 
     #[test]
+    fn camera_recording_start_stop_persists_mjpeg_artifact() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        clear_recording_sessions_for_test();
+        let mut file = ResourcesFile::default();
+        let ura = seed_camera(&mut file, "h-cam-recording");
+        resources::save(&file).unwrap();
+
+        let mut reg = AxonAbilityCatalog::new();
+        register_synthetic(&mut reg);
+        let dispatcher = Arc::new(reg);
+        let start = dispatcher
+            .execute_rpc(InvocationTarget {
+                scope: TargetScope::Local,
+                ability: ABILITY_CAMERA_RECORD_START.to_string(),
+                normalized_args: json!({"fps": 5, "max_duration_ms": 5000}),
+                call_mode: CallMode::Rpc,
+                subject: Some(ura.clone()),
+                causal_context: None,
+            })
+            .unwrap();
+        let session_id = start["recording_session_id"].as_str().unwrap().to_string();
+        assert_eq!(start["state"], "recording");
+
+        let stop = dispatcher
+            .execute_rpc(InvocationTarget {
+                scope: TargetScope::Local,
+                ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
+                normalized_args: json!({"recording_session_id": session_id}),
+                call_mode: CallMode::Rpc,
+                subject: Some(ura),
+                causal_context: None,
+            })
+            .unwrap();
+        assert_eq!(stop["state"], "stopped");
+        assert_eq!(stop["content_type"], recording_content_type());
+        assert!(
+            stop["frame_count"].as_u64().unwrap() >= 1,
+            "recording must contain at least one frame: {stop}"
+        );
+        let local_path = stop["local_path"].as_str().unwrap();
+        let bytes = std::fs::read(local_path).unwrap();
+        assert!(
+            bytes.starts_with(format!("--{RECORDING_BOUNDARY}\r\n").as_bytes()),
+            "recording artifact must be multipart MJPEG"
+        );
+        assert!(stop["capture_id"].as_str().is_some());
+        clear_recording_sessions_for_test();
+    }
+
+    #[test]
+    fn camera_recording_rejects_duplicate_start_without_orphaning_first_session() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        clear_recording_sessions_for_test();
+        let mut file = ResourcesFile::default();
+        let ura = seed_camera(&mut file, "h-cam-recording-duplicate");
+        resources::save(&file).unwrap();
+
+        let mut reg = AxonAbilityCatalog::new();
+        register_synthetic(&mut reg);
+        let dispatcher = Arc::new(reg);
+        let start_args = json!({"fps": 5, "max_duration_ms": 5000, "max_bytes": 1048576});
+        let first = dispatcher
+            .execute_rpc(InvocationTarget {
+                scope: TargetScope::Local,
+                ability: ABILITY_CAMERA_RECORD_START.to_string(),
+                normalized_args: start_args.clone(),
+                call_mode: CallMode::Rpc,
+                subject: Some(ura.clone()),
+                causal_context: None,
+            })
+            .unwrap();
+        let session_id = first["recording_session_id"].as_str().unwrap().to_string();
+
+        let duplicate_err = dispatcher
+            .execute_rpc(InvocationTarget {
+                scope: TargetScope::Local,
+                ability: ABILITY_CAMERA_RECORD_START.to_string(),
+                normalized_args: start_args,
+                call_mode: CallMode::Rpc,
+                subject: Some(ura.clone()),
+                causal_context: None,
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            duplicate_err.contains("recording_already_active"),
+            "duplicate start must fail with a stable reason: {duplicate_err}"
+        );
+        {
+            let sessions = recording_sessions().lock().unwrap();
+            let session = sessions
+                .get(&session_id)
+                .expect("first recording session must remain stoppable");
+            assert_eq!(session.resource_ura, ura);
+            assert!(
+                session.done.is_some(),
+                "duplicate admission failure must not steal the completion receiver"
+            );
+        }
+
+        let stop = dispatcher
+            .execute_rpc(InvocationTarget {
+                scope: TargetScope::Local,
+                ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
+                normalized_args: json!({"recording_session_id": session_id}),
+                call_mode: CallMode::Rpc,
+                subject: Some(ura),
+                causal_context: None,
+            })
+            .unwrap();
+        assert_eq!(stop["state"], "stopped");
+        clear_recording_sessions_for_test();
+    }
+
+    #[test]
     fn camera_subscribe_stream_preview_errors_name_subscribe_ability() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
@@ -994,9 +1628,8 @@ mod tests {
 
     /// INV-RESOURCE-VALIDITY: subject points at a URA not in the
     /// local table → reason="resource_not_found". Distinct from
-    /// "URA present but device unplugged" (resource_unavailable —
-    /// not testable in PR3a's synthetic backend; covered when the
-    /// real backend lands).
+    /// "URA present but device unplugged" (resource_unavailable),
+    /// which requires a production camera backend to exercise.
     #[test]
     fn handler_rejects_unknown_subject_with_resource_not_found_reason() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();

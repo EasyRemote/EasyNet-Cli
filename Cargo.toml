@@ -186,11 +186,10 @@ rand = "0.8"
 # Locate $XDG_CONFIG_HOME / ~/.config with platform fallbacks.
 dirs = "5"
 termimad = "0.31"
-# Pure-Rust JPEG encoder. Used by `camera.snapshot` /
-# `screen.snapshot` (RFC-005 v3.2 A3 / A8) to produce a real JPEG
-# byte stream. PR3a uses it with a synthetic frame buffer (no
-# hardware dep — the real cpal/nokhwa backends land later); the
-# encode path itself is the same for synthetic and real frames.
+# Pure-Rust JPEG encoder. Used by camera still/preview paths and
+# `screen.snapshot` (RFC-005 v3.2 A3/A4/A8) to produce real JPEG
+# byte streams. Tests also use it with synthetic frame buffers so
+# receipt encoding is identical across hardware and non-hardware runs.
 # Picked over `image` because we only need encoding (no decoders,
 # no PNG/GIF/WebP) and want the smallest extra build surface.
 jpeg-encoder = { version = "0.7", default-features = false }
@@ -201,12 +200,11 @@ jpeg-encoder = { version = "0.7", default-features = false }
 # default-device sample-rate may diverge from the schema's
 # 16/24/48 kHz set, so a downsampler is added in a follow-up.
 cpal = "0.15"
-# RFC-005 v3.2 A2, A3 — physical camera capture
-# (camera.subscribe / camera.snapshot). nokhwa wraps AVFoundation
-# (macOS), V4L2 (Linux) and MediaFoundation (Windows). Windows
-# back-end is known fragile; only macOS + Linux land in CI.
-# `input-native` opts into the platform-direct backends and
-# avoids the heavyweight image-pipeline backends.
+# RFC-005 v3.2 A3/A4 — physical camera capture. Non-macOS camera
+# subscribe/snapshot uses nokhwa's platform-direct backends. macOS
+# snapshot/subscribe use direct AVFoundation bindings below so still
+# photos go through `AVCapturePhotoOutput` instead of preview frames.
+# `input-native` avoids the heavyweight image-pipeline backends.
 nokhwa = { version = "0.10", features = ["input-native"] }
 # RFC-005 v3.2 A4, A8 — physical screen capture
 # (screen.subscribe / screen.snapshot). xcap was picked over
@@ -372,6 +370,10 @@ objc2 = "0.6"
 block2 = "0.6"
 dispatch2 = "0.3"
 objc2-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", features = [
+    "AVCaptureOutputBase",
+    "AVCapturePhotoOutput",
+] }
 objc2-core-media = "0.3"
 objc2-core-video = "0.3"
 objc2-core-foundation = "0.3"
