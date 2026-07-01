@@ -36,8 +36,11 @@ use easynet_cli::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
 };
 use easynet_cli::runtime::ability::conformance::{
-    BaselineConformanceReport, DaemonInvocationSurface, DeviceBaseline, HubBaseline,
-    RegistryConformance, RuntimeAdminConformance,
+    BaselineConformanceReport, DeviceBaseline, HubBaseline, RegistryConformance,
+};
+#[cfg(feature = "axon-pb")]
+use easynet_cli::runtime::ability::conformance::{
+    DaemonInvocationSurface, RuntimeAdminConformance,
 };
 use easynet_cli::runtime::agents;
 use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
@@ -109,14 +112,17 @@ fn assert_daemon_baseline_conformance(
     if matches!(mode, DaemonMode::Hub | DaemonMode::Both) {
         let hub = HubBaseline::required_abilities();
         collect_baseline_failure(&mut failures, registry_conformance.check("hub", hub));
-        collect_baseline_failure(
-            &mut failures,
-            DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
-        );
-        collect_baseline_failure(
-            &mut failures,
-            RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
-        );
+        #[cfg(feature = "axon-pb")]
+        {
+            collect_baseline_failure(
+                &mut failures,
+                DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
+            );
+            collect_baseline_failure(
+                &mut failures,
+                RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
+            );
+        }
     }
 
     if failures.is_empty() {

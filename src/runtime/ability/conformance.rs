@@ -383,10 +383,16 @@ pub struct DeviceBaseline;
 impl DeviceBaseline {
     #[must_use]
     pub fn required_abilities() -> Vec<BaselineAbility> {
-        let mut abilities = DEVICE_BASELINE.to_vec();
         #[cfg(feature = "remote-desktop")]
-        abilities.extend_from_slice(DEVICE_REMOTE_DESKTOP_BASELINE);
-        abilities
+        {
+            let mut abilities = DEVICE_BASELINE.to_vec();
+            abilities.extend_from_slice(DEVICE_REMOTE_DESKTOP_BASELINE);
+            abilities
+        }
+        #[cfg(not(feature = "remote-desktop"))]
+        {
+            DEVICE_BASELINE.to_vec()
+        }
     }
 }
 
@@ -469,6 +475,7 @@ impl DaemonInvocationSurface {
     /// dispatcher match arms. This is the constructor tests should use; it
     /// keeps conformance from becoming a second hand-maintained route list.
     #[must_use]
+    #[cfg(feature = "axon-pb")]
     pub fn from_daemon_surface() -> Self {
         Self::new(
             crate::services::invocation_transport::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES
@@ -534,6 +541,7 @@ impl RuntimeAdminConformance {
     /// that feed `RUNTIME_ADMIN_BIDI_ROUTES`, so the installed set cannot
     /// silently drift from what the daemon actually serves.
     #[must_use]
+    #[cfg(feature = "axon-pb")]
     pub fn from_daemon_surface() -> Self {
         Self::new(
             crate::services::invocation_transport::bidi_dispatcher::RUNTIME_ADMIN_BIDI_ROUTES
@@ -642,6 +650,7 @@ mod tests {
         assert!(report.is_conformant(), "{}", report.panic_message());
     }
 
+    #[cfg(feature = "axon-pb")]
     #[test]
     fn daemon_invocation_surface_satisfies_hub_baseline() {
         let report = DaemonInvocationSurface::from_daemon_surface()
@@ -649,6 +658,7 @@ mod tests {
         assert!(report.is_conformant(), "{}", report.panic_message());
     }
 
+    #[cfg(feature = "axon-pb")]
     #[test]
     fn daemon_invocation_surface_detects_missing_route() {
         let installed_without_identity_register =
@@ -673,6 +683,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "axon-pb")]
     #[test]
     fn daemon_invocation_route_tables_are_classified_by_dispatchers() {
         for route in crate::services::invocation_transport::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES {
@@ -690,6 +701,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "axon-pb")]
     #[test]
     fn hub_baseline_runtime_admin_rows_are_installed_on_daemon_surface() {
         // The installed runtime-admin surface is the production bidi

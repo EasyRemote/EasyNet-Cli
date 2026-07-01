@@ -39,7 +39,6 @@ pub(crate) mod descriptor_ref;
 #[cfg(feature = "axon-pb")]
 pub mod dispatch_shim;
 pub mod hot_agent_registrar;
-#[cfg(feature = "axon-pb")]
 pub(crate) mod local_runtime_request;
 pub mod runtime_factory;
 #[cfg(feature = "axon-pb")]
