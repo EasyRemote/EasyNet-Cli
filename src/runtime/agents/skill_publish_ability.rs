@@ -309,7 +309,7 @@ fn tree_handler(args: Value) -> anyhow::Result<Value> {
     let (owner_id, skill_name) = parse_owner_skill_args(&args, "skill.tree")?;
     validate_skill_name(&skill_name)?;
     let resource_ura = package_resource_ura_from_args(&args, "skill.tree", &skill_name)?;
-    let skill_dir = resolve_skill_dir(&owner_id, &skill_name, "skill.tree")?;
+    let skill_dir = resolve_readable_skill_dir(&owner_id, &skill_name, "skill.tree")?;
     let mut entries = Vec::new();
     collect_skill_tree_entries(&skill_dir, &skill_dir, &mut entries)?;
     annotate_skill_file_resource_uras(&resource_ura, &mut entries);
@@ -334,7 +334,7 @@ fn read_file_handler(args: Value) -> anyhow::Result<Value> {
     let (owner_id, skill_name, rel_path) = parse_skill_file_args(&args, "skill.read_file", false)?;
     validate_skill_name(&skill_name)?;
     let package_ura = package_resource_ura_from_args(&args, "skill.read_file", &skill_name)?;
-    let skill_dir = resolve_skill_dir(&owner_id, &skill_name, "skill.read_file")?;
+    let skill_dir = resolve_readable_skill_dir(&owner_id, &skill_name, "skill.read_file")?;
     let rel = validate_skill_relative_path(&rel_path, false)?;
     let full = skill_dir.join(&rel);
     ensure_resolved_inside(&skill_dir, &full, "skill.read_file")?;
@@ -698,6 +698,25 @@ fn resolve_skill_dir(owner_id: &str, skill_name: &str, verb: &str) -> anyhow::Re
         "{verb}: no skill named {skill_name:?} for agent {owner_id:?} under {}",
         owner_root.display()
     )
+}
+
+fn resolve_readable_skill_dir(
+    owner_id: &str,
+    skill_name: &str,
+    verb: &str,
+) -> anyhow::Result<PathBuf> {
+    if let Some(global_pool) =
+        crate::runtime::skill_store::GlobalSkillPoolRef::parse_owner_id(owner_id, verb)?
+    {
+        if let Some(path) = global_pool.skill_dir(skill_name) {
+            return Ok(path);
+        }
+        anyhow::bail!(
+            "{verb}: no global skill named {skill_name:?} in pool {:?}",
+            global_pool.label()
+        );
+    }
+    resolve_skill_dir(owner_id, skill_name, verb)
 }
 
 /// Refuse skill names that would escape the skills/ directory or
@@ -1379,6 +1398,45 @@ mod tests {
             "path": "guide.md",
         }))
         .expect("read resolves global skill");
+        assert_eq!(read["content"], "global guide");
+    }
+
+    #[test]
+    fn tree_and_read_file_accept_unscoped_global_pool_owner() {
+        let _g = HomeGuard::new();
+        let skill_dir = crate::persistence::config::home_dir()
+            .join(".claude")
+            .join("skills")
+            .join("global-inspectable");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        crate::persistence::config::atomic_write(
+            &skill_dir.join("SKILL.md"),
+            b"---\nname: global-inspectable\ndescription: Global Inspectable\n---\n",
+        )
+        .unwrap();
+        crate::persistence::config::atomic_write(&skill_dir.join("guide.md"), b"global guide")
+            .unwrap();
+
+        let tree = tree_handler(json!({
+            "owner_agent_id": "global:claude-global",
+            "skill_name": "global-inspectable",
+            "resource_ura": "easynet:///r/localhost/resource/agent.dev.claude-global/skill/global-inspectable",
+        }))
+        .expect("tree resolves unscoped global owner");
+        assert_eq!(tree["owner_agent_id"], "global:claude-global");
+        assert!(tree["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["path"] == "guide.md" && f["type"] == "file"));
+
+        let read = read_file_handler(json!({
+            "owner_agent_id": "global:claude-global",
+            "skill_name": "global-inspectable",
+            "resource_ura": "easynet:///r/localhost/resource/agent.dev.claude-global/skill/global-inspectable",
+            "path": "guide.md",
+        }))
+        .expect("read resolves unscoped global owner");
         assert_eq!(read["content"], "global guide");
     }
 

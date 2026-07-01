@@ -58,9 +58,11 @@ pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
 /// }
 /// ```
 ///
-/// `owner_agent_id` is a local workspace selector. `agent_ura` and
-/// `subject_ura` are canonical query scopes. If both forms are
-/// supplied they must resolve to the same hosted agent.
+/// `owner_agent_id` is usually a local workspace selector. It may
+/// also be `global:<pool>` for unscoped global-pool rows returned by
+/// this ability. `agent_ura` and `subject_ura` are canonical query
+/// scopes. If both forms are supplied they must resolve to the same
+/// hosted agent.
 ///
 /// Returns: `{ "items": [InstalledSkill, ...] }`. The InstalledSkill
 /// shape matches `EasyNet/backend/internal/types/custom_types.go`
@@ -130,6 +132,11 @@ impl<'a> SkillInventoryBuilder<'a> {
     }
 
     fn collect(mut self) -> Vec<crate::runtime::skill_store::InstallRecord> {
+        if let Some(global_pool) = self.scope.global_pool() {
+            self.collect_global_pool(global_pool);
+            return self.rows;
+        }
+
         for (name, entry) in &self.registry.agents {
             if !self.scope.includes_agent(name) {
                 continue;
@@ -137,10 +144,14 @@ impl<'a> SkillInventoryBuilder<'a> {
             self.collect_managed_installs(name, entry);
             self.collect_global_pools(name, entry.agent_type);
         }
+        self.retain_skill_name_filter();
+        self.rows
+    }
+
+    fn retain_skill_name_filter(&mut self) {
         if let Some(skill_name) = &self.scope.skill_name {
             self.rows.retain(|row| row.name == *skill_name);
         }
-        self.rows
     }
 
     fn collect_managed_installs(&mut self, name: &str, entry: &agents::AgentEntry) {
@@ -196,6 +207,27 @@ impl<'a> SkillInventoryBuilder<'a> {
             }
         }
     }
+
+    fn collect_global_pool(
+        &mut self,
+        global_pool: &crate::runtime::skill_store::GlobalSkillPoolRef,
+    ) {
+        if let Some(skill_name) = self.scope.skill_name.as_deref() {
+            self.rows.extend(
+                self.global_pool_cache
+                    .rows_for_global_skill(global_pool, skill_name),
+            );
+            return;
+        }
+        for pool_dir in global_pool.dirs() {
+            if self.emitted_unscoped_global_pools.insert(pool_dir.clone()) {
+                self.rows.extend(
+                    self.global_pool_cache
+                        .rows_for_global_pool(global_pool.label(), &pool_dir),
+                );
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -217,6 +249,23 @@ impl GlobalSkillPoolCache {
                 row
             })
             .collect()
+    }
+
+    fn rows_for_global_skill(
+        &mut self,
+        global_pool: &crate::runtime::skill_store::GlobalSkillPoolRef,
+        skill_name: &str,
+    ) -> Vec<crate::runtime::skill_store::InstallRecord> {
+        let Some(skill_dir) = global_pool.skill_dir(skill_name) else {
+            return Vec::new();
+        };
+        crate::runtime::skill_store::global_skill_record_from_dir(
+            &global_pool.owner_agent_id(),
+            global_pool.label(),
+            &skill_dir,
+        )
+        .into_iter()
+        .collect()
     }
 
     fn rows_for_agent(
@@ -297,6 +346,7 @@ struct SkillListScope {
     owner_agent_id: Option<String>,
     agent_ura: Option<String>,
     skill_name: Option<String>,
+    global_pool: Option<crate::runtime::skill_store::GlobalSkillPoolRef>,
 }
 
 impl SkillListScope {
@@ -322,6 +372,18 @@ impl SkillListScope {
                     .map_err(|e| anyhow::anyhow!("skill.list: {e}"))
             })
             .transpose()?;
+        let global_pool = owner_agent_id
+            .as_deref()
+            .map(|owner| {
+                crate::runtime::skill_store::GlobalSkillPoolRef::parse_owner_id(owner, "skill.list")
+            })
+            .transpose()?
+            .flatten();
+        if global_pool.is_some() && (agent_ura.is_some() || subject.is_some()) {
+            anyhow::bail!(
+                "skill.list: global owner_agent_id cannot be combined with agent_ura/subject_ura"
+            );
+        }
         let scoped_agent_ura = merge_agent_scope(agent_ura, subject.as_ref())?;
         let scoped_owner = scoped_agent_ura
             .as_deref()
@@ -336,9 +398,14 @@ impl SkillListScope {
         }
 
         Ok(Self {
-            owner_agent_id: scoped_owner.or(owner_agent_id),
+            owner_agent_id: global_pool
+                .as_ref()
+                .map(|pool| pool.owner_agent_id())
+                .or(scoped_owner)
+                .or(owner_agent_id),
             agent_ura: scoped_agent_ura,
             skill_name: subject.and_then(|scope| scope.skill_name),
+            global_pool,
         })
     }
 
@@ -351,14 +418,21 @@ impl SkillListScope {
     }
 
     fn is_agent_scoped(&self) -> bool {
-        self.owner_agent_id.is_some() || self.agent_ura.is_some()
+        self.global_pool.is_none() && (self.owner_agent_id.is_some() || self.agent_ura.is_some())
     }
 
     fn includes_agent(&self, agent_name: &str) -> bool {
+        if self.global_pool.is_some() {
+            return false;
+        }
         self.owner_agent_id
             .as_ref()
             .map(|filter| filter == agent_name)
             .unwrap_or(true)
+    }
+
+    fn global_pool(&self) -> Option<&crate::runtime::skill_store::GlobalSkillPoolRef> {
+        self.global_pool.as_ref()
     }
 }
 
@@ -421,7 +495,7 @@ pub fn list_input_schema() -> Value {
         "properties": {
             "owner_agent_id": {
                 "type": "string",
-                "description": "Restrict the list to skills owned by this agent. Absent = every registered agent."
+                "description": "Restrict the list to skills owned by this agent, or use global:<pool> for unscoped global-pool rows. Absent = every registered agent."
             },
             "agent_ura": {
                 "type": "string",
@@ -592,6 +666,26 @@ mod tests {
             .collect();
         assert_eq!(scoped_rows.len(), 1);
         assert_eq!(scoped_rows[0]["agent_id"], "alice");
+    }
+
+    #[test]
+    fn list_handler_filters_unscoped_global_pool_owner() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let home = std::path::PathBuf::from(std::env::var("HOME").expect("home"));
+        let skill_dir = home.join(".claude").join("skills").join("summarize");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: summarize\ndescription: Summarize text\n---\n",
+        )
+        .expect("skill md");
+
+        let filtered = list_handler_for_args(json!({"owner_agent_id": "global:claude-global"}))
+            .expect("global-pool scoped list");
+        let items = filtered["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["agent_id"], "global:claude-global");
+        assert_eq!(items[0]["name"], "summarize");
     }
 
     #[test]
