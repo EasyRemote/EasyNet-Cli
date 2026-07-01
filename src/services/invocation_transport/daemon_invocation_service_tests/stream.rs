@@ -550,6 +550,136 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     );
 }
 
+#[tokio::test]
+async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() {
+    use crate::services::pending_dispatch::PendingStreamDispatchMap;
+    use futures::StreamExt;
+
+    const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/stream-target";
+    const ABILITY: &str = "dev.semop.chat";
+
+    let pending_stream = Arc::new(PendingStreamDispatchMap::new());
+    let svc = make_service().with_pending_stream(Arc::clone(&pending_stream));
+    let (target_tx, mut target_rx) = mpsc::channel(4);
+    svc.directory
+        .presence
+        .insert(TARGET_DEVICE_URA.to_string(), target_tx);
+    publish_test_route(&svc, TARGET_DEVICE_URA, ABILITY);
+
+    let arguments = br#"{"message":"hello"}"#.to_vec();
+    let signing_key = test_device_signing_key();
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(signed_test_envelope(
+                TEST_DAEMON_URI,
+                TARGET_DEVICE_URA,
+                TARGET_DEVICE_URA,
+                ABILITY,
+                &arguments,
+                &signing_key,
+            )),
+            function_name: ABILITY.to_string(),
+            arguments: arguments.clone(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("remote stream route should dispatch over presence");
+
+    let dispatch_frame = target_rx
+        .recv()
+        .await
+        .expect("remote target receives dispatch frame")
+        .expect("dispatch frame is Ok");
+    let call_id = match dispatch_frame.frame.payload.expect("dispatch payload") {
+        DownPayload::BinaryChunk(chunk) => {
+            let dispatch =
+                SessionDispatch::decode_frame(&chunk.data).expect("SessionDispatch decodes");
+            match dispatch {
+                SessionDispatch::Dispatch {
+                    call_id,
+                    callee_ura,
+                    subject_ura,
+                    ability,
+                    args,
+                    ..
+                } => {
+                    assert_eq!(callee_ura.as_deref(), Some(TARGET_DEVICE_URA));
+                    assert_eq!(subject_ura.as_deref(), Some(TARGET_DEVICE_URA));
+                    assert_eq!(
+                        ability,
+                        crate::ura::owner_ability_ura(TARGET_DEVICE_URA, ABILITY)
+                            .expect("expected ability URA")
+                    );
+                    assert_eq!(args, arguments);
+                    call_id
+                }
+                other => panic!("expected SessionDispatch::Dispatch, got {other:?}"),
+            }
+        }
+        other => panic!("expected legacy BinaryChunk carrier, got {other:?}"),
+    };
+
+    assert_eq!(
+        pending_stream.try_push_chunk(call_id, br#"{"delta":"part-1"}"#.to_vec()),
+        crate::services::pending_dispatch::StreamDeliver::Delivered
+    );
+    assert_eq!(
+        pending_stream.try_finish(
+            call_id,
+            DispatchResult {
+                payload: br#"{"done":true}"#.to_vec(),
+                receipt: None,
+                error: None,
+                failure: None,
+                request_id: Some("inv_remote_stream_1".to_string()),
+            },
+        ),
+        crate::services::pending_dispatch::StreamDeliver::Delivered
+    );
+
+    let mut stream = resp.into_inner();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("chunk arrives")
+        .expect("stream remains open")
+        .expect("chunk is Ok");
+    assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert_eq!(
+        first.state,
+        easynet_axon::invocation::InvocationState::Running.to_wire_i32()
+    );
+    assert!(!first.terminal);
+    assert_eq!(first.payload, br#"{"delta":"part-1"}"#);
+    assert_eq!(
+        first.selected_node_id,
+        format!(
+            "route-ref::{}",
+            crate::ura::owner_ability_ura(TARGET_DEVICE_URA, ABILITY)
+                .expect("expected ability URA")
+        )
+    );
+
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("terminal arrives")
+        .expect("stream remains open until terminal")
+        .expect("terminal is Ok");
+    assert_eq!(
+        terminal.state,
+        easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+    );
+    assert!(terminal.terminal);
+    assert_eq!(terminal.invocation_id, "inv_remote_stream_1");
+    assert_eq!(terminal.payload, br#"{"done":true}"#);
+    assert!(terminal.error.is_none());
+
+    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("stream closes after terminal");
+    assert!(close.is_none());
+    assert_eq!(pending_stream.outstanding(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     use base64::Engine as _;

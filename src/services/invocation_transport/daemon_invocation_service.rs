@@ -553,6 +553,7 @@ impl DaemonInvocationService {
         StreamDispatcher::new(
             self.admission.clone(),
             self.directory.clone(),
+            self.sessions.clone(),
             self.runtime.clone(),
             self.target_gate(),
         )
@@ -1101,7 +1102,7 @@ impl Invocation for DaemonInvocationService {
             Some(DaemonStreamRoute::FederationSubscribeDirectoryV2) => {
                 streams.dispatch_subscribe_directory_v2()
             }
-            None => streams.dispatch_local_selected_route(&inner).await,
+            None => streams.dispatch_selected_route(&inner).await,
         }
     }
 
