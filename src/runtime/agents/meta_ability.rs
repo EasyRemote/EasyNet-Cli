@@ -1447,6 +1447,50 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn list_abilities_surfaces_remote_desktop_plugin_manifest_schema() {
+        use crate::persistence::local_agents::{save, LocalAgentsFile};
+        use crate::runtime::plugin_host::PluginRuntimeLimits;
+        use std::sync::OnceLock;
+
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        save(&LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            hosted_agents: Vec::new(),
+        })
+        .expect("seed local-agents.json");
+
+        let mut live_reg = AxonAbilityCatalog::new();
+        crate::plugins::remote_desktop::register(&mut live_reg, PluginRuntimeLimits::new(128, 8));
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+        handle.set(Arc::new(live_reg)).expect("set live registry");
+
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, Vec::new, handle, None);
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let ability = resp["abilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == "remote_desktop.create_session")
+            .expect("remote_desktop.create_session must appear in discovery");
+
+        let desc = ability["description"].as_str().unwrap_or_default();
+        assert!(
+            !desc.contains("no manifest schema"),
+            "remote desktop plugin abilities must publish manifest text, got: {desc:?}"
+        );
+        assert_eq!(
+            ability["schema_summary"]["input"]["properties"]["mode"]["enum"][0],
+            json!("view_only"),
+            "plugin manifest schema must flow into meta.list_abilities: {ability}"
+        );
+        assert_eq!(ability["class"], json!("query"));
+        assert_eq!(ability["source"], json!("registry"));
+    }
+
     #[test]
     fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
         use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};

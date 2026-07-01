@@ -35,8 +35,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
@@ -74,82 +74,8 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     let registry = agents::load_agents()?;
     let local_agents = crate::persistence::local_agents::load().ok();
     let scope = SkillListScope::from_args(&args, local_agents.as_ref())?;
-
-    // Collect rows in the same shape `easynet skill list --json`
-    // emitted historically — the backend already knows how to read
-    // that shape (see `cliInstalledRow` in
-    // backend/internal/logic/skill/listInstalledLogic.go), and this
-    // ability now becomes the definitive source.
-    use crate::runtime::skill_store::{global_skill_pools_for, read_install_record, InstallRecord};
-    let mut rows: Vec<InstallRecord> = Vec::new();
-    let mut global_pool_cache = GlobalSkillPoolCache::default();
-    let mut emitted_unscoped_global_pools = std::collections::BTreeSet::new();
     let hosted_agent_index = HostedAgentUraIndex::from_local_agents(local_agents.as_ref());
-
-    for (name, entry) in &registry.agents {
-        if let Some(filter) = &scope.owner_agent_id {
-            if filter != name {
-                continue;
-            }
-        }
-
-        // Source 1 — EasyNet-managed installs. Path layout is owned
-        // by the agent type and resolved through
-        // `managed_skill_dir_for_agent_type`, so listing and publish
-        // code cannot silently grow another compatibility search path.
-        let root = entry
-            .root_path
-            .clone()
-            .unwrap_or_else(|| crate::persistence::config::agents_root().join(name));
-        let skills_dir = managed_skill_dir_for_agent_type(&root, entry.agent_type);
-        if skills_dir.exists() {
-            if let Ok(read) = std::fs::read_dir(&skills_dir) {
-                for dir_entry in read.flatten() {
-                    let record_path = dir_entry.path().join(".easynet").join("install.json");
-                    if !record_path.exists() {
-                        continue;
-                    }
-                    match read_install_record(&record_path) {
-                        Ok(r) => rows.push(r),
-                        Err(e) => {
-                            // Per-row failure must not blank the
-                            // whole list — log and skip. The
-                            // operator sees the warning in the
-                            // daemon log; the rest of the list
-                            // surfaces normally.
-                            let path_display = format!("{}", dir_entry.path().display());
-                            let err_msg = format!("{e}");
-                            crate::op_event!(
-                                component = skill_list,
-                                kind = entry_skipped,
-                                level = "warn",
-                                path = path_display,
-                                error = err_msg,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // Source 2 — agent-native global pools (~/.claude/skills,
-        // ~/.agents/skills). These are populated by external tooling
-        // and have no install.json; metadata is synthesised from
-        // SKILL.md frontmatter (or directory name fallback). Unscoped
-        // inventory lists each global pool once; scoped inventory projects
-        // the pool onto the selected agent so skill.read_file/write_file
-        // still receive an owner-shaped row.
-        for (label, pool_dir) in global_skill_pools_for(entry.agent_type) {
-            if scope.is_agent_scoped() {
-                rows.extend(global_pool_cache.rows_for_agent(name, label, &pool_dir));
-            } else if emitted_unscoped_global_pools.insert(pool_dir.clone()) {
-                rows.extend(global_pool_cache.rows_for_global_pool(label, &pool_dir));
-            }
-        }
-    }
-    if let Some(skill_name) = &scope.skill_name {
-        rows.retain(|row| row.name == *skill_name);
-    }
+    let rows = SkillInventoryBuilder::new(&registry, &scope).collect();
 
     // Serialise InstallRecord directly — its serde derive emits the
     // wire shape backend already speaks (content_hash via
@@ -175,6 +101,101 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
         .collect();
 
     Ok(json!({ "items": items }))
+}
+
+/// Builds the installed-skill inventory in one bounded pass.
+///
+/// This type owns the fan-out policy: managed agent installs are inherently
+/// agent-scoped, while native global pools are scanned once and then either
+/// emitted once globally or projected onto the selected agent. Keeping that
+/// policy out of `list_handler` prevents future patches from reintroducing an
+/// O(agents * global_pool_size) unscoped listing.
+struct SkillInventoryBuilder<'a> {
+    registry: &'a agents::AgentRegistry,
+    scope: &'a SkillListScope,
+    rows: Vec<crate::runtime::skill_store::InstallRecord>,
+    global_pool_cache: GlobalSkillPoolCache,
+    emitted_unscoped_global_pools: BTreeSet<PathBuf>,
+}
+
+impl<'a> SkillInventoryBuilder<'a> {
+    fn new(registry: &'a agents::AgentRegistry, scope: &'a SkillListScope) -> Self {
+        Self {
+            registry,
+            scope,
+            rows: Vec::new(),
+            global_pool_cache: GlobalSkillPoolCache::default(),
+            emitted_unscoped_global_pools: BTreeSet::new(),
+        }
+    }
+
+    fn collect(mut self) -> Vec<crate::runtime::skill_store::InstallRecord> {
+        for (name, entry) in &self.registry.agents {
+            if !self.scope.includes_agent(name) {
+                continue;
+            }
+            self.collect_managed_installs(name, entry);
+            self.collect_global_pools(name, entry.agent_type);
+        }
+        if let Some(skill_name) = &self.scope.skill_name {
+            self.rows.retain(|row| row.name == *skill_name);
+        }
+        self.rows
+    }
+
+    fn collect_managed_installs(&mut self, name: &str, entry: &agents::AgentEntry) {
+        let root = entry
+            .root_path
+            .clone()
+            .unwrap_or_else(|| crate::persistence::config::agents_root().join(name));
+        let skills_dir = managed_skill_dir_for_agent_type(&root, entry.agent_type);
+        if !skills_dir.exists() {
+            return;
+        }
+        let Ok(read) = std::fs::read_dir(&skills_dir) else {
+            return;
+        };
+        for dir_entry in read.flatten() {
+            self.collect_managed_install_record(&dir_entry.path());
+        }
+    }
+
+    fn collect_managed_install_record(&mut self, skill_dir: &Path) {
+        let record_path = skill_dir.join(".easynet").join("install.json");
+        if !record_path.exists() {
+            return;
+        }
+        match crate::runtime::skill_store::read_install_record(&record_path) {
+            Ok(record) => self.rows.push(record),
+            Err(err) => {
+                let path_display = format!("{}", skill_dir.display());
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = skill_list,
+                    kind = entry_skipped,
+                    level = "warn",
+                    path = path_display,
+                    error = err_msg,
+                );
+            }
+        }
+    }
+
+    fn collect_global_pools(&mut self, agent_name: &str, agent_type: agents::AgentType) {
+        for (label, pool_dir) in crate::runtime::skill_store::global_skill_pools_for(agent_type) {
+            if self.scope.is_agent_scoped() {
+                self.rows.extend(
+                    self.global_pool_cache
+                        .rows_for_agent(agent_name, label, &pool_dir),
+                );
+            } else if self.emitted_unscoped_global_pools.insert(pool_dir.clone()) {
+                self.rows.extend(
+                    self.global_pool_cache
+                        .rows_for_global_pool(label, &pool_dir),
+                );
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -331,6 +352,13 @@ impl SkillListScope {
 
     fn is_agent_scoped(&self) -> bool {
         self.owner_agent_id.is_some() || self.agent_ura.is_some()
+    }
+
+    fn includes_agent(&self, agent_name: &str) -> bool {
+        self.owner_agent_id
+            .as_ref()
+            .map(|filter| filter == agent_name)
+            .unwrap_or(true)
     }
 }
 
