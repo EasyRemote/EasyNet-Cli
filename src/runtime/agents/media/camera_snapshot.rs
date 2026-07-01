@@ -988,9 +988,6 @@ fn run_recording_worker(
     let mut stop_reason = "stopped";
 
     loop {
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
         if started.elapsed().as_millis() as u64 >= options.max_duration_ms {
             stop_reason = "duration_limit";
             break;
@@ -1019,6 +1016,9 @@ fn run_recording_worker(
                 }
             }
             Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
@@ -1026,6 +1026,9 @@ fn run_recording_worker(
                 stop_reason = "stream_closed";
                 break;
             }
+        }
+        if stop.load(Ordering::Relaxed) {
+            break;
         }
     }
 
@@ -1284,6 +1287,13 @@ mod tests {
         recording_sessions().lock().unwrap().clear();
     }
 
+    fn recording_session_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn registration_publishes_camera_manifests_to_catalog_snapshot() {
         let mut reg = AxonAbilityCatalog::new();
@@ -1461,6 +1471,7 @@ mod tests {
 
     #[test]
     fn camera_recording_start_stop_persists_mjpeg_artifact() {
+        let _recording_guard = recording_session_test_guard();
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         clear_recording_sessions_for_test();
         let mut file = ResourcesFile::default();
@@ -1511,6 +1522,7 @@ mod tests {
 
     #[test]
     fn camera_recording_rejects_duplicate_start_without_orphaning_first_session() {
+        let _recording_guard = recording_session_test_guard();
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         clear_recording_sessions_for_test();
         let mut file = ResourcesFile::default();

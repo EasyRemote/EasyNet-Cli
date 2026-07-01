@@ -921,6 +921,8 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | "mic.subscribe"
         | "camera.subscribe"
         | "camera.snapshot"
+        | "camera.record_start"
+        | "camera.record_stop"
         | "screen.subscribe"
         | "screen.snapshot"
         | "speaker.publish"

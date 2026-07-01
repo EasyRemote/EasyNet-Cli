@@ -105,7 +105,7 @@ introspection simply because they use the `meta.*` namespace.
 | `meta.teach` / `meta.acquire` / `meta.forget` | capability transfer grant, learned manifest copy, learned-copy removal |
 | `ability.*` / `skill.*` mutation verbs | write/remove manifests or skill package state |
 | `fs.*`, `process.exec`, `shell.run`, `http.request` | host locomotion / execution work |
-| `terminal.*`, `voice.*`, `browser.*`, `mission.*` | session, media, browser, or orchestration work |
+| `terminal.*`, `mic.*`, `camera.*`, `screen.*`, `speaker.*`, `voice.*`, `browser.*`, `mission.*` | session, media, browser, or orchestration work |
 
 ## Cross-layer rules
 

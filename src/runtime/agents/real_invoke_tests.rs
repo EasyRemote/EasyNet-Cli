@@ -2584,6 +2584,37 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
 }
 
 #[test]
+fn real_camera_record_start_with_no_subject_returns_subject_required() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target("camera.record_start", json!({})))
+        .expect_err("camera.record_start without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "camera.record_start: expected reason=subject_required; got {err}"
+    );
+}
+
+#[test]
+fn real_camera_record_stop_with_no_subject_returns_subject_required() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target(
+            "camera.record_stop",
+            json!({"recording_session_id": "missing-real-invoke-session"}),
+        ))
+        .expect_err("camera.record_stop without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "camera.record_stop: expected reason=subject_required; got {err}"
+    );
+}
+
+#[test]
 fn real_screen_subscribe_with_no_subject_returns_subject_required() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
