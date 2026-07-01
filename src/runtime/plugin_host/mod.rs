@@ -4,6 +4,8 @@
 // File: src/runtime/plugin_host/mod.rs
 // Description: Ability extension host for installed and builtin plugins.
 
+pub mod broker;
+pub mod contribution;
 pub mod descriptor;
 pub mod errors;
 pub mod host_api;
@@ -12,24 +14,47 @@ pub mod install;
 pub mod load_plan;
 pub mod manifest;
 pub mod package;
+pub mod realtime;
 pub mod runtime_manager;
 pub mod sidecar;
 pub mod surface;
 pub mod wire;
 
+pub use broker::{
+    PluginActivationBroker, PluginPolicyBroker, PluginRealtimeActivationOutcome,
+    PluginRealtimeActivationReport, PluginRealtimeOutcomeStatus, PluginRealtimePermissionReadiness,
+    PluginRealtimePermissionStatus, PluginRealtimePublishReadiness, PluginRealtimeResourceMatch,
+    PluginRealtimeResourceReadiness, PluginResourceBroker,
+};
+pub use contribution::{
+    DaemonPluginBinder, PluginAbilityContribution, PluginAbilityHandler, PluginContributionBuilder,
+    PluginContributionSet, PluginImplementationBinding, PluginPackageContribution,
+    PluginRequirementSet,
+};
 pub use descriptor::{PluginAbilityMetadata, PluginDescriptorProjector};
 pub use errors::{PluginHostError, Result};
-pub use host_api::{PluginHotReloadReport, PluginRuntimeHost};
+pub use host_api::{PluginHotReloadReport, PluginRealtimeActivationHint, PluginRuntimeHost};
 pub use index::{PluginPackageIndex, PluginPackageIndexError, PluginPackageIndexLoadReport};
 pub use install::{InstalledPluginRecord, PluginInstaller, PluginStateToml};
 pub use load_plan::{PluginLoadPlan, PluginLoadPlanner, PluginLoadStatus};
 pub use manifest::{
     PluginAbilityLayer, PluginBidiWireKind, PluginCallMode, PluginDeclarativeBinding, PluginKind,
-    PluginPackageManifest, PluginRuntimeLimits,
+    PluginPackageManifest, PluginRealtimeCapability, PluginRealtimeKind, PluginRealtimeMode,
+    PluginRealtimeTransport, PluginRuntimeLimits,
 };
 pub use package::PluginAbilityDescriptor;
+pub use realtime::{
+    activation_plans_for_manifest, PluginRealtimeActivationPlan, PluginRealtimeActivationStatus,
+    PluginRealtimeTransportAdapterReadiness, PluginRealtimeTransportAdapterRegistry,
+    PluginRealtimeTransportAdapterStatus, PluginRealtimeTransportReadiness,
+    PluginRealtimeTransportReadinessStatus, PluginRealtimeTransportRoleReadiness,
+    PluginRealtimeTransportRoleStatus,
+};
 pub use runtime_manager::{PluginRuntimeManager, PluginRuntimeState};
-pub use surface::{PluginAbilitySurface, PluginAbilitySurfaceRecord, PluginSurfaceProjector};
+pub use surface::{
+    PluginAbilitySurface, PluginAbilitySurfaceRecord, PluginPackageSurfaceRecord,
+    PluginSurfaceProjector, PluginSurfaceReport,
+};
 pub use wire::PluginWireRegistry;
 
 use std::path::PathBuf;

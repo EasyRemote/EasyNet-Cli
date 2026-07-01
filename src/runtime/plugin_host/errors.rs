@@ -59,8 +59,16 @@ pub enum PluginHostError {
     InvalidRuntimeLimit(&'static str),
     #[error("plugin manifest declares invalid declarative binding for {id}: {reason}")]
     InvalidDeclarativeBinding { id: String, reason: String },
+    #[error("plugin manifest declares invalid realtime capability for {id}: {reason}")]
+    InvalidRealtimeCapability { id: String, reason: String },
     #[error("plugin ability {ability:?} control-plane registration failed: {reason}")]
     ControlPlaneRegistrationFailed { ability: String, reason: String },
+    #[error("plugin contribution for {package} ability {ability:?} is invalid: {reason}")]
+    InvalidContribution {
+        package: String,
+        ability: String,
+        reason: String,
+    },
     #[error(
         "plugin manifest entrypoint {declared:?} does not match compiled binding {expected:?}"
     )]
@@ -207,6 +215,22 @@ impl PartialEq for PluginHostError {
                 InvalidDeclarativeBinding { id: ai, reason: ar },
                 InvalidDeclarativeBinding { id: bi, reason: br },
             ) => ai == bi && ar == br,
+            (
+                InvalidRealtimeCapability { id: ai, reason: ar },
+                InvalidRealtimeCapability { id: bi, reason: br },
+            ) => ai == bi && ar == br,
+            (
+                InvalidContribution {
+                    package: ap,
+                    ability: aa,
+                    reason: ar,
+                },
+                InvalidContribution {
+                    package: bp,
+                    ability: ba,
+                    reason: br,
+                },
+            ) => ap == bp && aa == ba && ar == br,
             (
                 EntrypointMismatch {
                     declared: ad,

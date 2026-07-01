@@ -71,10 +71,15 @@ The layering is enforced at CI time:
   the transport reads the local bidi codec profile from
   `AbilityWireRegistry`, but plugin package ownership and execution
   policy remain in `runtime/plugin_host` and the Axon
-  `LocalRuntime`. `plugin_host` itself is allowed only for the
-  boot-injected `PluginRuntimeManager` handle used to execute
-  already-loaded plugin-backed abilities; install/load policy stays
-  in `runtime/plugin_host`.
+  `LocalRuntime`. Plugin packages contribute `AbilityImpl` bindings;
+  `DaemonPluginBinder` applies daemon authority policy before writing them
+  into `AxonAbilityCatalog`. Resource, permission, and realtime transport
+  readiness are projected by daemon-owned plugin-host brokers/adapters; plugin
+  packages do not own policy, caller/callee identity, or transport admission.
+  `plugin_host` itself is allowed only for the boot-injected
+  `PluginRuntimeManager` handle used to execute already-loaded plugin-backed
+  abilities; install/load policy stays in `runtime/plugin_host`. See
+  `docs/design/plugin-contribution-boundary.md`.
 - `scripts/check-kernel-boundary.sh` (rule 3) — Execution may
   only touch the network via `crate::runtime::gateway_api`, not
   the concrete `runtime::gateway`.

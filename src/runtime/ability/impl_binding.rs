@@ -41,11 +41,15 @@ impl RuntimeEnv {
         ))
     }
 
-    pub fn plugin_sidecar(package: &str, version: &str) -> Self {
+    pub fn plugin(package: &str, version: &str) -> Self {
         Self::generated(format!(
             "easynet-cli/{};plugin:{package}@{version}",
             env!("CARGO_PKG_VERSION")
         ))
+    }
+
+    pub fn plugin_sidecar(package: &str, version: &str) -> Self {
+        Self::plugin(package, version)
     }
 
     pub fn mcp(server: &str) -> Self {

@@ -1451,7 +1451,10 @@ mod tests {
     #[test]
     fn list_abilities_surfaces_remote_desktop_plugin_manifest_schema() {
         use crate::persistence::local_agents::{save, LocalAgentsFile};
-        use crate::runtime::plugin_host::PluginRuntimeLimits;
+        use crate::runtime::plugin_host::{
+            DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
+            PluginRequirementSet, PluginRuntimeLimits,
+        };
         use std::sync::OnceLock;
 
         let _home = crate::facade::cli::test_support::HomeGuard::new();
@@ -1462,7 +1465,23 @@ mod tests {
         .expect("seed local-agents.json");
 
         let mut live_reg = AxonAbilityCatalog::new();
-        crate::plugins::remote_desktop::register(&mut live_reg, PluginRuntimeLimits::new(128, 8));
+        let limits = PluginRuntimeLimits::new(128, 8);
+        let mut builder = PluginContributionBuilder::new(
+            "easynet.remote_desktop",
+            "0.1.0",
+            PluginKind::Builtin,
+            limits,
+            PluginRequirementSet::default(),
+            Vec::new(),
+        );
+        crate::plugins::remote_desktop::contribute(&mut builder, limits)
+            .expect("remote desktop plugin contribution");
+        let contribution = builder
+            .finish()
+            .expect("remote desktop package contribution");
+        DaemonPluginBinder::static_catalog(&mut live_reg)
+            .bind_set(&PluginContributionSet::new(vec![contribution]))
+            .expect("bind remote desktop contribution");
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle.set(Arc::new(live_reg)).expect("set live registry");
 

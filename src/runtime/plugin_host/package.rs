@@ -12,7 +12,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::plugin_host::errors::{PluginHostError, Result};
 use crate::runtime::plugin_host::manifest::{
     validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginCallMode,
@@ -186,7 +185,10 @@ pub struct BuiltinPluginBinding {
     pub expected_entrypoint: &'static str,
     pub enabled_env_var: Option<&'static str>,
     pub ability_specs: fn() -> Vec<BuiltinPluginAbilitySpec>,
-    pub register: fn(&mut AxonAbilityCatalog, PluginRuntimeLimits),
+    pub contribute: fn(
+        &mut crate::runtime::plugin_host::contribution::PluginContributionBuilder,
+        PluginRuntimeLimits,
+    ) -> Result<()>,
 }
 
 /// Source class for a package in the package index.
@@ -662,7 +664,12 @@ pub(crate) mod tests {
         fn input_schema() -> Value {
             serde_json::json!({"type": "object", "additionalProperties": false})
         }
-        fn register(_: &mut AxonAbilityCatalog, _: PluginRuntimeLimits) {}
+        fn contribute(
+            _: &mut crate::runtime::plugin_host::PluginContributionBuilder,
+            _: PluginRuntimeLimits,
+        ) -> Result<()> {
+            Ok(())
+        }
         fn ability_specs() -> Vec<BuiltinPluginAbilitySpec> {
             vec![BuiltinPluginAbilitySpec {
                 name: "test.echo",
@@ -700,7 +707,7 @@ layer = "control"
             expected_entrypoint: "test::register",
             enabled_env_var: None,
             ability_specs,
-            register,
+            contribute,
         }) {
             Ok(_) => panic!("manifest layer must match compiled spec"),
             Err(err) => err,

@@ -26,7 +26,7 @@ grep -q 'InvokeAbilityRef::parse(&invoke_args.ability_ura)' "$INVOKE_RS" \
 grep -q 'AbilitySelector::parse(raw)' "$INVOKE_RS" \
     || fail "plain CLI invoke input must still parse as an Ability URA"
 
-grep -q 'AbilitySelector::parse(ability_ura)' "$INVOKE_RS" \
+grep -q 'AbilitySelector::parse(&ability_ura)' "$INVOKE_RS" \
     || fail "descriptor-ref CLI invoke input must parse the embedded Ability URA"
 
 grep -q 'local_registry_ability()' "$INVOKE_RS" \

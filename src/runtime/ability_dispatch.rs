@@ -3307,6 +3307,20 @@ impl AxonAbilityCatalog {
         self.has_static_handler(ability)
     }
 
+    /// Snapshot the boot-time static ability names once for bounded
+    /// catalogue validation.
+    ///
+    /// Plugin reload and other fan-in validators should consume this read
+    /// model instead of calling [`Self::has_static_ability`] per candidate:
+    /// the execution index is authority-keyed, so per-name probes would
+    /// otherwise rescan that index repeatedly.
+    pub fn static_ability_names(&self) -> Vec<String> {
+        self.execution_index
+            .read()
+            .expect("execution_index RwLock poisoned")
+            .names(ExecutionOrigin::Static)
+    }
+
     fn has_static_handler(&self, ability: &str) -> bool {
         self.execution_index
             .read()
@@ -3720,6 +3734,24 @@ impl AxonAbilityCatalog {
         );
     }
 
+    pub fn register_rpc_with_envelope_and_spec_and_impl(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::RpcWithEnvelope(handler),
+        )
+        .with_manifest(manifest)
+        .with_implementation(implementation)
+        .commit(self)
+    }
+
     /// Register an envelope-aware RPC handler. Used by abilities
     /// that need access to the AXIOM 7-tuple `subject` (per
     /// **INV-SUBJECT-ENVELOPE**) — typically media abilities
@@ -3775,6 +3807,24 @@ impl AxonAbilityCatalog {
         );
     }
 
+    pub fn register_stream_with_envelope_and_spec_and_impl(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::StreamWithEnvelope(handler),
+        )
+        .with_manifest(manifest)
+        .with_implementation(implementation)
+        .commit(self)
+    }
+
     /// Envelope-aware stream variant. See `register_rpc_with_envelope`
     /// for the rationale. Transitional shim; defaults owner to
     /// `OwnerKind::Device`.
@@ -3818,6 +3868,24 @@ impl AxonAbilityCatalog {
             )
             .with_manifest(manifest),
         );
+    }
+
+    pub fn register_bidi_with_envelope_and_spec_and_impl(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalBidiHandlerWithEnvelope,
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        StaticRegistration::new(
+            ability,
+            owner,
+            StaticRegistrationHandler::BidiWithEnvelope(handler),
+        )
+        .with_manifest(manifest)
+        .with_implementation(implementation)
+        .commit(self)
     }
 
     /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
@@ -6707,6 +6775,31 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn static_ability_names_excludes_dynamic_rows() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner(
+            "fs.read",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::Value::Null)),
+        );
+        let reg = Arc::new(reg);
+        reg.hot_register_rpc(
+            "plugin.echo",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::Value::Null)),
+        )
+        .expect("dynamic RPC registers");
+
+        let names = reg.static_ability_names();
+
+        assert!(names.contains(&"fs.read".to_string()));
+        assert!(
+            !names.contains(&"plugin.echo".to_string()),
+            "plugin reload collision checks must compare only against boot-time static abilities"
+        );
     }
 
     #[test]

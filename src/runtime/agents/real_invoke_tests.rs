@@ -2141,6 +2141,26 @@ fn real_device_plugin_reload_reports_registration_diff() {
     );
 }
 
+#[test]
+fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let result = d.execute_rpc(target(
+        "plugin.activate_realtime",
+        json!({"package_id": "missing.test"}),
+    ));
+    match result {
+        Ok(value) => assert!(value.is_object()),
+        Err(err) => assert!(
+            !format!("{err}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
+            "plugin.activate_realtime must be routed: {err}"
+        ),
+    }
+}
+
 // ════════════════════════════════════════════════════════════════
 // Category E: Stream / Bidi
 // ════════════════════════════════════════════════════════════════

@@ -313,6 +313,9 @@ pub fn description_for(name: &str) -> &'static str {
         "agent.list" => agent_list_ability::list_agents_description(),
         plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_description(),
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_description(),
+        plugin_lifecycle_ability::ACTIVATE_REALTIME_ABILITY => {
+            plugin_lifecycle_ability::activate_realtime_description()
+        }
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
         teach_ability::TEACH => teach_ability::teach_description(),
@@ -494,6 +497,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "agent.list" => agent_list_ability::list_agents_input_schema(),
         plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_input_schema(),
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_input_schema(),
+        plugin_lifecycle_ability::ACTIVATE_REALTIME_ABILITY => {
+            plugin_lifecycle_ability::activate_realtime_input_schema()
+        }
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
         teach_ability::TEACH => teach_ability::teach_input_schema(),
@@ -952,6 +958,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // ability registration table after an install/update/remove
         // transaction has already committed on disk.
         | "plugin.reload"
+        | "plugin.activate_realtime"
         => Some(AbilityLayer::Operational),
         // `<user>.api_key.{create,list,revoke}` — user-rooted
         // credential-lifecycle verbs. `<user>` is the active

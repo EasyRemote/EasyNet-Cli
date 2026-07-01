@@ -96,6 +96,10 @@ mod tests {
         EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend, SyntheticScreenBackend,
     };
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+    use crate::runtime::plugin_host::{
+        DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
+        PluginRequirementSet,
+    };
 
     #[derive(Debug)]
     struct FailingScreenBackend;
@@ -118,6 +122,33 @@ mod tests {
         }
     }
 
+    fn registry_with_screen_backend(backend: Arc<dyn ScreenSnapshotBackend>) -> AxonAbilityCatalog {
+        let limits = test_runtime_limits();
+        let mut builder = PluginContributionBuilder::new(
+            "easynet.remote_desktop",
+            "0.1.0",
+            PluginKind::Builtin,
+            limits,
+            PluginRequirementSet::default(),
+            Vec::new(),
+        );
+        crate::plugins::remote_desktop::registration::contribute_with_screen_backend(
+            &mut builder,
+            backend,
+            limits,
+        )
+        .expect("remote desktop contribution");
+        let contribution = builder
+            .finish()
+            .expect("remote desktop contribution finish");
+        let contributions = PluginContributionSet::new(vec![contribution]);
+        let mut reg = AxonAbilityCatalog::new();
+        DaemonPluginBinder::static_catalog(&mut reg)
+            .bind_set(&contributions)
+            .expect("bind remote desktop contribution");
+        reg
+    }
+
     #[test]
     fn attach_bidi_emits_synthetic_frame_and_closes_on_request() {
         let _lock = test_lock();
@@ -127,12 +158,7 @@ mod tests {
             let ura = seed_display(&mut file, "remote-desktop-bidi-display");
             resources::save(&file).unwrap();
 
-            let mut reg = AxonAbilityCatalog::new();
-            crate::plugins::remote_desktop::registration::register_with_screen_backend(
-                &mut reg,
-                Arc::new(SyntheticScreenBackend),
-                test_runtime_limits(),
-            );
+            let reg = registry_with_screen_backend(Arc::new(SyntheticScreenBackend));
             let dispatcher = Arc::new(reg);
             let create_target = InvocationTarget {
                 scope: TargetScope::Local,
@@ -350,12 +376,7 @@ mod tests {
         let other_ura = seed_display(&mut file, "remote-desktop-bidi-other-display");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
-        crate::plugins::remote_desktop::registration::register_with_screen_backend(
-            &mut reg,
-            Arc::new(SyntheticScreenBackend),
-            test_runtime_limits(),
-        );
+        let reg = registry_with_screen_backend(Arc::new(SyntheticScreenBackend));
         let dispatcher = Arc::new(reg);
         let created = dispatcher
             .execute_rpc(InvocationTarget {
@@ -398,12 +419,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-bidi-missing-subject-display");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
-        crate::plugins::remote_desktop::registration::register_with_screen_backend(
-            &mut reg,
-            Arc::new(SyntheticScreenBackend),
-            test_runtime_limits(),
-        );
+        let reg = registry_with_screen_backend(Arc::new(SyntheticScreenBackend));
         let dispatcher = Arc::new(reg);
         let created = dispatcher
             .execute_rpc(InvocationTarget {

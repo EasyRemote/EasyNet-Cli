@@ -390,6 +390,7 @@ struct PointerTargetGeometry {
     height: Option<f64>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MappedPointerPoint {
     x: f64,
@@ -442,6 +443,7 @@ fn value_f64(value: &Value) -> Option<f64> {
     value.as_f64().filter(|value| value.is_finite())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn map_pointer_point(
     frame: &PointerInputFrame,
     target: Option<PointerTargetGeometry>,
@@ -470,6 +472,7 @@ fn map_pointer_point(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn map_axis(
     raw: f64,
     normalized: Option<f64>,

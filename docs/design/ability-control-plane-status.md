@@ -1,7 +1,7 @@
 # Ability Control-Plane -- Implementation Status
 
 **Status:** verified-against-disk snapshot.
-**Date:** 2026-06-23.
+**Date:** 2026-07-02.
 **Scope:** Current state of the three-registry ability control plane in
 `EasyNet-Cli`, including the Axon `LocalRuntime` receipt proof-binding seam.
 
@@ -40,8 +40,16 @@ handler. Dynamic catalogue drain removes the record on hot-unregister, so the
 control-plane registry does not leak stale plugin/MCP bindings.
 
 The plugin host consumes this boundary through
-`rebind_control_plane_record(...)`: a plugin supplies an implementation binding;
-it does not become the authority owner of the ability.
+`PluginPackageContribution` and `DaemonPluginBinder`: a plugin supplies an
+implementation binding; the daemon binder applies authority policy and writes
+the descriptor/authority/implementation record. A plugin package does not
+become the authority owner of the ability.
+
+Plugin resource/policy/realtime readiness is separate from implementation
+binding. `PluginResourceBroker`, `PluginPolicyBroker`,
+`PluginActivationBroker`, and the realtime transport adapter registry project
+plugin-declared requirements into activation readiness; they do not mint
+authorities, bypass admission, or fork receipt semantics.
 
 Representative canaries:
 
@@ -49,6 +57,10 @@ Representative canaries:
 - `runtime_registration_carries_control_plane_proof_binding`
 - `control_plane_keeps_rpc_and_stream_records_for_same_ability`
 - `control_plane_audit_facts_bind_descriptor_authority_and_impl`
+- builtin plugin contribution binding records `AbilityImplSource::BuiltinPlugin`
+- WebRTC realtime capability metadata maps through the generic role-aware
+  transport adapter registry while the plugin implementation owns concrete
+  SDP/ICE/media work
 
 ## 3. Axon Receipt Proof Binding
 
