@@ -180,6 +180,7 @@ fn list_abilities_handler(
 ) -> anyhow::Result<Value> {
     use crate::runtime::ability_descriptor::Visibility;
     let scope = AbilityListScope::from_args(&args)?;
+    let build_context = AbilityCatalogBuildContext::load(pages_user);
 
     // Scope parameter (RFC-001 v4.1.7 hub-broadcast contract):
     //   * `"local"` (default) — only abilities the device owns +
@@ -195,11 +196,15 @@ fn list_abilities_handler(
     // descriptions read off the workspace ability TOMLs. We index by
     // the descriptor's canonical ability URA so two hosted agents can
     // both expose `chat` without one collapsing the other.
-    let static_descriptors = descriptors_provider();
+    let static_descriptors =
+        scoped_static_descriptors(&scope, &build_context).unwrap_or_else(|| descriptors_provider());
     let mut catalog: std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor> =
         std::collections::BTreeMap::new();
     for d in static_descriptors {
         if !crate::runtime::agents::is_publishable_catalog_name(&d.name) {
+            continue;
+        }
+        if !scope.matches_descriptor(&d) {
             continue;
         }
         let Some(identity) = d.identity() else {
@@ -267,15 +272,11 @@ fn list_abilities_handler(
         // …). Dropping is the honest answer — once `easynet device
         // pair` finishes, the next list_abilities call sees the
         // populated state and emits the full catalogue.
-        let realm = crate::persistence::config::load_credentials()
-            .ok()
-            .map(|c| c.realm.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let local = crate::persistence::local_agents::load().unwrap_or_default();
-        let device_owner_ura = if local.host_device_agent_ura.is_empty() {
+        let realm = build_context.realm.clone();
+        let device_owner_ura = if build_context.local.host_device_agent_ura.is_empty() {
             None
         } else {
-            Some(local.host_device_agent_ura.clone())
+            Some(build_context.local.host_device_agent_ura.clone())
         };
         let hub_owner_ura = realm.as_deref().map(crate::ura::hub_ura);
         // user-segment used for `OwnerKind::Agent(...)` resolution.
@@ -284,7 +285,7 @@ fn list_abilities_handler(
         // and registration paths agree on which user-id is
         // canonical without reading process-wide env state on
         // each invocation.
-        let user_segment = pages_user.map(str::to_string);
+        let user_segment = build_context.user_segment.clone();
         for row in registry.ability_catalog_snapshot() {
             let name = row.name;
             // Keep the live registry on the same public-catalogue surface as
@@ -363,6 +364,9 @@ fn list_abilities_handler(
                         .with_hints(transport_hints)
                         .with_source("registry"),
                 };
+                if !scope.matches_descriptor(&descriptor) {
+                    continue;
+                }
                 let Some(identity) = descriptor.identity() else {
                     continue;
                 };
@@ -373,7 +377,12 @@ fn list_abilities_handler(
             }
         }
 
-        synthesize_hot_hosted_agent_descriptors(&mut catalog, &local, &hint_snapshot);
+        synthesize_hot_hosted_agent_descriptors(
+            &mut catalog,
+            &build_context,
+            &hint_snapshot,
+            &scope,
+        );
     }
 
     // Final pass — service-health metadata. Applied uniformly over
@@ -433,6 +442,38 @@ fn list_abilities_handler(
 
     scope.apply(&mut merged);
     Ok(json!({ "abilities": merged }))
+}
+
+struct AbilityCatalogBuildContext {
+    realm: Option<String>,
+    host_node_id: Option<String>,
+    local: crate::persistence::local_agents::LocalAgentsFile,
+    agents: Option<crate::registry::agents::AgentRegistry>,
+    user_segment: Option<String>,
+}
+
+impl AbilityCatalogBuildContext {
+    fn load(pages_user: Option<&str>) -> Self {
+        let credentials = crate::persistence::config::load_credentials().ok();
+        let realm = credentials
+            .as_ref()
+            .map(|c| c.realm.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let host_node_id = credentials
+            .as_ref()
+            .map(|c| c.node_id.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Self {
+            realm,
+            host_node_id,
+            local: crate::persistence::local_agents::load().unwrap_or_default(),
+            agents: crate::registry::agents::load_agents().ok(),
+            user_segment: pages_user
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        }
+    }
 }
 
 struct AbilityListScope {
@@ -499,6 +540,31 @@ impl AbilityListScope {
                     .unwrap_or(false)
             });
         }
+    }
+
+    fn requested_owner_ura(&self) -> Option<String> {
+        self.owner_ura.clone().or_else(|| {
+            self.ability_ura
+                .as_deref()
+                .and_then(|ability_ura| crate::ura::AbilitySelector::parse(ability_ura).ok())
+                .map(|selector| selector.owner_ura().to_string())
+        })
+    }
+
+    fn matches_descriptor(&self, descriptor: &AbilityDescriptor) -> bool {
+        if let Some(owner_ura) = self.owner_ura.as_deref() {
+            if descriptor.owner_ura != owner_ura {
+                return false;
+            }
+        }
+        if let Some(ability_ura) = self.ability_ura.as_deref() {
+            return descriptor
+                .canonical_ability_ura()
+                .as_deref()
+                .map(|candidate| candidate == ability_ura)
+                .unwrap_or(false);
+        }
+        true
     }
 }
 
@@ -587,27 +653,84 @@ fn merge_owner_scope(
     }
 }
 
+fn scoped_static_descriptors(
+    scope: &AbilityListScope,
+    context: &AbilityCatalogBuildContext,
+) -> Option<Vec<AbilityDescriptor>> {
+    let owner_ura = scope.requested_owner_ura()?;
+    static_descriptors_for_owner(&owner_ura, context)
+}
+
+fn static_descriptors_for_owner(
+    owner_ura: &str,
+    context: &AbilityCatalogBuildContext,
+) -> Option<Vec<AbilityDescriptor>> {
+    if context.local.host_device_agent_ura == owner_ura {
+        return Some(crate::runtime::agents::profiles::device::descriptors_for(
+            owner_ura,
+        ));
+    }
+
+    if crate::persistence::local_agents::lookup_hosted_ura(&context.local, "consent", "default")
+        .as_deref()
+        == Some(owner_ura)
+    {
+        return Some(crate::runtime::agents::profiles::consent::descriptors_for(
+            owner_ura,
+        ));
+    }
+
+    if crate::persistence::local_agents::lookup_hosted_ura(&context.local, "mcp", "default")
+        .as_deref()
+        == Some(owner_ura)
+    {
+        return Some(crate::runtime::agents::profiles::mcp::descriptors_for(
+            owner_ura,
+        ));
+    }
+
+    let llm_owner = context
+        .local
+        .hosted_agents
+        .iter()
+        .any(|entry| entry.profile == "llm" && entry.agent_ura == owner_ura);
+    if llm_owner {
+        let catalog = crate::runtime::agents::profiles::llm::LlmProfileAbilityCatalog::load();
+        return Some(
+            crate::runtime::agents::profiles::llm::descriptors_for_with_catalog(
+                owner_ura, None, &catalog,
+            ),
+        );
+    }
+
+    None
+}
+
 fn synthesize_hot_hosted_agent_descriptors(
     catalog: &mut std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor>,
-    local: &crate::persistence::local_agents::LocalAgentsFile,
+    context: &AbilityCatalogBuildContext,
     hint_snapshot: &crate::runtime::agents::AbilityDiscoveryHintSnapshot,
+    scope: &AbilityListScope,
 ) {
     use crate::runtime::ability_descriptor::Visibility;
 
-    let Ok(agents) = crate::registry::agents::load_agents() else {
+    let Some(agents) = context.agents.as_ref() else {
         return;
     };
-    let host_node_id = crate::persistence::config::load_credentials()
-        .ok()
-        .map(|c| c.node_id.trim().to_string())
-        .filter(|s| !s.is_empty());
 
-    for (agent_name, entry) in agents.agents {
+    for (agent_name, entry) in &agents.agents {
         let Some(owner_ura) =
-            crate::persistence::local_agents::lookup_hosted_ura(local, "llm", &agent_name)
+            crate::persistence::local_agents::lookup_hosted_ura(&context.local, "llm", agent_name)
         else {
             continue;
         };
+        if scope
+            .owner_ura
+            .as_deref()
+            .is_some_and(|scope_owner| scope_owner != owner_ura)
+        {
+            continue;
+        }
         if crate::ura::parse_ura(&owner_ura)
             .map(|u| u.kind != crate::ura::URAKind::Agent)
             .unwrap_or(true)
@@ -640,7 +763,7 @@ fn synthesize_hot_hosted_agent_descriptors(
                     .with_metadata_entry("model", model.clone())
                     .with_metadata_entry("base_model", model.clone());
             }
-            if let Some(node_id) = host_node_id.as_ref() {
+            if let Some(node_id) = context.host_node_id.as_ref() {
                 descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
             }
             if spec.name() == default_chat_name {
@@ -648,6 +771,9 @@ fn synthesize_hot_hosted_agent_descriptors(
                 if let Some(output_schema) = chat_manifest.output_schema() {
                     descriptor = descriptor.with_output_schema(output_schema.clone());
                 }
+            }
+            if !scope.matches_descriptor(&descriptor) {
+                continue;
             }
             insert_or_upgrade_hosted_descriptor(catalog, descriptor);
         }

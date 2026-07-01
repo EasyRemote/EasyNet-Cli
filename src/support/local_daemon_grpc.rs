@@ -666,6 +666,32 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
     )
 }
 
+/// Open a daemon-hosted bidirectional ability through Axon's local
+/// Invocation gRPC transport and drain JSON-frame down output.
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    default_subject_ura: &str,
+    subject: Option<String>,
+    timeout: Duration,
+    input_frames: Vec<serde_json::Value>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::local_invoke::LocalBidiFrame>> {
+    let subject_policy =
+        LocalDaemonSubjectPolicy::explicit_or_declared_default(default_subject_ura, subject)?;
+    invoke_local_daemon_ability_bidi_json_frames_with_target(
+        function_name,
+        payload_json,
+        Some(callee_ura),
+        subject_policy,
+        timeout,
+        input_frames,
+        max_frames,
+    )
+}
+
 #[cfg(feature = "axon-pb")]
 fn invoke_local_daemon_ability_stream_with_target(
     function_name: &str,
@@ -757,6 +783,210 @@ fn invoke_local_daemon_ability_stream_with_target(
     })
 }
 
+#[cfg(feature = "axon-pb")]
+fn invoke_local_daemon_ability_bidi_json_frames_with_target(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_override: Option<&str>,
+    subject_policy: LocalDaemonSubjectPolicy,
+    timeout: Duration,
+    input_frames: Vec<serde_json::Value>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::local_invoke::LocalBidiFrame>> {
+    use anyhow::Context;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use easynet_axon::pb::axon::v1::{
+        invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
+        BinaryChunk, ContentEnvelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
+        StreamDescriptor,
+    };
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::ReceiverStream;
+
+    let socket_path = resolve_socket_path();
+    if !probe_accepting(&socket_path) {
+        return Err(anyhow::Error::new(
+            crate::support::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+                "daemon not running (local Axon gRPC listener unreachable at {}). \
+                 Start it with `easynet runtime start`.",
+                socket_path.display()
+            )),
+        ));
+    }
+
+    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+        function_name,
+        payload_json,
+        callee_override,
+        subject_policy,
+        timeout,
+    )?;
+    let function_name = invocation.function_name.clone();
+    let envelope_open = EnvelopeOpen {
+        envelope: Some(invocation.envelope()?),
+        target: Some(InvocationTarget {
+            ability_name: function_name.clone(),
+            ..InvocationTarget::default()
+        }),
+        initial_args: invocation.arguments.clone(),
+        args_content_type: "application/json".to_string(),
+        streams: vec![StreamDescriptor {
+            stream_id: 1,
+            content_type: "application/json".to_string(),
+            ordering: "STRICT".to_string(),
+            ..StreamDescriptor::default()
+        }],
+        content_envelope: Some(ContentEnvelope {
+            content_type: "application/json".to_string(),
+            encoding: "identity".to_string(),
+            ..ContentEnvelope::default()
+        }),
+        ..EnvelopeOpen::default()
+    };
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for local Axon daemon bidi invoke")?;
+
+    runtime.block_on(async move {
+        let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
+            .await
+            .with_context(|| {
+                format!(
+                    "connect to local Axon daemon gRPC endpoint at {}",
+                    socket_path.display()
+                )
+            })?;
+        let mut client =
+            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel)
+                .max_decoding_message_size(
+                    crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+                )
+                .max_encoding_message_size(
+                    crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+                );
+
+        let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(16);
+        up_tx
+            .send(InvokeBidiUp {
+                sequence: 0,
+                mac: Vec::new(),
+                payload: Some(UpPayload::EnvelopeOpen(envelope_open)),
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("local bidi up channel closed before frame 0"))?;
+
+        let mut next_sequence = 1_u64;
+        for input in input_frames {
+            let data = serde_json::to_vec(&input)
+                .with_context(|| format!("encode {function_name} bidi input JSON frame"))?;
+            up_tx
+                .send(InvokeBidiUp {
+                    sequence: next_sequence,
+                    mac: Vec::new(),
+                    payload: Some(UpPayload::BinaryChunk(BinaryChunk {
+                        stream_id: 1,
+                        data,
+                        ..BinaryChunk::default()
+                    })),
+                })
+                .await
+                .map_err(|_| anyhow::anyhow!("local bidi up channel closed while sending input"))?;
+            next_sequence = next_sequence.saturating_add(1);
+        }
+
+        let mut down = client
+            .invoke_bidi(tonic::Request::new(ReceiverStream::new(up_rx)))
+            .await
+            .map_err(|status| {
+                anyhow::anyhow!(
+                    "daemon error opening bidi {function_name} through Axon \
+                     (code={:?}): {}",
+                    status.code(),
+                    status.message()
+                )
+            })?
+            .into_inner();
+
+        let mut frames = Vec::new();
+        while let Some(frame) = down
+            .message()
+            .await
+            .with_context(|| format!("read {function_name} InvokeBidi down frame"))?
+        {
+            let sequence = frame.sequence;
+            let Some(payload) = frame.payload else {
+                continue;
+            };
+            let projected = match payload {
+                DownPayload::BinaryChunk(chunk) => {
+                    let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
+                        serde_json::json!({
+                            "type": "binary",
+                            "stream_id": chunk.stream_id,
+                            "data_b64": B64.encode(&chunk.data),
+                        })
+                    });
+                    crate::support::local_invoke::LocalBidiFrame {
+                        sequence,
+                        content_type: "application/json".to_string(),
+                        terminal: false,
+                        payload,
+                    }
+                }
+                DownPayload::Receipt(receipt) => {
+                    let terminal = receipt.state
+                        != easynet_axon::invocation::InvocationState::Admitted.to_wire_i32();
+                    let receipt_payload = if receipt.payload.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::from_slice(&receipt.payload).unwrap_or_else(|_| {
+                            serde_json::json!({
+                                "data_b64": B64.encode(&receipt.payload),
+                            })
+                        })
+                    };
+                    crate::support::local_invoke::LocalBidiFrame {
+                        sequence,
+                        content_type: receipt.payload_content_type.clone(),
+                        terminal,
+                        payload: serde_json::json!({
+                            "type": "receipt",
+                            "state": receipt.state,
+                            "reason": receipt.reason,
+                            "cleanup_complete": receipt.cleanup_complete,
+                            "failure": receipt.failure.map(|failure| serde_json::json!({
+                                "code": failure.code,
+                                "message": failure.message,
+                                "retryable": failure.retryable,
+                            })),
+                            "payload": receipt_payload,
+                        }),
+                    }
+                }
+                DownPayload::Control(_) => crate::support::local_invoke::LocalBidiFrame {
+                    sequence,
+                    content_type: "application/json".to_string(),
+                    terminal: false,
+                    payload: serde_json::json!({"type": "control"}),
+                },
+                DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => continue,
+            };
+            let terminal = projected.terminal;
+            frames.push(projected);
+            if terminal {
+                break;
+            }
+            if max_frames.is_some_and(|limit| frames.len() >= limit) {
+                break;
+            }
+        }
+        drop(up_tx);
+        Ok::<_, anyhow::Error>(frames)
+    })
+}
+
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
     function_name: &str,
@@ -769,6 +999,24 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
 ) -> anyhow::Result<Vec<crate::support::local_invoke::LocalStreamFrame>> {
     anyhow::bail!(
         "streaming `{}` through the local Axon daemon requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`",
+        function_name
+    )
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _callee_ura: &str,
+    _default_subject_ura: &str,
+    _subject: Option<String>,
+    _timeout: Duration,
+    _input_frames: Vec<serde_json::Value>,
+    _max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::local_invoke::LocalBidiFrame>> {
+    anyhow::bail!(
+        "bidirectional `{}` through the local Axon daemon requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",
         function_name
     )

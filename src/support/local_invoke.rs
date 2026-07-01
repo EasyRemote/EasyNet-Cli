@@ -62,6 +62,19 @@ pub struct LocalStreamFrame {
     pub payload: Value,
 }
 
+/// One decoded down-frame from a daemon-hosted bidirectional ability.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalBidiFrame {
+    /// Sequence assigned by the daemon transport.
+    pub sequence: u64,
+    /// Best-effort content type for the projected payload.
+    pub content_type: String,
+    /// Whether this frame terminates the bidi session.
+    pub terminal: bool,
+    /// JSON projection of the frame payload.
+    pub payload: Value,
+}
+
 /// Typed failure classes for local-daemon invocation (F-023).
 ///
 /// Minted at the transport layer where the cause is structurally known
@@ -229,6 +242,28 @@ pub fn invoke_local_ability_target_stream_with_subject(
         target.default_subject_ura(),
         subject,
         timeout,
+        max_frames,
+    )
+}
+
+/// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
+/// session and drain a bounded number of down frames.
+pub fn invoke_local_ability_target_bidi_json_frames_with_subject(
+    target: &LocalAbilityTarget,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+    input_frames: Vec<Value>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<LocalBidiFrame>> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
+        target.dispatch_name(),
+        args,
+        target.callee_ura(),
+        target.default_subject_ura(),
+        subject,
+        timeout,
+        input_frames,
         max_frames,
     )
 }

@@ -94,7 +94,9 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod abilities;
+pub(crate) mod ability_bidi;
 pub(crate) mod ability_catalog_row;
+pub(crate) mod ability_record;
 pub(crate) mod ability_scaffold;
 pub(crate) mod ability_stream;
 pub(crate) mod agent;

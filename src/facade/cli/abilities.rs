@@ -543,12 +543,8 @@ fn invoke_remote_list_abilities(
 }
 
 fn extract_abilities(value: &Value) -> anyhow::Result<Vec<Value>> {
-    // The handler returns `{"abilities": [...]}`. Tolerate the
-    // older spelling `tools` for forward-compat in case a follow-up
-    // renames it; either way we extract a Vec<Value>.
     Ok(value
         .get("abilities")
-        .or_else(|| value.get("tools"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())

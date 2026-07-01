@@ -18,6 +18,8 @@
 //   uninstall <ability-ura>     Remove a deployed ability                  (NEW)
 //   invoke <ability-ura>       Call a public ability by canonical URA      (-> cli::invoke)
 //   stream <ability-ura>       Call a server-stream ability locally        (-> cli::ability_stream)
+//   bidi <ability-ura>         Open a bidirectional ability locally        (-> cli::ability_bidi)
+//   record <ability-ura>       Record from a resource-backed stream        (-> cli::ability_record)
 //          [--node <id>]       --node pins to a specific remote device
 //   exec <node> -- <cmd>        One-shot remote shell (ad-hoc ability)     (-> cli::exec)
 //   teach <agent.name> --to U   Grant descriptor import to ONE agent       (-> cli::teach)
@@ -64,7 +66,8 @@ use console::style;
 use serde_json::Value;
 
 use crate::facade::cli::{
-    abilities, ability_scaffold, ability_stream, deploy, discover, exec, invoke, teach,
+    abilities, ability_bidi, ability_record, ability_scaffold, ability_stream, deploy, discover,
+    exec, invoke, teach,
 };
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
@@ -99,6 +102,10 @@ pub enum AbilityAction {
     Invoke(invoke::InvokeArgs),
     /// Invoke a public server-stream ability by canonical Ability URA.
     Stream(ability_stream::StreamArgs),
+    /// Open a public bidirectional ability by canonical Ability URA.
+    Bidi(ability_bidi::BidiArgs),
+    /// Ergonomic wrapper for resource-backed recording streams.
+    Record(ability_record::RecordArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
     /// Grant one agent permission to import a declaration-only descriptor.
@@ -155,6 +162,8 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::Uninstall(a) => run_uninstall(a),
         AbilityAction::Invoke(a) => invoke::run(a),
         AbilityAction::Stream(a) => ability_stream::run(a),
+        AbilityAction::Bidi(a) => ability_bidi::run(a),
+        AbilityAction::Record(a) => ability_record::run(a),
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
         AbilityAction::Learn(a) => teach::run_learn(a),
@@ -185,7 +194,6 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     };
     let abilities = catalogue
         .get("abilities")
-        .or_else(|| catalogue.get("tools"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -213,7 +221,6 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // metadata should still print the rest.
     let name = entry
         .get("name")
-        .or_else(|| entry.get("tool_name"))
         .and_then(Value::as_str)
         .unwrap_or(&args.ability_ura);
     let version = entry
