@@ -11,7 +11,7 @@
 //   uses to infer data dependencies — no manual `depends_on` in the language.
 //
 // Key Types:
-//   EalProgram → MissionDecl → Vec<Statement> → CallExpr → Vec<Field> → FieldValue
+//   EalProgram → MissionDecl → Vec<Statement> → CallExpr/EmitStatement → Vec<Field> → FieldValue
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -36,6 +36,13 @@ pub enum Statement {
         call: CallExpr,
     },
     Call(CallExpr),
+    /// `emit "<name>" kind "<kind>" value <value>`.
+    /// Emits are archival mission records, not ability invocations:
+    /// they do not dispatch, do not produce receipts, and do not
+    /// participate in step scheduling. The planner lowers them to
+    /// `MissionIr::emits`, and the interpreter resolves them from
+    /// captured bindings at mission completion.
+    Emit(EmitStatement),
     /// `loop "<name>?" max_iters: N { body { … } verify { … } }`.
     /// See RFC docs/rfc/eal-control-flow-v1.md §3.1. The parser
     /// populates this variant unchanged; the planner lowers it to
@@ -60,6 +67,13 @@ pub struct LoopBlock {
     pub max_iters: u32,
     pub body: Vec<Statement>,
     pub verify: Vec<Statement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmitStatement {
+    pub name: String,
+    pub kind: String,
+    pub value: FieldValue,
 }
 
 /// `call "ability" on "node" with { ... } <options>`

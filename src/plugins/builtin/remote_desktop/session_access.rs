@@ -11,7 +11,7 @@ use crate::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::plugins::remote_desktop::session_consent::causal_context_contains_receipt;
 use crate::runtime::ability_dispatch::EnvelopeContext;
 use crate::runtime::agents::media::resource_subject::{
-    is_default_local_runtime_subject, reject_subject_in_args,
+    reject_subject_in_args, require_resource_ura_subject,
 };
 
 /// Verify that a remote desktop session control-plane ability targets exactly
@@ -60,19 +60,15 @@ pub(in crate::plugins::builtin::remote_desktop) fn ensure_session_resource_ident
     session: &RemoteDesktopSession,
 ) -> RemoteDesktopResult<()> {
     ensure_session_control_identity(ability, env, args, session)?;
-    let subject = env
-        .subject
-        .as_deref()
-        .ok_or_else(|| RemoteDesktopError::InvalidArgument {
-            ability,
-            detail: "envelope subject is required for resource data-plane access".to_string(),
-        })?;
-    if is_default_local_runtime_subject(subject) {
-        return Err(RemoteDesktopError::InvalidArgument {
-            ability,
-            detail: "envelope subject is required for resource data-plane access".to_string(),
-        });
-    }
+    let subject = require_resource_ura_subject(
+        ability,
+        Some(env.subject()),
+        "remote desktop data-plane resource",
+    )
+    .map_err(|_| RemoteDesktopError::InvalidArgument {
+        ability,
+        detail: "envelope subject is required for resource data-plane access".to_string(),
+    })?;
     ensure_session_subject_consistent(ability, subject, session)?;
     Ok(())
 }
@@ -85,13 +81,7 @@ fn ensure_session_caller_consistent(
     let Some(expected) = session.creator_caller_ura() else {
         return Ok(());
     };
-    let actual =
-        env.caller
-            .as_deref()
-            .ok_or_else(|| RemoteDesktopError::SessionCallerRequired {
-                ability,
-                session_id: session.session_id().to_string(),
-            })?;
+    let actual = env.caller();
     if expected != actual {
         return Err(RemoteDesktopError::SessionCallerMismatch {
             ability,
@@ -110,13 +100,7 @@ fn ensure_session_consent_receipt_consistent(
     let Some(expected) = session.consent().approval_receipt() else {
         return Ok(());
     };
-    if env.causal_context.is_none() {
-        return Err(RemoteDesktopError::ConsentReceiptRequired {
-            ability,
-            session_id: session.session_id().to_string(),
-        });
-    }
-    if !causal_context_contains_receipt(env.causal_context.as_ref(), expected) {
+    if !causal_context_contains_receipt(Some(env.causal_context()), expected) {
         return Err(RemoteDesktopError::ConsentReceiptMismatch {
             ability,
             expected: expected.receipt_ura().to_string(),

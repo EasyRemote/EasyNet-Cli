@@ -341,12 +341,12 @@ fn sync_existing_device_config_toml(
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DaemonMode {
-    /// Consumer device behind NAT. Outbound `<self>.session` to a
+    /// Consumer device behind NAT. Outbound `session.open` to a
     /// hub; never binds TCP. Backend cliipc connects to UDS.
     Device,
 
     /// Public-internet rendezvous. Binds both UDS (for backend
-    /// cliipc) and TCP+TLS (for inbound `<self>.session` from
+    /// cliipc) and TCP+TLS (for inbound `session.open` from
     /// remote devices). Has no upstream hub of its own under
     /// RFC-003; cross-realm hub-to-hub is RFC-005, out of scope.
     Hub,
@@ -803,7 +803,7 @@ pub enum DaemonConfigError {
 
     #[error(
         "[daemon] mode = \"device\" but hub_endpoint is missing; device-mode daemons must \
-         dial a hub for outbound `<self>.session` (spec §1.3)"
+         dial a hub for outbound `session.open` (spec §1.3)"
     )]
     DeviceMissingHubEndpoint,
 }
@@ -1233,8 +1233,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
 
         ensure_minimal_device_config(&creds).expect("write minimal config");
@@ -1277,8 +1279,10 @@ uds_path = "/tmp/custom.sock"
             deploy_signature: String::new(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
         let path = default_config_path();
         std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir");

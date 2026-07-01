@@ -41,7 +41,9 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, Stre
 use crate::runtime::agents::media::resource_subject::{
     self, resolve_required_resource_subject, ResourceSubjectSpec,
 };
-use crate::runtime::agents::media_abilities::{ABILITY_SCREEN_SNAPSHOT, ABILITY_SCREEN_SUBSCRIBE};
+use crate::runtime::agents::media_abilities::{
+    self, ABILITY_SCREEN_SNAPSHOT, ABILITY_SCREEN_SUBSCRIBE,
+};
 
 /// 2 MiB inline cap — same shape as camera.snapshot. This keeps
 /// base64-expanded receipts below Axon's 4 MiB IPC frame limit while
@@ -767,24 +769,26 @@ pub fn register_with_backend(
     backend: Arc<dyn ScreenSnapshotBackend>,
 ) {
     let snapshot_backend = Arc::clone(&backend);
-    reg.register_rpc_with_envelope_and_owner(
-        "screen.snapshot",
+    reg.register_rpc_with_envelope_and_spec(
+        ABILITY_SCREEN_SNAPSHOT,
         OwnerKind::Device,
+        media_abilities::registry_manifest(ABILITY_SCREEN_SNAPSHOT),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             snapshot_handler(&snapshot_backend, env, args)
         }),
     );
-    reg.register_stream_with_envelope_and_owner(
-        "screen.subscribe",
+    reg.register_stream_with_envelope_and_spec(
+        ABILITY_SCREEN_SUBSCRIBE,
         OwnerKind::Device,
+        media_abilities::registry_manifest(ABILITY_SCREEN_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| subscribe_handler(&backend, env, args)),
     );
 }
 
-/// Default registration uses the real `XcapBackend`. The daemon
-/// boot path calls this after `media_abilities::register` so the
-/// envelope-aware variant takes precedence over the args-only
-/// stub. Tests that need a hardware-free path call
+/// Default registration uses the real `XcapBackend`.
+/// `media_abilities::register` skips screen names once this module
+/// exists, so the screen dispatch slots are single-owner. Tests
+/// that need a hardware-free path call
 /// `register_with_backend(reg, Arc::new(SyntheticScreenBackend))`
 /// instead.
 pub fn register(reg: &mut AxonAbilityCatalog) {
@@ -824,7 +828,7 @@ fn snapshot_handler(
     // the caller is waiting on.
     if let Err(err) = crate::persistence::context_store::record_capture(
         crate::persistence::context_store::CaptureRecord {
-            device: env.callee.as_deref().unwrap_or_default(),
+            device: env.callee(),
             ability: ABILITY_SCREEN_SNAPSHOT,
             ext: "jpg",
             bytes: &jpeg_bytes,
@@ -915,6 +919,29 @@ mod tests {
 
     fn register_with_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticScreenBackend));
+    }
+
+    #[test]
+    fn registration_publishes_screen_manifests_to_catalog_snapshot() {
+        let mut reg = AxonAbilityCatalog::new();
+        register_with_synthetic(&mut reg);
+        let rows = reg.ability_catalog_snapshot();
+
+        for ability in [ABILITY_SCREEN_SNAPSHOT, ABILITY_SCREEN_SUBSCRIBE] {
+            let manifest = rows
+                .iter()
+                .find(|row| row.name == ability)
+                .and_then(|row| row.manifest.as_ref())
+                .unwrap_or_else(|| panic!("{ability} must publish schema manifest"));
+            assert_eq!(
+                manifest.description(),
+                media_abilities::description(ability).expect("screen description")
+            );
+            assert_eq!(
+                manifest.input_schema(),
+                &media_abilities::input_schema(ability).expect("screen schema")
+            );
+        }
     }
 
     #[test]

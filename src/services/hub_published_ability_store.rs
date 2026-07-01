@@ -11,7 +11,7 @@
 // OpenAI compat shim) and pushes that list down to every member
 // device through `federation.join` (full snapshot) +
 // `federation.heartbeat` (incremental diff). The device-side
-// catalogue (`meta.list_abilities scope=realm`, `<self>.discover`
+// catalogue (`meta.list_abilities scope=realm`, `<agent>.discover`
 // scope=realm) merges the device-local registry with this store
 // so users see everything the realm offers without an extra
 // round-trip per query.

@@ -29,10 +29,10 @@ mod tests {
     #[test]
     fn permission_probe_rejects_subject_scoped_invocation() {
         let err = handle(
-            EnvelopeContext {
-                subject: Some("easynet:///r/acme/resource/display.1".into()),
-                ..EnvelopeContext::default()
-            },
+            EnvelopeContext::for_test(
+                "easynet:///r/acme/user/tester",
+                "easynet:///r/acme/resource/display.1",
+            ),
             json!({}),
         )
         .unwrap_err();
@@ -42,10 +42,10 @@ mod tests {
     #[test]
     fn permission_probe_accepts_default_user_subject() {
         let response = handle(
-            EnvelopeContext {
-                subject: Some("easynet:///r/acme/user/dev".into()),
-                ..EnvelopeContext::default()
-            },
+            EnvelopeContext::for_test(
+                "easynet:///r/acme/user/tester",
+                "easynet:///r/acme/user/dev",
+            ),
             json!({}),
         )
         .unwrap();

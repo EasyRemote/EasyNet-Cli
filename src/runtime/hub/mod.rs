@@ -2,12 +2,9 @@
 // ========================
 //
 // File: src/runtime/hub/mod.rs
-// Description: in-daemon Hub responsibilities. v0 carries only
-//              the Pages reference system's listener (RFC-006-B
-//              v0.6). Production traffic terminates at the Go
-//              backend's wildcard listener; this in-daemon
-//              listener is the dev-mode existence proof and
-//              the path the MVP demo uses.
+// Description: in-daemon Hub responsibilities. The daemon owns the local
+//              Hub-side runtime surfaces; product backends wrap these daemon
+//              abilities instead of re-implementing a second Hub runtime.
 //
 // Conformance: RFC-006-B v0.6 §3 (Hub: the only HTTP boundary),
 //              INV-1 (Adapter Purity).

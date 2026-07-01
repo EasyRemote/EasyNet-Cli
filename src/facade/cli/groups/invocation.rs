@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::facade::cli::receipt_verification::CliReceiptChainVerification;
 use crate::runtime::agents::invocation_history_ability::{
     ABILITY_HISTORY_GET, ABILITY_HISTORY_LIST, ABILITY_HISTORY_PATH, ABILITY_TRACE_GET,
 };
@@ -42,6 +43,9 @@ pub enum InvocationAction {
     /// Aggregate operational stats over recent records — state mix,
     /// latency percentiles, top abilities and error codes.
     Stats(StatsArgs),
+    /// Watch an Invocation causal set live — by invocation URA, or a
+    /// whole run via its trace anchor (seven-axes T2.4).
+    Watch(crate::facade::cli::invocation_watch::WatchArgs),
 }
 
 #[derive(Debug, Args)]
@@ -112,6 +116,7 @@ pub fn run(args: InvocationArgs) -> anyhow::Result<()> {
             println!("{}", response.ledger_path);
             Ok(())
         }
+        InvocationAction::Watch(a) => crate::facade::cli::invocation_watch::run(a),
     }
 }
 
@@ -177,7 +182,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     })?;
 
     if args.format == OutputFormat::Json {
-        println!("{}", serde_json::to_string_pretty(&record)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&show_record_json(&record)?)?
+        );
         return Ok(());
     }
 
@@ -190,6 +198,13 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .map(|ms| ms.to_string())
         .unwrap_or_else(|| "-".to_string());
     let started = record.started_unix_ms.to_string();
+    let tokens_in = record.usage.tokens_in.to_string();
+    let tokens_out = record.usage.tokens_out.to_string();
+    let duration_ms = record.usage.duration_ms.to_string();
+    let external_calls = record.usage.external_calls.to_string();
+    let ledger_reported_receipt_chain_verified =
+        ledger_reported_receipt_chain_verified(&record).to_string();
+    let cli_receipt_chain_verification = cli_receipt_chain_verification().to_string();
     let ability = public_ability_label(&record);
     output::kv_section_stdout(&[
         ("invocation_ura", record.invocation_ura.as_str()),
@@ -205,6 +220,18 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         ("started", &started),
         ("completed", &completed),
         ("elapsed_ms", &elapsed),
+        ("usage_tokens_in", &tokens_in),
+        ("usage_tokens_out", &tokens_out),
+        ("usage_duration_ms", &duration_ms),
+        ("usage_external_calls", &external_calls),
+        (
+            "ledger_reported_receipt_chain_verified",
+            &ledger_reported_receipt_chain_verified,
+        ),
+        (
+            "cli_receipt_chain_verification",
+            &cli_receipt_chain_verification,
+        ),
     ]);
     if let Some(error) = record.error.as_ref() {
         eprintln!();
@@ -215,6 +242,30 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         ]);
     }
     Ok(())
+}
+
+fn show_record_json(record: &InvocationRecord) -> anyhow::Result<Value> {
+    let mut value = serde_json::to_value(record).context("serialize invocation record")?;
+    let object = value
+        .as_object_mut()
+        .context("serialized invocation record must be a JSON object")?;
+    object.insert(
+        "ledger_reported_receipt_chain_verified".to_string(),
+        Value::Bool(ledger_reported_receipt_chain_verified(record)),
+    );
+    object.insert(
+        "cli_receipt_chain_verification".to_string(),
+        serde_json::to_value(cli_receipt_chain_verification())?,
+    );
+    Ok(value)
+}
+
+fn ledger_reported_receipt_chain_verified(record: &InvocationRecord) -> bool {
+    record.receipt_chain.verified
+}
+
+fn cli_receipt_chain_verification() -> CliReceiptChainVerification {
+    CliReceiptChainVerification::not_performed()
 }
 
 fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
@@ -635,6 +686,43 @@ mod tests {
             b = b.elapsed_ms(ms);
         }
         b.build().expect("stats test record")
+    }
+
+    #[test]
+    fn show_record_json_reports_usage_attestation() {
+        let record = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+            .invocation_ura("easynet:///r/test/resource/alice.invocations/i-1")
+            .request_id("req-1")
+            .caller_ura("easynet:///r/test/device/caller")
+            .callee_ura("easynet:///r/test/device/callee")
+            .subject_ura("easynet:///r/test/device/callee")
+            .ability_ura("easynet:///r/test/ability/device.callee.fs.read")
+            .ability_name("fs.read")
+            .state("completed")
+            .started_unix_ms(1_700_000_000_000_i64)
+            .usage(easynet_axon::invocation::axiom::InvocationUsage {
+                tokens_in: 11,
+                tokens_out: 7,
+                duration_ms: 29,
+                external_calls: 2,
+            })
+            .receipt_chain(easynet_axon::invocation::InvocationReceiptChainSummary {
+                verified: true,
+                ..Default::default()
+            })
+            .args(easynet_axon::invocation::LedgerEventPayload::Digest {
+                content_type: "application/json".to_string(),
+                sha256: "0".repeat(64),
+                size_bytes: 2,
+            })
+            .build()
+            .expect("show test record");
+
+        let value = show_record_json(&record).expect("json projection");
+        assert_eq!(value["usage"]["tokens_in"], 11);
+        assert_eq!(value["usage"]["tokens_out"], 7);
+        assert_eq!(value["ledger_reported_receipt_chain_verified"], true);
+        assert_eq!(value["cli_receipt_chain_verification"], "not_performed");
     }
 
     #[test]

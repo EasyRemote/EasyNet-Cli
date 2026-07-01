@@ -7,7 +7,7 @@
 // ---------------
 // `federation.advertise_agent` publishes hosted user agents whose
 // online/offline bit actually lives on the host device's live
-// `<self>.session`. PresenceRegistry alone therefore cannot answer
+// `session.open`. PresenceRegistry alone therefore cannot answer
 // "which `/agent/<user>.<agent>` rows should federation.resolve
 // surface right now?" — it only knows about device URAs.
 //
@@ -72,6 +72,41 @@ impl AdvertisedAgentStore {
         self.inner.remove(agent_ura).map(|(_, record)| record)
     }
 
+    /// Remove every advertised agent whose canonical owner is the supplied
+    /// user subject URA.
+    ///
+    /// The linkage rule is Axon URA structure, not string-prefix matching:
+    /// `easynet:///r/<realm>/user/<user>` owns
+    /// `easynet:///r/<realm>/agent/<user>.<agent>`. Device-sponsored agent
+    /// URAs intentionally do not match this method.
+    pub fn remove_user_owned_agents(&self, user_ura: &str) -> Vec<AdvertisedAgentRecord> {
+        let Ok(user) = crate::ura::parse_ura(user_ura) else {
+            return Vec::new();
+        };
+        if user.kind != crate::ura::URAKind::User {
+            return Vec::new();
+        }
+        let Some(user_id) = user.user_id() else {
+            return Vec::new();
+        };
+
+        let keys: Vec<String> = self
+            .inner
+            .iter()
+            .filter_map(|entry| {
+                if record_is_owned_by_user(entry.value(), &user.realm, user_id) {
+                    Some(entry.key().clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        keys.into_iter()
+            .filter_map(|key| self.remove(&key))
+            .collect()
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> Vec<AdvertisedAgentRecord> {
         self.inner.iter().map(|entry| entry.clone()).collect()
@@ -86,6 +121,15 @@ impl AdvertisedAgentStore {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
+}
+
+fn record_is_owned_by_user(record: &AdvertisedAgentRecord, realm: &str, user_id: &str) -> bool {
+    let Ok(agent) = crate::ura::parse_ura(&record.agent_ura) else {
+        return false;
+    };
+    agent.kind == crate::ura::URAKind::Agent
+        && agent.realm == realm
+        && agent.agent_ids().map(|(owner, _)| owner) == Some(user_id)
 }
 
 #[cfg(test)]
@@ -119,5 +163,87 @@ mod tests {
         store.upsert(record.clone());
         assert_eq!(store.remove("ura"), Some(record));
         assert!(store.get("ura").is_none());
+    }
+
+    #[test]
+    fn remove_user_owned_agents_uses_canonical_agent_owner() {
+        let store = AdvertisedAgentStore::new();
+        let alice_agent = AdvertisedAgentRecord {
+            agent_ura: "easynet:///r/realm/agent/alice.helper".into(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".into()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: "easynet:///r/realm/device/dev-1".into(),
+            },
+        };
+        let alice_second = AdvertisedAgentRecord {
+            agent_ura: "easynet:///r/realm/agent/alice.researcher".into(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".into()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: "easynet:///r/realm/device/dev-1".into(),
+            },
+        };
+        let bob_agent = AdvertisedAgentRecord {
+            agent_ura: "easynet:///r/realm/agent/bob.helper".into(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-2".into()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: "easynet:///r/realm/device/dev-2".into(),
+            },
+        };
+        let other_realm_alice = AdvertisedAgentRecord {
+            agent_ura: "easynet:///r/other/agent/alice.helper".into(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-3".into()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: "easynet:///r/other/device/dev-3".into(),
+            },
+        };
+        for record in [
+            alice_agent.clone(),
+            alice_second.clone(),
+            bob_agent.clone(),
+            other_realm_alice.clone(),
+        ] {
+            store.upsert(record);
+        }
+
+        let mut removed = store.remove_user_owned_agents("easynet:///r/realm/user/alice");
+        removed.sort_by(|a, b| a.agent_ura.cmp(&b.agent_ura));
+
+        assert_eq!(removed, vec![alice_agent, alice_second]);
+        assert!(store.get("easynet:///r/realm/agent/alice.helper").is_none());
+        assert!(store
+            .get("easynet:///r/realm/agent/alice.researcher")
+            .is_none());
+        assert_eq!(
+            store.get("easynet:///r/realm/agent/bob.helper"),
+            Some(bob_agent)
+        );
+        assert_eq!(
+            store.get("easynet:///r/other/agent/alice.helper"),
+            Some(other_realm_alice)
+        );
+    }
+
+    #[test]
+    fn remove_user_owned_agents_ignores_invalid_or_non_user_subject() {
+        let store = AdvertisedAgentStore::new();
+        let record = AdvertisedAgentRecord {
+            agent_ura: "easynet:///r/realm/agent/alice.helper".into(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".into()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: "easynet:///r/realm/device/dev-1".into(),
+            },
+        };
+        store.upsert(record.clone());
+
+        assert!(store.remove_user_owned_agents("not-a-ura").is_empty());
+        assert!(store
+            .remove_user_owned_agents("easynet:///r/realm/device/dev-1")
+            .is_empty());
+        assert_eq!(store.get(&record.agent_ura), Some(record));
     }
 }

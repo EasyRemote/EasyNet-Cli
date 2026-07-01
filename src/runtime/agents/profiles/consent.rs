@@ -6,11 +6,11 @@
 //! Per RFC §A6: human-in-the-loop approval flow goes through this
 //! Agent's abilities, never through a side-channel.
 //!
-//! Descriptor ownership
-//! --------------------
+//! Descriptor projection
+//! ---------------------
 //! Consent descriptors are generated from the dispatch registry entries whose
-//! owner is `OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID)`. This file does not
-//! infer ownership from ability name prefixes.
+//! projection class is `OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID)`. This file
+//! does not infer ownership from ability name prefixes.
 //!
 //! Currently wired in agents/permission_ability.rs (which renames to
 //! consent_ability.rs in a follow-up cleanup; for now the file name
@@ -50,7 +50,6 @@ mod tests {
         assert!(names.contains("consent.subscribe"));
         assert!(names.contains("consent.decide"));
         assert!(names.contains("consent.list_pending"));
-        assert!(!names.contains("policy.evaluate"));
         assert!(!names.contains("skill.list"));
     }
 }

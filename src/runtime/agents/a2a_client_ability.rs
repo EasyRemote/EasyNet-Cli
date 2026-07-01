@@ -64,11 +64,44 @@ pub const ABILITY_SEND_TASK: &str = "a2a.client.send_task";
 /// surface fresh — same wire path the rest of the CLI's
 /// cross-device dispatch takes after the joint-plan unification.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
+    // Registered envelope-aware so the handler can read the inbound
+    // invocation's causal context and chain it onto the forward hop
+    // (refactor SPEC §15.1-1, bug-1 Slice B). The plain args-only
+    // registration could not see the envelope, so an A2A forward always
+    // re-rooted the receipt DAG.
+    reg.register_rpc_with_envelope_and_owner(
         "a2a.client.send_task",
         OwnerKind::Device,
-        Arc::new(move |args: Value| send_task_handler(args)),
+        Arc::new(
+            move |env: crate::runtime::ability_dispatch::EnvelopeContext, args: Value| {
+                send_task_handler(args, &env)
+            },
+        ),
     );
+}
+
+/// Extract the causal parent anchors (`{receipt_ura, receipt_hash}` objects)
+/// from an inbound `EnvelopeContext.causal_context`. The adapter serialises
+/// the typed `CausalContext` as `{"kind":"none"}`, `{"kind":"scalar",..}`, or
+/// `{"kind":"list","receipts":[..]}` (see `ability_dispatch::causal_context_to_json`).
+/// Returns the parent list to chain onto the forward hop; empty for a root
+/// invocation.
+fn causal_parents_from_env(env: &crate::runtime::ability_dispatch::EnvelopeContext) -> Vec<Value> {
+    let cc = env.causal_context();
+    match cc.get("kind").and_then(Value::as_str) {
+        Some("scalar") => vec![json!({
+            "receipt_ura": cc.get("receipt_ura").cloned().unwrap_or(Value::Null),
+            "receipt_hash": cc.get("receipt_hash").cloned().unwrap_or(Value::Null),
+        })],
+        Some("list") => cc
+            .get("receipts")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        // "none", "merkle", or anything unrecognised: no chainable receipt
+        // anchors, so this forward hop roots a fresh causal context.
+        _ => Vec::new(),
+    }
 }
 
 /// `a2a.client.send_task` handler.
@@ -87,7 +120,10 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// Returns: `{ ok, result?, error? }` — same envelope shape
 /// `a2a.bridge.send_task` (the inbound side) returns, so a planner
 /// that handles the inbound shape handles the outbound shape too.
-fn send_task_handler(args: Value) -> anyhow::Result<Value> {
+fn send_task_handler(
+    args: Value,
+    env: &crate::runtime::ability_dispatch::EnvelopeContext,
+) -> anyhow::Result<Value> {
     let target_node = match target_node_field(&args) {
         Ok(s) => s,
         Err(msg) => return Ok(error_response(&msg)),
@@ -135,19 +171,23 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let ability_ura =
-            match crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        let target_call =
+            match crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
                 &target_ura,
                 &ability,
             ) {
-                Ok(ability_ura) => ability_ura,
+                Ok(target_call) => target_call,
                 Err(e) => return Ok(error_response(&format!("{e}"))),
             };
-        match crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-            ability_ura.as_str(),
+        // Chain the inbound invocation's causal parents onto the forward
+        // hop so an A2A relay preserves the receipt DAG instead of re-rooting
+        // it (SPEC §15.1-1, bug-1 Slice B). Root invocations yield no parents.
+        let causal_parents = causal_parents_from_env(env);
+        match crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
+            &target_call,
             task_args,
-            &target_ura,
             caller_ura.as_deref(),
+            &causal_parents,
         ) {
             Ok(value) => Ok(json!({ "ok": true, "result": value })),
             Err(e) => Ok(error_response(&format!("{e}"))),
@@ -225,20 +265,73 @@ mod tests {
         Arc::new(reg)
     }
 
+    /// A root (parent-less) inbound envelope. `send_task_handler` reads the
+    /// causal context off this to chain it onto the forward hop.
+    fn root_env() -> crate::runtime::ability_dispatch::EnvelopeContext {
+        crate::runtime::ability_dispatch::EnvelopeContext::for_test_ability(
+            "easynet:///r/acme/device/local",
+            ABILITY_SEND_TASK,
+            "easynet:///r/acme/device/local",
+        )
+    }
+
     #[test]
     fn registration_makes_send_task_dispatchable() {
         let arc = fresh_registry();
-        assert!(arc.get_rpc(ABILITY_SEND_TASK).is_some());
+        // Registered envelope-aware (rpc_with_env), so it answers has_rpc
+        // (which checks both handler families), not the args-only get_rpc.
+        assert!(arc.has_rpc(ABILITY_SEND_TASK));
+    }
+
+    /// SPEC §15.1-1 (bug-1 Slice B): the A2A forward must chain the inbound
+    /// invocation's causal parents. This pins the extraction from each
+    /// `EnvelopeContext.causal_context` serialised shape so a relayed task
+    /// preserves the receipt DAG instead of re-rooting it.
+    #[test]
+    fn causal_parents_extracted_from_each_causal_context_shape() {
+        use crate::runtime::ability_dispatch::EnvelopeContext;
+
+        // Root: {"kind":"none"} -> no parents.
+        let none_env = EnvelopeContext::for_test_ability(
+            "easynet:///r/acme/device/local",
+            ABILITY_SEND_TASK,
+            "easynet:///r/acme/device/local",
+        )
+        .with_causal_context(json!({"kind": "none"}));
+        assert!(causal_parents_from_env(&none_env).is_empty());
+
+        // Scalar: one receipt anchor.
+        let scalar_env = none_env.clone().with_causal_context(json!({
+            "kind": "scalar",
+            "receipt_ura": "easynet:///r/acme/receipt/r1",
+            "receipt_hash": "aa",
+        }));
+        let scalar = causal_parents_from_env(&scalar_env);
+        assert_eq!(scalar.len(), 1);
+        assert_eq!(scalar[0]["receipt_ura"], "easynet:///r/acme/receipt/r1");
+
+        // List: fan-in parents pass through verbatim.
+        let list_env = none_env.with_causal_context(json!({
+            "kind": "list",
+            "receipts": [
+                {"receipt_ura": "easynet:///r/acme/receipt/r1", "receipt_hash": "aa"},
+                {"receipt_ura": "easynet:///r/acme/receipt/r2", "receipt_hash": "bb"},
+            ],
+        }));
+        let list = causal_parents_from_env(&list_env);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[1]["receipt_ura"], "easynet:///r/acme/receipt/r2");
     }
 
     #[test]
     fn send_task_missing_target_node_ura_returns_ok_false() {
-        let arc = fresh_registry();
-        let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
-        let resp = handler(json!({
-            "agent_name": "claude",
-            "skill_name": "chat",
-        }))
+        let resp = send_task_handler(
+            json!({
+                "agent_name": "claude",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+        )
         .unwrap();
         assert_eq!(resp["ok"], false);
         let err = resp["error"].as_str().unwrap();
@@ -250,12 +343,13 @@ mod tests {
 
     #[test]
     fn send_task_missing_agent_name_returns_ok_false() {
-        let arc = fresh_registry();
-        let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
-        let resp = handler(json!({
-            "target_node_ura": "easynet:///r/acme/node/N1",
-            "skill_name": "chat",
-        }))
+        let resp = send_task_handler(
+            json!({
+                "target_node_ura": "easynet:///r/acme/node/N1",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+        )
         .unwrap();
         assert_eq!(resp["ok"], false);
         assert!(resp["error"].as_str().unwrap().contains("`agent_name`"));
@@ -263,12 +357,13 @@ mod tests {
 
     #[test]
     fn send_task_missing_skill_name_returns_ok_false() {
-        let arc = fresh_registry();
-        let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
-        let resp = handler(json!({
-            "target_node_ura": "easynet:///r/acme/node/N1",
-            "agent_name": "claude",
-        }))
+        let resp = send_task_handler(
+            json!({
+                "target_node_ura": "easynet:///r/acme/node/N1",
+                "agent_name": "claude",
+            }),
+            &root_env(),
+        )
         .unwrap();
         assert_eq!(resp["ok"], false);
         assert!(resp["error"].as_str().unwrap().contains("`skill_name`"));
@@ -276,13 +371,14 @@ mod tests {
 
     #[test]
     fn send_task_empty_string_field_returns_ok_false() {
-        let arc = fresh_registry();
-        let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
-        let resp = handler(json!({
-            "target_node_ura": "",
-            "agent_name": "claude",
-            "skill_name": "chat",
-        }))
+        let resp = send_task_handler(
+            json!({
+                "target_node_ura": "",
+                "agent_name": "claude",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+        )
         .unwrap();
         assert_eq!(resp["ok"], false);
     }
@@ -297,13 +393,14 @@ mod tests {
         // with a message naming the missing daemon transport or
         // the parse arm if the URI shape rejects first.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let arc = fresh_registry();
-        let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
-        let resp = handler(json!({
-            "target_node_ura": "easynet:///r/acme/device/N1",
-            "agent_name": "claude",
-            "skill_name": "chat",
-        }))
+        let resp = send_task_handler(
+            json!({
+                "target_node_ura": "easynet:///r/acme/device/N1",
+                "agent_name": "claude",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+        )
         .unwrap();
         assert_eq!(resp["ok"], false);
         let msg = resp["error"].as_str().unwrap();
@@ -319,13 +416,14 @@ mod tests {
     #[test]
     fn send_task_rejects_retired_target_node_uri_alias() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let arc = fresh_registry();
-        let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
-        let resp = handler(json!({
-            "target_node_uri": "easynet:///r/acme/device/N1",
-            "agent_name": "claude",
-            "skill_name": "chat",
-        }))
+        let resp = send_task_handler(
+            json!({
+                "target_node_uri": "easynet:///r/acme/device/N1",
+                "agent_name": "claude",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+        )
         .unwrap();
         assert_eq!(resp["ok"], false);
         let msg = resp["error"].as_str().unwrap();

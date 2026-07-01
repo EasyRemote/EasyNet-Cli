@@ -6,7 +6,7 @@ allowed-tools: [mcp__easynet]
 
 # EasyNet Collaborate
 
-You are part of an EasyNet device with other agents and (when joined) a wider federation. Three discovery tiers are reachable through your `<self>.discover` and `<self>.invoke` ability — try them in this order before you reason your way around a tool gap.
+You are part of an EasyNet device with other agents and (when joined) a wider federation. Three discovery tiers are reachable through your `<agent>.discover` and `<agent>.invoke` ability — try them in this order before you reason your way around a tool gap.
 
 ## When This Skill Activates
 
@@ -23,20 +23,20 @@ You are part of an EasyNet device with other agents and (when joined) a wider fe
 - You are repeating a kind of query you just made — "I've done this twice this turn" is a signal an ability already exists.
 - You are about to do work outside your specialty (audio, video, ML inference, niche compilation) — a peer agent on the device may already wrap it.
 - You hit "I can't do that" and you have not yet checked the catalog. Don't surface that line until tier 1+2 came back empty.
-- The user's task crosses a `<self>` boundary you can feel (e.g., they asked you to "have claude review", you ARE claude — you should not delegate to yourself, but you SHOULD discover what abilities your own bundle exposes that you might be skipping).
+- The user's task crosses a `legacy self alias` boundary you can feel (e.g., they asked you to "have claude review", you ARE claude — you should not delegate to yourself, but you SHOULD discover what abilities your own bundle exposes that you might be skipping).
 
 ## Process
 
 ### 1. Discover the right tier
 
-Call `<self>.discover` with the smallest scope that could carry the answer. Walk outward only when the previous tier came back empty.
+Call `<agent>.discover` with the smallest scope that could carry the answer. Walk outward only when the previous tier came back empty.
 
 ```
-mcp__easynet → <self>.discover { "scope": "self" }
+mcp__easynet → <agent>.discover { "scope": "self" }
                                  ↑ your own published abilities + chat
-mcp__easynet → <self>.discover { "scope": "device" }
+mcp__easynet → <agent>.discover { "scope": "device" }
                                  ↑ all agents on this machine
-mcp__easynet → <self>.discover { "scope": "easynet" }
+mcp__easynet → <agent>.discover { "scope": "easynet" }
                                  ↑ federation (only if device joined; may
                                    return federation_not_joined or
                                    federation_unavailable typed errors)
@@ -45,7 +45,7 @@ mcp__easynet → <self>.discover { "scope": "easynet" }
 Filter rules you apply locally:
 
 - Keep entries whose name matches `<other-agent>.<verb>` for cross-agent calls.
-- Drop your own `<self>.chat` and your other `<self>.<verb>` — those are how callers reach you, not how you reach others.
+- Drop your own `legacy self alias.chat` and your other `legacy self alias.<verb>` — those are how callers reach you, not how you reach others.
 - Keep `host.*` / `fs.*` / `shell.*` / `http.*` / `device.process.exec` if you need a host primitive.
 - Skip daemon-internal namespaces unless you specifically need them: `runtime.*`, `federation.*`, `device.fleet.pty_session_*`, `device.a2a.bridge.*`, `device.mcp.bridge.*`.
 
@@ -53,10 +53,10 @@ Filter rules you apply locally:
 
 Two surfaces. Pick the simpler one for one-off calls; use EAL for multi-step composition.
 
-**Single ability call** — use `<self>.invoke`:
+**Single ability call** — use `<agent>.invoke`:
 
 ```
-mcp__easynet → <self>.invoke {
+mcp__easynet → <agent>.invoke {
   "ability": "claude.weather",
   "args":    { "location": "Beijing" }
 }
@@ -81,8 +81,8 @@ Surface the ability's result, not raw JSON. If the call fails, tell the user bri
 
 | Canonical | Note |
 |---|---|
-| `<self>.discover` | per-agent introspection alias for `device.meta.list_abilities` |
-| `<self>.invoke` | per-agent dispatch alias for `device.mcp.bridge.call_tool` |
+| `<agent>.discover` | per-agent introspection alias for `device.meta.list_abilities` |
+| `<agent>.invoke` | per-agent dispatch alias for `device.mcp.bridge.call_tool` |
 | `device.mission.run` | run an EAL program (compose multiple agent calls) |
 | `device.mission.track <run_id>` | poll the persisted state of a long-running mission |
 | `device.mission.cancel <run_id>` | flip an in-flight mission to cancelled |
@@ -98,9 +98,9 @@ User: what's the weather in Beijing?
 
 **Process:**
 ```
-You: <self>.discover { "scope": "device" }
+You: <agent>.discover { "scope": "device" }
     → returns claude.weather among others
-You: <self>.invoke { "ability": "claude.weather", "args": { "location": "Beijing" } }
+You: <agent>.invoke { "ability": "claude.weather", "args": { "location": "Beijing" } }
     → "Beijing: 18°C, clear skies"
 ```
 
@@ -121,9 +121,9 @@ features."
 
 **Process:**
 ```
-You: <self>.discover { "scope": "device" }
+You: <agent>.discover { "scope": "device" }
     → no transcribe/fetch ability for Apple release notes
-You: <self>.discover { "scope": "easynet" }
+You: <agent>.discover { "scope": "easynet" }
     → federation_not_joined  (typed error)
 You: tell user honestly — "I don't have a way to fetch the live release
      notes; I can summarize what I know up to my training cutoff if that's
@@ -136,7 +136,7 @@ The self-prompted trigger fired even though the user didn't say "look it up" —
 
 **Process:**
 ```
-You: <self>.discover { "scope": "easynet" }
+You: <agent>.discover { "scope": "easynet" }
     → { "error": "federation_unavailable", "reason": "hub call failed: timeout" }
 You: fall back to device tier; if also empty, surface to user.
 ```
@@ -145,13 +145,13 @@ Don't retry tier 3 in a loop — one attempt, fall back, move on.
 
 ## Fallback: direct Axon SDK (only when EasyNet daemon is unavailable)
 
-If `<self>.discover` returns daemon errors and the user has explicitly said they're not running through `easynet-daemon`, the Axon Python SDK can talk to a local `axon-runtime` directly. The bundled script `${CLAUDE_SKILL_DIR}/scripts/axon-invoke.sh` wraps this path.
+If `<agent>.discover` returns daemon errors and the user has explicitly said they're not running through `easynet-daemon`, the Axon Python SDK can talk to a local `axon-runtime` directly. The bundled script `${CLAUDE_SKILL_DIR}/scripts/axon-invoke.sh` wraps this path.
 
 Do NOT use this path when EasyNet daemon is up. The whole point of EasyNet is the daemon's discovery + dispatch + audit trail. The SDK fallback exists for axon-only deployments and for debugging the daemon itself.
 
 ## What NOT to do
 
-- ❌ Hardcode an ability name. Always go through `<self>.discover` first; agents come and go.
+- ❌ Hardcode an ability name. Always go through `<agent>.discover` first; agents come and go.
 - ❌ Try to invoke `<other-agent>.chat` to fulfill a specific need — that's a wasteful recursive chat. Call the specific verb instead.
 - ❌ Loop discover→invoke more than ~3 times in one turn. If it isn't there, surface that.
 - ❌ Promise the user a result without actually invoking. Always call before replying.

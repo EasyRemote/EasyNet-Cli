@@ -72,7 +72,7 @@ pub enum Visibility {
 }
 
 /// Per AXON-RFC-006 §"transition receipts", an ability falls into
-/// one of three execution shapes that determine receipt
+/// one of four execution shapes that determine receipt
 /// machinery + audit timing:
 ///
 ///   * `Query`      — single-shot read. One request, one response,
@@ -86,6 +86,11 @@ pub enum Visibility {
 ///                    auditing lives in the stream itself.
 ///                    Examples: `mic.subscribe`, `camera.subscribe`,
 ///                    `discuss.subscribe`.
+///
+///   * `Bidi`       — full-duplex session. One open handshake, then
+///                    independent inbound/outbound frames until a
+///                    terminal close. It intentionally hashes as the
+///                    Axon Bidi call mode, never as a Stream.
 ///
 ///   * `Transition` — state-mutating sequence. The ability hands
 ///                    back a receipt that itself carries the
@@ -104,6 +109,7 @@ pub enum Visibility {
 pub enum AbilityClass {
     Query,
     Stream,
+    Bidi,
     Transition,
 }
 
@@ -116,6 +122,7 @@ impl AbilityClass {
         match self {
             AbilityClass::Query => "query",
             AbilityClass::Stream => "stream",
+            AbilityClass::Bidi => "bidi",
             AbilityClass::Transition => "transition",
         }
     }
@@ -123,7 +130,9 @@ impl AbilityClass {
     /// Derive the execution class from transport hints when an
     /// ability manifest has not declared a class explicitly.
     pub fn from_hints(hints: &AbilityHints) -> Self {
-        if hints.streaming_only || hints.bidi_only {
+        if hints.bidi_only {
+            AbilityClass::Bidi
+        } else if hints.streaming_only {
             AbilityClass::Stream
         } else {
             AbilityClass::Query
@@ -312,12 +321,16 @@ pub struct AbilityDescriptor {
     ///     (`federation.advertise_*`, `voice.list_calls`, …).
     ///
     /// Field name kept as `owner_ura` for wire-compat with
-    /// every existing daemon. §A.URA-5's "agent owns the ability"
-    /// rule applies to ABILITY URAs (`/ability/<...>`-shaped) — it
-    /// does not constrain who may publish a descriptor for a
+    /// every existing daemon. §A.URA-5's agent-scoped ability URA
+    /// rule applies to `/ability/<...>`-shaped URAs — it does not
+    /// constrain who may publish a descriptor for a
     /// device-built-in or hub-built-in verb. A device publishing
     /// `shell.run` is the canonical pattern, not a violation.
     pub owner_ura: String,
+    /// Governed interface version. This is distinct from
+    /// `AbilityManifest.schema_version`, which versions the TOML file
+    /// format rather than the callable interface contract.
+    pub version: String,
     /// Explicit execution-class override. `None` means "derive from
     /// transport hints"; `Some(_)` means a builder called
     /// `with_class(...)` and the descriptor must honor that even if
@@ -358,7 +371,9 @@ impl Serialize for AbilityDescriptor {
 
 impl<'de> Deserialize<'de> for AbilityDescriptor {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        AbilityDescriptorWire::deserialize(deserializer).map(AbilityDescriptorWire::into_descriptor)
+        AbilityDescriptorWire::deserialize(deserializer)?
+            .try_into_descriptor()
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -373,11 +388,18 @@ struct AbilityDescriptorWire {
     /// Owner-local public ability name. Local registry prefixes
     /// such as `device.` or `<agent-id>.` are not serialized.
     name: String,
-    /// Always populated by the projection layer; ignored on parse —
-    /// the canonical value is recomputed from owner + public verb.
+    /// Always populated by the projection layer; validated on parse
+    /// against owner + public verb so wire state cannot drift from the
+    /// canonical descriptor identity.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     ability_ura: String,
     owner_ura: String,
+    #[serde(default = "default_descriptor_version")]
+    version: String,
+    #[serde(default)]
+    schema_hash: String,
+    #[serde(default)]
+    descriptor_hash: String,
     /// Always emitted at serialize time with the descriptor's
     /// effective class, so consumers always see a concrete value.
     /// On parse, an absent field becomes `None` (the descriptor's
@@ -416,6 +438,9 @@ impl AbilityDescriptorWire {
             name,
             ability_ura,
             owner_ura: d.owner_ura.clone(),
+            version: d.version.clone(),
+            schema_hash: d.schema_hash_prefixed(),
+            descriptor_hash: d.descriptor_hash_prefixed(),
             class,
             visibility: d.visibility,
             scope_subjects: d.scope_subjects.clone(),
@@ -428,14 +453,24 @@ impl AbilityDescriptorWire {
         }
     }
 
-    fn into_descriptor(self) -> AbilityDescriptor {
-        // Wire `ability_ura` is intentionally discarded; the
-        // canonical URA is rebuilt from `owner_ura` + name at
-        // every read via `canonical_ability_ura()`. Wire `class`,
-        // when present, becomes the explicit override.
-        AbilityDescriptor {
+    fn try_into_descriptor(self) -> Result<AbilityDescriptor, String> {
+        let wire_ability_ura = self.ability_ura.trim().to_string();
+        let wire_schema_hash = self.schema_hash.trim().to_string();
+        let wire_descriptor_hash = self.descriptor_hash.trim().to_string();
+        let version = if self.version.trim().is_empty() {
+            default_descriptor_version()
+        } else {
+            self.version.trim().to_string()
+        };
+        crate::runtime::ability::descriptor::AbilityDescriptorVersion::new(version.clone())
+            .map_err(|err| format!("invalid descriptor version {version:?}: {err}"))?;
+
+        // Wire `class`, when present, becomes the explicit override.
+        // Wire identity/hash fields are independently validated below.
+        let descriptor = AbilityDescriptor {
             name: self.name,
             owner_ura: self.owner_ura,
+            version,
             class_override: self.class,
             visibility: self.visibility,
             scope_subjects: self.scope_subjects,
@@ -445,8 +480,46 @@ impl AbilityDescriptorWire {
             schema_summary: self.schema_summary,
             hints: self.hints,
             metadata: self.metadata,
+        };
+
+        if !wire_ability_ura.is_empty() {
+            let Some(canonical_ability_ura) = descriptor.canonical_ability_ura() else {
+                return Err(format!(
+                    "wire ability_ura {wire_ability_ura:?} cannot be validated for owner {:?} \
+                     and name {:?}",
+                    descriptor.owner_ura,
+                    descriptor.public_name()
+                ));
+            };
+            if wire_ability_ura != canonical_ability_ura {
+                return Err(format!(
+                    "wire ability_ura {wire_ability_ura:?} does not match canonical \
+                     ability_ura {canonical_ability_ura:?}"
+                ));
+            }
         }
+        if !wire_schema_hash.is_empty() {
+            let actual = descriptor.schema_hash_prefixed();
+            if wire_schema_hash != actual {
+                return Err(format!(
+                    "wire schema_hash {wire_schema_hash:?} does not match computed {actual:?}"
+                ));
+            }
+        }
+        if !wire_descriptor_hash.is_empty() {
+            let actual = descriptor.descriptor_hash_prefixed();
+            if wire_descriptor_hash != actual {
+                return Err(format!(
+                    "wire descriptor_hash {wire_descriptor_hash:?} does not match computed {actual:?}"
+                ));
+            }
+        }
+        Ok(descriptor)
     }
+}
+
+fn default_descriptor_version() -> String {
+    crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string()
 }
 
 /// Construction error. Shape mirrors `AgentAbilitySpec::new`: a
@@ -457,6 +530,7 @@ pub enum DescriptorError {
     EmptyName,
     UnnamespacedName,
     EmptyOwner,
+    InvalidVersion { version: String },
 }
 
 impl std::fmt::Display for DescriptorError {
@@ -468,6 +542,9 @@ impl std::fmt::Display for DescriptorError {
             }
             DescriptorError::EmptyOwner => {
                 write!(f, "owner_ura must not be empty")
+            }
+            DescriptorError::InvalidVersion { version } => {
+                write!(f, "descriptor version {version:?} is not a valid semver")
             }
         }
     }
@@ -505,6 +582,7 @@ impl AbilityDescriptor {
         Ok(Self {
             name,
             owner_ura,
+            version: default_descriptor_version(),
             class_override: None,
             visibility,
             // Sensible defaults for SCOPED's two axes: any caller
@@ -534,6 +612,16 @@ impl AbilityDescriptor {
         self
     }
 
+    pub fn with_version(mut self, version: impl Into<String>) -> Result<Self, DescriptorError> {
+        let version = version.into();
+        let version = version.trim().to_string();
+        if !crate::runtime::ability::descriptor::is_valid_descriptor_version(&version) {
+            return Err(DescriptorError::InvalidVersion { version });
+        }
+        self.version = version;
+        Ok(self)
+    }
+
     pub fn with_input_schema(mut self, schema: Value) -> Self {
         self.schema_summary.input = schema;
         self
@@ -558,6 +646,11 @@ impl AbilityDescriptor {
     /// `with_hints(...)` calls cannot silently flip it.
     pub fn with_class(mut self, class: AbilityClass) -> Self {
         self.class_override = Some(class);
+        self
+    }
+
+    pub fn with_visibility(mut self, visibility: Visibility) -> Self {
+        self.visibility = visibility;
         self
     }
 
@@ -589,6 +682,56 @@ impl AbilityDescriptor {
     /// method, not a separate source of truth.
     pub fn canonical_ability_ura(&self) -> Option<String> {
         crate::ura::owner_ability_ura(&self.owner_ura, &self.public_name())
+    }
+
+    pub fn schema_hash_bytes(&self) -> [u8; 32] {
+        let governed = self.governed_schema_summary();
+        crate::runtime::ability::descriptor::schema_hash_for_governed_summary(&governed).0
+    }
+
+    fn governed_schema_summary(&self) -> Value {
+        let access_policy = crate::runtime::ability::descriptor::governed_access_policy_summary(
+            serde_json::to_value(self.visibility).expect("visibility serializes"),
+            governed_scope_rule_value(&self.scope_subjects),
+            governed_scope_rule_value(&self.scope_agents),
+            serde_json::json!([]),
+        );
+        crate::runtime::ability::descriptor::governed_schema_summary(
+            &self.schema_summary.input,
+            &self.schema_summary.output_receipt_body,
+            access_policy,
+            serde_json::to_value(&self.hints).expect("ability hints serialize"),
+        )
+    }
+
+    pub fn schema_hash_prefixed(&self) -> String {
+        crate::runtime::ability::descriptor::SchemaHash(self.schema_hash_bytes()).prefixed_hex()
+    }
+
+    pub fn descriptor_hash_bytes(&self) -> [u8; 32] {
+        let call_mode = match self.ability_class() {
+            AbilityClass::Stream => crate::runtime::ability::CallMode::Stream,
+            AbilityClass::Bidi => crate::runtime::ability::CallMode::Bidi,
+            AbilityClass::Query | AbilityClass::Transition => {
+                crate::runtime::ability::CallMode::Rpc
+            }
+        };
+        let ability_ura = self
+            .canonical_ability_ura()
+            .unwrap_or_else(|| self.public_name());
+        crate::runtime::ability::descriptor::descriptor_hash_for_ability_ura_parts(
+            &ability_ura,
+            &self.public_name(),
+            &self.version,
+            call_mode,
+            crate::runtime::ability::descriptor::SchemaHash(self.schema_hash_bytes()),
+        )
+        .0
+    }
+
+    pub fn descriptor_hash_prefixed(&self) -> String {
+        crate::runtime::ability::descriptor::DescriptorHash(self.descriptor_hash_bytes())
+            .prefixed_hex()
     }
 
     pub fn identity(&self) -> Option<AbilityIdentity> {
@@ -633,6 +776,27 @@ impl AbilityDescriptor {
             }
         }
     }
+}
+
+fn governed_scope_rule_value(rule: &ScopeRule) -> Value {
+    match rule {
+        ScopeRule::OnlyMatching(values) => {
+            serde_json::to_value(ScopeRule::OnlyMatching(sorted_scope_values(values)))
+                .expect("scope rule serializes")
+        }
+        other => serde_json::to_value(other).expect("scope rule serializes"),
+    }
+}
+
+fn sorted_scope_values(values: &[String]) -> Vec<String> {
+    let mut values = values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
 }
 
 #[cfg(test)]
@@ -890,6 +1054,14 @@ mod tests {
         assert_eq!(stream.ability_class(), AbilityClass::Stream);
         assert!(!stream.class_was_pinned());
 
+        let bidi = query.clone().with_hints(AbilityHints {
+            streaming_only: true,
+            bidi_only: true,
+            ..Default::default()
+        });
+        assert_eq!(bidi.ability_class(), AbilityClass::Bidi);
+        assert!(!bidi.class_was_pinned());
+
         let transition = query.with_class(AbilityClass::Transition);
         assert_eq!(transition.ability_class(), AbilityClass::Transition);
         assert!(transition.class_was_pinned());
@@ -950,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn serialized_ability_ura_is_always_derived_not_round_tripped() {
+    fn serialized_ability_ura_is_derived_and_validated_on_parse() {
         let d = must(
             "chat",
             "easynet:///r/acme/agent/alice.claude",
@@ -965,13 +1137,99 @@ mod tests {
         );
         // Tamper with the wire form: a malicious / buggy upstream
         // sends a URA that does not match owner+name. Deserialization
-        // must ignore it and recompute.
+        // must fail closed rather than silently accepting a false
+        // identity projection.
         json["ability_ura"] = serde_json::json!("easynet:///r/acme/ability/mallory.evil.chat");
-        let back: AbilityDescriptor = serde_json::from_value(json).unwrap();
+        let err = serde_json::from_value::<AbilityDescriptor>(json).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not match canonical ability_ura"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn descriptor_wire_rejects_hash_tampering() {
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        );
+        let mut schema_json: serde_json::Value = serde_json::to_value(&d).unwrap();
+        schema_json["schema_hash"] = serde_json::json!("sha256:bad");
+        let schema_err = serde_json::from_value::<AbilityDescriptor>(schema_json).unwrap_err();
+        assert!(
+            schema_err.to_string().contains("wire schema_hash"),
+            "{schema_err}"
+        );
+
+        let mut descriptor_json: serde_json::Value = serde_json::to_value(&d).unwrap();
+        descriptor_json["descriptor_hash"] = serde_json::json!("sha256:bad");
+        let descriptor_err =
+            serde_json::from_value::<AbilityDescriptor>(descriptor_json).unwrap_err();
+        assert!(
+            descriptor_err.to_string().contains("wire descriptor_hash"),
+            "{descriptor_err}"
+        );
+    }
+
+    #[test]
+    fn descriptor_hash_binds_governance_fields() {
+        let public = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Public,
+        )
+        .with_input_schema(serde_json::json!({"type":"object"}));
+        let scoped = public
+            .clone()
+            .with_visibility(Visibility::Scoped)
+            .with_scope_agents(ScopeRule::OnlyMatching(vec![
+                "easynet:///r/acme/agent/bob".to_string()
+            ]));
+
+        assert_ne!(
+            public.schema_hash_prefixed(),
+            scoped.schema_hash_prefixed(),
+            "schema hash must bind governance fields, not only input/output JSON"
+        );
+        assert_ne!(
+            public.descriptor_hash_prefixed(),
+            scoped.descriptor_hash_prefixed(),
+            "descriptor revision must change when governance changes"
+        );
+    }
+
+    #[test]
+    fn descriptor_wire_rejects_invalid_version() {
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        );
+        let mut json: serde_json::Value = serde_json::to_value(&d).unwrap();
+        json["version"] = serde_json::json!("not-semver");
+        let err = serde_json::from_value::<AbilityDescriptor>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid descriptor version"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn with_version_validates_the_governed_interface_version() {
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        );
+        let versioned = d.clone().with_version("2.0.0").unwrap();
+        assert_eq!(versioned.version, "2.0.0");
         assert_eq!(
-            back.canonical_ability_ura().as_deref(),
-            Some("easynet:///r/acme/ability/alice.claude.chat"),
-            "wire ability_ura must never override the locally-derived value"
+            d.with_version("not-semver").unwrap_err(),
+            DescriptorError::InvalidVersion {
+                version: "not-semver".to_string()
+            }
         );
     }
 
@@ -991,6 +1249,27 @@ mod tests {
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(json["class"], serde_json::json!("stream"));
         assert!(!d.class_was_pinned());
+    }
+
+    #[test]
+    fn bidi_descriptor_hash_uses_bidi_call_mode() {
+        let owner = "easynet:///r/acme/agent/alice.claude";
+        let stream = must("chat", owner, Visibility::Scoped).with_hints(AbilityHints {
+            streaming_only: true,
+            ..Default::default()
+        });
+        let bidi = must("chat", owner, Visibility::Scoped).with_hints(AbilityHints {
+            bidi_only: true,
+            ..Default::default()
+        });
+
+        assert_eq!(bidi.ability_class(), AbilityClass::Bidi);
+        assert_eq!(serde_json::to_value(&bidi).unwrap()["class"], "bidi");
+        assert_ne!(
+            stream.descriptor_hash_prefixed(),
+            bidi.descriptor_hash_prefixed(),
+            "bidi descriptors must hash with Axon CallMode::Bidi, not Stream"
+        );
     }
 
     #[test]

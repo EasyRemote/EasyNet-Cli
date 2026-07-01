@@ -49,14 +49,26 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::time::Duration;
+use std::{fmt::Write as _, time::Duration};
 
 use anyhow::{anyhow, bail, Context};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
 
+use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
 use crate::services::invocation_transport::ProtoEnvelope;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+use easynet_axon::pb::axon::v1::{
+    Error as WireError, InvocationState as WireInvocationState, InvokeResponse,
+};
 use easynet_axon::ura::{parse_ura, URAKind};
+
+const FORWARD_CONTEXT_ATTEMPT_COUNT: &str = "forward.attempt_count";
+const FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT: &str = "forward.diagnostic_attempt_count";
+const FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED: &str = "forward.diagnostic_truncated";
+const FORWARD_CONTEXT_LAST_ERROR: &str = "forward.last_error";
+const FORWARD_CONTEXT_ATTEMPTS_JSON: &str = "forward.attempts_json";
+const FORWARD_CONTEXT_DIAGNOSTICS_ERROR: &str = "forward.diagnostics_error";
 
 /// Validate a `--node` argument as a canonical Axon Device or Hub URA.
 /// Returns the URA string when it parses; surfaces a typed error
@@ -114,64 +126,166 @@ const URA_DISCOVERY_HINT: &str = "Where to find a canonical URA today (until PR-
      (4) `easynet ability list` — local-realm only \
      today; cross-realm enumeration ships in PR-N3.";
 
-/// Canonical Ability URA that has been proven to belong to the target owner.
+/// Complete caller-side target for `federation.forward_invoke`.
 ///
-/// This is the caller-side boundary object for `federation.forward_invoke`.
-/// It is not a transport wrapper and it is not a fallback for the removed
-/// ability-plus-args public API. Command adapters may choose a known system
-/// ability by selector, but the selector is projected into this value before
-/// the daemon IPC frame is built.
+/// This value object is the root fix for the execution-target/callee-owner
+/// split. `execution_target_ura` is the node or hub the local daemon sends the
+/// frame to. `callee_ura` is the Agent/Device/Hub identity that advertises the
+/// AbilityDescriptor. They are equal for device-owned system abilities and
+/// intentionally different for hosted-agent abilities executed on a device.
+///
+/// What this is not: it is not a route answer. The remote daemon/hub remains
+/// responsible for proving that a hosted Agent is actually runnable at the
+/// execution target. This object only prevents the CLI from corrupting the
+/// signed Invocation tuple before the resolver gets a chance to decide.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TargetOwnedAbilityUra {
-    value: String,
+pub(crate) struct RemoteAbilityInvocationTarget {
+    execution_target_ura: String,
+    ability_ura: String,
+    callee_ura: String,
+    public_ability: String,
+    descriptor_binding: RemoteDescriptorBinding,
 }
 
-impl TargetOwnedAbilityUra {
-    /// Project an internal registry selector into the canonical Ability URA
-    /// owned by `target_ura`.
-    pub(crate) fn from_selector(target_ura: &str, selector: &str) -> anyhow::Result<Self> {
-        validate_forward_target_ura(target_ura)?;
-        let public_ability = crate::ura::owner_local_ability_name(target_ura, selector);
-        let ability_ura =
-            crate::ura::owner_ability_ura(target_ura, &public_ability).ok_or_else(|| {
-                anyhow::anyhow!("derive ability URA for {target_ura} {public_ability}")
+/// Descriptor binding state for a remote ability target.
+///
+/// `Bound` means the caller has a descriptor version and may mint a
+/// descriptor-bound origin-caller proof. `DeferredToDestination` means the
+/// local process is only routing an opaque call; the destination resolver must
+/// bind and prove the descriptor before executing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RemoteDescriptorBinding {
+    Bound { version: String },
+    DeferredToDestination,
+}
+
+impl RemoteAbilityInvocationTarget {
+    /// Project a target-owned system ability selector into a full remote
+    /// invocation target with descriptor binding deferred to that target.
+    ///
+    /// Use this for command adapters whose product contract is "call this
+    /// device/hub-owned system ability on `--node`". It is deliberately named
+    /// target-owned so it is not reused for arbitrary Ability URAs.
+    pub(crate) fn for_target_owned_selector(
+        execution_target_ura: &str,
+        selector: &str,
+    ) -> anyhow::Result<Self> {
+        validate_forward_target_ura(execution_target_ura)?;
+        let public_ability = crate::ura::owner_local_ability_name(execution_target_ura, selector);
+        let ability_ura = crate::ura::owner_ability_ura(execution_target_ura, &public_ability)
+            .ok_or_else(|| {
+                anyhow!("derive ability URA for {execution_target_ura} {public_ability}")
             })?;
-        Self::from_ability_ura(target_ura, &ability_ura)
+        Self::from_ability_ura(execution_target_ura, &ability_ura)
     }
 
-    /// Accept an already-canonical Ability URA after proving it belongs to
-    /// `target_ura`.
-    pub(crate) fn from_ability_ura(target_ura: &str, ability_ura: &str) -> anyhow::Result<Self> {
-        validate_forward_target_ura(target_ura)?;
+    /// Accept an already-canonical Ability URA and bind it to an execution
+    /// target without rewriting the Ability owner.
+    pub(crate) fn from_ability_ura(
+        execution_target_ura: &str,
+        ability_ura: &str,
+    ) -> anyhow::Result<Self> {
+        validate_forward_target_ura(execution_target_ura)?;
         let trimmed = ability_ura.trim();
-        validate_forward_ability_owner(trimmed, target_ura)?;
+        let selector = crate::ura::AbilitySelector::parse(trimmed)?;
+        validate_forward_execution_target(execution_target_ura, &selector)?;
         Ok(Self {
-            value: trimmed.to_string(),
+            execution_target_ura: execution_target_ura.trim().to_string(),
+            ability_ura: trimmed.to_string(),
+            callee_ura: selector.owner_ura().to_string(),
+            public_ability: selector.public_name().to_string(),
+            descriptor_binding: RemoteDescriptorBinding::DeferredToDestination,
         })
+    }
+
+    /// Accept a descriptor-bound Ability ref and preserve the version for
+    /// origin-caller proof generation.
+    pub(crate) fn from_descriptor_ref(
+        execution_target_ura: &str,
+        descriptor_ref: &str,
+    ) -> anyhow::Result<Self> {
+        let canonical = easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref)
+            .map_err(|err| anyhow!("invalid descriptor-bound Ability ref: {err}"))?;
+        let ability_ura =
+            crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+                &canonical,
+            )
+            .map_err(|err| anyhow!("descriptor-bound Ability ref is missing ability URA: {err}"))?;
+        let descriptor_version =
+            crate::runtime::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref(
+                &canonical,
+            )
+            .map_err(|err| {
+                anyhow!("descriptor-bound Ability ref is missing descriptor version: {err}")
+            })?;
+        let mut target = Self::from_ability_ura(execution_target_ura, &ability_ura)?;
+        target.descriptor_binding = RemoteDescriptorBinding::Bound {
+            version: descriptor_version.to_string(),
+        };
+        Ok(target)
     }
 
     /// Borrow the canonical URA for the transport helper.
     pub(crate) fn as_str(&self) -> &str {
-        &self.value
+        &self.ability_ura
+    }
+
+    /// Node or hub that receives the forwarding request.
+    pub(crate) fn execution_target_ura(&self) -> &str {
+        &self.execution_target_ura
+    }
+
+    pub(crate) fn descriptor_version(&self) -> Option<&str> {
+        match &self.descriptor_binding {
+            RemoteDescriptorBinding::Bound { version } => Some(version.as_str()),
+            RemoteDescriptorBinding::DeferredToDestination => None,
+        }
     }
 }
 
-/// Dispatch a canonical Ability URA against `node_ura` via the local daemon's
-/// `federation.forward_invoke` ability.
-///
-/// This is the latest public boundary for remote CLI invoke paths. The caller
-/// must supply the canonical callable identity up front; this helper only
-/// verifies that the Ability URA belongs to the target owner before shaping the
-/// daemon IPC request.
-pub fn invoke_via_federation_forward_ability_ura(
-    ability_ura: &str,
+pub(crate) fn invoke_via_federation_forward_target(
+    target: &RemoteAbilityInvocationTarget,
     args: Value,
-    node_ura: &str,
     caller_ura: Option<&str>,
 ) -> anyhow::Result<Value> {
-    validate_forward_target_ura(node_ura)?;
-    validate_forward_ability_owner(ability_ura, node_ura)?;
+    invoke_via_federation_forward_target_with_timeout(
+        target,
+        args,
+        caller_ura,
+        &[],
+        Duration::from_secs(30),
+    )
+}
 
+/// Forward a device-targeted call while preserving the caller's causal
+/// lineage. Used by paths that are themselves dispatching an
+/// already-placed invocation (e.g. the EAL device branch), so the
+/// receipt DAG keeps real edges instead of re-rooting at the forward hop
+/// (refactor SPEC §15.1 item 1, seven-tuple invariant). Originating CLI
+/// commands keep calling [`invoke_via_federation_forward_target`], which
+/// passes no parents.
+pub(crate) fn invoke_via_federation_forward_target_with_causal_parents(
+    target: &RemoteAbilityInvocationTarget,
+    args: Value,
+    caller_ura: Option<&str>,
+    causal_parents: &[Value],
+) -> anyhow::Result<Value> {
+    invoke_via_federation_forward_target_with_timeout(
+        target,
+        args,
+        caller_ura,
+        causal_parents,
+        Duration::from_secs(30),
+    )
+}
+
+pub(crate) fn invoke_via_federation_forward_target_with_timeout(
+    target: &RemoteAbilityInvocationTarget,
+    args: Value,
+    caller_ura: Option<&str>,
+    causal_parents: &[Value],
+    timeout: Duration,
+) -> anyhow::Result<Value> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -205,27 +319,33 @@ pub fn invoke_via_federation_forward_ability_ura(
     // of the SAME value — not whatever bytes the operator typed.
     let args_bytes_for_claim =
         serde_json::to_vec(&args).context("serialise args for origin-caller claim")?;
-    let origin_caller = caller_ura.and_then(|caller| {
-        device_origin_claim(caller, ability_ura, node_ura, &args_bytes_for_claim)
-    });
+    let origin_caller =
+        caller_ura.and_then(|caller| device_origin_claim(caller, target, &args_bytes_for_claim));
     let inner_payload = json!({
-        "ability_ura": ability_ura,
+        "ability_ura": target.as_str(),
         "args": args,
         "call_id": call_id,
     });
     let inner_envelope_bytes = serde_json::to_vec(&inner_payload)
         .context("serialise inner ability call as forward_invoke payload")?;
-    let inner_envelope_b64 = base64_engine_encode(&inner_envelope_bytes);
+    let inner_envelope_b64 = BASE64_STANDARD.encode(&inner_envelope_bytes);
 
-    // DEC-N4 §2.1 audit-chain + deadline fields. The CLI bridge
-    // is the lowest-level synchronous initiator; it has no prior
-    // `ForwardReceipt` to chain (those are PR-N5 territory) and
-    // no caller-side deadline budget (CLI invocations run to
-    // completion). Both fields ship as their zero-shape so the
-    // peer hub treats them as "no caller hint, apply defaults".
-    // Once `<self>.invoke_remote` initiator becomes the upstream
-    // caller (instead of a direct CLI dial), it will populate
-    // both with real values per PR-N5 §1 / DEC-N5 §3.
+    // DEC-N4 §2.1 audit-chain + deadline fields. When the caller is an
+    // originating CLI command there is no prior `ForwardReceipt` to chain
+    // and `causal_parents` is empty, so this stays a root hop. When the
+    // caller is itself dispatching an already-placed invocation (the EAL
+    // device branch), the parent anchors flow in via `causal_parents` and
+    // are carried here instead of being silently dropped — preserving the
+    // seven-tuple's causal placement across the forward hop (refactor
+    // SPEC §15.1 item 1).
+    //
+    // The bytes are the canonical JSON encoding of the parent anchor list
+    // (empty list -> empty bytes, identical to the prior root behaviour).
+    // The daemon-side typed decode that stamps these onto
+    // `InvocationReceipt.causal_context.list` is PR-N5 territory; until it
+    // lands the bytes ride opaquely, but they are no longer thrown away at
+    // the initiator. `forward_deadline_ms` carries the caller-side timeout
+    // so the peer hub bounds the forwarded work.
     //
     // Build the request through the canonical `ForwardInvokeRequest`
     // type rather than a hand-rolled `json!` object. The type carries
@@ -234,31 +354,29 @@ pub fn invoke_via_federation_forward_ability_ura(
     // sequence`); serialising the struct guarantees the wire shape can
     // never drift from the contract the daemon parses.
     let forward_request = easynet_axon::ForwardInvokeRequest {
-        target_ura: node_ura.to_string(),
+        target_ura: target.execution_target_ura().to_string(),
         inner_envelope_b64,
-        causal_context_bytes: Vec::new(),
-        forward_deadline_ms: 0,
+        causal_context_bytes: encode_causal_parents_for_forward(causal_parents)?,
+        forward_deadline_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
         origin_caller,
     };
     let forward_args_bytes =
         serde_json::to_vec(&forward_request).context("serialise ForwardInvokeRequest")?;
 
-    // Build the outer envelope. The caller URA defaults to a
-    // generic `easynet:///r/cli/device/local` so the daemon's
-    // admission gate has something to log; production deployments
-    // will override this with the operator's identity once
-    // PR-N2 cross-realm signing lands.
+    // Build the outer envelope. When the CLI is only asking its local
+    // daemon control plane to forward work, the caller is the daemon's
+    // process-local `_system.local` subject, not a guessed device/user
+    // identity. Explicit caller URAs still sign through their own keyring
+    // identity.
     //
     // AXIOM §A1 requires both `caller` and `callee`; the daemon's
     // admission gate rejects an envelope missing either with
     // `AXON_AXIOM_ENVELOPE_INCOMPLETE:callee_missing`. For a
-    // `federation.forward_invoke` call the inner ability's
-    // `target_ura` is the ultimate addressee, so we stamp it as
-    // both `callee` (intermediate routing hop addressee per A1
-    // "intermediate hops MAY repeat target") and `subject` (the
-    // identity the inner ability runs against). This matches the
-    // backend Go side's `daemon_grpc/invoke_remote.go` envelope
-    // convention.
+    // `federation.forward_invoke` call the `callee` remains the
+    // target node/peer for routing, while the descriptor-bound
+    // `subject` is the target-owned federation ability. Hub/User
+    // identities are legal routing/caller identities, but Axon's
+    // signed `EntityRef` subject set is intentionally narrower.
     // v4.1.5 §A.URA-3 strict parsing: agent tail MUST be
     // `<user-uuid>.<agent-id>` (split on dot). The
     // the legacy CLI agent-placeholder alias fails the strict parser
@@ -267,18 +385,27 @@ pub fn invoke_via_federation_forward_ability_ura(
     // token with no dot/slash). The daemon's loopback bypass +
     // the Postel-permissive admission paths still admit either,
     // but we want the wire to ship a parseable URA so that any
-    // caller-side strict validator (or a future enforce-mode
-    // flip) does not reject the envelope.
-    let resolved_caller_ura = caller_ura
-        .unwrap_or("easynet:///r/cli/device/local")
-        .to_string();
+    // caller-side strict validator does not reject the envelope.
+    let outer_caller_ura = LOCAL_SYSTEM_AGENT_URA;
+    let forward_subject_ura =
+        crate::ura::owner_ability_ura(target.execution_target_ura(), "federation.forward_invoke")
+            .ok_or_else(|| {
+            anyhow!(
+                "derive descriptor subject for federation.forward_invoke owned by `{}`",
+                target.execution_target_ura()
+            )
+        })?;
     // AXIOM §A1: `invocation_nonce` is a 16-byte random value the
     // daemon's admission gate uses to dedup replays
     // (`AXON_NONCE_REPLAY` rejects on a hit in the replay window).
     // CLI-initiated calls are one-shot, so a fresh `OsRng` 16-byte
     // sample per call is sufficient.
-    let request = ProtoEnvelope::targeted(&resolved_caller_ura, node_ura, node_ura)?
-        .invoke_request("federation.forward_invoke", forward_args_bytes)?;
+    let request = ProtoEnvelope::targeted(
+        outer_caller_ura,
+        target.execution_target_ura(),
+        forward_subject_ura,
+    )?
+    .invoke_request("federation.forward_invoke", forward_args_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -288,7 +415,7 @@ pub fn invoke_via_federation_forward_ability_ura(
     runtime.block_on(async move {
         let channel = crate::support::local_daemon_grpc::connect_channel(
             socket_path.clone(),
-            Duration::from_secs(30),
+            timeout,
             Duration::from_secs(10),
         )
         .await
@@ -307,15 +434,17 @@ pub fn invoke_via_federation_forward_ability_ura(
                 && status.message().contains("target_offline")
             {
                 anyhow!(
-                    "cross-hub target `{node_ura}` is offline (federation.forward_invoke \
+                    "cross-hub target `{}` is offline (federation.forward_invoke \
                      reported target_offline). Run `easynet federation peers` to see \
                      reachable peers, or `easynet runtime status` on the peer machine \
-                     to confirm the daemon is running."
+                     to confirm the daemon is running.",
+                    target.execution_target_ura()
                 )
             } else {
                 anyhow!(
-                    "daemon error invoking federation.forward_invoke for target `{node_ura}` \
+                    "daemon error invoking federation.forward_invoke for target `{}` \
                      (code={:?}): {}",
+                    target.execution_target_ura(),
                     status.code(),
                     status.message(),
                 )
@@ -325,9 +454,27 @@ pub fn invoke_via_federation_forward_ability_ura(
     })
 }
 
-fn decode_forward_invoke_response_value(
-    body: &easynet_axon::pb::axon::v1::InvokeResponse,
-) -> anyhow::Result<Value> {
+/// Encode the caller's causal parent anchors into the opaque
+/// `ForwardInvokeRequest.causal_context_bytes` blob.
+///
+/// An empty parent list is a root hop and yields empty bytes, identical to
+/// the prior unconditional `Vec::new()` — so originating CLI calls are
+/// unchanged. A non-empty list is carried as canonical JSON so the lineage
+/// survives the forward hop instead of being dropped (refactor SPEC §15.1
+/// item 1). The daemon-side typed decode that stamps these onto
+/// `InvocationReceipt.causal_context.list` is PR-N5 territory; the bytes
+/// ride opaquely until then but are no longer discarded at the initiator.
+fn encode_causal_parents_for_forward(causal_parents: &[Value]) -> anyhow::Result<Vec<u8>> {
+    if causal_parents.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::to_vec(causal_parents)
+        .context("serialise causal parents for forward_invoke causal_context_bytes")
+}
+
+fn decode_forward_invoke_response_value(body: &InvokeResponse) -> anyhow::Result<Value> {
+    ensure_completed_invoke_response("federation.forward_invoke", body)?;
+
     // DEC-N4 §2.1 final shape:
     // ForwardInvokeResponse { result_bytes, correlation_call_id }
     // is the wire surface. The shape belongs to the Axon SDK and
@@ -344,6 +491,181 @@ fn decode_forward_invoke_response_value(
         })?;
 
     decode_forward_result_bytes(&envelope.result_bytes)
+}
+
+pub(crate) fn ensure_completed_invoke_response(
+    surface: &str,
+    body: &InvokeResponse,
+) -> anyhow::Result<()> {
+    let completed = easynet_axon::invocation::InvocationState::Completed.to_wire_i32();
+    if body.state == completed {
+        return Ok(());
+    }
+
+    let state = WireInvocationState::try_from(body.state)
+        .map(|state| state.as_str_name().to_string())
+        .unwrap_or_else(|_| format!("UNKNOWN_STATE_{}", body.state));
+    let error = body.error.as_ref();
+    let (code, message) = error
+        .map(|error| {
+            (
+                error.code.trim().to_string(),
+                error.message.trim().to_string(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                "INVOKE_NOT_COMPLETED".to_string(),
+                "InvokeResponse did not carry a structured error".to_string(),
+            )
+        });
+    let diagnostics = error
+        .and_then(|error| render_invoke_error_context(surface, error))
+        .unwrap_or_default();
+    bail!(
+        "{surface} did not complete: state={state} code={} message={}{}",
+        if code.is_empty() {
+            "INVOKE_NOT_COMPLETED"
+        } else {
+            code.as_str()
+        },
+        if message.is_empty() {
+            "InvokeResponse did not carry an error message"
+        } else {
+            message.as_str()
+        },
+        diagnostics,
+    )
+}
+
+fn render_invoke_error_context(surface: &str, error: &WireError) -> Option<String> {
+    if surface != "federation.forward_invoke" {
+        return None;
+    }
+    render_forward_diagnostics_context(error)
+}
+
+fn render_forward_diagnostics_context(error: &WireError) -> Option<String> {
+    let context = &error.context;
+    let has_forward_context = [
+        FORWARD_CONTEXT_ATTEMPT_COUNT,
+        FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT,
+        FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED,
+        FORWARD_CONTEXT_LAST_ERROR,
+        FORWARD_CONTEXT_ATTEMPTS_JSON,
+        FORWARD_CONTEXT_DIAGNOSTICS_ERROR,
+    ]
+    .iter()
+    .any(|key| context.contains_key(*key));
+    if !has_forward_context {
+        return None;
+    }
+
+    let mut out = String::from("\nforward diagnostics:");
+    append_forward_context_field(
+        &mut out,
+        "attempt_count",
+        context.get(FORWARD_CONTEXT_ATTEMPT_COUNT),
+    );
+    append_forward_context_field(
+        &mut out,
+        "diagnostic_attempt_count",
+        context.get(FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT),
+    );
+    append_forward_context_field(
+        &mut out,
+        "diagnostic_truncated",
+        context.get(FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED),
+    );
+    append_forward_context_field(
+        &mut out,
+        "last_error",
+        context.get(FORWARD_CONTEXT_LAST_ERROR),
+    );
+    append_forward_context_field(
+        &mut out,
+        "diagnostics_error",
+        context.get(FORWARD_CONTEXT_DIAGNOSTICS_ERROR),
+    );
+
+    if let Some(attempts_json) = context.get(FORWARD_CONTEXT_ATTEMPTS_JSON) {
+        append_forward_attempts(&mut out, attempts_json);
+    }
+
+    Some(out)
+}
+
+fn append_forward_context_field(out: &mut String, label: &str, value: Option<&String>) {
+    let Some(value) = value else {
+        return;
+    };
+    let _ = write!(out, "\n  {label}: {}", compact_context_value(value));
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ForwardAttemptDiagnosticDisplay {
+    endpoint: Option<String>,
+    failure_class: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+    retryable: Option<bool>,
+}
+
+fn append_forward_attempts(out: &mut String, attempts_json: &str) {
+    match serde_json::from_str::<Vec<ForwardAttemptDiagnosticDisplay>>(attempts_json) {
+        Ok(attempts) if attempts.is_empty() => {
+            let _ = write!(out, "\n  attempts: []");
+        }
+        Ok(attempts) => {
+            let _ = write!(out, "\n  attempts:");
+            for (idx, attempt) in attempts.iter().enumerate() {
+                let _ = write!(
+                    out,
+                    "\n    {}. endpoint={} class={} retryable={} code={} message={}",
+                    idx + 1,
+                    attempt_field(attempt.endpoint.as_deref()),
+                    attempt_field(attempt.failure_class.as_deref()),
+                    attempt
+                        .retryable
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    attempt_field(attempt.code.as_deref()),
+                    attempt_field(attempt.message.as_deref()),
+                );
+            }
+        }
+        Err(err) => {
+            let _ = write!(
+                out,
+                "\n  attempts_json_parse_error: {}",
+                compact_context_value(&err.to_string())
+            );
+        }
+    }
+}
+
+fn attempt_field(value: Option<&str>) -> String {
+    value
+        .map(compact_context_value)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn compact_context_value(value: &str) -> String {
+    const MAX_CONTEXT_VALUE_DISPLAY_BYTES: usize = 512;
+
+    let mut compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.len() <= MAX_CONTEXT_VALUE_DISPLAY_BYTES {
+        return compact;
+    }
+
+    let mut end = MAX_CONTEXT_VALUE_DISPLAY_BYTES;
+    while !compact.is_char_boundary(end) {
+        end -= 1;
+    }
+    compact.truncate(end);
+    compact.push_str("...");
+    compact
 }
 
 fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
@@ -375,29 +697,28 @@ fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
 /// forward path relays no explicit subject), causal = None, ability =
 /// the PUBLIC name, args = the hub-re-serialised bytes.
 ///
-/// Returns `None` when the caller is not a device URA — fidelity is
-/// additive; execution then proceeds with the trust-domain identity.
+/// Returns `None` when the caller is not a device URA or when the route target
+/// lacks a descriptor version. Fidelity is additive, but it must never mint an
+/// origin proof over a guessed descriptor.
 fn device_origin_claim(
     caller_ura: &str,
-    ability_ura: &str,
-    target_ura: &str,
+    target: &RemoteAbilityInvocationTarget,
     args_bytes: &[u8],
 ) -> Option<easynet_axon::OriginCallerClaim> {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine as _;
     use easynet_axon::invocation::{
-        canonical_invocation_bytes, AgentIdentity, CausalContext, InvocationEnvelope,
-        SubjectIdentity, UraProfile,
+        sign_descriptor_bound_invocation, AgentIdentity, CausalContext, DescriptorBoundEnvelope,
+        DescriptorBoundEnvelopeParts, EntityRef, SubjectIdentity, UraProfile,
     };
-    use ed25519_dalek::Signer as _;
 
     let parsed = parse_ura(caller_ura).ok()?;
     if parsed.kind != URAKind::Device {
         return None;
     }
     let device_id = parsed.device_id()?.to_string();
-    let callee_ura = crate::ura::ability_owner_identity_ura(ability_ura)?;
-    let public_ability = crate::ura::public_ability_name_from_ability_ura(target_ura, ability_ura)?;
+    let callee_ura = target.callee_ura.to_string();
+    let public_ability = target.public_ability.to_string();
 
     let subject_id = easynet_axon::invocation::private_agent_subject_id(&device_id);
     let (seed, signer_pubkey_b64) =
@@ -405,36 +726,113 @@ fn device_origin_claim(
     let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
 
     let nonce = easynet_axon::invocation::fresh_nonce();
+    let descriptor_version = target.descriptor_version()?;
+    let subject_ura = match EntityRef::try_from_subject_identity(&SubjectIdentity::new(
+        callee_ura.clone(),
+        UraProfile::EasynetStrictV2,
+    )) {
+        Ok(_) => callee_ura.clone(),
+        Err(_) => crate::ura::owner_ability_ura(&callee_ura, &public_ability)?,
+    };
+    let subject = SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
+    let ability = crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        &callee_ura,
+        &public_ability,
+        descriptor_version,
+    )
+    .ok()?;
 
-    let envelope = InvocationEnvelope::from_wire_parts(
-        AgentIdentity::new(caller_ura.to_string(), UraProfile::EasynetStrictV2),
-        AgentIdentity::new(callee_ura.clone(), UraProfile::EasynetStrictV2),
-        SubjectIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-        nonce,
-        CausalContext::None,
-        public_ability.clone(),
+    EntityRef::try_from_subject_identity(&subject).ok()?;
+    let descriptor_bound = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
+        caller: AgentIdentity::new(caller_ura.to_string(), UraProfile::EasynetStrictV2),
+        callee: AgentIdentity::new(callee_ura.clone(), UraProfile::EasynetStrictV2),
+        ability,
+        subject,
+        invocation_nonce: nonce,
+        causal_context: CausalContext::None,
         args_bytes,
-    );
-    let signature = signing.sign(&canonical_invocation_bytes(&envelope));
+    })
+    .ok()?;
+    let signature = sign_descriptor_bound_invocation(&signing, &descriptor_bound, "device-origin");
 
     Some(easynet_axon::OriginCallerClaim {
         caller_ura: caller_ura.to_string(),
         ability: public_ability,
-        signature_b64: B64.encode(signature.to_bytes()),
+        descriptor_version: descriptor_version.to_string(),
+        signature_b64: B64.encode(signature.signature),
         signer_pubkey_b64,
         nonce_b64: B64.encode(nonce),
     })
 }
 
-fn validate_forward_ability_owner(ability_ura: &str, node_ura: &str) -> anyhow::Result<()> {
-    crate::ura::public_ability_name_from_ability_ura(node_ura, ability_ura)
-        .map(|_| ())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "ability URA `{ability_ura}` is not owned by target `{node_ura}`; \
-                 pass a canonical Ability URA such as `easynet:///r/<realm>/ability/device.<device-id>.<namespace>.<ability-id>`"
-            )
-        })
+fn validate_forward_execution_target(
+    execution_target_ura: &str,
+    selector: &crate::ura::AbilitySelector,
+) -> anyhow::Result<()> {
+    let target = parse_ura(execution_target_ura)
+        .map_err(|err| anyhow!("invalid target URA `{execution_target_ura}`: {err}"))?;
+    let owner = parse_ura(selector.owner_ura()).map_err(|err| {
+        anyhow!(
+            "invalid ability owner URA `{}`: {err}",
+            selector.owner_ura()
+        )
+    })?;
+    if owner.realm != target.realm {
+        bail!(
+            "ability URA `{}` belongs to realm `{}`, but execution target `{}` belongs to realm `{}`",
+            selector.ability_ura(),
+            owner.realm,
+            execution_target_ura,
+            target.realm
+        );
+    }
+
+    match (target.kind, selector.owner_kind()) {
+        (URAKind::Device, "agent") => Ok(()),
+        (URAKind::Device, "device") => {
+            if selector.owner_ura() == execution_target_ura.trim() {
+                Ok(())
+            } else {
+                bail!(
+                    "device-owned ability URA `{}` must execute on its owning device `{}`, not `{}`",
+                    selector.ability_ura(),
+                    selector.owner_ura(),
+                    execution_target_ura
+                );
+            }
+        }
+        (URAKind::Hub, "hub") => {
+            if selector.owner_ura() == execution_target_ura.trim() {
+                Ok(())
+            } else {
+                bail!(
+                    "hub-owned ability URA `{}` must execute on its owning hub `{}`, not `{}`",
+                    selector.ability_ura(),
+                    selector.owner_ura(),
+                    execution_target_ura
+                );
+            }
+        }
+        (URAKind::Hub, "agent") => Ok(()),
+        (URAKind::Device, "hub") => bail!(
+            "hub-owned ability URA `{}` requires a Hub execution target, not device `{}`",
+            selector.ability_ura(),
+            execution_target_ura
+        ),
+        (URAKind::Hub, "device") => bail!(
+            "device-owned ability URA `{}` requires its owning Device execution target `{}`, not hub `{}`",
+            selector.ability_ura(),
+            selector.owner_ura(),
+            execution_target_ura
+        ),
+        (target_kind, owner_kind) => bail!(
+            "ability URA `{}` cannot execute on target `{}`: unsupported owner/target pair owner_kind={} target_kind={}",
+            selector.ability_ura(),
+            execution_target_ura,
+            owner_kind,
+            target_kind
+        ),
+    }
 }
 
 fn validate_forward_target_ura(target_ura: &str) -> anyhow::Result<()> {
@@ -462,17 +860,20 @@ fn validate_forward_target_ura(target_ura: &str) -> anyhow::Result<()> {
 ///     to the daemon. `None` returns the full federated
 ///     directory; `Some(ura)` returns at most one entry (lex
 ///     tie-break on peer realm).
-///   * `caller_ura` — optional caller URA for the envelope. When
-///     `None`, falls back to the device URA minted from
-///     `credentials.json`, then the generic
-///     `easynet:///r/cli/device/local` placeholder. The daemon's
-///     loopback bypass admits both shapes.
-///
 /// Returns the `entries` array as a `Vec<Value>` (each element
 /// is a `DirectoryEntry`-shaped JSON object).
-pub fn invoke_federation_discover(
+pub fn invoke_federation_discover(agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
+    invoke_federation_discover_filtered(agent_ura_filter, None)
+}
+
+/// Same daemon-backed discovery path as `invoke_federation_discover`,
+/// with the optional PR-N4 user-binding privacy filter exposed for
+/// the operator CLI. Keeping this in the transport service avoids a
+/// second facade-owned gRPC request builder that can drift from the
+/// signed daemon IPC contract.
+pub fn invoke_federation_discover_filtered(
     agent_ura_filter: Option<&str>,
-    caller_ura: Option<&str>,
+    local_user_id_filter: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
@@ -487,19 +888,18 @@ pub fn invoke_federation_discover(
     if let Some(ura) = agent_ura_filter {
         req_args["agent_ura"] = Value::String(ura.to_string());
     }
+    if let Some(user) = local_user_id_filter {
+        req_args["local_user_id"] = Value::String(user.to_string());
+    }
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
-    let resolved_caller = caller_ura
-        .map(str::to_string)
-        .or_else(|| {
-            crate::persistence::config::load_credentials()
-                .ok()
-                .map(|c| crate::ura::device_ura(&c.realm, &c.node_id))
-        })
-        .unwrap_or_else(|| crate::ura::device_ura("cli", "local"));
-
-    let request = ProtoEnvelope::loopback(resolved_caller)?
-        .invoke_request("federation.discover", arg_bytes)?;
+    let local_device_ura = crate::runtime::local_invocation_identity::local_device_ura();
+    let request = ProtoEnvelope::targeted(
+        LOCAL_SYSTEM_AGENT_URA,
+        local_device_ura.as_str(),
+        local_device_ura.as_str(),
+    )?
+    .invoke_request("federation.discover", arg_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -527,6 +927,8 @@ pub fn invoke_federation_discover(
         })?
     };
 
+    ensure_completed_invoke_response("federation.discover", &response)?;
+
     let body: Value =
         serde_json::from_slice(&response.result).context("decode discover response body")?;
     Ok(body
@@ -540,25 +942,17 @@ pub fn invoke_federation_discover(
 /// InvocationServer. Removes the named Agent's directory entry on
 /// the hub. CLI lifecycle surfaces (`easynet device remove`,
 /// `easynet device reset --force`) call this helper instead of
-/// local-only `node.remove` / `node.deregister`
-/// acknowledgements.
+/// relying on local-only `node.remove` acknowledgements.
 ///
 /// Args:
 ///   * `agent_ura` — canonical URA of the Agent to revoke (typically
 ///     a device URA `easynet:///r/<realm>/device/<id>`).
 ///   * `reason` — operator-supplied label, written through to the
 ///     receipt for audit. `"deregister"` / `"reset"` are common.
-///   * `caller_ura` — same fallback chain as
-///     `invoke_federation_discover`.
-///
 /// Returns `Ok(())` on a successful ack from the daemon. Best-effort
 /// by contract on the hub side, but this helper still surfaces
 /// transport / parse errors so callers can log them honestly.
-pub fn invoke_federation_revoke(
-    agent_ura: &str,
-    reason: &str,
-    caller_ura: Option<&str>,
-) -> anyhow::Result<()> {
+pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result<()> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -574,17 +968,13 @@ pub fn invoke_federation_revoke(
     });
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
-    let resolved_caller = caller_ura
-        .map(str::to_string)
-        .or_else(|| {
-            crate::persistence::config::load_credentials()
-                .ok()
-                .map(|c| crate::ura::device_ura(&c.realm, &c.node_id))
-        })
-        .unwrap_or_else(|| crate::ura::device_ura("cli", "local"));
-
-    let request =
-        ProtoEnvelope::loopback(resolved_caller)?.invoke_request("federation.revoke", arg_bytes)?;
+    let local_device_ura = crate::runtime::local_invocation_identity::local_device_ura();
+    let request = ProtoEnvelope::targeted(
+        LOCAL_SYSTEM_AGENT_URA,
+        local_device_ura.as_str(),
+        local_device_ura.as_str(),
+    )?
+    .invoke_request("federation.revoke", arg_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -600,13 +990,14 @@ pub fn invoke_federation_revoke(
         .await
         .context("connect to local daemon gRPC endpoint")?;
         let mut client = InvocationClient::new(channel);
-        let _ = client.invoke(request).await.map_err(|status| {
+        let response = client.invoke(request).await.map_err(|status| {
             anyhow!(
                 "daemon rejected federation.revoke: code={:?} message={}",
                 status.code(),
                 status.message()
             )
         })?;
+        ensure_completed_invoke_response("federation.revoke", &response.into_inner())?;
         Ok::<_, anyhow::Error>(())
     })
 }
@@ -615,7 +1006,7 @@ pub fn invoke_federation_revoke(
 /// DEC-N4 §2.1 correlation field. Format: `cli-<nanos-hex>` —
 /// nanoseconds since Unix epoch, hex-encoded, prefixed so log
 /// scraping can tell CLI-minted ids apart from daemon-minted
-/// ones (`<self>.invoke_remote` initiator path uses a different
+/// ones (`runtime.invoke_remote` initiator path uses a different
 /// prefix). Collision space is `2^64` per second of clock
 /// resolution; for the CLI's typical hand-driven cadence the
 /// risk is negligible.
@@ -626,36 +1017,6 @@ fn generate_call_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("cli-{nanos:x}")
-}
-
-/// Minimal base64 encoder used for the inner envelope payload.
-/// Avoids pulling `base64` as a top-level dep just for one
-/// call site; the inner envelope is a CLI-internal blob, not a
-/// wire-stable string, so a per-call encoder is fine. Matches
-/// the standard alphabet so a daemon-side decoder using the
-/// `base64` crate would interoperate.
-fn base64_engine_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let combined = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[((combined >> 18) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((combined >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(ALPHABET[((combined >> 6) & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(ALPHABET[(combined & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -669,20 +1030,25 @@ mod tests {
     /// public name, args = hub-re-serialised bytes).
     #[test]
     fn device_origin_claim_round_trips_executing_device_rebuild() {
-        use easynet_axon::invocation::canonical_invocation_bytes;
         use ed25519_dalek::{Verifier as _, VerifyingKey};
 
         let caller = "easynet:///r/easynet.run/device/node-a";
-        let target = "easynet:///r/easynet.run/device/node-b";
         let ability_ura = "easynet:///r/easynet.run/ability/alice.bfilter.code_filter";
+        let descriptor_ref = format!("{ability_ura}@2.4.0");
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/easynet.run/device/node-b",
+            &descriptor_ref,
+        )
+        .expect("remote ability target");
         let args_bytes =
             serde_json::to_vec(&serde_json::json!({"rows": "[]", "code": "return True"}))
                 .expect("args bytes");
 
-        let claim = device_origin_claim(caller, ability_ura, target, &args_bytes)
+        let claim = device_origin_claim(caller, &target, &args_bytes)
             .expect("device caller produces a claim");
         assert_eq!(claim.caller_ura, caller);
-        assert_eq!(claim.ability, "bfilter.code_filter");
+        assert_eq!(claim.ability, "code_filter");
+        assert_eq!(claim.descriptor_version, "2.4.0");
 
         // Executing-device side: decode and rebuild exactly as
         // `LocalAxonSessionDispatcher` does (claim -> wire dispatch with
@@ -693,7 +1059,9 @@ mod tests {
             )
             .expect("claim decodes");
         let route_callee = "easynet:///r/easynet.run/agent/alice.bfilter";
-        let wire = origin.into_wire_dispatch(route_callee, route_callee, args_bytes.clone());
+        let wire = origin
+            .into_wire_dispatch(route_callee, route_callee, args_bytes.clone())
+            .expect("origin caller wire dispatch");
 
         use base64::Engine as _;
         let pubkey: [u8; 32] = base64::engine::general_purpose::STANDARD
@@ -702,11 +1070,19 @@ mod tests {
             .try_into()
             .expect("32 bytes");
         let verifying = VerifyingKey::from_bytes(&pubkey).expect("verifying key");
-        let signature = ed25519_dalek::Signature::from_slice(&wire.signature.signature)
+        let crate::runtime::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(
+            caller_signature,
+        ) = &wire.ingress
+        else {
+            panic!("origin caller claim must rebuild an external signed dispatch");
+        };
+        let signature = ed25519_dalek::Signature::from_slice(&caller_signature.signature)
             .expect("signature shape");
         verifying
-            .verify(&canonical_invocation_bytes(&wire.envelope), &signature)
-            .expect("rebuilt canonical bytes must verify against the device claim");
+            .verify(&wire.envelope.canonical_bytes(), &signature)
+            .expect(
+                "rebuilt descriptor-bound canonical bytes must verify against the device claim",
+            );
 
         // Tampered args must NOT verify (fail closed at admission).
         let mut tampered = args_bytes.clone();
@@ -714,9 +1090,11 @@ mod tests {
         let origin2 =
             crate::services::invocation_transport::origin_caller::OriginCaller::from_claim(claim)
                 .expect("claim decodes");
-        let wire2 = origin2.into_wire_dispatch(route_callee, route_callee, tampered);
+        let wire2 = origin2
+            .into_wire_dispatch(route_callee, route_callee, tampered)
+            .expect("origin caller wire dispatch");
         assert!(verifying
-            .verify(&canonical_invocation_bytes(&wire2.envelope), &signature)
+            .verify(&wire2.envelope.canonical_bytes(), &signature)
             .is_err());
     }
 
@@ -724,13 +1102,27 @@ mod tests {
     /// fidelity is additive, never fabricated.
     #[test]
     fn device_origin_claim_requires_device_caller() {
-        assert!(device_origin_claim(
-            "easynet:///r/easynet.run/user/alice",
-            "easynet:///r/easynet.run/ability/alice.bfilter.code_filter",
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/easynet.run/device/node-b",
-            b"{}",
+            "easynet:///r/easynet.run/ability/alice.bfilter.code_filter@2.4.0",
         )
-        .is_none());
+        .expect("remote ability target");
+        assert!(
+            device_origin_claim("easynet:///r/easynet.run/user/alice", &target, b"{}",).is_none()
+        );
+    }
+
+    #[test]
+    fn device_origin_claim_requires_descriptor_version() {
+        let target = RemoteAbilityInvocationTarget::from_ability_ura(
+            "easynet:///r/easynet.run/device/node-b",
+            "easynet:///r/easynet.run/ability/alice.bfilter.code_filter",
+        )
+        .expect("remote ability target");
+        assert!(
+            device_origin_claim("easynet:///r/easynet.run/device/node-a", &target, b"{}",)
+                .is_none()
+        );
     }
 
     #[test]
@@ -894,42 +1286,79 @@ mod tests {
     }
 
     #[test]
-    fn forward_ability_ura_rejects_owner_mismatch() {
-        let err = validate_forward_ability_owner(
-            "easynet:///r/acme/ability/device.other.fs.read",
+    fn remote_target_rejects_wrong_device_owner() {
+        let err = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/ability/device.other.fs.read",
         )
         .expect_err("owner mismatch must fail");
         let msg = err.to_string();
         assert!(
-            msg.contains("not owned by target"),
+            msg.contains("owning device"),
             "owner mismatch must be explicit: {msg}"
         );
     }
 
     #[test]
-    fn forward_ability_ura_accepts_matching_device_owner() {
-        validate_forward_ability_owner(
-            "easynet:///r/acme/ability/device.dev-1.fs.read",
+    fn remote_target_accepts_matching_device_owner() {
+        RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/ability/device.dev-1.fs.read",
         )
         .expect("matching device-owned ability URA is accepted");
     }
 
     #[test]
-    fn target_owned_ability_ura_projects_device_selector_to_owner_ura() {
+    fn remote_target_accepts_agent_owner_on_device_execution_target() {
+        let target = RemoteAbilityInvocationTarget::from_ability_ura(
+            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/ability/alice.worker.report.generate",
+        )
+        .expect("agent-owned ability may execute on a device route");
         assert_eq!(
-            TargetOwnedAbilityUra::from_selector("easynet:///r/acme/device/dev-1", "fs.read",)
-                .expect("device ability URA")
-                .as_str(),
+            target.execution_target_ura(),
+            "easynet:///r/acme/device/dev-1"
+        );
+        assert_eq!(target.callee_ura, "easynet:///r/acme/agent/alice.worker");
+        assert_eq!(target.public_ability, "report.generate");
+    }
+
+    #[test]
+    fn remote_target_projects_device_selector_to_owner_ura() {
+        assert_eq!(
+            RemoteAbilityInvocationTarget::for_target_owned_selector(
+                "easynet:///r/acme/device/dev-1",
+                "fs.read",
+            )
+            .expect("device ability URA")
+            .as_str(),
             "easynet:///r/acme/ability/device.dev-1.fs.read"
         );
     }
 
     #[test]
-    fn target_owned_ability_ura_projects_device_meta_list_resources() {
+    fn target_owned_selector_declares_descriptor_binding_deferred_to_destination() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+            "easynet:///r/acme/device/N1",
+            "claude.chat",
+        )
+        .expect("remote A2A selector should not require a local descriptor source");
+
         assert_eq!(
-            TargetOwnedAbilityUra::from_selector(
+            target.as_str(),
+            "easynet:///r/acme/ability/device.N1.claude.chat"
+        );
+        assert!(matches!(
+            &target.descriptor_binding,
+            RemoteDescriptorBinding::DeferredToDestination
+        ));
+        assert_eq!(target.descriptor_version(), None);
+    }
+
+    #[test]
+    fn remote_target_projects_device_meta_list_resources() {
+        assert_eq!(
+            RemoteAbilityInvocationTarget::for_target_owned_selector(
                 "easynet:///r/acme/device/02507271-6034-40df-959c-f90bc930d676",
                 "meta.list_resources",
             )
@@ -940,9 +1369,9 @@ mod tests {
     }
 
     #[test]
-    fn target_owned_ability_ura_accepts_prebuilt_canonical_ura() {
+    fn remote_target_accepts_prebuilt_canonical_ura() {
         assert_eq!(
-            TargetOwnedAbilityUra::from_ability_ura(
+            RemoteAbilityInvocationTarget::from_ability_ura(
                 "easynet:///r/acme/device/dev-1",
                 "easynet:///r/acme/ability/device.dev-1.fs.read",
             )
@@ -953,22 +1382,22 @@ mod tests {
     }
 
     #[test]
-    fn target_owned_ability_ura_rejects_wrong_owner() {
-        let err = TargetOwnedAbilityUra::from_ability_ura(
+    fn remote_target_rejects_wrong_owner() {
+        let err = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/acme/device/dev-1",
             "easynet:///r/acme/ability/device.other.fs.read",
         )
         .expect_err("wrong owner must fail");
         assert!(
-            err.to_string().contains("not owned by target"),
+            err.to_string().contains("owning device"),
             "owner mismatch must be explicit: {err}"
         );
     }
 
     #[test]
-    fn target_owned_ability_ura_projects_hub_selector_to_owner_ura() {
+    fn remote_target_projects_hub_selector_to_owner_ura() {
         assert_eq!(
-            TargetOwnedAbilityUra::from_selector(
+            RemoteAbilityInvocationTarget::for_target_owned_selector(
                 &easynet_axon::ura::hub_ura("acme"),
                 "hub.federation.resolve",
             )
@@ -979,9 +1408,9 @@ mod tests {
     }
 
     #[test]
-    fn target_owned_ability_ura_projects_protocol_hub_identity() {
+    fn remote_target_projects_protocol_hub_identity() {
         assert_eq!(
-            TargetOwnedAbilityUra::from_selector(
+            RemoteAbilityInvocationTarget::for_target_owned_selector(
                 "easynet:///r/acme/hub",
                 "hub.federation.resolve",
             )
@@ -992,8 +1421,8 @@ mod tests {
     }
 
     #[test]
-    fn target_owned_ability_ura_rejects_hub_with_tail() {
-        let err = TargetOwnedAbilityUra::from_selector(
+    fn remote_target_rejects_hub_with_tail() {
+        let err = RemoteAbilityInvocationTarget::for_target_owned_selector(
             "easynet:///r/acme/hub/extra",
             "hub.federation.resolve",
         )
@@ -1013,6 +1442,7 @@ mod tests {
         let body = easynet_axon::pb::axon::v1::InvokeResponse {
             result: serde_json::to_vec(&envelope).expect("encode ForwardInvokeResponse"),
             result_content_type: "application/json".to_string(),
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
             ..Default::default()
         };
 
@@ -1030,6 +1460,7 @@ mod tests {
         let body = easynet_axon::pb::axon::v1::InvokeResponse {
             result: serde_json::to_vec(&envelope).expect("encode ForwardInvokeResponse"),
             result_content_type: "application/json".to_string(),
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
             ..Default::default()
         };
 
@@ -1051,6 +1482,7 @@ mod tests {
         let body = easynet_axon::pb::axon::v1::InvokeResponse {
             result: serde_json::to_vec(&envelope).expect("encode ForwardInvokeResponse"),
             result_content_type: "application/json".to_string(),
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
             ..Default::default()
         };
 
@@ -1061,15 +1493,163 @@ mod tests {
     }
 
     #[test]
-    fn base64_encode_round_trip_against_known_vectors() {
-        // RFC 4648 §10 test vectors. Pin the encoder so a regression
-        // here doesn't silently break the inner envelope shape.
-        assert_eq!(base64_engine_encode(b""), "");
-        assert_eq!(base64_engine_encode(b"f"), "Zg==");
-        assert_eq!(base64_engine_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_engine_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_engine_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_engine_encode(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_engine_encode(b"foobar"), "Zm9vYmFy");
+    fn decode_forward_invoke_response_rejects_failed_in_band_state() {
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
+            error: Some(easynet_axon::pb::axon::v1::Error {
+                code: "AXON_TARGET_OFFLINE".to_string(),
+                message: "peer is unreachable".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = decode_forward_invoke_response_value(&body)
+            .expect_err("failed in-band state must not decode as success");
+        let rendered = err.to_string();
+        assert!(rendered.contains("state=INVOCATION_STATE_FAILED"));
+        assert!(rendered.contains("AXON_TARGET_OFFLINE"));
+        assert!(rendered.contains("peer is unreachable"));
+    }
+
+    #[test]
+    fn forward_diagnostics_context_is_rendered_for_forward_failures() {
+        let attempts_json = serde_json::json!([
+            {
+                "endpoint": "http://peer-a",
+                "failure_class": "transport",
+                "code": "",
+                "message": "connect refused",
+                "retryable": true
+            },
+            {
+                "endpoint": "http://peer-b",
+                "failure_class": "remote_rejected",
+                "code": "AXON_REMOTE_POLICY_REJECTED",
+                "message": "signature rejected",
+                "retryable": false
+            }
+        ])
+        .to_string();
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
+            error: Some(easynet_axon::pb::axon::v1::Error {
+                code: "AXON_FORWARD_HOP_FAILED".to_string(),
+                message: "all remote shard endpoints failed".to_string(),
+                context: [
+                    (FORWARD_CONTEXT_ATTEMPT_COUNT.to_string(), "2".to_string()),
+                    (
+                        FORWARD_CONTEXT_DIAGNOSTIC_ATTEMPT_COUNT.to_string(),
+                        "2".to_string(),
+                    ),
+                    (
+                        FORWARD_CONTEXT_DIAGNOSTIC_TRUNCATED.to_string(),
+                        "false".to_string(),
+                    ),
+                    (
+                        FORWARD_CONTEXT_LAST_ERROR.to_string(),
+                        "http://peer-b remote_rejected signature rejected".to_string(),
+                    ),
+                    (FORWARD_CONTEXT_ATTEMPTS_JSON.to_string(), attempts_json),
+                ]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = decode_forward_invoke_response_value(&body)
+            .expect_err("forward failure should surface diagnostics");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("AXON_FORWARD_HOP_FAILED"));
+        assert!(rendered.contains("forward diagnostics:"));
+        assert!(rendered.contains("attempt_count: 2"));
+        assert!(rendered.contains("diagnostic_truncated: false"));
+        assert!(rendered.contains("last_error: http://peer-b remote_rejected signature rejected"));
+        assert!(rendered.contains("1. endpoint=http://peer-a class=transport retryable=true"));
+        assert!(rendered.contains(
+            "2. endpoint=http://peer-b class=remote_rejected retryable=false \
+             code=AXON_REMOTE_POLICY_REJECTED message=signature rejected"
+        ));
+    }
+
+    #[test]
+    fn forward_diagnostics_malformed_attempts_json_keeps_canonical_error() {
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
+            error: Some(easynet_axon::pb::axon::v1::Error {
+                code: "AXON_FORWARD_HOP_FAILED".to_string(),
+                message: "all remote shard endpoints failed".to_string(),
+                context: [(
+                    FORWARD_CONTEXT_ATTEMPTS_JSON.to_string(),
+                    "not-json".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = decode_forward_invoke_response_value(&body)
+            .expect_err("forward failure should preserve malformed diagnostics");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("AXON_FORWARD_HOP_FAILED"));
+        assert!(rendered.contains("forward diagnostics:"));
+        assert!(rendered.contains("attempts_json_parse_error:"));
+    }
+
+    #[test]
+    fn forward_context_is_not_rendered_for_other_surfaces() {
+        let body = easynet_axon::pb::axon::v1::InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
+            error: Some(easynet_axon::pb::axon::v1::Error {
+                code: "AXON_FORWARD_HOP_FAILED".to_string(),
+                message: "all remote shard endpoints failed".to_string(),
+                context: [(FORWARD_CONTEXT_ATTEMPT_COUNT.to_string(), "2".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = ensure_completed_invoke_response("federation.revoke", &body)
+            .expect_err("non-forward surface still fails");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("AXON_FORWARD_HOP_FAILED"));
+        assert!(!rendered.contains("forward diagnostics:"));
+    }
+
+    /// SPEC §15.1 item 1 regression: an originating (parent-less) forward
+    /// hop stays a root (empty bytes, unchanged from before), while a
+    /// forwarding hop that carries causal parents encodes them onto
+    /// `causal_context_bytes` instead of dropping them. Pairs with the EAL
+    /// device-branch threading in `eal::interpreter::dispatch`.
+    #[test]
+    fn causal_parents_are_carried_onto_forward_request_not_dropped() {
+        // Root hop: no parents -> empty bytes, identical to the prior
+        // unconditional `Vec::new()`.
+        assert!(encode_causal_parents_for_forward(&[])
+            .expect("root encodes")
+            .is_empty());
+
+        // Forwarding hop: parents are preserved and round-trip back.
+        let parents = vec![
+            json!({"receipt_ura": "easynet:///r/acme/receipt/r1", "receipt_hash": "sha256:aa"}),
+            json!({"receipt_ura": "easynet:///r/acme/receipt/r2", "receipt_hash": "sha256:bb"}),
+        ];
+        let bytes = encode_causal_parents_for_forward(&parents).expect("parents encode");
+        assert!(
+            !bytes.is_empty(),
+            "non-empty causal parents must not be dropped to empty bytes"
+        );
+        let decoded: Vec<Value> =
+            serde_json::from_slice(&bytes).expect("causal_context_bytes round-trips to parents");
+        assert_eq!(decoded, parents);
     }
 }

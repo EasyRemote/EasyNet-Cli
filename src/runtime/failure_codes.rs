@@ -34,6 +34,7 @@ const SPECIFIC_PREFIXES: &[&str] = &[
     "RESOLVE_",
     "ROUTE_",
     "INVOCATION_",
+    "POLICY_",
     "DENDRITE_",
     "BRIDGE_",
 ];
@@ -281,7 +282,7 @@ mod tests {
     #[test]
     fn extracts_admission_reason_token() {
         assert_eq!(
-            FailureCodeClassifier::extract("CALLER_SIGNATURE_INVALID: rejected <self>.session")
+            FailureCodeClassifier::extract("CALLER_SIGNATURE_INVALID: rejected session.open")
                 .as_deref(),
             Some("CALLER_SIGNATURE_INVALID")
         );

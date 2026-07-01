@@ -16,20 +16,19 @@
 //! 1. A real `tonic::transport::Server` hosts a
 //!    `DaemonInvocationService` wired with a real Axon
 //!    `LocalRuntime` and a real `PresenceRegistry`, on a UDS.
-//! 2. The device publishes its ability projection through the
+//! 2. The device may publish its ability projection through the
 //!    real `federation.advertise_abilities` wire path — the same
 //!    RFC-005 owner-projection publication a production device
 //!    uses. No catalog seam is poked directly.
-//! 3. A unary `Invoke` of the published ability drives
+//! 3. A unary `Invoke` of the device-local ability drives
 //!    `resolve_local_rpc_route` → `DaemonRouteResolver` →
 //!    `LocalDeviceAbility` FINAL_ROUTE → runtime dispatch, and the
-//!    echoed payload round-trips back.
-//! 4. A unary `Invoke` of an *unpublished* ability on the same
-//!    online owner surfaces `FailedPrecondition` carrying
-//!    `ROUTE_NEGATIVE` + `NEGATIVE_REASON_NODATA` — proving the
-//!    daemon never falls back to tool-name inference or an old
-//!    catalog dispatch table when the resolver says "no route".
-//! 5. A unary `Invoke` against an owner that is *not online*
+//!    echoed payload round-trips back. The route is proven by the
+//!    live LocalRuntime binding, not by DeviceAgent projection.
+//! 4. A unary `Invoke` of an ability not bound in the same device's
+//!    LocalRuntime surfaces `FailedPrecondition` carrying
+//!    `ROUTE_NEGATIVE` + `NEGATIVE_REASON_NODATA`.
+//! 5. A unary `Invoke` against a non-local owner that is *not online*
 //!    surfaces `ROUTE_NEGATIVE` + `NEGATIVE_REASON_NXDOMAIN`.
 //!
 //! Per `team-work/conventions/cargo-discipline.md`: single tokio
@@ -45,14 +44,21 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::invocation::{make_ability, LocalRuntime};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+use easynet_axon::pb::axon::v1::InvokeRequest;
+use easynet_cli::runtime::ability_dispatch::{
+    AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, OwnerKind,
+};
 use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
 use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::services::invocation_transport::invocation_wire::ProtoEnvelope;
 use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
+use easynet_cli::services::self_identity::{SelfIdentity, SelfIdentityError};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::json;
 use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
@@ -63,7 +69,9 @@ use tonic::Request;
 
 const REALM: &str = "test-realm";
 const DEVICE_URI: &str = "easynet:///r/test-realm/device/device-a";
+const REMOTE_DEVICE_URI: &str = "easynet:///r/test-realm/device/device-b";
 const ABILITY_PUBLIC_NAME: &str = "test.echo";
+const UNBOUND_ABILITY_PUBLIC_NAME: &str = "test.missing";
 const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-a.test.echo";
 /// The runtime registry key MUST equal the resolver's dispatch name
 /// (the ability's public name), because the daemon dispatches strictly
@@ -71,10 +79,35 @@ const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-a.test.
 /// owner-prefixed alias.
 const ABILITY_REGISTRY_NAME: &str = ABILITY_PUBLIC_NAME;
 const ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
+const DEVICE_SIGNING_SEED: [u8; 32] = [0xA1; 32];
 
 /// Any single in-process step that takes longer than this is a
 /// pipeline regression, not legitimate work.
 const STEP_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct TestSigner(SigningKey);
+
+impl SelfIdentity for TestSigner {
+    fn sign(
+        &self,
+        _self_ura: &str,
+        canonical_bytes: &[u8],
+    ) -> Result<Signature, SelfIdentityError> {
+        Ok(self.0.sign(canonical_bytes))
+    }
+
+    fn public_key(&self, _self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
+        Ok(self.0.verifying_key())
+    }
+}
+
+fn device_signer() -> TestSigner {
+    TestSigner(SigningKey::from_bytes(&DEVICE_SIGNING_SEED))
+}
+
+fn device_public_key_b64() -> String {
+    BASE64_STANDARD.encode(device_signer().0.verifying_key().to_bytes())
+}
 
 /// An in-process daemon hosting a real `DaemonInvocationService`
 /// over a tempfile UDS. On `Drop` it signals shutdown and aborts
@@ -106,10 +139,17 @@ async fn start_daemon() -> TestDaemon {
     let socket_path = tempdir.path().join("daemon.sock");
 
     let trust_path = tempdir.path().join("realm-trust.toml");
+    let device_public_key_b64 = device_public_key_b64();
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
 agent_ura = "{DEVICE_URI}"
+public_key_b64 = "{device_public_key_b64}"
+role = "device"
+added_at_unix_ms = 0
+
+[[trusted_agent]]
+agent_ura = "{REMOTE_DEVICE_URI}"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "device"
 added_at_unix_ms = 0
@@ -125,13 +165,14 @@ added_at_unix_ms = 0
     let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_URI.to_string()));
 
     let runtime = LocalRuntime::new();
-    runtime
-        .register_ability(
-            ABILITY_REGISTRY_NAME,
-            make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
-        )
-        .await
-        .expect("register device-owned echo ability");
+    let authority_context =
+        AbilityAuthorityContext::for_device_authority_root(DEVICE_URI).expect("device authority");
+    let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        Arc::clone(&runtime),
+        authority_context,
+    );
+    let echo_handler: LocalRpcHandler = Arc::new(Ok);
+    catalog.register_rpc_with_owner(ABILITY_REGISTRY_NAME, OwnerKind::Device, echo_handler);
 
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_session_realm(REALM)
@@ -190,23 +231,20 @@ fn invoke(
     function_name: &str,
     args: serde_json::Value,
 ) -> Request<InvokeRequest> {
-    Request::new(InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: DEVICE_URI.to_string(),
-                ..AgentIdentity::default()
-            }),
-            callee: Some(AgentIdentity {
-                ura: callee_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            invocation_nonce: vec![0x11; 16],
-            ..Envelope::default()
-        }),
-        function_name: function_name.to_string(),
-        arguments: args.to_string().into_bytes(),
-        ..InvokeRequest::default()
-    })
+    let arguments = args.to_string().into_bytes();
+    let signer = device_signer();
+    let descriptor_ref = format!(
+        "{}@{}",
+        easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
+            .expect("fixture ability URA"),
+        easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    );
+    Request::new(
+        ProtoEnvelope::targeted(DEVICE_URI, callee_ura, callee_ura)
+            .expect("valid invoke envelope")
+            .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
+            .expect("valid signed invoke request"),
+    )
 }
 
 /// Publish the echo ability's owner projection through the real
@@ -289,17 +327,15 @@ async fn invoke_surfaces_typed_nodata_when_owner_online_but_ability_unpublished(
     mark_owner_online(&daemon.presence);
     let mut client = InvocationClient::new(connect(&daemon.socket_path).await);
 
-    // Owner is online, but no projection was published: resolve must
-    // return NODATA. The daemon must NOT fall back to tool-name
-    // inference even though `device.test.echo` is registered in the
-    // runtime — only the resolver-selected route may dispatch.
+    // Owner is online, but this ability is not bound in the live
+    // LocalRuntime: resolve must return NODATA.
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(DEVICE_URI, ABILITY_PUBLIC_NAME, json!({}))),
+        client.invoke(invoke(DEVICE_URI, UNBOUND_ABILITY_PUBLIC_NAME, json!({}))),
     )
     .await
     .expect("invoke did not time out")
-    .expect_err("unpublished ability must surface a typed resolver negative");
+    .expect_err("unbound ability must surface a typed resolver negative");
 
     assert_eq!(status.code(), tonic::Code::FailedPrecondition);
     assert!(
@@ -312,12 +348,12 @@ async fn invoke_surfaces_typed_nodata_when_owner_online_but_ability_unpublished(
 #[tokio::test]
 async fn invoke_surfaces_typed_nxdomain_when_owner_offline() {
     let daemon = start_daemon().await;
-    // Owner deliberately left offline (no presence insert).
+    // Remote owner deliberately left offline (no presence insert).
     let mut client = InvocationClient::new(connect(&daemon.socket_path).await);
 
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(DEVICE_URI, ABILITY_PUBLIC_NAME, json!({}))),
+        client.invoke(invoke(REMOTE_DEVICE_URI, ABILITY_PUBLIC_NAME, json!({}))),
     )
     .await
     .expect("invoke did not time out")

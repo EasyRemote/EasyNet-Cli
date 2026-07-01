@@ -269,8 +269,7 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
             let hub_ura = ura::hub_ura(realm);
             let device_ura = ura::device_ura(realm, &c.node_id);
             write_row(buf, style, "Hub:", &style.paint(sgr::DIM, &hub_ura));
-            if let Some(username) = c.username.as_deref().filter(|s| !s.is_empty()) {
-                let user_ura = ura::user_ura(realm, username);
+            if let Ok(user_ura) = c.user_ura() {
                 write_row(
                     buf,
                     style,

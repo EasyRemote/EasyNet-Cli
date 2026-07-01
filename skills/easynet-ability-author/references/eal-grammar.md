@@ -3,7 +3,7 @@
 ## Tokens
 
 ```
-KEYWORDS: mission, call, on, with, let, timeout, retries, on_failure, optional
+KEYWORDS: mission, call, emit, on, with, let, timeout, retries, on_failure, optional
 FAILURE_POLICIES: abort, skip, retry, continue
 LITERALS: "string", 42, 3.14, true, false
 VARREF: identifier.output (e.g., photo.output)
@@ -16,9 +16,10 @@ COMMENT: // single line
 program     = mission_decl
 mission_decl = "mission" STRING "{" statement* "}"
 
-statement   = let_call | bare_call
+statement   = let_call | bare_call | emit_stmt
 let_call    = "let" IDENT "=" call_expr
 bare_call   = call_expr
+emit_stmt   = "emit" STRING "kind" (STRING | IDENT) "value" field_value
 
 call_expr   = "call" STRING ("on" STRING)? ("with" "{" field_list "}")? options*
 field_list  = field ("," field)* ","?
@@ -53,6 +54,15 @@ source → lexer → parser → analyzer → planner → ir → interpreter
 - `input = x.output` references the captured result in a later step
 - This creates an edge in the dependency DAG
 - The compiler detects cycles (A→B→A) and rejects them
+
+## Emissions
+
+- `emit "name" kind answer value x.output` appends a mission archive record.
+- Emits are not ability calls, produce no receipts, and do not add DAG steps.
+- Emits can appear multiple times at top-level mission scope.
+- A binding referenced by `emit` must already be defined.
+- Runtime records unresolved emit values explicitly when the producer failed or
+  skipped before capturing output.
 
 ## Agent Dispatch Convention
 

@@ -2,18 +2,12 @@
 // ============================
 //
 // File: src/facade/cli/groups/trust.rs
-// Description: `easynet trust …` — read the realm trust plane
-//              (commit-plan-2 D3 / Gate D). Trust answers "whose keys
-//              does this daemon's admission gate accept, and in what
-//              role" — it deliberately does NOT answer "what may they
-//              call"; that is permission/policy (D4), a separate
-//              product question per commit-plan-2 invariant 8.
-//
-//              Read-only by design. The trust anchor has two write
-//              paths already — the pairing flow and the
-//              `<self>.register_device_pubkey` protocol ability — and
-//              a third CLI write path would need its own DEC against
-//              admission-truth ownership before it exists.
+// Description: `easynet trust …` — read-only view of the realm trust
+//              anchor: whose keys this daemon's admission gate accepts
+//              and in what role (commit-plan-2 D3 / Gate D). The anchor
+//              has write paths through pairing and protocol key
+//              registration; this CLI noun does not define a separate
+//              ability-permission system.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -23,7 +17,7 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::json;
 
-use crate::services::invocation_transport::boot::trust_anchor_path_from_env_or_default;
+use crate::services::realm_trust_anchor::trust_anchor_path_from_env_or_default;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::support::output::OutputFormat;
 
@@ -168,7 +162,7 @@ fn print_trust_is_not_permission() {
         "\n{}",
         style(
             "trust = whose signatures admission accepts; it does not grant any ability \
-             permission (that is `policy`, a separate surface)"
+             permission (that belongs to ability access/permission)"
         )
         .dim()
     );

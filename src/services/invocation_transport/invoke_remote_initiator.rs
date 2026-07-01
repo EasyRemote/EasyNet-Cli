@@ -1,8 +1,8 @@
-// EasyNet CLI — invocation_transport — <self>.invoke_remote initiator (device side)
+// EasyNet CLI — invocation_transport — runtime.invoke_remote initiator (device side)
 // =========================================================================
 //
 // File: src/services/invocation_transport/invoke_remote_initiator.rs
-// Description: Device-side caller for `<self>.invoke_remote`. Opens a
+// Description: Device-side caller for `runtime.invoke_remote`. Opens a
 //              per-call `InvokeBidi` stream against the daemon, sends
 //              frame 0 = `EnvelopeOpen` carrying the cross-device
 //              dispatch request, drains result frames into a returned
@@ -11,13 +11,13 @@
 // Where this fits in RFC-003
 // --------------------------
 // PR-1 lands the daemon-side dispatcher. PR-3 (this
-// commit) lands two halves of `<self>.invoke_remote`:
+// commit) lands two halves of `runtime.invoke_remote`:
 //
 //   commit 2/3 (this file) — device-side initiator: a function any
 //   in-process consumer can call to invoke an ability on a remote
 //   device through the local daemon, without knowing the gRPC plumbing
 //
-//   commit 3/3 (next)      — hub-side handler: the `<self>.invoke_remote`
+//   commit 3/3 (next)      — hub-side handler: the `runtime.invoke_remote`
 //   arm of the daemon's `InvokeBidi` dispatcher that consumes the
 //   stream this initiator opens
 //
@@ -29,7 +29,7 @@
 // Wire shape (from PR-3 sub-spec §2.1)
 // ------------------------------------
 // Frame 0 up (`EnvelopeOpen`):
-//   target.ability_name = "<self>.invoke_remote"
+//   target.ability_name = "runtime.invoke_remote"
 //   initial_args        = JSON-encoded:
 //     {
 //       "type": "request",
@@ -84,17 +84,10 @@ use easynet_axon::pb::axon::v1::{
 /// `InvokeBidi` dispatcher routes on
 /// `EnvelopeOpen.target.ability_name`.
 ///
-/// **Wire-pinned** — held on the `<self>.invoke_remote` transport
-/// literal until the production hub (EasyNet-Axon) ships matching
-/// dual-name acceptance. EasyNet/backend's `AbilityInvokeRemote`
-/// const tracks this string verbatim. M4 of the system-namespace
-/// migration is staged for RFC-001 v4.1.6's wire-break carrier;
-/// see `docs/open-questions/deprecate-self-alias-in-ability-names.md`
-/// Stage 2 for the cross-repo coordination plan.
-// TODO(RFC-001-v4.1.6 stage-2): rename to `device.invoke_remote`
-// once the hub ships dual-name acceptance. Single grep anchor for
-// all wire-pinned `<self>.*` constants.
-pub const ABILITY_INVOKE_REMOTE: &str = "<self>.invoke_remote";
+/// `runtime.invoke_remote` is the daemon-owned per-call remote
+/// dispatch carrier. Backend and CLI track this string verbatim; no
+/// historical caller-relative alias is accepted.
+pub const ABILITY_INVOKE_REMOTE: &str = "runtime.invoke_remote";
 
 /// Stream id used by every BinaryChunk on the invoke_remote bidi.
 /// PR-3 sub-spec §2.1 declares one StreamDescriptor (id=0,
@@ -165,15 +158,13 @@ impl SessionContentEnvelope {
 pub enum InvokeRemoteUp {
     /// The only frame-0 variant — start a cross-device dispatch.
     Request {
-        /// Canonical URI of the device whose `<self>.session` stream
+        /// Canonical URI of the device whose `session.open` stream
         /// the daemon must look up via `PresenceRegistry::lookup`.
         subject_device: String,
         /// Inner ability subject. Resource-backed abilities use this
         /// as their envelope subject after the target daemon dispatches
-        /// through its LocalRuntime. Older callers omit it and the
-        /// target falls back to `subject_device`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        subject_ura: Option<String>,
+        /// through its LocalRuntime.
+        subject_ura: String,
         /// Canonical Ability URA the remote owner should run.
         ability_ura: String,
         /// Opaque payload bytes the remote ability consumes. The
@@ -187,9 +178,8 @@ pub enum InvokeRemoteUp {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
         /// Typed browser-signed user identity (DEC-EU user-caller
-        /// pass-through). First-class field per invocation-unity
-        /// §22.2; the legacy `x-easynet-origin-caller` metadata item
-        /// is its rolling-upgrade fallback.
+        /// pass-through). This first-class field is the only authority
+        /// carrier for origin-caller dispatch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin_caller:
             Option<crate::services::invocation_transport::origin_caller::OriginCallerClaim>,
@@ -231,13 +221,13 @@ pub enum InvokeRemoteFrame {
     Done(Vec<u8>),
 }
 
-/// Wire shape of a frame the hub's `<self>.invoke_remote` handler
-/// pushes down a target device's `<self>.session` reverse channel,
+/// Wire shape of a frame the hub's `runtime.invoke_remote` handler
+/// pushes down a target device's `session.open` reverse channel,
 /// and of the matching reply the target device sends back up its
 /// session stream.
 ///
 /// MVP-style framing per PR-3 sub-spec §2.3. Public so the
-/// `<self>.session` accept handler imports the same type to
+/// `session.open` accept handler imports the same type to
 /// recognise these frames in the session stream.
 ///
 /// Direction discipline (per PR-N6 spec §"Direction discipline"):
@@ -254,7 +244,7 @@ pub enum InvokeRemoteFrame {
 pub enum SessionDispatch {
     /// Hub → target device. "Run this ability locally and reply
     /// with `call_id` so I can route the reply back to the
-    /// `<self>.invoke_remote` caller."
+    /// `runtime.invoke_remote` caller."
     Dispatch {
         call_id: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -319,9 +309,9 @@ pub enum SessionDispatch {
     /// CLI's `ability invoke --node` lands a `forward_invoke`
     /// that the device's local PresenceRegistry cannot serve
     /// (which is always the case for device-mode, since
-    /// device-mode only dials outbound `<self>.session` and
+    /// device-mode only dials outbound `session.open` and
     /// never accepts inbound bidi). The hub picks the frame up
-    /// on the existing `<self>.session` accept handler and runs
+    /// on the existing `session.open` accept handler and runs
     /// the same `forward_invoke` logic against the hub's
     /// authoritative PresenceRegistry, then answers with a
     /// matching `RequestResult` frame.
@@ -397,7 +387,7 @@ pub fn call_id_hex(call_id: &[u8; 16]) -> String {
     out
 }
 
-/// Open an `<self>.invoke_remote` bidi stream against the local
+/// Open an `runtime.invoke_remote` bidi stream against the local
 /// daemon on `channel` and return a stream of result frames.
 ///
 /// The returned stream yields `Ok(InvokeRemoteFrame::Chunk(_))` for
@@ -419,8 +409,8 @@ pub async fn invoke_remote(
     args: Vec<u8>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<InvokeRemoteFrame, Status>> + Send>>, Status> {
     let request = InvokeRemoteUp::Request {
+        subject_ura: subject_device.clone(),
         subject_device,
-        subject_ura: None,
         ability_ura,
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -459,10 +449,11 @@ pub async fn invoke_remote(
 }
 
 /// Build the EnvelopeOpen frame-0 carrying `initial_args` for the
-/// `<self>.invoke_remote` ability. AXIOM admission fields stay empty
-/// at this layer; the daemon's `AdmissionFacade::verify_envelope`
-/// (PR-1 commit 7b/9) gates membership, and PR-7 will add the
-/// signature path that fills `mac` in.
+/// `runtime.invoke_remote` ability. This client-side session bootstrap
+/// frame does not manufacture Axon runtime admission state. The receiving
+/// daemon may run its transport policy gate for wrapper compatibility, but
+/// descriptor-bound user calls still enter LocalRuntime through Axon's
+/// public signed/external-signed request constructors.
 fn build_envelope_open_frame(initial_args: &[u8]) -> InvokeBidiUp {
     let envelope_open = EnvelopeOpen {
         envelope: None,
@@ -626,7 +617,7 @@ fn extract_chunk_bytes(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> Op
 
 // ── Hub-side frame construction ─────────────────────────────────────
 // The dispatch/terminal frame builders and the inner-payload decode
-// the hub uses when it drives `<self>.invoke_remote` over a device's
+// the hub uses when it drives `runtime.invoke_remote` over a device's
 // session channel. Moved next to the wire types they serialize
 // (commit-plan-2 E2d).
 
@@ -734,14 +725,14 @@ pub(crate) fn build_carrier_v1_dispatch_frame(
 }
 
 /// Build a `DispatchFrame` carrying a `SessionDispatch::Dispatch` JSON
-/// payload, ready to push down a target's `<self>.session` reverse
+/// payload, ready to push down a target's `session.open` reverse
 /// channel. Encoding failure is impossible for the current variant
 /// (call_id u64, owned String, owned Vec<u8>) but mapped to
 /// `Status::internal` for forward-compatibility per letter 25 §"flag".
 pub(crate) struct InvokeRemoteDispatchFrameRequest<'a> {
     pub(crate) call_id: u64,
     pub(crate) callee_ura: &'a str,
-    pub(crate) subject_ura: Option<&'a str>,
+    pub(crate) subject_ura: &'a str,
     pub(crate) ability: &'a str,
     pub(crate) args: &'a [u8],
     pub(crate) args_content_envelope: SessionContentEnvelope,
@@ -764,12 +755,17 @@ pub(crate) fn build_invoke_remote_dispatch_frame(
         origin_caller,
     } = request;
 
+    let subject_ura = subject_ura.trim();
+    if subject_ura.is_empty() {
+        return Err(Status::invalid_argument(
+            "runtime.invoke_remote: missing inner subject_ura",
+        ));
+    }
+
     let payload = SessionDispatch::Dispatch {
         call_id,
         callee_ura: Some(callee_ura.to_string()),
-        subject_ura: subject_ura
-            .filter(|subject| !subject.trim().is_empty())
-            .map(ToOwned::to_owned),
+        subject_ura: Some(subject_ura.to_string()),
         ability: ability.to_string(),
         args: args.to_vec(),
         args_content_envelope,
@@ -778,7 +774,7 @@ pub(crate) fn build_invoke_remote_dispatch_frame(
     };
     let bytes = payload.encode_frame().map_err(|err| {
         Status::internal(format!(
-            "<self>.invoke_remote: encode SessionDispatch::Dispatch: {err}"
+            "runtime.invoke_remote: encode SessionDispatch::Dispatch: {err}"
         ))
     })?;
     let chunk = BinaryChunk {
@@ -795,14 +791,14 @@ pub(crate) fn build_invoke_remote_dispatch_frame(
 }
 
 /// Build the terminal `InvokeBidiDown` frame the
-/// `<self>.invoke_remote` caller's down stream yields. Carries the
+/// `runtime.invoke_remote` caller's down stream yields. Carries the
 /// `InvokeRemoteDown::Result` JSON in `BinaryChunk.data`.
 pub(crate) fn build_invoke_remote_terminal_frame(
     down: &InvokeRemoteDown,
 ) -> Result<InvokeBidiDown, Status> {
     let bytes = serde_json::to_vec(down).map_err(|err| {
         Status::internal(format!(
-            "<self>.invoke_remote: encode InvokeRemoteDown: {err}"
+            "runtime.invoke_remote: encode InvokeRemoteDown: {err}"
         ))
     })?;
     let chunk = BinaryChunk {
@@ -816,7 +812,7 @@ pub(crate) fn build_invoke_remote_terminal_frame(
     })
 }
 
-/// Build a one-shot `<self>.invoke_remote` Response stream carrying a
+/// Build a one-shot `runtime.invoke_remote` Response stream carrying a
 /// single terminal frame whose `InvokeRemoteDown::Result` has
 /// `error = Some(msg)` and an empty payload.
 ///
@@ -865,7 +861,7 @@ mod tests {
     fn frame_zero_carries_ability_name_and_one_stream_descriptor() {
         let request_json = serde_json::to_vec(&InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
-            subject_ura: None,
+            subject_ura: "easynet:///r/realm/device/dev-B".into(),
             ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
             args: b"hi".to_vec(),
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -903,7 +899,7 @@ mod tests {
     fn invoke_remote_up_request_serde_round_trip() {
         let original = InvokeRemoteUp::Request {
             subject_device: "easynet:///r/realm/device/dev-X".into(),
-            subject_ura: Some("easynet:///r/realm/resource/camera-1".into()),
+            subject_ura: "easynet:///r/realm/resource/camera-1".into(),
             ability_ura: "easynet:///r/realm/ability/device.dev-X.fs.read".into(),
             args: vec![1, 2, 3, 255],
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1348,7 +1344,7 @@ mod hub_frame_tests {
         let frame = build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
             call_id: 42,
             callee_ura: "easynet:///r/realm/device/dev",
-            subject_ura: Some("easynet:///r/realm/resource/camera-1"),
+            subject_ura: "easynet:///r/realm/resource/camera-1",
             ability: "echo",
             args: b"hello",
             args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1425,7 +1421,7 @@ mod hub_frame_tests {
     }
     #[tokio::test]
     async fn invoke_remote_inband_error_response_surfaces_reason_in_terminal_frame() {
-        // Operational failures inside `<self>.invoke_remote` (target
+        // Operational failures inside `runtime.invoke_remote` (target
         // offline, channel full, handler errored) used to surface as
         // `tonic::Status` — i.e., a gRPC-level error, which the Go
         // HTTP shim above tonic logs as a bare HTTP 500. The frontend

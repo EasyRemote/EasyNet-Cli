@@ -88,8 +88,13 @@ async fn forward_invoke_self_target_runs_locally_via_axon_runtime() {
     // LocalRuntime verbatim, so the selected route's device-local
     // dispatch key is also bare. This mirrors the production
     // convention and the sibling `observe.health` quota test.
-    let rt =
-        runtime_with_json_echo("demo.echo", "MARKER-C9-1", "self-target-fallthrough-fired").await;
+    let rt = runtime_with_json_echo(
+        TEST_DAEMON_URI,
+        "demo.echo",
+        "MARKER-C9-1",
+        "self-target-fallthrough-fired",
+    )
+    .await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -152,7 +157,13 @@ async fn forward_invoke_self_target_scopes_agent_target_ability() {
     upsert_hosted_agent(&mut local, "llm", "alice", target_ura);
     save(&local).expect("seed local-agents.json");
 
-    let rt = runtime_with_json_echo("alice.chat", "MARKER-AGENT-SCOPE", "agent-scope-fired").await;
+    let rt = runtime_with_json_echo(
+        target_ura,
+        "alice.chat",
+        "MARKER-AGENT-SCOPE",
+        "agent-scope-fired",
+    )
+    .await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -196,6 +207,7 @@ async fn forward_invoke_self_target_scopes_agent_target_ability() {
 async fn forward_invoke_agent_ability_unhosted_by_target_fails_at_resolution() {
     let target_ura = TEST_DAEMON_URI;
     let rt = runtime_with_json_echo(
+        target_ura,
         "observe.health",
         "MARKER-DEVICE-SCOPE",
         "device-scope-fired",
@@ -275,8 +287,13 @@ async fn forward_invoke_local_hub_ura_runs_locally_via_axon_runtime() {
     // `easynet:///r/<realm>/hub` as self-targeted even though
     // `AdmissionFacade.daemon_ura()` still carries the host
     // device URA from credentials.json.
-    let rt =
-        runtime_with_json_echo("demo.echo", "MARKER-C9-HUB", "local-hub-self-target-fired").await;
+    let rt = runtime_with_json_echo(
+        &crate::ura::hub_ura("test-realm"),
+        "demo.echo",
+        "MARKER-C9-HUB",
+        "local-hub-self-target-fired",
+    )
+    .await;
 
     let svc = make_service()
         .with_session_realm("test-realm")
@@ -374,7 +391,13 @@ async fn forward_invoke_self_target_does_not_intercept_other_target_uras() {
     // through the existing presence-push path and surfaces
     // target_offline when the device is not subscribed —
     // unchanged by the fall-through.
-    let rt = runtime_with_json_echo("demo.echo", "MARKER-OTHER", "must-not-fire").await;
+    let rt = runtime_with_json_echo(
+        TEST_DAEMON_URI,
+        "demo.echo",
+        "MARKER-OTHER",
+        "must-not-fire",
+    )
+    .await;
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
@@ -476,11 +499,12 @@ async fn forward_invoke_same_realm_route_negative_does_not_peer_fanout_when_conf
 }
 
 #[tokio::test]
-async fn forward_invoke_cross_realm_with_no_client_returns_target_offline() {
-    // C1a / DEC-N4 §2.1: cross-realm target + no federation
-    // client wired ⇒ `Status::failed_precondition` with the
-    // wire-stable `target_offline` reason. The older
-    // "Ok with target_online:false" shape is gone.
+async fn forward_invoke_cross_realm_without_peer_route_surfaces_resolver_noroute_before_client() {
+    // Route-first invariant: the resolver must select a peer
+    // delegation before the dispatcher checks whether a federation
+    // client is wired. An unmapped realm is therefore a typed
+    // `NEGATIVE_REASON_NOROUTE`, not an opaque transport
+    // `target_offline`.
     let svc = make_service().with_session_realm("test-realm");
 
     let err = svc
@@ -490,7 +514,32 @@ async fn forward_invoke_cross_realm_with_no_client_returns_target_offline() {
             &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
         )
         .await
-        .expect_err("cross-realm without client surfaces target_offline");
+        .expect_err("cross-realm without peer route surfaces resolver NOROUTE");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert_route_negative_noroute(err.message());
+}
+
+#[tokio::test]
+async fn forward_invoke_cross_realm_with_peer_route_but_no_client_returns_target_offline() {
+    // Once the resolver has selected a concrete peer hub route, missing
+    // federation transport is a dispatch-plane offline condition.
+    let mut peers = BTreeMap::new();
+    peers.insert(
+        "peer-realm".to_string(),
+        "https://peer-hub.example:50443".to_string(),
+    );
+    let svc = make_service()
+        .with_session_realm("test-realm")
+        .with_federated_peers(peers);
+
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_federation_forward_invoke(
+            None,
+            &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
+        )
+        .await
+        .expect_err("selected peer route without client surfaces target_offline");
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     assert_eq!(
         err.message(),
@@ -963,40 +1012,27 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     // daemon_b: realm "realm-b", peer dispatches through to
     //           its own local presence registry.
     //
-    // Limit honesty for PR-N1: this exercise stops at the
-    // point of `daemon_a.invoke()` building a peer_request
-    // and handing it to the federation client. Going one
-    // step further (the federation client invoking
-    // `daemon_b.invoke()`) requires daemon B's admission
-    // gate to admit the request, which under PR-N1 today
-    // means daemon A's URA must be in daemon B's trust
-    // anchor as a Hub-role peer. PR-N2 lands the
-    // FederatedKeyResolver that resolves daemon A's signing
-    // key out of daemon B's trust set; without that the
-    // cross-realm strict admission would reject the
-    // signature step. Either way, the in-process e2e here
-    // proves the routing chain works; full TLS handshake +
-    // cross-realm admission is the operator-side smoke test.
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
     const DAEMON_A_URI: &str = "easynet:///r/realm-a/device/daemon-a";
     const DAEMON_B_URI: &str = "easynet:///r/realm-b/device/daemon-b";
     const TARGET_DEVICE_URI: &str = "easynet:///r/realm-b/device/target-device";
     const PEER_HUB_URI: &str = "https://daemon-b.example:50443";
+    const DAEMON_A_SIGNING_SEED: [u8; 32] = [0xA1; 32];
 
-    // Daemon B's trust anchor: pre-populated with daemon A
-    // as a Backend-role entry so daemon B's admission gate
-    // admits a request whose envelope.caller.ura is daemon
-    // A's URA. URA-only no-op admission today (Backend role
-    // skips the strict signature path? — no, Backend goes
-    // strict. Use Device for URA-only no-op so the e2e
-    // doesn't depend on PR-N2 cross-realm sig verify).
-    // DEC-013 path-conditional admission lets Device entries
-    // pass URA-only — exactly what we need for the in-
-    // process e2e under PR-N1.
+    let daemon_a_signing_key = ed25519_dalek::SigningKey::from_bytes(&DAEMON_A_SIGNING_SEED);
+    let daemon_a_pubkey_b64 = {
+        use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+        BASE64_STANDARD.encode(daemon_a_signing_key.verifying_key().to_bytes())
+    };
+
+    // Daemon B's trust anchor contains daemon A's public key. The
+    // in-process federation client below signs the rebuilt peer
+    // request with the matching private key, so daemon B exercises
+    // the same strict Device-caller admission path as production callers.
     let daemon_a_in_b_trust = vec![crate::services::realm_trust_anchor::TrustedAgent {
         agent_ura: DAEMON_A_URI.to_string(),
-        public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+        public_key_b64: daemon_a_pubkey_b64,
         role: crate::services::realm_trust_anchor::TrustedAgentRole::Device,
         added_at_unix_ms: 1_714_492_800_000,
         origin_realm: None,
@@ -1070,18 +1106,20 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     });
 
     // Daemon A: empty presence registry; cross-realm target
-    // routes via the InProcessPeerClient → daemon B. We
-    // forward the envelope verbatim from the test request so
-    // daemon B sees `envelope.caller.ura = DAEMON_A_URI` and
-    // resolves the URA-only Device admission against the
-    // pre-staged trust entry above.
+    // routes via the InProcessPeerClient → daemon B. The fixture
+    // signs the peer request after daemon A has rebuilt the target
+    // ability and argument bytes, matching the strict admission
+    // bytes daemon B verifies.
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
         Some(DAEMON_A_URI.to_string()),
     );
     let federation_client: Arc<dyn FederationClient> = Arc::new(ForwardingPeerClient {
         peer: daemon_b,
-        envelope: test_envelope_with_uri(DAEMON_A_URI),
+        caller_ura: DAEMON_A_URI.to_string(),
+        callee_ura: crate::ura::hub_ura(REALM_B),
+        subject_ura: DAEMON_B_URI.to_string(),
+        signing_seed: DAEMON_A_SIGNING_SEED,
     });
     let mut peers = BTreeMap::new();
     peers.insert(REALM_B.to_string(), PEER_HUB_URI.to_string());
@@ -1158,15 +1196,15 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     );
 }
 
-/// Like `InProcessPeerClient` but stamps an envelope onto the
-/// peer request so daemon B's admission gate sees a caller URA
-/// it can admit. Real PR-N2 path will sign + AXIOM-rewrite the
-/// envelope; this test fixture just stamps the original
-/// envelope verbatim, sufficient for the URA-only Device
-/// admission gate the e2e leans on.
+/// Like `InProcessPeerClient` but signs a fresh envelope over the
+/// rebuilt peer request so daemon B verifies the same ability and
+/// argument bytes it will dispatch.
 struct ForwardingPeerClient {
     peer: Arc<DaemonInvocationService>,
-    envelope: Envelope,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    signing_seed: [u8; 32],
 }
 
 #[async_trait::async_trait]
@@ -1176,7 +1214,15 @@ impl FederationClient for ForwardingPeerClient {
         _target_hub: &crate::services::federation_client::HubUri,
         mut request: InvokeRequest,
     ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError> {
-        request.envelope = Some(self.envelope.clone());
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.signing_seed);
+        request.envelope = Some(signed_test_envelope(
+            &self.caller_ura,
+            &self.callee_ura,
+            &self.subject_ura,
+            &request.function_name,
+            &request.arguments,
+            &signing_key,
+        ));
         let response = self
             .peer
             .invoke(Request::new(request))

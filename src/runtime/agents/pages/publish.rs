@@ -35,7 +35,7 @@ use super::state::{
 /// Handler invoked when a user calls `pages.publish`. The
 /// handler is registered once at daemon boot under the user-prefixed
 /// ability name; the dispatcher routes per-user calls to the same
-/// closure (`<self>` is the calling daemon's user identity).
+/// closure (`legacy self alias` is the calling daemon's user identity).
 ///
 /// args:
 /// ```json
@@ -129,7 +129,8 @@ pub fn handle_publish(
     // Register per-project fetch/API abilities into the live
     // daemon-hosted Axon runtime so Hub remote/session dispatch
     // can find them without any legacy resolver path.
-    super::register_project_abilities(registry.as_ref(), user, project_id);
+    super::register_project_abilities(registry.as_ref(), user, project_id)
+        .context("register pages project abilities")?;
 
     let project_ura = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
     let url_root = super::pages_public_url_root(realm, user, project_id);

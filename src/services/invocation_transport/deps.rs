@@ -23,7 +23,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::runtime::ability_wire::AbilityWireRegistry;
@@ -34,11 +33,11 @@ use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::federation_directory::SharedFederatedDirectoryView;
 use crate::services::invocation_transport::device_trust_sync::DeviceTrustSync;
+use crate::services::invocation_transport::runtime_trust::RuntimeTrustContext;
 use crate::services::invocation_transport::session_escalation::SessionEscalationHandle;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
 use crate::services::presence_registry::PresenceRegistry;
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Directory read plane: live device sessions, hosted-agent rows,
 /// per-agent ability catalogs, and the federated directory view.
@@ -94,11 +93,11 @@ pub(crate) struct FederationDial {
 }
 
 /// Device<->hub session correlation plane: per-call dispatch maps for
-/// `<self>.invoke_remote`, the device-mode escalation handle, and the
+/// `runtime.invoke_remote`, the device-mode escalation handle, and the
 /// on-miss device trust sync that rides the same session channel.
 #[derive(Clone)]
 pub(crate) struct SessionPlane {
-    /// Cross-call correlation for `<self>.invoke_remote` dispatches
+    /// Cross-call correlation for `runtime.invoke_remote` dispatches
     /// awaiting a target-device reply. `None` ⇒ the ability is
     /// unavailable on this daemon (`failed_precondition`).
     pub(crate) pending: Option<Arc<PendingDispatchMap>>,
@@ -106,35 +105,31 @@ pub(crate) struct SessionPlane {
     /// replies; same-hub `fs.transfer` is the first consumer.
     pub(crate) pending_stream: Option<Arc<PendingStreamDispatchMap>>,
     /// Device-mode escalation handle: when `Some`, federation
-    /// forward_invoke routes through the existing `<self>.session`
+    /// forward_invoke routes through the existing `session.open`
     /// bidi to the hub instead of the (empty) local PresenceRegistry.
     pub(crate) escalation: Option<Arc<SessionEscalationHandle>>,
     /// On-miss device trust sync shared with the device's
-    /// `<self>.session` dispatcher; warms the local anchor for
+    /// `session.open` dispatcher; warms the local anchor for
     /// first-contact cross-device callers. `None` on hub/both daemons
     /// (the hub IS the realm's key registrar).
     pub(crate) device_trust_sync: Option<Arc<DeviceTrustSync>>,
 }
 
-/// `<self>.register_device_pubkey` handler context. The same
+/// Runtime trust aggregate context. The same
 /// `SharedTrustAnchor` cell is threaded into the `AdmissionFacade` so
-/// a successful publish is visible to the next admission without a
-/// daemon restart. Cloning is cheap (the cell is `Arc`-shaped).
-#[derive(Debug, Clone)]
-pub(crate) struct RegisterPubkeyContext {
-    pub(crate) daemon_realm: String,
-    pub(crate) trust_anchor_path: PathBuf,
-    pub(crate) cell: SharedTrustAnchor,
-}
+/// a successful register/revoke publish is visible to the next
+/// admission without a daemon restart. Cloning is cheap.
+pub(crate) type RegisterPubkeyContext = RuntimeTrustContext;
 
 /// Identity/trust write surface this daemon owns.
 #[derive(Clone)]
 pub(crate) struct IdentityPlane {
-    /// `<self>.register_device_pubkey` handler context. `None` ⇒ the
-    /// ability returns `failed_precondition` (booted without the
-    /// trust-write surface — typically a smoke-test setup).
-    pub(crate) register_pubkey: Option<RegisterPubkeyContext>,
-    /// Daemon realm for `<self>.session` admission-time cross-realm
+    /// Runtime trust aggregate for identity.register_pubkey,
+    /// identity.list_user_pubkeys, and identity.revoke_user_pubkey.
+    /// `None` ⇒ these abilities return `failed_precondition`
+    /// (typically a smoke-test setup).
+    pub(crate) runtime_trust: Option<RuntimeTrustContext>,
+    /// Daemon realm for `session.open` admission-time cross-realm
     /// rejection. `None` ⇒ constructed without realm context
     /// (typically a narrow unit test); the defense-in-depth check is
     /// skipped.

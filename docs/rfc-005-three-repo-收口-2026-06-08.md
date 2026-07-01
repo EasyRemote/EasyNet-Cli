@@ -49,7 +49,7 @@ backend 仅消费）在抽查中**成立**——backend 已无 `NormalizeInvokeT
 - 🟡 C1 收尾（工作树）：`callable_summary` 进 projection、`ProjectionUpsertOutcome` 做
   per-owner revision/digest fence、lease `is_live_at` 过滤。
 - 🟡 C2 主体（工作树）：daemon `namespace.resolve` / `namespace.proxy_resolve` 返回 Axon typed
-  `ResolveAnswer`、跨 realm 走 `federation.forward_invoke`、boot 期 `<self>.session` 准入 gate 失败即 fail-closed。
+  `ResolveAnswer`、跨 realm 走 `federation.forward_invoke`、boot 期 `session.open` 准入 gate 失败即 fail-closed。
 - ⬜ C2/C3 仍 `[ ]`：resolve-before-invoke 全量替换、`ResourceRef` 每次 fs 操作复核、
   `AuthoritativeLocal` 才进权威 dispatch、fs.* 树发布。
 

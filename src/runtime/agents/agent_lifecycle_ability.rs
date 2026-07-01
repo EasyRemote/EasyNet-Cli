@@ -3,8 +3,9 @@
 //
 // File: src/runtime/agents/agent_lifecycle_ability.rs
 //
-// Per RFC §18, the device-profile owns these abilities. They match
-// the operator-facing `easynet agent add` / `easynet agent remove`
+// Per RFC §18, the device-profile advertises these abilities under
+// device authority. They match the operator-facing `easynet agent add` /
+// `easynet agent remove`
 // CLI subcommands but reach the same registry through Invoke instead
 // of stdin parsing — so a remote operator (or another local Agent)
 // can manage the local agent registry without spawning a shell.
@@ -61,7 +62,9 @@ use crate::registry::agents::{
 };
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::agents::profiles::bootstrap::{self, BootstrapPlan, LlmSubAgent, UuidMinter};
-use crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest;
+use crate::runtime::axon_bridge::hot_agent_registrar::{
+    block_on_hot_registrar, HotAgentAdvertiseRequest,
+};
 use crate::runtime::directory::{AgentDirectory, Location};
 
 use crate::runtime::ability_dispatch::OwnerKind;
@@ -156,6 +159,20 @@ fn start_agent_handler(
         .get("label")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let custom_command = args
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let custom_args: Vec<String> = args
+        .get("command_args")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let materialize_directory = args
         .get("materialize_directory")
         .and_then(Value::as_bool)
@@ -253,7 +270,7 @@ fn start_agent_handler(
 
     let mut entry = if let Some(entry) = provided_entry {
         entry
-    } else if let Some(existing) = existing_entry {
+    } else if let Some(existing) = existing_entry.clone() {
         if materialize_directory {
             let mut updated = existing;
             updated.agent_type = agent_type;
@@ -274,6 +291,26 @@ fn start_agent_handler(
     if let Some(directory) = materialized_directory.as_ref() {
         normalize_v2_entry(&mut entry);
         entry.root_path = Some(directory.root().to_path_buf());
+    }
+    if agent_type == AgentType::External {
+        if let Some(command) = custom_command
+            .as_ref()
+            .or_else(|| existing_entry.as_ref().map(|entry| &entry.command))
+            .filter(|command| !command.is_empty())
+        {
+            entry.command = command.clone();
+        }
+        if !custom_args.is_empty() {
+            entry.args = custom_args.clone();
+        } else if let Some(existing) = existing_entry.as_ref() {
+            entry.args = existing.args.clone();
+        }
+        if entry.command.is_empty() {
+            anyhow::bail!(
+                "agent.start: external agents require `command`; use \
+                 `easynet agent add <name> --type external --command <program> [--arg ...]`"
+            );
+        }
     }
     if label.is_some() {
         entry.with_label(label.clone());
@@ -296,25 +333,18 @@ fn start_agent_handler(
 
     // ── Phase 5c runtime registration ─────────────────────────────
     //
-    // The runtime registration invariant: every name in
-    // `agents.json` must own its `<name>.{chat,discover,invoke}`
-    // triple in `LocalRuntime`. Without this, dispatch on a
-    // hot-added agent is not visible to Axon's dispatch table and
-    // `invocations.redb` never grows even though chat completes.
-    //
-    // The registrar produces byte-identical handlers to the
-    // fallback (they share the same `build_*_handler_for`
-    // factory closures in `chat_ability`), so the two paths are
-    // observably equivalent for dispatch. Axon's `LocalRuntime`
-    // owns the live call path and ledger write; the catalogue side
-    // remains registration metadata.
+    // The dynamic registration invariant: every hosted agent in
+    // `agents.json` must have its executable `<name>.*` abilities
+    // committed through HotAgentRegistrar. That single transaction
+    // writes catalogue metadata, control-plane facts, dynamic side
+    // tables, and the Axon `LocalRuntime` handler row.
     //
     // If the OnceLock is empty (boot not done) we log + skip.
     // The agent still lands in `agents.json`, so a daemon
-    // restart picks it up via the boot-time
-    // `chat_ability::register_for_agent` path. The window is small and only matters for the very
-    // first agent added during boot - operators normally run
-    // `agent add` post-boot.
+    // restart replays it through the same dynamic registrar after
+    // the catalogue OnceLock is set. The window is small and only
+    // matters for the very first agent added during boot; operators
+    // normally run `agent add` post-boot.
     // Test path: tests in this file construct the handler with an
     // `empty_hot_registrar()` whose `OnceLock` is unset; the outer
     // `else` here emits a `hot_registrar_not_yet_wired_at_boot`
@@ -350,14 +380,30 @@ fn start_agent_handler(
             reason = "hot_registrar_not_yet_wired_at_boot",
             message = "agent landed in agents.json but `LocalRuntime` did not get \
                        <agent>.{chat,discover,invoke} — daemon restart or next \
-                       boot will pick it up via the static registration path",
+                       boot will replay it through the dynamic registrar",
         );
         None
     };
 
-    let (runtime_registered, runtime_failed) = runtime_sync_outcome
-        .map(|o| (o.registered, o.failed))
-        .unwrap_or((0, 0));
+    let (
+        runtime_registered,
+        runtime_replaced,
+        runtime_failed,
+        runtime_removed,
+        runtime_not_ready,
+        runtime_catalog_not_ready,
+    ) = runtime_sync_outcome
+        .map(|o| {
+            (
+                o.registered,
+                o.replaced,
+                o.failed,
+                o.removed,
+                o.runtime_not_ready,
+                o.catalog_not_ready,
+            )
+        })
+        .unwrap_or((0, 0, 0, 0, true, false));
 
     // ISS-002 closed loop: persist this hot-added agent's owner
     // projection into the cursor file NOW. Previously agent.start only
@@ -448,7 +494,11 @@ fn start_agent_handler(
         "agent_ura": agent_ura,
         "replaced_prior": replaced_prior,
         "runtime_registered": runtime_registered,
+        "runtime_replaced": runtime_replaced,
         "runtime_failed": runtime_failed,
+        "runtime_removed": runtime_removed,
+        "runtime_not_ready": runtime_not_ready,
+        "runtime_catalog_not_ready": runtime_catalog_not_ready,
         "hub_advertised": hub_advertise_outcome
             .as_ref()
             .map(|outcome| outcome.advertised)
@@ -480,6 +530,8 @@ fn build_hot_agent_descriptors(
     agent_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     let live_registry = crate::runtime::agents::build_registry();
+    let hint_snapshot =
+        crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(&live_registry);
     let mut descriptors = Vec::new();
     for spec in crate::runtime::abilities::abilities_for_publication(name, entry) {
         let registry_name = spec.name();
@@ -494,10 +546,7 @@ fn build_hot_agent_descriptors(
                 let mut desc = desc
                     .with_description(spec.description())
                     .with_input_schema(spec.parameters().clone())
-                    .with_hints(crate::runtime::agents::discovery_hints_for(
-                        &live_registry,
-                        registry_name,
-                    ))
+                    .with_hints(hint_snapshot.for_name(registry_name))
                     .with_source(format!("agent:{name}"))
                     .with_metadata_entry("runtime", entry.agent_type.to_string())
                     .with_metadata_entry("agent_type", entry.agent_type.to_string())
@@ -525,11 +574,7 @@ fn build_hot_agent_descriptors(
 }
 
 fn runtime_kind_from(t: AgentType) -> RuntimeKind {
-    match t {
-        AgentType::ClaudeCode => RuntimeKind::ClaudeCode,
-        AgentType::Codex => RuntimeKind::Codex,
-        AgentType::CodexAppServer => RuntimeKind::CodexAppServer,
-    }
+    t.runtime_kind()
 }
 
 fn normalize_v2_entry(entry: &mut AgentEntry) {
@@ -559,17 +604,12 @@ fn stop_agent_handler(
         remove_hosted_llm_agent(&name)?;
     }
 
-    // Phase 5c runtime-sync reverse: tear down every `<name>.*`
-    // row from `LocalRuntime` in one atomic
-    // `unregister_ability_by_prefix` call. Ordering is
-    // "persist then update runtime" on the create side, so we follow the
-    // same shape here: persist the removal first, then drop the
-    // runtime rows. Doing it that way means a crash between
-    // steps leaves the runtime in a "host registered but
-    // agents.json doesn't know" state — equivalent to a stale
-    // boot-time registration, which is harmless and self-heals
-    // on next daemon restart (the boot path only registers
-    // agents present in agents.json).
+    // Runtime-sync reverse: persist the registry removal first, then
+    // tear down every dynamic hosted-agent row whose decoded
+    // owner-local public name is `<name>.*`. A crash between the two
+    // steps can leave stale live rows for the current process, but the
+    // next boot replay only installs agents still present in
+    // `agents.json`.
     // Symmetric to `start_agent_handler`: an unset registrar cell
     // is the documented test seam (with a warn-level event so a
     // production occurrence is operator-visible); a wired registrar
@@ -759,6 +799,7 @@ fn refresh_agents_handler(
         return Ok(json!({
             "ok": false,
             "runtime_not_ready": true,
+            "runtime_catalog_not_ready": false,
             "agents_scanned": rows.len(),
             "runtime_registered": 0,
             "runtime_failed": 0,
@@ -782,6 +823,7 @@ fn refresh_agents_handler(
                 "runtime_failed": outcome.failed,
                 "runtime_removed": outcome.removed,
                 "runtime_not_ready": outcome.runtime_not_ready,
+                "runtime_catalog_not_ready": outcome.catalog_not_ready,
             }));
         }
         agent_results
@@ -810,23 +852,21 @@ fn refresh_agents_handler(
             .and_then(Value::as_bool)
             .unwrap_or(false)
     });
+    let runtime_catalog_not_ready = agent_results.iter().any(|row| {
+        row.get("runtime_catalog_not_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
     Ok(json!({
-        "ok": !runtime_not_ready && runtime_failed == 0,
+        "ok": !runtime_not_ready && !runtime_catalog_not_ready && runtime_failed == 0,
         "runtime_not_ready": runtime_not_ready,
+        "runtime_catalog_not_ready": runtime_catalog_not_ready,
         "agents_scanned": agent_results.len(),
         "runtime_registered": runtime_registered,
         "runtime_failed": runtime_failed,
         "runtime_removed": runtime_removed,
         "agents": agent_results,
     }))
-}
-
-fn block_on_hot_registrar<F, T>(future: F) -> Option<T>
-where
-    F: std::future::Future<Output = T> + Send,
-    T: Send,
-{
-    crate::support::async_bridge::try_run_blocking_in_tokio(future)
 }
 
 fn sync_hosted_agents_for_registry(
@@ -840,33 +880,37 @@ fn sync_hosted_agents_for_registry(
 }
 
 fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> BootstrapPlan {
-    let (realm, user_id, host_device_ura) = config::load_credentials()
+    let (realm, user_id, username, host_device_ura) = config::load_credentials()
         .ok()
         .map(|creds| {
             let realm = creds.realm.trim().to_string();
             let node_id = creds.node_id.trim().to_string();
             let user_id = creds
-                .username
+                .user_id
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .unwrap_or("")
                 .to_string();
+            let username = creds
+                .username_slug()
+                .map(str::to_string)
+                .unwrap_or_default();
             let host_device_ura = if realm.is_empty() || node_id.is_empty() {
                 String::new()
             } else {
                 crate::ura::device_ura(&realm, &node_id)
             };
-            (realm, user_id, host_device_ura)
+            (realm, user_id, username, host_device_ura)
         })
-        .unwrap_or_else(|| (String::new(), String::new(), String::new()));
+        .unwrap_or_else(|| (String::new(), String::new(), String::new(), String::new()));
 
     BootstrapPlan {
         realm,
         user_id,
+        username,
         host_device_ura,
         consent: true,
-        policy: false,
         mcp: false,
         llm_sub_agents: registry
             .agents
@@ -895,21 +939,21 @@ fn agent_ura_for_name(name: &str) -> anyhow::Result<String> {
     if let Some(ura) = local_agents_ura_for_name(name) {
         return Ok(ura);
     }
-    let (realm, user_id) = crate::persistence::config::load_credentials()
+    let (realm, username) = crate::persistence::config::load_credentials()
         .and_then(|creds| {
-            let user_id = creds.username_slug()?.to_string();
+            let username = creds.username_slug()?.to_string();
             let realm = creds.realm.trim().to_string();
             if realm.is_empty() {
                 anyhow::bail!("credentials file is missing realm");
             }
-            Ok((realm, user_id))
+            Ok((realm, username))
         })
         .map_err(|err| {
             anyhow::anyhow!(
                 "agent.start requires joined credentials before deriving hosted-agent URA: {err}"
             )
         })?;
-    Ok(crate::ura::agent_ura(&realm, &user_id, name))
+    Ok(crate::ura::agent_ura(&realm, &username, name))
 }
 
 fn local_agents_ura_for_name(name: &str) -> Option<String> {
@@ -1128,6 +1172,7 @@ mod tests {
             hub_endpoint: "axon://hub.test:50051".to_string(),
             realm: "localhost".to_string(),
             username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
             ..Default::default()
         })
         .expect("seed joined credentials");
@@ -1161,6 +1206,9 @@ mod tests {
             crate::runtime::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
                 Arc::new(Vec::new()),
                 Arc::new(std::sync::OnceLock::new()),
+                Arc::new(
+                    crate::runtime::agents::discover_ability::BridgeDiscoverFederationResolver,
+                ),
             );
         let advertiser: Arc<
             dyn crate::runtime::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
@@ -1221,11 +1269,10 @@ mod tests {
                     "error names the reserved-owner semantics: {msg}"
                 );
                 assert!(
-                    agents::load_agents()
+                    !agents::load_agents()
                         .unwrap_or_default()
                         .agents
-                        .get(name)
-                        .is_none(),
+                        .contains_key(name),
                     "rejected name must not persist an agents.json row"
                 );
             }
@@ -1249,11 +1296,10 @@ mod tests {
                 "error should surface credentials prerequisite: {err}"
             );
             assert!(
-                agents::load_agents()
+                !agents::load_agents()
                     .unwrap_or_default()
                     .agents
-                    .get("claude")
-                    .is_none(),
+                    .contains_key("claude"),
                 "unjoined failure must not persist a half-valid hosted agent row"
             );
         });
@@ -1366,6 +1412,47 @@ mod tests {
         let err = start_agent_handler(json!({"agent_type": "claude-code"}), &empty_hot_registrar())
             .unwrap_err();
         assert!(format!("{err}").contains("name"));
+    }
+
+    #[test]
+    fn start_agent_persists_external_command_and_args() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let resp = start_agent_handler(
+                json!({
+                    "name": "semop",
+                    "agent_type": "external",
+                    "command": "/bin/cat",
+                    "command_args": ["--number"],
+                    "materialize_directory": true,
+                }),
+                &empty_hot_registrar(),
+            )
+            .unwrap();
+            assert_eq!(resp["agent_type"], "external");
+            let registry = agents::load_agents().unwrap();
+            let stored = registry.agents.get("semop").unwrap();
+            assert_eq!(stored.agent_type, AgentType::External);
+            assert_eq!(stored.command, "/bin/cat");
+            assert_eq!(stored.args, vec!["--number".to_string()]);
+        });
+    }
+
+    #[test]
+    fn start_agent_rejects_external_without_command() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let err = start_agent_handler(
+                json!({
+                    "name": "semop",
+                    "agent_type": "external",
+                    "materialize_directory": true,
+                }),
+                &empty_hot_registrar(),
+            )
+            .unwrap_err();
+            assert!(format!("{err}").contains("external agents require `command`"));
+        });
     }
 
     #[test]

@@ -132,6 +132,7 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
         RuntimeKind::Codex | RuntimeKind::CodexAppServer => {
             write_codex_config(&root, model.as_deref(), &agent_name)?;
         }
+        RuntimeKind::External => {}
     }
 
     // Seed the `easynet-collaborate` skill so a freshly-installed
@@ -295,6 +296,7 @@ fn collaborate_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
     let parent = match runtime {
         RuntimeKind::ClaudeCode => ws.join(".claude").join("skills"),
         RuntimeKind::Codex | RuntimeKind::CodexAppServer => ws.join(".agents").join("skills"),
+        RuntimeKind::External => ws.join("skills"),
     };
     parent.join("easynet-collaborate")
 }
@@ -327,6 +329,7 @@ fn pages_author_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
     let parent = match runtime {
         RuntimeKind::ClaudeCode => ws.join(".claude").join("skills"),
         RuntimeKind::Codex | RuntimeKind::CodexAppServer => ws.join(".agents").join("skills"),
+        RuntimeKind::External => ws.join("skills"),
     };
     parent.join("easynet-pages-author")
 }
@@ -353,6 +356,7 @@ fn ability_author_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
     let parent = match runtime {
         RuntimeKind::ClaudeCode => ws.join(".claude").join("skills"),
         RuntimeKind::Codex | RuntimeKind::CodexAppServer => ws.join(".agents").join("skills"),
+        RuntimeKind::External => ws.join("skills"),
     };
     parent.join("easynet-ability-author")
 }
@@ -912,8 +916,8 @@ mod tests {
             "description:",
             "allowed-tools:",
             "## When This Skill Activates",
-            "<self>.discover",
-            "<self>.invoke",
+            "<agent>.discover",
+            "<agent>.invoke",
         ] {
             assert!(
                 COLLABORATE_SKILL_MD.contains(required),

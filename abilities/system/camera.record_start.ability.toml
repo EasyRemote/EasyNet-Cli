@@ -1,0 +1,29 @@
+schema_version = "1"
+name = "camera.record_start"
+description = "Start a bounded recording session for a camera resource. Subject MUST be a camera resource_ura. Returns a recording_session_id that must be passed to camera.record_stop."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.codec]
+type = "string"
+enum = ["mjpeg"]
+
+[input_schema.properties.fps]
+type = "integer"
+minimum = 1
+maximum = 60
+
+[input_schema.properties.max_bytes]
+type = "integer"
+minimum = 1048576
+maximum = 268435456
+
+[input_schema.properties.max_duration_ms]
+type = "integer"
+minimum = 1000
+maximum = 1800000
+
+[input_schema.properties.resolution]
+type = "string"

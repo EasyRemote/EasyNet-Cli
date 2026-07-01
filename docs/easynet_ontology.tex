@@ -219,6 +219,63 @@ object into something strictly simpler:
     \item without observability/audit $\Rightarrow$ unauditable side effect.
 \end{itemize}
 
+\subsection{AbilityDescriptor, AuthorityBinding, and AbilityImpl}
+
+\axiom{}
+\begin{quote}
+\textbf{AbilityDescriptor is the governed interface; AbilityImpl is the
+executable binding; Receipt is the versioned, verifiable execution fact.}
+\end{quote}
+
+The object-oriented shorthand ``agent owns ability'' is not precise enough for
+the device/daemon/plugin control plane. The cleaner split is:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item \textbf{Device} --- execution substrate identified by
+    \texttt{device\_ura}, with \texttt{node\_id} and local resources.
+    \item \textbf{Daemon} --- projection and dispatch runtime. It registers
+    descriptors, binds implementations, dispatches Invocations, and emits
+    receipts.
+    \item \textbf{DeviceAgent} --- control-plane identity projection for a
+    device. It advertises descriptors; it is not the ultimate authority
+    source.
+    \item \textbf{AbilityDescriptor} --- versioned governed interface with
+    \texttt{ability\_ura}, \texttt{name}, \texttt{version}, \texttt{schema},
+    \texttt{schema\_hash}, \texttt{call\_mode}, visibility, and policy
+    reference.
+    \item \textbf{AuthorityBinding} --- governance predicate over both
+    advertisement and invocation. A binding that only proves publication
+    rights is incomplete.
+    \item \textbf{AbilityImpl} --- executable binding for a descriptor version,
+    with implementation kind, entrypoint, \texttt{impl\_hash}, and
+    \texttt{runtime\_env}.
+    \item \textbf{PluginAbilityImpl} --- local plugin-provided execution
+    binding loaded and bound by the daemon.
+\end{itemize}
+
+\derived{} Ownership, authority, and execution binding are separate layers.
+\texttt{DeviceAgent advertises AbilityDescriptor}; it does not formally own
+Ability. The owner/accountability root is the \texttt{device\_ura} or an
+explicit \texttt{AuthorityBinding}.
+
+\derived{} \texttt{Invocation.subject} is an \texttt{EntityRef}, not only a
+resource pointer. It may refer to a resource, agent, ability, session,
+continuation, state object, or the callee itself.
+
+\derived{} Versioning is part of the security model. An Invocation must pin
+\texttt{descriptor\_version}. A Receipt must bind
+\texttt{descriptor\_version}, \texttt{schema\_hash}, \texttt{impl\_hash},
+\texttt{runtime\_env}, \texttt{authority\_proof}, \texttt{input\_hash},
+\texttt{output\_hash}, \texttt{parent\_receipts}, and a signature. Otherwise
+the system cannot prove which governed interface and executable binding were
+used at execution time.
+
+\begin{invariant}
+Descriptor is not implementation. Advertisement is not authority. Authority is
+not execution. Invocation is not a raw handler call. Receipt is not a return
+value.
+\end{invariant}
+
 \subsection{Thesis B: EasyNet, the network of vocational abilities}
 
 \axiom{}

@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "0.64.8"
+version = "0.86.20"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -163,6 +163,7 @@ flate2 = "1"
 gethostname = "0.5"
 hex = "0.4"
 tar = "0.4"
+fs2 = "0.4"
 indicatif = "0.17"
 num_cpus = "1"
 rayon = "1"
@@ -185,11 +186,10 @@ rand = "0.8"
 # Locate $XDG_CONFIG_HOME / ~/.config with platform fallbacks.
 dirs = "5"
 termimad = "0.31"
-# Pure-Rust JPEG encoder. Used by `camera.snapshot` /
-# `screen.snapshot` (RFC-005 v3.2 A3 / A8) to produce a real JPEG
-# byte stream. PR3a uses it with a synthetic frame buffer (no
-# hardware dep — the real cpal/nokhwa backends land later); the
-# encode path itself is the same for synthetic and real frames.
+# Pure-Rust JPEG encoder. Used by camera still/preview paths and
+# `screen.snapshot` (RFC-005 v3.2 A3/A4/A8) to produce real JPEG
+# byte streams. Tests also use it with synthetic frame buffers so
+# receipt encoding is identical across hardware and non-hardware runs.
 # Picked over `image` because we only need encoding (no decoders,
 # no PNG/GIF/WebP) and want the smallest extra build surface.
 jpeg-encoder = { version = "0.7", default-features = false }
@@ -200,12 +200,11 @@ jpeg-encoder = { version = "0.7", default-features = false }
 # default-device sample-rate may diverge from the schema's
 # 16/24/48 kHz set, so a downsampler is added in a follow-up.
 cpal = "0.15"
-# RFC-005 v3.2 A2, A3 — physical camera capture
-# (camera.subscribe / camera.snapshot). nokhwa wraps AVFoundation
-# (macOS), V4L2 (Linux) and MediaFoundation (Windows). Windows
-# back-end is known fragile; only macOS + Linux land in CI.
-# `input-native` opts into the platform-direct backends and
-# avoids the heavyweight image-pipeline backends.
+# RFC-005 v3.2 A3/A4 — physical camera capture. Non-macOS camera
+# subscribe/snapshot uses nokhwa's platform-direct backends. macOS
+# snapshot/subscribe use direct AVFoundation bindings below so still
+# photos go through `AVCapturePhotoOutput` instead of preview frames.
+# `input-native` avoids the heavyweight image-pipeline backends.
 nokhwa = { version = "0.10", features = ["input-native"] }
 # RFC-005 v3.2 A4, A8 — physical screen capture
 # (screen.subscribe / screen.snapshot). xcap was picked over
@@ -247,6 +246,11 @@ serde_yaml = "0.9"
 # is omitted. POSIX-only; on Windows rpassword falls back to
 # stdin echo. Pinning v7 (matches ratatui's MSRV in the workspace).
 rpassword = "7"
+# Snapshot renderer for `easynet invocation watch --format panel`.
+# We use ratatui's buffer/widget model for deterministic fixed-width
+# panels; the watch engine remains the single data source for
+# table/json/panel.
+ratatui = { version = "0.29", default-features = false }
 # Percent-encoding for HTTP-executor URL templating. The `[exec]
 # kind = "http"` path encodes substituted values automatically so
 # an arg containing a space or non-ASCII char doesn't break the URL.
@@ -332,6 +336,14 @@ once_cell = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 # PR-N1 commit 8/N: CLI bridge for `easynet ability invoke --node`
 # uses a tonic UDS gRPC client to reach the local daemon's
 # Invocation server with `function_name="federation.forward_invoke"`.
@@ -358,6 +370,10 @@ objc2 = "0.6"
 block2 = "0.6"
 dispatch2 = "0.3"
 objc2-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", features = [
+    "AVCaptureOutputBase",
+    "AVCapturePhotoOutput",
+] }
 objc2-core-media = "0.3"
 objc2-core-video = "0.3"
 objc2-core-foundation = "0.3"

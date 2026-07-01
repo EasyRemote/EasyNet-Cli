@@ -10,7 +10,7 @@ use crate::eal::ir::IrFailurePolicy;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
-mod tests {
+mod cases {
     use super::*;
     use crate::eal::{parser, planner};
     use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
@@ -31,6 +31,8 @@ mod tests {
         fail_functions: Arc<std::collections::HashSet<String>>,
         /// Record of function names called (for ordering verification)
         calls: Arc<Mutex<Vec<(String, Instant)>>>,
+        /// Record of run trace ids observed by dispatch calls.
+        traces: Arc<Mutex<Vec<String>>>,
     }
 
     impl MockDispatcher {
@@ -41,6 +43,7 @@ mod tests {
                 fail_first_n: Arc::new(AtomicU32::new(0)),
                 fail_functions: Arc::new(std::collections::HashSet::new()),
                 calls: Arc::new(Mutex::new(Vec::new())),
+                traces: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -77,7 +80,7 @@ mod tests {
     impl StepDispatcher for MockDispatcher {
         fn dispatch(
             &self,
-            _run: RunContext<'_>,
+            run: RunContext<'_>,
             _target: &IrTarget,
             ability: &AbilityName,
             _arguments: &Value,
@@ -90,6 +93,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((ability_str.clone(), Instant::now()));
+            self.traces.lock().unwrap().push(run.trace_id.to_string());
 
             // Simulate work
             if self.delay_ms > 0 {
@@ -126,6 +130,7 @@ mod tests {
                 fail_first_n: Arc::clone(&self.fail_first_n),
                 fail_functions: Arc::clone(&self.fail_functions),
                 calls: Arc::clone(&self.calls),
+                traces: Arc::clone(&self.traces),
             }))
         }
     }
@@ -171,6 +176,93 @@ mod tests {
         for (i, e) in entries.iter().enumerate() {
             assert_eq!(e.step_id, format!("s{i}"));
         }
+    }
+
+    #[test]
+    fn explicit_trace_id_reaches_dispatch_and_report() {
+        let ir = planner::compile(
+            &parser::parse(r#"mission "trace-contract" { let r = alice.chat(prompt: "hi") }"#)
+                .unwrap(),
+        )
+        .unwrap();
+        let dispatcher = MockDispatcher::new(0);
+        let observed = Arc::clone(&dispatcher.traces);
+        let report =
+            execute_with_dispatcher_for_trace(&dispatcher, "test", &ir, "run-trace-42".into())
+                .unwrap();
+
+        assert_eq!(report.trace.mission_id, "run-trace-42");
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec!["run-trace-42".to_string()],
+            "child dispatch must carry the caller-owned mission trace id"
+        );
+    }
+
+    #[test]
+    fn emit_records_resolved_binding_and_literal_without_extra_dispatch() {
+        let ir = planner::compile(
+            &parser::parse(
+                r#"mission "emit-contract" {
+                    let rows = alice.produce(prompt: "hi")
+                    emit "terminal_rows" kind answer value rows.output
+                    emit "operator_chain" kind context value "produce"
+                }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let dispatcher = MockDispatcher::new(0);
+        let calls = Arc::clone(&dispatcher.call_count);
+        let report =
+            execute_with_dispatcher_for_trace(&dispatcher, "test", &ir, "run-emit-1".into())
+                .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "emit must not dispatch");
+        assert_eq!(report.trace.emissions.len(), 2);
+        assert_eq!(report.trace.emissions[0].seq, 1);
+        assert_eq!(report.trace.emissions[0].name, "terminal_rows");
+        assert_eq!(report.trace.emissions[0].kind, "answer");
+        assert_eq!(
+            report.trace.emissions[0].source_binding.as_deref(),
+            Some("rows")
+        );
+        assert_eq!(report.trace.emissions[0].value["function"], "produce");
+        assert!(report.trace.emissions[0].error.is_none());
+        assert_eq!(report.trace.emissions[1].value, "produce");
+    }
+
+    #[test]
+    fn emit_records_missing_binding_when_producer_fails() {
+        let ir = planner::compile(
+            &parser::parse(
+                r#"mission "emit-missing" {
+                    let rows = alice.fail(prompt: "hi")
+                    emit "terminal_rows" kind answer value rows.output
+                }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let dispatcher = MockDispatcher::new(0).with_fail_functions(&["fail"]);
+        let report =
+            execute_with_dispatcher_for_trace(&dispatcher, "test", &ir, "run-emit-2".into())
+                .unwrap();
+
+        assert_eq!(report.trace.outcome, MissionOutcome::Partial);
+        assert_eq!(report.trace.emissions.len(), 1);
+        assert_eq!(report.trace.emissions[0].value, serde_json::Value::Null);
+        assert_eq!(
+            report.trace.emissions[0].source_binding.as_deref(),
+            Some("rows")
+        );
+        assert!(
+            report.trace.emissions[0]
+                .error
+                .as_deref()
+                .is_some_and(|msg| msg.contains("was not captured")),
+            "missing binding must be explicit in the emission record"
+        );
     }
 
     #[test]
@@ -633,17 +725,20 @@ mod tests {
         let ir = planner::compile(&prog).unwrap();
         assert_eq!(ir.phases.len(), 3);
 
-        // Phase 1 (b,c) should run in parallel with 50ms delay each
-        let dispatcher = MockDispatcher::new(50);
+        // Phase 1 (b,c) should run in parallel. Use enough per-step
+        // delay that the serial-vs-parallel gap is larger than normal
+        // test-runtime scheduling overhead.
+        let dispatcher = MockDispatcher::new(100);
         let t0 = Instant::now();
         let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
         let elapsed = t0.elapsed();
 
         assert_eq!(report.steps_completed, 4);
-        // Phase 0: 50ms, Phase 1: 50ms (parallel b+c), Phase 2: 50ms = ~150ms
-        // If b,c were serial: 50+50+50+50 = 200ms
+        // Phase 0: 100ms, Phase 1: 100ms (parallel b+c), Phase 2:
+        // 100ms = ~300ms. If b,c were serial: ~400ms plus runtime
+        // scheduling overhead.
         assert!(
-            elapsed < Duration::from_millis(200),
+            elapsed < Duration::from_millis(450),
             "diamond took {elapsed:?} — parallel phase should save time"
         );
     }
@@ -918,6 +1013,7 @@ mod tests {
             outcome: MissionOutcome::Completed,
             step_traces: vec![],
             ability_graph: vec![],
+            emissions: vec![],
             traces_truncated: 0,
         };
 
@@ -1347,9 +1443,11 @@ mod tests {
     /// bodies, and every lowered envelope is ledger-groupable.
     #[test]
     fn loop_steps_thread_causal_parents_and_trace_id() {
+        type RecordedCalls = Arc<Mutex<Vec<(String, String, Vec<Value>)>>>;
+
         struct RecordingDispatcher {
             // (ability, trace_id, causal_parents) per dispatch.
-            calls: Arc<Mutex<Vec<(String, String, Vec<Value>)>>>,
+            calls: RecordedCalls,
         }
         impl StepDispatcher for RecordingDispatcher {
             fn dispatch(
@@ -1452,9 +1550,11 @@ mod tests {
     /// invocation records.
     #[test]
     fn loop_result_feeds_downstream_step_with_receipt_chain() {
+        type RecordedCalls = Arc<Mutex<Vec<(String, Value, Vec<Value>)>>>;
+
         struct ArgRecordingDispatcher {
             // (ability, arguments, causal_parents) per dispatch.
-            calls: Arc<Mutex<Vec<(String, Value, Vec<Value>)>>>,
+            calls: RecordedCalls,
         }
         impl StepDispatcher for ArgRecordingDispatcher {
             fn dispatch(

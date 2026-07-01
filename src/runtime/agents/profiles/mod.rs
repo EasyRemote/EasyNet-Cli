@@ -4,22 +4,24 @@
 //! shorthand for "an Agent advertising the corresponding ability
 //! namespace". These are NOT protocol-level types or kind values.
 //! They are implementation modules that group ability handlers by
-//! the Agent that hosts them.
+//! the Agent projection that advertises them.
 //!
 //! Registered profiles
 //! -------------------
-//!   device   — device.*, admin.*, meta.*, schedule.*,
-//!              loop.*, discuss.* (host-resident operational abilities)
+//!   device   — daemon-local host abilities advertised by the device-profile
+//!              Agent under device authority: fs.*, process.*, shell.*,
+//!              terminal.*, session.*, browser/media/voice, skill management,
+//!              device.*, admin.*, meta.*, schedule.*, loop.*, discuss.*
 //!   consent  — consent.* (human-in-the-loop approval flow)
-//!   policy   — policy.* (admission policy evaluation)
 //!   mcp      — mcp.bridge.* + mcp.client.* (edge MCP adapter, single
-//!              Agent owns both inbound and outbound per RFC §1 [P6])
-//!   llm      — conversation.*, session.*, meta.* per LLM sub-agent
-//!              (claude / codex / etc.)
+//!              Agent projection advertises both inbound and outbound per
+//!              RFC §1 [P6])
+//!   llm      — conversation.* plus private per-skill abilities advertised by
+//!              each LLM sub-agent projection (claude / codex / etc.)
 //!
 //! The handlers themselves live in the per-feature files (chat_ability.rs,
 //! session_ability.rs, etc.) at the parent agents/ module. The profile
-//! files here only declare WHICH abilities each profile owns; the actual
+//! files here only declare WHICH abilities each profile advertises; the actual
 //! `register_*` functions are imported from the feature modules.
 //!
 //! See:
@@ -32,12 +34,9 @@ pub mod consent;
 pub mod device;
 pub mod llm;
 pub mod mcp;
-pub mod policy;
 
 /// Hosted Agent id for the default consent profile.
 pub const DEFAULT_CONSENT_AGENT_ID: &str = "consent-default";
-/// Hosted Agent id for the default policy profile.
-pub const DEFAULT_POLICY_AGENT_ID: &str = "policy-default";
 /// Hosted Agent id for the default MCP profile.
 pub const DEFAULT_MCP_AGENT_ID: &str = "mcp-default";
 
@@ -84,8 +83,6 @@ pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::Abilit
     };
     let consent_ura =
         crate::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default");
-    let policy_ura =
-        crate::persistence::local_agents::lookup_hosted_ura(&local, "policy", "default");
     let mcp_uri = crate::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default");
     let llm_uras: Vec<(String, String)> = local
         .hosted_agents
@@ -96,7 +93,6 @@ pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::Abilit
     all_descriptors_for_host(
         &host_ura,
         consent_ura.as_deref(),
-        policy_ura.as_deref(),
         mcp_uri.as_deref(),
         &llm_uras,
     )
@@ -106,28 +102,33 @@ pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::Abilit
 /// the same host's URAs. Used by P4.6's `federation.advertise_abilities`
 /// publisher: the daemon advertises the union of every profile it hosts.
 ///
-/// `device_ura` is the host device-profile Agent URA. The other URAs
-/// are looked up from `local-agents.json` (P3.4 / P4.7).
+/// `device_ura` is the host device-profile Agent URA, not a raw hardware
+/// locator. The other URAs are looked up from `local-agents.json`
+/// (P3.4 / P4.7).
 pub fn all_descriptors_for_host(
     device_ura: &str,
     consent_ura: Option<&str>,
-    policy_ura: Option<&str>,
     mcp_uri: Option<&str>,
     llm_uras: &[(String, String)], // (sub_agent_name, ura)
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    let llm_catalog = if llm_uras.is_empty() {
+        None
+    } else {
+        Some(llm::LlmProfileAbilityCatalog::load())
+    };
     let mut out = Vec::new();
     out.extend(device::descriptors_for(device_ura));
     if let Some(ura) = consent_ura {
         out.extend(consent::descriptors_for(ura));
     }
-    if let Some(ura) = policy_ura {
-        out.extend(policy::descriptors_for(ura));
-    }
     if let Some(ura) = mcp_uri {
         out.extend(mcp::descriptors_for(ura));
     }
     for (_name, ura) in llm_uras {
-        out.extend(llm::descriptors_for(ura));
+        let catalog = llm_catalog
+            .as_ref()
+            .expect("llm_catalog is present when llm_uras is non-empty");
+        out.extend(llm::descriptors_for_with_catalog(ura, None, catalog));
     }
     out
 }
@@ -142,7 +143,7 @@ mod tests {
         // (not the legacy v1 `agent/01DEV` placeholder). Production
         // mints this via `crate::ura::device_ura` (start.rs:623).
         let device_ura = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
-        let all = all_descriptors_for_host(device_ura, None, None, None, &[]);
+        let all = all_descriptors_for_host(device_ura, None, None, &[]);
         assert!(!all.is_empty());
         for d in &all {
             assert_eq!(d.owner_ura, device_ura);
@@ -156,15 +157,15 @@ mod tests {
         // We only assert profiles whose namespace is reliably present
         // in the default `build_registry()` (which skips per-agent
         // chat handlers because no AgentRegistry is loaded). Device
-        // and consent are guaranteed; llm/policy/mcp depend on
+        // and consent are guaranteed; llm/mcp depend on
         // optional sub-systems and are exercised in their own tests.
         // URA v4.1.5: device-profile is anchored on the `device`
-        // role (built-ins owned by the device); hosted-user agents
-        // (consent / policy / mcp / llm) use the user-anchored
+        // role (built-ins governed by device authority); hosted-user agents
+        // (consent / mcp / llm) use the user-anchored
         // `agent/<user-uuid>.<agent-id>` shape per §A.URA-5.
         let device_ura = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
         let consent_ura = "easynet:///r/acme/agent/00000000-0000-0000-0000-000000000001.consent";
-        let all = all_descriptors_for_host(device_ura, Some(consent_ura), None, None, &[]);
+        let all = all_descriptors_for_host(device_ura, Some(consent_ura), None, &[]);
         let owners: std::collections::HashSet<&str> =
             all.iter().map(|d| d.owner_ura.as_str()).collect();
         assert!(owners.contains(device_ura));

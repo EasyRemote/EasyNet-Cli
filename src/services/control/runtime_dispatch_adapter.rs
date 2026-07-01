@@ -77,13 +77,19 @@ impl RuntimeDispatchAdapter {
     /// `observe.health` without constructing the whole daemon.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
-        let agents = crate::registry::agents::load_agents().unwrap_or_default();
+        let agents = crate::registry::agents::AgentRegistry::default();
         let local_runtime = LocalRuntime::new();
         let mut config = crate::runtime::agents::RegistryBuildConfig::new(
             crate::runtime::agents::RegistryBuildServices::fresh(),
             &agents,
         );
         config.local_runtime = Some(Arc::clone(&local_runtime));
+        config.authority_context = Some(
+            crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+                crate::runtime::local_invocation_identity::local_device_ura(),
+            )
+            .expect("local device URA is a valid device authority root"),
+        );
         let _registry = crate::runtime::agents::build_registry_with_services(config);
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(node_id_from_env_or_default()));
@@ -169,6 +175,7 @@ mod tests {
 
     #[test]
     fn runtime_dispatch_rpc_observe_health_returns_json_object() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let adapter = RuntimeDispatchAdapter::new_for_test();
         let value = adapter
             .execute_runtime_dispatch("observe.health", serde_json::json!({}), None)

@@ -2,7 +2,7 @@ schema_version = "1"
 id = "easynet.remote_desktop"
 version = "0.1.0"
 kind = "builtin"
-entrypoint = "easynet_cli::plugins::remote_desktop::register"
+entrypoint = "easynet_cli::plugins::remote_desktop::contribute"
 
 abilities = ["abilities/*.ability.toml"]
 permissions = [
@@ -15,11 +15,37 @@ resources = [
   "window",
   "application",
 ]
-platforms = ["macos"]
+platforms = ["macos", "linux"]
 
 [limits]
 max_sessions = 128
 max_frame_queue = 1
+
+[[realtime_capability]]
+kind = "screen"
+modes = ["subscribe", "record"]
+transport = "webrtc"
+fallback_transport = "invoke_bidi"
+activation_abilities = [
+  "remote_desktop.create_session",
+  "remote_desktop.set_description",
+  "remote_desktop.add_ice_candidate",
+  "remote_desktop.attach",
+  "remote_desktop.end_session",
+  "remote_desktop.permission_status",
+  "remote_desktop.request_permission",
+]
+permissions = [
+  "screen_capture",
+  "input_injection",
+  "local_user_consent",
+]
+resources = [
+  "display",
+  "window",
+  "application",
+]
+quick_add = true
 
 [[ability_metadata]]
 name = "remote_desktop.create_session"

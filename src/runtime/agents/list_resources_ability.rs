@@ -1,15 +1,15 @@
-// EasyNet CLI — meta.list_resources ability handler (RFC-005 v3.2 A9)
+// EasyNet CLI — meta.list_resources ability handler
 // =====================================================================
 //
 // File: src/runtime/agents/list_resources_ability.rs
 //
-// Resource discovery surface for the eight physical-channel abilities
-// (mic.subscribe, camera.subscribe, …). A consumer wishing to record
-// "Chrome" calls `meta.list_resources(types=["application"])`, picks
-// the application's `resource_ura`, then invokes
-// `screen.subscribe(subject=<that ura>)`.
+// Resource discovery surface for physical-channel abilities
+// (mic.subscribe, camera.subscribe, screen.subscribe, camera.record_start,
+// ...). A consumer wishing to record "Chrome" calls
+// `meta.list_resources(types=["application"])`, picks the application's
+// `resource_ura`, then invokes `screen.subscribe(subject=<that ura>)`.
 //
-// Wire shape (RFC-005 v3.2 A9):
+// Wire shape:
 //
 //   args:    { "types"?: ["mic"|"camera"|"display"|"application"|
 //                         "window"|"speaker"|"voice"|"asr_model"] }

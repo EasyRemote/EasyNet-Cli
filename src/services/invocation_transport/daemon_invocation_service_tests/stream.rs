@@ -228,33 +228,64 @@ async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
 
 #[tokio::test]
 async fn invoke_stream_dispatches_registered_local_stream_ability() {
-    use easynet_axon::invocation::{make_ability, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode, LocalRuntime};
     use futures::StreamExt;
 
     let rt = LocalRuntime::new();
-    rt.register_streaming_ability(
-        "browser.capture_viewport",
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, "browser.capture_viewport")
+            .expect("device stream ability URA");
+    // Stream-mode descriptor proof so Axon's receipt-proof normalizer
+    // admits the dispatch (production stamps the equivalent off the
+    // control-plane record). register_streaming_ability leaves the proof
+    // unbound, so register with explicit stream-mode options.
+    rt.register_ability_with_options(
+        runtime_ability,
         make_ability(|ctx| async move {
             let args: serde_json::Value =
                 serde_json::from_slice(&ctx.payload).unwrap_or(serde_json::Value::Null);
+            let envelope = ctx
+                .runtime
+                .axiom_envelope_of(&ctx.invocation_id)
+                .await
+                .expect("runtime stores descriptor-bound stream envelope")
+                .envelope;
             Ok(serde_json::to_vec(&serde_json::json!({
                 "MARKER-LOCAL-STREAM": "dispatched",
+                "caller": envelope.caller.ura,
+                "subject": envelope.subject.ura,
                 "session_ura": args.get("session_ura").and_then(|v| v.as_str()),
             }))
             .unwrap())
         }),
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            [0x11; 32],
+            [0x22; 32],
+        ),
     )
     .await
     .unwrap();
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     publish_test_route(&svc, TEST_DAEMON_URI, "browser.capture_viewport");
 
+    let function_name = "browser.capture_viewport".to_string();
+    let arguments = br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#.to_vec();
+    let subject_ura = "easynet:///r/test-realm/resource/browser.capture/s1";
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
-            envelope: Some(test_envelope()),
-            function_name: "browser.capture_viewport".to_string(),
-            arguments: br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#
-                .to_vec(),
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    subject_ura,
+                )
+                .expect("valid unsigned loopback stream envelope")
+                .into_inner(),
+            ),
+            function_name,
+            arguments,
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -263,6 +294,38 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     let mut stream = resp.into_inner();
     let first = stream.next().await.expect("one frame").expect("frame Ok");
     assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert_eq!(
+        first
+            .header
+            .as_ref()
+            .map(|header| header.request_id.as_str()),
+        Some(first.invocation_id.as_str()),
+        "InvokeStream chunks must expose the Axon request id for ledger lookup"
+    );
+    assert!(
+        first.invocation_id.starts_with("inv_"),
+        "local stream invocation id must be projected"
+    );
+    assert!(
+        first
+            .selected_node_id
+            .starts_with("route-ref::easynet:///r/test-realm/ability/device.test-daemon."),
+        "selected_node_id should carry the chosen route ref, got {}",
+        first.selected_node_id
+    );
+    assert_eq!(first.sequence, 0);
+    assert_eq!(
+        first.state,
+        easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+    );
+    assert!(
+        first.admission_receipt.is_some(),
+        "first stream chunk must expose the admission receipt"
+    );
+    assert!(
+        first.terminal_receipt.is_some(),
+        "terminal stream chunk must expose the terminal receipt"
+    );
     assert!(
         first.terminal,
         "local snapshot stream must preserve terminal=true on the daemon InvokeStream chunk"
@@ -275,6 +338,14 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
         Some("dispatched")
     );
     assert_eq!(
+        frame.get("caller").and_then(|value| value.as_str()),
+        Some(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA)
+    );
+    assert_eq!(
+        frame.get("subject").and_then(|value| value.as_str()),
+        Some(subject_ura)
+    );
+    assert_eq!(
         frame.get("session_ura").and_then(|value| value.as_str()),
         Some("easynet:///r/local/resource/daemon.browser/s1")
     );
@@ -285,25 +356,355 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     assert!(close.is_none());
 }
 
+#[tokio::test]
+async fn invoke_stream_accepts_descriptor_ref_function_name() {
+    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode, LocalRuntime};
+    use futures::StreamExt;
+
+    let ability = "browser.descriptor_stream";
+    let rt = LocalRuntime::new();
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, ability).expect("stream ability URA");
+    rt.register_ability_with_options(
+        runtime_ability,
+        make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            [0x11; 32],
+            [0x22; 32],
+        ),
+    )
+    .await
+    .unwrap();
+
+    let svc = make_service().with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, ability);
+
+    let arguments = br#"{"descriptor":"stream-function-name"}"#.to_vec();
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URI, ability);
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URI,
+                )
+                .expect("valid unsigned loopback stream envelope")
+                .into_inner(),
+            ),
+            function_name: descriptor_ref,
+            arguments: arguments.clone(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("descriptor-ref stream function_name dispatches");
+
+    let mut stream = resp.into_inner();
+    let first = stream.next().await.expect("one frame").expect("frame Ok");
+    assert!(first.terminal);
+    assert_eq!(first.payload, arguments);
+}
+
+#[tokio::test]
+async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapshot() {
+    use crate::runtime::ability_dispatch::{
+        AbilityAuthorityContext, AxonAbilityCatalog, LocalStreamHandler, OwnerKind, StreamSource,
+    };
+    use easynet_axon::invocation::LocalRuntime;
+    use futures::StreamExt;
+
+    let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        LocalRuntime::new(),
+        AbilityAuthorityContext::for_device_authority_root(TEST_DAEMON_URI)
+            .expect("test daemon URI is a valid device authority root"),
+    );
+    let handler: LocalStreamHandler = Arc::new(|_args| {
+        Ok(StreamSource::Snapshot(vec![serde_json::json!({
+            "MARKER-SNAPSHOT": "progress-before-empty-terminal"
+        })]))
+    });
+    catalog.register_stream_with_owner("browser.snapshot_once", OwnerKind::Device, handler);
+    let rt = catalog.runtime().expect("catalog attaches a LocalRuntime");
+    let svc = make_service().with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, "browser.snapshot_once");
+
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URI,
+                )
+                .expect("valid unsigned loopback stream envelope")
+                .into_inner(),
+            ),
+            function_name: "browser.snapshot_once".to_string(),
+            arguments: br#"{}"#.to_vec(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("registered snapshot stream returns Ok");
+
+    let mut stream = resp.into_inner();
+    let first = stream
+        .next()
+        .await
+        .expect("snapshot progress frame")
+        .expect("snapshot progress frame is Ok");
+    assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert!(
+        !first.terminal,
+        "StreamSource::Snapshot progress frame must not be terminal"
+    );
+    let first_json: serde_json::Value =
+        serde_json::from_slice(&first.payload).expect("snapshot JSON frame");
+    assert_eq!(
+        first_json
+            .get("MARKER-SNAPSHOT")
+            .and_then(|value| value.as_str()),
+        Some("progress-before-empty-terminal")
+    );
+
+    let second = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("empty terminal frame arrives within 2s")
+        .expect("empty terminal frame is projected")
+        .expect("empty terminal frame is Ok");
+    assert_eq!(second.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert!(
+        second.terminal,
+        "daemon projection must preserve terminal=true even when payload is empty"
+    );
+    assert!(
+        second.payload.is_empty(),
+        "finite StreamSource completion is represented by an empty terminal payload"
+    );
+
+    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("stream closes promptly after terminal");
+    assert!(close.is_none());
+}
+
+#[tokio::test]
+async fn invoke_stream_dispatches_non_default_descriptor_version() {
+    // Regression for the version-convergence gap: a stream ability
+    // registered at a NON-default descriptor version must dispatch. The
+    // dispatcher reads the Stream-mode proof version and stamps the wire
+    // ref accordingly; before the fix, reassembly forced 1.0.0 and Axon
+    // rejected the call as proof_descriptor_version_mismatch.
+    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode, LocalRuntime};
+    use futures::StreamExt;
+
+    const NON_DEFAULT_VERSION: &str = "2.0.0";
+    let rt = LocalRuntime::new();
+    let runtime_ability =
+        crate::ura::owner_ability_ura(TEST_DAEMON_URI, "browser.capture_viewport")
+            .expect("device stream ability URA");
+    rt.register_ability_with_options(
+        runtime_ability,
+        make_ability(|_ctx| async move {
+            Ok(serde_json::to_vec(&serde_json::json!({"MARKER-V2": "dispatched"})).unwrap())
+        }),
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            NON_DEFAULT_VERSION,
+            [0x11; 32],
+            [0x22; 32],
+        ),
+    )
+    .await
+    .unwrap();
+    let svc = make_service().with_local_runtime(Arc::clone(&rt));
+    publish_test_route(&svc, TEST_DAEMON_URI, "browser.capture_viewport");
+
+    let function_name = "browser.capture_viewport".to_string();
+    let arguments = br#"{}"#.to_vec();
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URI,
+                )
+                .expect("valid loopback stream envelope")
+                .into_inner(),
+            ),
+            function_name,
+            arguments,
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("non-default-version stream dispatch returns Ok");
+    let mut stream = resp.into_inner();
+    let first = stream.next().await.expect("one frame").expect("frame Ok");
+    let frame: serde_json::Value = serde_json::from_slice(&first.payload).expect("JSON frame");
+    assert_eq!(
+        frame.get("MARKER-V2").and_then(|v| v.as_str()),
+        Some("dispatched"),
+        "the 2.0.0-versioned stream handler must have run: {frame}"
+    );
+}
+
+#[tokio::test]
+async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() {
+    use crate::services::pending_dispatch::PendingStreamDispatchMap;
+    use futures::StreamExt;
+
+    const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/stream-target";
+    const ABILITY: &str = "dev.semop.chat";
+
+    let pending_stream = Arc::new(PendingStreamDispatchMap::new());
+    let svc = make_service().with_pending_stream(Arc::clone(&pending_stream));
+    let (target_tx, mut target_rx) = mpsc::channel(4);
+    svc.directory
+        .presence
+        .insert(TARGET_DEVICE_URA.to_string(), target_tx);
+    publish_test_route(&svc, TARGET_DEVICE_URA, ABILITY);
+
+    let arguments = br#"{"message":"hello"}"#.to_vec();
+    let signing_key = test_device_signing_key();
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(signed_test_envelope(
+                TEST_DAEMON_URI,
+                TARGET_DEVICE_URA,
+                TARGET_DEVICE_URA,
+                ABILITY,
+                &arguments,
+                &signing_key,
+            )),
+            function_name: ABILITY.to_string(),
+            arguments: arguments.clone(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("remote stream route should dispatch over presence");
+
+    let dispatch_frame = target_rx
+        .recv()
+        .await
+        .expect("remote target receives dispatch frame")
+        .expect("dispatch frame is Ok");
+    let call_id = match dispatch_frame.frame.payload.expect("dispatch payload") {
+        DownPayload::BinaryChunk(chunk) => {
+            let dispatch =
+                SessionDispatch::decode_frame(&chunk.data).expect("SessionDispatch decodes");
+            match dispatch {
+                SessionDispatch::Dispatch {
+                    call_id,
+                    callee_ura,
+                    subject_ura,
+                    ability,
+                    args,
+                    ..
+                } => {
+                    assert_eq!(callee_ura.as_deref(), Some(TARGET_DEVICE_URA));
+                    assert_eq!(subject_ura.as_deref(), Some(TARGET_DEVICE_URA));
+                    assert_eq!(
+                        ability,
+                        crate::ura::owner_ability_ura(TARGET_DEVICE_URA, ABILITY)
+                            .expect("expected ability URA")
+                    );
+                    assert_eq!(args, arguments);
+                    call_id
+                }
+                other => panic!("expected SessionDispatch::Dispatch, got {other:?}"),
+            }
+        }
+        other => panic!("expected legacy BinaryChunk carrier, got {other:?}"),
+    };
+
+    assert_eq!(
+        pending_stream.try_push_chunk(call_id, br#"{"delta":"part-1"}"#.to_vec()),
+        crate::services::pending_dispatch::StreamDeliver::Delivered
+    );
+    assert_eq!(
+        pending_stream.try_finish(
+            call_id,
+            DispatchResult {
+                payload: br#"{"done":true}"#.to_vec(),
+                receipt: None,
+                error: None,
+                failure: None,
+                request_id: Some("inv_remote_stream_1".to_string()),
+            },
+        ),
+        crate::services::pending_dispatch::StreamDeliver::Delivered
+    );
+
+    let mut stream = resp.into_inner();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("chunk arrives")
+        .expect("stream remains open")
+        .expect("chunk is Ok");
+    assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert_eq!(
+        first.state,
+        easynet_axon::invocation::InvocationState::Running.to_wire_i32()
+    );
+    assert!(!first.terminal);
+    assert_eq!(first.payload, br#"{"delta":"part-1"}"#);
+    assert_eq!(
+        first.selected_node_id,
+        format!(
+            "route-ref::{}",
+            crate::ura::owner_ability_ura(TARGET_DEVICE_URA, ABILITY)
+                .expect("expected ability URA")
+        )
+    );
+
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("terminal arrives")
+        .expect("stream remains open until terminal")
+        .expect("terminal is Ok");
+    assert_eq!(
+        terminal.state,
+        easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+    );
+    assert!(terminal.terminal);
+    assert_eq!(terminal.invocation_id, "inv_remote_stream_1");
+    assert_eq!(terminal.payload, br#"{"done":true}"#);
+    assert!(terminal.error.is_none());
+
+    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("stream closes after terminal");
+    assert!(close.is_none());
+    assert_eq!(pending_stream.outstanding(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn admitted_bidi_file_transfer_download_emits_business_frames() {
+async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     use base64::Engine as _;
     use easynet_axon::invocation::LocalRuntime;
 
     let rt = LocalRuntime::new();
     let mut catalog =
-        crate::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt));
+        crate::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            Arc::clone(&rt),
+            crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+                TEST_DAEMON_URI,
+            )
+            .expect("test daemon URI is a valid device authority root"),
+        );
     crate::runtime::agents::file_transfer_ability::register(&mut catalog);
 
     let path = std::env::temp_dir().join(format!(
-        "easynet-admitted-bidi-download-{}-{}.bin",
+        "easynet-external-signed-bidi-download-{}-{}.bin",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0)
     ));
-    let bytes = b"admitted-bidi-download-proof";
+    let bytes = b"external-signed-bidi-download-proof";
     std::fs::write(&path, bytes).unwrap();
 
     let args = serde_json::to_vec(&serde_json::json!({
@@ -315,15 +716,17 @@ async fn admitted_bidi_file_transfer_download_emits_business_frames() {
         .expect("local fs ResourceRef"),
     }))
     .unwrap();
-    let open = make_envelope_open(
+    let file_transfer_descriptor_ref = test_descriptor_ref(
+        TEST_DAEMON_URI,
         crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
-        args,
     );
-    let wire = crate::runtime::axon_bridge::dispatch_shim::admitted_from_envelope_open(&open)
-        .expect("wire dispatch");
-    let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_admitted(&rt, wire)
+    let open = make_envelope_open(&file_transfer_descriptor_ref, args);
+    let wire =
+        crate::runtime::axon_bridge::dispatch_shim::external_signed_from_envelope_open(&open)
+            .expect("wire dispatch");
+    let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_external_signed(&rt, wire)
         .await
-        .expect("open admitted bidi");
+        .expect("open external-signed bidi");
     let (input, mut output) = handle.split();
 
     input
@@ -372,7 +775,7 @@ async fn admitted_bidi_file_transfer_download_emits_business_frames() {
     }
     assert!(
         got_complete,
-        "admitted file_transfer download must emit complete"
+        "external-signed file_transfer download must emit complete"
     );
     assert_eq!(downloaded, bytes);
     let _ = std::fs::remove_file(&path);
@@ -403,12 +806,9 @@ async fn invoke_stream_unknown_function_returns_resolver_negative() {
 
 #[tokio::test]
 async fn invoke_rejects_caller_not_in_trust_anchor() {
-    // PR-7 commit 4/N (DEC-013 Option D): trust-anchor membership
-    // is the first non-loopback check. A URA absent from the
-    // anchor short-circuits to `permission_denied` before any
-    // §5.2 work — the gating reject, identical to the PR-1 URA-
-    // only behaviour for unknown callers. Same `PermissionDenied`
-    // wire code as before, refreshed message text.
+    // Trust-anchor membership is the first non-loopback check. A
+    // URA absent from the anchor short-circuits to
+    // `permission_denied` before any signature or replay work.
     let svc = DaemonInvocationService::new(
         Arc::new(PresenceRegistry::new()),
         AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),
@@ -442,8 +842,7 @@ async fn invoke_rejects_caller_not_in_trust_anchor() {
 
 #[tokio::test]
 async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
-    // Same DEC-013 dispatch as `invoke_rejects_caller_not_in_trust_anchor`.
-    // Stream surface shares the same membership check.
+    // Stream surface shares the same membership check as unary.
     let svc = DaemonInvocationService::new(
         Arc::new(PresenceRegistry::new()),
         AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),

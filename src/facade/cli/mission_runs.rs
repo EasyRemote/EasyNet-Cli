@@ -160,6 +160,14 @@ impl MissionRunStore {
         // Best-effort, like every write on this surface.
         if let Err(e) = run.write_meta(&MissionRunMeta {
             name: name.to_string(),
+            // The watch anchor must exist while the run is ALIVE —
+            // attaching `invocation watch --trace` mid-run is the
+            // entire point — so the in-flight meta already carries it.
+            trace_id: run
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             started_at: Local::now().to_rfc3339(),
             status: MissionRunStatus::Running,
             ..Default::default()
@@ -282,6 +290,16 @@ impl std::fmt::Display for MissionRunStatus {
 pub struct MissionRunMeta {
     pub name: String,
     pub source_file: Option<String>,
+    /// Envelope-stamped trace id shared by every step Invocation of
+    /// this run (seven-axes T2.0). Equal to the run-directory id *by
+    /// construction* (see `MissionContextGuard::enter`); stored
+    /// explicitly so the `invocation watch --trace` surface depends
+    /// on a recorded contract, not on that coincidence. A mission has
+    /// no root Invocation of its own — it is a script, and the trace
+    /// is the only runtime identity a CLI-launched run has (spec
+    /// §0.1-1). Empty on metas written before this field existed.
+    #[serde(default)]
+    pub trace_id: String,
     pub started_at: String,
     pub duration_ms: u64,
     pub status: MissionRunStatus,
@@ -513,8 +531,8 @@ pub struct MissionRunResult {
     pub run_dir: PathBuf,
     /// Run id (the trailing component of `run_dir`). This is what the
     /// dispatch invariant assertion (Step 9) compares against
-    /// `EASYNET_MISSION_ID`.
-    #[allow(dead_code)]
+    /// `EASYNET_MISSION_ID`, and what `mission run --format json`
+    /// reports alongside `meta.trace_id`.
     pub run_id: String,
     /// Persisted run metadata.
     pub meta: MissionRunMeta,
@@ -602,13 +620,6 @@ fn find_implicit_agent_fallback(
 
 /// THE single in-process entry point for executing an EAL mission source
 /// string. See module-level comment above for the load-bearing invariant.
-///
-/// TODO(layering): when this function grows past ~150 lines, split into:
-///   compile_source(source) -> MissionIr
-///   execute_ir(ir, opts)   -> MissionRunResult
-///   dispatch_step(step)     -> StepResult (already in interpreter)
-/// The single-entry contract still holds at the level of
-/// `run_mission_inproc`; the split is purely internal.
 pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<MissionRunResult> {
     // Compile.
     let program = crate::eal::parser::parse(source)?;
@@ -683,7 +694,12 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
     let started = std::time::Instant::now();
     let started_at = chrono::Local::now().to_rfc3339();
 
-    let exec = crate::eal::interpreter::execute_with_endpoint(&state.endpoint, tenant, &ir);
+    let exec = crate::eal::interpreter::execute_with_endpoint_for_trace(
+        &state.endpoint,
+        tenant,
+        &ir,
+        run_id.clone(),
+    );
 
     let duration_ms = started.elapsed().as_millis() as u64;
 
@@ -691,6 +707,7 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
     let mut meta = MissionRunMeta {
         name: ir.name.clone(),
         source_file: opts.source_label.clone(),
+        trace_id: run_id.clone(),
         started_at,
         duration_ms,
         status: MissionRunStatus::Ok,
@@ -928,10 +945,42 @@ mod tests {
         let _ = fs::remove_dir_all(&*root);
     }
 
+    /// W2 acceptance gate (spec §4): metas written before `trace_id`
+    /// existed must keep deserializing — the field defaults to empty,
+    /// it never gates parsing.
+    #[test]
+    fn pre_trace_id_meta_still_deserializes() {
+        let old = r#"{
+            "name": "legacy", "source_file": null,
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "duration_ms": 7, "status": "ok", "error": null,
+            "steps_total": 1, "steps_completed": 1, "steps_failed": 0
+        }"#;
+        let meta: MissionRunMeta = serde_json::from_str(old).expect("legacy meta parses");
+        assert_eq!(meta.trace_id, "", "absent field defaults, never errors");
+        assert_eq!(meta.status, MissionRunStatus::Ok);
+    }
+
+    /// The in-flight meta written at `create()` time already carries
+    /// the trace anchor — `invocation watch --trace` must be able to
+    /// attach while the run is alive, not only after completion.
+    #[test]
+    fn in_flight_meta_carries_trace_anchor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(dir.path().to_path_buf());
+        let run = store.create("anchor-check").expect("create run");
+        let raw = fs::read_to_string(run.path.join("meta.json")).expect("read in-flight meta");
+        let meta: MissionRunMeta = serde_json::from_str(&raw).expect("parse in-flight meta");
+        let run_id = run.path.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(meta.trace_id, run_id);
+        assert_eq!(meta.status, MissionRunStatus::Running);
+    }
+
     fn make_meta(name: &str, status: MissionRunStatus) -> MissionRunMeta {
         MissionRunMeta {
             name: name.into(),
             source_file: Some(format!("/tmp/{name}.eal")),
+            trace_id: String::new(),
             started_at: "2026-04-06T12:00:00+00:00".into(),
             duration_ms: 42,
             status,

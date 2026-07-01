@@ -50,9 +50,23 @@ use super::presentation::stage::StageRenderer;
 #[derive(Debug, Args)]
 pub struct StopArgs {}
 
-pub fn run(_args: StopArgs) -> anyhow::Result<()> {
+pub fn run(args: StopArgs) -> anyhow::Result<()> {
+    run_with_options(args, StopOptions::default())
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct StopOptions {
+    /// Internal caller has already attempted `federation.revoke`.
+    ///
+    /// Public `runtime stop` keeps revoke enabled; `self uninstall`
+    /// disables it because uninstall owns an explicit hub-removal stage
+    /// before it tears down local files.
+    pub(crate) skip_revoke: bool,
+}
+
+pub(crate) fn run_with_options(_args: StopArgs, options: StopOptions) -> anyhow::Result<()> {
     let state = config::load().ok();
-    let plan = StopPlan::from_state(state.as_ref());
+    let plan = StopPlan::from_state(state.as_ref(), options);
     plan.execute()
 }
 
@@ -84,11 +98,12 @@ enum StopShape {
 /// the low-level `stop_*` helpers directly.
 struct StopPlan {
     shape: StopShape,
+    options: StopOptions,
     renderer: StageRenderer,
 }
 
 impl StopPlan {
-    fn from_state(state: Option<&config::RuntimeState>) -> Self {
+    fn from_state(state: Option<&config::RuntimeState>, options: StopOptions) -> Self {
         let shape = match state {
             None => StopShape::Stateless,
             Some(s) if matches!(s.runtime_kind, config::RuntimeKind::DaemonOnly) => {
@@ -106,6 +121,7 @@ impl StopPlan {
         };
         Self {
             shape,
+            options,
             renderer: StageRenderer::new(),
         }
     }
@@ -130,6 +146,11 @@ impl StopPlan {
     /// tell "I have nothing to revoke" from "this build can't".
     fn stage_revoke(&mut self) {
         self.renderer.set_active("revoke");
+        if self.options.skip_revoke {
+            self.renderer
+                .stage_skipped("revoke", "(already attempted by caller)");
+            return;
+        }
         if !matches!(self.shape, StopShape::DaemonOnly) {
             self.renderer
                 .stage_skipped("revoke", "(only runs in daemon-only mode)");
@@ -148,7 +169,6 @@ impl StopPlan {
             match crate::services::invocation_transport::federation_invoke::invoke_federation_revoke(
                 &caller_ura,
                 "device shutdown",
-                Some(&caller_ura),
             ) {
                 Ok(_) => self.renderer.stage_ok("revoke"),
                 Err(e) => self.renderer.stage_skipped("revoke", &format!("({e})")),

@@ -45,10 +45,27 @@ mission "example" {
   // Reference a prior step's output (auto-builds the DAG)
   let summary = claude.summarise(text: "more text")
   let saved   = device.save(content: summary.output)
+
+  // Archive important mission values for downstream answer/report stages
+  emit "summary" kind answer value summary.output
+  emit "chain" kind context value "summarise -> save"
 }
 ```
 
 `summary.output` carries `summarise`'s result into `save`. The compiler sees the dependency and runs `save` only after `summarise` finishes. Steps with no shared dependencies execute in parallel.
+
+## Emit statements
+
+```eal
+emit "terminal_rows" kind answer value rows.output
+emit "note" kind diagnostic value "fallback path"
+```
+
+`emit` appends an ordered archive record to the mission trace. It is not an
+ability call, does not dispatch, and does not change step phases. Emitted names
+do not need to be unique; order is preserved by `seq`. Top-level `emit` can
+reference a prior binding or a literal value. Loop-local emit is not supported
+in this EAL version.
 
 ## Step options
 

@@ -1,20 +1,20 @@
 //! mcp profile — RFC-001 §1 [P6].
 //!
 //! Per restatement-mapping decision P6: a single mcp-profile Agent
-//! owns BOTH inbound and outbound MCP — `mcp.bridge.*` (incoming MCP
-//! tools/list + tools/call) and `mcp.client.*` (outgoing MCP calls
-//! to external servers). They share one Agent identity rather than
-//! splitting into two profiles.
+//! advertises BOTH inbound and outbound MCP — `mcp.bridge.*` (incoming
+//! MCP tools/list + tools/call) and `mcp.client.*` (outgoing MCP calls
+//! to external servers). They share one Agent identity projection rather
+//! than splitting into two profiles.
 //!
 //! This is the ONLY place MCP awareness is permitted in the CLI per
 //! RFC-001 §A3 (MCP only at edge adapters; everywhere else is
 //! Invocation-only). The conformance script enforces this.
 //!
-//! Descriptor ownership
-//! --------------------
-//! MCP descriptors are generated from the dispatch registry entries whose owner
-//! is `OwnerKind::Agent(DEFAULT_MCP_AGENT_ID)`. This file does not infer
-//! ownership from ability name prefixes.
+//! Descriptor projection
+//! ---------------------
+//! MCP descriptors are generated from the dispatch registry entries whose
+//! projection class is `OwnerKind::Agent(DEFAULT_MCP_AGENT_ID)`. This file does
+//! not infer ownership from ability name prefixes.
 //!
 //! What this file provides today
 //! -----------------------------
@@ -423,6 +423,10 @@ fn metadata_for_agent_ability(
             metadata.push(("exec_kind", "eal".to_string()));
             ("unknown", "composed ability cost depends on steps")
         }
+        Some(crate::core::ability_spec::AbilityExec::HostStream(_)) => {
+            metadata.push(("exec_kind", "host_stream".to_string()));
+            ("free", "free/local")
+        }
         None => {
             metadata.push(("exec_kind", "agent_chat".to_string()));
             ("llm_metered", "LLM token billing may apply")
@@ -444,6 +448,60 @@ fn metadata_for_agent_ability(
     metadata
 }
 
+/// The identity trace a successful daemon invocation echoes back, folded
+/// into the tool-call result under the `x-easynet-invocation` key so an
+/// EasyNet-aware driver (Claude Code, Codex) can correlate the tool call
+/// with the ledger. The field set mirrors what
+/// `drivers::invocation_trace::parse_invocation_trace_metadata` consumes.
+#[derive(Debug, Clone, Default)]
+pub struct InvocationToolTrace {
+    pub ability: String,
+    pub mcp_tool: String,
+    pub request_id: Option<String>,
+    pub ability_ura: Option<String>,
+    pub invocation_ura: Option<String>,
+    pub caller_ura: Option<String>,
+    pub callee_ura: Option<String>,
+    pub subject_ura: Option<String>,
+}
+
+impl InvocationToolTrace {
+    /// Project the daemon invocation `_meta` echo (see
+    /// `local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta`)
+    /// onto the driver-facing trace object.
+    fn from_daemon_meta(meta: &serde_json::Value, mcp_tool: &str) -> Self {
+        let field = |key: &str| meta.get(key).and_then(|v| v.as_str()).map(str::to_string);
+        Self {
+            ability: field("ability").unwrap_or_default(),
+            mcp_tool: mcp_tool.to_string(),
+            request_id: field("request_id"),
+            ability_ura: field("ability_ura"),
+            invocation_ura: field("invocation_ura"),
+            caller_ura: field("caller_ura"),
+            callee_ura: field("callee_ura"),
+            subject_ura: field("subject_ura"),
+        }
+    }
+
+    fn into_value(self) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("ability".into(), self.ability.into());
+        obj.insert("mcp_tool".into(), self.mcp_tool.into());
+        let mut put = |key: &str, v: Option<String>| {
+            if let Some(v) = v {
+                obj.insert(key.into(), v.into());
+            }
+        };
+        put("request_id", self.request_id);
+        put("ability_ura", self.ability_ura);
+        put("invocation_ura", self.invocation_ura);
+        put("caller_ura", self.caller_ura);
+        put("callee_ura", self.callee_ura);
+        put("subject_ura", self.subject_ura);
+        serde_json::Value::Object(obj)
+    }
+}
+
 /// The trait the MCP provider needs from a local ability invoker.
 /// Production wires this to daemon.sock Axon Invocation; tests inject
 /// fakes without depending on daemon transport.
@@ -455,6 +513,19 @@ pub trait LocalInvoker {
         ability: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String>;
+
+    /// Invoke and additionally surface the invocation identity trace.
+    /// The default implementation carries no trace; the production daemon
+    /// adapter overrides it so tool results can echo the ledger identity.
+    /// `mcp_tool` is the wire tool name the driver matches against.
+    fn invoke_traced(
+        &self,
+        ability: &str,
+        _mcp_tool: &str,
+        args: serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<InvocationToolTrace>), String> {
+        self.invoke_sync(ability, args).map(|value| (value, None))
+    }
 }
 
 /// Production adapter for `easynet mcp serve`: route every tool call
@@ -470,6 +541,27 @@ impl LocalInvoker for DaemonLocalInvoker {
     ) -> Result<serde_json::Value, String> {
         crate::support::local_invoke::invoke_local_ability(ability, args)
             .map_err(|err| err.to_string())
+    }
+
+    fn invoke_traced(
+        &self,
+        ability: &str,
+        mcp_tool: &str,
+        args: serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<InvocationToolTrace>), String> {
+        let (value, meta) =
+            crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
+                ability,
+                args,
+                None,
+                &[],
+                None,
+                None,
+                None,
+            )
+            .map_err(|err| err.to_string())?;
+        let trace = InvocationToolTrace::from_daemon_meta(&meta, mcp_tool);
+        Ok((value, Some(trace)))
     }
 }
 
@@ -674,9 +766,9 @@ fn per_agent_workspace_descriptors(
     // missing from `tools/list` after the ability-only refactor.
     //
     // The two descriptors are intentionally per-agent: every agent
-    // owns its own discover / invoke (the discovery ladder is
-    // owner-scoped). Source = `kernel:built-in:self-bundle` so an
-    // operator inspecting the descriptor catalogue can tell at a
+    // projection advertises its own discover / invoke (the discovery
+    // ladder is projection-scoped). Source = `kernel:built-in:self-bundle`
+    // so an operator inspecting the descriptor catalogue can tell at a
     // glance the entry came from a synth path, not a TOML.
     {
         let discover_name = format!(
@@ -758,6 +850,32 @@ fn per_agent_workspace_descriptors(
     out
 }
 
+/// Fold the invocation identity trace into a successful tool-call payload
+/// under the `x-easynet-invocation` key the drivers parse. An object
+/// payload gains the key in place; a scalar/array payload is wrapped as
+/// `{ "result": <payload>, "x-easynet-invocation": {...} }` so the trace
+/// has a home without losing the original value. No trace → payload
+/// untouched.
+fn fold_invocation_trace(
+    payload: serde_json::Value,
+    trace: Option<InvocationToolTrace>,
+) -> serde_json::Value {
+    let Some(trace) = trace else {
+        return payload;
+    };
+    let trace_value = trace.into_value();
+    match payload {
+        serde_json::Value::Object(mut map) => {
+            map.insert("x-easynet-invocation".into(), trace_value);
+            serde_json::Value::Object(map)
+        }
+        other => serde_json::json!({
+            "result": other,
+            "x-easynet-invocation": trace_value,
+        }),
+    }
+}
+
 impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I> {
     fn tool_specs(&self) -> Vec<serde_json::Value> {
         tool_specs_from_descriptors(&self.descriptors)
@@ -782,9 +900,9 @@ impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I
             };
         };
         let args_value = serde_json::Value::Object(args.clone());
-        match self.invoker.invoke_sync(ability_name, args_value) {
-            Ok(value) => easynet_axon::mcp::ToolResult {
-                payload: value,
+        match self.invoker.invoke_traced(ability_name, name, args_value) {
+            Ok((value, trace)) => easynet_axon::mcp::ToolResult {
+                payload: fold_invocation_trace(value, trace),
                 is_error: false,
             },
             Err(msg) => easynet_axon::mcp::ToolResult {
@@ -1015,6 +1133,45 @@ mod tests {
         let names: Vec<&str> = specs.iter().map(|s| s["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"observe_health"));
         assert!(names.contains(&"agent_list"));
+    }
+
+    #[test]
+    fn mcp_provider_advertises_and_routes_agent_discover() {
+        let desc = AbilityDescriptor::new("claude.discover", "agent://claude", Visibility::Scoped)
+            .unwrap()
+            .with_source("kernel:built-in:self-bundle")
+            .with_input_schema(crate::runtime::agents::discover_ability::input_schema())
+            .with_description(crate::runtime::agents::discover_ability::description());
+        let invoker = RecordingInvoker::new(Ok(serde_json::json!({
+            "candidates": [],
+            "scope": "device",
+            "query": "weather"
+        })));
+        let p = InvokeMcpProvider::new(invoker, vec![desc]);
+
+        let specs = p.tool_specs();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0]["name"], "claude_discover");
+        assert_eq!(specs[0]["x-easynet"]["ability"], "claude.discover");
+        assert_eq!(
+            specs[0]["inputSchema"]["properties"]["scope"]["enum"],
+            serde_json::json!(["self", "device", "user", "public"])
+        );
+
+        let mut args = serde_json::Map::new();
+        args.insert("scope".into(), serde_json::json!("device"));
+        args.insert("query".into(), serde_json::json!("weather"));
+        let result = p.handle_tool_call("claude_discover", &args);
+        assert!(!result.is_error);
+        assert_eq!(result.payload["scope"], "device");
+        assert_eq!(
+            p.invoker.last_ability.borrow().as_deref(),
+            Some("claude.discover")
+        );
+        assert_eq!(
+            p.invoker.last_args.borrow().as_ref().unwrap()["query"],
+            serde_json::json!("weather")
+        );
     }
 
     #[test]

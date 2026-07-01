@@ -5,7 +5,7 @@
 // Description: A reload-friendly cell holding the daemon's current
 //              `RealmTrustAnchor`. Built once at boot, shared by
 //              the admission facade and the
-//              `<self>.register_device_pubkey` ability handler.
+//              `identity.register_pubkey` ability handler.
 //              Replaces an `Arc<RealmTrustAnchor>` so the pairing
 //              flow can publish a fresh anchor (after
 //              `append_agent` + atomic `save`) without rebuilding
@@ -45,7 +45,7 @@
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, RwLock,
+    Arc, Mutex, MutexGuard, RwLock,
 };
 
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
@@ -64,6 +64,12 @@ use crate::services::realm_trust_anchor::RealmTrustAnchor;
 #[derive(Debug, Clone)]
 pub struct SharedTrustAnchor {
     inner: Arc<RwLock<Arc<RealmTrustAnchor>>>,
+    /// Serializes read-modify-write trust-anchor transactions. The
+    /// `RwLock` above only protects the published pointer; without a
+    /// transaction mutex, two writers can both snapshot generation N,
+    /// persist divergent generation N+1 files, and let the later
+    /// replace drop the earlier mutation.
+    mutation_lock: Arc<Mutex<()>>,
     /// Monotonic counter bumped on every successful `replace`.
     /// Boot-time anchors start at generation 0; the first SIGHUP
     /// reload that publishes a new anchor produces generation 1.
@@ -79,6 +85,7 @@ impl SharedTrustAnchor {
     pub fn new(anchor: Arc<RealmTrustAnchor>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(anchor)),
+            mutation_lock: Arc::new(Mutex::new(())),
             cert_anchor_generation: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -116,6 +123,16 @@ impl SharedTrustAnchor {
         };
         *guard = next;
         self.cert_anchor_generation.fetch_add(1, Ordering::Release);
+    }
+
+    /// Lock one write-side trust transaction. Writers must hold this
+    /// guard across snapshot -> domain mutation -> disk save -> publish
+    /// so concurrent identity writes cannot overwrite each other.
+    pub(crate) fn mutation_guard(&self) -> MutexGuard<'_, ()> {
+        match self.mutation_lock.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 }
 

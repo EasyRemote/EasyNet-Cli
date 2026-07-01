@@ -247,14 +247,14 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         }
         let metadata: Option<std::collections::HashMap<String, String>> = Some(map);
         self.bridge
-            .ability_call_raw(
+            .ability_call_raw(easynet_axon::dendrite_bridge::AbilityRawCallOptions {
                 tenant_id,
                 resource_ura,
                 payload_json,
-                subject_id.as_deref(),
-                metadata.as_ref(),
-                self.timeout_ms,
-            )
+                subject_id: subject_id.as_deref(),
+                metadata: metadata.as_ref(),
+                timeout_ms: self.timeout_ms,
+            })
             .map_err(|e| format!("{e}"))
     }
 }
@@ -370,7 +370,7 @@ pub fn advertise_abilities<I: AbilityInvoker>(
 /// already-persisted owner projection. Single source of the wire shape
 /// so the boot-time `advertise_abilities` path and the event-driven
 /// hot-add advertiser (see `agent_lifecycle_ability` / the
-/// `<self>.session` advertiser) cannot drift. ISS-002.
+/// `session.open` advertiser) cannot drift. ISS-002.
 pub(crate) fn advertise_abilities_payload(
     agent_ura: &str,
     projection: &crate::runtime::owner_projection::OwnerProjectionPublication,
@@ -393,7 +393,7 @@ pub(crate) fn advertise_abilities_payload(
 ///
 /// `prefix` filters by `agent_ura_prefix` server-side — pass an empty
 /// string for "every agent". `include_abilities` is the load-bearing
-/// flag for `<self>.discover(scope: "easynet")`: without it every
+/// flag for `<agent>.discover(scope: "easynet")`: without it every
 /// peer record is just `{ura, status}` with no descriptors, and the
 /// LLM can't pick a candidate.
 ///
@@ -414,7 +414,7 @@ pub fn resolve_agents<I: AbilityInvoker>(
 /// RFC-002 §5 variant: pass an explicit tenant_filter so callers can
 /// request "scope to caller's tenant" (None / "") or "cross-tenant
 /// catalog listing" ("*"). The hub-side default is auto-fill from
-/// envelope tenant; CLI's `<self>.discover(scope: "user")` therefore
+/// envelope tenant; CLI's `<agent>.discover(scope: "user")` therefore
 /// passes None and the hub fills in the right value.
 pub fn resolve_agents_with_filter<I: AbilityInvoker>(
     invoker: &I,

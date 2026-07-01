@@ -103,10 +103,8 @@ where
 /// legacy local-realm fallback.
 fn lookup_node_ura_in_directory(node: &str) -> Option<String> {
     let entries =
-        crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
-            None, None,
-        )
-        .ok()?;
+        crate::services::invocation_transport::federation_invoke::invoke_federation_discover(None)
+            .ok()?;
     for entry in entries {
         if entry.get("node_id").and_then(Value::as_str) == Some(node) {
             if let Some(ura) = entry.get("agent_ura").and_then(Value::as_str) {

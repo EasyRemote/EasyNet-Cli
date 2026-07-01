@@ -76,8 +76,10 @@ pub struct ResolveKeyArgs {
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ResolveKeyReceipt {
+    #[serde(default)]
     pub agent_ura: String,
     pub public_key_hex: String,
+    #[serde(default)]
     pub status: String,
     #[serde(default)]
     pub key_id: String,
@@ -91,6 +93,10 @@ pub struct ResolveKeyReceipt {
 #[derive(Debug, Clone, Serialize)]
 pub struct JoinArgs {
     pub realm: String,
+    /// Canonical membership identity requested by the joining device.
+    /// This is the post-genesis device URA the hub binds to
+    /// `public_key_hex` and returns in `JoinReceipt.membership_ura`.
+    pub membership_ura: String,
     /// Lowercase hex of the Ed25519 public key the joining device
     /// just generated. The hub binds this key to the canonical URA
     /// in its receipt.
@@ -288,7 +294,7 @@ pub struct ResolveFilter {
     /// When true, the Hub includes each agent's
     /// `advertised_abilities` in the receipt. Default false keeps
     /// the listing payload small for the common "is this agent
-    /// alive" check; `<self>.discover(scope: "easynet")` flips it
+    /// alive" check; `<agent>.discover(scope: "easynet")` flips it
     /// to true so the LLM sees what each peer offers.
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub include_abilities: bool,
@@ -362,11 +368,13 @@ mod tests {
     fn join_args_serializes_with_required_fields_only() {
         let args = JoinArgs {
             realm: "acme".into(),
+            membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "deadbeef".into(),
             pairing_secret: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["realm"], "acme");
+        assert_eq!(v["membership_ura"], "easynet:///r/acme/device/dev-a");
         assert_eq!(v["public_key_hex"], "deadbeef");
         assert!(
             v.get("pairing_secret").is_none(),
@@ -378,6 +386,7 @@ mod tests {
     fn join_args_includes_pairing_secret_when_set() {
         let args = JoinArgs {
             realm: "acme".into(),
+            membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "00".into(),
             pairing_secret: Some("token-xyz".into()),
         };

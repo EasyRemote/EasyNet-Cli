@@ -7,10 +7,11 @@
 // Grammar (EBNF):
 //   program     = mission_decl
 //   mission     = "mission" STRING "{" statement* "}"
-//   statement   = "let" IDENT "=" rhs | rhs
+//   statement   = "let" IDENT "=" rhs | emit_stmt | rhs
 //   rhs         = call_expr | member_call
 //   call_expr   = "call" STRING ("on" STRING)? ("with" "{" field_list "}")? option*
 //   member_call = IDENT "." IDENT "(" named_arg_list? ")" option*
+//   emit_stmt   = "emit" STRING "kind" (STRING | IDENT) "value" arg_value
 //   named_arg_list = named_arg ("," named_arg)*
 //   named_arg   = IDENT ":" arg_value
 //   arg_value   = STRING | INT | FLOAT | BOOL | var_ref
@@ -165,7 +166,33 @@ impl Parser {
                      (source.summarize + target.chat(prompt: summary.output))."
                 )
             }
+            Token::Emit => Ok(Statement::Emit(self.parse_emit_statement()?)),
             _ => Ok(Statement::Call(self.parse_rhs()?)),
+        }
+    }
+
+    /// Parse an archival emit statement:
+    ///
+    /// `emit "terminal_rows" kind "answer" value rows.output`
+    ///
+    /// `kind` and `value` are contextual identifiers, not lexer
+    /// keywords, so ability/argument names keep the same namespace they
+    /// had before this statement form existed.
+    fn parse_emit_statement(&mut self) -> anyhow::Result<EmitStatement> {
+        self.expect(&Token::Emit)?;
+        let name = self.expect_string()?;
+        self.expect_contextual_ident("kind")?;
+        let kind = self.expect_emit_kind()?;
+        self.expect_contextual_ident("value")?;
+        let value = self.parse_arg_value()?;
+        Ok(EmitStatement { name, kind, value })
+    }
+
+    fn expect_emit_kind(&mut self) -> anyhow::Result<String> {
+        match self.advance() {
+            Token::StringLit(s) => Ok(s),
+            Token::Ident(s) => Ok(s),
+            t => anyhow::bail!("expected emit kind string or identifier, got {t:?}"),
         }
     }
 
@@ -570,6 +597,28 @@ mod tests {
     fn parse_var_ref() {
         let p = parse(r#"mission "t" { let a = call "x" on "n" let b = call "y" on "n" with { input = a.output } }"#).unwrap();
         assert_eq!(p.mission.statements.len(), 2);
+    }
+
+    #[test]
+    fn parse_emit_statement() {
+        let p = parse(
+            r#"mission "t" {
+                let rows = alice.map(prompt: "x")
+                emit "terminal_rows" kind answer value rows.output
+            }"#,
+        )
+        .unwrap();
+        match &p.mission.statements[1] {
+            Statement::Emit(e) => {
+                assert_eq!(e.name, "terminal_rows");
+                assert_eq!(e.kind, "answer");
+                match &e.value {
+                    FieldValue::VarRef { var_name } => assert_eq!(var_name, "rows"),
+                    v => panic!("expected rows.output var-ref, got {v:?}"),
+                }
+            }
+            other => panic!("expected emit statement, got {other:?}"),
+        }
     }
 
     #[test]

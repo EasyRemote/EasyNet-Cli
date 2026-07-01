@@ -51,8 +51,8 @@ use phases::{
 };
 use retry::now_unix_ms;
 use trace::{
-    CappedTraceBuffer, CapturedResult, EXECUTION_TRACE_SCHEMA_VERSION, TRACE_CAP_HEAD,
-    TRACE_CAP_TAIL,
+    CappedTraceBuffer, CapturedResult, EmissionRecord, EXECUTION_TRACE_SCHEMA_VERSION,
+    TRACE_CAP_HEAD, TRACE_CAP_TAIL,
 };
 #[allow(unused_imports)] // public trace model re-export; external callers use this path.
 pub use trace::{
@@ -63,7 +63,7 @@ pub use trace::{
 fn millis_u64(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
-use super::ir::{IrCall, MissionIr};
+use super::ir::{IrCall, IrEmit, IrEmitValue, MissionIr};
 use crate::core::agent_id::AbilityName;
 use crate::eal::error::EalError;
 use crate::eal::ir::IrTarget;
@@ -161,27 +161,51 @@ impl From<Value> for StepDispatchOutcome {
 // the variant at parse time, and the planner baked it into the IR.
 // See `docs/AGENT_IDENTITY.md` invariants 1 and 2.
 
-pub fn execute_with_endpoint(
+/// Execute a mission with a caller-owned trace id.
+///
+/// `mission_runs` uses this entry so the persisted run id, the
+/// `MissionRunMeta.trace_id`, every child Invocation envelope, and
+/// the on-disk `trace.json` all name the same run. That identity is
+/// operational metadata, not an eighth Invocation tuple field.
+pub fn execute_with_endpoint_for_trace(
     endpoint: &str,
     tenant: &str,
     ir: &MissionIr,
+    trace_id: String,
 ) -> anyhow::Result<ExecutionReport> {
     let dispatcher = AgentAwareDispatcher::new(
         endpoint,
         crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
     );
-    execute_with_dispatcher(&dispatcher, tenant, ir)
+    execute_with_dispatcher_for_trace(&dispatcher, tenant, ir, trace_id)
 }
 
 // ── Core execution engine ──
 
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
+#[cfg(test)]
 pub fn execute_with_dispatcher(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
-    let mission_id = uuid::Uuid::new_v4().to_string();
+    let trace_id = uuid::Uuid::new_v4().to_string();
+    execute_with_dispatcher_for_trace(dispatcher, tenant, ir, trace_id)
+}
+
+/// Execute a mission through an injected dispatcher with a caller-owned
+/// trace id.
+///
+/// Tests use this to pin the execution identity contract without
+/// depending on `mission_runs` persistence. Production mission runs
+/// call the endpoint variant above so the same trace id reaches the
+/// daemon-lowered child Invocations.
+pub fn execute_with_dispatcher_for_trace(
+    dispatcher: &dyn StepDispatcher,
+    tenant: &str,
+    ir: &MissionIr,
+    mission_id: String,
+) -> anyhow::Result<ExecutionReport> {
     // One trace id per mission run, equal to the mission id: every
     // lowered invocation envelope carries it, so the daemon ledger can
     // group the run (`easynet invocation trace <mission_id>`).
@@ -314,6 +338,7 @@ pub fn execute_with_dispatcher(
             })
         })
         .collect();
+    let emissions = resolve_emissions(&ir.emits, &captured);
     let trace = ExecutionTrace {
         schema_version: EXECUTION_TRACE_SCHEMA_VERSION,
         mission_id,
@@ -328,6 +353,7 @@ pub fn execute_with_dispatcher(
         outcome,
         step_traces,
         ability_graph,
+        emissions: emissions.clone(),
         traces_truncated,
     };
 
@@ -347,6 +373,54 @@ pub fn execute_with_dispatcher(
 }
 
 // ── Internals ──
+
+fn resolve_emissions(
+    emits: &[IrEmit],
+    captured: &HashMap<String, CapturedResult>,
+) -> Vec<EmissionRecord> {
+    emits
+        .iter()
+        .enumerate()
+        .map(|(idx, emit)| {
+            let seq = idx + 1;
+            match &emit.value {
+                IrEmitValue::Literal { value } => EmissionRecord {
+                    seq,
+                    name: emit.name.clone(),
+                    kind: emit.kind.clone(),
+                    value: value.clone(),
+                    source_binding: None,
+                    error: None,
+                },
+                IrEmitValue::Binding { binding } => match captured.get(binding) {
+                    Some(result) => EmissionRecord {
+                        seq,
+                        name: emit.name.clone(),
+                        kind: emit.kind.clone(),
+                        value: decode_emitted_value(&result.value),
+                        source_binding: Some(binding.clone()),
+                        error: None,
+                    },
+                    None => EmissionRecord {
+                        seq,
+                        name: emit.name.clone(),
+                        kind: emit.kind.clone(),
+                        value: Value::Null,
+                        source_binding: Some(binding.clone()),
+                        error: Some(format!(
+                            "binding '{binding}' was not captured; producer may have failed or skipped"
+                        )),
+                    },
+                },
+            }
+        })
+        .collect()
+}
+
+fn decode_emitted_value(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).to_string()))
+}
 
 enum StepExecResult {
     Ok {

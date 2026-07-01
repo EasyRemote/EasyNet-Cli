@@ -64,8 +64,8 @@ pub const ABILITY_LIST_ABILITIES: &str = "meta.list_abilities";
 /// AFTER `Arc::new(reg)`. The list_abilities handler reads through
 /// it to enumerate every CURRENTLY-REGISTERED ability — including
 /// abilities registered AFTER `meta_ability::register` ran (e.g.
-/// `mission.run`, per-agent `<agent>.<verb>` chat-translation
-/// handlers, hot-materialized agent abilities). The static profile
+/// `mission.run`, per-agent executor-bound handlers, hot-materialized
+/// agent abilities). The static profile
 /// descriptor catalogue is merged on top so first-class abilities
 /// (fs.read, http.request, ...) keep their full schemas;
 /// runtime-only entries (mission.run, hot-reloaded agent abilities)
@@ -180,6 +180,7 @@ fn list_abilities_handler(
 ) -> anyhow::Result<Value> {
     use crate::runtime::ability_descriptor::Visibility;
     let scope = AbilityListScope::from_args(&args)?;
+    let build_context = AbilityCatalogBuildContext::load(pages_user);
 
     // Scope parameter (RFC-001 v4.1.7 hub-broadcast contract):
     //   * `"local"` (default) — only abilities the device owns +
@@ -195,11 +196,15 @@ fn list_abilities_handler(
     // descriptions read off the workspace ability TOMLs. We index by
     // the descriptor's canonical ability URA so two hosted agents can
     // both expose `chat` without one collapsing the other.
-    let static_descriptors = descriptors_provider();
+    let static_descriptors =
+        scoped_static_descriptors(&scope, &build_context).unwrap_or_else(|| descriptors_provider());
     let mut catalog: std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor> =
         std::collections::BTreeMap::new();
     for d in static_descriptors {
         if !crate::runtime::agents::is_publishable_catalog_name(&d.name) {
+            continue;
+        }
+        if !scope.matches_descriptor(&d) {
             continue;
         }
         let Some(identity) = d.identity() else {
@@ -228,6 +233,8 @@ fn list_abilities_handler(
     // `abilities/*.toml`, and (c) any future ability whose author
     // forgot to thread it through the profile catalogue.
     if let Some(registry) = registry_handle.get() {
+        let hint_snapshot =
+            crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(registry);
         // Owner URAs for the synthesised descriptors below. These
         // entries are abilities registered into `AxonAbilityCatalog`
         // that no static profile descriptor covers (RFC-002
@@ -265,15 +272,11 @@ fn list_abilities_handler(
         // …). Dropping is the honest answer — once `easynet device
         // pair` finishes, the next list_abilities call sees the
         // populated state and emits the full catalogue.
-        let realm = crate::persistence::config::load_credentials()
-            .ok()
-            .map(|c| c.realm.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let local = crate::persistence::local_agents::load().unwrap_or_default();
-        let device_owner_ura = if local.host_device_agent_ura.is_empty() {
+        let realm = build_context.realm.clone();
+        let device_owner_ura = if build_context.local.host_device_agent_ura.is_empty() {
             None
         } else {
-            Some(local.host_device_agent_ura.clone())
+            Some(build_context.local.host_device_agent_ura.clone())
         };
         let hub_owner_ura = realm.as_deref().map(crate::ura::hub_ura);
         // user-segment used for `OwnerKind::Agent(...)` resolution.
@@ -282,8 +285,9 @@ fn list_abilities_handler(
         // and registration paths agree on which user-id is
         // canonical without reading process-wide env state on
         // each invocation.
-        let user_segment = pages_user.map(str::to_string);
-        for name in registry.list_abilities() {
+        let user_segment = build_context.user_segment.clone();
+        for row in registry.ability_catalog_snapshot() {
+            let name = row.name;
             // Keep the live registry on the same public-catalogue surface as
             // `published_abilities`, `easynet ability list`, and advertise.
             if !crate::runtime::agents::is_publishable_catalog_name(&name) {
@@ -294,7 +298,12 @@ fn list_abilities_handler(
             // from the kind. Falling through to None on missing
             // metadata is intentional — synth drops entries it
             // cannot stamp authoritatively.
-            let owner_string = match registry.lookup_owner(&name) {
+            //
+            // SPEC §9.1.A Step 4: owner truth now comes from the
+            // control-plane record (`control_plane_owner`), not the legacy
+            // `owner` side table — proven equivalent for every owner kind by
+            // `control_plane_owner_matches_legacy_lookup_for_static_ability`.
+            let owner_string = match row.owner {
                 Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => hub_owner_ura.clone(),
                 Some(crate::runtime::ability_dispatch::OwnerKind::Device) => {
                     device_owner_ura.clone()
@@ -314,7 +323,7 @@ fn list_abilities_handler(
                 continue;
             };
             let public_name = crate::ura::owner_local_ability_name(owner, &name);
-            let transport_hints = crate::runtime::agents::discovery_hints_for(registry, &name);
+            let transport_hints = hint_snapshot.for_name(&name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
             // (chat ability + the family that follows it), surface
@@ -328,7 +337,13 @@ fn list_abilities_handler(
             // name-only stub the synth has emitted since the
             // 2026-05-05 owner-aware refactor.
             if let Ok(d) = AbilityDescriptor::new(public_name.clone(), owner, Visibility::Scoped) {
-                let descriptor = match registry.manifest_for_dynamic(&name) {
+                // SPEC §9.1.A Step 4: manifest body now comes from the
+                // control-plane-keyed store (`control_plane_manifest`),
+                // which the commit choke point dual-writes for BOTH static
+                // and hot/dynamic registrations — so it unions the same set
+                // `manifest_for_dynamic` did. Equivalence pinned by
+                // `control_plane_manifest_matches_legacy_for_static_ability`.
+                let descriptor = match row.manifest {
                     Some(manifest) => {
                         let mut d = d
                             .with_description(manifest.description())
@@ -349,6 +364,9 @@ fn list_abilities_handler(
                         .with_hints(transport_hints)
                         .with_source("registry"),
                 };
+                if !scope.matches_descriptor(&descriptor) {
+                    continue;
+                }
                 let Some(identity) = descriptor.identity() else {
                     continue;
                 };
@@ -359,7 +377,12 @@ fn list_abilities_handler(
             }
         }
 
-        synthesize_hot_hosted_agent_descriptors(&mut catalog, registry, &local);
+        synthesize_hot_hosted_agent_descriptors(
+            &mut catalog,
+            &build_context,
+            &hint_snapshot,
+            &scope,
+        );
     }
 
     // Final pass — service-health metadata. Applied uniformly over
@@ -419,6 +442,38 @@ fn list_abilities_handler(
 
     scope.apply(&mut merged);
     Ok(json!({ "abilities": merged }))
+}
+
+struct AbilityCatalogBuildContext {
+    realm: Option<String>,
+    host_node_id: Option<String>,
+    local: crate::persistence::local_agents::LocalAgentsFile,
+    agents: Option<crate::registry::agents::AgentRegistry>,
+    user_segment: Option<String>,
+}
+
+impl AbilityCatalogBuildContext {
+    fn load(pages_user: Option<&str>) -> Self {
+        let credentials = crate::persistence::config::load_credentials().ok();
+        let realm = credentials
+            .as_ref()
+            .map(|c| c.realm.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let host_node_id = credentials
+            .as_ref()
+            .map(|c| c.node_id.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Self {
+            realm,
+            host_node_id,
+            local: crate::persistence::local_agents::load().unwrap_or_default(),
+            agents: crate::registry::agents::load_agents().ok(),
+            user_segment: pages_user
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        }
+    }
 }
 
 struct AbilityListScope {
@@ -485,6 +540,31 @@ impl AbilityListScope {
                     .unwrap_or(false)
             });
         }
+    }
+
+    fn requested_owner_ura(&self) -> Option<String> {
+        self.owner_ura.clone().or_else(|| {
+            self.ability_ura
+                .as_deref()
+                .and_then(|ability_ura| crate::ura::AbilitySelector::parse(ability_ura).ok())
+                .map(|selector| selector.owner_ura().to_string())
+        })
+    }
+
+    fn matches_descriptor(&self, descriptor: &AbilityDescriptor) -> bool {
+        if let Some(owner_ura) = self.owner_ura.as_deref() {
+            if descriptor.owner_ura != owner_ura {
+                return false;
+            }
+        }
+        if let Some(ability_ura) = self.ability_ura.as_deref() {
+            return descriptor
+                .canonical_ability_ura()
+                .as_deref()
+                .map(|candidate| candidate == ability_ura)
+                .unwrap_or(false);
+        }
+        true
     }
 }
 
@@ -573,27 +653,84 @@ fn merge_owner_scope(
     }
 }
 
+fn scoped_static_descriptors(
+    scope: &AbilityListScope,
+    context: &AbilityCatalogBuildContext,
+) -> Option<Vec<AbilityDescriptor>> {
+    let owner_ura = scope.requested_owner_ura()?;
+    static_descriptors_for_owner(&owner_ura, context)
+}
+
+fn static_descriptors_for_owner(
+    owner_ura: &str,
+    context: &AbilityCatalogBuildContext,
+) -> Option<Vec<AbilityDescriptor>> {
+    if context.local.host_device_agent_ura == owner_ura {
+        return Some(crate::runtime::agents::profiles::device::descriptors_for(
+            owner_ura,
+        ));
+    }
+
+    if crate::persistence::local_agents::lookup_hosted_ura(&context.local, "consent", "default")
+        .as_deref()
+        == Some(owner_ura)
+    {
+        return Some(crate::runtime::agents::profiles::consent::descriptors_for(
+            owner_ura,
+        ));
+    }
+
+    if crate::persistence::local_agents::lookup_hosted_ura(&context.local, "mcp", "default")
+        .as_deref()
+        == Some(owner_ura)
+    {
+        return Some(crate::runtime::agents::profiles::mcp::descriptors_for(
+            owner_ura,
+        ));
+    }
+
+    let llm_owner = context
+        .local
+        .hosted_agents
+        .iter()
+        .any(|entry| entry.profile == "llm" && entry.agent_ura == owner_ura);
+    if llm_owner {
+        let catalog = crate::runtime::agents::profiles::llm::LlmProfileAbilityCatalog::load();
+        return Some(
+            crate::runtime::agents::profiles::llm::descriptors_for_with_catalog(
+                owner_ura, None, &catalog,
+            ),
+        );
+    }
+
+    None
+}
+
 fn synthesize_hot_hosted_agent_descriptors(
     catalog: &mut std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor>,
-    registry: &AxonAbilityCatalog,
-    local: &crate::persistence::local_agents::LocalAgentsFile,
+    context: &AbilityCatalogBuildContext,
+    hint_snapshot: &crate::runtime::agents::AbilityDiscoveryHintSnapshot,
+    scope: &AbilityListScope,
 ) {
     use crate::runtime::ability_descriptor::Visibility;
 
-    let Ok(agents) = crate::registry::agents::load_agents() else {
+    let Some(agents) = context.agents.as_ref() else {
         return;
     };
-    let host_node_id = crate::persistence::config::load_credentials()
-        .ok()
-        .map(|c| c.node_id.trim().to_string())
-        .filter(|s| !s.is_empty());
 
-    for (agent_name, entry) in agents.agents {
+    for (agent_name, entry) in &agents.agents {
         let Some(owner_ura) =
-            crate::persistence::local_agents::lookup_hosted_ura(local, "llm", &agent_name)
+            crate::persistence::local_agents::lookup_hosted_ura(&context.local, "llm", agent_name)
         else {
             continue;
         };
+        if scope
+            .owner_ura
+            .as_deref()
+            .is_some_and(|scope_owner| scope_owner != owner_ura)
+        {
+            continue;
+        }
         if crate::ura::parse_ura(&owner_ura)
             .map(|u| u.kind != crate::ura::URAKind::Agent)
             .unwrap_or(true)
@@ -616,10 +753,7 @@ fn synthesize_hot_hosted_agent_descriptors(
             descriptor = descriptor
                 .with_description(spec.description())
                 .with_input_schema(spec.parameters().clone())
-                .with_hints(crate::runtime::agents::discovery_hints_for(
-                    registry,
-                    spec.name(),
-                ))
+                .with_hints(hint_snapshot.for_name(spec.name()))
                 .with_source(format!("agent:{agent_name}"))
                 .with_metadata_entry("runtime", entry.agent_type.to_string())
                 .with_metadata_entry("agent_type", entry.agent_type.to_string())
@@ -629,7 +763,7 @@ fn synthesize_hot_hosted_agent_descriptors(
                     .with_metadata_entry("model", model.clone())
                     .with_metadata_entry("base_model", model.clone());
             }
-            if let Some(node_id) = host_node_id.as_ref() {
+            if let Some(node_id) = context.host_node_id.as_ref() {
                 descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
             }
             if spec.name() == default_chat_name {
@@ -637,6 +771,9 @@ fn synthesize_hot_hosted_agent_descriptors(
                 if let Some(output_schema) = chat_manifest.output_schema() {
                     descriptor = descriptor.with_output_schema(output_schema.clone());
                 }
+            }
+            if !scope.matches_descriptor(&descriptor) {
+                continue;
             }
             insert_or_upgrade_hosted_descriptor(catalog, descriptor);
         }
@@ -772,6 +909,7 @@ mod tests {
             hub_endpoint: "axon://hub.test:50051".to_string(),
             realm: realm.to_string(),
             username: Some(username.to_string()),
+            user_id: Some(format!("user-{username}")),
             ..Default::default()
         })
         .expect("seed credentials");
@@ -1099,27 +1237,29 @@ mod tests {
             OwnerKind::Agent("alice".to_string()),
             Arc::new(|_args| Ok(json!({}))),
         );
-        live_reg.hot_register_stream_with_spec(
-            "alice.mcp_search",
-            OwnerKind::Agent("alice".to_string()),
-            crate::core::ability_spec::AbilityManifest::new(
-                "mcp_search",
-                "Search reflected MCP content",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" }
-                    },
-                    "required": ["query"]
+        live_reg
+            .hot_register_stream_with_spec(
+                "alice.mcp_search",
+                OwnerKind::Agent("alice".to_string()),
+                crate::core::ability_spec::AbilityManifest::new(
+                    "mcp_search",
+                    "Search reflected MCP content",
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string" }
+                        },
+                        "required": ["query"]
+                    }),
+                )
+                .expect("valid MCP manifest"),
+                Arc::new(|_args| {
+                    Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                        Vec::new(),
+                    ))
                 }),
             )
-            .expect("valid MCP manifest"),
-            Arc::new(|_args| {
-                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
-                    Vec::new(),
-                ))
-            }),
-        );
+            .expect("dynamic stream manifest registers");
         handle.set(Arc::new(live_reg)).expect("set OnceLock");
 
         register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
@@ -1271,12 +1411,14 @@ mod tests {
             }),
         )
         .expect("valid manifest");
-        live_reg.hot_register_rpc_with_spec(
-            "device.hot.echo",
-            OwnerKind::Device,
-            manifest,
-            Arc::new(|_args| Ok(json!({}))),
-        );
+        live_reg
+            .hot_register_rpc_with_spec(
+                "device.hot.echo",
+                OwnerKind::Device,
+                manifest,
+                Arc::new(|_args| Ok(json!({}))),
+            )
+            .expect("dynamic RPC manifest registers");
 
         let mut reg = AxonAbilityCatalog::new();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
@@ -1303,6 +1445,69 @@ mod tests {
             ability["schema_summary"]["input"]["properties"]["text"]["type"], "string",
             "dynamic manifest schema must flow into meta.list_abilities: {ability}"
         );
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn list_abilities_surfaces_remote_desktop_plugin_manifest_schema() {
+        use crate::persistence::local_agents::{save, LocalAgentsFile};
+        use crate::runtime::plugin_host::{
+            DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
+            PluginRequirementSet, PluginRuntimeLimits,
+        };
+        use std::sync::OnceLock;
+
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        save(&LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            hosted_agents: Vec::new(),
+        })
+        .expect("seed local-agents.json");
+
+        let mut live_reg = AxonAbilityCatalog::new();
+        let limits = PluginRuntimeLimits::new(128, 8);
+        let mut builder = PluginContributionBuilder::new(
+            "easynet.remote_desktop",
+            "0.1.0",
+            PluginKind::Builtin,
+            limits,
+            PluginRequirementSet::default(),
+            Vec::new(),
+        );
+        crate::plugins::remote_desktop::contribute(&mut builder, limits)
+            .expect("remote desktop plugin contribution");
+        let contribution = builder
+            .finish()
+            .expect("remote desktop package contribution");
+        DaemonPluginBinder::static_catalog(&mut live_reg)
+            .bind_set(&PluginContributionSet::new(vec![contribution]))
+            .expect("bind remote desktop contribution");
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+        handle.set(Arc::new(live_reg)).expect("set live registry");
+
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, Vec::new, handle, None);
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let ability = resp["abilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == "remote_desktop.create_session")
+            .expect("remote_desktop.create_session must appear in discovery");
+
+        let desc = ability["description"].as_str().unwrap_or_default();
+        assert!(
+            !desc.contains("no manifest schema"),
+            "remote desktop plugin abilities must publish manifest text, got: {desc:?}"
+        );
+        assert_eq!(
+            ability["schema_summary"]["input"]["properties"]["mode"]["enum"][0],
+            json!("view_only"),
+            "plugin manifest schema must flow into meta.list_abilities: {ability}"
+        );
+        assert_eq!(ability["class"], json!("query"));
+        assert_eq!(ability["source"], json!("registry"));
     }
 
     #[test]

@@ -52,6 +52,8 @@ fn add_args(name: &str, r#type: &str, model: Option<&str>) -> AddArgs {
         r#type: r#type.into(),
         model: model.map(str::to_string),
         label: None,
+        command: None,
+        args: Vec::new(),
     }
 }
 
@@ -62,6 +64,7 @@ fn seed_joined_credentials() {
         hub_endpoint: "axon://hub.test:50051".to_string(),
         realm: "localhost".to_string(),
         username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
         ..Default::default()
     })
     .expect("seed joined credentials");

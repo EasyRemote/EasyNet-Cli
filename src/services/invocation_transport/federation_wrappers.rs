@@ -1,12 +1,12 @@
-// EasyNet CLI — invocation_transport — federation.* thin wrappers
-// =======================================================
+// EasyNet Daemon — invocation_transport — federation wrappers
+// ===========================================================
 //
 // File: src/services/invocation_transport/federation_wrappers.rs
-// Description: Six thin wrappers for the `federation.*` ability
-//              family that the new daemon binary serves over the
-//              `Invocation::Invoke` (and one over `InvokeStream`)
-//              RPC method, replacing the legacy axon-runtime
-//              implementations while preserving wire surface.
+// Description: Small daemon-owned handlers for the Hub/Federation
+//              baseline ability family served over Axon
+//              `Invocation::{Invoke,InvokeStream}`. Ability names
+//              come from `runtime::ability::conformance`; this module owns
+//              transport request/response decoding only.
 //
 // What this module is
 // -------------------
@@ -29,28 +29,6 @@
 //   delegation machinery — those are unchanged in axon and the
 //   dispatcher delegates to them
 //
-// PR-1 staging: the wrappers' shapes
-// ----------------------------------
-// This commit lands all six wrapper functions with their full
-// argument/response types and deterministic-field population. The
-// handlers do not yet:
-//
-// - Verify caller URA against envelope signer (admission gate
-//   integration arrives in commit 7/9 alongside the realm-trust
-//   loader)
-// - Push frames down a `<self>.session` reverse channel for
-//   `federation.forward_invoke` (the PresenceRegistry lookup is
-//   wired in commit 6/9 when the dispatcher injects the registry
-//   into the service)
-// - Pump the `subscribe_directory` server-stream from
-//   `registry.subscribe_events()` (also commit 6/9)
-//
-// Until those wires connect, callers receive schema-compatible
-// responses with default values for the non-deterministic fields and
-// correctly-derived values for the deterministic fields. PR-4's
-// schema-compat matrix accepts that distribution by design (spec
-// §4.2: time-valued and freshly-minted-ID fields MAY differ).
-//
 // Wire surface contract
 // ---------------------
 // Each wrapper response is a JSON object encoded into
@@ -70,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::runtime::ability::conformance;
 use crate::services::advertised_agent_store::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
@@ -84,28 +63,29 @@ pub use easynet_axon::{
 
 /// `federation.join` — caller's claimed URA is authoritative; no
 /// hub-side `agent/a-X` minting (spec §5.1 URA scheme migration).
-pub const ABILITY_FEDERATION_JOIN: &str = "federation.join";
+pub const ABILITY_FEDERATION_JOIN: &str = conformance::ABILITY_FEDERATION_JOIN;
 
 /// `federation.advertise_agent` — records hosted-agent directory rows.
 /// PresenceRegistry still owns transport liveness; resolve joins the
 /// two so `/agent/<user>.<agent>` rows surface while online/offline
-/// is derived from the host device's live `<self>.session`.
-pub const ABILITY_FEDERATION_ADVERTISE_AGENT: &str = "federation.advertise_agent";
+/// is derived from the host device's live `session.open`.
+pub const ABILITY_FEDERATION_ADVERTISE_AGENT: &str =
+    conformance::ABILITY_FEDERATION_ADVERTISE_AGENT;
 
 /// `federation.heartbeat` — warns that liveness is now stream-derived
 /// and returns a typed no-op success so legacy callers see "active"
 /// without us re-implementing the unary heartbeat path.
-pub const ABILITY_FEDERATION_HEARTBEAT: &str = "federation.heartbeat";
+pub const ABILITY_FEDERATION_HEARTBEAT: &str = conformance::ABILITY_FEDERATION_HEARTBEAT;
 
 /// `federation.resolve` — projects both live PresenceRegistry URAs
 /// and hosted-agent rows whose host device is presently online.
-pub const ABILITY_FEDERATION_RESOLVE: &str = "federation.resolve";
+pub const ABILITY_FEDERATION_RESOLVE: &str = conformance::ABILITY_FEDERATION_RESOLVE;
 
 /// `namespace.resolve` — RFC-005 typed namespace resolver surface.
 /// This is a daemon ability reached through `axon.v1.Invocation`; it
 /// returns an Axon `ResolveAnswer` proto-JSON projection, not legacy
 /// directory rows.
-pub const ABILITY_NAMESPACE_RESOLVE: &str = "namespace.resolve";
+pub const ABILITY_NAMESPACE_RESOLVE: &str = conformance::ABILITY_NAMESPACE_RESOLVE;
 
 /// `namespace.proxy_resolve` — daemon-local typed namespace proxy.
 /// The backend supplies the peer hub set, but the daemon owns trust
@@ -113,21 +93,22 @@ pub const ABILITY_NAMESPACE_RESOLVE: &str = "namespace.resolve";
 /// `ResolveAnswer` aggregation. This is the clean replacement for
 /// backend product paths that previously consumed
 /// legacy federation directory rows.
-pub const ABILITY_NAMESPACE_PROXY_RESOLVE: &str = "namespace.proxy_resolve";
+pub const ABILITY_NAMESPACE_PROXY_RESOLVE: &str = conformance::ABILITY_NAMESPACE_PROXY_RESOLVE;
 
 /// `federation.subscribe_directory` — the only federation.* ability
 /// served via `InvokeStream` (server-stream); the others go through
 /// unary `Invoke`.
-pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY: &str = "federation.subscribe_directory";
+pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY: &str =
+    conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY;
 
 /// `federation.revoke` — operator-driven removal of an agent from
 /// the registry via `PresenceRegistry::force_revoke`.
-pub const ABILITY_FEDERATION_REVOKE: &str = "federation.revoke";
+pub const ABILITY_FEDERATION_REVOKE: &str = conformance::ABILITY_FEDERATION_REVOKE;
 
 /// `federation.forward_invoke` — push an inner envelope down a
-/// target agent's `<self>.session` reverse channel; correlate the
+/// target agent's `session.open` reverse channel; correlate the
 /// reply by call_id (same scheme MVP uses).
-pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = "federation.forward_invoke";
+pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = conformance::ABILITY_FEDERATION_FORWARD_INVOKE;
 
 /// `federation.resolve_key` — peer-hub lookup of an agent URA's
 /// Ed25519 public key, served from the local realm trust anchor.
@@ -139,7 +120,7 @@ pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = "federation.forward_invoke";
 /// local-realm caller. Wire shape: request `{agent_ura}` → response
 /// `{public_key_b64}`; `Status::not_found` when the URA is not in
 /// this hub's trust set.
-pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
+pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = conformance::ABILITY_FEDERATION_RESOLVE_KEY;
 
 /// `federation.discover` — cross-realm directory lookup
 /// (PR-N3 N3-4). Reads the daemon's `SharedFederatedDirectoryView`
@@ -151,7 +132,7 @@ pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 /// has the URA; never errors. The §2.4 `origin_realm` rewrite
 /// chokepoint runs on the write side (`DirectoryView::apply_frame`)
 /// so reads here are pure lookup.
-pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
+pub const ABILITY_FEDERATION_DISCOVER: &str = conformance::ABILITY_FEDERATION_DISCOVER;
 
 /// `federation.subscribe_directory_v2` — server-stream variant
 /// of `subscribe_directory` that emits `DirectoryEvent` frames
@@ -161,7 +142,8 @@ pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
 /// `PresenceEventDelta` shapes); the daemon serves both during
 /// the v1→v2 migration so subscriber-side rollout can ramp
 /// independently of hub upgrades.
-pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscribe_directory_v2";
+pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str =
+    conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
 
 /// `federation.list_user_devices` — peer-hub user-device
 /// projection (PR-N3 N3-5). Backend on hub A invokes this on
@@ -174,7 +156,8 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscrib
 /// with `origin_realm = None` (this hub speaks for its own
 /// realm; the calling backend stamps the merge boundary's
 /// realm at its end).
-pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_devices";
+pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str =
+    conformance::ABILITY_FEDERATION_LIST_USER_DEVICES;
 
 /// `federation.proxy_list_user_devices` — daemon-local proxy
 /// wrapper that fans `federation.list_user_devices` out across
@@ -183,18 +166,19 @@ pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_dev
 /// callers must be the local backend (or daemon loopback), and
 /// the daemon owns the cross-hub dial + signing path so the Go
 /// backend never grows a second transport stack.
-pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str = "federation.proxy_list_user_devices";
+pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str =
+    conformance::ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES;
 
 /// `federation.advertise_abilities` — backend self-registration
-/// path. Backend on boot publishes its own ability descriptors
-/// (`aggregate.list_abilities_catalog` etc.) so they show up in
-/// `federation.resolve(prefix=hub)`. PR-1 staging accepts the call
-/// as a no-op success — the directory is presence-driven via
-/// `<self>.session` membership, so the descriptors don't need
-/// separate persistence. Without the handler the backend's boot
-/// path errors `Unimplemented` and the realm directory is silently
-/// missing every backend-owned ability.
-pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
+/// path. Backend on boot may publish product-facing ability descriptors
+/// so they show up in `federation.resolve(prefix=hub)`. PR-1 staging
+/// accepts the call as a no-op success — the directory is presence-driven
+/// via `session.open` membership, so the descriptors don't need separate
+/// persistence. Without the handler the backend's boot path errors
+/// `Unimplemented` and the realm directory is silently missing every
+/// backend-owned ability.
+pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str =
+    conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES;
 
 /// `runtime.bootstrap_self_identity` — runtime-self handshake.
 ///
@@ -202,7 +186,12 @@ pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str = "federation.advertise_a
 /// provide a shadow handler for the contract; if the embedded Axon
 /// runtime lacks the runtime-admin implementation, callers must see
 /// that explicit missing-handler failure instead of a false ack.
-pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
+pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str =
+    conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY;
+
+/// `federation.status` — read-only boot-state projection backed by
+/// `runtime::federation_init::FederationStatusProbe`.
+pub const ABILITY_FEDERATION_STATUS: &str = conformance::ABILITY_FEDERATION_STATUS;
 
 /// All federation.* ability names in deterministic order.
 /// Iteration order is the order PR-4's schema-compat matrix files
@@ -222,7 +211,13 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_FORWARD_INVOKE,
     ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+    ABILITY_FEDERATION_STATUS,
 ];
+
+#[must_use]
+pub fn handle_status() -> serde_json::Value {
+    crate::runtime::federation_init::FederationStatusProbe::render()
+}
 
 // ─── federation.join ───────────────────────────────────────────────
 
@@ -242,6 +237,9 @@ pub struct JoinRequest {
     /// Realm the caller is joining; must match the daemon's
     /// configured realm.
     pub realm: String,
+    /// Lowercase hex-encoded Ed25519 public key the joining device
+    /// will use for descriptor-bound membership calls after genesis.
+    pub public_key_hex: String,
 }
 
 /// Response payload for `federation.join`.
@@ -259,7 +257,7 @@ pub struct JoinResponse {
 }
 
 /// Handle a `federation.join` invocation. Pure function — no
-/// PresenceRegistry interaction (the device's `<self>.session`
+/// PresenceRegistry interaction (the device's `session.open`
 /// stream is what populates the registry; `join` just acknowledges
 /// realm membership).
 #[must_use]
@@ -383,10 +381,9 @@ pub(crate) struct AdvertiseAbilitiesRequest {
     pub ability_summaries: Vec<crate::runtime::owner_projection::AbilityProjectionSummary>,
 }
 
-/// Response payload for `federation.advertise_abilities`. Matches
-/// the wire shape the backend's `aggregator.advertise_abilities`
-/// expects (`ack` + `count`). PR-1 staging always returns
-/// `ack = true`; future PRs may surface partial-failure counts.
+/// Response payload for `federation.advertise_abilities`. Matches the
+/// daemon-backed wrapper contract (`ack` + `count`). PR-1 staging always
+/// returns `ack = true`; future PRs may surface partial-failure counts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AdvertiseAbilitiesResponse {
     pub ack: bool,
@@ -1217,6 +1214,7 @@ mod tests {
             ABILITY_FEDERATION_ADVERTISE_ABILITIES,
             "federation.advertise_abilities"
         );
+        assert_eq!(ABILITY_FEDERATION_STATUS, "federation.status");
         assert_eq!(
             ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
             "runtime.bootstrap_self_identity"
@@ -1224,7 +1222,24 @@ mod tests {
         // `namespace.*` resolver surfaces live outside the federation ability
         // set. `runtime.bootstrap_self_identity` is namespaced under
         // `runtime.*`, so it also stays outside this list.
-        assert_eq!(FEDERATION_ABILITIES.len(), 13);
+        assert_eq!(FEDERATION_ABILITIES.len(), 14);
+        assert!(
+            !FEDERATION_ABILITIES.contains(&"aggregate.list_abilities_catalog"),
+            "backend/product aggregate alias must not be advertised as federation baseline"
+        );
+    }
+
+    #[test]
+    fn federation_ability_list_matches_hub_baseline_federation_plane() {
+        let expected: std::collections::BTreeSet<&str> =
+            conformance::HubBaseline::required_abilities()
+                .iter()
+                .filter(|ability| ability.domain == conformance::BaselineDomain::HubFederation)
+                .map(|ability| ability.name)
+                .collect();
+        let actual: std::collections::BTreeSet<&str> =
+            FEDERATION_ABILITIES.iter().copied().collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -1262,6 +1277,11 @@ mod tests {
         let req = JoinRequest {
             membership_ura: "easynet:///r/realm/device/n1".to_string(),
             realm: "realm".to_string(),
+            public_key_hex: hex::encode(
+                ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            ),
         };
         let resp = handle_join(&req);
         assert_eq!(resp.membership_ura, req.membership_ura);
@@ -2319,7 +2339,7 @@ mod tests {
         // DEC-N4 §2.1 acceptance: `causal_context_bytes` and
         // `forward_deadline_ms` are wire fields on
         // `ForwardInvokeRequest` that round-trip verbatim from the
-        // caller's `<self>.invoke_remote` initiator (or the CLI
+        // caller's `runtime.invoke_remote` initiator (or the CLI
         // bridge in `services::invocation_transport::federation_invoke`) through the
         // dispatcher's JSON deserialise step. The dispatcher
         // surfaces these to the target's session frame so PR-N5's

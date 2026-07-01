@@ -5,9 +5,9 @@
 // Description: In-process integration test that drives the full
 //              PR-N4 cross-realm user identity binding flow:
 //              realm A's daemon issues a `UserBindingToken` via
-//              `<self>.keyring.federate_user_identity_token`;
+//              `device.keyring.federate_user_identity_token`;
 //              realm B's daemon consumes it via
-//              `<self>.keyring.consume_federate_user_token`;
+//              `device.keyring.consume_federate_user_token`;
 //              realm B's `FederatedUserResolver` then surfaces
 //              the bound user identity.
 //

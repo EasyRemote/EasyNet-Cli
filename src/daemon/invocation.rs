@@ -16,7 +16,7 @@ use super::{DaemonError, Result};
 pub struct DaemonInvocation {
     caller_ura: String,
     callee_ura: String,
-    ability: String,
+    descriptor_ref: String,
     subject_ura: String,
     nonce: [u8; 16],
     causal_context: easynet_axon::pb::axon::v1::CausalContext,
@@ -35,10 +35,10 @@ impl DaemonInvocation {
     pub fn builder(
         caller_ura: impl Into<String>,
         callee_ura: impl Into<String>,
-        ability: impl Into<String>,
+        descriptor_ref: impl Into<String>,
         subject_ura: impl Into<String>,
     ) -> Result<DaemonInvocationBuilder> {
-        DaemonInvocationBuilder::new(caller_ura, callee_ura, ability, subject_ura)
+        DaemonInvocationBuilder::new(caller_ura, callee_ura, descriptor_ref, subject_ura)
     }
 
     /// Caller URA.
@@ -51,9 +51,9 @@ impl DaemonInvocation {
         &self.callee_ura
     }
 
-    /// Ability/function name.
-    pub fn ability(&self) -> &str {
-        &self.ability
+    /// Canonical descriptor-bound Ability ref (`ability_ura@version`).
+    pub fn descriptor_ref(&self) -> &str {
+        &self.descriptor_ref
     }
 
     /// Subject URA.
@@ -98,25 +98,17 @@ impl DaemonInvocation {
     }
 
     fn envelope(&self) -> easynet_axon::pb::axon::v1::Envelope {
-        use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, SubjectIdentity};
-        Envelope {
-            caller: Some(AgentIdentity {
-                ura: self.caller_ura.clone(),
-                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
-            }),
-            callee: Some(AgentIdentity {
-                ura: self.callee_ura.clone(),
-                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
-            }),
-            subject: Some(SubjectIdentity {
-                ura: self.subject_ura.clone(),
-                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
-            }),
-            invocation_nonce: self.nonce.to_vec(),
-            causal_context: Some(self.causal_context.clone()),
-            caller_signature: self.caller_signature.clone(),
-            ..Envelope::default()
-        }
+        let mut envelope = crate::services::invocation_transport::ProtoEnvelope::targeted(
+            self.caller_ura.clone(),
+            self.callee_ura.clone(),
+            self.subject_ura.clone(),
+        )
+        .expect("DaemonInvocation builder validates caller/callee/subject URAs")
+        .into_inner();
+        envelope.invocation_nonce = self.nonce.to_vec();
+        envelope.causal_context = Some(self.causal_context.clone());
+        envelope.caller_signature = self.caller_signature.clone();
+        envelope
     }
 
     fn content_envelope(&self) -> easynet_axon::pb::axon::v1::ContentEnvelope {
@@ -129,11 +121,12 @@ impl DaemonInvocation {
 
     pub(crate) fn into_request(self) -> Result<easynet_axon::pb::axon::v1::InvokeRequest> {
         use easynet_axon::pb::axon::v1::InvokeRequest;
+        let function_name = self.descriptor_ref.clone();
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
         Ok(InvokeRequest {
             envelope: Some(envelope),
-            function_name: self.ability,
+            function_name,
             arguments: self.args,
             content_type: self.content_type,
             metadata: self.metadata,
@@ -147,11 +140,12 @@ impl DaemonInvocation {
         self,
     ) -> Result<easynet_axon::pb::axon::v1::InvokeServerStreamRequest> {
         use easynet_axon::pb::axon::v1::InvokeServerStreamRequest;
+        let function_name = self.descriptor_ref.clone();
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
         Ok(InvokeServerStreamRequest {
             envelope: Some(envelope),
-            function_name: self.ability,
+            function_name,
             arguments: self.args,
             content_type: self.content_type,
             metadata: self.metadata,
@@ -173,6 +167,7 @@ impl DaemonInvocation {
             ));
         }
         validate_bidi_streams(&streams)?;
+        let ability_name = self.descriptor_ref.clone();
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
         let mac = envelope
@@ -186,7 +181,7 @@ impl DaemonInvocation {
             payload: Some(invoke_bidi_up::Payload::EnvelopeOpen(EnvelopeOpen {
                 envelope: Some(envelope),
                 target: Some(InvocationTarget {
-                    ability_name: self.ability,
+                    ability_name,
                     ..InvocationTarget::default()
                 }),
                 initial_args: self.args,
@@ -209,7 +204,7 @@ impl DaemonInvocation {
 pub struct DaemonInvocationBuilder {
     caller_ura: String,
     callee_ura: String,
-    ability: String,
+    descriptor_ref: String,
     subject_ura: String,
     nonce: [u8; 16],
     causal_context: easynet_axon::pb::axon::v1::CausalContext,
@@ -225,22 +220,34 @@ impl DaemonInvocationBuilder {
     fn new(
         caller_ura: impl Into<String>,
         callee_ura: impl Into<String>,
-        ability: impl Into<String>,
+        descriptor_ref: impl Into<String>,
         subject_ura: impl Into<String>,
     ) -> Result<Self> {
         let caller_ura = checked_ura(caller_ura.into(), "caller_ura")?;
         let callee_ura = checked_ura(callee_ura.into(), "callee_ura")?;
         let subject_ura = checked_ura(subject_ura.into(), "subject_ura")?;
-        let ability = ability.into();
-        if ability.trim().is_empty() {
+        crate::services::invocation_transport::invocation_wire::try_entity_ref(subject_ura.clone())
+            .map_err(|err| {
+                DaemonError::InvalidInvocation(format!(
+                    "subject_ura must be descriptor-bound: {err}"
+                ))
+            })?;
+        let descriptor_ref = descriptor_ref.into();
+        if descriptor_ref.trim().is_empty() {
             return Err(DaemonError::InvalidInvocation(
-                "ability must not be empty".to_string(),
+                "descriptor_ref must not be empty".to_string(),
             ));
         }
+        let descriptor_ref =
+            crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+                &callee_ura,
+                &descriptor_ref,
+            )
+            .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
         Ok(Self {
             caller_ura,
             callee_ura,
-            ability: ability.trim().to_string(),
+            descriptor_ref,
             subject_ura,
             nonce: easynet_axon::invocation::fresh_nonce(),
             causal_context: empty_causal_context(),
@@ -330,7 +337,7 @@ impl DaemonInvocationBuilder {
         DaemonInvocation {
             caller_ura: self.caller_ura,
             callee_ura: self.callee_ura,
-            ability: self.ability,
+            descriptor_ref: self.descriptor_ref,
             subject_ura: self.subject_ura,
             nonce: self.nonce,
             causal_context: self.causal_context,
@@ -398,13 +405,22 @@ fn empty_causal_context() -> easynet_axon::pb::axon::v1::CausalContext {
 mod tests {
     use super::*;
 
+    fn descriptor_ref(owner_ura: &str, public_name: &str, version: &str) -> String {
+        format!(
+            "{}@{}",
+            crate::ura::owner_ability_ura(owner_ura, public_name).unwrap(),
+            version
+        )
+    }
+
     #[test]
     fn invocation_builder_keeps_complete_tuple_inspectable() {
         let hub = crate::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
         let invocation = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
             &hub,
-            "observe.health",
+            &observe_ref,
             "easynet:///r/acme/device/dev-a",
         )
         .unwrap()
@@ -415,7 +431,7 @@ mod tests {
 
         assert_eq!(invocation.caller_ura(), "easynet:///r/acme/device/dev-a");
         assert_eq!(invocation.callee_ura(), hub.as_str());
-        assert_eq!(invocation.ability(), "observe.health");
+        assert_eq!(invocation.descriptor_ref(), observe_ref);
         assert_eq!(invocation.subject_ura(), "easynet:///r/acme/device/dev-a");
         assert_eq!(invocation.nonce(), [0x42; 16]);
         assert_eq!(invocation.content_type(), "application/json");
@@ -425,10 +441,11 @@ mod tests {
     #[test]
     fn invocation_builder_emits_complete_stream_request() {
         let hub = crate::ura::hub_ura("acme");
+        let watch_ref = descriptor_ref(&hub, "device.watch.health", "2.4.0");
         let request = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
             &hub,
-            "device.watch.health",
+            &watch_ref,
             "easynet:///r/acme/device/dev-a",
         )
         .unwrap()
@@ -442,7 +459,7 @@ mod tests {
         let envelope = request
             .envelope
             .expect("stream request must carry envelope");
-        assert_eq!(request.function_name, "device.watch.health");
+        assert_eq!(request.function_name, watch_ref);
         assert_eq!(request.content_type, "application/json");
         assert_eq!(request.arguments, br#"{"interval_ms":1000}"#);
         assert_eq!(envelope.invocation_nonce, vec![0x24; 16]);
@@ -467,11 +484,12 @@ mod tests {
         let mut metadata = HashMap::new();
         metadata.insert("x-easynet-delegation".to_string(), "producer".to_string());
         let hub = crate::ura::hub_ura("acme");
+        let pty_ref = descriptor_ref(&hub, "device.pty.attach", "2.4.0");
 
         let frame = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
             &hub,
-            "device.pty.attach",
+            &pty_ref,
             "easynet:///r/acme/device/dev-a",
         )
         .unwrap()
@@ -505,10 +523,7 @@ mod tests {
             envelope.caller.expect("caller required").ura,
             "easynet:///r/acme/device/dev-a"
         );
-        assert_eq!(
-            open.target.expect("target required").ability_name,
-            "device.pty.attach"
-        );
+        assert_eq!(open.target.expect("target required").ability_name, pty_ref);
         assert_eq!(open.initial_args, br#"{"session_id":"pty-1"}"#);
         assert_eq!(open.args_content_type, "application/json");
         assert_eq!(open.metadata["x-easynet-delegation"], "producer");
@@ -526,10 +541,11 @@ mod tests {
     fn invocation_builder_rejects_ambiguous_bidi_stream_zero() {
         use easynet_axon::pb::axon::v1::StreamDescriptor;
         let hub = crate::ura::hub_ura("acme");
+        let pty_ref = descriptor_ref(&hub, "device.pty.attach", "2.4.0");
         let err = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
             &hub,
-            "device.pty.attach",
+            &pty_ref,
             "easynet:///r/acme/device/dev-a",
         )
         .unwrap()
@@ -556,7 +572,21 @@ mod tests {
     #[test]
     fn invocation_builder_rejects_invalid_ura() {
         let hub = crate::ura::hub_ura("acme");
-        let err = DaemonInvocation::builder("not-a-ura", &hub, "x", &hub).unwrap_err();
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let err = DaemonInvocation::builder("not-a-ura", &hub, observe_ref, &hub).unwrap_err();
         assert!(format!("{err}").contains("caller_ura"));
+    }
+
+    #[test]
+    fn invocation_builder_rejects_unversioned_ability() {
+        let hub = crate::ura::hub_ura("acme");
+        let err = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            "observe.health",
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("descriptor ref"));
     }
 }

@@ -18,6 +18,7 @@ use crate::persistence::owner_projections::{
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 
 pub(crate) const OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT: usize = 64;
+#[cfg(feature = "axon-pb")]
 const OWNER_PROJECTION_LEASE_TTL_MS: i64 = 60_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -57,6 +58,42 @@ impl AbilityCallableSummary {
     }
 }
 
+/// Compact owner-projection row published via `federation.advertise_abilities`
+/// and read back via `federation.resolve`.
+///
+/// REGISTRY/INDEX METADATA — intentionally outside the Axon wire contract
+/// (refactor SPEC §15.1 item 2; owner ruling 2026-06-29).
+///
+/// The first ten fields mirror the Axon `AbilityProjectionSummary` proto
+/// (`EasyNet-Axon/core/proto/axon/v1/namespace.proto`). The eleventh field,
+/// `callable_summary` (`public_name` / `description` / `ability_class` /
+/// input fields / flags), is **registry/index presentation metadata that is
+/// deliberately NOT part of the Axon proto** and must stay that way.
+///
+/// DECISION (do not relitigate): `callable_summary` is NOT promoted into the
+/// proto. The Axon wire contract carries only the canonical *execution*
+/// contract — invocation, authority, receipt, causal context. Discovery
+/// *presentation* data is registry/index metadata. Binding it into the proto
+/// would couple discovery presentation to wire compatibility (every UI label
+/// tweak becomes a wire-breaking change), which RFC-005 §4.2 forbids when it
+/// says the projection summary "MUST NOT carry implementation-private fields".
+///
+/// It is load-bearing today and travels as a tolerated serde extension, NOT a
+/// proto field:
+///   * EMITTED: `advertise.rs` serialises `ability_summaries` (this struct,
+///     `callable_summary` included) via `serde_json::to_value(&args)` onto the
+///     `federation.advertise_abilities` invocation envelope.
+///   * CONSUMED CROSS-PROCESS: a peer daemon's discover ladder reads
+///     `summary.callable_summary.description` in
+///     `runtime::agents::discover_ability` after a `federation.resolve`
+///     round-trip — written by daemon A, read by daemon B.
+///   * TOLERATED BY NON-Rust CONSUMERS: it rides as `serde_json` with
+///     `#[serde(default)]`; the Go backend decodes with `DiscardUnknown`, so
+///     the proto's absence of the field is correct and harmless, not a bug.
+///
+/// Guarded by `callable_summary_survives_projection_wire_roundtrip`. Do NOT
+/// add this (or any other discovery-presentation field) to the Axon proto;
+/// keep presentation metadata in this registry/index layer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AbilityProjectionSummary {
     pub ability_ura: String,
@@ -69,6 +106,8 @@ pub(crate) struct AbilityProjectionSummary {
     pub policy_ref: String,
     pub route_summary_ref: Option<String>,
     pub tags: Vec<String>,
+    /// Proto-unacknowledged daemon extension — see the struct-level
+    /// CONTRACT-DRIFT INVARIANT above before touching this field.
     #[serde(default)]
     pub callable_summary: AbilityCallableSummary,
 }
@@ -247,6 +286,7 @@ fn heartbeat_refresh_owner_uras_from_file(file: &OwnerProjectionCursorFile) -> V
 /// Lease expiry `OWNER_PROJECTION_LEASE_TTL_MS` after `now_ms`. Shared by
 /// projection publication and `federation.heartbeat` lease refresh so both
 /// renew to the same TTL and the lease window cannot drift between them.
+#[cfg(feature = "axon-pb")]
 pub(crate) fn lease_expiry_from_now(now_ms: i64) -> i64 {
     now_ms.saturating_add(OWNER_PROJECTION_LEASE_TTL_MS)
 }
@@ -275,14 +315,8 @@ pub(crate) fn summary_from_descriptor(
     })?;
     let public_name = descriptor.public_name();
     let (namespace, local_name) = split_public_name(&public_name);
-    let descriptor_revision = hash_json_prefixed(
-        &serde_json::to_value(descriptor)
-            .map_err(|e| format!("serialize descriptor {} failed: {e}", descriptor.name))?,
-    );
-    let schema_hash = Some(hash_json_prefixed(
-        &serde_json::to_value(&descriptor.schema_summary)
-            .map_err(|e| format!("serialize schema summary {} failed: {e}", descriptor.name))?,
-    ));
+    let descriptor_revision = descriptor.descriptor_hash_prefixed();
+    let schema_hash = Some(descriptor.schema_hash_prefixed());
     let mut tags = vec![format!("class:{}", descriptor.ability_class().as_str())];
     if !descriptor.source.trim().is_empty() {
         tags.push(format!("source:{}", bounded_tag_value(&descriptor.source)));
@@ -589,10 +623,6 @@ fn resource_owner_agent_parts(owner: &str) -> Option<(String, String)> {
     Some((user_id.to_string(), agent_id.to_string()))
 }
 
-fn hash_json_prefixed(value: &Value) -> String {
-    format!("sha256:{}", hash_value_hex(value))
-}
-
 fn hash_value_hex(value: &Value) -> String {
     hash_bytes_hex(&serde_json::to_vec(value).expect("serde_json::Value serialization cannot fail"))
 }
@@ -885,6 +915,74 @@ mod tests {
         assert_eq!(owners[0], "m");
         assert!(owners.iter().all(|owner| !owner.trim().is_empty()));
         assert!(owners.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    /// Guards the SPEC §15.1-2 contract-drift invariant documented on
+    /// `AbilityProjectionSummary`: `callable_summary` is wire-carried (it
+    /// must survive the serde JSON round-trip the federation envelope uses),
+    /// AND a payload that omits it — as the Go backend or a pre-extension
+    /// peer emits — must still decode via `#[serde(default)]`. If a future
+    /// change drops `callable_summary` from the wire shape or makes it
+    /// non-defaultable, exactly one of these assertions breaks, surfacing
+    /// the drift instead of silently regressing the cross-process read at
+    /// `runtime::agents::discover_ability` (`summary.callable_summary`).
+    #[test]
+    fn callable_summary_survives_projection_wire_roundtrip() {
+        let summary = AbilityProjectionSummary {
+            ability_ura: "easynet:///r/acme/ability/device.01DEV.fs.read".into(),
+            owner_ura: "easynet:///r/acme/device/01DEV".into(),
+            namespace: "fs".into(),
+            local_name: "read".into(),
+            descriptor_revision: "sha256:descriptor".into(),
+            schema_ref: None,
+            schema_hash: None,
+            policy_ref: "visibility:PUBLIC".into(),
+            route_summary_ref: None,
+            tags: Vec::new(),
+            callable_summary: AbilityCallableSummary {
+                public_name: "fs.read".into(),
+                description: "read a file".into(),
+                ability_class: "query".into(),
+                ..AbilityCallableSummary::default()
+            },
+        };
+
+        // 1. Wire-carried: a full serialize -> deserialize preserves the
+        //    daemon extension across the federation envelope shape.
+        let wire = serde_json::to_value(&summary).expect("summary serializes");
+        assert_eq!(
+            wire.get("callable_summary")
+                .and_then(|cs| cs.get("description"))
+                .and_then(Value::as_str),
+            Some("read a file"),
+            "callable_summary must be present on the projection wire shape"
+        );
+        let decoded: AbilityProjectionSummary =
+            serde_json::from_value(wire).expect("summary round-trips");
+        assert_eq!(decoded, summary);
+
+        // 2. Backward-compatible: a peer/backend payload that omits
+        //    callable_summary still decodes (the field is `#[serde(default)]`),
+        //    so the proto-side absence never breaks deserialization.
+        let proto_shaped = json!({
+            "ability_ura": "easynet:///r/acme/ability/device.01DEV.fs.read",
+            "owner_ura": "easynet:///r/acme/device/01DEV",
+            "namespace": "fs",
+            "local_name": "read",
+            "descriptor_revision": "sha256:descriptor",
+            "schema_ref": null,
+            "schema_hash": null,
+            "policy_ref": "visibility:PUBLIC",
+            "route_summary_ref": null,
+            "tags": [],
+        });
+        let without_extension: AbilityProjectionSummary =
+            serde_json::from_value(proto_shaped).expect("proto-shaped payload decodes");
+        assert_eq!(
+            without_extension.callable_summary,
+            AbilityCallableSummary::default(),
+            "omitted callable_summary must default, not fail to parse"
+        );
     }
 
     fn cursor(

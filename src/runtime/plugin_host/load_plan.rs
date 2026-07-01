@@ -213,3 +213,27 @@ fn current_platform() -> &'static str {
         "unknown"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_builtin_loads_in_linux_docker_profile() {
+        let index = PluginPackageIndex::builtin().expect("builtin package index must load");
+        let plan = PluginLoadPlanner::new("linux").plan(&index);
+        let entry = plan
+            .entries()
+            .iter()
+            .find(|entry| entry.package().id().as_str() == "easynet.remote_desktop")
+            .expect("remote desktop builtin package must be indexed");
+
+        assert_eq!(
+            entry.status(),
+            &PluginLoadStatus::Loaded,
+            "Linux Docker daemon builds compile remote-desktop by default, so the manifest \
+             must allow the builtin package to register its baseline abilities"
+        );
+    }
+}

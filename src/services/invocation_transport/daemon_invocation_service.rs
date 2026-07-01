@@ -14,36 +14,18 @@
 // struct holds them by `Arc` so individual RPC method calls clone
 // cheaply.
 //
-// What this commit lands
-// ----------------------
-// Commit 6/9: dispatcher wiring. The service now holds an
-// `Arc<PresenceRegistry>` injected at construction; the three RPC
-// methods route by `InvokeRequest.function_name`:
+// Dispatcher shape
+// ----------------
+// The tonic shell verifies transport admission, applies quota policy,
+// and then delegates to small dispatcher objects:
 //
-//   - `Invoke`:   federation.{join, advertise_agent, heartbeat,
-//                 resolve, revoke, forward_invoke} → federation
-//                 wrappers; anything else returns Unimplemented
-//                 with a follow-up commit (admission gate facade,
-//                 AxonAbilityCatalog forwarding) note
-//   - `InvokeStream`: `federation.subscribe_directory` →
-//                 initial-snapshot frame from
-//                 `build_subscribe_directory_initial`; the
-//                 broadcast pump for incremental events lands in
-//                 commit 7/9 alongside the AxonAbilityCatalog
-//                 stream forward path
-//   - `InvokeBidi`: still returns Unimplemented; PR-2 implements
-//                 `<self>.session` accept and PR-3 implements
-//                 `<self>.invoke_remote`
-//
-// What the dispatcher does NOT yet do
-// -----------------------------------
-// - Run the admission gate (commit 7/9, alongside the realm-trust
-//   loader and `easynet-axon` admission helpers integration)
-// - Forward unmatched abilities to AxonAbilityCatalog (commit 7/9)
-// - Push frames down `<self>.session` reverse channels for
-//   `federation.forward_invoke` (commit 8/9)
-// - Spawn the broadcast pump for `subscribe_directory` incremental
-//   events (commit 8/9)
+//   - `UnaryDispatcher` handles Hub/Federation control-plane arms,
+//     identity writes, runtime-admin handshakes, and the
+//     resolve-first LocalRuntime catch-all.
+//   - `StreamDispatcher` handles server-stream control-plane arms
+//     and stream-mode LocalRuntime dispatch.
+//   - `BidiDispatcher` handles session, remote dispatch, and
+//     bidi-mode LocalRuntime dispatch.
 //
 // Result content type
 // -------------------
@@ -78,7 +60,7 @@
 //   * `Status::failed_precondition` — the request is well-formed
 //     and the caller has admission, but THIS daemon is not
 //     configured to serve it. Examples: `with_pending(...)` was
-//     not called at boot so `<self>.invoke_remote` has no
+//     not called at boot so `runtime.invoke_remote` has no
 //     correlation map; `LocalRuntime` is not wired so a self-
 //     dispatch ability cannot run; the daemon was constructed
 //     without an `InvocationLedger`. The caller can retry the
@@ -121,6 +103,10 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::runtime::ability::conformance::BaselineCallMode;
+use crate::runtime::agents::invocation_history_ability::{
+    record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
+};
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::invocation_transport::admission_facade::AdmissionFacade;
@@ -136,16 +122,16 @@ use crate::services::invocation_transport::federation_wrappers::{
     ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
     ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
-    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_STATUS,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE,
 };
-use crate::services::invocation_transport::invocation_wire::BoxedDownStream;
+use crate::services::invocation_transport::invocation_wire::{wrap_json_response, BoxedDownStream};
 use crate::services::invocation_transport::ledger_projection::build_unary_ledger_record;
-use crate::services::invocation_transport::list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
+use crate::services::invocation_transport::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::services::invocation_transport::quota_meter::quota_metered_ability_for_request;
-use crate::services::invocation_transport::register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
-use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;
+use crate::services::invocation_transport::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+use crate::services::invocation_transport::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::invocation_transport::stream_dispatcher::StreamDispatcher;
 use crate::services::invocation_transport::target_gate::TargetGate;
@@ -157,6 +143,160 @@ use crate::services::federation_directory::now_unix_ms;
 use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
+
+/// Production unary daemon Invocation routes served by the exact-match arms
+/// in [`Invocation::invoke`]. The dispatcher and conformance gate both use
+/// this enum, so the route list has one typed owner instead of parallel string
+/// lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaemonUnaryRoute {
+    FederationJoin,
+    FederationAdvertiseAgent,
+    FederationAdvertiseAbilities,
+    FederationHeartbeat,
+    FederationStatus,
+    FederationResolve,
+    NamespaceResolve,
+    FederationResolveKey,
+    FederationDiscover,
+    FederationListUserDevices,
+    FederationProxyListUserDevices,
+    NamespaceProxyResolve,
+    FederationRevoke,
+    FederationForwardInvoke,
+    IdentityRegisterPubkey,
+    IdentityRevokeUserPubkey,
+    IdentityListUserPubkeys,
+}
+
+impl DaemonUnaryRoute {
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::FederationJoin,
+        Self::FederationAdvertiseAgent,
+        Self::FederationAdvertiseAbilities,
+        Self::FederationHeartbeat,
+        Self::FederationStatus,
+        Self::FederationResolve,
+        Self::NamespaceResolve,
+        Self::FederationResolveKey,
+        Self::FederationDiscover,
+        Self::FederationListUserDevices,
+        Self::FederationProxyListUserDevices,
+        Self::NamespaceProxyResolve,
+        Self::FederationRevoke,
+        Self::FederationForwardInvoke,
+        Self::IdentityRegisterPubkey,
+        Self::IdentityRevokeUserPubkey,
+        Self::IdentityListUserPubkeys,
+    ];
+
+    #[must_use]
+    pub(crate) fn from_function(function: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|route| route.name() == function)
+    }
+
+    #[must_use]
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::FederationJoin => ABILITY_FEDERATION_JOIN,
+            Self::FederationAdvertiseAgent => ABILITY_FEDERATION_ADVERTISE_AGENT,
+            Self::FederationAdvertiseAbilities => ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            Self::FederationHeartbeat => ABILITY_FEDERATION_HEARTBEAT,
+            Self::FederationStatus => ABILITY_FEDERATION_STATUS,
+            Self::FederationResolve => ABILITY_FEDERATION_RESOLVE,
+            Self::NamespaceResolve => ABILITY_NAMESPACE_RESOLVE,
+            Self::FederationResolveKey => ABILITY_FEDERATION_RESOLVE_KEY,
+            Self::FederationDiscover => ABILITY_FEDERATION_DISCOVER,
+            Self::FederationListUserDevices => ABILITY_FEDERATION_LIST_USER_DEVICES,
+            Self::FederationProxyListUserDevices => ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+            Self::NamespaceProxyResolve => ABILITY_NAMESPACE_PROXY_RESOLVE,
+            Self::FederationRevoke => ABILITY_FEDERATION_REVOKE,
+            Self::FederationForwardInvoke => ABILITY_FEDERATION_FORWARD_INVOKE,
+            Self::IdentityRegisterPubkey => ABILITY_IDENTITY_REGISTER_PUBKEY,
+            Self::IdentityRevokeUserPubkey => ABILITY_IDENTITY_REVOKE_USER_PUBKEY,
+            Self::IdentityListUserPubkeys => ABILITY_IDENTITY_LIST_USER_PUBKEYS,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn call_mode(self) -> BaselineCallMode {
+        BaselineCallMode::Rpc
+    }
+}
+
+pub(crate) const DAEMON_INVOCATION_UNARY_ROUTES: &[DaemonUnaryRoute] = DaemonUnaryRoute::ALL;
+
+/// Production server-stream daemon Invocation routes served by the exact-match
+/// arms in [`Invocation::invoke_stream`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaemonStreamRoute {
+    FederationSubscribeDirectory,
+    FederationSubscribeDirectoryV2,
+}
+
+impl DaemonStreamRoute {
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::FederationSubscribeDirectory,
+        Self::FederationSubscribeDirectoryV2,
+    ];
+
+    #[must_use]
+    pub(crate) fn from_function(function: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|route| route.name() == function)
+    }
+
+    #[must_use]
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::FederationSubscribeDirectory => ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+            Self::FederationSubscribeDirectoryV2 => ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn call_mode(self) -> BaselineCallMode {
+        BaselineCallMode::Stream
+    }
+}
+
+pub(crate) const DAEMON_INVOCATION_STREAM_ROUTES: &[DaemonStreamRoute] = DaemonStreamRoute::ALL;
+
+fn dispatch_function_name_for_route_table(
+    function_name: &str,
+    envelope: Option<&easynet_axon::pb::axon::v1::Envelope>,
+) -> String {
+    descriptor_ref_public_name_for_callee(function_name, envelope)
+        .unwrap_or_else(|| function_name.to_string())
+}
+
+fn descriptor_ref_public_name_for_callee(
+    function_name: &str,
+    envelope: Option<&easynet_axon::pb::axon::v1::Envelope>,
+) -> Option<String> {
+    let callee_ura = envelope?
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.trim())
+        .filter(|callee| !callee.is_empty())?;
+    let descriptor_ref =
+        easynet_axon::invocation::canonical_ability_descriptor_ref(function_name).ok()?;
+    let ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+        &descriptor_ref,
+    )
+    .ok()?;
+    let selector = crate::ura::AbilitySelector::parse(&ability_ura).ok()?;
+    if selector.owner_ura() != callee_ura {
+        return None;
+    }
+    Some(selector.public_name().to_string())
+}
+
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{
     InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
@@ -169,11 +309,10 @@ use easynet_axon::pb::axon::v1::{
 ///
 /// - `presence` — the `PresenceRegistry` consulted by federation
 ///   wrappers (resolve / forward_invoke / revoke / heartbeat /
-///   subscribe_directory) and by the future `<self>.session` accept
+///   subscribe_directory) and by the future `session.open` accept
 ///   path in PR-2
-/// - `admission` — the `AdmissionFacade` consulted at the start of
-///   every RPC method, before any dispatch. Rejects callers whose
-///   URA is not in the realm trust anchor (per spec §5)
+/// - `admission` — the transport policy facade consulted at the start
+///   of every RPC method, before any dispatch.
 ///
 /// Future-shape (commit 8/9 onward) will add:
 /// `ability_dispatch: Arc<AxonAbilityCatalog>` for the unmatched-
@@ -186,9 +325,8 @@ use easynet_axon::pb::axon::v1::{
 /// `Option<String>`; clone is cheap.
 #[derive(Clone)]
 pub struct DaemonInvocationService {
-    /// Admission gate consulted at the start of every RPC method,
-    /// before any plane is touched. Rejects callers whose URA is not
-    /// in the realm trust anchor (per spec §5).
+    /// Transport policy gate consulted at the start of every RPC method,
+    /// before any plane is touched.
     admission: AdmissionFacade,
     /// Directory read plane: presence, hosted-agent rows, ability
     /// catalogs, federated directory view. See [`DirectoryPlane`].
@@ -213,7 +351,7 @@ impl std::fmt::Debug for DaemonInvocationService {
             .field("presence", &self.directory.presence)
             .field("admission", &self.admission)
             .field("pending", &self.sessions.pending)
-            .field("register_pubkey", &self.identity.register_pubkey)
+            .field("runtime_trust", &self.identity.runtime_trust)
             .field("session_realm", &self.identity.session_realm)
             .field(
                 "hub_signing_seed",
@@ -257,15 +395,15 @@ impl std::fmt::Debug for DaemonInvocationService {
 
 impl DaemonInvocationService {
     /// Construct a service against the supplied presence registry
-    /// and admission facade. Production callers wire one registry
+    /// and transport policy facade. Production callers wire one registry
     /// per daemon process and share it via `Arc` between the
-    /// service, the `<self>.session` accept loop (PR-2), and any
-    /// audit-log subscriber. The admission facade is constructed
+    /// service, the `session.open` accept loop (PR-2), and any
+    /// audit-log subscriber. The policy facade is constructed
     /// from `RealmTrustAnchor::load_or_empty(...)` at daemon boot.
     ///
-    /// `<self>.invoke_remote` requires an additional
+    /// `runtime.invoke_remote` requires an additional
     /// `PendingDispatchMap`; use `with_pending(...)` to attach one.
-    /// Daemons constructed without it reject `<self>.invoke_remote`
+    /// Daemons constructed without it reject `runtime.invoke_remote`
     /// calls as not-configured rather than crashing.
     #[must_use]
     pub fn new(presence: Arc<PresenceRegistry>, admission: AdmissionFacade) -> Self {
@@ -297,7 +435,7 @@ impl DaemonInvocationService {
                 device_trust_sync: None,
             },
             identity: IdentityPlane {
-                register_pubkey: None,
+                runtime_trust: None,
                 session_realm: None,
             },
             runtime: RuntimePlane {
@@ -306,6 +444,23 @@ impl DaemonInvocationService {
                 ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
             },
         }
+    }
+
+    /// Attach the hosted-agent and owner-projection read models used
+    /// by federation directory abilities.
+    ///
+    /// Registry-built `<agent>.discover` handlers can hold the same
+    /// `Arc` stores, so `federation.advertise_*` writes and discover's
+    /// user/public tiers observe one daemon-owned directory state.
+    #[must_use]
+    pub fn with_directory_read_models(
+        mut self,
+        advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
+        ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
+    ) -> Self {
+        self.directory.advertised_agents = advertised_agents;
+        self.directory.ability_catalog = ability_catalog;
+        self
     }
 
     fn record_unary_invocation(
@@ -344,6 +499,42 @@ impl DaemonInvocationService {
         }
     }
 
+    /// Side-effect-free `invocation.record.get`: fetch one ledger record by
+    /// `request_id` off the in-process ledger handle and return it as JSON.
+    ///
+    /// Services the out-of-process CLI's observe-my-own-request read without
+    /// dispatching a second invocation (which would corrupt the audit trail)
+    /// and without opening the daemon-owned redb from a second process (which
+    /// redb forbids via its exclusive lock). The caller (`skip_ledger_record`)
+    /// guarantees this writes no ledger row. A `null` record is a valid
+    /// "not yet projected" answer, not an error.
+    fn dispatch_invocation_record_get(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        #[derive(serde::Deserialize)]
+        struct RecordGetRequest {
+            request_id: String,
+        }
+        let request: RecordGetRequest = serde_json::from_slice(arguments).map_err(|err| {
+            Status::invalid_argument(format!(
+                "invocation.record.get: failed to decode JSON arguments: {err}"
+            ))
+        })?;
+        let Some(ledger) = self.runtime.invocation_ledger.as_ref() else {
+            return Err(Status::failed_precondition(
+                "invocation.record.get: daemon has no invocation ledger wired",
+            ));
+        };
+        let record = record_by_request_id(ledger, &request.request_id).map_err(|err| match err
+            .to_string()
+        {
+            msg if msg.contains("request_id must not be empty") => Status::invalid_argument(msg),
+            msg => Status::internal(msg),
+        })?;
+        wrap_json_response(&serde_json::json!({ "record": record }))
+    }
+
     /// Resolve-first gate shared by the unary/stream/bidi dispatch
     /// paths. Cheap per-call construction: every plane is `Arc`-shaped.
     pub(crate) fn target_gate(&self) -> TargetGate {
@@ -360,7 +551,9 @@ impl DaemonInvocationService {
     /// per-call construction: planes and gate are `Arc`-shaped.
     fn stream_dispatcher(&self) -> StreamDispatcher {
         StreamDispatcher::new(
+            self.admission.clone(),
             self.directory.clone(),
+            self.sessions.clone(),
             self.runtime.clone(),
             self.target_gate(),
         )
@@ -394,12 +587,12 @@ impl DaemonInvocationService {
         })
     }
 
-    /// Attach a `PendingDispatchMap` for `<self>.invoke_remote`
+    /// Attach a `PendingDispatchMap` for `runtime.invoke_remote`
     /// dispatch correlation. Builder-style so existing
     /// `DaemonInvocationService::new(presence, admission)` callers
     /// stay source-compatible.
     ///
-    /// PR-3 ownership (this commit). PR-2's `<self>.session`
+    /// PR-3 ownership (this commit). PR-2's `session.open`
     /// accept handler will share the same `Arc<PendingDispatchMap>`
     /// to call `complete(call_id, ...)` when target devices send
     /// `Result` frames back up their session streams.
@@ -454,14 +647,39 @@ impl DaemonInvocationService {
 
     #[must_use]
     pub fn with_pending_stream(mut self, pending: Arc<PendingStreamDispatchMap>) -> Self {
+        let watcher_pending = Arc::clone(&pending);
+        let watcher_presence = Arc::clone(&self.directory.presence);
+        tokio::spawn(async move {
+            use crate::services::presence_registry::PresenceEvent;
+            let mut events = watcher_presence.subscribe_events();
+            loop {
+                match events.recv().await {
+                    Ok(PresenceEvent::Offline { ura, reason }) => {
+                        let cancelled = watcher_pending.cancel_for(&ura, "target_offline");
+                        if cancelled > 0 {
+                            crate::op_event!(
+                                component = daemon_invocation,
+                                kind = presence_offline_cancel_stream,
+                                target_ura = ura,
+                                reason = reason,
+                                cancelled = cancelled,
+                            );
+                        }
+                    }
+                    Ok(PresenceEvent::Online { .. }) => {}
+                    Err(_) => return,
+                }
+            }
+        });
         self.sessions.pending_stream = Some(pending);
         self
     }
 
-    /// Attach the `<self>.register_device_pubkey` handler context
-    /// (PR-7 commit 5/N). The same `SharedTrustAnchor` cell is
-    /// also threaded into the `AdmissionFacade` so a successful
-    /// register-pubkey publish is visible to the next admission
+    /// Attach the RuntimeTrust context used by
+    /// identity.register_pubkey, identity.list_user_pubkeys, and
+    /// identity.revoke_user_pubkey. The same `SharedTrustAnchor`
+    /// cell is also threaded into the `AdmissionFacade` so a
+    /// successful trust publish is visible to the next admission
     /// without restarting the daemon.
     #[must_use]
     pub fn with_register_pubkey(
@@ -470,7 +688,7 @@ impl DaemonInvocationService {
         trust_anchor_path: impl Into<PathBuf>,
         cell: SharedTrustAnchor,
     ) -> Self {
-        self.identity.register_pubkey = Some(RegisterPubkeyContext {
+        self.identity.runtime_trust = Some(RegisterPubkeyContext {
             daemon_realm: daemon_realm.into(),
             trust_anchor_path: trust_anchor_path.into(),
             cell,
@@ -478,7 +696,7 @@ impl DaemonInvocationService {
         self
     }
 
-    /// Attach the daemon's own realm for `<self>.session`
+    /// Attach the daemon's own realm for `session.open`
     /// cross-realm rejection. Kept as a dedicated builder so the
     /// PR-2 guardrail does not depend on the presence of the PR-7
     /// trust-write surface.
@@ -495,6 +713,7 @@ impl DaemonInvocationService {
     /// `HOME`.
     #[must_use]
     pub fn with_hub_signing_seed(mut self, seed: SessionSigningSeed) -> Self {
+        self.admission = self.admission.with_hub_signing_seed(seed);
         self.federation.hub_signing_seed = Some(seed);
         self
     }
@@ -502,7 +721,7 @@ impl DaemonInvocationService {
     /// **PR-N6 C4**. Attach a session-escalation handle. When
     /// set, `dispatch_federation_forward_invoke` routes every
     /// inbound forward_invoke call up the existing
-    /// `<self>.session` bidi to the hub instead of consulting
+    /// `session.open` bidi to the hub instead of consulting
     /// the local PresenceRegistry. Boot wires this only under
     /// `mode = "device"`; hub/both daemons leave it `None` and
     /// take the existing dispatch arm.
@@ -519,7 +738,7 @@ impl DaemonInvocationService {
 
     /// Attach the daemon's shared on-miss device trust sync. See the
     /// `device_trust_sync` field invariant: device-mode boot passes
-    /// the SAME `Arc` it hands the `<self>.session` dispatcher.
+    /// the SAME `Arc` it hands the `session.open` dispatcher.
     #[must_use]
     pub fn with_device_trust_sync(
         mut self,
@@ -538,7 +757,7 @@ impl DaemonInvocationService {
         self
     }
 
-    /// Set whether this service's admission gate honours the loopback
+    /// Set whether this service's transport policy gate honours the loopback
     /// bypass. Boot serves the *same* service over a loopback-only UDS
     /// and an off-box TCP+TLS socket; the TCP-fed clone is given
     /// `false` so a daemon-URA spoofer reaching the TCP port still
@@ -692,15 +911,9 @@ impl DaemonInvocationService {
 
 #[tonic::async_trait]
 impl Invocation for DaemonInvocationService {
-    /// Spec §2.1 + §4.1 reference. Routes by
-    /// `InvokeRequest.function_name`:
-    ///
-    /// - `federation.join` / `federation.advertise_agent` /
-    ///   `federation.heartbeat` / `federation.resolve` /
-    ///   `federation.revoke` / `federation.forward_invoke` →
-    ///   federation wrapper
-    /// - anything else → Unimplemented with a "PR-1 staging" note;
-    ///   commit 7/9 wires AxonAbilityCatalog as the fall-through
+    /// Spec §2.1 + §4.1 reference. Routes unary calls by exact
+    /// `InvokeRequest.function_name`. User/device abilities fall
+    /// through to namespace.resolve and then Axon LocalRuntime.
     async fn invoke(
         &self,
         request: Request<InvokeRequest>,
@@ -713,12 +926,13 @@ impl Invocation for DaemonInvocationService {
             return result;
         }
         let function = inner.function_name.as_str();
-        // #185: meter the already-admitted caller. A throttled caller
-        // is rejected here with `ResourceExhausted` before any dispatch
-        // work; the post-decrement status (when metered) rides the
-        // successful response below. Federation and daemon-local
-        // `<self>` calls are control-plane traffic; throttling them
-        // would break liveness and key-discovery paths.
+        let route_function =
+            dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
+        // #185: meter the caller after the transport policy gate. This
+        // is not an Axon runtime-admitted token; descriptor-bound local
+        // dispatch still enters LocalRuntime through public Axon
+        // admission below. A throttled caller is rejected here with
+        // `ResourceExhausted` before any dispatch work.
         let rate_limit = match quota_metered_ability_for_request(&inner) {
             Ok(Some(ability)) => match self.admission.check_quota_for_ability(&inner, &ability) {
                 Ok(info) => info,
@@ -742,75 +956,110 @@ impl Invocation for DaemonInvocationService {
         // rows for the same call).
         let unary = self.unary_dispatcher();
         let mut axon_took_it = false;
-        let result = match function {
-            ABILITY_FEDERATION_JOIN => unary.dispatch_federation_join(&inner.arguments),
-            ABILITY_FEDERATION_ADVERTISE_AGENT => {
-                unary.dispatch_federation_advertise_agent(&inner.arguments)
-            }
-            ABILITY_FEDERATION_ADVERTISE_ABILITIES => {
-                unary.dispatch_federation_advertise_abilities(&inner.arguments)
-            }
-            ABILITY_FEDERATION_HEARTBEAT => unary.dispatch_federation_heartbeat(&inner.arguments),
-            ABILITY_FEDERATION_RESOLVE => unary.dispatch_federation_resolve(&inner.arguments),
-            ABILITY_NAMESPACE_RESOLVE => unary.dispatch_namespace_resolve(&inner.arguments).await,
-            ABILITY_FEDERATION_RESOLVE_KEY => {
-                unary.dispatch_federation_resolve_key(&inner.arguments)
-            }
-            ABILITY_FEDERATION_DISCOVER => unary.dispatch_federation_discover(&inner.arguments),
-            ABILITY_FEDERATION_LIST_USER_DEVICES => unary
-                .dispatch_federation_list_user_devices(inner.envelope.as_ref(), &inner.arguments),
-            ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES => {
-                unary
-                    .dispatch_federation_proxy_list_user_devices(
+        // Set by the side-effect-free `invocation.record.get` read arm: it
+        // observes the ledger without dispatching, so it must write NO ledger
+        // row (neither the Axon LedgerSink nor the manual `record_unary_invocation`
+        // path). Distinct from `axon_took_it`, which means "Axon already wrote a
+        // row" — here nothing should be written at all.
+        let mut skip_ledger_record = false;
+        let result = if route_function == ABILITY_INVOCATION_RECORD_GET {
+            skip_ledger_record = true;
+            self.dispatch_invocation_record_get(&inner.arguments)
+        } else {
+            match DaemonUnaryRoute::from_function(&route_function) {
+                Some(DaemonUnaryRoute::FederationJoin) => {
+                    unary.dispatch_federation_join(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::FederationAdvertiseAgent) => {
+                    unary.dispatch_federation_advertise_agent(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::FederationAdvertiseAbilities) => {
+                    unary.dispatch_federation_advertise_abilities(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::FederationHeartbeat) => {
+                    unary.dispatch_federation_heartbeat(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::FederationStatus) => unary.dispatch_federation_status(),
+                Some(DaemonUnaryRoute::FederationResolve) => {
+                    unary.dispatch_federation_resolve(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::NamespaceResolve) => {
+                    unary.dispatch_namespace_resolve(&inner.arguments).await
+                }
+                Some(DaemonUnaryRoute::FederationResolveKey) => {
+                    unary.dispatch_federation_resolve_key(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::FederationDiscover) => {
+                    unary.dispatch_federation_discover(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::FederationListUserDevices) => unary
+                    .dispatch_federation_list_user_devices(
                         inner.envelope.as_ref(),
                         &inner.arguments,
-                    )
-                    .await
-            }
-            ABILITY_NAMESPACE_PROXY_RESOLVE => {
-                unary
-                    .dispatch_namespace_proxy_resolve(inner.envelope.as_ref(), &inner.arguments)
-                    .await
-            }
-            ABILITY_FEDERATION_REVOKE => unary.dispatch_federation_revoke(&inner.arguments),
-            ABILITY_FEDERATION_FORWARD_INVOKE => {
-                unary
-                    .dispatch_federation_forward_invoke(inner.envelope.as_ref(), &inner.arguments)
-                    .await
-            }
-            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => Err(Status::invalid_argument(
-                "federation.subscribe_directory is a server-stream ability and must be invoked \
-                 via InvokeStream, not Invoke",
-            )),
-            ABILITY_SELF_REGISTER_DEVICE_PUBKEY => {
-                unary.dispatch_register_device_pubkey(&inner.arguments)
-            }
-            ABILITY_SELF_REVOKE_USER_PUBKEY => unary.dispatch_revoke_user_pubkey(&inner.arguments),
-            ABILITY_SELF_LIST_USER_PUBKEYS => unary.dispatch_list_user_pubkeys(&inner.arguments),
-            // `runtime.*` are node-internal admin handshakes hosted by the
-            // receiving daemon, not owner-routed abilities. Dispatch them
-            // directly on the LocalRuntime so a hub-owner callee URA does
-            // not get rejected as `NXDOMAIN owner is not online`.
-            name if is_runtime_admin_ability(name) => {
-                unary.dispatch_runtime_admin_ability(&inner).await
-            }
-            // Catch-all user abilities must pass through namespace.resolve
-            // before Axon LocalRuntime dispatch. The runtime executes the
-            // selected route; it is not a resolver fallback.
-            //
-            // `axon_took_it` gates the post-dispatch
-            // `record_unary_invocation` so we don't write a duplicate
-            // ledger row for calls Axon already persisted via
-            // `LedgerSink`. Federation-wrapper arms above still run
-            // the manual record path because they are explicit service
-            // handlers rather than LocalRuntime ability dispatches.
-            _other => {
-                let (r, axon) = unary.dispatch_local_rpc_selected_route(&inner).await;
-                axon_took_it = axon;
-                r
+                    ),
+                Some(DaemonUnaryRoute::FederationProxyListUserDevices) => {
+                    unary
+                        .dispatch_federation_proxy_list_user_devices(
+                            inner.envelope.as_ref(),
+                            &inner.arguments,
+                        )
+                        .await
+                }
+                Some(DaemonUnaryRoute::NamespaceProxyResolve) => {
+                    unary
+                        .dispatch_namespace_proxy_resolve(inner.envelope.as_ref(), &inner.arguments)
+                        .await
+                }
+                Some(DaemonUnaryRoute::FederationRevoke) => {
+                    unary.dispatch_federation_revoke(&inner.arguments)
+                }
+                Some(DaemonUnaryRoute::FederationForwardInvoke) => {
+                    unary
+                        .dispatch_federation_forward_invoke(
+                            inner.envelope.as_ref(),
+                            &inner.arguments,
+                        )
+                        .await
+                }
+                Some(DaemonUnaryRoute::IdentityRegisterPubkey) => {
+                    unary.dispatch_register_device_pubkey(inner.envelope.as_ref(), &inner.arguments)
+                }
+                Some(DaemonUnaryRoute::IdentityRevokeUserPubkey) => {
+                    unary.dispatch_revoke_user_pubkey(inner.envelope.as_ref(), &inner.arguments)
+                }
+                Some(DaemonUnaryRoute::IdentityListUserPubkeys) => {
+                    unary.dispatch_list_user_pubkeys(&inner.arguments)
+                }
+                None if DaemonStreamRoute::from_function(&route_function).is_some() => {
+                    Err(Status::invalid_argument(format!(
+                        "{route_function} is a server-stream ability and must be invoked via InvokeStream, not Invoke"
+                    )))
+                }
+                // `runtime.*` are node-internal admin handshakes hosted by the
+                // receiving daemon, not owner-routed abilities. Dispatch them
+                // directly on the LocalRuntime so a hub-owner callee URA does
+                // not get rejected as `NXDOMAIN owner is not online`.
+                None if is_runtime_admin_ability(function) => {
+                    unary.dispatch_runtime_admin_ability(&inner).await
+                }
+                // Catch-all user abilities must pass through namespace.resolve
+                // before Axon LocalRuntime dispatch. The runtime executes the
+                // selected route; it is not a resolver fallback.
+                //
+                // `axon_took_it` gates the post-dispatch
+                // `record_unary_invocation` so we don't write a duplicate
+                // ledger row for calls Axon already persisted via
+                // `LedgerSink`. Federation-wrapper arms above still run
+                // the manual record path because they are explicit service
+                // handlers rather than LocalRuntime ability dispatches.
+                None => {
+                    let (r, axon) = unary.dispatch_local_rpc_selected_route(&inner).await;
+                    axon_took_it = axon;
+                    r
+                }
             }
         };
-        if !axon_took_it {
+        if !axon_took_it && !skip_ledger_record {
             self.record_unary_invocation(&inner, started_unix_ms, &result);
         }
         // #185: attach the caller's post-decrement quota status to the
@@ -842,14 +1091,18 @@ impl Invocation for DaemonInvocationService {
         let inner = request.into_inner();
         self.admission.verify_invoke_stream(&inner)?;
         let function = inner.function_name.as_str();
+        let route_function =
+            dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
 
         let streams = self.stream_dispatcher();
-        match function {
-            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => {
+        match DaemonStreamRoute::from_function(&route_function) {
+            Some(DaemonStreamRoute::FederationSubscribeDirectory) => {
                 streams.dispatch_subscribe_directory_initial()
             }
-            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => streams.dispatch_subscribe_directory_v2(),
-            _other => streams.dispatch_local_selected_route(&inner).await,
+            Some(DaemonStreamRoute::FederationSubscribeDirectoryV2) => {
+                streams.dispatch_subscribe_directory_v2()
+            }
+            None => streams.dispatch_selected_route(&inner).await,
         }
     }
 
@@ -858,11 +1111,11 @@ impl Invocation for DaemonInvocationService {
     /// Spec §2.1 reference. Routes by frame-0
     /// `EnvelopeOpen.target.ability_name`:
     ///
-    /// - `<self>.invoke_remote` → cross-device dispatch handler
+    /// - `runtime.invoke_remote` → cross-device dispatch handler
     ///   (PR-3 commit 1/3, this commit). Requires `with_pending(...)`
     ///   to have wired a `PendingDispatchMap`; otherwise returns
     ///   `Status::failed_precondition` with explicit reason.
-    /// - `<self>.session` → PR-2; arm added when PR-2 lands
+    /// - `session.open` → PR-2; arm added when PR-2 lands
     /// - anything else → `Status::unimplemented` citing PR-2/PR-3
     async fn invoke_bidi(
         &self,

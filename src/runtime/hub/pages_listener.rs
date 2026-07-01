@@ -178,7 +178,7 @@ async fn handle(req: Request<Body>) -> Response<Body> {
         if !matches!(method, axum::http::Method::GET | axum::http::Method::POST) {
             return text_response(StatusCode::METHOD_NOT_ALLOWED, "use GET\n");
         }
-        return handle_v1_models().await;
+        return handle_v1_models(req).await;
     }
 
     let host_header = req
@@ -417,9 +417,16 @@ fn pages_health_response(head_only: bool) -> Response<Body> {
 // ─── RFC-006-C OpenAI-compat handlers ──────────────────────────
 
 /// `GET /v1/models` — list chat-base abilities as OpenAI models.
-async fn handle_v1_models() -> Response<Body> {
-    let result = tokio::task::spawn_blocking(|| {
-        crate::runtime::agents::openai_compat_ability::handle_list_models(serde_json::json!({}))
+async fn handle_v1_models(req: Request<Body>) -> Response<Body> {
+    let openai_runtime = req
+        .extensions()
+        .get::<crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime>()
+        .cloned();
+    let result = tokio::task::spawn_blocking(move || match openai_runtime {
+        Some(runtime) => runtime.handle_list_models(serde_json::json!({})),
+        None => {
+            crate::runtime::agents::openai_compat_ability::handle_list_models(serde_json::json!({}))
+        }
     })
     .await;
 
@@ -436,6 +443,11 @@ async fn handle_v1_models() -> Response<Body> {
 /// `POST /v1/chat/completions` — OpenAI-shape chat completion.
 /// Streaming (`stream:true`) emits SSE; non-streaming returns one JSON.
 async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
+    let openai_runtime = req
+        .extensions()
+        .get::<crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime>()
+        .cloned();
+
     // Parse Authorization → Bearer token. Missing → 401.
     let bearer = req
         .headers()
@@ -470,8 +482,11 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
 
     // Run the adapter on the blocking pool (it can take a long
     // time — calls into the agent dispatcher).
-    let adapter_result = tokio::task::spawn_blocking(move || {
-        crate::runtime::agents::openai_compat_ability::handle_chat_completions(adapter_args)
+    let adapter_result = tokio::task::spawn_blocking(move || match openai_runtime {
+        Some(runtime) => runtime.handle_chat_completions(adapter_args),
+        None => {
+            crate::runtime::agents::openai_compat_ability::handle_chat_completions(adapter_args)
+        }
     })
     .await;
 
@@ -648,16 +663,7 @@ mod tests {
         dir
     }
 
-    fn ensure_openai_http_registry() {
-        // Every call rebinds the process-wide dispatch handle and
-        // identity. The two openai_compat_ability statics are
-        // `RwLock<Option<_>>` (last-writer-wins) precisely so this
-        // function can override whatever `build_registry()` from
-        // another test left behind. A `OnceLock<()>`-guarded init
-        // would skip the rebind on the second test of this module
-        // and inherit the earlier test's identity — which is what
-        // produced the `v1_models` / `v1_chat_completions` flakes
-        // when these tests ran inside the full lib test process.
+    fn openai_http_runtime() -> crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime {
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "codex.chat",
@@ -669,14 +675,18 @@ mod tests {
         handle
             .set(reg)
             .expect("dispatch handle OnceLock should set once");
-        crate::runtime::agents::openai_compat_ability::set_dispatch_handle(handle);
-        crate::runtime::agents::openai_compat_ability::set_identity(
+        crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime::from_pages_identity(
+            handle,
             crate::runtime::agents::PagesIdentity {
                 user: Some("alice".into()),
                 realm: Some("easynet.run".into()),
                 listener_port: Some(8787),
             },
-        );
+        )
+    }
+
+    fn attach_openai_runtime(req: &mut Request<Body>) {
+        req.extensions_mut().insert(openai_http_runtime());
     }
 
     #[tokio::test]
@@ -714,13 +724,12 @@ mod tests {
 
     #[tokio::test]
     async fn v1_models_lists_chat_ability_models() {
-        ensure_openai_http_registry();
-
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method("GET")
             .uri("/v1/models")
             .body(Body::empty())
             .expect("request");
+        attach_openai_runtime(&mut req);
         let resp = handle(req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = to_bytes(resp.into_body(), 4096).await.expect("body bytes");
@@ -734,9 +743,7 @@ mod tests {
 
     #[tokio::test]
     async fn v1_chat_completions_routes_to_chat_ability() {
-        ensure_openai_http_registry();
-
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method("POST")
             .uri("/v1/chat/completions")
             .header(header::CONTENT_TYPE, "application/json")
@@ -750,6 +757,7 @@ mod tests {
                 .to_string(),
             ))
             .expect("request");
+        attach_openai_runtime(&mut req);
         let resp = handle(req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = to_bytes(resp.into_body(), 4096).await.expect("body bytes");

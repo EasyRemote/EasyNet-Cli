@@ -52,6 +52,7 @@ use serde_json::{json, Value};
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::ura::AbilitySelector;
 
 /// Process-wide handle to the live ability registry. Set once at
@@ -233,15 +234,21 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
             let registry = handle.get().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle empty; build site forgot to populate OnceLock")
             })?;
-            let result = registry
-                .invoke_rpc_json(selector.local_registry_ability(), invoke_args)
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "ability `{}` ({}) failed: {e}",
-                        selector.ability_ura(),
-                        selector.local_registry_ability()
-                    )
-                })?;
+            let target = InvocationTarget {
+                scope: TargetScope::Local,
+                ability: selector.local_registry_ability().to_string(),
+                normalized_args: invoke_args,
+                call_mode: CallMode::Rpc,
+                subject: Some(selector.owner_ura().to_string()),
+                causal_context: None,
+            };
+            let result = registry.invoke_rpc_target_json(target).map_err(|e| {
+                anyhow::anyhow!(
+                    "ability `{}` ({}) failed: {e}",
+                    selector.ability_ura(),
+                    selector.local_registry_ability()
+                )
+            })?;
             Ok(json!({
                 "status":       200,
                 "body":         result,
@@ -331,7 +338,7 @@ pub(crate) fn register_api_abilities_for_project(
     registry: &AxonAbilityCatalog,
     user: &str,
     project_id: &str,
-) -> usize {
+) -> anyhow::Result<usize> {
     let names = api_ability_names_for_project(user, project_id);
     let owner = OwnerKind::User(user.to_string());
     for name in &names {
@@ -345,9 +352,9 @@ pub(crate) fn register_api_abilities_for_project(
             name.clone(),
             owner.clone(),
             Arc::new(move |args| handle_api(&user, &project_id, &verb, args)),
-        );
+        )?;
     }
-    names.len()
+    Ok(names.len())
 }
 
 #[cfg(test)]

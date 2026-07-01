@@ -49,15 +49,9 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::time::Duration;
-
-use anyhow::{anyhow, bail, Context};
 use clap::Args;
 use console::style;
 use serde_json::{json, Value};
-
-use crate::services::invocation_transport::ProtoEnvelope;
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 
 #[derive(Debug, Args)]
 pub struct DiscoverArgs {
@@ -80,80 +74,14 @@ pub struct DiscoverArgs {
     pub json: bool,
 }
 
-/// Resolve the UDS socket path the daemon's gRPC server binds.
-/// Mirrors the same env-override + tilde-expansion the
-/// federation_invoke bridge uses so the two CLI surfaces stay
-/// aligned across test deployments.
+/// Read the daemon-backed federated directory through the shared
+/// service boundary. The facade owns argument mapping and rendering;
+/// transport signing and gRPC details live below it.
 pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
-    let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
-    if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
-        bail!(
-            "daemon gRPC listener not reachable at {} — start the daemon first \
-             (`easynet runtime start`) and confirm `~/.easynet/daemon-config.toml` \
-             enables the transport plane.",
-            socket_path.display()
-        );
-    }
-
-    // Build the request. Use the daemon's own loopback URA as
-    // caller — the daemon's admission gate has a loopback
-    // bypass so operator-side calls bypass the strict signature
-    // pipeline. PR-N5 will replace this with a real signed
-    // operator envelope when the user-as-subject surface lands.
-    let mut req_args = json!({});
-    if let Some(ura) = args.agent_ura.as_deref() {
-        req_args["agent_ura"] = Value::String(ura.to_string());
-    }
-    if let Some(user) = args.local_user_id.as_deref() {
-        req_args["local_user_id"] = Value::String(user.to_string());
-    }
-    let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
-
-    // Caller URA: derive from credentials.json so the daemon's
-    // loopback bypass admits us. If credentials are missing,
-    // fall back to a generic operator URA; the daemon will
-    // reject if its trust set hasn't been wired for that URA.
-    let caller_ura = crate::persistence::config::load_credentials()
-        .ok()
-        .map(|c| crate::ura::device_ura(&c.realm, &c.node_id))
-        .unwrap_or_else(|| crate::ura::device_ura("cli", "local"));
-
-    let request =
-        ProtoEnvelope::loopback(caller_ura)?.invoke_request("federation.discover", arg_bytes)?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("build tokio runtime for federation discover")?;
-
-    let response: easynet_axon::pb::axon::v1::InvokeResponse = {
-        runtime.block_on(async move {
-            let channel = crate::support::local_daemon_grpc::connect_channel(
-                socket_path.clone(),
-                Duration::from_secs(10),
-                Duration::from_secs(5),
-            )
-            .await
-            .context("connect to local daemon gRPC endpoint")?;
-            let mut client = InvocationClient::new(channel);
-            let resp = client.invoke(request).await.map_err(|status| {
-                anyhow!(
-                    "daemon rejected federation.discover: code={:?} message={}",
-                    status.code(),
-                    status.message()
-                )
-            })?;
-            Ok::<_, anyhow::Error>(resp.into_inner())
-        })?
-    };
-
-    let body: serde_json::Value =
-        serde_json::from_slice(&response.result).context("decode discover response body")?;
-    let entries = body
-        .get("entries")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let entries = crate::services::federated_directory_reader::read_federated_directory_filtered(
+        args.agent_ura.as_deref(),
+        args.local_user_id.as_deref(),
+    )?;
 
     if args.json {
         let out = json!({ "entries": entries });

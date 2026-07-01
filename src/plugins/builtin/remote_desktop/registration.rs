@@ -32,13 +32,13 @@ use crate::plugins::remote_desktop::constants::{
 use crate::plugins::remote_desktop::handlers;
 use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::schema;
-use crate::runtime::ability_dispatch::{
-    AxonAbilityCatalog, BidiSource, EnvelopeContext, OwnerKind, StreamSource,
-};
+use crate::runtime::ability::AbilityImplSource;
+use crate::runtime::ability_dispatch::{BidiSource, EnvelopeContext, StreamSource};
 use crate::runtime::agents::media::screen_snapshot::{ScreenSnapshotBackend, XcapBackend};
 use crate::runtime::plugin_host::package::BuiltinPluginAbilitySpec;
 use crate::runtime::plugin_host::{
-    PluginAbilityLayer, PluginBidiWireKind, PluginCallMode, PluginRuntimeLimits,
+    PluginAbilityLayer, PluginBidiWireKind, PluginCallMode, PluginContributionBuilder,
+    PluginRuntimeLimits, Result,
 };
 
 type PluginRpcHandler =
@@ -78,41 +78,43 @@ impl RemoteDesktopAbilityBinding {
         }
     }
 
-    fn register(
+    fn contribute(
         self,
         spec: &BuiltinPluginAbilitySpec,
-        reg: &mut AxonAbilityCatalog,
+        builder: &mut PluginContributionBuilder,
         plugin: Arc<RemoteDesktopPlugin>,
-    ) {
+    ) -> Result<()> {
+        let manifest = spec.to_registry_manifest()?;
+        let runtime_env = builder.plugin_runtime_env();
         match self {
-            Self::Rpc { handler } => {
-                reg.register_rpc_with_envelope_and_owner(
-                    spec.name,
-                    OwnerKind::Device,
-                    Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
-                );
-            }
-            Self::StatelessRpc { handler } => {
-                reg.register_rpc_with_envelope_and_owner(
-                    spec.name,
-                    OwnerKind::Device,
-                    Arc::new(handler),
-                );
-            }
-            Self::Stream { handler } => {
-                reg.register_stream_with_envelope_and_owner(
-                    spec.name,
-                    OwnerKind::Device,
-                    Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
-                );
-            }
-            Self::Bidi { handler } => {
-                reg.register_bidi_with_envelope_and_owner(
-                    spec.name,
-                    OwnerKind::Device,
-                    Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
-                );
-            }
+            Self::Rpc { handler } => builder.rpc(
+                spec.name,
+                manifest,
+                AbilityImplSource::BuiltinPlugin,
+                runtime_env,
+                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+            ),
+            Self::StatelessRpc { handler } => builder.rpc(
+                spec.name,
+                manifest,
+                AbilityImplSource::BuiltinPlugin,
+                runtime_env,
+                Arc::new(handler),
+            ),
+            Self::Stream { handler } => builder.stream(
+                spec.name,
+                manifest,
+                AbilityImplSource::BuiltinPlugin,
+                runtime_env,
+                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+            ),
+            Self::Bidi { handler } => builder.bidi(
+                spec.name,
+                manifest,
+                AbilityImplSource::BuiltinPlugin,
+                runtime_env,
+                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+            ),
         }
     }
 }
@@ -261,31 +263,41 @@ pub(crate) fn ability_specs() -> Vec<BuiltinPluginAbilitySpec> {
         .collect()
 }
 
-/// Register the remote desktop plugin with the production screen backend.
-pub fn register(reg: &mut AxonAbilityCatalog, limits: PluginRuntimeLimits) {
-    register_with_screen_backend(reg, Arc::new(XcapBackend), limits);
+/// Contribute the remote desktop plugin with the production screen backend.
+pub fn contribute(
+    builder: &mut PluginContributionBuilder,
+    limits: PluginRuntimeLimits,
+) -> Result<()> {
+    contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits)
 }
 
-/// Register the remote desktop plugin with an injected screen backend.
+/// Contribute the remote desktop plugin with an injected screen backend.
 ///
 /// This is the only non-production registration entry point. Unit tests inject
-/// deterministic synthetic capture here while production uses [`register`].
-pub(in crate::plugins::builtin::remote_desktop) fn register_with_screen_backend(
-    reg: &mut AxonAbilityCatalog,
+/// deterministic synthetic capture here while production uses [`contribute`].
+pub(in crate::plugins::builtin::remote_desktop) fn contribute_with_screen_backend(
+    builder: &mut PluginContributionBuilder,
     backend: Arc<dyn ScreenSnapshotBackend>,
     limits: PluginRuntimeLimits,
-) {
+) -> Result<()> {
     let plugin = RemoteDesktopPlugin::new(backend, limits.into());
     for binding in compiled_ability_bindings() {
         binding
             .handler
-            .register(&binding.spec, reg, Arc::clone(&plugin));
+            .contribute(&binding.spec, builder, Arc::clone(&plugin))?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::ability::CallMode as DescriptorCallMode;
+    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+    use crate::runtime::agents::media::screen_snapshot::SyntheticScreenBackend;
+    use crate::runtime::plugin_host::{
+        DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
+    };
 
     #[test]
     fn every_remote_desktop_spec_is_projected_from_binding_table() {
@@ -309,5 +321,52 @@ mod tests {
                 binding.spec.name
             );
         }
+    }
+
+    #[test]
+    fn registration_publishes_remote_desktop_manifest_to_catalog_snapshot() {
+        let limits = crate::plugins::remote_desktop::test_support::test_runtime_limits();
+        let mut builder = PluginContributionBuilder::new(
+            "easynet.remote_desktop",
+            "0.1.0",
+            PluginKind::Builtin,
+            limits,
+            PluginRequirementSet::default(),
+            Vec::new(),
+        );
+        contribute_with_screen_backend(&mut builder, Arc::new(SyntheticScreenBackend), limits)
+            .expect("remote desktop contribution");
+        let contribution = builder
+            .finish()
+            .expect("remote desktop package contribution");
+        let contributions = PluginContributionSet::new(vec![contribution]);
+        let mut reg = AxonAbilityCatalog::new();
+        DaemonPluginBinder::static_catalog(&mut reg)
+            .bind_set(&contributions)
+            .expect("bind remote desktop contribution");
+
+        let rows = reg.ability_catalog_snapshot();
+        let create_session = rows
+            .iter()
+            .find(|row| row.name == ABILITY_CREATE_SESSION)
+            .expect("remote_desktop.create_session must be catalogued");
+        let manifest = create_session
+            .manifest
+            .as_ref()
+            .expect("remote_desktop.create_session must publish schema manifest");
+
+        assert_eq!(manifest.description(), schema::create_session_description());
+        assert_eq!(
+            manifest.input_schema(),
+            &schema::create_session_input_schema()
+        );
+        let record = reg
+            .control_plane_record_for_mode(ABILITY_CREATE_SESSION, DescriptorCallMode::Rpc)
+            .expect("remote desktop control-plane lookup is unambiguous")
+            .expect("remote desktop control-plane record");
+        assert_eq!(
+            *record.implementation().source(),
+            AbilityImplSource::BuiltinPlugin
+        );
     }
 }

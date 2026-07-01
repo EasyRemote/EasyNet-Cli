@@ -7,13 +7,13 @@ use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::NamedPipeServer;
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 use tokio_stream::wrappers::ReceiverStream;
-#[cfg(unix)]
-use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(windows)]
 use tonic::transport::server::Connected;
 
+#[cfg(unix)]
+use super::local_peer::{LocalPeerGate, PeerGateError};
 use super::paths::expand_home;
 use super::MAX_INVOCATION_GRPC_MESSAGE_BYTES;
 use crate::persistence::daemon_config::DaemonConfig;
@@ -137,7 +137,31 @@ pub(super) fn spawn_uds_listener(
         uds_path = uds_path_display,
     );
 
-    let incoming = UnixListenerStream::new(listener);
+    let peer_gate = LocalPeerGate::for_current_process();
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<tokio::net::UnixStream>>(32);
+    let accept_uds_path = uds_path_display.clone();
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _addr)) => match peer_gate.authorize_stream(&stream) {
+                    Ok(_credential) => {
+                        if tx.send(Ok(stream)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        log_uds_peer_rejection(&accept_uds_path, &err);
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Err(err)).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    let incoming = ReceiverStream::new(rx);
     tokio::spawn(async move {
         let result = Server::builder()
             // UDS is loopback-only; keepalive is purely defensive
@@ -166,6 +190,39 @@ pub(super) fn spawn_uds_listener(
     });
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn log_uds_peer_rejection(uds_path: &str, err: &PeerGateError) {
+    let err_msg = format!("{err}");
+    if let Some(credential) = err.credential() {
+        let peer_uid = credential.uid.to_string();
+        let peer_gid = credential.gid.to_string();
+        let peer_pid = credential
+            .pid
+            .map(|pid| pid.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = uds_peer_credential_rejected,
+            transport = "uds",
+            uds_path = uds_path,
+            peer_uid = peer_uid,
+            peer_gid = peer_gid,
+            peer_pid = peer_pid,
+            error = err_msg,
+            message = "dropping unauthorized daemon.sock connection",
+        );
+    } else {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = uds_peer_credential_unreadable,
+            transport = "uds",
+            uds_path = uds_path,
+            error = err_msg,
+            message = "dropping daemon.sock connection without OS peer credentials",
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -301,7 +358,7 @@ pub(super) fn spawn_tcp_tls_listener(
     );
 
     // Production-WAN h2 hardening on the public TCP+TLS listener:
-    // long-lived `<self>.session` bidi streams from devices behind
+    // long-lived `session.open` bidi streams from devices behind
     // home/corporate NATs / hosting LBs need explicit keep-alive
     // PINGs or intermediaries silently drop the connection,
     // surfacing as "h2 protocol error: error reading a body" on

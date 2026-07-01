@@ -168,6 +168,7 @@ impl PluginPackageIndex {
             }
         };
 
+        let mut uniqueness = PluginPackageUniqueness::default();
         let mut packages = Vec::<SharedPluginPackage>::new();
         let mut installed_errors = Vec::<PluginPackageIndexError>::new();
         for record in state.plugins {
@@ -188,9 +189,7 @@ impl PluginPackageIndex {
                 }
             };
 
-            let mut candidate = packages.clone();
-            candidate.push(Arc::clone(&package));
-            if let Err(err) = Self::from_packages(candidate) {
+            if let Err(err) = uniqueness.insert(&package) {
                 installed_errors.push(PluginPackageIndexError {
                     id: record.id,
                     version: record.version,
@@ -219,11 +218,23 @@ impl PluginPackageIndex {
     /// if installed package rows are corrupt.
     pub fn load_default_resilient() -> Result<PluginPackageIndexLoadReport> {
         let mut packages = Self::builtin()?.packages;
+        let mut uniqueness = PluginPackageUniqueness::from_packages(&packages)?;
         let installed = Self::installed_resilient(&default_plugin_root())?;
-        let (installed_index, installed_errors) = installed.into_parts();
-        packages.extend(installed_index.packages);
+        let (installed_index, mut installed_errors) = installed.into_parts();
+        for package in installed_index.packages {
+            if let Err(err) = uniqueness.insert(&package) {
+                installed_errors.push(PluginPackageIndexError {
+                    id: package.id().as_str().to_string(),
+                    version: package.version().as_str().to_string(),
+                    package_dir: package.root().to_path_buf(),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+            packages.push(package);
+        }
         Ok(PluginPackageIndexLoadReport {
-            index: Self::from_packages(packages)?,
+            index: Self { packages },
             installed_errors,
         })
     }
@@ -266,19 +277,35 @@ impl PluginPackageIndex {
 }
 
 fn validate_unique_packages(packages: &[SharedPluginPackage]) -> Result<()> {
-    let mut package_versions = BTreeMap::<(String, String), ()>::new();
-    let mut package_ids = BTreeMap::<String, String>::new();
-    let mut ability_owner = BTreeMap::<String, String>::new();
-    for package in packages {
+    PluginPackageUniqueness::from_packages(packages).map(|_| ())
+}
+
+#[derive(Default)]
+struct PluginPackageUniqueness {
+    package_versions: BTreeMap<(String, String), ()>,
+    package_ids: BTreeMap<String, String>,
+    ability_owner: BTreeMap<String, String>,
+}
+
+impl PluginPackageUniqueness {
+    fn from_packages(packages: &[SharedPluginPackage]) -> Result<Self> {
+        let mut uniqueness = Self::default();
+        for package in packages {
+            uniqueness.insert(package)?;
+        }
+        Ok(uniqueness)
+    }
+
+    fn insert(&mut self, package: &SharedPluginPackage) -> Result<()> {
         let id = package.id().as_str().to_string();
         let version = package.version().as_str().to_string();
-        if package_versions
-            .insert((id.clone(), version.clone()), ())
-            .is_some()
+        if self
+            .package_versions
+            .contains_key(&(id.clone(), version.clone()))
         {
             return Err(PluginHostError::DuplicatePackageVersion { id, version });
         }
-        if let Some(first_version) = package_ids.insert(id.clone(), version.clone()) {
+        if let Some(first_version) = self.package_ids.get(&id).cloned() {
             return Err(PluginHostError::DuplicatePackageId {
                 id,
                 first_version,
@@ -287,7 +314,7 @@ fn validate_unique_packages(packages: &[SharedPluginPackage]) -> Result<()> {
         }
         let owner = format!("{id}@{version}");
         for ability in package.manifest().abilities() {
-            if let Some(first) = ability_owner.insert(ability.name().to_string(), owner.clone()) {
+            if let Some(first) = self.ability_owner.get(ability.name()).cloned() {
                 return Err(PluginHostError::DuplicateAbilityOwner {
                     ability: ability.name().to_string(),
                     first,
@@ -295,8 +322,15 @@ fn validate_unique_packages(packages: &[SharedPluginPackage]) -> Result<()> {
                 });
             }
         }
+        self.package_versions
+            .insert((id.clone(), version.clone()), ());
+        self.package_ids.insert(id, version);
+        for ability in package.manifest().abilities() {
+            self.ability_owner
+                .insert(ability.name().to_string(), owner.clone());
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -434,6 +468,79 @@ mod tests {
         assert!(report.installed_errors()[0]
             .reason
             .contains("read plugin package path"));
+    }
+
+    #[test]
+    fn plugin_index_resilient_installed_skips_duplicate_ability_without_rebuilding_index() {
+        let root = tempfile::tempdir().expect("root");
+        let first = root.path().join("installed/test.first/0.1.0");
+        let second = root.path().join("installed/test.second/0.1.0");
+        write_test_package_with_id(&first, "test.first", "0.1.0", "test.echo");
+        write_test_package_with_id(&second, "test.second", "0.1.0", "test.echo");
+        let first_pkg = PluginPackage::from_installed(&first, None).expect("first package");
+        let second_pkg = PluginPackage::from_installed(&second, None).expect("second package");
+        write_lock(
+            root.path(),
+            PluginStateToml {
+                plugins: vec![
+                    InstalledPluginRecord {
+                        id: "test.first".to_string(),
+                        version: "0.1.0".to_string(),
+                        hash: first_pkg.hash().as_str().to_string(),
+                    },
+                    InstalledPluginRecord {
+                        id: "test.second".to_string(),
+                        version: "0.1.0".to_string(),
+                        hash: second_pkg.hash().as_str().to_string(),
+                    },
+                ],
+            },
+        );
+
+        let report = PluginPackageIndex::installed_resilient(root.path()).expect("resilient index");
+
+        assert_eq!(report.index().packages().len(), 1);
+        assert_eq!(report.index().packages()[0].id().as_str(), "test.first");
+        assert_eq!(report.installed_errors().len(), 1);
+        assert_eq!(report.installed_errors()[0].id, "test.second");
+        assert!(report.installed_errors()[0]
+            .reason
+            .contains("declared by multiple packages"));
+    }
+
+    #[test]
+    fn plugin_index_default_resilient_skips_installed_collision_with_builtin() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let root = default_plugin_root();
+        let shadow = root.join("installed/easynet.remote_desktop/9.9.9");
+        write_test_package_with_id(&shadow, "easynet.remote_desktop", "9.9.9", "test.shadow");
+        let shadow_pkg = PluginPackage::from_installed(&shadow, None).expect("shadow package");
+        write_lock(
+            &root,
+            PluginStateToml {
+                plugins: vec![InstalledPluginRecord {
+                    id: "easynet.remote_desktop".to_string(),
+                    version: "9.9.9".to_string(),
+                    hash: shadow_pkg.hash().as_str().to_string(),
+                }],
+            },
+        );
+
+        let report = PluginPackageIndex::load_default_resilient().expect("default resilient index");
+        let remote_desktop_rows = report
+            .index()
+            .packages()
+            .iter()
+            .filter(|package| package.id().as_str() == "easynet.remote_desktop")
+            .collect::<Vec<_>>();
+
+        assert_eq!(remote_desktop_rows.len(), 1);
+        assert_ne!(remote_desktop_rows[0].version().as_str(), "9.9.9");
+        assert_eq!(report.installed_errors().len(), 1);
+        assert_eq!(report.installed_errors()[0].id, "easynet.remote_desktop");
+        assert!(report.installed_errors()[0]
+            .reason
+            .contains("multiple active versions"));
     }
 
     fn write_lock(root: &Path, state: PluginStateToml) {

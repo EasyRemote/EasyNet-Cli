@@ -287,15 +287,17 @@
 - 落点:backend/internal/receipt/(仅记录与查询) · 规范 · 低中
 - 方向:边界决定(信任 Axon 已验)写进 boundary 文档;或补链验证调用。
 
-### F-040 backend 把产品跨设备调用包成 daemon-internal 的 `<self>.invoke_remote`,wire 形状逐字节手抄 【已核验,2026-06-12 边界镜头】
-- 落点:backend/internal/daemon_grpc/invoke_remote.go:58(`const AbilityInvokeRemote = "<self>.invoke_remote"`);
-  文件头注释自认:「daemon-internal — the daemon's <self>.invoke_remote dispatcher owns it」
+### F-040 backend 把产品跨设备调用包成 daemon-internal 的 `runtime.invoke_remote`,wire 形状逐字节手抄 【已核验,2026-06-12 边界镜头】
+- 落点:backend/internal/daemon_grpc/invoke_remote.go:58(`const AbilityInvokeRemote = "runtime.invoke_remote"`);
+  文件头注释自认:「daemon-internal — the daemon's runtime.invoke_remote dispatcher owns it」
   「Wire shape mirrors the Rust initiator … 1:1: struct names + JSON tags are byte-identical here,
   with no translation layer」 · 架构/边界 · **中高**
 - 违反(runtime-boundary skill 两条明文):①「Ordinary product calls should not be wrapped as
-  `<self>.invoke_remote` at the backend boundary」;② Cli 拥有的 JSON 帧形状在 Go 里手抄副本 =
+  `runtime.invoke_remote` at the backend boundary」;② Cli 拥有的 JSON 帧形状在 Go 里手抄副本 =
   协议形状第二真源(与 F-015 同病,平面不同:F-015 fork 协议层,本条 fork 派发帧层)。
-- 缓和:contract test 对真 daemon 回环验证;注释记录 v4.1.6 计划改名 `device.invoke_remote`。
+- 现状:本轮已把默认 backend Axon 调用改回完整 Invoke,由 CLI daemon 的
+  namespace.resolve / session.open / runtime.invoke_remote 路径负责本地性与转发;
+  backend 不再按 ability 名分类。
 - 方向:并入清洁目标迁移——backend 向 daemon Invocation 面提交**完整 Invocation**(七元组),
   daemon 拥有 callee 本地性解析/转发;过渡期至少把共享帧形状挪到生成代码(随 F-004 载体归一)。
   与 F-004/F-038 同批设计,不单独修。
@@ -578,6 +580,35 @@
   续传只用已绑 UUID(哨兵不再发)/ 显式新会话逃逸不污染 lifelong 指针。S 级。
 - **占用注记**:AskToDoPage.tsx 在前端在制波前中(未提交修改),修复须等释放或由占用会话搭车。
 
+### F-057 `--no-default-features`(proto-free)构建既有损坏:4 错误 【已修复 2026-06-13,no-default cfg 修复批】
+- 落点:`groups/trust.rs:26`(invocation_transport 被 feature 配出)、
+  `runtime/agents/discover_ability.rs:402`(同)、`services/pending_dispatch.rs:83`
+  (easynet_axon::pb 不可达)、discover_ability.rs:401(E0277 连带) · 构建矩阵 · 低
+- 证据:seven-axes 实现期对 HEAD 复核(2026-06-13):`cargo check --no-default-features`
+  4 错误,全部在 seven-axes 未触碰的文件——默认特性已含 axon-pb,proto-free 配置
+  长期无 CI 咬合而漂移。记忆 `project_axon_pb_feature_build_blindspot` 描述的是
+  反向时代("默认 proto-free"),已过时。
+- 修复:把 `trust_anchor_path_from_env_or_default` 移到纯数据模块
+  `realm_trust_anchor`,让 `trust show` 不再穿透到 `invocation_transport::boot`;
+  把 feature-agnostic `federation_invoke_shim` 提升到 `services` 层,避免 shim
+  被 `invocation_transport` 父模块 cfg 掉;给 `PendingDispatchMap` 的内部 receipt
+  字段加 `DispatchReceipt` feature 边界;给只被 transport 使用的 owner-projection
+  lease helper 加 `axon-pb` cfg。no-default 构建仍是本地/只读最小表面,不会伪造远端
+  federation 成功。
+- 验证:`CARGO_TARGET_DIR=target/no-default-check cargo check --no-default-features`
+  无错误无警告;`CARGO_TARGET_DIR=target/no-default-check cargo clippy
+  --no-default-features --lib -- -D warnings` 通过;`CARGO_TARGET_DIR=target/default-check
+  cargo check` 通过。
+
+### F-058 eal/interpreter/tests.rs 与 agent_lifecycle_ability.rs 既有 clippy 5 告警 【已修复 2026-06-13,seven-axes 修复批】
+- 落点:`eal/interpreter/tests.rs:13,1352,1457`(mod 同名 + 复杂类型 ×2)、
+  `agent_lifecycle_ability.rs:1227,1255`(unnecessary get) · 卫生 · 低
+- 证据:`cargo clippy --features axon-pb --lib --tests` 稳定 5 条,seven-axes 全程
+  未触碰其文件(每轮 clippy 门均以"我的文件零告警"为准放行)。
+- 修复:内层测试模块改名避免 module inception;两处 loop dispatcher 记录类型提本地别名;
+  两处 `get(..).is_none()` 改 `contains_key`。`cargo clippy --features axon-pb --lib --tests`
+  已作为验证门。
+
 ---
 
 ## 迭代日志
@@ -640,7 +671,7 @@
   提供」在 Cli 已达成;② AdmissionFacade 委托 `run_admission`+`canonical_invocation_bytes`
   (DEC-009),非复刻;③ FFI C ABI 七元组完整(subject/nonce/causal_context 必填,Axon JSON
   surface),无静默默认;④ Frontend parseURA 是 skill 钦定镜像。
-  **新债与升格**:F-040 入册(backend 包 `<self>.invoke_remote` + 帧形状逐字节手抄);
+  **新债与升格**:F-040 入册(backend 包 `runtime.invoke_remote` + 帧形状逐字节手抄);
   F-004 升格为「第二 invocation 载体」边界债,与 F-038/F-040 同病归批;
   F-015 定性升格:从「未用 SDK」到「协议真源二元化」(Rule 1 拒绝类)。
 - **2026-06-12 第 9 轮**(loop 重启,cron 0d1d80b5;边界维度铺满):
@@ -945,9 +976,8 @@
   1168b09/6e34457)。**零新债**。daemon catch-all 远端臂仍在制。
 - **2026-06-12 第 50 轮(循环会话,(b) 裁定消化)**:承认第 49 轮的反向命中——运载问题
   的答案在已批 spec §0.2:48 字面里,路由前未查批文,违自家决策密度家规(记忆原则再固化)。
-  (b) 终形入 prep 件 §七:**backend 切换再简化**——RemoteRoutingClient 整体退役(分类器/
-  transportCaller/origin 提取全归 daemon),handler 请求原样直交 canonical 面;删除清单
-  不变,时点 = daemon catch-all 远端臂落地(载体施工中)。ec0b7a60 形仍服务跨域腿。
+  (b) 终形已落地:**backend 切换再简化**——backend 路由 adapter 整体退役(分类器/
+  transportCaller/origin 提取全归 daemon),handler 请求原样直交 canonical 面。ec0b7a60 形仍服务跨域腿。
 - **2026-06-12 第 48 轮(循环会话)**:增量审计 Axon aa0bb5f2(domain→wire receipt 投影,
   DEC-F004 审计 5)——try_* 读者的出站镜像全集(身份/因果四形/callee 签名/六变体
   authority binding 双 proof 体),审计承载字段逐字过线(canonical bytes 覆盖
@@ -1155,4 +1185,3 @@
   36 处 result_large_err 源头归零,尺寸 pin + wire 透明双钉);顺藤摸出 **F-053**(normative
   §7 落后参考实现 5 个 wire 字段,PARITY 表超报)并同轮主修(c1a03e8f:§7.1 全 wire 形 +
   诚实扩展行)。F-037 复核确认已闭(155b6b4)。
-

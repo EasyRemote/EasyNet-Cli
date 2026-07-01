@@ -16,7 +16,7 @@ mod tests;
 use serde_json::Value;
 
 use crate::runtime::ability_dispatch::EnvelopeContext;
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
+use crate::runtime::plugin_host::errors::Result;
 
 pub use command::{SidecarCommand, SidecarExecutionModel};
 pub use frame::{SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame};
@@ -32,40 +32,14 @@ pub fn sidecar_invocation_from_context(
     ability: &str,
     args: Value,
 ) -> Result<SidecarInvocationEnvelope> {
-    let caller = env
-        .caller
-        .ok_or_else(|| PluginHostError::SidecarProtocolViolation {
-            message: format!("missing caller in Axon envelope for sidecar ability {ability}"),
-        })?;
-    let callee = env
-        .callee
-        .ok_or_else(|| PluginHostError::SidecarProtocolViolation {
-            message: format!("missing callee in Axon envelope for sidecar ability {ability}"),
-        })?;
-    let subject = env
-        .subject
-        .ok_or_else(|| PluginHostError::SidecarProtocolViolation {
-            message: format!("missing subject in Axon envelope for sidecar ability {ability}"),
-        })?;
-    let invocation_nonce =
-        env.invocation_nonce
-            .ok_or_else(|| PluginHostError::SidecarProtocolViolation {
-                message: format!("missing nonce in Axon envelope for sidecar ability {ability}"),
-            })?;
-    let causal_context =
-        env.causal_context
-            .ok_or_else(|| PluginHostError::SidecarProtocolViolation {
-                message: format!(
-                    "missing causal context in Axon envelope for sidecar ability {ability}"
-                ),
-            })?;
+    let _ = ability;
     Ok(SidecarInvocationEnvelope {
-        caller,
-        callee,
-        ability: env.ability.unwrap_or_else(|| ability.to_string()),
-        subject,
-        invocation_nonce,
-        causal_context,
+        caller: env.caller().to_string(),
+        callee: env.callee().to_string(),
+        ability: env.ability().to_string(),
+        subject: env.subject().to_string(),
+        invocation_nonce: env.invocation_nonce().to_vec(),
+        causal_context: env.causal_context().clone(),
         args,
     })
 }

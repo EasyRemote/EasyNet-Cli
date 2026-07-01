@@ -12,6 +12,30 @@ patch.
 
 ---
 
+## 2026-06-21 supersession: Ability control plane
+
+This file records the historical `v0.2.0-typed-dispatch` L2 execution basin.
+Its statements about `AbilityName`, call paths, member-call syntax, and
+`IrTarget` remain useful for that layer.
+
+They are not the current authority model for daemon/plugin/device abilities.
+For the current model, use `docs/design/ability-control-plane-model.md`.
+
+In particular, older phrases such as "Ability is a method", "there is no
+global ability identity", and "agent public abilities are methods" must not be
+used to override the current split:
+
+```text
+AbilityDescriptor = versioned governed interface
+AuthorityBinding = governance predicate over advertise + invoke
+AbilityImpl = versioned executable binding
+Daemon = projection + dispatch runtime
+Receipt = versioned, verifiable execution fact
+```
+
+Read the "Ability semantics" section below as scoped to the historical L2
+EAL typed-dispatch surface, not as a complete daemon control-plane ontology.
+
 ## Execution layer
 
 **Mission runtime is the single execution path.** Every cross-agent

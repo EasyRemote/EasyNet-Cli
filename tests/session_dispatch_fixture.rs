@@ -10,7 +10,7 @@
 //
 // Why a separate fixture rather than the `capture_rust_transport`
 // flow: Request/RequestResult flow only on the device → hub
-// direction over `<self>.session`, which the existing capture
+// direction over `session.open`, which the existing capture
 // harness (synthetic client driving a hub) does not exercise. C3+C4
 // land the dispatch handlers; until then the wire shape is checked
 // statically here.

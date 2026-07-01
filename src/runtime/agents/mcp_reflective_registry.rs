@@ -44,8 +44,9 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
+use crate::runtime::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
 use crate::runtime::execution::mcp_client::McpClientService;
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
@@ -69,7 +70,9 @@ pub const MCP_UPSTREAM_SOURCE_PREFIX: &str = "mcp_upstream:";
 /// raw input so `from_env` can log exactly what the operator typed
 /// (F-034: data-bearing typed error, not a message string).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unrecognized MCP reflection mode `{0}`; expected lazy|background|off|disabled|0|false|eager|sync|blocking")]
+#[error(
+    "unrecognized MCP reflection mode `{0}`; expected lazy|background|off|disabled|0|false|eager|sync|blocking"
+)]
 pub struct UnknownReflectionMode(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -951,8 +954,16 @@ async fn refresh_server_inner<W: RegistryWriter>(
     // `hot_unregister_removes_dynamic_entry_without_touching_static`
     // pin in `ability_dispatch`).
     for prev in previously_reflected {
-        if !new_local_names.contains(prev) && writer.unregister(prev) {
-            diff.removed.push(prev.clone());
+        if !new_local_names.contains(prev) {
+            match writer.unregister(prev) {
+                Ok(true) => diff.removed.push(prev.clone()),
+                Ok(false) => {}
+                Err(error) => diff.failed.push(ReflectFailure {
+                    server: server_name.to_string(),
+                    tool: Some(prev.clone()),
+                    reason: format!("unregister stale reflected ability failed: {error}"),
+                }),
+            }
         }
     }
 
@@ -1066,14 +1077,16 @@ trait RegistryWriter {
         &mut self,
         name: String,
         owner: OwnerKind,
+        authority_scope: AuthorityScope,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
-    );
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()>;
 
     /// Remove every trace of `name`. Returns `true` when something
     /// was actually removed. Static writers touch the boot maps;
     /// dynamic writers touch only the hot-reload side table.
-    fn unregister(&mut self, name: &str) -> bool;
+    fn unregister(&mut self, name: &str) -> anyhow::Result<bool>;
 
     /// Discriminator shown to operators in the collision error
     /// message so they can tell whether the prior registration came
@@ -1106,21 +1119,29 @@ struct StaticWriter<'a> {
 
 impl RegistryWriter for StaticWriter<'_> {
     fn has(&self, name: &str) -> bool {
-        self.reg.has_rpc(name) || self.reg.has_stream(name) || self.reg.has_bidi(name)
+        self.reg.has_registered_handler(name)
     }
 
     fn register_stream(
         &mut self,
         name: String,
         owner: OwnerKind,
+        authority_scope: AuthorityScope,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
-    ) {
-        self.reg
-            .register_stream_with_spec(name, owner, manifest, handler);
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        self.reg.register_stream_with_spec_impl_and_authority_scope(
+            name,
+            owner,
+            authority_scope,
+            manifest,
+            handler,
+            implementation,
+        )
     }
 
-    fn unregister(&mut self, name: &str) -> bool {
+    fn unregister(&mut self, name: &str) -> anyhow::Result<bool> {
         self.reg.unregister(name)
     }
 
@@ -1144,21 +1165,30 @@ struct DynamicWriter<'a> {
 
 impl RegistryWriter for DynamicWriter<'_> {
     fn has(&self, name: &str) -> bool {
-        self.reg.has_rpc(name) || self.reg.has_stream(name) || self.reg.has_bidi(name)
+        self.reg.has_registered_handler(name)
     }
 
     fn register_stream(
         &mut self,
         name: String,
         owner: OwnerKind,
+        authority_scope: AuthorityScope,
         manifest: AbilityManifest,
         handler: crate::runtime::ability_dispatch::LocalStreamHandler,
-    ) {
+        implementation: ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
         self.reg
-            .hot_register_stream_with_spec(name, owner, manifest, handler);
+            .hot_register_stream_with_spec_impl_and_authority_scope(
+                name,
+                owner,
+                authority_scope,
+                manifest,
+                handler,
+                implementation,
+            )
     }
 
-    fn unregister(&mut self, name: &str) -> bool {
+    fn unregister(&mut self, name: &str) -> anyhow::Result<bool> {
         self.reg.hot_unregister(name)
     }
 
@@ -1220,8 +1250,8 @@ fn register_one_tool<W: RegistryWriter>(
             ),
         });
     }
-    let owner_kind =
-        owner_kind_for_descriptor_owner(owner_ura).map_err(|reason| ReflectFailure {
+    let owner_authority =
+        descriptor_owner_authority(owner_ura).map_err(|reason| ReflectFailure {
             server: server_name.to_string(),
             tool: Some(upstream_tool.clone()),
             reason,
@@ -1299,7 +1329,20 @@ fn register_one_tool<W: RegistryWriter>(
         },
     );
 
-    writer.register_stream(local_name.clone(), owner_kind, manifest, handler);
+    writer
+        .register_stream(
+            local_name.clone(),
+            owner_authority.owner_kind,
+            owner_authority.authority_scope,
+            manifest,
+            handler,
+            ControlPlaneImplementation::new(AbilityImplSource::Mcp, RuntimeEnv::mcp(server_name)),
+        )
+        .map_err(|e| ReflectFailure {
+            server: server_name.to_string(),
+            tool: Some(upstream_tool.clone()),
+            reason: format!("control-plane registration failed: {e}"),
+        })?;
 
     // Build the descriptor that downstream `meta.list_abilities`
     // and `federation.advertise_abilities` will surface. CRITICAL:
@@ -1326,10 +1369,16 @@ fn register_one_tool<W: RegistryWriter>(
     })
 }
 
-fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DescriptorOwnerAuthority {
+    owner_kind: OwnerKind,
+    authority_scope: AuthorityScope,
+}
+
+fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthority, String> {
     let parsed =
         crate::ura::parse_ura(owner_ura).map_err(|e| format!("owner URA parse failed: {e}"))?;
-    match parsed.kind {
+    let (owner_kind, owner_projection, authority_root) = match parsed.kind {
         crate::ura::URAKind::Agent => {
             // DEC-F048: MCP reflective descriptors carry user-configured
             // tooling. A device-sponsored System Agent carries no user
@@ -1345,20 +1394,45 @@ fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String>
             let Some((_, agent_id)) = parsed.agent_ids() else {
                 return Err("owner agent URA is missing agent_id".to_string());
             };
-            Ok(OwnerKind::Agent(agent_id.to_string()))
+            (
+                OwnerKind::Agent(agent_id.to_string()),
+                format!("agent:{agent_id}"),
+                owner_ura.to_string(),
+            )
         }
-        crate::ura::URAKind::Hub => Ok(OwnerKind::Hub),
-        crate::ura::URAKind::Device => Ok(OwnerKind::Device),
+        crate::ura::URAKind::Hub => (OwnerKind::Hub, "hub".to_string(), owner_ura.to_string()),
+        crate::ura::URAKind::Device => (
+            OwnerKind::Device,
+            "device".to_string(),
+            owner_ura.to_string(),
+        ),
         crate::ura::URAKind::User => {
             let Some(user_id) = parsed.user_id() else {
                 return Err("owner user URA is missing user_id".to_string());
             };
-            Ok(OwnerKind::User(user_id.to_string()))
+            (
+                OwnerKind::User(user_id.to_string()),
+                format!("user:{user_id}"),
+                crate::ura::agent_ura(&parsed.realm, user_id, "account"),
+            )
         }
-        other => Err(format!(
-            "owner URA kind {other:?} cannot own a local ability"
-        )),
-    }
+        other => {
+            return Err(format!(
+                "owner URA kind {other:?} cannot own a local ability"
+            ))
+        }
+    };
+    let authority_scope = AuthorityScope::new(owner_projection, authority_root)
+        .map_err(|error| format!("owner authority scope rejected: {error}"))?;
+    Ok(DescriptorOwnerAuthority {
+        owner_kind,
+        authority_scope,
+    })
+}
+
+#[cfg(test)]
+fn owner_kind_for_descriptor_owner(owner_ura: &str) -> Result<OwnerKind, String> {
+    descriptor_owner_authority(owner_ura).map(|authority| authority.owner_kind)
 }
 
 /// `NotificationSink` that forwards every upstream
@@ -1996,11 +2070,13 @@ while True:
         assert!(reg.has_stream("echo_one"));
         assert!(reg.has_stream("echo_two"));
         assert_eq!(
-            reg.lookup_owner("echo_one"),
+            reg.control_plane_owner("echo_one"),
             Some(OwnerKind::Agent("mcp".to_string()))
         );
-        assert!(reg.manifest_for("echo_one").is_none());
-        assert!(reg.manifest_for_dynamic("echo_one").is_some());
+        // Hot-registered MCP tool: its manifest is present in the
+        // control-plane store (the commit choke point dual-writes static
+        // and dynamic registrations alike).
+        assert!(reg.control_plane_manifest("echo_one").is_some());
         assert_eq!(
             reflected_names_by_server(&result).get("echo").cloned(),
             Some(vec!["echo_one".to_string(), "echo_two".to_string()])

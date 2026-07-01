@@ -2,26 +2,32 @@
 // =====================================
 //
 // File: src/runtime/plugin_host/host_api.rs
-// Description: Register loaded plugin abilities into AxonAbilityCatalog.
+// Description: Collect loaded plugin AbilityImpl contributions for daemon binding.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::core::ability_spec::{EalExec, McpExec};
+use crate::runtime::ability::{AbilityImplSource, RuntimeEnv};
 use crate::runtime::ability_dispatch::{
-    AxonAbilityCatalog, EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
-    LocalStreamHandlerWithEnvelope, OwnerKind,
+    EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
+    LocalStreamHandlerWithEnvelope,
 };
 use crate::runtime::context::ParentInvocationContext;
+use crate::runtime::plugin_host::contribution::{
+    PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
+};
 use crate::runtime::plugin_host::errors::{PluginHostError, Result};
 use crate::runtime::plugin_host::load_plan::PluginLoadPlan;
 use crate::runtime::plugin_host::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::runtime::plugin_host::realtime::PluginRealtimeActivationPlan;
 use crate::runtime::plugin_host::sidecar::{
     sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,
 };
+use crate::runtime::plugin_host::PluginRealtimeCapability;
 
 /// Runtime host for daemon plugin packages.
 ///
@@ -38,6 +44,38 @@ pub struct PluginHotReloadReport {
     pub loaded_packages: Vec<String>,
     pub registered_abilities: Vec<String>,
     pub unregistered_abilities: Vec<String>,
+    pub realtime_activation_hints: Vec<PluginRealtimeActivationHint>,
+    pub realtime_activation_plans: Vec<PluginRealtimeActivationPlan>,
+}
+
+/// Quick-add realtime capability hint returned after plugin reload.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PluginRealtimeActivationHint {
+    pub package_id: String,
+    pub package_version: String,
+    pub capabilities: Vec<PluginRealtimeCapability>,
+    pub activation_plans: Vec<PluginRealtimeActivationPlan>,
+}
+
+/// Boot-time plugin contribution split.
+///
+/// Builtin packages are compiled into the daemon and bind into the static
+/// execution index. Installed sidecar/declarative packages bind into the
+/// dynamic execution index so reload/remove can reconcile them post-boot.
+#[derive(Clone, Default)]
+pub struct PluginBootContributionSet {
+    builtin: PluginContributionSet,
+    runtime: PluginContributionSet,
+}
+
+impl PluginBootContributionSet {
+    pub fn builtin(&self) -> &PluginContributionSet {
+        &self.builtin
+    }
+
+    pub fn runtime(&self) -> &PluginContributionSet {
+        &self.runtime
+    }
 }
 
 impl PluginRuntimeHost {
@@ -46,144 +84,43 @@ impl PluginRuntimeHost {
         Self::default()
     }
 
-    /// Register every loaded package into the ability catalog.
-    pub fn register(&self, load_plan: &PluginLoadPlan, reg: &mut AxonAbilityCatalog) -> Result<()> {
-        let existing: BTreeSet<String> = reg.list_abilities().into_iter().collect();
-        for entry in load_plan.entries() {
-            if !entry.is_loaded() {
-                continue;
-            }
-            let package = entry.package();
-            reject_catalog_collisions(package, &existing)?;
-            match package.manifest().kind() {
-                PluginKind::Builtin => {
-                    let binding = package.builtin_binding().ok_or_else(|| {
-                        PluginHostError::MissingBuiltinBinding(package.id().as_str().to_string())
-                    })?;
-                    (binding.register)(reg, package.manifest().limits());
-                }
-                PluginKind::Sidecar => {
-                    let command = SidecarCommand::from_package(package);
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
-                    register_json_frame_process_package(package, &mut sink, command)?;
-                    self.remember_runtime_plugin_package(package);
-                }
-                PluginKind::Declarative => {
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
-                    register_declarative_package(package, &mut sink)?;
-                    self.remember_runtime_plugin_package(package);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Hot-register loaded plugin packages into the catalogue's dynamic side.
-    ///
-    /// This is the daemon reload path after an install/update transaction. It
-    /// never mutates the static boot maps; static abilities continue to win on
-    /// name collision, and dynamic rows can be removed with
-    /// [`AxonAbilityCatalog::hot_unregister`].
-    pub fn hot_register(&self, load_plan: &PluginLoadPlan, reg: &AxonAbilityCatalog) -> Result<()> {
-        for entry in load_plan.entries() {
-            if !entry.is_loaded() {
-                continue;
-            }
-            let package = entry.package();
-            match package.manifest().kind() {
-                PluginKind::Builtin => {}
-                PluginKind::Sidecar => {
-                    reject_static_catalog_collisions(package, reg)?;
-                    let command = SidecarCommand::from_package(package);
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
-                    register_json_frame_process_package(package, &mut sink, command)?;
-                    self.remember_runtime_plugin_package(package);
-                }
-                PluginKind::Declarative => {
-                    reject_static_catalog_collisions(package, reg)?;
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
-                    register_declarative_package(package, &mut sink)?;
-                    self.remember_runtime_plugin_package(package);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Reconcile the daemon runtime with a freshly computed plugin load plan.
-    ///
-    /// Builtin plugins are intentionally skipped: they are compiled into the
-    /// daemon and cannot be installed or removed by package transactions. This
-    /// method owns only installed sidecar/declarative packages.
-    pub fn hot_reload(
+    /// Collect boot-time contributions without applying daemon authority
+    /// policy or mutating the Axon runtime.
+    pub fn collect_boot_contributions(
         &self,
         load_plan: &PluginLoadPlan,
-        reg: &AxonAbilityCatalog,
-    ) -> Result<PluginHotReloadReport> {
-        let mut report = PluginHotReloadReport::default();
-        let current = loaded_runtime_plugin_ability_names(load_plan);
-
-        for entry in load_plan.entries() {
-            if !entry.is_loaded() || entry.package().builtin_binding().is_some() {
-                continue;
-            }
-            let package = entry.package();
-            report.loaded_packages.push(format!(
-                "{}@{}",
-                package.id().as_str(),
-                package.version().as_str()
-            ));
-            match package.manifest().kind() {
-                PluginKind::Builtin => {}
-                PluginKind::Sidecar => {
-                    reject_static_catalog_collisions(package, reg)?;
-                    let command = SidecarCommand::from_package(package);
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
-                    register_json_frame_process_package(package, &mut sink, command)?;
-                }
-                PluginKind::Declarative => {
-                    reject_static_catalog_collisions(package, reg)?;
-                    let mut sink = CatalogRegistrationSink::dynamic(reg);
-                    register_declarative_package(package, &mut sink)?;
-                }
-            }
-        }
-
-        let mut tracked = self
-            .tracked_runtime_abilities
-            .write()
-            .expect("plugin runtime ability tracker poisoned");
-        let stale = tracked
-            .difference(&current)
-            .cloned()
-            .collect::<Vec<String>>();
-        for ability in stale {
-            reg.hot_remove_runtime_ability(&ability);
-            report.unregistered_abilities.push(ability);
-        }
-        *tracked = current;
-        report.registered_abilities = tracked.iter().cloned().collect();
-        report.loaded_packages.sort();
-        report.registered_abilities.sort();
-        report.unregistered_abilities.sort();
-        Ok(report)
+    ) -> Result<PluginBootContributionSet> {
+        Ok(PluginBootContributionSet {
+            builtin: collect_plugin_contributions(load_plan, BuiltinContribution::Only)?,
+            runtime: collect_plugin_contributions(load_plan, BuiltinContribution::Skip)?,
+        })
     }
 
-    fn remember_runtime_plugin_package(
+    /// Collect installed runtime contributions for post-boot binding/reload.
+    pub fn collect_runtime_contributions(
         &self,
-        package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-    ) {
+        load_plan: &PluginLoadPlan,
+    ) -> Result<PluginContributionSet> {
+        collect_plugin_contributions(load_plan, BuiltinContribution::Skip)
+    }
+
+    pub fn runtime_ability_names(&self, load_plan: &PluginLoadPlan) -> BTreeSet<String> {
+        loaded_runtime_plugin_ability_names(load_plan)
+    }
+
+    pub fn tracked_runtime_abilities(&self) -> BTreeSet<String> {
+        self.tracked_runtime_abilities
+            .read()
+            .expect("plugin runtime ability tracker poisoned")
+            .clone()
+    }
+
+    pub fn replace_tracked_runtime_abilities(&self, abilities: BTreeSet<String>) {
         let mut tracked = self
             .tracked_runtime_abilities
             .write()
             .expect("plugin runtime ability tracker poisoned");
-        tracked.extend(
-            package
-                .manifest()
-                .abilities()
-                .iter()
-                .map(|ability| ability.name().to_string()),
-        );
+        *tracked = abilities;
     }
 }
 
@@ -205,119 +142,157 @@ fn loaded_runtime_plugin_ability_names(load_plan: &PluginLoadPlan) -> BTreeSet<S
     names
 }
 
-fn reject_catalog_collisions(
+fn declarative_impl_source(binding: Option<&PluginDeclarativeBinding>) -> AbilityImplSource {
+    match binding {
+        Some(PluginDeclarativeBinding::Eal { .. }) => AbilityImplSource::Eal,
+        Some(PluginDeclarativeBinding::Mcp { .. }) => AbilityImplSource::Mcp,
+        Some(PluginDeclarativeBinding::Exec { .. }) | None => AbilityImplSource::DeclarativePlugin,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BuiltinContribution {
+    Only,
+    Skip,
+}
+
+fn collect_plugin_contributions(
+    load_plan: &PluginLoadPlan,
+    builtin: BuiltinContribution,
+) -> Result<PluginContributionSet> {
+    let mut contributions = PluginContributionSet::default();
+    for entry in load_plan.entries() {
+        if !entry.is_loaded() {
+            continue;
+        }
+        let package = entry.package();
+        let is_builtin = package.builtin_binding().is_some();
+        match builtin {
+            BuiltinContribution::Only if !is_builtin => continue,
+            BuiltinContribution::Skip if is_builtin => continue,
+            _ => {}
+        }
+        contributions.push(collect_package_contribution(package)?);
+    }
+    Ok(contributions)
+}
+
+fn collect_package_contribution(
     package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-    existing: &BTreeSet<String>,
-) -> Result<()> {
-    let second = format!("{}@{}", package.id().as_str(), package.version().as_str());
-    for ability in package.manifest().abilities() {
-        if existing.contains(ability.name()) {
-            return Err(PluginHostError::DuplicateAbilityOwner {
-                ability: ability.name().to_string(),
-                first: "daemon-catalog".to_string(),
-                second: second.clone(),
-            });
+) -> Result<crate::runtime::plugin_host::contribution::PluginPackageContribution> {
+    let manifest = package.manifest();
+    let mut builder = PluginContributionBuilder::new(
+        package.id().as_str().to_string(),
+        package.version().as_str().to_string(),
+        manifest.kind(),
+        manifest.limits(),
+        PluginRequirementSet::new(
+            manifest.permissions().to_vec(),
+            manifest.resources().to_vec(),
+        ),
+        manifest.realtime_capabilities().to_vec(),
+    );
+
+    match manifest.kind() {
+        PluginKind::Builtin => {
+            let binding = package.builtin_binding().ok_or_else(|| {
+                PluginHostError::MissingBuiltinBinding(package.id().as_str().to_string())
+            })?;
+            (binding.contribute)(&mut builder, manifest.limits())?;
+        }
+        PluginKind::Sidecar => {
+            let command = SidecarCommand::from_package(package);
+            let mut sink =
+                ContributionRegistrationSink::new(&mut builder, AbilityImplSource::SidecarPlugin);
+            contribute_json_frame_process_package(package, &mut sink, command)?;
+        }
+        PluginKind::Declarative => {
+            let impl_source = declarative_impl_source(manifest.declarative_binding());
+            let mut sink = ContributionRegistrationSink::new(&mut builder, impl_source);
+            contribute_declarative_package(package, &mut sink)?;
         }
     }
-    Ok(())
+
+    builder.finish()
 }
 
-fn reject_static_catalog_collisions(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-    reg: &AxonAbilityCatalog,
-) -> Result<()> {
-    let second = format!("{}@{}", package.id().as_str(), package.version().as_str());
-    for ability in package.manifest().abilities() {
-        if reg.has_static_ability(ability.name()) {
-            return Err(PluginHostError::DuplicateAbilityOwner {
-                ability: ability.name().to_string(),
-                first: "daemon-static-catalog".to_string(),
-                second: second.clone(),
-            });
+struct ContributionRegistrationSink<'a> {
+    builder: &'a mut PluginContributionBuilder,
+    impl_source: AbilityImplSource,
+    runtime_env: RuntimeEnv,
+}
+
+impl<'a> ContributionRegistrationSink<'a> {
+    fn new(builder: &'a mut PluginContributionBuilder, impl_source: AbilityImplSource) -> Self {
+        let runtime_env = builder.plugin_runtime_env();
+        Self {
+            builder,
+            impl_source,
+            runtime_env,
         }
     }
-    Ok(())
-}
 
-enum CatalogRegistrationSink<'a> {
-    Dynamic(&'a AxonAbilityCatalog),
-}
-
-impl<'a> CatalogRegistrationSink<'a> {
-    fn dynamic(reg: &'a AxonAbilityCatalog) -> Self {
-        Self::Dynamic(reg)
-    }
-
-    fn register_rpc(
+    fn contribute_rpc(
         &mut self,
         ability: String,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
-    ) {
-        match self {
-            Self::Dynamic(reg) => {
-                reg.hot_register_rpc_with_envelope_and_spec(
-                    ability,
-                    OwnerKind::Device,
-                    manifest,
-                    handler,
-                );
-            }
-        }
+    ) -> Result<()> {
+        self.builder.rpc(
+            ability,
+            manifest,
+            self.impl_source.clone(),
+            self.runtime_env.clone(),
+            handler,
+        )
     }
 
-    fn register_stream(
+    fn contribute_stream(
         &mut self,
         ability: String,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
-    ) {
-        match self {
-            Self::Dynamic(reg) => {
-                reg.hot_register_stream_with_envelope_and_spec(
-                    ability,
-                    OwnerKind::Device,
-                    manifest,
-                    handler,
-                );
-            }
-        }
+    ) -> Result<()> {
+        self.builder.stream(
+            ability,
+            manifest,
+            self.impl_source.clone(),
+            self.runtime_env.clone(),
+            handler,
+        )
     }
 
-    fn register_bidi(
+    fn contribute_bidi(
         &mut self,
         ability: String,
         manifest: crate::core::ability_spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
-    ) {
-        match self {
-            Self::Dynamic(reg) => {
-                reg.hot_register_bidi_with_envelope_and_spec(
-                    ability,
-                    OwnerKind::Device,
-                    manifest,
-                    handler,
-                );
-            }
-        }
+    ) -> Result<()> {
+        self.builder.bidi(
+            ability,
+            manifest,
+            self.impl_source.clone(),
+            self.runtime_env.clone(),
+            handler,
+        )
     }
 }
 
-fn register_declarative_package(
+fn contribute_declarative_package(
     package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-    sink: &mut CatalogRegistrationSink<'_>,
+    sink: &mut ContributionRegistrationSink<'_>,
 ) -> Result<()> {
     match package.manifest().declarative_binding() {
         Some(PluginDeclarativeBinding::Exec { argv }) => {
             let command = exec_declarative_command(package, argv)?;
-            register_json_frame_process_package(package, sink, command)
+            contribute_json_frame_process_package(package, sink, command)
         }
         Some(PluginDeclarativeBinding::Eal {
             program,
             result_binding,
-        }) => register_eal_declarative_package(package, sink, program, result_binding.clone()),
+        }) => contribute_eal_declarative_package(package, sink, program, result_binding.clone()),
         Some(PluginDeclarativeBinding::Mcp { server, tool }) => {
-            register_mcp_declarative_package(package, sink, server, tool)
+            contribute_mcp_declarative_package(package, sink, server, tool)
         }
         None => Ok(()),
     }
@@ -342,9 +317,9 @@ fn exec_declarative_command(
     Ok(SidecarCommand::with_args(program, args))
 }
 
-fn register_eal_declarative_package(
+fn contribute_eal_declarative_package(
     package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-    sink: &mut CatalogRegistrationSink<'_>,
+    sink: &mut ContributionRegistrationSink<'_>,
     program: &str,
     result_binding: Option<String>,
 ) -> Result<()> {
@@ -355,18 +330,18 @@ fn register_eal_declarative_package(
     };
     for ability in package.manifest().abilities() {
         let ability_name = ability.name().to_string();
-        sink.register_rpc(
+        sink.contribute_rpc(
             ability_name.clone(),
             package.ability_registry_manifest(&ability_name)?,
             eal_rpc_handler(spec.clone()),
-        );
+        )?;
     }
     Ok(())
 }
 
-fn register_mcp_declarative_package(
+fn contribute_mcp_declarative_package(
     package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-    sink: &mut CatalogRegistrationSink<'_>,
+    sink: &mut ContributionRegistrationSink<'_>,
     server: &str,
     tool: &str,
 ) -> Result<()> {
@@ -377,11 +352,11 @@ fn register_mcp_declarative_package(
     };
     for ability in package.manifest().abilities() {
         let ability_name = ability.name().to_string();
-        sink.register_rpc(
+        sink.contribute_rpc(
             ability_name.clone(),
             package.ability_registry_manifest(&ability_name)?,
             mcp_rpc_handler(spec.clone()),
-        );
+        )?;
     }
     Ok(())
 }
@@ -406,9 +381,9 @@ fn ensure_declarative_rpc_only(
     Ok(())
 }
 
-fn register_json_frame_process_package(
+fn contribute_json_frame_process_package(
     package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-    sink: &mut CatalogRegistrationSink<'_>,
+    sink: &mut ContributionRegistrationSink<'_>,
     command: SidecarCommand,
 ) -> Result<()> {
     for ability in package.manifest().abilities() {
@@ -416,25 +391,25 @@ fn register_json_frame_process_package(
         let manifest = package.ability_registry_manifest(&ability_name)?;
         match ability.call_mode() {
             PluginCallMode::Rpc => {
-                sink.register_rpc(
+                sink.contribute_rpc(
                     ability_name.clone(),
                     manifest,
                     rpc_process_handler(command.clone(), ability_name),
-                );
+                )?;
             }
             PluginCallMode::Stream => {
-                sink.register_stream(
+                sink.contribute_stream(
                     ability_name.clone(),
                     manifest,
                     stream_process_handler(command.clone(), ability_name),
-                );
+                )?;
             }
             PluginCallMode::Bidi => {
-                sink.register_bidi(
+                sink.contribute_bidi(
                     ability_name.clone(),
                     manifest,
                     bidi_process_handler(command.clone(), ability_name),
-                );
+                )?;
             }
         }
     }
@@ -476,16 +451,12 @@ fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
 
 fn invocation_context_from_envelope(env: &EnvelopeContext) -> ParentInvocationContext {
     ParentInvocationContext {
-        caller: env.caller.clone(),
-        callee: env.callee.clone(),
-        ability: env.ability.clone(),
-        subject: env.subject.clone(),
-        invocation_nonce: env.invocation_nonce.clone(),
-        causal_context: Some(
-            env.causal_context
-                .clone()
-                .unwrap_or_else(|| json!({"kind": "none"})),
-        ),
+        caller: Some(env.caller().to_string()),
+        callee: Some(env.callee().to_string()),
+        ability: Some(env.ability().to_string()),
+        subject: Some(env.subject().to_string()),
+        invocation_nonce: Some(env.invocation_nonce().to_vec()),
+        causal_context: Some(env.causal_context().clone()),
     }
 }
 
@@ -521,9 +492,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::runtime::ability::CallMode as DescriptorCallMode;
+    use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
     use crate::runtime::plugin_host::package::PluginPackage;
-    use crate::runtime::plugin_host::{PluginLoadPlanner, PluginPackageIndex};
+    use crate::runtime::plugin_host::{
+        PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
+    };
 
     #[test]
     fn plugin_runtime_host_registers_exec_declarative_rpc() {
@@ -531,22 +506,35 @@ mod tests {
         write_exec_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let plan = PluginLoadPlanner::new("macos").plan(&index);
         let mut catalog = AxonAbilityCatalog::new();
 
-        PluginRuntimeHost::new()
-            .register(&plan, &mut catalog)
+        manager_from_index(index)
+            .register_current_plugins(&mut catalog)
             .expect("register declarative exec");
 
         assert!(catalog.has_rpc("test.declarative_echo"));
         let manifest = catalog
-            .manifest_for_dynamic("test.declarative_echo")
+            .control_plane_manifest("test.declarative_echo")
             .expect("registered plugin ability manifest");
         assert_eq!(
             manifest.description(),
             "test descriptor for test.declarative_echo"
         );
         assert_eq!(manifest.input_schema()["type"], "object");
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_echo", DescriptorCallMode::Rpc)
+            .expect("plugin control-plane lookup is unambiguous")
+            .expect("plugin control-plane record");
+        assert_eq!(
+            *record.implementation().source(),
+            AbilityImplSource::DeclarativePlugin
+        );
+        assert!(record
+            .implementation()
+            .runtime_env()
+            .label()
+            .contains("plugin:"));
+        assert_eq!(record.authority().scope().owner_projection(), "device");
         let result = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
@@ -566,16 +554,15 @@ mod tests {
         write_exec_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let plan = PluginLoadPlanner::new("macos").plan(&index);
-        let catalog = AxonAbilityCatalog::new();
+        let mut catalog = AxonAbilityCatalog::new();
 
-        PluginRuntimeHost::new()
-            .hot_register(&plan, &catalog)
+        manager_from_index(index)
+            .register_current_plugins(&mut catalog)
             .expect("hot register declarative exec");
 
         assert!(catalog.has_dynamic("test.declarative_echo"));
         let manifest = catalog
-            .manifest_for_dynamic("test.declarative_echo")
+            .control_plane_manifest("test.declarative_echo")
             .expect("hot registered plugin ability manifest");
         assert_eq!(
             manifest.description(),
@@ -594,7 +581,9 @@ mod tests {
             .expect("hot declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hot"}));
 
-        assert!(catalog.hot_unregister("test.declarative_echo"));
+        assert!(catalog
+            .hot_unregister("test.declarative_echo")
+            .expect("hot declarative unregister"));
         assert!(!catalog.has_dynamic("test.declarative_echo"));
         assert!(!catalog.has_rpc("test.declarative_echo"));
         catalog
@@ -615,7 +604,6 @@ mod tests {
         write_sidecar_package(root.path(), "fs.read");
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let plan = PluginLoadPlanner::new("macos").plan(&index);
         let mut catalog = AxonAbilityCatalog::new();
         catalog.register_rpc_with_owner(
             "fs.read",
@@ -623,8 +611,9 @@ mod tests {
             Arc::new(|_args| Ok(json!({"from": "static-system"}))),
         );
 
-        let err = PluginRuntimeHost::new()
-            .hot_reload(&plan, &catalog)
+        let manager = PluginRuntimeManager::from_state(empty_state());
+        let err = manager
+            .reload_plugins_from_state(planned_state(index), &catalog)
             .expect_err("hot reload must reject plugins that shadow system abilities");
         assert!(
             matches!(
@@ -653,14 +642,18 @@ mod tests {
         write_eal_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let plan = PluginLoadPlanner::new("macos").plan(&index);
         let mut catalog = AxonAbilityCatalog::new();
 
-        PluginRuntimeHost::new()
-            .register(&plan, &mut catalog)
+        manager_from_index(index)
+            .register_current_plugins(&mut catalog)
             .expect("register declarative eal");
 
         assert!(catalog.has_rpc("test.declarative_eal"));
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_eal", DescriptorCallMode::Rpc)
+            .expect("EAL plugin control-plane lookup is unambiguous")
+            .expect("EAL plugin control-plane record");
+        assert_eq!(*record.implementation().source(), AbilityImplSource::Eal);
         let err = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
@@ -682,16 +675,20 @@ mod tests {
         write_mcp_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let plan = PluginLoadPlanner::new("macos").plan(&index);
-        let catalog = AxonAbilityCatalog::new();
+        let mut catalog = AxonAbilityCatalog::new();
 
-        PluginRuntimeHost::new()
-            .hot_register(&plan, &catalog)
+        manager_from_index(index)
+            .register_current_plugins(&mut catalog)
             .expect("hot register declarative mcp");
 
         assert!(catalog.has_dynamic("test.declarative_mcp"));
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_mcp", DescriptorCallMode::Rpc)
+            .expect("MCP plugin control-plane lookup is unambiguous")
+            .expect("MCP plugin control-plane record");
+        assert_eq!(*record.implementation().source(), AbilityImplSource::Mcp);
         let manifest = catalog
-            .manifest_for_dynamic("test.declarative_mcp")
+            .control_plane_manifest("test.declarative_mcp")
             .expect("hot registered MCP plugin ability manifest");
         assert_eq!(
             manifest.description(),
@@ -721,18 +718,17 @@ mod tests {
         write_sidecar_package(root.path(), "device.test.hot_reload_remove");
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let plan = PluginLoadPlanner::new("macos").plan(&index);
         let mut catalog = AxonAbilityCatalog::new();
-        let host = PluginRuntimeHost::new();
+        let manager = manager_from_index(index);
 
-        host.register(&plan, &mut catalog)
+        manager
+            .register_current_plugins(&mut catalog)
             .expect("boot register sidecar");
         assert!(catalog.has_rpc("device.test.hot_reload_remove"));
 
         let empty = PluginPackageIndex::from_packages(Vec::new()).expect("empty index");
-        let empty_plan = PluginLoadPlanner::new("macos").plan(&empty);
-        let report = host
-            .hot_reload(&empty_plan, &catalog)
+        let report = manager
+            .reload_plugins_from_state(planned_state(empty), &catalog)
             .expect("hot reload empty plugin index");
 
         assert!(report
@@ -743,6 +739,47 @@ mod tests {
             !catalog.has_rpc("device.test.hot_reload_remove"),
             "removed plugin ability must not remain invokable through LocalRuntime"
         );
+    }
+
+    #[test]
+    fn plugin_runtime_host_hot_reload_reports_realtime_activation_hints() {
+        let root = tempfile::tempdir().expect("root");
+        write_realtime_sidecar_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
+        let catalog = AxonAbilityCatalog::new();
+
+        let report = PluginRuntimeManager::from_state(empty_state())
+            .reload_plugins_from_state(planned_state(index), &catalog)
+            .expect("hot reload realtime sidecar");
+
+        assert_eq!(report.realtime_activation_hints.len(), 1);
+        let hint = &report.realtime_activation_hints[0];
+        assert_eq!(hint.package_id, "test.sidecar.realtime");
+        assert_eq!(hint.capabilities.len(), 1);
+        assert!(hint.capabilities[0].quick_add());
+        assert_eq!(hint.activation_plans.len(), 1);
+        assert_eq!(
+            hint.activation_plans[0].status,
+            crate::runtime::plugin_host::PluginRealtimeActivationStatus::Ready
+        );
+        assert_eq!(
+            hint.activation_plans[0].available_abilities,
+            vec!["test.camera".to_string()]
+        );
+        assert_eq!(report.realtime_activation_plans.len(), 1);
+    }
+
+    fn planned_state(index: PluginPackageIndex) -> PluginRuntimeState {
+        PluginRuntimeState::from_index_with_planner(index, PluginLoadPlanner::new("macos"))
+    }
+
+    fn empty_state() -> PluginRuntimeState {
+        planned_state(PluginPackageIndex::from_packages(Vec::new()).expect("empty plugin index"))
+    }
+
+    fn manager_from_index(index: PluginPackageIndex) -> PluginRuntimeManager {
+        PluginRuntimeManager::from_state(planned_state(index))
     }
 
     fn write_exec_declarative_package(root: &std::path::Path) {
@@ -900,6 +937,58 @@ layer = "control"
         fs::write(
             root.join(format!("abilities/{ability}.ability.toml")),
             test_descriptor(ability),
+        )
+        .expect("descriptor");
+        let sidecar = root.join("bin/sidecar");
+        fs::write(&sidecar, "#!/bin/sh\n").expect("sidecar bin");
+        let mut permissions = fs::metadata(&sidecar)
+            .expect("sidecar metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&sidecar, permissions).expect("chmod sidecar");
+    }
+
+    fn write_realtime_sidecar_package(root: &std::path::Path) {
+        fs::create_dir_all(root.join("abilities")).expect("abilities dir");
+        fs::create_dir_all(root.join("bin")).expect("bin dir");
+        fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "test.sidecar.realtime"
+version = "0.1.0"
+kind = "sidecar"
+entrypoint = "bin/sidecar"
+abilities = ["abilities/*.ability.toml"]
+permissions = ["camera"]
+resources = ["camera"]
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[[ability_metadata]]
+name = "test.camera"
+layer = "operational"
+call_mode = "bidi"
+bidi_wire_kind = "json_frames"
+
+[[realtime_capability]]
+kind = "camera"
+modes = ["snapshot", "subscribe", "record"]
+transport = "invoke_bidi"
+fallback_transport = "invoke_stream"
+activation_abilities = ["test.camera"]
+permissions = ["camera"]
+resources = ["camera"]
+quick_add = true
+"#,
+        )
+        .expect("manifest");
+        fs::write(
+            root.join("abilities/test.camera.ability.toml"),
+            test_descriptor("test.camera"),
         )
         .expect("descriptor");
         let sidecar = root.join("bin/sidecar");

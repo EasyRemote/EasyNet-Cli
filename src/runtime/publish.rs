@@ -176,7 +176,6 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // Lookup tables from bootstrap_outcomes for the descriptor
     // advertise step that follows.
     let consent_ura = first_ura(&bootstrap_outcomes, "consent", "default");
-    let policy_ura = first_ura(&bootstrap_outcomes, "policy", "default");
     let mcp_ura = first_ura(&bootstrap_outcomes, "mcp", "default");
     let llm_uras: Vec<(String, String)> = bootstrap_outcomes
         .iter()
@@ -206,7 +205,6 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     let mut descriptors = profiles_mod::all_descriptors_for_host(
         &plan.host_device_ura,
         consent_ura.as_deref(),
-        policy_ura.as_deref(),
         mcp_ura.as_deref(),
         &llm_uras,
     );
@@ -234,6 +232,8 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // this cycle" rather than blocking the rest of publish — the
     // outcome row surfaces the reason.
     let live_registry = crate::runtime::agents::build_registry();
+    let hint_snapshot =
+        crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(&live_registry);
     match crate::registry::agents::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
@@ -263,10 +263,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                             let mut d = d
                                 .with_description(spec.description())
                                 .with_input_schema(spec.parameters().clone())
-                                .with_hints(crate::runtime::agents::discovery_hints_for(
-                                    &live_registry,
-                                    registry_name,
-                                ))
+                                .with_hints(hint_snapshot.for_name(registry_name))
                                 .with_source(format!("agent:{name}"));
                             d = d.with_metadata_entry("host_node_id", host_node_id.clone());
                             d = d.with_metadata_entry("runtime", entry.agent_type.to_string());
@@ -608,7 +605,7 @@ fn build_register_args(
 /// `published_ability_names` + per-agent abilities.
 fn collect_daemon_owned_ability_names() -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    // Device-profile + consent + policy + mcp + llm published
+    // Device-profile + consent + mcp + llm published
     // names — these are the names `meta.list_abilities` would
     // surface to a remote caller. Driven by the same source the
     // runtime-local registry surfaces via list_tools.
@@ -784,9 +781,9 @@ mod tests {
         BootstrapPlan {
             realm: realm.into(),
             user_id: "test-user".into(),
+            username: "test-user".into(),
             host_device_ura: host.into(),
             consent: true,
-            policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "claude".into(),
@@ -992,9 +989,9 @@ mod tests {
         let plan = BootstrapPlan {
             realm: "acme".into(),
             user_id: "alice".into(),
+            username: "alice".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
-            policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "alice".into(),
@@ -1104,9 +1101,9 @@ mod tests {
         let plan = BootstrapPlan {
             realm: "acme".into(),
             user_id: "alice".into(),
+            username: "alice".into(),
             host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
-            policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "alice".into(),

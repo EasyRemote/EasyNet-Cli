@@ -4,10 +4,10 @@
 //! "callee-side" invocation pipeline:
 //!
 //!   * its own dispatch surface (`AxonAbilityCatalog`),
-//!   * its own admission gate (`AdmissionFacade`),
+//!   * its own transport policy gate (`AdmissionFacade`),
 //!   * its own in-memory receipt store (`SharedReceiptStore`,
 //!     deleted in Phase 5a — `LedgerSink` is now the canonical
-//!     persistence surface for admission outcomes).
+//!     persistence surface for runtime outcomes).
 //!
 //! Axon's `easynet_axon::invocation` module already defines the
 //! canonical implementations of every one of those concerns —
@@ -27,15 +27,19 @@
 //!     + `LedgerSink` at daemon boot.
 //!   * Phase 3 — registration sites write directly to the shared
 //!     `LocalRuntime`; there is no legacy registry mirror.
-//!   * Phase 4 — `dispatch_shim`: `<self>.invoke_remote` /
-//!     `federation.forward_invoke` dispatch arms route through
-//!     `invoke_externally_signed_{,stream_,bidi_}async` instead of
-//!     CLI's bespoke dispatch. This part depends on tonic-generated
-//!     Axon proto types and is therefore feature-gated with
-//!     `axon-pb`.
+//!   * Phase 4 — `dispatch_shim`: `runtime.invoke_remote` /
+//!     `federation.forward_invoke` dispatch arms route through the
+//!     `local_runtime_request` factory and Axon's public
+//!     descriptor-bound request APIs instead of CLI's bespoke
+//!     dispatch. The wire shim itself depends on tonic-generated Axon
+//!     proto types and is therefore feature-gated with `axon-pb`.
 //!   * Phase 5 — the CLI-side parallel implementations get deleted.
 
+pub(crate) mod descriptor_ref;
 #[cfg(feature = "axon-pb")]
 pub mod dispatch_shim;
 pub mod hot_agent_registrar;
+pub(crate) mod local_runtime_request;
 pub mod runtime_factory;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod wire_descriptor;

@@ -1,0 +1,13 @@
+schema_version = "1"
+name = "browser.attach_session"
+description = "[V0 MOCK — RETURNS PLACEHOLDER FRAMES, NOT REAL VIEWPORT CONTENT; replaced by real WebView in RFC-013 W1/W2] Attach a bidirectional JSON-frame stream to a WebView session created by browser.open_session. Downstream emits browser.ready and browser.frame messages; upstream accepts input and close control frames."
+
+[input_schema]
+type = "object"
+required = ["session_ura"]
+additionalProperties = false
+
+[input_schema.properties.session_ura]
+type = "string"
+description = "Session URA returned by browser.open_session."
+minLength = 1

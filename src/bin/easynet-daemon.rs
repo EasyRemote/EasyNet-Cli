@@ -33,7 +33,14 @@ use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{
-    default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig,
+    default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
+};
+use easynet_cli::runtime::ability::conformance::{
+    BaselineConformanceReport, DeviceBaseline, HubBaseline, RegistryConformance,
+};
+#[cfg(feature = "axon-pb")]
+use easynet_cli::runtime::ability::conformance::{
+    DaemonInvocationSurface, RuntimeAdminConformance,
 };
 use easynet_cli::runtime::agents;
 use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
@@ -50,6 +57,80 @@ use easynet_cli::services::control::{discovery, runtime_dispatch, server};
 
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
+
+fn device_ability_replay_fatal_message(
+    report: &easynet_cli::runtime::agents::device_ability_registrar::ReplayReport,
+) -> Option<String> {
+    if report.runtime_not_ready || report.store_unreadable || report.stale > 0 || report.errored > 0
+    {
+        return Some(format!(
+            "device ability replay failed before daemon start: runtime_not_ready={}, \
+             store_unreadable={}, stale={}, errored={}",
+            report.runtime_not_ready, report.store_unreadable, report.stale, report.errored
+        ));
+    }
+    None
+}
+
+fn report_device_ability_replay(
+    report: &easynet_cli::runtime::agents::device_ability_registrar::ReplayReport,
+) -> anyhow::Result<()> {
+    if let Some(message) = device_ability_replay_fatal_message(report) {
+        anyhow::bail!(message);
+    }
+    eprintln!(
+        "[device-ability] replay: {} registered, {} stale, {} errored, \
+         runtime_not_ready={}, store_unreadable={}, outcomes={}",
+        report.registered,
+        report.stale,
+        report.errored,
+        report.runtime_not_ready,
+        report.store_unreadable,
+        report.outcomes_json()
+    );
+    Ok(())
+}
+
+fn collect_baseline_failure(failures: &mut Vec<String>, report: BaselineConformanceReport) {
+    if !report.is_conformant() {
+        failures.push(report.panic_message());
+    }
+}
+
+fn assert_daemon_baseline_conformance(
+    mode: DaemonMode,
+    registry: &easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog,
+) -> Result<(), String> {
+    let registry_conformance = RegistryConformance::new(registry);
+    let mut failures = Vec::new();
+
+    if matches!(mode, DaemonMode::Device | DaemonMode::Both) {
+        let device = DeviceBaseline::required_abilities();
+        collect_baseline_failure(&mut failures, registry_conformance.check("device", &device));
+    }
+
+    if matches!(mode, DaemonMode::Hub | DaemonMode::Both) {
+        let hub = HubBaseline::required_abilities();
+        collect_baseline_failure(&mut failures, registry_conformance.check("hub", hub));
+        #[cfg(feature = "axon-pb")]
+        {
+            collect_baseline_failure(
+                &mut failures,
+                DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
+            );
+            collect_baseline_failure(
+                &mut failures,
+                RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
+            );
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n"))
+    }
+}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -91,15 +172,15 @@ async fn main() -> anyhow::Result<()> {
     )));
     boot_bus.emit_ok("kernel");
 
-    boot_bus.emit_started("control-server");
-    let control_server = match server::spawn_booting(boot_bus.clone()) {
-        Ok(handle) => {
-            boot_bus.emit_ok("control-server");
-            handle
+    boot_bus.emit_started("daemon-config");
+    let daemon_config = match DaemonConfig::load(&default_config_path()) {
+        Ok(config) => {
+            boot_bus.emit_ok("daemon-config");
+            config
         }
         Err(err) => {
-            boot_bus.emit_failed("control-server", err.to_string());
-            return Err(err);
+            boot_bus.emit_failed("daemon-config", err.to_string());
+            return Err(err.into());
         }
     };
 
@@ -159,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
     }
     boot_bus.emit_ok("loop-controller");
 
-    // Build the system.* ability registry off the SAME sub-service
+    // Build the daemon-owned ability registry off the SAME sub-service
     // handles the Kernel holds. This is the U1 unity property at
     // the boot path: every ability lookup and every KernelApi call
     // observe one set of sub-service state. A regression that built
@@ -210,12 +291,17 @@ async fn main() -> anyhow::Result<()> {
     //
     // Pre-set, dispatches of `agent.start` see an empty
     // cell and skip runtime registration (logged via op_event); the
-    // agent still lands on disk so a daemon restart picks it up via
-    // the static registration path. Post-set, every subsequent
-    // dispatch registers into `LocalRuntime` and ledger writes start
+    // agent still lands on disk so a daemon restart replays it through
+    // the dynamic registrar after the catalogue is wired. Post-set,
+    // every subsequent dispatch registers catalogue/control-plane and
+    // `LocalRuntime` rows in one transaction, so ledger writes start
     // landing.
     let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
         Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
+    let discover_federation_resolver_cell =
+        Arc::new(agents::discover_ability::DeferredDiscoverFederationResolver::new());
+    let discover_federation_resolver: agents::discover_ability::SharedDiscoverFederationResolver =
+        discover_federation_resolver_cell.clone();
     let built_registry =
         agents::build_registry_for_daemon_result(agents::RegistryDaemonBuildConfig {
             services: agents::RegistryBuildServices::new(
@@ -224,22 +310,59 @@ async fn main() -> anyhow::Result<()> {
                 kernel.discuss_service(),
                 kernel.schedule_service(),
                 kernel.loop_service(),
-            ),
+            )
+            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver)),
             invocation_ledger: invocation_ledger.clone(),
             loaders: None,
             pages_identity,
             local_runtime: Some(Arc::clone(&local_runtime)),
+            authority_context: None,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
             shared_stores: agents::RegistrySharedStores::new(Arc::clone(&hub_published_abilities)),
-        });
+        })?;
     let registry = Arc::clone(&built_registry.catalog);
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
 
+    boot_bus.emit_started("ability-conformance");
+    if let Err(message) = assert_daemon_baseline_conformance(daemon_config.mode(), &registry) {
+        boot_bus.emit_failed("ability-conformance", message.clone());
+        panic!("{message}");
+    }
+    boot_bus.emit_ok("ability-conformance");
+
+    boot_bus.emit_started("control-server");
+    let control_server = match server::spawn_booting(boot_bus.clone()) {
+        Ok(handle) => {
+            boot_bus.emit_ok("control-server");
+            handle
+        }
+        Err(err) => {
+            boot_bus.emit_failed("control-server", err.to_string());
+            return Err(err);
+        }
+    };
+
+    // Attach the live runtime to the device-ability registrar and replay
+    // any durably-installed device abilities back into it. This is the
+    // boot half of the `ability.deploy` install transaction: without it
+    // the registrar's runtime cell stays empty and deploy fails honestly
+    // ("registrar not wired"); with it, every previously-deployed device
+    // ability (host_stream generators, shell forwarders) is re-bound and
+    // routable before the first invocation can land. Boot replay is
+    // idempotent and reports stale/errored rows rather than skipping
+    // silently (plan invariant 7).
+    if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
+        device_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
+        device_registrar.set_runtime(Arc::clone(&local_runtime))?;
+        let report = device_registrar.replay_from_store().await;
+        report_device_ability_replay(&report)?;
+    }
+
     // Keep the registry object alive for dynamic side tables whose
     // handlers were installed while building the Axon runtime. Runtime
     // execution itself goes through `local_runtime`.
-    let _registry = registry;
+    let _registry = Arc::clone(&registry);
 
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
@@ -254,7 +377,7 @@ async fn main() -> anyhow::Result<()> {
     // exist. That keeps the PR-1 "load config before any listener
     // bind" invariant honest whenever the feature-gated transport is compiled in.
     // Hold the session-shutdown handle for the daemon's lifetime;
-    // dropping it at shutdown drains the live `<self>.session` dial
+    // dropping it at shutdown drains the live `session.open` dial
     // (F-007 — was Box::leak'd). Bound directly from the boot result:
     // Ok yields the handle, Err returns, so there is no never-read
     // placeholder.
@@ -267,6 +390,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&hot_agent_registrar_cell),
             Some(Arc::clone(&built_registry.plugin_runtime_manager)),
             Arc::clone(&hub_published_abilities),
+            Some(Arc::clone(&discover_federation_resolver_cell)),
         ) {
             Ok(handle) => {
                 boot_bus.emit_ok("daemon-invocation-transport");
@@ -397,7 +521,7 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_ready();
 
     wait_for_shutdown_signal().await;
-    // Cancel the session supervisor (drains the live `<self>.session`
+    // Cancel the session supervisor (drains the live `session.open`
     // dial -> clean Eof at the hub) before tearing down control sockets.
     #[cfg(feature = "axon-pb")]
     drop(session_shutdown);
@@ -626,4 +750,35 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use easynet_cli::runtime::agents::device_ability_registrar::ReplayReport;
+
+    #[test]
+    fn device_replay_boot_policy_rejects_stale_rows() {
+        let report = ReplayReport {
+            stale: 1,
+            errored: 1,
+            ..ReplayReport::default()
+        };
+
+        assert!(device_ability_replay_fatal_message(&report)
+            .unwrap()
+            .contains("stale=1"));
+    }
+
+    #[test]
+    fn device_replay_boot_policy_still_rejects_runtime_wiring_bug() {
+        let report = ReplayReport {
+            runtime_not_ready: true,
+            ..ReplayReport::default()
+        };
+
+        assert!(device_ability_replay_fatal_message(&report)
+            .unwrap()
+            .contains("runtime_not_ready=true"));
+    }
 }

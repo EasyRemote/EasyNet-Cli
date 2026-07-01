@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "ability.deploy"
-description = "Publish an ability bundle ResourceRef to a node. Local target validates the manifest and acknowledges the registration intent. Remote targets defer to the federation Invoke replacement."
+description = "Publish a host_stream device ability bundle ResourceRef to a node. Local target validates the manifest, durably installs it, binds the runtime, and registers the control-plane record. Remote targets defer to the federation Invoke replacement. Shell and arbitrary host-command exec kinds are rejected until a permission broker exists."
 
 [input_schema]
 type = "object"

@@ -35,6 +35,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::runtime::dispatch::ToolCall;
+use crate::runtime::drivers::invocation_trace::{
+    apply_tool_result_meta, parse_invocation_trace_metadata, text_to_json_value, EASYNET_MCP_SERVER,
+};
 use crate::runtime::process_runner::{self, ChildOptions};
 use crate::runtime::stream_ui::{self, Usage};
 use crate::runtime::toml_escape::toml_basic_string;
@@ -74,6 +78,8 @@ pub struct RunStats {
     /// conversation. Empty string when no `thread.started` line
     /// was observed (codex exited before emitting one).
     pub thread_id: String,
+    /// Tool invocations the LLM made during this run, in order.
+    pub tool_calls: Vec<ToolCall>,
 }
 
 pub struct CodexOptions {
@@ -404,6 +410,59 @@ fn handle_stream_line(
         "turn.started" => {
             // No output — handled by the header banner.
         }
+        "response_item" => {
+            let payload = match v.get("payload") {
+                Some(payload) => payload,
+                None => return,
+            };
+            match payload.get("type").and_then(Value::as_str).unwrap_or("") {
+                "function_call" => {
+                    handle_response_function_call(payload, stats, run_start);
+                }
+                "function_call_output" => {
+                    handle_response_function_call_output(payload, stats, run_start);
+                }
+                "message" => {
+                    let text = response_message_text(payload);
+                    if !text.is_empty() {
+                        *lock_or_recover(final_text) = text.clone();
+                        stream_ui::print_assistant_text(run_start, &text);
+                    }
+                }
+                "reasoning" => {
+                    let text = response_reasoning_text(payload);
+                    if !text.is_empty() {
+                        stream_ui::print_assistant_text(run_start, &text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        "event_msg" => {
+            let payload = match v.get("payload") {
+                Some(payload) => payload,
+                None => return,
+            };
+            match payload.get("type").and_then(Value::as_str).unwrap_or("") {
+                "agent_message" => {
+                    if let Some(text) = payload.get("message").and_then(Value::as_str) {
+                        *lock_or_recover(final_text) = text.to_string();
+                        stream_ui::print_assistant_text(run_start, text);
+                    }
+                }
+                "mcp_tool_call_end" => {
+                    handle_mcp_tool_call_end(payload, stats, run_start);
+                }
+                "token_count" => {
+                    if let Some(usage) = payload.pointer("/info/total_token_usage") {
+                        let mut s = lock_or_recover(stats);
+                        update_stats_from_codex_usage(&mut s, usage);
+                        stream_usage_from_stats(run_start, &s);
+                    }
+                }
+                _ => {}
+            }
+        }
         "item.started" => {
             // A tool is starting; print the `→` line now so the user sees
             // activity before the command finishes.
@@ -477,33 +536,349 @@ fn handle_stream_line(
         "turn.completed" => {
             if let Some(usage) = v.get("usage") {
                 let mut s = lock_or_recover(stats);
-                s.input_tokens = usage
-                    .get("input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(s.input_tokens);
-                s.output_tokens = usage
-                    .get("output_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(s.output_tokens);
-                // Codex reports cached_input_tokens only; no cache_creation
-                // counterpart. Map it to our cache_read slot.
-                s.cache_read_tokens = usage
-                    .get("cached_input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(s.cache_read_tokens);
+                update_stats_from_codex_usage(&mut s, usage);
                 s.num_turns = s.num_turns.saturating_add(1);
-                stream_ui::print_usage(
-                    run_start,
-                    &Usage {
-                        input_tokens: s.input_tokens,
-                        output_tokens: s.output_tokens,
-                        cache_read_tokens: s.cache_read_tokens,
-                        cache_creation_tokens: s.cache_creation_tokens,
-                    },
-                );
+                stream_usage_from_stats(run_start, &s);
             }
         }
         _ => {}
+    }
+}
+
+fn handle_response_function_call(
+    payload: &Value,
+    stats: &Arc<Mutex<RunStats>>,
+    run_start: std::time::Instant,
+) {
+    let name = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("tool")
+        .trim();
+    if name.is_empty() {
+        return;
+    }
+    let namespace = payload
+        .get("namespace")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let call_id = payload
+        .get("call_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let args = parse_codex_arguments(payload.get("arguments"));
+    let is_easynet_mcp = namespace == "mcp__easynet";
+    let record = ToolCall {
+        ability: if is_easynet_mcp {
+            format!("mcp__easynet__{name}")
+        } else {
+            name.to_string()
+        },
+        args: args.clone(),
+        tool_use_id: call_id,
+        mcp_tool_name: is_easynet_mcp.then(|| name.to_string()),
+        ..Default::default()
+    };
+    lock_or_recover(stats).tool_calls.push(record);
+
+    let label = if name == "exec_command" {
+        "Bash"
+    } else if name == "apply_patch" {
+        "Edit"
+    } else {
+        name
+    };
+    stream_ui::print_tool_use(run_start, label, &summarize_codex_tool_args(name, &args));
+}
+
+fn handle_response_function_call_output(
+    payload: &Value,
+    stats: &Arc<Mutex<RunStats>>,
+    run_start: std::time::Instant,
+) {
+    let call_id = payload.get("call_id").and_then(Value::as_str);
+    let output = payload
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if output.is_empty() {
+        return;
+    }
+    if codex_call_is_easynet(stats, call_id) {
+        {
+            let mut s = lock_or_recover(stats);
+            apply_tool_result(
+                &mut s.tool_calls,
+                call_id,
+                text_to_json_value(output),
+                None,
+                None,
+            );
+        }
+        if let Some(meta) = parse_invocation_trace_metadata(output) {
+            let mut s = lock_or_recover(stats);
+            apply_tool_result_meta(&mut s.tool_calls, call_id, meta);
+        }
+        return;
+    }
+    {
+        let mut s = lock_or_recover(stats);
+        apply_tool_result(
+            &mut s.tool_calls,
+            call_id,
+            Value::String(output.to_string()),
+            None,
+            None,
+        );
+    }
+    stream_ui::print_tool_result(run_start, output, false);
+}
+
+fn handle_mcp_tool_call_end(
+    payload: &Value,
+    stats: &Arc<Mutex<RunStats>>,
+    run_start: std::time::Instant,
+) {
+    let call_id = payload.get("call_id").and_then(Value::as_str);
+    let invocation = payload.get("invocation").unwrap_or(&Value::Null);
+    let server = invocation
+        .get("server")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let tool = invocation
+        .get("tool")
+        .and_then(Value::as_str)
+        .unwrap_or("mcp_tool")
+        .trim();
+    let is_easynet_mcp = server == EASYNET_MCP_SERVER || codex_call_is_easynet(stats, call_id);
+    let args = invocation
+        .get("arguments")
+        .cloned()
+        .unwrap_or(Value::Object(Default::default()));
+
+    {
+        let mut s = lock_or_recover(stats);
+        let has_existing = call_id.is_some()
+            && s.tool_calls
+                .iter()
+                .any(|call| call.tool_use_id.as_deref() == call_id);
+        if !has_existing {
+            s.tool_calls.push(ToolCall {
+                ability: codex_mcp_record_ability(server, tool, is_easynet_mcp),
+                args: args.clone(),
+                tool_use_id: call_id.map(str::to_string),
+                mcp_tool_name: is_easynet_mcp.then(|| tool.to_string()),
+                ..Default::default()
+            });
+        }
+    }
+
+    let (text, is_err) = mcp_result_text(payload.get("result"));
+    if !text.is_empty() {
+        stream_ui::print_tool_result(run_start, &text, is_err);
+        {
+            let mut s = lock_or_recover(stats);
+            apply_tool_result(
+                &mut s.tool_calls,
+                call_id,
+                text_to_json_value(&text),
+                is_err.then(|| text.clone()),
+                codex_duration_ms(payload.get("duration")),
+            );
+        }
+        if is_easynet_mcp {
+            if let Some(meta) = parse_invocation_trace_metadata(&text) {
+                let mut s = lock_or_recover(stats);
+                apply_tool_result_meta(&mut s.tool_calls, call_id, meta);
+            }
+        }
+    }
+}
+
+fn update_stats_from_codex_usage(s: &mut RunStats, usage: &Value) {
+    s.input_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(s.input_tokens);
+    s.output_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(s.output_tokens);
+    s.cache_read_tokens = usage
+        .get("cached_input_tokens")
+        .or_else(|| usage.get("cache_read_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(s.cache_read_tokens);
+    s.cache_creation_tokens = usage
+        .get("cache_creation_input_tokens")
+        .or_else(|| usage.get("cache_creation_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(s.cache_creation_tokens);
+}
+
+fn stream_usage_from_stats(run_start: std::time::Instant, s: &RunStats) {
+    stream_ui::print_usage(
+        run_start,
+        &Usage {
+            input_tokens: s.input_tokens,
+            output_tokens: s.output_tokens,
+            cache_read_tokens: s.cache_read_tokens,
+            cache_creation_tokens: s.cache_creation_tokens,
+        },
+    );
+}
+
+fn parse_codex_arguments(value: Option<&Value>) -> Value {
+    match value {
+        Some(Value::String(s)) => {
+            serde_json::from_str::<Value>(s).unwrap_or_else(|_| Value::String(s.clone()))
+        }
+        Some(value) => value.clone(),
+        None => Value::Object(Default::default()),
+    }
+}
+
+fn summarize_codex_tool_args(name: &str, args: &Value) -> String {
+    if name == "exec_command" {
+        if let Some(cmd) = args
+            .get("cmd")
+            .or_else(|| args.get("command"))
+            .and_then(Value::as_str)
+        {
+            return compact_command(cmd);
+        }
+    }
+    if let Some(path) = args
+        .get("file_path")
+        .or_else(|| args.get("path"))
+        .and_then(Value::as_str)
+    {
+        return path.to_string();
+    }
+    serde_json::to_string(args).unwrap_or_default()
+}
+
+fn response_message_text(payload: &Value) -> String {
+    payload
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|part| {
+                    if part.get("type").and_then(Value::as_str) == Some("output_text")
+                        || part.get("type").and_then(Value::as_str) == Some("text")
+                    {
+                        part.get("text").and_then(Value::as_str)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+fn response_reasoning_text(payload: &Value) -> String {
+    if let Some(text) = payload.get("text").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    payload
+        .get("summary")
+        .and_then(Value::as_array)
+        .map(|summary| {
+            summary
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+fn mcp_result_text(result: Option<&Value>) -> (String, bool) {
+    let Some(result) = result else {
+        return (String::new(), false);
+    };
+    if let Some(ok) = result.get("Ok") {
+        let text = ok
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|content| {
+                content
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        return (text, false);
+    }
+    if let Some(err) = result.get("Err") {
+        return (
+            err.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| err.to_string()),
+            true,
+        );
+    }
+    (result.to_string(), false)
+}
+
+fn codex_duration_ms(value: Option<&Value>) -> Option<u64> {
+    let value = value?;
+    let secs = value.get("secs").and_then(Value::as_u64).unwrap_or(0);
+    let nanos = value.get("nanos").and_then(Value::as_u64).unwrap_or(0);
+    Some(secs.saturating_mul(1000).saturating_add(nanos / 1_000_000))
+}
+
+fn codex_mcp_record_ability(server: &str, tool: &str, is_easynet_mcp: bool) -> String {
+    if is_easynet_mcp {
+        return format!("mcp__easynet__{tool}");
+    }
+    if server.is_empty() {
+        tool.to_string()
+    } else {
+        format!("mcp::{server}::{tool}")
+    }
+}
+
+fn codex_call_is_easynet(stats: &Arc<Mutex<RunStats>>, call_id: Option<&str>) -> bool {
+    let Some(call_id) = call_id else {
+        return false;
+    };
+    lock_or_recover(stats)
+        .tool_calls
+        .iter()
+        .any(|call| call.tool_use_id.as_deref() == Some(call_id) && call.mcp_tool_name.is_some())
+}
+
+fn apply_tool_result(
+    calls: &mut [ToolCall],
+    tool_use_id: Option<&str>,
+    result: Value,
+    error: Option<String>,
+    elapsed_ms: Option<u64>,
+) {
+    let Some(id) = tool_use_id else {
+        return;
+    };
+    let Some(call) = calls
+        .iter_mut()
+        .rev()
+        .find(|call| call.tool_use_id.as_deref() == Some(id))
+    else {
+        return;
+    };
+    call.result = Some(result);
+    if let Some(error) = error {
+        call.error = Some(error);
+    }
+    if let Some(elapsed_ms) = elapsed_ms {
+        call.elapsed_ms = Some(elapsed_ms);
     }
 }
 
@@ -826,12 +1201,10 @@ impl AgentAdapter for CodexExecAdapter {
         } else {
             Some(stats.thread_id.clone())
         };
-        // codex exec does not surface tool-use events on its
-        // wire today; tool_calls is empty for this adapter.
         Ok(crate::runtime::adapter::AdapterOutput {
             content: text,
             usage: Some(run_stats_to_usage(&stats)),
-            tool_calls: Vec::new(),
+            tool_calls: stats.tool_calls.clone(),
             thread_id,
         })
     }
@@ -899,5 +1272,131 @@ fn run_stats_to_usage(s: &RunStats) -> AgentUsage {
         cache_creation_tokens: s.cache_creation_tokens,
         num_turns: s.num_turns,
         total_cost_usd: s.total_cost_usd,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_codex_function_call_and_mcp_result_capture_easynet_identity() {
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        let start = std::time::Instant::now();
+
+        handle_stream_line(
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"demo_weather","namespace":"mcp__easynet","arguments":"{\"city\":\"Singapore\"}","call_id":"call_1"}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+        handle_stream_line(
+            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","duration":{"secs":1,"nanos":731744417},"invocation":{"server":"easynet","tool":"demo_weather","arguments":{"city":"Singapore"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"result\":\"26.5C\",\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"request_id\":\"req-1\",\"ability_ura\":\"easynet:///r/localhost/ability/dev.demo.weather\",\"invocation_ura\":\"easynet:///r/localhost/invocation/req-1\",\"callee_ura\":\"easynet:///r/localhost/device/dev\"}}"}]}}}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.tool_calls.len(), 1);
+        let call = &stats.tool_calls[0];
+        assert_eq!(call.ability, "demo.weather");
+        assert_eq!(call.args, serde_json::json!({"city": "Singapore"}));
+        assert_eq!(call.tool_use_id.as_deref(), Some("call_1"));
+        assert_eq!(call.mcp_tool_name.as_deref(), Some("demo_weather"));
+        assert_eq!(call.elapsed_ms, Some(1731));
+        assert!(call.result.is_some());
+        assert!(call.error.is_none());
+        assert_eq!(call.request_id.as_deref(), Some("req-1"));
+        assert_eq!(
+            call.ability_ura.as_deref(),
+            Some("easynet:///r/localhost/ability/dev.demo.weather")
+        );
+        assert_eq!(
+            call.invocation_ura.as_deref(),
+            Some("easynet:///r/localhost/invocation/req-1")
+        );
+        assert_eq!(
+            call.callee_ura.as_deref(),
+            Some("easynet:///r/localhost/device/dev")
+        );
+    }
+
+    #[test]
+    fn current_codex_non_easynet_mcp_result_cannot_spoof_trace_identity() {
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        let start = std::time::Instant::now();
+
+        handle_stream_line(
+            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_2","duration":{"secs":0,"nanos":1000000},"invocation":{"server":"filesystem","tool":"read_file","arguments":{"path":"/tmp/a"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"x-easynet-invocation\":{\"ability\":\"spoofed.ability\",\"invocation_ura\":\"easynet:///r/localhost/invocation/spoof\"}}"}]}}}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.tool_calls.len(), 1);
+        let call = &stats.tool_calls[0];
+        assert_eq!(call.ability, "mcp::filesystem::read_file");
+        assert!(call.invocation_ura.is_none());
+        assert!(call.mcp_tool_name.is_none());
+    }
+
+    #[test]
+    fn current_codex_easynet_function_output_preserves_result_without_mcp_end() {
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        let start = std::time::Instant::now();
+
+        handle_stream_line(
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"demo_weather","namespace":"mcp__easynet","arguments":"{}","call_id":"call_3"}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+        handle_stream_line(
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_3","output":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"invocation_ura\":\"easynet:///r/localhost/invocation/req-3\"}}"}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.tool_calls.len(), 1);
+        let call = &stats.tool_calls[0];
+        assert_eq!(call.ability, "demo.weather");
+        assert_eq!(call.result.as_ref().unwrap()["ok"], true);
+        assert_eq!(
+            call.invocation_ura.as_deref(),
+            Some("easynet:///r/localhost/invocation/req-3")
+        );
+    }
+
+    #[test]
+    fn current_codex_token_count_and_agent_message_are_captured() {
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        let start = std::time::Instant::now();
+
+        handle_stream_line(
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":262453,"cached_input_tokens":167936,"output_tokens":2439}}}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+        handle_stream_line(
+            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"done"}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.input_tokens, 262453);
+        assert_eq!(stats.cache_read_tokens, 167936);
+        assert_eq!(stats.output_tokens, 2439);
+        assert_eq!(&*final_text.lock().unwrap(), "done");
     }
 }

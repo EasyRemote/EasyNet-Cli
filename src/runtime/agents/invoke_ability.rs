@@ -1,11 +1,11 @@
-// EasyNet CLI — <self>.invoke ability handler
+// EasyNet CLI — <agent>.invoke ability handler
 // =================================================================
 //
 // File: src/runtime/agents/invoke_ability.rs
 //
 // Per-agent ability invocation entry point. Companion to
-// `<self>.discover` (see discover_ability.rs): once an LLM has picked
-// a candidate from the discovery ladder, it calls `<self>.invoke` to
+// `<agent>.discover` (see discover_ability.rs): once an LLM has picked
+// a candidate from the discovery ladder, it calls `<agent>.invoke` to
 // actually run the chosen ability — same wire shape regardless of
 // whether the target is the calling agent itself or a peer on this
 // device.
@@ -17,14 +17,14 @@
 // made the entry point look anonymous and obscured the "the caller is
 // THIS agent" fact from the handler — needed for the `[access]`
 // check, audit, and self/device scope filtering. Each agent gets its
-// own `<self>.invoke` so the handler's closure carries the caller
+// own `<agent>.invoke` so the handler's closure carries the caller
 // identity by construction.
 //
 // Wire shape
 // ----------
 //   args:  { ability_ura: string, args?: object }
 //          - ability_ura required. Canonical Ability URA from
-//                        `<self>.discover`; owner, dispatch target,
+//                        `<agent>.discover`; owner, dispatch target,
 //                        and local registry key are derived from it.
 //          - args        forwarded as-is to the resolved handler.
 //                        Default `{}` so common calls can omit it.
@@ -61,6 +61,7 @@ use serde_json::{json, Value};
 use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::runtime::local_runtime_invoker::is_not_found_error;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
@@ -189,7 +190,7 @@ pub fn dispatch(
         }
         anyhow::bail!(
             "target_not_registered: agent {target:?} is not registered on this device; \
-             call <self>.discover first to see what's reachable"
+             call <agent>.discover first to see what's reachable"
         );
     }
 
@@ -234,19 +235,25 @@ pub fn dispatch(
                  this is a daemon boot ordering bug, not a caller-side issue"
             )
         })?;
-        registry
-            .invoke_rpc_json(qualified, parsed.args.clone())
-            .map_err(|err| {
-                let msg = format!("{err}");
-                if is_not_found_error(&msg) {
-                    anyhow::anyhow!(
-                        "ability_not_found: no handler registered for {qualified}; \
-                         call <self>.discover to see what's available ({msg})"
-                    )
-                } else {
-                    anyhow::anyhow!("{msg}")
-                }
-            })
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: qualified.to_string(),
+            normalized_args: parsed.args.clone(),
+            call_mode: CallMode::Rpc,
+            subject: Some(parsed.owner_ura.clone()),
+            causal_context: None,
+        };
+        registry.invoke_rpc_target_json(target).map_err(|err| {
+            let msg = format!("{err}");
+            if is_not_found_error(&msg) {
+                anyhow::anyhow!(
+                    "ability_not_found: no handler registered for {qualified}; \
+                         call <agent>.discover to see what's available ({msg})"
+                )
+            } else {
+                anyhow::anyhow!("{msg}")
+            }
+        })
     })();
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
@@ -575,7 +582,7 @@ pub fn input_schema() -> Value {
             "ability_ura": {
                 "type": "string",
                 "description": "Canonical Ability URA returned by \
-                                `<self>.discover`, e.g. \
+                                `<agent>.discover`, e.g. \
                                 `easynet:///r/<realm>/ability/<user>.<agent>.weather` \
                                 or \
                                 `easynet:///r/<realm>/ability/device.<device-id>.fs.read`. \
@@ -600,7 +607,7 @@ pub fn manifest() -> AbilityManifest {
 }
 
 pub fn description() -> &'static str {
-    "Invoke a discovered ability by Ability URA. Pair with <self>.discover \
+    "Invoke a discovered ability by Ability URA. Pair with <agent>.discover \
      once you've picked a candidate from the discovery ladder. Returns \
      {result, fulfilled_by, target, ability, qualified_name, elapsed_ms}. \
      Typed errors: ability_not_found / permission_denied / \
@@ -630,7 +637,7 @@ mod tests {
         );
 
         let manifest = reg
-            .manifest_for("claude.invoke")
+            .control_plane_manifest("claude.invoke")
             .expect("invoke registration must publish its manifest");
         assert_eq!(manifest.description(), description());
         assert_eq!(manifest.input_schema(), &input_schema());

@@ -7,16 +7,17 @@ fn quota_meters_user_abilities_but_exempts_control_plane() {
 
     assert!(!quota_meters_function(ABILITY_FEDERATION_HEARTBEAT));
     assert!(!quota_meters_function(ABILITY_FEDERATION_FORWARD_INVOKE));
+    assert!(!quota_meters_function(ABILITY_FEDERATION_STATUS));
     assert!(!quota_meters_function(ABILITY_NAMESPACE_RESOLVE));
-    assert!(!quota_meters_function(ABILITY_SELF_REGISTER_DEVICE_PUBKEY));
-    assert!(!quota_meters_function(ABILITY_SELF_SESSION));
+    assert!(!quota_meters_function(ABILITY_IDENTITY_REGISTER_PUBKEY));
+    assert!(!quota_meters_function(ABILITY_SESSION_OPEN));
 
     assert!(
         quota_meters_function("federation.user_owned_probe"),
         "quota exemptions must be exact system abilities, not namespace prefixes"
     );
     assert!(
-        quota_meters_function("<self>.user_owned_probe"),
+        quota_meters_function("agent.user_owned_probe"),
         "a user-registered reserved-prefix ability must not bypass quota by spelling alone"
     );
 }
@@ -72,10 +73,26 @@ fn quota_for_forward_invoke_meters_inner_user_ability_only() {
     );
 }
 
+#[test]
+fn hub_daemon_invocation_surface_satisfies_baseline_contract() {
+    use crate::runtime::ability::conformance::{DaemonInvocationSurface, HubBaseline};
+
+    let report = DaemonInvocationSurface::from_daemon_surface()
+        .check("hub", HubBaseline::required_abilities());
+
+    assert!(report.is_conformant(), "{}", report.panic_message());
+}
+
 #[tokio::test]
 async fn forward_invoke_quota_throttles_by_inner_user_ability() {
     let caller_ura = "easynet:///r/test-realm/device/quota-caller";
-    let rt = runtime_with_json_echo("observe.health", "handled_by", "quota-test").await;
+    let rt = runtime_with_json_echo(
+        TEST_DAEMON_URI,
+        "observe.health",
+        "handled_by",
+        "quota-test",
+    )
+    .await;
     let svc = make_quota_service_for_device_caller(caller_ura, 1).with_local_runtime(rt);
     publish_test_route(&svc, TEST_DAEMON_URI, "observe.health");
     let args = forward_invoke_args_for_ability(
@@ -118,16 +135,36 @@ async fn forward_invoke_quota_throttles_by_inner_user_ability() {
 
 #[tokio::test]
 async fn invoke_dispatches_federation_join_to_wrapper() {
-    let svc = make_service();
+    let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let svc = make_service().with_register_pubkey("realm", trust_path, cell.clone());
+    let public_key_hex = hex::encode(
+        ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
+    let membership_ura = "easynet:///r/realm/device/n1";
+    let args = format!(
+        r#"{{"membership_ura":"{membership_ura}","realm":"realm","public_key_hex":"{public_key_hex}"}}"#
+    );
+    let provisional = crate::runtime::provisional_ura::provisional_ura_for_pubkey(
+        &hex::decode(&public_key_hex).expect("public key hex"),
+    );
+    let request = crate::services::invocation_transport::ProtoEnvelope::federation_join_genesis(
+        provisional,
+        crate::ura::hub_ura("realm"),
+        membership_ura,
+    )
+    .expect("genesis envelope")
+    .invoke_request(ABILITY_FEDERATION_JOIN, args.into_bytes())
+    .expect("join request");
     let resp = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_JOIN,
-            r#"{"membership_ura":"easynet:///r/realm/device/n1","realm":"realm"}"#,
-        ))
+        .invoke(Request::new(request))
         .await
         .expect("dispatch returns Ok");
     let body: federation_wrappers::JoinResponse = parse_response_body(resp);
-    assert_eq!(body.membership_ura, "easynet:///r/realm/device/n1");
+    assert_eq!(body.membership_ura, membership_ura);
     assert_eq!(body.realm, "realm");
     assert_eq!(body.join_receipt_hash.len(), 64);
 }
@@ -160,6 +197,32 @@ async fn invoke_dispatches_federation_heartbeat() {
     let body: federation_wrappers::HeartbeatResponse = parse_response_body(resp);
     assert_eq!(body.membership_status, "active");
     assert_eq!(body.realm_directory_size, 0);
+}
+
+#[tokio::test]
+async fn invoke_dispatches_federation_status() {
+    let svc = make_service();
+    let resp = svc
+        .invoke(invoke_request(ABILITY_FEDERATION_STATUS, "{}"))
+        .await
+        .expect("dispatch returns Ok");
+    let body: serde_json::Value = parse_response_body(resp);
+    assert!(
+        body.get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .is_some(),
+        "status payload must expose a stable ok boolean: {body}"
+    );
+    assert!(
+        body.get("code")
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        "status payload must expose a stable machine code: {body}"
+    );
+    assert!(
+        body.get("outcome").is_some(),
+        "status payload must include outcome even while boot is still in progress: {body}"
+    );
 }
 
 #[test]
@@ -361,12 +424,15 @@ async fn invoke_writes_success_record_to_invocation_ledger() {
     assert!(record.invocation_ura.starts_with(&expected_prefix));
     assert!(!record.invocation_ura.contains("/resource/invocation."));
     assert_eq!(record.ability_name, ABILITY_FEDERATION_RESOLVE);
+    // The ledger ability_ura now projects from the callee DEVICE binding
+    // (where the self-target call actually executed), not the abstract hub
+    // form — the truthful provenance of a locally-run invocation.
     assert_eq!(
         record.ability_ura,
-        "easynet:///r/test-realm/ability/hub.federation.resolve"
+        "easynet:///r/test-realm/ability/device.test-daemon.federation.resolve"
     );
     assert_eq!(record.state, "completed");
-    assert_eq!(record.authority_binding, "self");
+    assert_eq!(record.authority_form, "self");
     assert!(matches!(
         record.args,
         easynet_axon::invocation::LedgerEventPayload::Digest { .. }
@@ -451,6 +517,28 @@ fn unary_ledger_projects_failed_invoke_response_error() {
     );
 }
 
+#[test]
+fn unary_ledger_rejects_missing_subject_identity() {
+    let mut request = invoke_request("terminal.fs.read", "{}").into_inner();
+    request
+        .envelope
+        .as_mut()
+        .expect("test request carries envelope")
+        .subject = None;
+    let response = InvokeResponse {
+        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+        ..InvokeResponse::default()
+    };
+    let result = Ok(Response::new(response));
+    let err = build_unary_ledger_record(&request, 10, 15, &result)
+        .expect_err("ledger projection must reject incomplete invocation tuples");
+
+    assert!(
+        err.to_string().contains("envelope.subject.ura is required"),
+        "{err}"
+    );
+}
+
 #[tokio::test]
 async fn malformed_forward_invoke_quota_parse_error_is_audited() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -495,35 +583,33 @@ async fn malformed_forward_invoke_quota_parse_error_is_audited() {
 }
 
 #[test]
-fn ledger_authority_binding_classifies_bootstrap_delegated_session_and_self() {
-    let bootstrap = invoke_request(ABILITY_SELF_REGISTER_DEVICE_PUBKEY, "{}").into_inner();
-    assert_eq!(
-        ledger_authority_binding_for_request(&bootstrap),
-        "bootstrap"
-    );
+fn ledger_authority_form_classifies_bootstrap_delegated_session_and_self() {
+    let bootstrap = invoke_request(ABILITY_IDENTITY_REGISTER_PUBKEY, "{}").into_inner();
+    assert_eq!(ledger_authority_form_for_request(&bootstrap), "bootstrap");
 
     let mut delegated = invoke_request("demo.delegated", "{}").into_inner();
     delegated.metadata.insert(
         DELEGATION_METADATA_KEY.to_string(),
         "serialized-proof".to_string(),
     );
-    assert_eq!(
-        ledger_authority_binding_for_request(&delegated),
-        "delegated"
+    assert_eq!(ledger_authority_form_for_request(&delegated), "delegated");
+
+    let mut hosted = invoke_request("demo.hosted_delegated", "{}").into_inner();
+    hosted.metadata.insert(
+        HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
+        r#"{"kind":"hosted_agent"}"#.to_string(),
     );
+    assert_eq!(ledger_authority_form_for_request(&hosted), "delegated");
 
     let mut session = invoke_request("demo.session", "{}").into_inner();
     session.metadata.insert(
         SESSION_AUTHORITY_METADATA_KEY.to_string(),
         "serialized-session-authority".to_string(),
     );
-    assert_eq!(ledger_authority_binding_for_request(&session), "session");
+    assert_eq!(ledger_authority_form_for_request(&session), "session");
 
     let self_authority = invoke_request("demo.self", "{}").into_inner();
-    assert_eq!(
-        ledger_authority_binding_for_request(&self_authority),
-        "self"
-    );
+    assert_eq!(ledger_authority_form_for_request(&self_authority), "self");
 }
 
 #[test]
@@ -556,6 +642,79 @@ fn invocation_resource_ura_maps_agent_to_user_owned_namespace() {
         "easynet:///r/test-realm/resource/alice.invocations/agents/frontend/invocations/req-with-spaces-"
     ));
     assert!(!ura.contains("/resource/invocation."));
+}
+
+#[test]
+fn remote_receipt_projection_preserves_ability_identity_authority_and_proof_facts() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    let receipt = InvocationReceipt {
+        invocation_id: "remote-req-1".to_string(),
+        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+        timestamp_unix_ms: 1_200,
+        caller_binding: Some(AgentIdentity {
+            ura: crate::ura::agent_ura("caller-realm", "alice", "frontend"),
+            profile: "easynet-strict-v2".to_string(),
+        }),
+        callee_binding: Some(AgentIdentity {
+            ura: crate::ura::device_ura("peer-realm", "device-b"),
+            profile: "easynet-strict-v2".to_string(),
+        }),
+        subject_binding: Some(SubjectIdentity {
+            ura: crate::ura::user_ura("peer-realm", "bob"),
+            profile: "easynet-strict-v2".to_string(),
+        }),
+        usage: Some(InvocationUsage {
+            tokens_in: 5,
+            tokens_out: 7,
+            duration_ms: 200,
+            external_calls: 1,
+        }),
+        descriptor_version: "descriptor.remote.v1".to_string(),
+        schema_hash: vec![0x11; 32],
+        impl_hash: vec![0x22; 32],
+        runtime_env: "remote-runtime".to_string(),
+        ..InvocationReceipt::default()
+    };
+
+    let record = ledger_record_from_remote_receipt(&receipt, "demo.echo", 1_000)
+        .expect("remote receipt projects");
+    // The forwarded-receipt ability_ura projects from the callee DEVICE
+    // binding (`device-b`), the truthful provenance of where the peer ran
+    // it — not the abstract hub form.
+    assert_eq!(
+        record.ability_ura,
+        crate::ura::owner_ability_ura(
+            &crate::ura::device_ura("peer-realm", "device-b"),
+            "demo.echo"
+        )
+        .expect("device-form ability URA"),
+        "remote rows must not leave ability_ura empty"
+    );
+    // A forwarded receipt does not carry the caller's authority form
+    // (the delegation/session metadata lived on the originating request,
+    // which the hub never sees). The projection records "unknown" rather
+    // than minting a classification the receipt never asserted — the
+    // callee's own ledger row holds the authoritative form.
+    assert_eq!(record.authority_form, "unknown");
+    assert_eq!(record.usage.tokens_in, 5);
+    assert_eq!(record.usage.tokens_out, 7);
+    assert_eq!(record.elapsed_ms, Some(200));
+    assert_eq!(record.diagnostics.len(), 1);
+    let diagnostic = &record.diagnostics[0];
+    assert_eq!(diagnostic.source, "remote_receipt");
+    assert_eq!(diagnostic.code, "REMOTE_RECEIPT_PROOF_FACTS");
+    assert!(
+        diagnostic.message.contains("descriptor.remote.v1"),
+        "{diagnostic:?}"
+    );
+    assert!(
+        diagnostic.message.contains("remote-runtime"),
+        "{diagnostic:?}"
+    );
+    assert!(
+        diagnostic.payload.is_some(),
+        "proof facts must be digest-addressable in the local ledger projection"
+    );
 }
 
 #[tokio::test]
@@ -857,26 +1016,24 @@ async fn invoke_dispatches_federation_list_user_devices_admits_loopback_caller()
 
 #[tokio::test]
 async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller() {
-    // PR-N3 N3-5: caller URA is in trust set but as Backend
+    // PR-N3 N3-5: caller URA is in trust set but as Device
     // role → admission filter rejects. PermissionDenied is
     // the wire-stable rejection; the message mentions the
     // caller URA for operator audit grep.
-    //
-    // Build the test through the URA-only Device admission
-    // arm: we register the caller as a Device-role entry so
-    // the general admission gate's URA-only no-op admits
-    // (DEC-013 Device path doesn't require a signed envelope).
-    // The dispatch arm then runs the N3-5 admission filter,
-    // which reads the trust anchor again and finds the role
-    // is Device, not Hub — reject.
+    // The request is signed so the general admission gate passes;
+    // the dispatch arm then reads the trust anchor again and finds
+    // the role is Device, not Hub.
     use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+    use ed25519_dalek::SigningKey;
 
     let device_caller_ura = "easynet:///r/realm-b/device/device-not-hub";
+    let signing_key = SigningKey::from_bytes(&[0x77; 32]);
     let mut anchor_inner = RealmTrustAnchor::default();
     anchor_inner
         .append_agent(TrustedAgent {
             agent_ura: device_caller_ura.to_string(),
-            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: None,
@@ -887,17 +1044,25 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
     let admission = AdmissionFacade::new(Arc::new(anchor_inner), Some(TEST_DAEMON_URI.to_string()));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
 
-    let envelope = Envelope {
-        caller: Some(easynet_axon::pb::axon::v1::AgentIdentity {
-            ura: device_caller_ura.to_string(),
-            profile: "easynet-strict-v2".to_string(),
-        }),
-        ..Envelope::default()
-    };
+    let function_name = ABILITY_FEDERATION_LIST_USER_DEVICES;
+    let arguments = br#"{"realm":"realm-x"}"#.to_vec();
+    let envelope = signed_test_envelope(
+        device_caller_ura,
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        function_name,
+        &arguments,
+        &signing_key,
+    );
     let req = Request::new(InvokeRequest {
         envelope: Some(envelope),
-        function_name: ABILITY_FEDERATION_LIST_USER_DEVICES.to_string(),
-        arguments: br#"{"realm":"realm-x"}"#.to_vec(),
+        function_name: function_name.to_string(),
+        arguments,
+        metadata: std::collections::HashMap::from([(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+        )]),
         ..InvokeRequest::default()
     });
 
@@ -911,6 +1076,506 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
         "rejection message must surface the caller URA; got: {}",
         err.message()
     );
+}
+
+#[tokio::test]
+async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_write() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let device_caller_ura = "easynet:///r/local/device/device-writer";
+    let device_signing_key = test_device_signing_key();
+    let device_pubkey_b64 = BASE64_STANDARD.encode(device_signing_key.verifying_key().to_bytes());
+    let cell = SharedTrustAnchor::new(Arc::new(
+        RealmTrustAnchor::from_entries(vec![TrustedAgent {
+            agent_ura: device_caller_ura.to_string(),
+            public_key_b64: device_pubkey_b64,
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }])
+        .expect("device caller trust anchor"),
+    ));
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+        .with_register_pubkey("local", trust_path.clone(), cell.clone())
+        .with_session_realm("local");
+
+    let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x55; 32]);
+    let user_ura = "easynet:///r/local/user/user-1";
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": user_ura,
+        "public_key_b64": BASE64_STANDARD.encode(user_key.verifying_key().to_bytes()),
+        "role": "user",
+    }))
+    .expect("register args");
+    let function_name = ABILITY_IDENTITY_REGISTER_PUBKEY;
+    let envelope = signed_test_envelope(
+        device_caller_ura,
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        function_name,
+        &arguments,
+        &device_signing_key,
+    );
+    let req = Request::new(InvokeRequest {
+        envelope: Some(envelope),
+        function_name: function_name.to_string(),
+        arguments,
+        metadata: std::collections::HashMap::from([(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+        )]),
+        ..InvokeRequest::default()
+    });
+
+    let err = svc
+        .invoke(req)
+        .await
+        .expect_err("device caller must not write user trust row");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(
+        err.message().contains("role `device`") && err.message().contains("`user` trust row"),
+        "rejection should identify caller role and target role; got: {}",
+        err.message()
+    );
+    assert!(
+        cell.snapshot().lookup_user_all(user_ura).is_empty(),
+        "denied user row must not be published into the shared trust anchor",
+    );
+    assert!(
+        !trust_path.exists(),
+        "denied user row must not persist realm-trust.toml",
+    );
+}
+
+#[tokio::test]
+async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let device_caller_ura = "easynet:///r/local/device/device-writer";
+    let device_signing_key = test_device_signing_key();
+    let device_pubkey_b64 = BASE64_STANDARD.encode(device_signing_key.verifying_key().to_bytes());
+    let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x56; 32]);
+    let user_pubkey_b64 = BASE64_STANDARD.encode(user_key.verifying_key().to_bytes());
+    let user_ura = "easynet:///r/local/user/user-1";
+    let cell = SharedTrustAnchor::new(Arc::new(
+        RealmTrustAnchor::from_entries(vec![
+            TrustedAgent {
+                agent_ura: device_caller_ura.to_string(),
+                public_key_b64: device_pubkey_b64,
+                role: TrustedAgentRole::Device,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            TrustedAgent {
+                agent_ura: user_ura.to_string(),
+                public_key_b64: user_pubkey_b64.clone(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_700_000_000_001,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+        ])
+        .expect("device caller plus user trust anchor"),
+    ));
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+        .with_register_pubkey("local", trust_path.clone(), cell.clone())
+        .with_session_realm("local");
+
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": user_ura,
+        "public_key_b64": user_pubkey_b64,
+    }))
+    .expect("revoke args");
+    let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+    let envelope = signed_test_envelope(
+        device_caller_ura,
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        function_name,
+        &arguments,
+        &device_signing_key,
+    );
+    let req = Request::new(InvokeRequest {
+        envelope: Some(envelope),
+        function_name: function_name.to_string(),
+        arguments,
+        metadata: std::collections::HashMap::from([(
+            crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+        )]),
+        ..InvokeRequest::default()
+    });
+
+    let err = svc
+        .invoke(req)
+        .await
+        .expect_err("device caller must not revoke user trust row");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(
+        err.message().contains("role `device`") && err.message().contains("revoke user trust row"),
+        "rejection should identify caller role and mutation; got: {}",
+        err.message()
+    );
+    assert!(
+        cell.snapshot()
+            .lookup_user_by_pubkey(user_ura, &user_pubkey_b64)
+            .is_some(),
+        "denied revoke must leave the shared trust anchor untouched",
+    );
+    assert!(
+        !trust_path.exists(),
+        "denied revoke must not persist realm-trust.toml",
+    );
+}
+
+#[tokio::test]
+async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let backend_ura = crate::ura::hub_ura("local");
+    let backend_signing_key = test_device_signing_key();
+    let backend_pubkey_b64 = BASE64_STANDARD.encode(backend_signing_key.verifying_key().to_bytes());
+    let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x57; 32]);
+    let user_pubkey_b64 = BASE64_STANDARD.encode(user_key.verifying_key().to_bytes());
+    let user_ura = "easynet:///r/local/user/user-1";
+    let cell = SharedTrustAnchor::new(Arc::new(
+        RealmTrustAnchor::from_entries(vec![
+            TrustedAgent {
+                agent_ura: backend_ura.clone(),
+                public_key_b64: backend_pubkey_b64,
+                role: TrustedAgentRole::Backend,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            TrustedAgent {
+                agent_ura: user_ura.to_string(),
+                public_key_b64: user_pubkey_b64.clone(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_700_000_000_001,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+        ])
+        .expect("backend plus user trust anchor"),
+    ));
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+    let presence = Arc::new(PresenceRegistry::new());
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    presence.insert_negotiated_with_trust(
+        user_ura.to_string(),
+        tx,
+        crate::services::presence_registry::SessionContract::legacy(),
+        crate::services::presence_registry::SessionTrustContext::user_pubkey(
+            user_pubkey_b64.clone(),
+        ),
+    );
+    let mut events = presence.subscribe_events();
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let svc = DaemonInvocationService::new(Arc::clone(&presence), admission)
+        .with_register_pubkey("local", trust_path, cell.clone())
+        .with_session_realm("local");
+
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": user_ura,
+        "public_key_b64": user_pubkey_b64,
+    }))
+    .expect("revoke args");
+    let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+    let envelope = signed_test_envelope(
+        &backend_ura,
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        function_name,
+        &arguments,
+        &backend_signing_key,
+    );
+    let resp = svc
+        .invoke(Request::new(InvokeRequest {
+            envelope: Some(envelope),
+            function_name: function_name.to_string(),
+            arguments,
+            metadata: std::collections::HashMap::from([(
+                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                    .to_string(),
+                test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            )]),
+            ..InvokeRequest::default()
+        }))
+        .await
+        .expect("backend caller may revoke user key");
+
+    let body: crate::services::invocation_transport::revoke_user_pubkey::RevokeResponse =
+        parse_response_body(resp);
+    assert!(body.ok);
+    assert!(body.removed);
+    assert!(
+        cell.snapshot()
+            .lookup_user_by_pubkey(user_ura, &user_pubkey_b64)
+            .is_none(),
+        "successful revoke removes the trust row before runtime invalidation",
+    );
+    assert!(
+        !presence.contains(user_ura),
+        "successful revoke must force-remove matching runtime presence",
+    );
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("offline event emitted")
+        .expect("presence event");
+    match event {
+        crate::services::presence_registry::PresenceEvent::Offline { ura, reason } => {
+            assert_eq!(ura, user_ura);
+            assert_eq!(
+                reason,
+                crate::services::presence_registry::OfflineReason::AdminRevoked,
+            );
+        }
+        other => panic!("expected AdminRevoked offline event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presence() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let backend_ura = crate::ura::hub_ura("local");
+    let backend_signing_key = test_device_signing_key();
+    let backend_pubkey_b64 = BASE64_STANDARD.encode(backend_signing_key.verifying_key().to_bytes());
+    let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x59; 32]);
+    let user_pubkey_b64 = BASE64_STANDARD.encode(user_key.verifying_key().to_bytes());
+    let user_ura = "easynet:///r/local/user/alice";
+    let host_ura = "easynet:///r/local/device/alice-laptop";
+    let cell = SharedTrustAnchor::new(Arc::new(
+        RealmTrustAnchor::from_entries(vec![
+            TrustedAgent {
+                agent_ura: backend_ura.clone(),
+                public_key_b64: backend_pubkey_b64,
+                role: TrustedAgentRole::Backend,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            TrustedAgent {
+                agent_ura: user_ura.to_string(),
+                public_key_b64: user_pubkey_b64.clone(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_700_000_000_001,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+        ])
+        .expect("backend plus user trust anchor"),
+    ));
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+    let presence = Arc::new(PresenceRegistry::new());
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    presence.insert(host_ura.to_string(), tx);
+    let mut events = presence.subscribe_events();
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let svc = DaemonInvocationService::new(Arc::clone(&presence), admission)
+        .with_register_pubkey("local", trust_path, cell.clone())
+        .with_session_realm("local");
+
+    for agent_ura in [
+        "easynet:///r/local/agent/alice.helper",
+        "easynet:///r/local/agent/alice.researcher",
+    ] {
+        svc.directory.advertised_agents.upsert(
+            crate::services::advertised_agent_store::AdvertisedAgentRecord {
+                agent_ura: agent_ura.to_string(),
+                public_key_hex: String::new(),
+                host_node_id: Some("alice-laptop".to_string()),
+                signing_authority:
+                    crate::services::advertised_agent_store::AdvertisedAgentSigningAuthority::HostedBy {
+                        host_ura: host_ura.to_string(),
+                    },
+            },
+        );
+    }
+    svc.directory.advertised_agents.upsert(
+        crate::services::advertised_agent_store::AdvertisedAgentRecord {
+            agent_ura: "easynet:///r/local/agent/bob.helper".to_string(),
+            public_key_hex: String::new(),
+            host_node_id: Some("bob-laptop".to_string()),
+            signing_authority:
+                crate::services::advertised_agent_store::AdvertisedAgentSigningAuthority::HostedBy {
+                    host_ura: "easynet:///r/local/device/bob-laptop".to_string(),
+                },
+        },
+    );
+
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": user_ura,
+        "public_key_b64": user_pubkey_b64,
+    }))
+    .expect("revoke args");
+    let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+    let envelope = signed_test_envelope(
+        &backend_ura,
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        function_name,
+        &arguments,
+        &backend_signing_key,
+    );
+    let resp = svc
+        .invoke(Request::new(InvokeRequest {
+            envelope: Some(envelope),
+            function_name: function_name.to_string(),
+            arguments,
+            metadata: std::collections::HashMap::from([(
+                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                    .to_string(),
+                test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            )]),
+            ..InvokeRequest::default()
+        }))
+        .await
+        .expect("backend caller may revoke user key");
+
+    let body: crate::services::invocation_transport::revoke_user_pubkey::RevokeResponse =
+        parse_response_body(resp);
+    assert!(body.ok);
+    assert!(body.removed);
+    assert!(
+        !presence.contains(host_ura),
+        "successful user revoke must force-remove the host device that made owned agents online",
+    );
+    assert!(svc
+        .directory
+        .advertised_agents
+        .get("easynet:///r/local/agent/alice.helper")
+        .is_none());
+    assert!(svc
+        .directory
+        .advertised_agents
+        .get("easynet:///r/local/agent/alice.researcher")
+        .is_none());
+    assert!(svc
+        .directory
+        .advertised_agents
+        .get("easynet:///r/local/agent/bob.helper")
+        .is_some());
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("offline event emitted")
+        .expect("presence event");
+    match event {
+        crate::services::presence_registry::PresenceEvent::Offline { ura, reason } => {
+            assert_eq!(ura, host_ura);
+            assert_eq!(
+                reason,
+                crate::services::presence_registry::OfflineReason::AdminRevoked,
+            );
+        }
+        other => panic!("expected AdminRevoked host offline event, got {other:?}"),
+    }
+    match tokio::time::timeout(std::time::Duration::from_millis(50), events.recv()).await {
+        Err(_elapsed) => {}
+        Ok(other) => panic!("shared host must be revoked once, got extra event {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let backend_ura = crate::ura::hub_ura("local");
+    let backend_signing_key = test_device_signing_key();
+    let backend_pubkey_b64 = BASE64_STANDARD.encode(backend_signing_key.verifying_key().to_bytes());
+    let missing_key = ed25519_dalek::SigningKey::from_bytes(&[0x58; 32]);
+    let missing_pubkey_b64 = BASE64_STANDARD.encode(missing_key.verifying_key().to_bytes());
+    let user_ura = "easynet:///r/local/user/user-1";
+    let cell = SharedTrustAnchor::new(Arc::new(
+        RealmTrustAnchor::from_entries(vec![TrustedAgent {
+            agent_ura: backend_ura.clone(),
+            public_key_b64: backend_pubkey_b64,
+            role: TrustedAgentRole::Backend,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }])
+        .expect("backend trust anchor"),
+    ));
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+    let presence = Arc::new(PresenceRegistry::new());
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    presence.insert(user_ura.to_string(), tx);
+    let mut events = presence.subscribe_events();
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let svc = DaemonInvocationService::new(Arc::clone(&presence), admission)
+        .with_register_pubkey("local", trust_path, cell)
+        .with_session_realm("local");
+
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": user_ura,
+        "public_key_b64": missing_pubkey_b64,
+    }))
+    .expect("revoke args");
+    let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+    let envelope = signed_test_envelope(
+        &backend_ura,
+        TEST_DAEMON_URI,
+        TEST_DAEMON_URI,
+        function_name,
+        &arguments,
+        &backend_signing_key,
+    );
+    let resp = svc
+        .invoke(Request::new(InvokeRequest {
+            envelope: Some(envelope),
+            function_name: function_name.to_string(),
+            arguments,
+            metadata: std::collections::HashMap::from([(
+                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                    .to_string(),
+                test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            )]),
+            ..InvokeRequest::default()
+        }))
+        .await
+        .expect("idempotent revoke miss succeeds");
+
+    let body: crate::services::invocation_transport::revoke_user_pubkey::RevokeResponse =
+        parse_response_body(resp);
+    assert!(body.ok);
+    assert!(!body.removed);
+    assert!(
+        presence.contains(user_ura),
+        "removed=false must not emit runtime offline side effects",
+    );
+    match tokio::time::timeout(std::time::Duration::from_millis(50), events.recv()).await {
+        Err(_elapsed) => {}
+        Ok(other) => panic!("idempotent revoke miss must not emit offline event, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1040,6 +1705,11 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         .with_session_realm("local-realm");
 
     let args = br#"{"realm":"user-realm","peer_hub_urls":["https://peer-hub.example:50443"]}"#;
+    let descriptor_subject_ura = crate::ura::owner_ability_ura(
+        &crate::ura::hub_ura("local-realm"),
+        ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+    )
+    .expect("hub proxy ability subject");
     let mut envelope = Envelope {
         caller: Some(AgentIdentity {
             ura: caller_ura.clone(),
@@ -1050,15 +1720,24 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
             profile: "easynet-strict-v2".to_string(),
         }),
         subject: Some(SubjectIdentity {
-            ura: "easynet:///r/local-realm/user/alice".to_string(),
+            ura: descriptor_subject_ura.clone(),
             profile: "easynet-strict-v2".to_string(),
         }),
         invocation_nonce: vec![7; 16],
         ..Envelope::default()
     };
-    sign_peer_request_envelope(
+    let descriptor_ref = format!(
+        "{}@1.0.0",
+        crate::ura::owner_ability_ura(
+            &crate::ura::hub_ura("local-realm"),
+            ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES
+        )
+        .expect("proxy list descriptor ref")
+    );
+    let signed_descriptor_ref = sign_peer_request_envelope(
         &mut envelope,
         ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+        &descriptor_ref,
         args,
         Some("local-realm"),
         Some(&[0x22; 32]),
@@ -1072,11 +1751,16 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         ..InvokeRequest::default()
     };
     request.metadata.insert(
+        crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            .to_string(),
+        signed_descriptor_ref,
+    );
+    request.metadata.insert(
         "x-easynet-delegation".to_string(),
         signed_delegation_metadata_for_test(
             &caller_signing_key,
             &caller_ura,
-            "easynet:///r/local-realm/user/alice",
+            &descriptor_subject_ura,
             &caller_ura,
             &crate::ura::hub_ura("local-realm"),
             &[ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES],
@@ -1333,20 +2017,29 @@ async fn invoke_unknown_ability_without_projection_returns_resolver_negative() {
 /// and returns the handler's JSON output.
 #[tokio::test]
 async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
-    use easynet_axon::invocation::{make_ability, LocalRuntime};
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
 
     let rt = LocalRuntime::new();
-    rt.register_ability(
-        "test.fallback.echo",
+    let ability = "test.fallback.echo";
+    let ability_ura = crate::ura::owner_ability_ura(TEST_DAEMON_URI, ability).unwrap();
+    rt.register_ability_with_options(
+        ability_ura,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof(
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [0x11; 32],
+                [0x22; 32],
+            ),
     )
     .await
     .unwrap();
 
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "test.fallback.echo");
+    publish_test_route(&svc, TEST_DAEMON_URI, ability);
     let resp = svc
-        .invoke(invoke_request("test.fallback.echo", r#"{"hello":"world"}"#))
+        .invoke(invoke_request(ability, r#"{"hello":"world"}"#))
         .await
         .expect("selected-route dispatch succeeds");
     let body: serde_json::Value = parse_response_body(resp);
@@ -1377,12 +2070,10 @@ async fn invoke_selected_route_unknown_runtime_handler_surfaces_not_found() {
 
 #[tokio::test]
 async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
-    use easynet_axon::invocation::LocalRuntime;
-
     // No SDK admin installed: the runtime admin path must report the
     // missing handler, never fabricate a CLI-side ack. No catalog
     // route is published — `runtime.*` bypasses owner resolution.
-    let rt = LocalRuntime::new();
+    let rt = crate::runtime::axon_bridge::runtime_factory::build_local_runtime(None, None);
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     let args = r#"{
         "tenant_id":"tenant-a",
@@ -1416,14 +2107,13 @@ async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
 #[tokio::test]
 async fn invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installed() {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-    use easynet_axon::invocation::LocalRuntime;
     use ed25519_dalek::SigningKey;
 
     // Admin installed, NO catalog route published: `runtime.*`
     // dispatches directly on the LocalRuntime, proving it bypasses
     // owner-presence resolution (the production bug was a hub-owner
     // callee resolving to NXDOMAIN on the device daemon).
-    let rt = LocalRuntime::new();
+    let rt = crate::runtime::axon_bridge::runtime_factory::build_local_runtime(None, None);
     rt.install_bootstrap_self_identity_admin().await.unwrap();
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     let key = SigningKey::from_bytes(&[0x44; 32]);

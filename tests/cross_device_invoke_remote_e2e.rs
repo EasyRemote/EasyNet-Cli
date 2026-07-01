@@ -1,4 +1,4 @@
-//! Cross-device `<self>.invoke_remote` end-to-end integration test
+//! Cross-device `runtime.invoke_remote` end-to-end integration test
 //! ================================================================
 //!
 //! File: tests/cross_device_invoke_remote_e2e.rs
@@ -7,7 +7,7 @@
 //!          transport plane is wire-correct end-to-end on a real
 //!          tonic gRPC server via UDS, with two simulated devices,
 //!          a hub-side `DaemonInvocationService`, and a real
-//!          `<self>.invoke_remote` round-trip.
+//!          `runtime.invoke_remote` round-trip.
 //!
 //! What this test exercises (the real bytes, not mocks)
 //! ----------------------------------------------------
@@ -15,19 +15,19 @@
 //!    `DaemonInvocationService` with `PendingDispatchMap`
 //!    injected, on a tempfile UDS.
 //! 2. Two simulated devices each open a real `InvokeBidi` RPC
-//!    against `<self>.session` and hold the bidi for the test
+//!    against `session.open` and hold the bidi for the test
 //!    duration. The hub registers each in the `PresenceRegistry`.
 //! 3. One device opens a separate per-call `InvokeBidi` against
-//!    `<self>.invoke_remote` targeting the other device.
+//!    `runtime.invoke_remote` targeting the other device.
 //! 4. Hub's `dispatch_invoke_remote` registers a pending entry,
 //!    pushes a `SessionDispatch::Dispatch` frame down the
 //!    target's reverse channel.
-//! 5. The target's `<self>.session` test client reads the frame,
+//! 5. The target's `session.open` test client reads the frame,
 //!    replies with a known `SessionDispatch::Result` carrying a
 //!    test-marker payload.
 //! 6. Hub's `drain_session_up_stream` parses the reply, calls
 //!    `pending.complete(call_id, ...)`.
-//! 7. The originating `<self>.invoke_remote` stream yields a
+//! 7. The originating `runtime.invoke_remote` stream yields a
 //!    terminal `InvokeRemoteDown::Result` carrying the same
 //!    test-marker payload.
 //! 8. Test asserts the round-trip completes within a bounded
@@ -44,34 +44,44 @@
 
 #![cfg(feature = "axon-pb")]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::invocation::LocalRuntime;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use easynet_axon::invocation::{
+    make_ability, sign_descriptor_bound_invocation, AbilityOptions,
+    AgentIdentity as AxiomAgentIdentity, CausalContext, DescriptorBoundEnvelope,
+    InvocationEnvelope, LocalRuntime, SubjectIdentity as AxiomSubjectIdentity, UraProfile,
+};
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
-    bidi_control, AgentIdentity, BidiControl, BinaryChunk, Envelope, EnvelopeOpen,
+    bidi_control, AgentIdentity, BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen,
     InvocationTarget, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeServerStreamRequest,
-    StreamDescriptor,
+    StreamDescriptor, SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
 use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::services::invocation_transport::invocation_wire::ProtoEnvelope;
 use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
     InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
 use easynet_cli::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
 use easynet_cli::services::invocation_transport::session_initiator::{
-    SessionFrameDispatcher, SessionUpSender, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
+    SessionFrameDispatcher, SessionUpSender, ABILITY_SESSION_OPEN, SESSION_STREAM_ID,
 };
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
 use easynet_cli::services::presence_registry::{OfflineReason, PresenceEvent, PresenceRegistry};
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
+use ed25519_dalek::SigningKey;
 use futures::StreamExt;
 use serde_json::json;
+use sha2::Digest as _;
 use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -83,8 +93,13 @@ const DEVICE_A_URI: &str = "easynet:///r/test-realm/device/device-a";
 const DEVICE_B_URI: &str = "easynet:///r/test-realm/device/device-b";
 const DEVICE_B_ECHO_ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-b.test.echo";
 const DEVICE_B_ECHO_PUBLIC_NAME: &str = "test.echo";
-const DEVICE_B_ECHO_REGISTRY_ABILITY: &str = DEVICE_B_ECHO_PUBLIC_NAME;
 const ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
+const DEVICE_A_SIGNING_SEED: [u8; 32] = [0xA1; 32];
+const DEVICE_B_SIGNING_SEED: [u8; 32] = [0xB2; 32];
+const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
+const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
+const TEST_SCHEMA_HASH: [u8; 32] = [0x33; 32];
+const TEST_IMPL_HASH: [u8; 32] = [0x44; 32];
 
 /// 5-second bound on every blocking await in the test. Real
 /// transport plane round-trips finish in milliseconds; any test
@@ -96,6 +111,102 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 /// the bytes that come out of the originating invoke_remote
 /// stream.
 const REPLY_MARKER: &[u8] = b"hello-from-device-b";
+
+fn signing_key_for(caller_ura: &str) -> SigningKey {
+    match caller_ura {
+        DEVICE_A_URI => SigningKey::from_bytes(&DEVICE_A_SIGNING_SEED),
+        DEVICE_B_URI => SigningKey::from_bytes(&DEVICE_B_SIGNING_SEED),
+        other => panic!("no test signing key configured for {other}"),
+    }
+}
+
+fn public_key_b64_for(caller_ura: &str) -> String {
+    BASE64_STANDARD.encode(signing_key_for(caller_ura).verifying_key().to_bytes())
+}
+
+fn descriptor_proof_options(options: AbilityOptions) -> AbilityOptions {
+    options.with_descriptor_proof(
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        TEST_SCHEMA_HASH,
+        TEST_IMPL_HASH,
+    )
+}
+
+struct SignedCallEnvelope {
+    envelope: Envelope,
+    descriptor_ref: String,
+}
+
+impl SignedCallEnvelope {
+    fn metadata(&self) -> HashMap<String, String> {
+        HashMap::from([(
+            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
+            self.descriptor_ref.clone(),
+        )])
+    }
+}
+
+fn signed_envelope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    args: &[u8],
+) -> SignedCallEnvelope {
+    let signing_key = signing_key_for(caller_ura);
+    let mut envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
+        .expect("valid descriptor-bound test envelope")
+        .into_inner();
+    let nonce: [u8; 16] = envelope
+        .invocation_nonce
+        .as_slice()
+        .try_into()
+        .expect("ProtoEnvelope emits a 16-byte nonce");
+
+    let subject = AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
+    let ability_ref = format!(
+        "{}@{}",
+        easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+            .expect("callee-owned descriptor ability"),
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    );
+    let axiom_env = InvocationEnvelope {
+        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+        subject: subject.clone(),
+        ability: ability_ref.clone(),
+        args_digest: sha2::Sha256::digest(args).into(),
+        invocation_nonce: nonce,
+        causal_context: CausalContext::None,
+    };
+    let descriptor_bound =
+        DescriptorBoundEnvelope::new(axiom_env).expect("descriptor-bound test envelope");
+    let key_id_hint = public_key_b64_for(caller_ura);
+    let signature =
+        sign_descriptor_bound_invocation(&signing_key, &descriptor_bound, key_id_hint.as_str());
+
+    envelope.caller = Some(AgentIdentity {
+        ura: caller_ura.to_string(),
+        profile: DEFAULT_URA_PROFILE.to_string(),
+    });
+    envelope.callee = Some(AgentIdentity {
+        ura: callee_ura.to_string(),
+        profile: DEFAULT_URA_PROFILE.to_string(),
+    });
+    envelope.subject = Some(PbSubjectIdentity {
+        ura: subject_ura.to_string(),
+        profile: DEFAULT_URA_PROFILE.to_string(),
+    });
+    envelope.caller_signature = Some(CallerSignature {
+        algorithm: signature.algorithm,
+        signature: signature.signature,
+        key_id_hint: signature.key_id_hint,
+    });
+    SignedCallEnvelope {
+        envelope,
+        descriptor_ref: ability_ref,
+    }
+}
 
 /// Owns every resource the in-process hub holds open so the test
 /// can deterministically tear them down before the tokio runtime
@@ -163,17 +274,19 @@ async fn start_in_process_hub() -> TestHub {
     // loading it via the production loader path. Both devices
     // admitted; empty anchor would reject everyone external.
     let trust_path = tempdir.path().join("realm-trust.toml");
+    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URI);
+    let device_b_public_key_b64 = public_key_b64_for(DEVICE_B_URI);
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
 agent_ura = "{DEVICE_A_URI}"
-public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+public_key_b64 = "{device_a_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
 
 [[trusted_agent]]
 agent_ura = "{DEVICE_B_URI}"
-public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+public_key_b64 = "{device_b_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
         "#,
@@ -225,11 +338,12 @@ async fn start_in_process_local_device() -> TestHub {
     let socket_path = tempdir.path().join("local-device.sock");
 
     let trust_path = tempdir.path().join("realm-trust.toml");
+    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URI);
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
 agent_ura = "{DEVICE_A_URI}"
-public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+public_key_b64 = "{device_a_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
         "#,
@@ -242,8 +356,14 @@ added_at_unix_ms = 0
     let presence = Arc::new(PresenceRegistry::new());
     let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_A_URI.to_string()));
     let runtime = LocalRuntime::new();
-    let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(
+    let authority_context =
+        easynet_cli::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+            DEVICE_A_URI,
+        )
+        .expect("test device URI is a valid device authority root");
+    let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
+        authority_context,
     );
     easynet_cli::runtime::agents::file_transfer_ability::register(&mut catalog);
     let service =
@@ -290,14 +410,16 @@ async fn connect_to_hub(socket_path: &std::path::Path) -> Channel {
 }
 
 fn subscribe_directory_request(caller_ura: &str) -> Request<InvokeServerStreamRequest> {
+    let signed = signed_envelope(
+        caller_ura,
+        caller_ura,
+        caller_ura,
+        "federation.subscribe_directory",
+        b"",
+    );
     Request::new(InvokeServerStreamRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: caller_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            ..Envelope::default()
-        }),
+        metadata: signed.metadata(),
+        envelope: Some(signed.envelope),
         function_name: "federation.subscribe_directory".to_string(),
         ..InvokeServerStreamRequest::default()
     })
@@ -309,21 +431,19 @@ fn unary_invoke(
     function_name: &str,
     args: serde_json::Value,
 ) -> Request<InvokeRequest> {
+    let arguments = args.to_string().into_bytes();
+    let signed = signed_envelope(
+        caller_ura,
+        callee_ura,
+        callee_ura,
+        function_name,
+        &arguments,
+    );
     Request::new(InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: caller_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            callee: Some(AgentIdentity {
-                ura: callee_ura.to_string(),
-                ..AgentIdentity::default()
-            }),
-            invocation_nonce: vec![0x22; 16],
-            ..Envelope::default()
-        }),
+        metadata: signed.metadata(),
+        envelope: Some(signed.envelope),
         function_name: function_name.to_string(),
-        arguments: args.to_string().into_bytes(),
+        arguments,
         ..InvokeRequest::default()
     })
 }
@@ -385,16 +505,17 @@ async fn publish_device_b_echo_projection(socket_path: &std::path::Path) {
 }
 
 fn build_test_echo_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
-    let runtime = easynet_axon::invocation::LocalRuntime::new();
-    futures::executor::block_on(runtime.register_ability(
-        DEVICE_B_ECHO_REGISTRY_ABILITY,
-        easynet_axon::invocation::make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+    let runtime = LocalRuntime::new();
+    futures::executor::block_on(runtime.register_ability_with_options(
+        DEVICE_B_ECHO_ABILITY_URA,
+        make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        descriptor_proof_options(AbilityOptions::default()),
     ))
-    .expect("register device-owned echo ability in LocalRuntime");
+    .expect("register canonical device-owned echo Ability URA in LocalRuntime");
     runtime
 }
 
-/// A device-side `<self>.session` bidi held open for the duration
+/// A device-side `session.open` bidi held open for the duration
 /// of the test. Owns the up-stream sender (so the test can push
 /// frames) and the JoinHandle of the spawned drain task. On Drop
 /// the up-sender is dropped first — tonic closes the request stream
@@ -446,18 +567,20 @@ async fn open_device_session(channel: Channel, caller_ura: &str) -> DeviceSessio
     let mut client = InvocationClient::new(channel);
 
     // Build a frame-0 EnvelopeOpen identifying this device.
+    let signed = signed_envelope(
+        caller_ura,
+        caller_ura,
+        caller_ura,
+        ABILITY_SESSION_OPEN,
+        b"",
+    );
     let envelope_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: caller_ura.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            metadata: signed.metadata(),
+            envelope: Some(signed.envelope),
             target: Some(InvocationTarget {
-                ability_name: ABILITY_SELF_SESSION.to_string(),
+                ability_name: ABILITY_SESSION_OPEN.to_string(),
                 ..InvocationTarget::default()
             }),
             streams: vec![StreamDescriptor {
@@ -503,18 +626,20 @@ async fn open_device_session_with_drain(
 ) -> (DeviceSession, mpsc::Receiver<InvokeBidiDown>) {
     let mut client = InvocationClient::new(channel);
 
+    let signed = signed_envelope(
+        caller_ura,
+        caller_ura,
+        caller_ura,
+        ABILITY_SESSION_OPEN,
+        b"",
+    );
     let envelope_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: caller_ura.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            metadata: signed.metadata(),
+            envelope: Some(signed.envelope),
             target: Some(InvocationTarget {
-                ability_name: ABILITY_SELF_SESSION.to_string(),
+                ability_name: ABILITY_SESSION_OPEN.to_string(),
                 ..InvocationTarget::default()
             }),
             streams: vec![StreamDescriptor {
@@ -860,26 +985,19 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
         }))
         .unwrap();
         let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let signed = signed_envelope(
+            DEVICE_A_URI,
+            DEVICE_A_URI,
+            DEVICE_A_URI,
+            easynet_cli::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
+            &args,
+        );
         up_tx
             .send(InvokeBidiUp {
                 sequence: 0,
                 payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-                    envelope: Some(Envelope {
-                        caller: Some(AgentIdentity {
-                            ura: DEVICE_A_URI.to_string(),
-                            ..AgentIdentity::default()
-                        }),
-                        callee: Some(AgentIdentity {
-                            ura: DEVICE_A_URI.to_string(),
-                            ..AgentIdentity::default()
-                        }),
-                        subject: Some(easynet_axon::pb::axon::v1::SubjectIdentity {
-                            ura: DEVICE_A_URI.to_string(),
-                            ..Default::default()
-                        }),
-                        invocation_nonce: (1_u8..=16).collect(),
-                        ..Envelope::default()
-                    }),
+                    metadata: signed.metadata(),
+                    envelope: Some(signed.envelope),
                     target: Some(InvocationTarget {
                         ability_name:
                             easynet_cli::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
@@ -965,12 +1083,12 @@ async fn run_round_trip() {
     let hub = start_in_process_hub().await;
     let socket_path = hub.socket_path();
 
-    // Step 1: open device A's `<self>.session`. Hub registers
+    // Step 1: open device A's `session.open`. Hub registers
     // DEVICE_A_URI in its PresenceRegistry.
     let channel_a = connect_to_hub(socket_path).await;
     let _device_a = open_device_session(channel_a.clone(), DEVICE_A_URI).await;
 
-    // Step 2: open device B's `<self>.session` with a drain so
+    // Step 2: open device B's `session.open` with a drain so
     // we can see the SessionDispatch::Dispatch frame the hub
     // pushes when device A invokes ability on B.
     let channel_b = connect_to_hub(socket_path).await;
@@ -1032,14 +1150,14 @@ async fn run_round_trip() {
         ability
     });
 
-    // Step 4: device A invokes <self>.invoke_remote(target=B,
+    // Step 4: device A invokes runtime.invoke_remote(target=B,
     // ability_ura=device-B test.echo, args=...). Open a per-call bidi.
     let channel_caller = connect_to_hub(socket_path).await;
     let mut caller_client = InvocationClient::new(channel_caller);
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: DEVICE_B_URI.to_string(),
         ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1048,16 +1166,18 @@ async fn run_round_trip() {
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
+    let signed = signed_envelope(
+        DEVICE_A_URI,
+        DEVICE_A_URI,
+        DEVICE_A_URI,
+        ABILITY_INVOKE_REMOTE,
+        &initial_args,
+    );
     let invoke_remote_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: DEVICE_A_URI.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            metadata: signed.metadata(),
+            envelope: Some(signed.envelope),
             target: Some(InvocationTarget {
                 ability_name: ABILITY_INVOKE_REMOTE.to_string(),
                 ..InvocationTarget::default()
@@ -1128,8 +1248,8 @@ async fn run_round_trip() {
         .expect("reply task completes within bound")
         .expect("reply task did not panic");
     assert_eq!(
-        ability, DEVICE_B_ECHO_REGISTRY_ABILITY,
-        "device B must see the resolver-selected local dispatch ability derived from the Ability URA"
+        ability, DEVICE_B_ECHO_PUBLIC_NAME,
+        "v0 SessionDispatch delivers the owner-local public ability name; LocalAxonSessionDispatcher separately proves canonical runtime dispatch"
     );
 }
 
@@ -1163,7 +1283,7 @@ async fn run_round_trip_via_local_dispatcher() {
 
     let invoke_remote_request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: DEVICE_B_URI.to_string(),
         ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1172,16 +1292,18 @@ async fn run_round_trip_via_local_dispatcher() {
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
+    let signed = signed_envelope(
+        DEVICE_A_URI,
+        DEVICE_A_URI,
+        DEVICE_A_URI,
+        ABILITY_INVOKE_REMOTE,
+        &initial_args,
+    );
     let invoke_remote_open = InvokeBidiUp {
         sequence: 0,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: DEVICE_A_URI.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            metadata: signed.metadata(),
+            envelope: Some(signed.envelope),
             target: Some(InvocationTarget {
                 ability_name: ABILITY_INVOKE_REMOTE.to_string(),
                 ..InvocationTarget::default()

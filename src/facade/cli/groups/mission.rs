@@ -68,6 +68,12 @@ pub struct RunArgs {
     /// Print the full execution trace JSON after completion.
     #[arg(long)]
     pub trace: bool,
+    /// Output format. 'table' keeps the human progress lines; 'json'
+    /// emits the machine run record on stdout — including 'trace_id',
+    /// the anchor 'easynet invocation watch --trace' attaches to
+    /// (seven-axes T2.0). Conflicts with '--trace', which owns stdout.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table, conflicts_with = "trace")]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -186,6 +192,27 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
             invocation_context: None,
         },
     )?;
+
+    if matches!(args.format, OutputFormat::Json) {
+        // Machine record on stdout (progress already went to stderr).
+        // `trace_id` is the runtime anchor of the whole run — the id
+        // every step Invocation carries and the handle
+        // `invocation watch --trace` attaches to (seven-axes T2.0).
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": result.run_id,
+                "trace_id": result.meta.trace_id,
+                "status": result.meta.status,
+                "duration_ms": result.meta.duration_ms,
+                "steps_total": result.meta.steps_total,
+                "steps_completed": result.meta.steps_completed,
+                "steps_failed": result.meta.steps_failed,
+                "run_dir": result.run_dir.display().to_string(),
+            }))?
+        );
+        return Ok(());
+    }
 
     eprintln!();
     eprintln!(

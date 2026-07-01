@@ -28,11 +28,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::persistence::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 
@@ -118,6 +120,19 @@ pub struct ClipEntry {
     pub preview: String,
 }
 
+/// One row in the clipboard list surface. The embedded `entry` is the
+/// latest raw capture for a content key; counts summarize all matching
+/// captures in the append-only log.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClipListEntry {
+    #[serde(flatten)]
+    pub entry: ClipEntry,
+    /// Total captures with the same clipboard content.
+    pub occurrence_count: usize,
+    /// Repeated captures beyond the latest displayed row.
+    pub duplicate_count: usize,
+}
+
 pub fn append_clip(entry: &ClipEntry) -> anyhow::Result<()> {
     fs::create_dir_all(context_dir())?;
     let mut line = serde_json::to_string(entry)?;
@@ -144,6 +159,54 @@ pub fn list_clips(limit: usize) -> Vec<ClipEntry> {
     entries.reverse();
     entries.truncate(cap);
     entries
+}
+
+/// Newest-first unique clip entries, annotated with repeat counts.
+///
+/// Complexity is linear in the number of log rows: the append-only log
+/// already gives chronological order, so a tail-to-head scan discovers
+/// each content key's latest entry before older duplicates. A hash map
+/// gives O(1) expected duplicate lookup and avoids an O(k log k) sort
+/// over the unique rows.
+pub fn list_clip_summaries(limit: usize) -> Vec<ClipListEntry> {
+    let cap = limit.clamp(1, LIST_CLIPS_MAX);
+    let Ok(content) = fs::read_to_string(clipboard_log_path()) else {
+        return Vec::new();
+    };
+    let mut positions: HashMap<[u8; 32], usize> = HashMap::new();
+    let mut summaries: Vec<ClipListEntry> = Vec::new();
+    for entry in content
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<ClipEntry>(l).ok())
+    {
+        let key = clip_content_key(&entry);
+        if let Some(&idx) = positions.get(&key) {
+            summaries[idx].occurrence_count += 1;
+            summaries[idx].duplicate_count += 1;
+        } else {
+            positions.insert(key, summaries.len());
+            summaries.push(ClipListEntry {
+                entry,
+                occurrence_count: 1,
+                duplicate_count: 0,
+            });
+        }
+    }
+    summaries.truncate(cap);
+    summaries
+}
+
+fn clip_content_key(entry: &ClipEntry) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(entry.kind.as_bytes());
+    hash.update([0]);
+    match (&entry.text, &entry.image_file) {
+        (Some(text), _) => hash.update(text.as_bytes()),
+        (_, Some(file)) => hash.update(file.as_bytes()),
+        (None, None) => hash.update(entry.preview.as_bytes()),
+    }
+    hash.finalize().into()
 }
 
 /// Remove one clip by id: its JSONL line is dropped (every other line
@@ -607,6 +670,37 @@ mod tests {
         assert_eq!(clips.len(), 2);
         assert_eq!(clips[0].id, "c2", "newest first");
         assert_eq!(clips[1].id, "c1");
+    }
+
+    #[test]
+    fn clip_summaries_collapse_duplicates_with_latest_entry_and_counts() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let rows = [
+            ("old-a", "2026-06-10T00:00:00Z", "alpha"),
+            ("only-b", "2026-06-10T00:01:00Z", "beta"),
+            ("new-a", "2026-06-10T00:02:00Z", "alpha"),
+        ];
+        for (id, timestamp, text) in rows {
+            append_clip(&ClipEntry {
+                id: id.into(),
+                timestamp: timestamp.into(),
+                device: "easynet:///r/localhost/device/d1".into(),
+                kind: "text".into(),
+                text: Some(text.into()),
+                image_file: None,
+                preview: text.into(),
+            })
+            .unwrap();
+        }
+
+        let clips = list_clip_summaries(10);
+        assert_eq!(clips.len(), 2, "duplicate content is displayed once");
+        assert_eq!(clips[0].entry.id, "new-a", "latest duplicate wins");
+        assert_eq!(clips[0].occurrence_count, 2);
+        assert_eq!(clips[0].duplicate_count, 1);
+        assert_eq!(clips[1].entry.id, "only-b");
+        assert_eq!(clips[1].occurrence_count, 1);
+        assert_eq!(clips[1].duplicate_count, 0);
     }
 
     #[test]

@@ -6,8 +6,7 @@
 
 use crate::plugins::remote_desktop::constants::{
     REASON_CONSENT_RECEIPT_MISMATCH, REASON_CONSENT_RECEIPT_REQUIRED, REASON_INVALID_ARGUMENT,
-    REASON_SESSION_CALLER_MISMATCH, REASON_SESSION_CALLER_REQUIRED, REASON_SESSION_TOKEN_MISMATCH,
-    REASON_SESSION_TOKEN_REQUIRED,
+    REASON_SESSION_CALLER_MISMATCH, REASON_SESSION_TOKEN_MISMATCH, REASON_SESSION_TOKEN_REQUIRED,
 };
 
 /// Domain error for remote desktop session access and lifecycle checks.
@@ -29,13 +28,6 @@ pub(in crate::plugins::builtin::remote_desktop) enum RemoteDesktopError {
         "{ability}: session_token does not match session {session_id:?}; reason={REASON_SESSION_TOKEN_MISMATCH}"
     )]
     SessionTokenMismatch {
-        ability: &'static str,
-        session_id: String,
-    },
-    #[error(
-        "{ability}: envelope caller is required for session {session_id:?}; reason={REASON_SESSION_CALLER_REQUIRED}"
-    )]
-    SessionCallerRequired {
         ability: &'static str,
         session_id: String,
     },

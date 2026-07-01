@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "context.clipboard.list"
-description = "List captured clipboard history (newest first) with the tracking flag."
+description = "List captured clipboard history as newest-first unique entries with duplicate counts and the tracking flag."
 
 [input_schema]
 type = "object"
@@ -8,4 +8,4 @@ additionalProperties = false
 
 [input_schema.properties.limit]
 type = "integer"
-description = "Max entries to return (default 100, cap 200)."
+description = "Max unique entries to return (default 100, cap 200)."

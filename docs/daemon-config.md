@@ -17,7 +17,7 @@ parsed by [`src/persistence/daemon_config.rs`](/Users/macbook.silan.tech/Documen
 1. `mode = "device"` must not set `listen_tcp`.
 2. If `listen_tcp` is set, both `tls_cert_pem` and `tls_key_pem` must be set.
 3. The daemon UDS is bound with mode `0600`; local backend/CLI clients are expected to connect through this path instead of a public TCP socket.
-4. `device` mode requires `hub_endpoint`, because `<self>.session` is maintained as an outbound long-lived bidi to the hub.
+4. `device` mode requires `hub_endpoint`, because `session.open` is maintained as an outbound long-lived bidi to the hub.
 5. Listener-shaping config is read once at boot. `mode`, `listen_tcp`, TLS paths,
    `hub_endpoint`, `realm`, `uds_path`, and `ledger_dir` changes take effect on
    restart.
@@ -53,7 +53,7 @@ uds_path = "~/.easynet/daemon.sock"
 - `realm-trust.toml` is a separate file from `daemon-config.toml`. It is
   loaded from `/etc/easynet/realm-trust.toml` by default and governs
   admission, not listener binding.
-- Current pairing-flow updates through `<self>.register_device_pubkey`
+- Current pairing-flow updates through `identity.register_pubkey`
   republish the in-memory trust anchor immediately. Manual edits to
   `realm-trust.toml` can be reloaded with `sudo kill -HUP $(pidof easynet-daemon)`.
   The same SIGHUP pass also reloads `[daemon.federated_peers]` and

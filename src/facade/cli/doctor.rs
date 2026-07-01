@@ -6,7 +6,7 @@
 //              layer the CLI touches:
 //
 //                1. Local device pairing      (credentials present?)
-//                2. Local Axon runtime        (process up? endpoint reachable?)
+//                2. Local EasyNet daemon      (process up? endpoint reachable?)
 //                3. Federation reachability   (can the runtime list nodes?)
 //                4. Registered AI agent CLIs  (claude / codex actually installed?)
 //                5. MCP server entries        (any AI client wired up?)
@@ -52,6 +52,7 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<()> {
 
     checks.push(check_connection_state(&connection));
     checks.push(check_pairing());
+    checks.push(check_user_signing_key());
     checks.push(check_runtime());
     checks.push(check_federation());
     checks.extend(check_agents());
@@ -172,6 +173,75 @@ fn check_pairing() -> Check {
     }
 }
 
+// Detect whether the paired user has any signing key registered in the
+// daemon's trust anchor. Without one, user-as-caller invokes (the
+// browser's mutating reads, or CLI-driven user invocation) fail closed
+// with AXON_CALLER_SIGNATURE_INVALID and the failure is otherwise
+// invisible until a call is attempted. Query the daemon's
+// `identity.list_user_pubkeys` (the same trust source admission verifies
+// against) rather than the keyring or the on-disk TOML, so the check
+// can't drift from what the gate actually sees.
+fn check_user_signing_key() -> Check {
+    let name = "user signing key".to_string();
+    let creds = match config::load_credentials() {
+        Ok(c) => c,
+        Err(_) => {
+            return Check {
+                name,
+                status: CheckStatus::Warn,
+                detail: "not paired; no user identity".to_string(),
+                hint: Some("Run 'easynet device join <token>' first."),
+            }
+        }
+    };
+    let user_ura = match creds.user_ura() {
+        Ok(u) => u,
+        Err(_) => {
+            return Check {
+                name,
+                status: CheckStatus::Fail,
+                detail: "credentials missing user_id".to_string(),
+                hint: Some("Re-pair with 'easynet device join <token>'."),
+            }
+        }
+    };
+
+    match crate::support::local_invoke::invoke_local_ability(
+        "identity.list_user_pubkeys",
+        serde_json::json!({ "agent_ura": user_ura }),
+    ) {
+        Ok(v) => {
+            let n = v
+                .get("keys")
+                .and_then(|k| k.as_array())
+                .map_or(0, |a| a.len());
+            if n > 0 {
+                Check {
+                    name,
+                    status: CheckStatus::Ok,
+                    detail: format!("{n} key(s) registered for {user_ura}"),
+                    hint: None,
+                }
+            } else {
+                Check {
+                    name,
+                    status: CheckStatus::Warn,
+                    detail: format!("no signing key registered for {user_ura}"),
+                    hint: Some(
+                        "Run 'easynet auth signing-key register' to enable user-as-caller invokes.",
+                    ),
+                }
+            }
+        }
+        Err(_) => Check {
+            name,
+            status: CheckStatus::Warn,
+            detail: "daemon unreachable; cannot verify".to_string(),
+            hint: Some("Start the daemon with 'easynet runtime start'."),
+        },
+    }
+}
+
 fn check_runtime() -> Check {
     match config::load() {
         Ok(state) => match state.runtime_kind {
@@ -254,9 +324,8 @@ fn check_federation() -> Check {
 #[cfg(feature = "axon-pb")]
 fn federation_check_impl() -> Check {
     use serde_json::Value;
-    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
-        None, None,
-    ) {
+    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(None)
+    {
         Ok(entries) => {
             let total = entries.len();
             let stale = entries

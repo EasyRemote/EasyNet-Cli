@@ -8,27 +8,31 @@
 use super::{
     a2a_bridge_ability, a2a_client_ability, ability_publish_ability, ability_toml,
     admin_status_ability, agent_lifecycle_ability, agent_list_ability, browser_session_ability,
-    build_registry, chat_history_ability, context_ability, device_ops_ability, discuss_ability,
-    file_transfer_ability, fs_ability, fs_edit_ability, http_request_ability,
+    build_registry, chat_history_ability, context_ability, device_ops_ability, discover_ability,
+    discuss_ability, file_transfer_ability, fs_ability, fs_edit_ability, http_request_ability,
     invocation_history_ability, list_resources_ability, loop_ability, mcp_bridge_ability,
     mcp_client_ability, media_abilities, meta_ability, mission_ability, network_health_ability,
-    orchestration_ability, permission_ability, ping, plugin_lifecycle_ability, policy_ability,
+    orchestration_ability, permission_ability, ping, plugin_lifecycle_ability,
     process_exec_ability, pty_attach_ability, pty_io_ability, pty_lifecycle_ability,
     registry_builder::build_system_registry, schedule_ability, session_ability, shell_run_ability,
-    skill_install_ability, skill_publish_ability, think_ability, voice_call_ability,
+    skill_install_ability, skill_publish_ability, teach_ability, think_ability, voice_call_ability,
 };
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::runtime::ability::CallMode as DescriptorCallMode;
+use crate::runtime::ability_descriptor::AbilityHints;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Public list of every v1 system-ability *name*. Used by
 /// `registry::a2a_labels` to populate the top-level
 /// `system_skills[]` field of the node-roster v2 envelope so peers
-/// discover what device-level abilities this daemon offers without
-/// invoking anything.
+/// discover what device-profile abilities this daemon offers without invoking
+/// anything.
 ///
 /// The list is built from the live registry to avoid name drift
 /// between the publisher and the runtime catalogue.
 ///
-/// RFC-005 public catalogue names are owner-local names. Device-owned
+/// RFC-005 public catalogue names are owner-local names. Device-profile-owned
 /// handlers may still use implementation-local registry keys while routing,
 /// but public discovery must expose `fs.read`, `skill.list`, `agent.list`,
 /// etc.; the owner is carried by `owner_ura` / `ability_ura`, not duplicated
@@ -47,8 +51,12 @@ pub fn published_ability_names() -> Vec<String> {
 /// the two catalogue builders share the same surface and because future
 /// non-publishable synthetic rows should be excluded here, not by ad-hoc
 /// prefix checks in callers.
-pub fn is_publishable_catalog_name(_name: &str) -> bool {
-    true
+pub fn is_publishable_catalog_name(name: &str) -> bool {
+    // Local front door only. The daemon registers this key so the CLI can
+    // call aggregate discovery without picking an arbitrary self agent, but
+    // it is not a public/federated capability. Publishing it would duplicate
+    // the device owner prefix and break RFC-005 owner-local names.
+    name != discover_ability::DEVICE_DISCOVER_ABILITY
 }
 
 /// One row of a system ability's discovery + registration metadata.
@@ -95,14 +103,15 @@ pub fn published_system_abilities() -> Vec<SystemAbilityMetadata> {
     published_abilities_from_registry(&registry)
 }
 
-/// Published system abilities whose owner was declared as `owner` in the
-/// registry.
+/// Published system abilities whose authority/projection class was declared as
+/// `owner` in the registry.
 ///
-/// This is the descriptor-generation path for implementation profiles. Owner
-/// membership comes from `AxonAbilityCatalog::lookup_owner`, not from ability
-/// name prefixes. That keeps the profile catalogue aligned with the handler
-/// registration truth table and prevents broad namespaces such as `device.*`
-/// from accidentally stealing sub-profile abilities.
+/// This is the descriptor-generation path for implementation profiles.
+/// Projection membership comes from `AxonAbilityCatalog::lookup_owner`, not
+/// from ability name prefixes. That keeps the profile catalogue aligned with
+/// the handler registration truth table and prevents broad namespaces such as
+/// `device.*` from accidentally stealing abilities advertised by the
+/// device-profile Agent or any hosted sub-profile Agent.
 pub fn published_system_abilities_for_owner(
     owner: crate::runtime::ability_dispatch::OwnerKind,
 ) -> Vec<SystemAbilityMetadata> {
@@ -120,7 +129,10 @@ pub fn system_ability_owner(
     ability_name: &str,
 ) -> Option<crate::runtime::ability_dispatch::OwnerKind> {
     let registry = build_system_registry();
-    registry.lookup_owner(ability_name)
+    // SPEC §9.1.A Step 5: ownership truth comes from the control-plane
+    // record, not the legacy `owner` side table (equivalence pinned by
+    // `control_plane_owner_matches_legacy_lookup_for_static_ability`).
+    registry.control_plane_owner(ability_name)
 }
 
 fn published_abilities_from_registry(registry: &AxonAbilityCatalog) -> Vec<SystemAbilityMetadata> {
@@ -131,15 +143,19 @@ fn published_abilities_from_registry_for_owner(
     registry: &AxonAbilityCatalog,
     owner: Option<&crate::runtime::ability_dispatch::OwnerKind>,
 ) -> Vec<SystemAbilityMetadata> {
-    registry
-        .list_abilities()
+    let hint_snapshot = AbilityDiscoveryHintSnapshot::from_registry(registry);
+    let catalog_snapshot = registry.ability_catalog_snapshot();
+    catalog_snapshot
         .into_iter()
-        .filter(|name| is_publishable_catalog_name(name))
-        .filter(|name| {
+        .filter(|row| is_publishable_catalog_name(&row.name))
+        .filter(|row| {
             owner
-                .map(|expected| registry.lookup_owner(name).as_ref() == Some(expected))
+                // SPEC §9.1.A Step 5: owner filter reads the control-plane
+                // record, not the legacy `owner` side table.
+                .map(|expected| row.owner.as_ref() == Some(expected))
                 .unwrap_or(true)
         })
+        .map(|row| row.name)
         .filter(|name| !name.ends_with(".chat"))
         // RFC-002 §3.3 keyring abilities are owner-namespaced under
         // `device` and self-described by `keyring::abilities` — they
@@ -150,7 +166,7 @@ fn published_abilities_from_registry_for_owner(
         .map(|name| SystemAbilityMetadata {
             description: description_for_owned(&name),
             input_schema: input_schema_for(&name),
-            hints: discovery_hints_for(registry, &name),
+            hints: hint_snapshot.for_name(&name),
             name,
         })
         .collect()
@@ -165,10 +181,40 @@ pub fn descriptor_path_for(name: &str) -> String {
         .unwrap_or_else(|| format!("abilities/system/{name}.ability.toml"))
 }
 
-pub(crate) fn discovery_hints_for(
-    registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
+/// One catalogue-local call-mode index used while rendering descriptor hints.
+///
+/// The previous implementation derived hints by calling
+/// `registry.has_rpc/has_stream/has_bidi` for each ability. With a runtime
+/// attached those helpers synchronously queried `LocalRuntime::ability_options`,
+/// so a pure list operation fanned out into three async runtime reads per row.
+/// This snapshot is the bounded read model: one control-plane pass, then O(1)
+/// local lookups for every rendered descriptor.
+#[derive(Debug, Clone)]
+pub(crate) struct AbilityDiscoveryHintSnapshot {
+    modes_by_ability: BTreeMap<String, BTreeSet<DescriptorCallMode>>,
+}
+
+impl AbilityDiscoveryHintSnapshot {
+    pub(crate) fn from_registry(registry: &AxonAbilityCatalog) -> Self {
+        Self {
+            modes_by_ability: registry.call_modes_by_ability(),
+        }
+    }
+
+    pub(crate) fn for_name(&self, name: &str) -> AbilityHints {
+        discovery_hints_from_modes(name, self.modes_by_ability.get(name))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn discovery_hints_for(registry: &AxonAbilityCatalog, name: &str) -> AbilityHints {
+    AbilityDiscoveryHintSnapshot::from_registry(registry).for_name(name)
+}
+
+fn discovery_hints_from_modes(
     name: &str,
-) -> crate::runtime::ability_descriptor::AbilityHints {
+    modes: Option<&BTreeSet<DescriptorCallMode>>,
+) -> AbilityHints {
     if name.ends_with(".chat") {
         // Hosted chat abilities are registered on the local stream
         // surface today, but the user-facing control-plane path still
@@ -188,9 +234,9 @@ pub(crate) fn discovery_hints_for(
             ..Default::default()
         };
     }
-    let has_rpc = registry.has_rpc(name);
-    let has_stream = registry.has_stream(name);
-    let has_bidi = registry.has_bidi(name);
+    let has_rpc = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Rpc));
+    let has_stream = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Stream));
+    let has_bidi = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Bidi));
     // Derive the purity hints from the ability's semantic layer — one
     // source of truth (classify_ability). Introspection/Observation are
     // pure reads (read_only + idempotent: re-issuing yields the same
@@ -206,7 +252,7 @@ pub(crate) fn discovery_hints_for(
         Some(AbilityLayer::Control) => (false, true),
         Some(AbilityLayer::Operational) | None => (false, false),
     };
-    crate::runtime::ability_descriptor::AbilityHints {
+    AbilityHints {
         read_only,
         idempotent,
         streaming_only: has_stream && !has_rpc && !has_bidi,
@@ -232,8 +278,6 @@ pub fn description_for(name: &str) -> &'static str {
     match name {
         "observe.health" => ping::description(),
         "observe.network_health" => network_health_ability::description(),
-        "policy.evaluate" => policy_ability::evaluate_description(),
-        "policy.simulate" => policy_ability::simulate_description(),
         "session.list" => session_ability::list_description(),
         "session.attach" => session_ability::attach_description(),
         "chat.history.list" => chat_history_ability::list_description(),
@@ -269,8 +313,14 @@ pub fn description_for(name: &str) -> &'static str {
         "agent.list" => agent_list_ability::list_agents_description(),
         plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_description(),
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_description(),
+        plugin_lifecycle_ability::ACTIVATE_REALTIME_ABILITY => {
+            plugin_lifecycle_ability::activate_realtime_description()
+        }
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
+        teach_ability::TEACH => teach_ability::teach_description(),
+        teach_ability::ACQUIRE => teach_ability::acquire_description(),
+        teach_ability::FORGET => teach_ability::forget_description(),
         "mission.run" => mission_ability::run_description(),
         "mission.track" => mission_ability::track_description(),
         "mission.cancel" => mission_ability::cancel_description(),
@@ -303,9 +353,6 @@ pub fn description_for(name: &str) -> &'static str {
         "node.remove" => device_ops_ability::remove_node_description(),
         "ability.deploy" => device_ops_ability::deploy_ability_description(),
         "ability.uninstall" => device_ops_ability::uninstall_ability_description(),
-        "remote.exec" => device_ops_ability::exec_remote_description(),
-        "node.register" => device_ops_ability::register_self_description(),
-        "node.deregister" => device_ops_ability::deregister_self_description(),
         "mission.discuss_round" => orchestration_ability::discuss_round_description(),
         "voice.create_call" => voice_call_ability::create_call_description(),
         "voice.show_call" => voice_call_ability::show_call_description(),
@@ -320,6 +367,7 @@ pub fn description_for(name: &str) -> &'static str {
         "browser.send_input" => browser_session_ability::send_input_description(),
         "browser.capture_viewport" => browser_session_ability::capture_viewport_description(),
         "browser.close_session" => browser_session_ability::close_session_description(),
+        "browser.attach_session" => browser_session_ability::attach_session_description(),
         "admin.status" => admin_status_ability::description(),
         "ability.publish" => ability_publish_ability::publish_description(),
         "ability.unpublish" => ability_publish_ability::unpublish_description(),
@@ -415,8 +463,6 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
     match name {
         "observe.health" => ping::input_schema(),
         "observe.network_health" => network_health_ability::input_schema(),
-        "policy.evaluate" => policy_ability::evaluate_input_schema(),
-        "policy.simulate" => policy_ability::simulate_input_schema(),
         "session.list" => session_ability::list_input_schema(),
         "session.attach" => session_ability::attach_input_schema(),
         "chat.history.list" => chat_history_ability::list_input_schema(),
@@ -451,8 +497,14 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "agent.list" => agent_list_ability::list_agents_input_schema(),
         plugin_lifecycle_ability::RELOAD_ABILITY => plugin_lifecycle_ability::reload_input_schema(),
         plugin_lifecycle_ability::STATUS_ABILITY => plugin_lifecycle_ability::status_input_schema(),
+        plugin_lifecycle_ability::ACTIVATE_REALTIME_ABILITY => {
+            plugin_lifecycle_ability::activate_realtime_input_schema()
+        }
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
+        teach_ability::TEACH => teach_ability::teach_input_schema(),
+        teach_ability::ACQUIRE => teach_ability::acquire_input_schema(),
+        teach_ability::FORGET => teach_ability::forget_input_schema(),
         "mission.run" => mission_ability::run_input_schema(),
         "mission.track" => mission_ability::track_input_schema(),
         "mission.cancel" => mission_ability::cancel_input_schema(),
@@ -485,9 +537,6 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "node.remove" => device_ops_ability::remove_node_input_schema(),
         "ability.deploy" => device_ops_ability::deploy_ability_input_schema(),
         "ability.uninstall" => device_ops_ability::uninstall_ability_input_schema(),
-        "remote.exec" => device_ops_ability::exec_remote_input_schema(),
-        "node.register" => device_ops_ability::register_self_input_schema(),
-        "node.deregister" => device_ops_ability::deregister_self_input_schema(),
         "mission.discuss_round" => orchestration_ability::discuss_round_input_schema(),
         "voice.create_call" => voice_call_ability::create_call_input_schema(),
         "voice.show_call" => voice_call_ability::show_call_input_schema(),
@@ -502,6 +551,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "browser.send_input" => browser_session_ability::send_input_input_schema(),
         "browser.capture_viewport" => browser_session_ability::capture_viewport_input_schema(),
         "browser.close_session" => browser_session_ability::close_session_input_schema(),
+        "browser.attach_session" => browser_session_ability::attach_session_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
         "ability.publish" => ability_publish_ability::publish_input_schema(),
         "ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
@@ -730,9 +780,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | "context.captures.list"
         | "context.captures.get" => Some(AbilityLayer::Introspection),
         // ── Control / decision ──────────────────────────────
-        "policy.evaluate"
-        | "policy.simulate"
-        | "consent.decide"
+        "consent.decide"
         // context mutations — flip clipboard tracking, delete a
         // clip, add / remove favorites: device-context
         // configuration writes, same decision class as
@@ -762,17 +810,13 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // intent, mirroring how schedule.list / loop.status
         // got bumped into the introspection layer because they
         // describe daemon-managed state. The remaining
-        // verbs (remove_node, deploy_ability, uninstall_ability,
-        // exec_remote, register_self, deregister_self)
+        // verbs (remove_node, deploy_ability, uninstall_ability)
         // mutate state — Operational unambiguous.
         | "node.list"
         | "node.describe"
         | "node.remove"
         | "ability.deploy"
         | "ability.uninstall"
-        | "remote.exec"
-        | "node.register"
-        | "node.deregister"
         // terminal.* shell-session lifecycle abilities.
         // create / close mutate session state; input / read /
         // resize push or pull data over an established session;
@@ -848,6 +892,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // skill.install.
         | "ability.publish"
         | "ability.unpublish"
+        | "meta.teach"
+        | "meta.acquire"
+        | "meta.forget"
         | "skill.publish"
         | "skill.unpublish"
         | "skill.write_file"
@@ -880,6 +927,8 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | "mic.subscribe"
         | "camera.subscribe"
         | "camera.snapshot"
+        | "camera.record_start"
+        | "camera.record_stop"
         | "screen.subscribe"
         | "screen.snapshot"
         | "speaker.publish"
@@ -901,6 +950,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // system WebView) under the caller's identity. Same
         // class as media/* verbs.
         | "browser.open_session"
+        | "browser.attach_session"
         | "browser.send_input"
         | "browser.capture_viewport"
         | "browser.close_session"
@@ -908,6 +958,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // ability registration table after an install/update/remove
         // transaction has already committed on disk.
         | "plugin.reload"
+        | "plugin.activate_realtime"
         => Some(AbilityLayer::Operational),
         // `<user>.api_key.{create,list,revoke}` — user-rooted
         // credential-lifecycle verbs. `<user>` is the active

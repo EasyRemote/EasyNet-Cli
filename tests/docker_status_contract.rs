@@ -37,7 +37,7 @@ fn write_failed_snapshot() -> tempfile::TempDir {
   "interrupted_transition": "T09_OPEN_SELF_SESSION",
   "failure": {
     "code": "CALLER_SIGNATURE_INVALID",
-    "message": "CALLER_SIGNATURE_INVALID: rejected <self>.session",
+    "message": "CALLER_SIGNATURE_INVALID: rejected session.open",
     "stage": "T09_OPEN_SELF_SESSION",
     "retryable": false
   },

@@ -82,6 +82,21 @@ pub enum AuthAction {
     /// Remove a device from this realm via the backend HTTP API.
     /// Asks for confirmation unless `-y/--yes` is passed.
     DeviceRemove(auth::DeviceRemoveArgs),
+
+    /// Manage this user's signing keys (used for user-as-caller
+    /// invocation). The key is owned by the local daemon's trust
+    /// anchor, not the backend.
+    #[command(subcommand)]
+    SigningKey(SigningKeyAction),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SigningKeyAction {
+    /// Generate a fresh user signing keypair on this host and register
+    /// its public key with the local daemon's trust anchor (via the
+    /// daemon `identity.register_pubkey` ability). Enables CLI-driven
+    /// user-as-caller invocation from this host.
+    Register(auth::SigningKeyRegisterArgs),
 }
 
 pub fn dispatch(args: AuthArgs) -> anyhow::Result<()> {
@@ -96,5 +111,8 @@ pub fn dispatch(args: AuthArgs) -> anyhow::Result<()> {
         AuthAction::Agents(a) => auth::run_agents(a),
         AuthAction::Events(a) => auth::run_events(a),
         AuthAction::DeviceRemove(a) => auth::run_device_remove(a),
+        AuthAction::SigningKey(action) => match action {
+            SigningKeyAction::Register(a) => auth::run_signing_key_register(a),
+        },
     }
 }

@@ -22,7 +22,14 @@ done
 grep -q 'struct BrowserSessionService' "$BROWSER_RS" \
     || fail "browser session state must be owned by BrowserSessionService"
 
-grep -q 'let service = Arc::new(BrowserSessionService::default())' "$BROWSER_RS" \
+register_body="$(
+    perl -0ne 'print $1 if /pub fn register\(reg: &mut AxonAbilityCatalog\) \{(.*?)\n\}/s' \
+        "$BROWSER_RS"
+)"
+[[ -n "$register_body" ]] \
+    || fail "browser registry must expose pub fn register(reg: &mut AxonAbilityCatalog)"
+
+grep -q 'let service = Arc::new(BrowserSessionService::default())' <<<"$register_body" \
     || fail "browser registry must register closures over one explicit service instance"
 
 grep -q 'service.capture_viewport' "$BROWSER_RS" \

@@ -100,6 +100,7 @@ pub mod gateway_api;
 // Stage 2 (the executor) is a follow-up file `ability_dispatch.rs`;
 // PR-SYS swaps the existing dispatch.rs call sites over to it.
 pub mod invocation_target;
+pub(crate) mod local_invocation_identity;
 pub mod local_runtime_invoker;
 
 // Kernel + Gateway implementations.
@@ -118,13 +119,14 @@ pub mod kernel;
 // "no peer import" rule.
 pub mod execution;
 
-// PR-SYS: stage-2 dispatch executor + the `system.*` ability
-// namespace. `ability_dispatch` consumes `InvocationTarget` (from
+// Stage-2 dispatch executor for daemon-owned and agent-owned abilities.
+// `ability_dispatch` consumes `InvocationTarget` (from
 // stage-1 resolver in `invocation_target.rs`) and routes either to
 // the in-process `AxonAbilityCatalog` or via `GatewayApi`.
 // `agents::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
+pub mod ability;
 pub mod ability_descriptor;
 pub mod ability_dispatch;
 pub mod ability_wire;

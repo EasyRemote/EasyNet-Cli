@@ -2,29 +2,29 @@
 // ===================================================
 //
 // File: src/services/pending_dispatch.rs
-// Description: Cross-call correlation table for `<self>.invoke_remote`
+// Description: Cross-call correlation table for `runtime.invoke_remote`
 //              dispatches awaiting their reply on a target device's
-//              `<self>.session` stream.
+//              `session.open` stream.
 //
 // Why this module exists
 // ----------------------
-// `<self>.invoke_remote` (PR-3, this commit) is the per-call bidi the
+// `runtime.invoke_remote` (PR-3, this commit) is the per-call bidi the
 // caller opens against the daemon. The daemon pushes a `Dispatch`
-// frame down the target device's pre-existing `<self>.session`
+// frame down the target device's pre-existing `session.open`
 // reverse channel (PR-2 lands the session accept side). The target
 // device runs the requested ability locally and writes a `Result`
 // frame back up its session stream. PR-2's session-receive task
 // must then route that `Result` back to the *original*
-// `<self>.invoke_remote` caller — by call_id.
+// `runtime.invoke_remote` caller — by call_id.
 //
 // `PendingDispatchMap` is the shared correlation surface:
 //
-//   * `<self>.invoke_remote` handler (PR-3, this commit's caller):
+//   * `runtime.invoke_remote` handler (PR-3, this commit's caller):
 //     `register_pending(call_id) -> oneshot::Receiver<DispatchResult>`.
 //     The handler awaits the receiver while a target session task
 //     races to fulfil it.
 //
-//   * PR-2 `<self>.session` receive task (planned):
+//   * PR-2 `session.open` receive task (planned):
 //     `complete(call_id, DispatchResult)` invoked when the device's
 //     `Result { call_id, ... }` frame arrives. The matching
 //     oneshot is fulfilled and the invoke_remote handler wakes.
@@ -68,8 +68,15 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::services::session_failure::SessionFailure;
 
+#[cfg(feature = "axon-pb")]
+pub type DispatchReceipt = easynet_axon::pb::axon::v1::InvocationReceipt;
+
+#[cfg(not(feature = "axon-pb"))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum DispatchReceipt {}
+
 /// Result the target device sent back for a cross-device dispatch.
-/// Mirrors the shape `<self>.session`'s receive task will hand off
+/// Mirrors the shape `session.open`'s receive task will hand off
 /// when it sees a `Result` frame on the session up stream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DispatchResult {
@@ -80,7 +87,7 @@ pub struct DispatchResult {
     /// field — never serialized; the invoke_remote consumer side
     /// projects it into the hub ledger where the full call context
     /// (ability, route) lives. `None` on the JSON carrier.
-    pub receipt: Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
+    pub receipt: Option<DispatchReceipt>,
     /// `Some(message)` if the target reported an execution error;
     /// `None` for a clean reply.
     pub error: Option<String>,
@@ -159,8 +166,8 @@ impl std::fmt::Debug for PendingEntry {
     }
 }
 
-/// Shared correlation table between `<self>.invoke_remote` (writer)
-/// and `<self>.session` (completer). Constructed once per daemon
+/// Shared correlation table between `runtime.invoke_remote` (writer)
+/// and `session.open` (completer). Constructed once per daemon
 /// process; cloned by `Arc` into each handler that needs it.
 #[derive(Debug, Clone, Default)]
 pub struct PendingDispatchMap {
@@ -218,7 +225,7 @@ impl PendingDispatchMap {
 
     /// Cancel every outstanding pending dispatch whose `target_ura`
     /// matches. Called from the daemon's presence-event watcher
-    /// when a `<self>.session` reverse channel drops — without this,
+    /// when a `session.open` reverse channel drops — without this,
     /// `forward_invoke` callers would block on `oneshot::Receiver`
     /// until their HTTP request timeout fired (typically 30s) for a
     /// target whose offline state is already known. Returns the
@@ -304,8 +311,22 @@ impl Drop for PendingStreamHandle {
 
 #[derive(Debug, Default)]
 struct PendingStreamDispatchInner {
-    entries: DashMap<u64, mpsc::Sender<DispatchStreamEvent>>,
+    entries: DashMap<u64, PendingStreamEntry>,
     next_call_id: AtomicU64,
+}
+
+struct PendingStreamEntry {
+    sender: mpsc::Sender<DispatchStreamEvent>,
+    target_ura: String,
+}
+
+impl std::fmt::Debug for PendingStreamEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingStreamEntry")
+            .field("target_ura", &self.target_ura)
+            .field("sender", &"<mpsc::Sender>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -321,6 +342,10 @@ impl PendingStreamDispatchMap {
     }
 
     pub fn register_pending(&self) -> PendingStreamHandle {
+        self.register_pending_for("")
+    }
+
+    pub fn register_pending_for(&self, target_ura: &str) -> PendingStreamHandle {
         // SessionDispatch::Result frames share one session-wide
         // keyspace across unary and streaming paths. Reserve odd
         // call_ids for streaming so a late terminal/chunk frame cannot
@@ -328,7 +353,13 @@ impl PendingStreamDispatchMap {
         let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
         let call_id = (sequence << 1) | 1;
         let (tx, rx) = mpsc::channel(Self::CHANNEL_CAPACITY);
-        self.inner.entries.insert(call_id, tx);
+        self.inner.entries.insert(
+            call_id,
+            PendingStreamEntry {
+                sender: tx,
+                target_ura: target_ura.to_string(),
+            },
+        );
         PendingStreamHandle {
             call_id,
             map: Arc::clone(&self.inner),
@@ -337,7 +368,12 @@ impl PendingStreamDispatchMap {
     }
 
     pub async fn push_chunk(&self, call_id: u64, payload: Vec<u8>) -> bool {
-        let Some(sender) = self.inner.entries.get(&call_id).map(|entry| entry.clone()) else {
+        let Some(sender) = self
+            .inner
+            .entries
+            .get(&call_id)
+            .map(|entry| entry.sender.clone())
+        else {
             return false;
         };
         sender
@@ -348,7 +384,8 @@ impl PendingStreamDispatchMap {
 
     pub async fn finish(&self, call_id: u64, result: DispatchResult) -> bool {
         match self.inner.entries.remove(&call_id) {
-            Some((_, sender)) => sender
+            Some((_, entry)) => entry
+                .sender
                 .send(DispatchStreamEvent::Terminal(Box::new(result)))
                 .await
                 .is_ok(),
@@ -357,7 +394,7 @@ impl PendingStreamDispatchMap {
     }
 
     /// Non-blocking `push_chunk` for the session drain. The drain is
-    /// the ONE reader of a device's whole `<self>.session`; awaiting
+    /// the ONE reader of a device's whole `session.open`; awaiting
     /// a full per-call channel there lets a single stalled consumer
     /// block every other invocation on that device (measured
     /// 2026-06-12: one unread streaming caller froze all calls to
@@ -366,7 +403,12 @@ impl PendingStreamDispatchMap {
     /// end-of-stream after the buffered chunks — and the drain moves
     /// on.
     pub fn try_push_chunk(&self, call_id: u64, payload: Vec<u8>) -> StreamDeliver {
-        let Some(sender) = self.inner.entries.get(&call_id).map(|entry| entry.clone()) else {
+        let Some(sender) = self
+            .inner
+            .entries
+            .get(&call_id)
+            .map(|entry| entry.sender.clone())
+        else {
             return StreamDeliver::NoMatch;
         };
         match sender.try_send(DispatchStreamEvent::Chunk(payload)) {
@@ -389,8 +431,11 @@ impl PendingStreamDispatchMap {
     /// stopped draining its chunks.
     pub fn try_finish(&self, call_id: u64, result: DispatchResult) -> StreamDeliver {
         match self.inner.entries.remove(&call_id) {
-            Some((_, sender)) => {
-                match sender.try_send(DispatchStreamEvent::Terminal(Box::new(result))) {
+            Some((_, entry)) => {
+                match entry
+                    .sender
+                    .try_send(DispatchStreamEvent::Terminal(Box::new(result)))
+                {
                     Ok(()) => StreamDeliver::Delivered,
                     Err(mpsc::error::TrySendError::Full(_)) => StreamDeliver::ConsumerStalled,
                     Err(mpsc::error::TrySendError::Closed(_)) => StreamDeliver::NoMatch,
@@ -398,6 +443,36 @@ impl PendingStreamDispatchMap {
             }
             None => StreamDeliver::NoMatch,
         }
+    }
+
+    pub fn cancel_for(&self, target_ura: &str, error_reason: &str) -> usize {
+        let to_cancel: Vec<u64> = self
+            .inner
+            .entries
+            .iter()
+            .filter(|e| e.value().target_ura == target_ura)
+            .map(|e| *e.key())
+            .collect();
+        let mut count = 0;
+        for call_id in to_cancel {
+            if let Some((_, entry)) = self.inner.entries.remove(&call_id) {
+                let _ = entry
+                    .sender
+                    .try_send(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
+                        payload: Vec::new(),
+                        error: Some(error_reason.to_string()),
+                        failure: Some(SessionFailure::from_reason(
+                            error_reason,
+                            "TARGET_NOT_IN_PRESENCE_REGISTRY",
+                            true,
+                        )),
+                        request_id: None,
+                        receipt: None,
+                    })));
+                count += 1;
+            }
+        }
+        count
     }
 
     pub fn outstanding(&self) -> usize {
@@ -616,6 +691,49 @@ mod tests {
             })))
         );
         writer.await.expect("writer joined");
+    }
+
+    #[tokio::test]
+    async fn pending_stream_map_cancel_for_target_yields_terminal_failure_after_chunks() {
+        let map = PendingStreamDispatchMap::new();
+        let mut handle = map.register_pending_for("easynet:///r/realm/device/target");
+        let id = handle.call_id();
+
+        assert_eq!(map.outstanding(), 1);
+        assert_eq!(
+            map.try_push_chunk(id, b"partial-frame".to_vec()),
+            StreamDeliver::Delivered
+        );
+        assert_eq!(
+            map.cancel_for("easynet:///r/realm/device/other", "target_offline"),
+            0,
+            "non-matching target URA must not cancel this stream"
+        );
+        assert_eq!(map.outstanding(), 1);
+        assert_eq!(
+            map.cancel_for("easynet:///r/realm/device/target", "target_offline"),
+            1,
+            "matching target URA must cancel the pending stream"
+        );
+        assert_eq!(map.outstanding(), 0);
+
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Chunk(b"partial-frame".to_vec()))
+        );
+        let Some(DispatchStreamEvent::Terminal(result)) = handle.recv().await else {
+            panic!("cancel_for must deliver one terminal failure event");
+        };
+        assert!(result.payload.is_empty());
+        assert_eq!(result.error.as_deref(), Some("target_offline"));
+        let failure = result.failure.expect("typed terminal failure");
+        assert_eq!(failure.code, "TARGET_OFFLINE");
+        assert!(failure.retryable);
+        assert_eq!(
+            handle.recv().await,
+            None,
+            "stream handle must close after terminal failure"
+        );
     }
 
     #[tokio::test]

@@ -4,9 +4,8 @@
 // File: src/plugins/builtin/remote_desktop/mod.rs
 // Description: Compiled binding for the `easynet.remote_desktop` plugin.
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::plugin_host::package::{BuiltinPluginAbilitySpec, BuiltinPluginBinding};
-use crate::runtime::plugin_host::PluginRuntimeLimits;
+use crate::runtime::plugin_host::{PluginContributionBuilder, PluginRuntimeLimits, Result};
 
 pub(crate) mod config;
 pub(crate) mod constants;
@@ -48,7 +47,7 @@ pub(crate) mod view_transport;
 
 const MANIFEST_PATH: &str = "plugins/remote-desktop/plugin.toml";
 const MANIFEST_BODY: &str = include_str!("../../../../plugins/remote-desktop/plugin.toml");
-const ENTRYPOINT: &str = "easynet_cli::plugins::remote_desktop::register";
+const ENTRYPOINT: &str = "easynet_cli::plugins::remote_desktop::contribute";
 const ENABLED_ENV_VAR: &str = "EASYNET_REMOTE_DESKTOP_PLUGIN";
 
 /// Return the compiled binding consumed by the plugin host.
@@ -59,7 +58,7 @@ pub fn binding() -> BuiltinPluginBinding {
         expected_entrypoint: ENTRYPOINT,
         enabled_env_var: Some(ENABLED_ENV_VAR),
         ability_specs,
-        register,
+        contribute,
     }
 }
 
@@ -68,7 +67,10 @@ pub fn ability_specs() -> Vec<BuiltinPluginAbilitySpec> {
     registration::ability_specs()
 }
 
-/// Register the plugin's ability handlers into the daemon catalog.
-pub fn register(reg: &mut AxonAbilityCatalog, limits: PluginRuntimeLimits) {
-    registration::register(reg, limits);
+/// Contribute the plugin's ability handlers to the daemon binder.
+pub fn contribute(
+    builder: &mut PluginContributionBuilder,
+    limits: PluginRuntimeLimits,
+) -> Result<()> {
+    registration::contribute(builder, limits)
 }

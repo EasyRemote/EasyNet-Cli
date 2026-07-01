@@ -128,7 +128,8 @@ async fn create_direct_webrtc_endpoint(
     )
     .ok_or_else(|| {
         anyhow::anyhow!(
-            "{ABILITY_SET_DESCRIPTION}: direct WebRTC currently supports xcap display resources; reason={REASON_RESOURCE_TYPE_MISMATCH}"
+            "{ABILITY_SET_DESCRIPTION}: no compatible direct WebRTC media backend for subject type {}; reason={REASON_RESOURCE_TYPE_MISMATCH}",
+            endpoint_config.entry.kind.as_str()
         )
     })?;
 

@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
+use crate::persistence::resources::{ResourceEntry, ResourceType};
 use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
@@ -157,9 +158,14 @@ pub fn parse_input_frame(text: &str) -> anyhow::Result<RemoteDesktopInputFrame> 
     Ok(frame)
 }
 
-pub fn apply_input_frame(frame: &RemoteDesktopInputFrame) -> InputApplyOutcome {
+pub(in crate::plugins::builtin::remote_desktop) fn apply_input_frame_with_policy(
+    input_policy: &Value,
+    frame: &RemoteDesktopInputFrame,
+) -> InputApplyOutcome {
     match frame {
-        RemoteDesktopInputFrame::Pointer(frame) => apply_pointer_frame(frame),
+        RemoteDesktopInputFrame::Pointer(frame) => {
+            apply_pointer_frame(frame, pointer_target_from_policy(input_policy))
+        }
         RemoteDesktopInputFrame::Key(frame) => apply_key_frame(frame),
         RemoteDesktopInputFrame::Clipboard(_) => {
             InputApplyOutcome::rejected("clipboard_injection_not_enabled")
@@ -168,6 +174,30 @@ pub fn apply_input_frame(frame: &RemoteDesktopInputFrame) -> InputApplyOutcome {
             InputApplyOutcome::rejected("file_drop_not_enabled")
         }
     }
+}
+
+pub(in crate::plugins::builtin::remote_desktop) fn input_policy_for_entry(
+    mut input_policy: Value,
+    entry: &ResourceEntry,
+) -> Value {
+    let Some(target) = pointer_target_for_entry(entry) else {
+        return input_policy;
+    };
+    let Some(map) = input_policy.as_object_mut() else {
+        return input_policy;
+    };
+    map.insert(
+        "pointer_target".to_string(),
+        json!({
+            "subject_type": entry.kind.as_str(),
+            "hardware_id": entry.hardware_id.as_str(),
+            "origin_x": target.origin_x,
+            "origin_y": target.origin_y,
+            "width": target.width,
+            "height": target.height,
+        }),
+    );
+    input_policy
 }
 
 pub fn input_injection_available() -> bool {
@@ -286,7 +316,7 @@ pub(in crate::plugins::builtin::remote_desktop) async fn run_remote_desktop_inpu
                     );
                     continue;
                 }
-                let outcome = apply_input_frame(&frame);
+                let outcome = apply_input_frame_with_policy(&input_policy, &frame);
                 if outcome.applied {
                     accepted_count = accepted_count.saturating_add(1);
                     if accepted_count == 1 || accepted_count.is_multiple_of(120) {
@@ -352,6 +382,116 @@ pub(in crate::plugins::builtin::remote_desktop) fn record_input_channel_event(
     session.record_input_channel_event(event_type, payload);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PointerTargetGeometry {
+    origin_x: f64,
+    origin_y: f64,
+    width: Option<f64>,
+    height: Option<f64>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MappedPointerPoint {
+    x: f64,
+    y: f64,
+}
+
+fn pointer_target_for_entry(entry: &ResourceEntry) -> Option<PointerTargetGeometry> {
+    match entry.kind {
+        ResourceType::Display => {
+            let origin_x = metadata_f64(entry, "x").unwrap_or(0.0);
+            let origin_y = metadata_f64(entry, "y").unwrap_or(0.0);
+            Some(PointerTargetGeometry {
+                origin_x,
+                origin_y,
+                width: metadata_f64(entry, "width"),
+                height: metadata_f64(entry, "height"),
+            })
+        }
+        ResourceType::Window => Some(PointerTargetGeometry {
+            origin_x: metadata_f64(entry, "x")?,
+            origin_y: metadata_f64(entry, "y")?,
+            width: metadata_f64(entry, "width"),
+            height: metadata_f64(entry, "height"),
+        }),
+        ResourceType::Application => Some(PointerTargetGeometry {
+            origin_x: metadata_f64(entry, "primary_x").or_else(|| metadata_f64(entry, "x"))?,
+            origin_y: metadata_f64(entry, "primary_y").or_else(|| metadata_f64(entry, "y"))?,
+            width: metadata_f64(entry, "primary_width").or_else(|| metadata_f64(entry, "width")),
+            height: metadata_f64(entry, "primary_height").or_else(|| metadata_f64(entry, "height")),
+        }),
+        _ => None,
+    }
+}
+
+fn pointer_target_from_policy(policy: &Value) -> Option<PointerTargetGeometry> {
+    let target = policy.get("pointer_target")?;
+    Some(PointerTargetGeometry {
+        origin_x: value_f64(target.get("origin_x")?)?,
+        origin_y: value_f64(target.get("origin_y")?)?,
+        width: target.get("width").and_then(value_f64),
+        height: target.get("height").and_then(value_f64),
+    })
+}
+
+fn metadata_f64(entry: &ResourceEntry, key: &str) -> Option<f64> {
+    entry.metadata.get(key).and_then(value_f64)
+}
+
+fn value_f64(value: &Value) -> Option<f64> {
+    value.as_f64().filter(|value| value.is_finite())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn map_pointer_point(
+    frame: &PointerInputFrame,
+    target: Option<PointerTargetGeometry>,
+) -> MappedPointerPoint {
+    let Some(target) = target else {
+        return MappedPointerPoint {
+            x: frame.x.max(0.0),
+            y: frame.y.max(0.0),
+        };
+    };
+    let local_x = map_axis(
+        frame.x,
+        frame.normalized_x,
+        frame.target_width,
+        target.width,
+    );
+    let local_y = map_axis(
+        frame.y,
+        frame.normalized_y,
+        frame.target_height,
+        target.height,
+    );
+    MappedPointerPoint {
+        x: target.origin_x + local_x,
+        y: target.origin_y + local_y,
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn map_axis(
+    raw: f64,
+    normalized: Option<f64>,
+    client_span: Option<f64>,
+    source_span: Option<f64>,
+) -> f64 {
+    if let Some(normalized) = normalized {
+        if let Some(span) = source_span.or(client_span) {
+            return normalized * span.max(1.0);
+        }
+    }
+    if let (Some(client_span), Some(source_span)) = (client_span, source_span) {
+        if client_span.is_finite() && source_span.is_finite() && client_span > 0.0 {
+            return raw * source_span / client_span;
+        }
+    }
+    raw
+}
+
 fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
     match frame {
         RemoteDesktopInputFrame::Pointer(pointer) => {
@@ -395,8 +535,11 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn apply_pointer_frame(frame: &PointerInputFrame) -> InputApplyOutcome {
-    platform::apply_pointer_frame(frame)
+fn apply_pointer_frame(
+    frame: &PointerInputFrame,
+    target: Option<PointerTargetGeometry>,
+) -> InputApplyOutcome {
+    platform::apply_pointer_frame(frame, target)
 }
 
 fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
@@ -413,7 +556,10 @@ mod platform {
     use objc2_core_foundation::CFString;
     use objc2_foundation::{NSMutableDictionary, NSNumber};
 
-    use super::{InputApplyOutcome, KeyInputFrame, PointerInputFrame};
+    use super::{
+        map_pointer_point, InputApplyOutcome, KeyInputFrame, PointerInputFrame,
+        PointerTargetGeometry,
+    };
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -477,7 +623,10 @@ mod platform {
         input_injection_available()
     }
 
-    pub(super) fn apply_pointer_frame(frame: &PointerInputFrame) -> InputApplyOutcome {
+    pub(super) fn apply_pointer_frame(
+        frame: &PointerInputFrame,
+        target: Option<PointerTargetGeometry>,
+    ) -> InputApplyOutcome {
         if !input_injection_available() {
             request_accessibility_prompt();
             return InputApplyOutcome::rejected(ACCESSIBILITY_DENIED_REASON);
@@ -497,7 +646,7 @@ mod platform {
             ("up", _) => (K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_CENTER),
             _ => return InputApplyOutcome::rejected("unsupported_pointer_action"),
         };
-        let point = mapped_point(frame);
+        let point = mapped_point(frame, target);
         unsafe {
             let event = CGEventCreateMouseEvent(std::ptr::null_mut(), event_type, point, button);
             if event.is_null() {
@@ -581,20 +730,11 @@ mod platform {
     const K_CG_EVENT_CENTER_MOUSE_DOWN: u32 = K_CG_EVENT_OTHER_MOUSE_DOWN;
     const K_CG_EVENT_CENTER_MOUSE_UP: u32 = K_CG_EVENT_OTHER_MOUSE_UP;
 
-    fn mapped_point(frame: &PointerInputFrame) -> CGPoint {
-        let x = frame
-            .normalized_x
-            .zip(frame.target_width)
-            .map(|(normalized, width)| normalized * width)
-            .unwrap_or(frame.x);
-        let y = frame
-            .normalized_y
-            .zip(frame.target_height)
-            .map(|(normalized, height)| normalized * height)
-            .unwrap_or(frame.y);
+    fn mapped_point(frame: &PointerInputFrame, target: Option<PointerTargetGeometry>) -> CGPoint {
+        let point = map_pointer_point(frame, target);
         CGPoint {
-            x: x.max(0.0),
-            y: y.max(0.0),
+            x: point.x,
+            y: point.y,
         }
     }
 
@@ -676,7 +816,7 @@ mod platform {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use super::{InputApplyOutcome, KeyInputFrame, PointerInputFrame};
+    use super::{InputApplyOutcome, KeyInputFrame, PointerInputFrame, PointerTargetGeometry};
 
     pub(super) fn input_injection_available() -> bool {
         false
@@ -686,7 +826,10 @@ mod platform {
         false
     }
 
-    pub(super) fn apply_pointer_frame(_frame: &PointerInputFrame) -> InputApplyOutcome {
+    pub(super) fn apply_pointer_frame(
+        _frame: &PointerInputFrame,
+        _target: Option<PointerTargetGeometry>,
+    ) -> InputApplyOutcome {
         InputApplyOutcome::rejected("platform_input_injection_unavailable")
     }
 
@@ -698,6 +841,7 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::resources::{ResourceBinding, ResourceEntry};
 
     #[test]
     fn parses_pointer_input_frame() {
@@ -722,5 +866,69 @@ mod tests {
     fn parses_key_input_frame() {
         let frame = parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Key);
+    }
+
+    #[test]
+    fn maps_window_relative_pointer_to_global_screen_point() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/window.test".into(),
+            owner_agent: "easynet:///r/acme/device/dev-1".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Cursor".into(),
+            metadata: json!({
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let policy = input_policy_for_entry(json!({"pointer_enabled": true}), &entry);
+        let frame = match parse_input_frame(
+            r#"{"type":"pointer","action":"move","x":0,"y":0,"normalized_x":0.5,"normalized_y":0.25}"#,
+        )
+        .unwrap()
+        {
+            RemoteDesktopInputFrame::Pointer(frame) => frame,
+            _ => unreachable!(),
+        };
+
+        let point = map_pointer_point(&frame, pointer_target_from_policy(&policy));
+
+        assert_eq!(point, MappedPointerPoint { x: 500.0, y: 350.0 });
+    }
+
+    #[test]
+    fn maps_application_pointer_through_primary_window_bounds() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/application.test".into(),
+            owner_agent: "easynet:///r/acme/device/dev-1".into(),
+            kind: ResourceType::Application,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "application:macos:cgwindow:Cursor".into(),
+            display_name: "Cursor".into(),
+            metadata: json!({
+                "primary_x": 300,
+                "primary_y": 400,
+                "primary_width": 1000,
+                "primary_height": 500,
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let policy = input_policy_for_entry(json!({"pointer_enabled": true}), &entry);
+        let frame = match parse_input_frame(
+            r#"{"type":"pointer","action":"down","x":250,"y":100,"target_width":500,"target_height":250}"#,
+        )
+        .unwrap()
+        {
+            RemoteDesktopInputFrame::Pointer(frame) => frame,
+            _ => unreachable!(),
+        };
+
+        let point = map_pointer_point(&frame, pointer_target_from_policy(&policy));
+
+        assert_eq!(point, MappedPointerPoint { x: 800.0, y: 600.0 });
     }
 }

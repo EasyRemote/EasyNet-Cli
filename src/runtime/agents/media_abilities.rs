@@ -1,10 +1,10 @@
-// EasyNet CLI — Media abilities (RFC-005 v3.2 A1-A8)
-// ====================================================
+// EasyNet CLI — Media abilities (RFC-005 v3.2 A1-A10)
+// =====================================================
 //
 // File: src/runtime/agents/media_abilities.rs
 //
-// Eight physical-channel abilities, all `subject = resource_ura`,
-// all RFC-006 class ∈ {Stream, Query}. Per the binding invariants
+// Physical-channel abilities, all `subject = resource_ura`.
+// Per the binding invariants
 // in plan v3.2:
 //
 //   A1 mic.subscribe        Stream  (server-stream)  device
@@ -15,6 +15,8 @@
 //   A6 voice.subscribe      Stream  (server-stream)  llm
 //   A7 voice.transcribe     Stream  (true bidi)      llm
 //   A8 screen.snapshot      Query   (rpc)            device
+//   A9 camera.record_start  Transition (rpc)         device
+//   A10 camera.record_stop  Transition (rpc)         device
 //
 // Single source of truth: a const `ABILITIES` table holds every
 // ability's name + description + input_schema + RFC-006 class +
@@ -25,11 +27,15 @@
 //
 // PR2 scope (this file)
 // ---------------------
-// All eight handlers are stubbed (`unimplemented!()` for the
-// device IO portion). What ships in PR2:
+// This module owns the metadata for all eight handlers and the
+// temporary stubs for abilities that still have no real module in
+// `media/`. What ships in PR2:
 //
-//   - registration of all eight names into the local registry, so
-//     `meta.list_abilities` and `gen-ability-tomls` see them
+//   - metadata for all eight names, so `meta.list_abilities` and
+//     `gen-ability-tomls` see them
+//   - registration of only the still-unwired stubs; real media
+//     modules register their own envelope-aware handlers and must
+//     not share the same dispatch slot with an args-only stub
 //   - description / input_schema / rfc006 metadata so each TOML
 //     materialises with the correct RFC-006 class
 //   - validation skeleton enforcing **INV-SUBJECT-ENVELOPE**: the
@@ -79,6 +85,8 @@ use crate::runtime::agents::ability_toml::Rfc006Metadata;
 pub const ABILITY_MIC_SUBSCRIBE: &str = "mic.subscribe";
 pub const ABILITY_CAMERA_SUBSCRIBE: &str = "camera.subscribe";
 pub const ABILITY_CAMERA_SNAPSHOT: &str = "camera.snapshot";
+pub const ABILITY_CAMERA_RECORD_START: &str = "camera.record_start";
+pub const ABILITY_CAMERA_RECORD_STOP: &str = "camera.record_stop";
 pub const ABILITY_SCREEN_SUBSCRIBE: &str = "screen.subscribe";
 pub const ABILITY_SCREEN_SNAPSHOT: &str = "screen.snapshot";
 pub const ABILITY_SPEAKER_PUBLISH: &str = "speaker.publish";
@@ -126,7 +134,7 @@ struct AbilityRow {
     shape: DispatchShape,
 }
 
-/// All eight media abilities in declaration order. Adding a 9th
+/// All media abilities in declaration order. Adding another
 /// media ability means appending one row here — `register` and
 /// `metadata(name)` both pick it up automatically; mod.rs's three
 /// description/schema/rfc006 tables already delegate via
@@ -158,6 +166,25 @@ const ABILITIES: &[AbilityRow] = &[
                       payloadstore_ura, captured_at } in the receipt body.",
         input_schema: snapshot_args_no_region,
         class: AbilityClass::Query,
+        shape: DispatchShape::Rpc,
+    },
+    AbilityRow {
+        name: ABILITY_CAMERA_RECORD_START,
+        description: "Start a bounded recording session for a camera resource. \
+                      Subject MUST be a camera resource_ura. Returns a \
+                      recording_session_id that must be passed to \
+                      camera.record_stop.",
+        input_schema: camera_record_start_args,
+        class: AbilityClass::Transition,
+        shape: DispatchShape::Rpc,
+    },
+    AbilityRow {
+        name: ABILITY_CAMERA_RECORD_STOP,
+        description: "Stop a camera recording session and persist the captured \
+                      device-camera artifact. Subject MUST be the same camera \
+                      resource_ura used for camera.record_start.",
+        input_schema: camera_record_stop_args,
+        class: AbilityClass::Transition,
         shape: DispatchShape::Rpc,
     },
     AbilityRow {
@@ -241,6 +268,21 @@ pub fn input_schema(name: &str) -> Option<Value> {
     row(name).map(|r| (r.input_schema)())
 }
 
+/// Registry manifest for a media ability.
+///
+/// The `ABILITIES` table is the authoritative media contract; live handler
+/// registration must project through this helper instead of registering a
+/// handler-only control-plane row and letting `meta.list_abilities` degrade to
+/// a schema-less descriptor.
+pub(crate) fn registry_manifest(name: &'static str) -> crate::core::ability_spec::AbilityManifest {
+    let row = row(name).unwrap_or_else(|| panic!("{name} must be a registered media ability"));
+    crate::runtime::agents::system_ability_manifest::registry_manifest(
+        row.name,
+        row.description,
+        (row.input_schema)(),
+    )
+}
+
 /// RFC-006 metadata for a media ability, or `None` if not a media
 /// ability. No `Value` allocation; cheapest of the three.
 pub fn rfc006(name: &str) -> Option<Rfc006Metadata> {
@@ -263,15 +305,20 @@ fn row(name: &str) -> Option<&'static AbilityRow> {
 
 // ── Registration ─────────────────────────────────────────────
 
-/// Register all eight media abilities on the local registry by
-/// iterating `ABILITIES`. PR3 replaces the per-shape stubs with
-/// real cpal/nokhwa/screen-crate backends.
+/// Register only media abilities that still do not have a real
+/// envelope-aware handler module. The full eight-ability metadata
+/// remains in `ABILITIES`; handler registration is intentionally
+/// narrower so the registry never relies on "real handler overrides
+/// stub" precedence.
 ///
 /// Each closure captures `row: &'static AbilityRow` by value
 /// (the reference is `Copy + 'static`); no rebinding to `let
 /// name = row.name;` is needed.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     for row in ABILITIES {
+        if has_real_media_handler(row.name) {
+            continue;
+        }
         // Post-M3 of the system-namespace migration: `row.name` is
         // already canonical (`device.<segment>.<verb>`). Earlier
         // revisions stored the legacy form in the table and
@@ -280,28 +327,44 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         // passes `row.name` verbatim.
         match row.shape {
             DispatchShape::Rpc => {
-                reg.register_rpc_with_owner(
+                reg.register_rpc_with_spec(
                     row.name,
                     OwnerKind::Device,
+                    registry_manifest(row.name),
                     Arc::new(|args| query_stub(row.name, args)),
                 );
             }
             DispatchShape::Stream => {
-                reg.register_stream_with_owner(
+                reg.register_stream_with_spec(
                     row.name,
                     OwnerKind::Device,
+                    registry_manifest(row.name),
                     Arc::new(|args| stream_stub(row.name, args)),
                 );
             }
             DispatchShape::Bidi => {
-                reg.register_bidi_with_owner(
+                reg.register_bidi_with_spec(
                     row.name,
                     OwnerKind::Device,
+                    registry_manifest(row.name),
                     Arc::new(|args| bidi_stub(row.name, args)),
                 );
             }
         }
     }
+}
+
+fn has_real_media_handler(name: &str) -> bool {
+    matches!(
+        name,
+        ABILITY_MIC_SUBSCRIBE
+            | ABILITY_CAMERA_SUBSCRIBE
+            | ABILITY_CAMERA_SNAPSHOT
+            | ABILITY_CAMERA_RECORD_START
+            | ABILITY_CAMERA_RECORD_STOP
+            | ABILITY_SCREEN_SUBSCRIBE
+            | ABILITY_SCREEN_SNAPSHOT
+    )
 }
 
 // ── INV-SUBJECT-ENVELOPE enforcement ─────────────────────────
@@ -447,6 +510,31 @@ fn snapshot_args_no_region() -> Value {
     })
 }
 
+fn camera_record_start_args() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "fps":             { "type": "integer", "minimum": 1, "maximum": 60 },
+            "resolution":      { "type": "string" },
+            "codec":           { "type": "string", "enum": ["mjpeg"] },
+            "max_duration_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
+            "max_bytes":       { "type": "integer", "minimum": 1048576, "maximum": 268435456 }
+        }
+    })
+}
+
+fn camera_record_stop_args() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recording_session_id"],
+        "properties": {
+            "recording_session_id": { "type": "string", "minLength": 1 }
+        }
+    })
+}
+
 /// Snapshot — region permitted (screen, with the same display-
 /// only rule as `video_subscribe_args_with_region`).
 fn snapshot_args_with_region() -> Value {
@@ -495,15 +583,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registration_dispatches_every_row_to_the_shape_it_declares() {
-        // Two-way pin between the `ABILITIES` table and the
-        // registered handlers: every row's `shape` field must
-        // resolve to a registered handler of that exact dispatch
-        // type. Catches both "row added but not registered" and
-        // "row's shape field changed but register() not updated".
+    fn registration_dispatches_unwired_stubs_to_the_shape_they_declare() {
+        // Two-way pin between the `ABILITIES` table and stub
+        // registration: rows without real modules must resolve to
+        // a registered handler of their declared dispatch type;
+        // rows with real modules must remain unregistered here so
+        // one dispatch slot never has both an args-only stub and an
+        // envelope-aware handler.
         let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         for row in ABILITIES {
+            if has_real_media_handler(row.name) {
+                assert!(
+                    reg.get_rpc(row.name).is_none()
+                        && reg.get_stream(row.name).is_none()
+                        && reg.get_bidi(row.name).is_none(),
+                    "{} has a real media module and must not also be stub-registered",
+                    row.name
+                );
+                continue;
+            }
             match row.shape {
                 DispatchShape::Rpc => assert!(
                     reg.get_rpc(row.name).is_some(),
@@ -525,6 +624,26 @@ mod tests {
     }
 
     #[test]
+    fn stub_registration_publishes_media_manifests() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg);
+        let rows = reg.ability_catalog_snapshot();
+
+        for row in ABILITIES {
+            if has_real_media_handler(row.name) {
+                continue;
+            }
+            let manifest = rows
+                .iter()
+                .find(|catalog_row| catalog_row.name == row.name)
+                .and_then(|catalog_row| catalog_row.manifest.as_ref())
+                .unwrap_or_else(|| panic!("{} must publish a media manifest", row.name));
+            assert_eq!(manifest.description(), row.description);
+            assert_eq!(manifest.input_schema(), &(row.input_schema)());
+        }
+    }
+
+    #[test]
     fn projections_resolve_every_row_in_the_table() {
         // Single-source pin: every name in `ABILITIES` must
         // resolve through all three projections. Catches a
@@ -535,6 +654,8 @@ mod tests {
         for row in ABILITIES {
             assert_eq!(description(row.name), Some(row.description));
             assert_eq!(rfc006(row.name).and_then(|m| m.class), Some(row.class));
+            let manifest = registry_manifest(row.name);
+            assert_eq!(manifest.description(), row.description);
             assert!(
                 input_schema(row.name).is_some(),
                 "input_schema for {} returned None",
@@ -560,7 +681,12 @@ mod tests {
         // copy-paste cannot accidentally drop the guard.
         let bad = json!({"subject": "easynet:///r/x/resource/y"});
 
-        for ability in [ABILITY_CAMERA_SNAPSHOT, ABILITY_SCREEN_SNAPSHOT] {
+        for ability in [
+            ABILITY_CAMERA_SNAPSHOT,
+            ABILITY_CAMERA_RECORD_START,
+            ABILITY_CAMERA_RECORD_STOP,
+            ABILITY_SCREEN_SNAPSHOT,
+        ] {
             let err = query_stub(ability, bad.clone()).unwrap_err().to_string();
             assert!(
                 err.contains(REASON_SUBJECT_IN_ARGS),
@@ -590,10 +716,10 @@ mod tests {
 
     #[test]
     fn handlers_without_subject_in_args_reach_unimplemented_branch() {
-        // Without the subject-in-args poison, the stubs fall
-        // through to the "not yet wired" error. PR3 will replace
-        // that branch with real device IO.
-        let err = query_stub(ABILITY_CAMERA_SNAPSHOT, json!({}))
+        // Without the subject-in-args poison, the still-unwired
+        // stubs fall through to the "not yet wired" error. Real
+        // camera handlers are skipped by the stub registrar.
+        let err = query_stub(ABILITY_SPEAKER_PUBLISH, json!({}))
             .unwrap_err()
             .to_string();
         assert!(
@@ -603,11 +729,26 @@ mod tests {
     }
 
     #[test]
-    fn all_eight_abilities_classify_as_query_or_stream() {
-        // Sanity pin: no media ability is Transition. A future
-        // change reclassifying one (e.g. a stateful media.session)
-        // fires this and forces an explicit decision.
+    fn recording_abilities_are_explicit_transitions() {
+        assert_eq!(
+            rfc006(ABILITY_CAMERA_RECORD_START).unwrap().class,
+            Some(AbilityClass::Transition)
+        );
+        assert_eq!(
+            rfc006(ABILITY_CAMERA_RECORD_STOP).unwrap().class,
+            Some(AbilityClass::Transition)
+        );
+    }
+
+    #[test]
+    fn non_recording_media_abilities_classify_as_query_or_stream() {
         for row in ABILITIES {
+            if matches!(
+                row.name,
+                ABILITY_CAMERA_RECORD_START | ABILITY_CAMERA_RECORD_STOP
+            ) {
+                continue;
+            }
             assert!(
                 matches!(row.class, AbilityClass::Query | AbilityClass::Stream),
                 "{} classified as Transition; would need transition_id, state_type, etc.",

@@ -25,6 +25,19 @@ require_grep() {
     grep -Fq "$pattern" "$file" || fail "$message"
 }
 
+require_any_grep() {
+    local file="$1"
+    local message="$2"
+    shift 2
+    local pattern
+    for pattern in "$@"; do
+        if grep -Fq "$pattern" "$file"; then
+            return 0
+        fi
+    done
+    fail "$message"
+}
+
 reject_grep() {
     local pattern="$1"
     local file="$2"
@@ -65,8 +78,10 @@ require_grep 'easynet:///r/localhost/hub' src/ura.rs \
 reject_grep 'hub       easynet:///r/<realm>/hub/<id>' src/ura.rs \
     "CLI URA facade docs must not advertise Hub identities with tail"
 
-require_grep 'use easynet_axon::ura::{parse_ura, URAKind};' src/services/invocation_transport/federation_invoke.rs \
-    "parse_node_ura must delegate grammar to Axon"
+require_any_grep src/services/invocation_transport/federation_invoke.rs \
+    "parse_node_ura must delegate grammar to Axon" \
+    'use easynet_axon::ura::{parse_ura, URAKind};' \
+    'use easynet_axon::ura::{URAKind, parse_ura};'
 require_grep 'whose clean protocol identity is `easynet:///r/<realm>/hub`' src/services/invocation_transport/federation_invoke.rs \
     "parse_node_ura docs must state the canonical /hub identity"
 require_grep 'fn parse_node_ura_accepts_protocol_hub_identity()' src/services/invocation_transport/federation_invoke.rs \
@@ -81,13 +96,13 @@ require_grep 'assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"))
 require_grep 'assert!(!facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));' \
     src/services/invocation_transport/admission_facade.rs \
     "admission facade must reject Hub callers with tail"
-# E6 moved the service behavior tests to the #[path]-linked companion
-# file; the realm-extraction assertions live there now.
+# The service behavior tests consume the same helper through the
+# admission facade; the realm-extraction assertions live there now.
 require_grep 'parse_realm_from_ura("easynet:///r/peer-realm/hub")' \
-    src/services/invocation_transport/daemon_invocation_service_tests.rs \
+    src/services/invocation_transport/admission_facade.rs \
     "daemon realm extraction must accept canonical Hub URAs"
 require_grep 'parse_realm_from_ura("easynet:///r/peer-realm/hub/extra")' \
-    src/services/invocation_transport/daemon_invocation_service_tests.rs \
+    src/services/invocation_transport/admission_facade.rs \
     "daemon realm extraction must reject Hub URAs with tail"
 require_grep 'parse_realm_from_ura("easynet:///r/abc/hub")' \
     src/services/invocation_transport/register_device_pubkey.rs \

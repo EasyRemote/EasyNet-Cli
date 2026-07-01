@@ -7,12 +7,12 @@
 // federation and, if so, installs the production wiring:
 //
 //   * `BridgeForwardInvoker` — concrete `CliForwardInvoker` that
-//     turns a remote `<self>.invoke(target=peer)` into a real
+//     turns a remote `<agent>.invoke(target=peer)` into a real
 //     `federation.forward_invoke` call over the daemon's
 //     existing gRPC bridge.
 //
 //   * `FederationStatusProbe` — process-wide handle exposing the
-//     decision to observers (the `<self>.federation.status`
+//     decision to observers (the `federation.status`
 //     ability + operator log lines).
 //
 // Design contract
@@ -248,8 +248,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         }
     }
 

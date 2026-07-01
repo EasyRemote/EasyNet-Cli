@@ -28,7 +28,10 @@ pub mod state;
 
 use std::sync::Arc;
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
+use crate::runtime::ability::authority::AuthorityScope;
+use crate::runtime::ability_dispatch::{
+    AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
+};
 
 /// Installation parameters for the Pages reference system. Carry
 /// the daemon's user identity (the `<user>` segment in every
@@ -128,7 +131,8 @@ fn register_management_abilities(
     config: &PagesConfig,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
-    let owner = OwnerKind::User(config.user.clone());
+    let owner = OwnerKind::Agent("pages".to_string());
+    let authority_scope = pages_management_authority_scope(config);
 
     let user = config.user.clone();
     let realm = config.realm.clone();
@@ -141,9 +145,11 @@ fn register_management_abilities(
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
         publish::handle_publish(&user, listener_port, &realm, registry, args)
     });
-    reg.register_rpc_with_spec(
+    register_management_rpc(
+        reg,
         "pages.publish",
         owner.clone(),
+        authority_scope.clone(),
         manifest_for_verb("pages.publish"),
         publish_handler,
     );
@@ -156,9 +162,11 @@ fn register_management_abilities(
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
         list_get_unpublish::handle_unpublish_with_registry(&user, registry.as_ref(), args)
     });
-    reg.register_rpc_with_spec(
+    register_management_rpc(
+        reg,
         "pages.unpublish",
         owner.clone(),
+        authority_scope.clone(),
         manifest_for_verb("pages.unpublish"),
         unpublish_handler,
     );
@@ -169,9 +177,11 @@ fn register_management_abilities(
     let list_handler: LocalRpcHandler = Arc::new(move |args| {
         list_get_unpublish::handle_list(&user, list_listener_port, &realm, args)
     });
-    reg.register_rpc_with_spec(
+    register_management_rpc(
+        reg,
         "pages.list",
         owner.clone(),
+        authority_scope.clone(),
         manifest_for_verb("pages.list"),
         list_handler,
     );
@@ -181,12 +191,43 @@ fn register_management_abilities(
     let listener_port = config.listener_port;
     let get_handler: LocalRpcHandler =
         Arc::new(move |args| list_get_unpublish::handle_get(&user, listener_port, &realm, args));
-    reg.register_rpc_with_spec(
+    register_management_rpc(
+        reg,
         "pages.get",
         owner,
+        authority_scope,
         manifest_for_verb("pages.get"),
         get_handler,
     );
+}
+
+fn pages_management_authority_scope(config: &PagesConfig) -> AuthorityScope {
+    AuthorityScope::new(
+        "agent:pages",
+        crate::ura::agent_ura(&config.realm, &config.user, "pages"),
+    )
+    .expect("static pages management authority scope is well-formed")
+}
+
+fn register_management_rpc(
+    reg: &mut AxonAbilityCatalog,
+    ability: &'static str,
+    owner: OwnerKind,
+    authority_scope: AuthorityScope,
+    manifest: crate::core::ability_spec::AbilityManifest,
+    handler: LocalRpcHandler,
+) {
+    reg.register_rpc_with_spec_impl_and_authority_scope(
+        ability,
+        owner,
+        authority_scope,
+        manifest,
+        handler,
+        ControlPlaneImplementation::native_daemon(),
+    )
+    .unwrap_or_else(|error| {
+        panic!("static pages management registration failed for {ability:?}: {error}")
+    });
 }
 
 /// Build the `AbilityManifest` for a `pages.<verb>` from the shared
@@ -287,9 +328,9 @@ pub(crate) fn register_project_abilities(
     reg: &AxonAbilityCatalog,
     user: &str,
     project_id: &str,
-) -> usize {
-    fetch::register_fetch_ability(reg, user, project_id);
-    1 + api::register_api_abilities_for_project(reg, user, project_id)
+) -> anyhow::Result<usize> {
+    fetch::register_fetch_ability(reg, user, project_id)?;
+    Ok(1 + api::register_api_abilities_for_project(reg, user, project_id)?)
 }
 
 pub(crate) fn registered_project_ability_names(
@@ -312,10 +353,14 @@ pub(crate) fn registered_project_ability_names(
     names
 }
 
-pub(crate) fn unregister_project_abilities(reg: &AxonAbilityCatalog, names: Vec<String>) {
+pub(crate) fn unregister_project_abilities(
+    reg: &AxonAbilityCatalog,
+    names: Vec<String>,
+) -> anyhow::Result<()> {
     for name in names {
-        reg.hot_unregister(&name);
+        reg.hot_unregister(&name)?;
     }
+    Ok(())
 }
 
 fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
@@ -328,7 +373,16 @@ fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
         .collect();
     project_ids.sort();
     for project_id in project_ids {
-        register_project_abilities(reg, user, &project_id);
+        if let Err(error) = register_project_abilities(reg, user, &project_id) {
+            let error_message = error.to_string();
+            crate::op_event!(
+                component = pages,
+                kind = restore_project_abilities_failed,
+                user = user,
+                project_id = project_id.as_str(),
+                error = error_message.as_str(),
+            );
+        }
     }
 }
 

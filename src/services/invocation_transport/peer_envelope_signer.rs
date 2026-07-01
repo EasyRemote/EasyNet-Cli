@@ -15,18 +15,83 @@
 
 use tonic::Status;
 
-use easynet_axon::pb::axon::v1::{AgentIdentity, CallerSignature, Envelope, SubjectIdentity};
+use easynet_axon::pb::axon::v1::{
+    AgentIdentity, CallerSignature, Envelope, InvokeRequest, SubjectIdentity,
+};
 
+use crate::runtime::axon_bridge::wire_descriptor::{
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
+};
+use crate::services::invocation_transport::invocation_wire::{
+    try_entity_ref, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+};
 use crate::services::invocation_transport::register_device_pubkey::parse_realm_from_ura;
 use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
+
+pub(crate) struct PeerInvokeRequest<'a> {
+    caller_envelope: Option<&'a Envelope>,
+    target_ura: &'a str,
+    function_name: &'a str,
+    arguments: Vec<u8>,
+    local_realm: Option<&'a str>,
+    hub_signing_seed: Option<&'a SessionSigningSeed>,
+}
+
+impl<'a> PeerInvokeRequest<'a> {
+    pub(crate) fn new(
+        caller_envelope: Option<&'a Envelope>,
+        target_ura: &'a str,
+        function_name: &'a str,
+        arguments: Vec<u8>,
+        local_realm: Option<&'a str>,
+        hub_signing_seed: Option<&'a SessionSigningSeed>,
+    ) -> Self {
+        Self {
+            caller_envelope,
+            target_ura,
+            function_name,
+            arguments,
+            local_realm,
+            hub_signing_seed,
+        }
+    }
+
+    pub(crate) fn into_invoke_request(self) -> Result<InvokeRequest, Status> {
+        let mut envelope =
+            build_peer_envelope(self.caller_envelope, self.target_ura, self.local_realm)?;
+        let descriptor_ref = peer_descriptor_ref_for_envelope(&envelope, self.function_name)?;
+        sign_peer_request_envelope(
+            &mut envelope,
+            self.function_name,
+            &descriptor_ref,
+            &self.arguments,
+            self.local_realm,
+            self.hub_signing_seed,
+        )?;
+
+        let mut request = InvokeRequest {
+            envelope: Some(envelope),
+            function_name: self.function_name.to_string(),
+            arguments: self.arguments,
+            ..InvokeRequest::default()
+        };
+        request.metadata.insert(
+            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
+            descriptor_ref,
+        );
+        Ok(request)
+    }
+}
 
 /// Build the strict envelope the cross-hub dialer attaches to the
 /// rebuilt peer `InvokeRequest`.
 ///
 /// This is a new hub-to-hub invocation, not a verbatim re-send:
 /// `caller = local hub`, `callee = target hub`, and `subject =
-/// original caller` when present. Every URA must parse through the
-/// canonical URA parser before the peer request is sent.
+/// original caller` when present. Signing normalizes the subject to a
+/// descriptor-bound EntityRef when the original caller is a Hub/User URA.
+/// Every URA must parse through the canonical URA parser before the peer
+/// request is sent.
 pub(crate) fn build_peer_envelope(
     caller_envelope: Option<&Envelope>,
     target_ura: &str,
@@ -57,11 +122,16 @@ pub(crate) fn build_peer_envelope(
     crate::ura::parse_ura(&peer_hub_ura).map_err(|err| {
         Status::invalid_argument(format!("peer envelope callee URA is invalid: {err}"))
     })?;
+    // Subject is the entity the forwarded invocation acts upon: the
+    // original caller when present, otherwise the target itself. It must
+    // be a device/agent/ability/resource — never the peer hub, which the
+    // descriptor-bound subject contract rejects (subject_ref_kind
+    // unsupported:Hub). The hub is the transport callee, not the subject.
     let subject_ura = caller_envelope
         .and_then(|env| env.caller.as_ref())
         .map(|caller| caller.ura.trim().to_string())
         .filter(|ura| !ura.is_empty())
-        .unwrap_or_else(|| peer_hub_ura.clone());
+        .unwrap_or_else(|| target_ura.trim().to_string());
     crate::ura::parse_ura(&subject_ura).map_err(|err| {
         Status::invalid_argument(format!("peer envelope subject URA is invalid: {err}"))
     })?;
@@ -76,9 +146,12 @@ pub(crate) fn build_peer_envelope(
         profile: profile.clone(),
     });
     forwarded.subject = Some(SubjectIdentity {
-        ura: subject_ura,
+        ura: subject_ura.clone(),
         profile,
     });
+    try_entity_ref(subject_ura).map_err(|err| {
+        Status::invalid_argument(format!("peer envelope subject is invalid: {err}"))
+    })?;
 
     if forwarded.invocation_nonce.len() != 16 {
         let mut nonce = vec![0u8; 16];
@@ -92,24 +165,26 @@ pub(crate) fn build_peer_envelope(
 pub(crate) fn sign_peer_request_envelope(
     envelope: &mut Envelope,
     ability: &str,
+    descriptor_ref: &str,
     arguments: &[u8],
     local_realm: Option<&str>,
     hub_signing_seed: Option<&SessionSigningSeed>,
-) -> Result<(), Status> {
-    let Some(realm) = local_realm else {
-        return Ok(());
-    };
+) -> Result<String, Status> {
+    let realm = local_realm.ok_or_else(|| {
+        Status::failed_precondition(
+            "cross-hub forward_invoke signing requires configured local realm",
+        )
+    })?;
+    let descriptor_ref = descriptor_ref.trim();
+    if descriptor_ref.is_empty() {
+        return Err(Status::invalid_argument(
+            "cross-hub forward_invoke signing requires explicit descriptor ref",
+        ));
+    }
 
-    use easynet_axon::invocation::axiom::{
-        canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-        InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UraProfile,
-    };
     use ed25519_dalek::{Signer as _, SigningKey};
-    use sha2::{Digest, Sha256};
 
-    envelope.causal_context = None;
-
-    let caller_ura = envelope
+    envelope
         .caller
         .as_ref()
         .map(|caller| caller.ura.trim())
@@ -124,7 +199,8 @@ pub(crate) fn sign_peer_request_envelope(
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: callee URA missing after rewrite")
-        })?;
+        })?
+        .to_string();
     let subject_ura = envelope
         .subject
         .as_ref()
@@ -132,21 +208,55 @@ pub(crate) fn sign_peer_request_envelope(
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: subject URA missing after rewrite")
+        })?
+        .to_string();
+    let descriptor_subject_ura = descriptor_subject_ura_for(&callee_ura, &subject_ura, ability)
+        .map_err(|err| {
+            Status::internal(format!(
+                "cross-hub forward_invoke signing: derive descriptor subject: {err}"
+            ))
         })?;
-    let invocation_nonce: [u8; 16] =
-        envelope
-            .invocation_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                Status::internal(
-                    "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
-                )
-            })?;
+    if descriptor_subject_ura != subject_ura {
+        let profile = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.profile.clone())
+            .filter(|profile| !profile.trim().is_empty())
+            .unwrap_or_else(|| {
+                crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string()
+            });
+        envelope.subject = Some(SubjectIdentity {
+            ura: descriptor_subject_ura.clone(),
+            profile,
+        });
+    }
+    if envelope.invocation_nonce.len() != 16 {
+        return Err(Status::internal(
+            "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
+        ));
+    }
+    let descriptor_ref =
+        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+            &callee_ura,
+            descriptor_ref,
+        )
+        .map_err(|err| {
+            Status::internal(format!(
+                "cross-hub forward_invoke signing: invalid explicit descriptor ref for `{ability}`: {err}"
+            ))
+        })?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(arguments);
-    let args_digest: [u8; 32] = hasher.finalize().into();
+    let descriptor_bound = descriptor_bound_from_wire_parts(
+        envelope.clone(),
+        descriptor_ref.clone(),
+        arguments,
+        WireCallerIdentity::FromEnvelope,
+    )
+    .map_err(|err| {
+        Status::internal(format!(
+            "cross-hub forward_invoke signing: build descriptor-bound envelope: {err}"
+        ))
+    })?;
 
     // Hub identity is a fresh-random Ed25519 seed minted by
     // backend's `LoadOrInitHubIdentity` at first boot and persisted
@@ -173,22 +283,50 @@ pub(crate) fn sign_peer_request_envelope(
         })?,
     };
     let signing_key = SigningKey::from_bytes(&hub_seed);
-    let axiom_envelope = InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-        subject: AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2),
-        ability: ability.to_string(),
-        args_digest,
-        invocation_nonce,
-        causal_context: CausalContext::None,
-    };
-    let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_envelope));
+    let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
     envelope.caller_signature = Some(CallerSignature {
         algorithm: "ed25519".to_string(),
         signature: signature.to_bytes().to_vec(),
         ..CallerSignature::default()
     });
-    Ok(())
+    Ok(descriptor_ref.to_string())
+}
+
+fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Result<String, Status> {
+    let callee_ura = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| {
+            Status::internal("cross-hub forward_invoke signing: callee URA missing after rewrite")
+        })?;
+    crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        callee_ura,
+        ability,
+        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+    )
+    .map_err(|err| {
+        Status::internal(format!(
+            "cross-hub forward_invoke signing: derive peer descriptor ref for `{ability}`: {err}"
+        ))
+    })
+}
+
+fn descriptor_subject_ura_for(
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+) -> anyhow::Result<String> {
+    if try_entity_ref(subject_ura.to_string()).is_ok() {
+        return Ok(subject_ura.to_string());
+    }
+    crate::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
+        anyhow::anyhow!(
+            "subject `{subject_ura}` is not descriptor-bound and callee `{callee_ura}` \
+             cannot own ability `{ability}`"
+        )
+    })
 }
 
 /// Decode the base64-encoded inner envelope carried by
@@ -334,5 +472,53 @@ mod tests {
     fn build_peer_envelope_rejects_bad_target_ura() {
         let err = build_peer_envelope(None, "agent://dev-b", Some("local")).unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn sign_peer_request_preserves_causal_context() {
+        let mut env = Envelope {
+            caller: Some(AgentIdentity {
+                ura: crate::ura::hub_ura("local"),
+                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            callee: Some(AgentIdentity {
+                ura: crate::ura::hub_ura("peer"),
+                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/local/device/dev-a".to_string(),
+                profile: crate::services::invocation_transport::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            invocation_nonce: vec![9u8; 16],
+            causal_context: Some(easynet_axon::pb::axon::v1::CausalContext {
+                form: Some(easynet_axon::pb::axon::v1::causal_context::Form::Scalar(
+                    easynet_axon::pb::axon::v1::ReceiptRef {
+                        receipt_hash: vec![7u8; 32],
+                        receipt_ura: "easynet:///r/local/resource/invocations/parent/receipt"
+                            .to_string(),
+                    },
+                )),
+            }),
+            ..Envelope::default()
+        };
+
+        sign_peer_request_envelope(
+            &mut env,
+            // A hub ability is owner-local-dotted (`hub.<name>`); a bare
+            // single-segment name has no valid hub descriptor URA. Use a
+            // real federation ability, as every production caller does.
+            "federation.discover",
+            "easynet:///r/peer/ability/hub.federation.discover@1.0.0",
+            br#"{"q":"chat"}"#,
+            Some("local"),
+            Some(&[3u8; 32]),
+        )
+        .unwrap();
+
+        assert!(env.caller_signature.is_some());
+        assert!(matches!(
+            env.causal_context.and_then(|ctx| ctx.form),
+            Some(easynet_axon::pb::axon::v1::causal_context::Form::Scalar(_))
+        ));
     }
 }

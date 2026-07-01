@@ -260,7 +260,7 @@ Axon:  C4,C5,C6 ──────────────┼──→ 解锁 �
   不再回退到本地 device profile 静态 descriptor,避免绕过租约读模型。
 - CLI `agent.list` 输出 hosted agent 的 canonical `ura`,backend 不再把
   peer 短名 agent 误归属到本地 user。
-- CLI `<self>.invoke_remote` 已修复跨 realm target:本地 daemon 接到
+- CLI `runtime.invoke_remote` 已修复跨 realm target:本地 daemon 接到
   hub/backend 的 invoke_remote 后,若 target realm 不是本地 realm,会构造
   canonical `federation.forward_invoke` 并由 CLI daemon 的 peer hub dialer
   转发;后端不直连 peer hub,也不在本地 PresenceRegistry 查 peer 设备。
@@ -269,8 +269,8 @@ Axon:  C4,C5,C6 ──────────────┼──→ 解锁 �
   属于 hub daemon 进程内状态,不是 device-hosted ability,也不是跨 hub 复制
   read model。后端经 daemon.sock 发完整 Axon Invocation,callee 是本 realm
   `hub` URA,subject 是 backend synthetic system user URA,并携带 backend-signed
-  SessionAuthority;`RemoteRoutingClient` 对 `voice.*` 走 raw daemon `Invoke`,
-  不再误走 `<self>.invoke_remote` / device `<self>.session`。
+  SessionAuthority;CLI daemon 自己决定 raw local runtime 还是远端 session.open,
+  backend 不再按 ability 名分类。
 - Backend file transfer HTTP entry 已删除旧 unary fork 路径,统一通过
   `streambridge.OpenSignedBidiSession` 打开 backend-signed bidi session;
   请求参数使用 `resource_ref`,由 CLI filesystem ResourceRef namespace 在

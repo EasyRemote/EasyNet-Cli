@@ -66,15 +66,47 @@ use serde_json::Value;
 /// `CURRENT_SCHEMA_VERSION` on every file it generates.
 pub const CURRENT_SCHEMA_VERSION: &str = "1";
 
-/// Two kinds of ability the CLI publishes. Introduced by PR-SYS to
-/// disambiguate agent abilities (per-agent `<agent>.chat`-style)
-/// from device-level system abilities (`system.<feature>`).
+/// Default governed interface version for ability descriptors. This is not
+/// the TOML file schema version; it is the version that enters descriptor
+/// hashes, authority bindings, implementation bindings, and Axon receipts.
+pub const DEFAULT_DESCRIPTOR_VERSION: &str = "1.0.0";
+
+/// Validate a governed ability descriptor version.
 ///
-/// Why an enum and not a free-form string: a name beginning with
-/// `system.` is a wire-level promise that the publishing node
-/// itself owns the handler — no agent subprocess gets reached. The
-/// enum lets a reader look at one field and know which dispatch
-/// path applies, instead of grepping the prefix.
+/// The grammar is intentionally narrower than SemVer: exactly three
+/// dot-separated numeric fields. Capability negotiation belongs one layer up;
+/// this field is a stable control-plane fact, not a range expression.
+pub fn is_valid_descriptor_version(version: &str) -> bool {
+    if version.trim().is_empty() || version.trim() != version {
+        return false;
+    }
+    let mut parts = version.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    let Some(minor) = parts.next() else {
+        return false;
+    };
+    let Some(patch) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    [major, minor, patch]
+        .into_iter()
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Two kinds of ability the CLI publishes. The split disambiguates
+/// agent abilities (per-agent `<agent>.<verb>`-style) from daemon-owned
+/// device/control-plane abilities.
+///
+/// Why an enum and not a free-form string: the kind is a wire-level
+/// promise about handler ownership. `System` means the publishing node
+/// owns the handler and no agent subprocess is reached. The enum lets a
+/// reader look at one field and know which dispatch path applies,
+/// instead of grepping a prefix.
 ///
 /// `Agent` is the existing case (every `<name>.chat` pre-PR-SYS
 /// shipped under this kind, even though the kind didn't exist
@@ -89,7 +121,7 @@ pub enum AbilityKind {
     /// agent's subprocess. Names: `<agent>.<verb>`.
     Agent,
     /// Belongs to the daemon (the node) itself; dispatch lands
-    /// in-process via `runtime::system::*`. Names: `system.<feature>`.
+    /// in-process via daemon-owned ability handlers.
     System,
 }
 
@@ -98,12 +130,9 @@ impl AbilityKind {
     /// dispatch-router boundaries that receive a string and need
     /// to know which sub-system owns the handler.
     ///
-    /// Post-RFC-001 v4.1.7 system-namespace migration: the
-    /// classifier matches the canonical first-segment partition
-    /// (`device.*` / `hub.*` for system-tier abilities; everything
-    /// else is agent-owned). The pre-migration `system.*` prefix
-    /// is retained as a back-compat sniff for legacy manifests
-    /// the reader may still encounter on disk.
+    /// The classifier matches the canonical first-segment partition:
+    /// `device.*`, `hub.*`, and current control-plane `system.*` names
+    /// are daemon-owned; everything else is agent-owned.
     pub fn from_qualified_name(name: &str) -> Self {
         if name.starts_with("device.") || name.starts_with("hub.") || name.starts_with("system.") {
             Self::System
@@ -128,6 +157,9 @@ pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1"];
 /// * `schema_version` — on-disk schema version; `None` on read is
 ///   treated as the implicit v1 shape (written by a tool that
 ///   predated the stamping rule). Writer always stamps explicitly.
+/// * `descriptor_version` — governed interface version; this is the
+///   version hashed into descriptor proofs and propagated into authority /
+///   implementation bindings. Absence means [`DEFAULT_DESCRIPTOR_VERSION`].
 /// * `name` — the *verb* portion of the ability's name. The wire-
 ///   level name is assembled as `<agent>.<name>` by whoever calls
 ///   `qualified_name` below. Must not contain `.` (that is the
@@ -174,6 +206,8 @@ pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1"];
 pub struct AbilityManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     schema_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    descriptor_version: Option<String>,
     name: String,
     description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,14 +216,13 @@ pub struct AbilityManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     output_schema: Option<Value>,
     /// Optional executor binding. When present, the daemon dispatches
-    /// the ability to the named executor directly, bypassing the
-    /// chat-translation fallback. Absence preserves the legacy "fulfil
-    /// via the owning agent's chat handler" behaviour, so existing
-    /// manifests keep working unchanged.
+    /// the ability to the named executor directly. Absence means the
+    /// manifest is discoverable metadata only; it is not an invocable
+    /// route.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     exec: Option<AbilityExec>,
-    /// Optional access policy. Drives `<self>.discover` filtering and
-    /// the `<self>.invoke` permission check. Absence is treated as the
+    /// Optional access policy. Drives `<agent>.discover` filtering and
+    /// the `<agent>.invoke` permission check. Absence is treated as the
     /// default policy (`AccessPolicy::default()`), which sets
     /// `visibility = "device"` — the same trust boundary as "agents
     /// running on the same physical device under one user".
@@ -311,7 +344,7 @@ impl CostMeta {
 ///
 /// The model is monotonic: each tier strictly includes the smaller
 /// ones (`device` includes `self`, `public` includes both). This
-/// matches the `<self>.discover(scope: ...)` ladder — Tier 1 returns
+/// matches the `<agent>.discover(scope: ...)` ladder — Tier 1 returns
 /// `self`+, Tier 2 returns `device`+, Tier 3 returns `public`.
 ///
 /// Default is `Device` rather than `Self` because two agents on the
@@ -424,7 +457,7 @@ impl Visibility {
     }
 
     /// Stable string form used in JSON discovery payloads (the
-    /// `visibility` field of a `<self>.discover` candidate). Mirrors
+    /// `visibility` field of a `<agent>.discover` candidate). Mirrors
     /// the TOML serde rename rules so the wire form and the on-disk
     /// form agree.
     pub fn as_wire_str(self) -> &'static str {
@@ -472,6 +505,92 @@ pub enum AbilityExec {
     /// CLI. It preserves the MCP `tools/call` response shape and
     /// avoids routing through shell or chat translation.
     Mcp(McpExec),
+    /// Stream frames from an external warm host over a Unix socket.
+    /// The daemon opens `host_socket`, sends one request line, then
+    /// reads many JSON frame lines until an explicit terminal — letting
+    /// an external resident process (e.g. an easyremote Python host
+    /// running a generator) stream frames without re-spawning per
+    /// frame. Unlike `Shell` (one bounded result, RPC-only), this is
+    /// the sole external-process *server-stream* path: an ability with
+    /// this exec registers as stream-mode. The wire protocol is the
+    /// single source of truth in `HostStreamExec`'s doc comment.
+    HostStream(HostStreamExec),
+}
+
+/// Configuration for the `host_stream` executor.
+///
+/// **Wire protocol (newline-delimited UTF-8 JSON over `host_socket`),
+/// the single source of truth for both the daemon executor and the
+/// external host:**
+///
+/// ```text
+/// daemon → host:  {"request":{"fn":"<function>","args":{...},"call_id":"<id>"}}
+/// host → daemon:  {"stream_item":<value>,"seq":0}
+///                 {"stream_item":<value>,"seq":1}
+///                 {"terminal":{"output_hash":"sha256:<hex>","frames":2}}
+///   — OR (mutually exclusive with terminal, at most once) —
+///                 {"error":{"kind":"<KIND>","message":"...","recoverable":false}}
+/// ```
+///
+/// Invariants:
+/// 1. `seq` is monotonically increasing from 0; a gap or reorder is a
+///    truncation failure (frame reorder must not be invisible).
+/// 2. `output_hash = H(prev_hash || seq || canonical_json(frame))`,
+///    seeded with the empty hash, folded over every emitted frame in
+///    `seq` order. The host sends the final rolling hash on `terminal`;
+///    the daemon recomputes and a mismatch is a truncation failure.
+/// 3. `terminal` and `error` are mutually exclusive and each may appear
+///    at most once; whichever arrives first ends the stream.
+/// 4. EOF (socket close) before `terminal`/`error` is `STREAM_TRUNCATED`,
+///    NOT a clean terminal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostStreamExec {
+    /// AF_UNIX path to the external warm host's stream socket.
+    pub host_socket: String,
+    /// The resident function name to invoke on the host.
+    pub function: String,
+}
+
+impl HostStreamExec {
+    fn validate(&self) -> anyhow::Result<()> {
+        let host_socket = self.host_socket.trim();
+        if host_socket.is_empty() {
+            anyhow::bail!("host_stream exec: host_socket must not be empty");
+        }
+        let socket_path = std::path::Path::new(host_socket);
+        if !socket_path.is_absolute() {
+            anyhow::bail!("host_stream exec: host_socket must be an absolute Unix socket path");
+        }
+        if socket_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            anyhow::bail!("host_stream exec: host_socket must not contain `..` components");
+        }
+
+        let function = self.function.trim();
+        if function.is_empty() {
+            anyhow::bail!("host_stream exec: function must not be empty");
+        }
+        if !is_host_stream_function_token(function) {
+            anyhow::bail!(
+                "host_stream exec: function must contain only ASCII letters, digits, `_`, `-`, \
+                 `.`, or `:` and must start with a letter or `_`"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn is_host_stream_function_token(function: &str) -> bool {
+    let mut chars = function.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'))
 }
 
 /// Configuration for the `shell` executor.
@@ -638,6 +757,7 @@ impl AbilityManifest {
     ) -> anyhow::Result<Self> {
         let m = Self {
             schema_version: Some(CURRENT_SCHEMA_VERSION.to_string()),
+            descriptor_version: None,
             name: name.into(),
             description: description.into(),
             timeout_seconds: None,
@@ -698,8 +818,7 @@ impl AbilityManifest {
         self.cost.as_ref()
     }
 
-    /// Attach an executor binding. Optional; absence keeps the legacy
-    /// chat-translation fallback. Returns the manifest for builder
+    /// Attach an executor binding. Returns the manifest for builder
     /// chaining.
     pub fn with_exec(mut self, exec: AbilityExec) -> anyhow::Result<Self> {
         self.exec = Some(exec);
@@ -712,6 +831,15 @@ impl AbilityManifest {
     /// manifest for builder chaining.
     pub fn with_access(mut self, access: AccessPolicy) -> anyhow::Result<Self> {
         self.access = Some(access);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Set the governed interface version for this ability. This value is
+    /// distinct from `schema_version`: changing it changes the descriptor
+    /// hash and the authority / implementation binding key.
+    pub fn with_descriptor_version(mut self, version: impl Into<String>) -> anyhow::Result<Self> {
+        self.descriptor_version = Some(version.into());
         self.validate()?;
         Ok(self)
     }
@@ -745,6 +873,19 @@ impl AbilityManifest {
         Ok(m)
     }
 
+    /// Parse from JSON. This is the canonical entry point for deployed
+    /// `ability.json` bundles and boot replay.
+    ///
+    /// JSON deployment uses the same semantic validation as TOML manifests:
+    /// private fields alone are not a construction boundary because serde can
+    /// deserialize them directly inside this module's crate.
+    pub fn from_json_slice(bytes: &[u8]) -> anyhow::Result<Self> {
+        let m: Self = serde_json::from_slice(bytes)
+            .map_err(|e| anyhow::anyhow!("failed to parse ability.json: {e}"))?;
+        m.validate()?;
+        Ok(m)
+    }
+
     /// Serialize to TOML. The writer always stamps the current
     /// schema version — even when the loaded manifest came in
     /// without one — so the round-tripped file is always
@@ -766,6 +907,14 @@ impl AbilityManifest {
     /// Human-readable blurb. Not a protocol field.
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// Effective governed interface version. Absent manifest field means the
+    /// default descriptor version, not an unknown version.
+    pub fn descriptor_version(&self) -> &str {
+        self.descriptor_version
+            .as_deref()
+            .unwrap_or(DEFAULT_DESCRIPTOR_VERSION)
     }
 
     /// Per-ability invocation timeout. `None` means "inherit
@@ -815,6 +964,23 @@ impl AbilityManifest {
                     "ability.toml schema_version = {:?} is not supported (known: {:?})",
                     v,
                     SUPPORTED_SCHEMA_VERSIONS
+                );
+            }
+        }
+        if let Some(version) = &self.descriptor_version {
+            if version.trim().is_empty() {
+                anyhow::bail!("ability.toml `descriptor_version` must not be empty");
+            }
+            if version.trim() != version {
+                anyhow::bail!(
+                    "ability.toml `descriptor_version` must not contain leading/trailing whitespace: {:?}",
+                    version
+                );
+            }
+            if !is_valid_descriptor_version(version) {
+                anyhow::bail!(
+                    "ability.toml `descriptor_version` must use N.N.N numeric form (got {:?})",
+                    version
                 );
             }
         }
@@ -916,6 +1082,7 @@ impl AbilityExec {
             AbilityExec::Http(h) => h.validate(),
             AbilityExec::Eal(e) => e.validate(),
             AbilityExec::Mcp(m) => m.validate(),
+            AbilityExec::HostStream(h) => h.validate(),
         }
     }
 }
@@ -1349,9 +1516,17 @@ pub fn default_chat_manifest() -> AbilityManifest {
                         "args": {},
                         "result": {},
                         "error": {"type": "string"},
-                        "elapsed_ms": {"type": "integer", "minimum": 0}
+                        "elapsed_ms": {"type": "integer", "minimum": 0},
+                        "tool_use_id": {"type": "string"},
+                        "mcp_tool_name": {"type": "string"},
+                        "request_id": {"type": "string"},
+                        "ability_ura": {"type": "string"},
+                        "invocation_ura": {"type": "string"},
+                        "caller_ura": {"type": "string"},
+                        "callee_ura": {"type": "string"},
+                        "subject_ura": {"type": "string"}
                     },
-                    "required": ["ability", "elapsed_ms"]
+                    "required": ["ability"]
                 }
             },
             "context_used": {
@@ -1374,6 +1549,11 @@ pub fn default_chat_manifest() -> AbilityManifest {
                 "properties": {
                     "input_tokens": {"type": "integer", "minimum": 0},
                     "output_tokens": {"type": "integer", "minimum": 0},
+                    "cache_read_tokens": {"type": "integer", "minimum": 0},
+                    "cached_input_tokens": {"type": "integer", "minimum": 0},
+                    "cache_creation_tokens": {"type": "integer", "minimum": 0},
+                    "num_turns": {"type": "integer", "minimum": 0},
+                    "total_cost_usd": {"type": "number", "minimum": 0},
                     "model": {"type": "string"}
                 }
             },
@@ -1431,9 +1611,41 @@ mod tests {
         let m = AbilityManifest::new("chat", "hello", object_schema()).unwrap();
         assert_eq!(m.name(), "chat");
         assert_eq!(m.description(), "hello");
+        assert_eq!(m.descriptor_version(), DEFAULT_DESCRIPTOR_VERSION);
         assert!(m.input_schema().is_object());
         assert!(m.output_schema().is_none());
         assert_eq!(m.timeout_seconds(), None);
+    }
+
+    #[test]
+    fn descriptor_version_is_an_interface_fact_not_schema_version() {
+        let m = AbilityManifest::new("chat", "hello", object_schema())
+            .unwrap()
+            .with_descriptor_version("2.1.0")
+            .unwrap();
+        assert_eq!(m.descriptor_version(), "2.1.0");
+
+        let toml = m.to_toml_string().unwrap();
+        assert!(toml.contains(&format!("schema_version = \"{CURRENT_SCHEMA_VERSION}\"")));
+        assert!(
+            toml.contains("descriptor_version = \"2.1.0\""),
+            "writer must persist the governed interface version; got:\n{toml}"
+        );
+        assert_eq!(AbilityManifest::from_toml_str(&toml).unwrap(), m);
+    }
+
+    #[test]
+    fn from_json_slice_rejects_semantically_invalid_manifest() {
+        let raw = serde_json::to_vec(&json!({
+            "schema_version": "1",
+            "name": "bad.name",
+            "description": "invalid dotted verb",
+            "input_schema": {"type": "object"},
+        }))
+        .unwrap();
+
+        let err = AbilityManifest::from_json_slice(&raw).unwrap_err();
+        assert!(format!("{err}").contains("must not contain `.`"));
     }
 
     #[test]
@@ -1658,6 +1870,25 @@ mod tests {
             .to_string();
         let m = AbilityManifest::from_toml_str(&toml).unwrap();
         assert_eq!(m.name(), "chat");
+    }
+
+    #[test]
+    fn from_toml_str_rejects_invalid_descriptor_version() {
+        for invalid in ["", "  ", "v1", "1", "1.0", "1.0.0.0", "1.0.x", " 1.0.0"] {
+            let toml = format!(
+                "schema_version = \"1\"\n\
+                 descriptor_version = {invalid:?}\n\
+                 name = \"chat\"\n\
+                 description = \"x\"\n\
+                 [input_schema]\n\
+                 type = \"object\"\n"
+            );
+            let err = AbilityManifest::from_toml_str(&toml).unwrap_err();
+            assert!(
+                format!("{err}").contains("descriptor_version"),
+                "{invalid:?} should fail as descriptor_version; got {err}"
+            );
+        }
     }
 
     // ── failure path ────────────────────────────────────────────────────────
@@ -2296,6 +2527,61 @@ result_binding = ""
 "#;
         let err = AbilityManifest::from_toml_str(toml).unwrap_err();
         assert!(format!("{err}").contains("result_binding"));
+    }
+
+    #[test]
+    fn host_stream_exec_accepts_absolute_socket_and_function_token() {
+        let toml = r#"
+schema_version = "1"
+name = "weather"
+description = "stream weather frames"
+[input_schema]
+type = "object"
+[exec]
+kind = "host_stream"
+host_socket = "/tmp/easynet-weather.sock"
+function = "er.weather:forecast_v1"
+"#;
+
+        let m = AbilityManifest::from_toml_str(toml).expect("host_stream manifest must parse");
+        match m.exec() {
+            Some(AbilityExec::HostStream(exec)) => {
+                assert_eq!(exec.host_socket, "/tmp/easynet-weather.sock");
+                assert_eq!(exec.function, "er.weather:forecast_v1");
+            }
+            other => panic!("expected HostStream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_stream_exec_rejects_relative_socket_and_invalid_function() {
+        let relative_socket = r#"
+schema_version = "1"
+name = "weather"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "host_stream"
+host_socket = "tmp/easynet-weather.sock"
+function = "er.weather"
+"#;
+        let err = AbilityManifest::from_toml_str(relative_socket).unwrap_err();
+        assert!(format!("{err}").contains("absolute Unix socket path"));
+
+        let invalid_function = r#"
+schema_version = "1"
+name = "weather"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "host_stream"
+host_socket = "/tmp/easynet-weather.sock"
+function = "1;rm -rf"
+"#;
+        let err = AbilityManifest::from_toml_str(invalid_function).unwrap_err();
+        assert!(format!("{err}").contains("function"));
     }
 
     #[test]

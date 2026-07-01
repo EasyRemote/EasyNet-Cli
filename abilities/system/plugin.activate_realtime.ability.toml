@@ -1,0 +1,18 @@
+schema_version = "1"
+name = "plugin.activate_realtime"
+description = "Check the concrete daemon abilities, local resources, permissions, and publication state required to activate a plugin-declared realtime capability."
+
+[input_schema]
+type = "object"
+required = ["package_id"]
+additionalProperties = false
+
+[input_schema.properties.package_id]
+type = "string"
+description = "Plugin package id to activate, for example easynet.remote_desktop."
+minLength = 1
+
+[input_schema.properties.package_version]
+type = "string"
+description = "Optional package version. When omitted, every installed version with the requested id is checked."
+minLength = 1

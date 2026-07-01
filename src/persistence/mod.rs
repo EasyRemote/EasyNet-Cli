@@ -53,6 +53,7 @@ pub mod context_store;
 /// `pr-drafts/PR-0-spec-daemon-invocation-server.md §1` for the
 /// listener invariants this module enforces at load time.
 pub mod daemon_config;
+pub(crate) mod file_lock;
 pub(crate) mod local_agents;
 pub(crate) mod owner_projections;
 /// Local resources registry — `~/.easynet/resources.json`. Maps a
@@ -64,4 +65,5 @@ pub(crate) mod owner_projections;
 /// layer; the runtime side reads it through this module's public
 /// API.
 pub mod resources;
+pub(crate) mod teach_grants;
 pub(crate) mod tenant_paths;

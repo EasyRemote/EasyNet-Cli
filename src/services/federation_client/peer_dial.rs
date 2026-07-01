@@ -7,7 +7,7 @@
 //              (`cross_hub_dial::resolve_peer_channel` for hub-to-hub
 //              cross-realm forward_invoke, `invocation_transport::session_
 //              initiator::dial_and_run_session` for device-to-hub
-//              `<self>.session` bootstrap).
+//              `session.open` bootstrap).
 //
 // Why this module exists
 // ----------------------

@@ -59,6 +59,16 @@ pub enum PluginHostError {
     InvalidRuntimeLimit(&'static str),
     #[error("plugin manifest declares invalid declarative binding for {id}: {reason}")]
     InvalidDeclarativeBinding { id: String, reason: String },
+    #[error("plugin manifest declares invalid realtime capability for {id}: {reason}")]
+    InvalidRealtimeCapability { id: String, reason: String },
+    #[error("plugin ability {ability:?} control-plane registration failed: {reason}")]
+    ControlPlaneRegistrationFailed { ability: String, reason: String },
+    #[error("plugin contribution for {package} ability {ability:?} is invalid: {reason}")]
+    InvalidContribution {
+        package: String,
+        ability: String,
+        reason: String,
+    },
     #[error(
         "plugin manifest entrypoint {declared:?} does not match compiled binding {expected:?}"
     )]
@@ -86,7 +96,9 @@ pub enum PluginHostError {
     InvalidAbilityDescriptor { path: PathBuf, reason: String },
     #[error("plugin package path {path} escapes package root {root}")]
     PackagePathEscapesRoot { root: PathBuf, path: PathBuf },
-    #[error("plugin ability descriptor for {ability:?} cannot be projected into registry manifest: {reason}")]
+    #[error(
+        "plugin ability descriptor for {ability:?} cannot be projected into registry manifest: {reason}"
+    )]
     DescriptorProjectionFailed { ability: String, reason: String },
     #[error("read plugin package path {path}: {source}")]
     ReadFailed {
@@ -203,6 +215,22 @@ impl PartialEq for PluginHostError {
                 InvalidDeclarativeBinding { id: ai, reason: ar },
                 InvalidDeclarativeBinding { id: bi, reason: br },
             ) => ai == bi && ar == br,
+            (
+                InvalidRealtimeCapability { id: ai, reason: ar },
+                InvalidRealtimeCapability { id: bi, reason: br },
+            ) => ai == bi && ar == br,
+            (
+                InvalidContribution {
+                    package: ap,
+                    ability: aa,
+                    reason: ar,
+                },
+                InvalidContribution {
+                    package: bp,
+                    ability: ba,
+                    reason: br,
+                },
+            ) => ap == bp && aa == ba && ar == br,
             (
                 EntrypointMismatch {
                     declared: ad,

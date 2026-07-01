@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 #
-# Guard the layered CLI boundary against retired top-level command aliases.
+# Guard the layered CLI boundary.
+#
+# `join` / `start` / `stop` are FIRST-CLASS top-level Quickstart commands
+# (the highest-frequency device-lifecycle verbs), NOT retired aliases. They
+# coexist with the canonical layered forms (`device join`, `runtime start`,
+# `runtime stop`) and forward to the same impls. F-039 (which removed them as
+# "retired aliases") was reversed: the product wants these three as primary
+# top-level UX. This check therefore guards that BOTH the Quickstart shortcuts
+# AND the layered groups exist — not that the shortcuts are absent.
 
 set -euo pipefail
 
@@ -15,29 +23,19 @@ fail() {
 CLI_MOD="src/facade/cli/mod.rs"
 [[ -f "$CLI_MOD" ]] || fail "missing $CLI_MOD"
 
-bad="$(
-    grep -nE 'Command::(Join|Start|Stop)|^[[:space:]]*(Join|Start|Stop)\(|alias of '\''(device join|runtime start|runtime stop)'\''|Shortcut for '\''easynet (device join|runtime start|runtime stop)'\''|Top-level shortcuts|Quickstart' \
-        "$CLI_MOD" 2>/dev/null || true
-)"
-if [[ -n "$bad" ]]; then
-    fail "retired top-level CLI aliases still exist:
-$bad"
-fi
+# Quickstart shortcuts must be present and wired.
+grep -q 'Join(join::JoinArgs)' "$CLI_MOD" \
+    || fail "Quickstart 'join' command is missing"
+grep -q 'Start(start::StartArgs)' "$CLI_MOD" \
+    || fail "Quickstart 'start' command is missing"
+grep -q 'Stop(stop::StopArgs)' "$CLI_MOD" \
+    || fail "Quickstart 'stop' command is missing"
 
+# The canonical layered homes must still exist (no behavioural drift: the two
+# spellings share the same JoinArgs/StartArgs/StopArgs and run functions).
 grep -q 'Device(groups::device::DeviceArgs)' "$CLI_MOD" \
     || fail "layered device command is missing"
 grep -q 'Runtime(groups::runtime::RuntimeArgs)' "$CLI_MOD" \
     || fail "layered runtime command is missing"
-
-bad_text="$(
-    grep -RInE 'easynet (join|start|stop)([[:space:]`'\''")]|$)' \
-        src/facade/cli scripts tests 2>/dev/null \
-        | grep -vE 'device join|runtime start|runtime stop|scripts/check-cli-flat-command-boundary\.sh|tests/scripts/test_check_cli_flat_command_boundary\.sh' \
-        || true
-)"
-if [[ -n "$bad_text" ]]; then
-    fail "user-facing text still advertises retired flat commands:
-$bad_text"
-fi
 
 echo "check-cli-flat-command-boundary: ok"

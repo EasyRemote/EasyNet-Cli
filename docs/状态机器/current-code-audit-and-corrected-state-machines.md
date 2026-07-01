@@ -56,7 +56,7 @@
 | --- | --- | --- | --- |
 | Join snapshot | `EasyNet-Cli/src/runtime/join_connection_state.rs` | 定义 `JoinConnectionState`, `JoinTransition`, `JoinFailureCode`, `JoinConnectionSnapshot`, 持久化到 `~/.easynet/connection-state.json` | code 不是一一对应: `PairingTokenPending/Preflighted/Consumed` 都是 `J100`; `CredentialsSaved/LocalTrustWired/HubCredentialVerified/HubSessionEndpointReachable` 都是 `J300`; boot/admission failure 也有合并 |
 | Join autostart | `EasyNet-Cli/src/facade/cli/join.rs` | pairing accepted 后默认调用 `runtime start`; start 失败时报 `pairing credentials were saved, but daemon startup failed` | 文案已经正确, 但 failure code 粒度仍不足 |
-| Runtime start | `EasyNet-Cli/src/facade/cli/start.rs` | credential verify、Hub session endpoint probe、daemon boot failure 都记录 snapshot | `ConnectedOnline` 需要确保只在 `<self>.session` admission / PresenceRegistry evidence 成立后记录 |
+| Runtime start | `EasyNet-Cli/src/facade/cli/start.rs` | credential verify、Hub session endpoint probe、daemon boot failure 都记录 snapshot | `ConnectedOnline` 需要确保只在 `session.open` admission / PresenceRegistry evidence 成立后记录 |
 | Stop | `EasyNet-Cli/src/facade/cli/stop.rs` | `StopPlan` 分阶段执行 revoke、heartbeat、daemon、sweep、axon runtime、cleanup | 不是持久化状态机; doctor 无法报告 stop code/transition |
 | Reset | `EasyNet-Cli/src/facade/cli/reset.rs` | active runtime 时拒绝 reset; daemon alive 时 best-effort revoke; 然后删除本地 credentials | 不是 self uninstall; revoke 失败仍继续 local reset, 需要明确状态和风险 |
 | Backend route facade | `EasyNet/backend/internal/logic/ability/resolve_invoke_route.go` | 使用 daemon `ResolveInvokeRoute`; negative answer 转 typed validation error | 基本方向正确 |
@@ -89,7 +89,7 @@
 | `HubCredentialVerified` | `J300` | `HUB_PREFLIGHT` | Backend credential verify 通过 | 与本地保存混码 |
 | `HubSessionEndpointReachable` | `J300` | `HUB_PREFLIGHT` | Hub session endpoint 可达 | 与 credential 混码 |
 | `DaemonBooting` | `J400` | `DAEMON_BOOT` | daemon process booting | 与 runtime starting 混码 |
-| `SelfSessionAdmissionPending` | `J500` | `SESSION_CONNECTING` | `<self>.session` admission pending | OK |
+| `SelfSessionAdmissionPending` | `J500` | `SESSION_CONNECTING` | `session.open` admission pending | OK |
 | `ConnectedOnline` | `J800` | `FRONTEND_CONNECTED` | 设备在线 | 与 suspect/draining 混码 |
 | `ConnectedSuspect` | `J800` | `DEGRADED` | 连接可疑/降级 | 不应与 online 混码 |
 | `ConnectedDraining` | `J800` | `OFFLINE` | 正在下线 | 不应与 online 混码 |
@@ -178,7 +178,7 @@ stateDiagram-v2
 | `F520` | `START_FAILED_CREDENTIAL_VERIFY` | `T06_VERIFY_CREDENTIAL` | maybe | credential verify 不通过 |
 | `F530` | `HUB_UNREACHABLE` | `T07_CONNECT_SESSION_ENDPOINT` | yes | Hub session endpoint 不可达 |
 | `F550` | `DAEMON_BOOT_FAILED` | `T08_BOOT_DAEMON` | yes/maybe | daemon process/listener boot failed |
-| `F551` | `SELF_SESSION_ADMISSION_FAILED` | `T09_OPEN_SELF_SESSION` / `T10_ADMIT_PRESENCE` | maybe | Hub 拒绝或未确认 `<self>.session` |
+| `F551` | `SELF_SESSION_ADMISSION_FAILED` | `T09_OPEN_SELF_SESSION` / `T10_ADMIT_PRESENCE` | maybe | Hub 拒绝或未确认 `session.open` |
 | `F552` | `SESSION_RUNTIME_UNAVAILABLE` | `T09_OPEN_SELF_SESSION` | yes | bridge/session runtime 缺库或初始化失败 |
 | `F560` | `RESOLVE_UNAVAILABLE` | `T11_REFETCH_READ_MODEL` | yes | namespace/read-model resolve 暂不可用 |
 

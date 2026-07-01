@@ -10,6 +10,81 @@ fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_>
     RegistryBuildConfig::new(RegistryBuildServices::fresh(), agents)
 }
 
+fn sha256_hex_for_test(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+/// Seed `local-agents.json` with the canonical hosted-agent identities the
+/// hot registrar requires before it will register `<agent>.chat` into the
+/// runtime. Each tuple is `(profile, name)`; the agent URA is the canonical
+/// `agent/<name>.<profile>` form under the local realm. Call inside a
+/// `HomeGuard` so the file lands in the test's temp HOME.
+fn seed_hosted_agents_for_chat(agents: &[(&str, &str)]) {
+    use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
+    let mut local = LocalAgentsFile::default();
+    for (profile, name) in agents {
+        // Agent URA is `agent/<user>.<name>`; the registrar verifies its
+        // agent-id (the after-dot segment) equals the registry name, so
+        // `name` must be the third arg.
+        let agent_ura = crate::ura::agent_ura("localhost", profile, name);
+        upsert_hosted_agent(&mut local, profile, name, &agent_ura);
+    }
+    save(&local).expect("seed local-agents.json for chat handlers");
+}
+
+#[test]
+fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+
+    let home = std::env::var("HOME").expect("HomeGuard sets HOME");
+    let manifest_path =
+        std::path::Path::new(&home).join("agents/apprentice/abilities/quote.ability.toml");
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+        .expect("create manifest dir");
+    let manifest =
+        b"name = \"quote\"\ndescription = \"imported\"\n\n[input_schema]\ntype = \"object\"\n";
+    std::fs::write(&manifest_path, manifest).expect("write imported descriptor");
+    let manifest_hash = sha256_hex_for_test(manifest);
+
+    let grants_path = crate::persistence::teach_grants::path();
+    std::fs::create_dir_all(grants_path.parent().expect("teach grants parent"))
+        .expect("create state dir");
+    std::fs::write(
+        &grants_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "5",
+            "grants": [],
+            "imports": [{
+                "ability_name": "quote",
+                "learner_agent": "apprentice",
+                "source_descriptor_ura": "easynet:///r/localhost/agent/dev.mentor/ability/quote",
+                "manifest_hash": manifest_hash,
+                "imported_at": "2026-06-23T01:02:03Z",
+                "state": "acquiring",
+                "acquiring_manifest_path": manifest_path.to_string_lossy(),
+                "acquiring_staging_manifest_path": null,
+                "acquiring_manifest_hash": manifest_hash,
+                "pending_grant": null
+            }]
+        }))
+        .expect("serialize grants"),
+    )
+    .expect("write acquiring teach grants fixture");
+
+    let recovered =
+        super::registry_builder::recover_descriptor_import_transactions_before_daemon_registry_boot()
+            .expect("daemon boot recovery hook");
+    assert_eq!(recovered, 1);
+
+    let recovered: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(grants_path).expect("read recovered grants"))
+            .expect("parse recovered grants");
+    assert_eq!(recovered["imports"][0]["state"], "active");
+    assert!(recovered["imports"][0]["acquiring_manifest_path"].is_null());
+    assert!(recovered["imports"][0]["acquiring_manifest_hash"].is_null());
+}
+
 #[test]
 fn published_ability_names_contains_agent_list_and_terminal_list() {
     // Diagnostic for the production NODATA: agent.list resolves but
@@ -17,6 +92,9 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
     // and both must be in the published set that (a) drives the device
     // profile and (b) is registered into the live LocalRuntime via
     // runtime.register_local_tool.
+    // Hold the env lock: published_ability_names() reads HOME-rooted
+    // registry state, so a concurrent HOME-mutating test must not race it.
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let names = published_ability_names();
     assert!(
         names.iter().any(|n| n == "agent.list"),
@@ -29,7 +107,38 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
 }
 
 #[test]
+fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
+    let reg = super::registry_builder::build_registry();
+    let rows = reg.ability_catalog_snapshot();
+
+    for ability in [
+        "mic.subscribe",
+        "camera.snapshot",
+        "camera.subscribe",
+        "screen.snapshot",
+        "screen.subscribe",
+        "remote_desktop.create_session",
+        "remote_desktop.attach",
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row.name == ability)
+            .unwrap_or_else(|| panic!("{ability} must be registered at daemon boot"));
+        let manifest = row
+            .manifest
+            .as_ref()
+            .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
+        assert_eq!(
+            manifest.input_schema()["type"],
+            serde_json::json!("object"),
+            "{ability} must expose an object input schema"
+        );
+    }
+}
+
+#[test]
 fn terminal_list_is_owner_kind_device() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     use crate::runtime::ability_dispatch::OwnerKind;
     assert_eq!(
         system_ability_owner("terminal.list"),
@@ -64,6 +173,7 @@ fn discovery_hints_read_only_tracks_ability_layer() {
 
 #[test]
 fn ability_layer_classification_is_complete() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // The audit story (RFC docs/AXON-RFC-001-ability-layers.md)
     // says every published ability MUST belong to exactly one
     // semantic layer. A new ability that lands without a
@@ -126,17 +236,22 @@ fn build_registry_is_non_empty_and_includes_ping() {
 
 #[test]
 fn published_ability_names_matches_live_registry() {
-    // The label-publishing helper and the dispatch registry
-    // must agree byte-for-byte. A regression that returned a
-    // hard-coded list would let the publisher advertise
-    // abilities the dispatcher cannot route.
-    let live = build_registry().list_abilities();
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    // The label-publishing helper and the publishable subset of the dispatch
+    // registry must agree byte-for-byte. Local-only front doors may still live
+    // in the registry for CLI/runtime calls, but must not be advertised.
+    let live: Vec<String> = build_registry()
+        .list_abilities()
+        .into_iter()
+        .filter(|name| is_publishable_catalog_name(name))
+        .collect();
     let advertised = published_ability_names();
     assert_eq!(live, advertised);
 }
 
 #[test]
 fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // The TOML descriptors in abilities/system/ are the
     // source of truth for external discovery tools. They are
     // GENERATED from `render_ability_toml(name,
@@ -206,6 +321,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
 ///     get_rpc() returns None" type mismatches).
 #[test]
 fn every_published_ability_resolves_to_a_handler() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let names: Vec<String> = reg.list_abilities();
     let mut unresolved: Vec<String> = Vec::new();
@@ -245,6 +361,7 @@ fn every_published_ability_resolves_to_a_handler() {
 /// tests.
 #[test]
 fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     let reg = build_system_registry();
@@ -415,7 +532,23 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
 }
 
 #[test]
+fn build_registry_satisfies_device_baseline_contract() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let device = crate::runtime::ability::conformance::DeviceBaseline::required_abilities();
+    let report = crate::runtime::ability::conformance::RegistryConformance::new(&reg)
+        .check("device", &device);
+
+    assert!(
+        report.is_conformant(),
+        "Device baseline abilities missing or registered under the wrong call mode:\n  {}",
+        report.panic_message()
+    );
+}
+
+#[test]
 fn published_abilities_includes_skill_list_with_real_metadata() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // Load-bearing for the EasyNet frontend's Skills page: the
     // backend invokes `skill.list` against the target node.
     // A regression that dropped it from `published_abilities()`
@@ -452,6 +585,7 @@ fn published_abilities_includes_skill_list_with_real_metadata() {
 
 #[test]
 fn published_system_abilities_excludes_plugin_package_abilities() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let plugin_leaks: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -465,6 +599,9 @@ fn published_system_abilities_excludes_plugin_package_abilities() {
 
 #[test]
 fn published_abilities_marks_server_stream_routes_as_streaming_only() {
+    // Hold the env lock: published_abilities() reads HOME-rooted registry
+    // state, so a concurrent HOME-mutating test must not race it.
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "consent.subscribe",
@@ -499,6 +636,7 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
 
 #[test]
 fn published_abilities_marks_bidi_routes_as_bidi_only() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "fs.transfer",
@@ -529,6 +667,7 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
 
 #[test]
 fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     use crate::registry::agents::{AgentEntry, AgentType};
     let mut agents = AgentRegistry::default();
     agents
@@ -552,6 +691,8 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
     // that shadows the manifest's real one. The filter in
     // `published_abilities()` enforces this; pin it.
     use crate::registry::agents::{AgentEntry, AgentType};
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    seed_hosted_agents_for_chat(&[("claude", "alice")]);
     let mut agents = AgentRegistry::default();
     agents
         .agents
@@ -575,6 +716,7 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
 
 #[test]
 fn description_for_and_input_schema_for_cover_every_published_name() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     // Adding a new ability to build_registry without also adding
     // arms to `description_for`/`input_schema_for` would let it
     // ship with the unknown-name fallback ("(system ability)" and
@@ -623,6 +765,8 @@ fn registry_includes_chat_handler_per_registered_agent() {
     // property that lets the proxy dispatch chat through the
     // same registry as ping/session/permission.
     use crate::registry::agents::{AgentEntry, AgentType};
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
+    seed_hosted_agents_for_chat(&[("claude", "alice"), ("codex", "bob")]);
     let mut agents = AgentRegistry::default();
     agents
         .agents
@@ -647,6 +791,9 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
     // Run in a child-process-style isolation: redirect the
     // keyring file path to a tempdir + clear DISABLE so the
     // auto-init path runs. The default tests set DISABLE.
+    // NOTE: this test already serialises via env_lock() directly — do
+    // NOT also take a HomeGuard (it acquires the same non-reentrant
+    // env_lock and would deadlock).
     let _env_lock = crate::facade::cli::test_support::env_lock();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("keyring.json");
@@ -704,6 +851,7 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
 /// as `fs.read`.
 #[test]
 fn published_catalogue_does_not_duplicate_device_owner_prefix() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -718,23 +866,28 @@ fn published_catalogue_does_not_duplicate_device_owner_prefix() {
     );
 }
 
-/// **M5 lint** — `<self>` token never appears as a first
+/// **M5 lint** — the legacy self alias token never appears as a first
 /// segment in the published catalogue. The wire-pinned trio
-/// (`<self>.session`, `<self>.invoke_remote`,
-/// `<self>.register_device_pubkey`) goes through wire-only
+/// (`session.open`, `runtime.invoke_remote`,
+/// `identity.register_pubkey`) goes through wire-only
 /// constants; they are NOT registered into the discoverable
 /// catalogue. If they ever leak, this test fails and the
 /// regression is caught at CI rather than in an LLM seeing
-/// a `<self>.*` entry and getting confused.
+/// a legacy self-alias entry and getting confused.
 #[test]
 fn published_catalogue_never_contains_self_alias() {
+    let _home = crate::facade::cli::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
         .collect();
-    let leaks: Vec<&String> = names.iter().filter(|n| n.starts_with("<self>")).collect();
+    let legacy_self_prefix = ["<", "self", ">"].concat();
+    let leaks: Vec<&String> = names
+        .iter()
+        .filter(|n| n.starts_with(&legacy_self_prefix))
+        .collect();
     assert!(
         leaks.is_empty(),
-        "post-M5 catalogue must not expose <self>.* names; got {leaks:?}"
+        "post-M5 catalogue must not expose legacy self-alias names; got {leaks:?}"
     );
 }

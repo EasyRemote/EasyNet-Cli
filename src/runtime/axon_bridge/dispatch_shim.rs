@@ -1,5 +1,5 @@
-//! Phase-4 dispatch shim: route wire envelopes through Axon's
-//! `LocalRuntime` callee-side APIs.
+//! LocalRuntime dispatch adapter: route daemon ingress through Axon's
+//! public descriptor-bound APIs.
 //!
 //! Goal
 //! ----
@@ -16,11 +16,10 @@
 //!      `InvocationEnvelope::from_wire_parts` — the helper Axon ships
 //!      precisely so every wire-receiving consumer agrees on what
 //!      "the envelope" means.
-//!   3. Hand the (envelope, optional signature, args) triple to
-//!      `LocalRuntime::invoke_admitted_*_async` when the daemon
-//!      admission facade has already verified the caller, or to
-//!      `LocalRuntime::invoke_externally_signed_*_async` when this
-//!      shim owns admission for that call site.
+//!   3. Classify the ingress as either external signed caller material or a
+//!      daemon-local system call, then hand the request to Axon's public
+//!      `DescriptorBoundInvocationRequest::{externally_signed,signed}`
+//!      constructors via `LocalRuntimeRequestFactory`.
 //!
 //! After Phase 4: there is no longer a "self-target shortcut" that
 //! looks different from a "remote-target" path inside the daemon.
@@ -30,125 +29,177 @@
 //! `AxonError::invalid_argument("unknown_ability:...")` (the
 //! universal "I don't host this" signal).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use easynet_axon::invocation::{
-    fresh_nonce, AgentIdentity, AxonError, BidiInvocationHandle, CallerSignature, CausalContext,
-    InvocationEnvelope, InvocationHandle, InvocationState, LocalRuntime, StreamingInvocationHandle,
-    SubjectIdentity, UraProfile,
+    fresh_nonce, AgentIdentity, AxonError, BidiInvocationHandle,
+    CallMode as AxonInvocationCallMode, CallerSignature, CausalContext, DescriptorBoundEnvelope,
+    DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest, EntityRef, InvocationHandle,
+    InvocationState, LocalRuntime, StreamingInvocationHandle, SubjectIdentity, UraProfile,
 };
 
-use easynet_axon::invocation::wire;
 use easynet_axon::pb::axon::v1 as pb;
 
-/// Canonical wire dispatch for call sites where this shim owns strict
-/// admission. The caller signature is mandatory because the next step is
-/// `invoke_externally_signed_*`.
+use crate::runtime::axon_bridge::descriptor_ref::{
+    ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_version,
+};
+use crate::runtime::axon_bridge::local_runtime_request::{
+    LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
+};
+use crate::runtime::axon_bridge::wire_descriptor::{
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
+};
+use crate::runtime::local_invocation_identity::system_agent_identity;
+
+/// Explicit admission class for a wire-shaped LocalRuntime dispatch.
 #[derive(Debug)]
-pub struct WireDispatch {
-    pub envelope: InvocationEnvelope,
-    pub signature: CallerSignature,
-    pub payload: Vec<u8>,
+pub enum WireDispatchIngress {
+    /// Caller-supplied signature that Axon must verify.
+    ExternalSigned(CallerSignature),
+    /// Explicit daemon/session-local dispatch signed by `_system.local`.
+    LocalSystem,
 }
 
-/// Wire dispatch after the daemon's transport admission facade has already
-/// admitted the caller. The optional signature is retained for audit/context
-/// storage, but this path does not re-run admission or nonce replay.
+/// Canonical wire dispatch for descriptor-bound LocalRuntime calls.
 #[derive(Debug)]
-pub struct AdmittedWireDispatch {
-    pub envelope: InvocationEnvelope,
-    pub signature: Option<CallerSignature>,
+pub struct WireDispatch {
+    pub envelope: DescriptorBoundEnvelope,
+    pub ingress: WireDispatchIngress,
     pub payload: Vec<u8>,
+    /// Transport metadata admitted by the daemon/session boundary and
+    /// preserved for envelope-aware product handlers.
+    pub request_metadata: HashMap<String, String>,
     /// Operational trace-correlation id from the wire envelope
     /// (empty when the caller sent none). Threaded into the Axon
     /// runtime so the ledger record carries it.
     pub trace_id: String,
 }
 
-/// Reassemble (envelope, signature, payload) from the wire
-/// EnvelopeOpen + InvocationTarget pair carried on bidi frame 0
-/// (or projected from a unary InvokeRequest by the wrapping layer).
-///
-/// Encodes the design rule from
-/// `core/proto/axon/v1/types.proto:429-446`: the wire `Envelope`
-/// carries the 4 binding fields; `ability` and `args` live on the
-/// surrounding shape. We thread both halves into `from_wire_parts`
-/// so the canonical 7-tuple is reassembled in one place — the
-/// load-bearing invariant being that `sha256(payload)` matches the
-/// digest the caller signed over.
-pub fn from_envelope_open(
-    envelope: pb::Envelope,
-    target_ability_name: String,
-    initial_args: Vec<u8>,
-) -> Result<WireDispatch, Box<AxonError>> {
-    let signature = envelope
-        .caller_signature
-        .clone()
-        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing caller_signature"))?;
-    let admitted = admitted_from_wire_parts(envelope, target_ability_name, initial_args)?;
-    Ok(WireDispatch {
-        envelope: admitted.envelope,
-        signature: signature.into(),
-        payload: admitted.payload,
-    })
+#[derive(Clone, Copy)]
+enum WireIngressPolicy {
+    ExternalSigned,
+    LocalSystem,
 }
 
-/// Reassemble a wire envelope after admission has already succeeded.
-///
-/// Unlike [`from_envelope_open`], this accepts unsigned Device/loopback
-/// envelopes because the caller admission decision was made by
-/// `AdmissionFacade` at the gRPC boundary. It still builds the canonical
-/// Axon envelope so LocalRuntime handlers see caller/callee/subject.
-// Err is boxed (clippy result_large_err): AxonError is ≥144 B, and the
-// Ok path of every dispatch would otherwise carry the large variant.
-pub fn admitted_from_wire_parts(
+fn dispatch_from_wire_parts(
     envelope: pb::Envelope,
     target_ability_name: String,
     initial_args: Vec<u8>,
-) -> Result<AdmittedWireDispatch, Box<AxonError>> {
-    let trace_id = envelope.trace_id.clone();
-    let caller = envelope
-        .caller
-        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing caller"))?;
-    let callee = envelope.callee.unwrap_or_else(|| caller.clone());
-    let signature = envelope.caller_signature.map(Into::into);
-
-    let caller_sdk = wire::try_agent_identity_from_wire(caller)?;
-    let callee_sdk = wire::try_agent_identity_from_wire(callee)?;
-    // Subject defaulting per RFC 001 §5.1: if the wire omits it,
-    // mirror callee. Doing this at the boundary keeps every
-    // downstream consumer (admission, audit, ledger) seeing a
-    // populated subject without sprinkling `if subject.is_none()`
-    // through the call graph.
-    let subject_sdk: SubjectIdentity = match envelope.subject {
-        Some(subject) => wire::try_subject_identity_from_wire(subject)?,
-        None => SubjectIdentity::from_callee(&callee_sdk),
+    request_metadata: HashMap<String, String>,
+    policy: WireIngressPolicy,
+) -> Result<WireDispatch, Box<AxonError>> {
+    let caller_identity = match policy {
+        WireIngressPolicy::ExternalSigned => WireCallerIdentity::FromEnvelope,
+        WireIngressPolicy::LocalSystem => WireCallerIdentity::LocalSystem,
     };
-
-    let nonce = wire::try_invocation_nonce(envelope.invocation_nonce)?;
-    let causal_context = wire::causal_context_from_wire(envelope.causal_context)?;
-
-    let envelope_sdk = InvocationEnvelope::from_wire_parts(
-        caller_sdk,
-        callee_sdk,
-        subject_sdk,
-        nonce,
-        causal_context,
+    let reassembled = descriptor_bound_from_wire_parts(
+        envelope.clone(),
         target_ability_name,
         &initial_args,
-    );
+        caller_identity,
+    )
+    .map_err(Box::new)?;
+    let ingress = match policy {
+        WireIngressPolicy::ExternalSigned => {
+            let signature = envelope
+                .caller_signature
+                .clone()
+                .ok_or_else(|| {
+                    AxonError::invalid_argument("wire envelope missing caller_signature")
+                })?
+                .into();
+            WireDispatchIngress::ExternalSigned(signature)
+        }
+        WireIngressPolicy::LocalSystem => WireDispatchIngress::LocalSystem,
+    };
 
-    Ok(AdmittedWireDispatch {
-        envelope: envelope_sdk,
-        signature,
+    Ok(WireDispatch {
+        envelope: reassembled.envelope,
+        ingress,
         payload: initial_args,
-        trace_id,
+        request_metadata,
+        trace_id: reassembled.trace_id,
     })
 }
 
-pub fn admitted_from_envelope_open(
+/// Reassemble an externally signed wire envelope into the canonical
+/// descriptor-bound dispatch object.
+///
+/// The caller signature is mandatory. Daemon product policy may reject or
+/// authorize a route before this point, but Axon admission still owns
+/// signature structure, crypto verification, nonce replay, and receipt proof
+/// normalization.
+// Err is boxed (clippy result_large_err): AxonError is ≥144 B, and the
+// Ok path of every dispatch would otherwise carry the large variant.
+pub fn external_signed_from_wire_parts(
+    envelope: pb::Envelope,
+    target_ability_name: String,
+    initial_args: Vec<u8>,
+    request_metadata: HashMap<String, String>,
+) -> Result<WireDispatch, Box<AxonError>> {
+    dispatch_from_wire_parts(
+        envelope,
+        target_ability_name,
+        initial_args,
+        request_metadata,
+        WireIngressPolicy::ExternalSigned,
+    )
+}
+
+/// Reassemble an explicit daemon/session-local dispatch from the same wire
+/// envelope pieces, then bind it to the synthetic `_system.local`
+/// caller before entering Axon's public signed request path.
+///
+/// Use this only after an outer daemon/session policy gate has accepted the
+/// request. Public carrier ingress that still depends on caller crypto must
+/// use [`external_signed_from_wire_parts`] instead.
+pub fn local_system_from_wire_parts(
+    envelope: pb::Envelope,
+    target_ability_name: String,
+    initial_args: Vec<u8>,
+    request_metadata: HashMap<String, String>,
+) -> Result<WireDispatch, Box<AxonError>> {
+    dispatch_from_wire_parts(
+        envelope,
+        target_ability_name,
+        initial_args,
+        request_metadata,
+        WireIngressPolicy::LocalSystem,
+    )
+}
+
+fn request_for_wire_dispatch(
+    mode: AxonInvocationCallMode,
+    wire: WireDispatch,
+) -> Result<DescriptorBoundInvocationRequest, AxonError> {
+    let WireDispatch {
+        envelope,
+        ingress,
+        payload,
+        request_metadata,
+        trace_id,
+    } = wire;
+    let ingress = match ingress {
+        WireDispatchIngress::ExternalSigned(signature) => LocalRuntimeIngress::ExternalSigned {
+            envelope,
+            signature,
+            payload,
+        },
+        WireDispatchIngress::LocalSystem => LocalRuntimeIngress::LocalSystem { envelope, payload },
+    };
+    LocalRuntimeRequestFactory::request_for(
+        mode,
+        ingress,
+        LocalRuntimeRequestOptions::default()
+            .with_trace_id(trace_id)
+            .with_request_metadata(request_metadata),
+    )
+}
+
+pub fn external_signed_from_envelope_open(
     envelope_open: &pb::EnvelopeOpen,
-) -> Result<AdmittedWireDispatch, Box<AxonError>> {
+) -> Result<WireDispatch, Box<AxonError>> {
     let ability = envelope_open
         .target
         .as_ref()
@@ -159,7 +210,12 @@ pub fn admitted_from_envelope_open(
         .envelope
         .clone()
         .ok_or_else(|| AxonError::invalid_argument("wire envelope missing envelope"))?;
-    admitted_from_wire_parts(envelope, ability, envelope_open.initial_args.clone())
+    external_signed_from_wire_parts(
+        envelope,
+        ability,
+        envelope_open.initial_args.clone(),
+        envelope_open.metadata.clone(),
+    )
 }
 
 /// One terminal outcome from an Axon-driven RPC dispatch.
@@ -176,6 +232,9 @@ pub struct RpcDispatchOutcome {
     pub state: InvocationState,
     pub payload_bytes: Vec<u8>,
     pub error: Option<AxonError>,
+    /// Admission receipt minted by Axon for the descriptor-bound call,
+    /// when admission reached the runtime.
+    pub admission_receipt: Option<easynet_axon::invocation::InvocationReceipt>,
     /// Terminal execution receipt, when the runtime minted one —
     /// carried back to the hub on carrier-v1 sessions (DEC-F004).
     pub terminal_receipt: Option<easynet_axon::invocation::InvocationReceipt>,
@@ -190,13 +249,12 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
     let state = handle.wait().await;
     let events = handle.core().snapshot_events().await;
     let terminal = events.iter().rev().find(|e| e.state.is_terminal()).cloned();
-    let terminal_receipt = handle
-        .core()
-        .snapshot_receipts()
-        .await
-        .into_iter()
-        .rev()
-        .find(|r| r.state.is_terminal());
+    let receipts = handle.core().snapshot_receipts().await;
+    let admission_receipt = receipts
+        .iter()
+        .find(|r| r.state == InvocationState::Admitted)
+        .cloned();
+    let terminal_receipt = receipts.into_iter().rev().find(|r| r.state.is_terminal());
 
     match (state, terminal) {
         (InvocationState::Completed, Some(ev)) => RpcDispatchOutcome {
@@ -204,6 +262,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             state,
             payload_bytes: ev.payload,
             error: None,
+            admission_receipt: admission_receipt.clone(),
             terminal_receipt: terminal_receipt.clone(),
         },
         (InvocationState::Failed, Some(ev)) => RpcDispatchOutcome {
@@ -213,6 +272,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             error: Some(
                 AxonError::internal(ev.reason.clone()).with_invocation_id(ev.invocation_id),
             ),
+            admission_receipt: admission_receipt.clone(),
             terminal_receipt: terminal_receipt.clone(),
         },
         (InvocationState::TimedOut, Some(ev)) => RpcDispatchOutcome {
@@ -223,6 +283,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
                 AxonError::deadline_exceeded(ev.reason.clone())
                     .with_invocation_id(ev.invocation_id),
             ),
+            admission_receipt: admission_receipt.clone(),
             terminal_receipt: terminal_receipt.clone(),
         },
         (InvocationState::Cancelled, Some(ev)) => RpcDispatchOutcome {
@@ -232,6 +293,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             error: Some(
                 AxonError::cancelled(ev.reason.clone()).with_invocation_id(ev.invocation_id),
             ),
+            admission_receipt: admission_receipt.clone(),
             terminal_receipt: terminal_receipt.clone(),
         },
         // No terminal event recorded — should not happen because
@@ -243,6 +305,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             error: Some(AxonError::internal(
                 "axon dispatch ended without a terminal event",
             )),
+            admission_receipt,
             terminal_receipt: None,
         },
         // Wait() returned a non-terminal state — defensive.
@@ -254,6 +317,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
                 "axon dispatch ended in non-terminal state {}",
                 other.as_str()
             ))),
+            admission_receipt,
             terminal_receipt: None,
         },
     }
@@ -272,96 +336,125 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
 /// that admission / dispatch / audit / persist live in Axon and
 /// CLI owns only the transport translation.
 pub async fn dispatch_rpc(runtime: &Arc<LocalRuntime>, wire: WireDispatch) -> RpcDispatchOutcome {
-    dispatch_rpc_with_dispatch_key(runtime, wire, None).await
+    let request = match request_for_wire_dispatch(AxonInvocationCallMode::Rpc, wire) {
+        Ok(request) => request,
+        Err(err) => {
+            return RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            };
+        }
+    };
+    let result = runtime.invoke_descriptor_bound_request_async(request).await;
+    match result {
+        Ok((handle, _signed)) => drain_to_outcome(handle).await,
+        Err(err) => RpcDispatchOutcome {
+            invocation_id: None,
+            state: InvocationState::Failed,
+            payload_bytes: Vec::new(),
+            error: Some(err),
+            admission_receipt: None,
+            terminal_receipt: None,
+        },
+    }
 }
 
-/// Like [`dispatch_rpc`], but resolves the registered handler under
-/// `dispatch_ability` while verifying the signature against the
-/// envelope's signed (public) ability name. EasyNet's user-caller
-/// pass-through uses this so a browser-signed public name (`chat`)
-/// runs the owner-scoped dispatch key the hub addressed (`demo.chat`).
-pub async fn dispatch_rpc_with_dispatch_key(
+/// Unary entry for externally signed callers after daemon policy routing.
+pub async fn dispatch_rpc_external_signed(
     runtime: &Arc<LocalRuntime>,
     wire: WireDispatch,
-    dispatch_ability: Option<String>,
 ) -> RpcDispatchOutcome {
-    let WireDispatch {
-        envelope,
-        signature,
-        payload,
-    } = wire;
-    match runtime
-        .invoke_externally_signed_dispatch_async(
-            envelope,
-            signature,
-            payload,
-            None,
-            None,
-            dispatch_ability,
-        )
-        .await
-    {
-        Ok((handle, _signed)) => drain_to_outcome(handle).await,
-        Err(err) => RpcDispatchOutcome {
-            invocation_id: None,
-            state: InvocationState::Failed,
-            payload_bytes: Vec::new(),
-            error: Some(err),
-            terminal_receipt: None,
-        },
-    }
+    dispatch_rpc(runtime, wire).await
 }
 
-/// Unary entry for callers already admitted by the daemon transport layer.
+/// Unary entry for daemon-admitted externally signed callers.
 pub async fn dispatch_rpc_admitted(
     runtime: &Arc<LocalRuntime>,
-    wire: AdmittedWireDispatch,
+    wire: WireDispatch,
 ) -> RpcDispatchOutcome {
-    let AdmittedWireDispatch {
-        envelope,
-        signature,
-        payload,
-        trace_id,
-    } = wire;
-    let trace_id = (!trace_id.is_empty()).then_some(trace_id);
-    match runtime
-        .invoke_admitted_async(envelope, signature, payload, None, None, trace_id)
-        .await
-    {
-        Ok((handle, _signed)) => drain_to_outcome(handle).await,
+    dispatch_rpc(runtime, wire).await
+}
+
+/// Unary entry for explicit daemon/session-local system dispatch.
+pub async fn dispatch_rpc_local_system(
+    runtime: &Arc<LocalRuntime>,
+    wire: WireDispatch,
+) -> RpcDispatchOutcome {
+    dispatch_rpc(runtime, wire).await
+}
+
+/// Dispatch a node-internal `runtime.*` admin ability by its BARE
+/// registered name, bypassing descriptor-bound canonicalization.
+///
+/// Admin abilities (`runtime.bootstrap_self_identity`, …) are installed by
+/// the Axon SDK under their bare name with no owner, no descriptor proof,
+/// and no presence/control-plane record. Routing them through the
+/// descriptor-bound path would canonicalize the name to a device-owned
+/// ability URA (`device.<id>.runtime.…`) the runtime never registered and
+/// demand a proof binding the admin handler does not carry — both wrong for
+/// a runtime-internal handshake. `invoke_async` runs the bare name under a
+/// system-local binding, which is exactly the admin contract.
+pub async fn dispatch_rpc_local_admin_bare(
+    runtime: &Arc<LocalRuntime>,
+    ability: &str,
+    payload: Vec<u8>,
+) -> RpcDispatchOutcome {
+    match runtime.invoke_async(ability, payload, None, None).await {
+        Ok(handle) => drain_to_outcome(handle).await,
         Err(err) => RpcDispatchOutcome {
-            invocation_id: None,
             state: InvocationState::Failed,
             payload_bytes: Vec::new(),
             error: Some(err),
+            invocation_id: None,
+            admission_receipt: None,
             terminal_receipt: None,
         },
     }
 }
 
+pub async fn open_stream_external_signed(
+    runtime: &Arc<LocalRuntime>,
+    wire: WireDispatch,
+) -> Result<StreamingInvocationHandle, AxonError> {
+    open_stream(runtime, wire).await
+}
+
+/// Server-stream entry for daemon-admitted externally signed callers.
 pub async fn open_stream_admitted(
     runtime: &Arc<LocalRuntime>,
-    wire: AdmittedWireDispatch,
+    wire: WireDispatch,
 ) -> Result<StreamingInvocationHandle, AxonError> {
-    let AdmittedWireDispatch {
-        envelope,
-        signature,
-        payload,
-        trace_id,
-    } = wire;
-    let trace_id = (!trace_id.is_empty()).then_some(trace_id);
+    open_stream(runtime, wire).await
+}
+
+async fn open_stream(
+    runtime: &Arc<LocalRuntime>,
+    wire: WireDispatch,
+) -> Result<StreamingInvocationHandle, AxonError> {
+    let request = request_for_wire_dispatch(AxonInvocationCallMode::Stream, wire)?;
     let (handle, _signed) = runtime
-        .invoke_admitted_stream_async(envelope, signature, payload, None, None, trace_id)
+        .invoke_descriptor_bound_stream_request_async(request)
         .await?;
     Ok(handle)
 }
 
-pub async fn open_stream_local(
-    runtime: &Arc<LocalRuntime>,
-    ability: &str,
-    args: Vec<u8>,
-) -> Result<StreamingInvocationHandle, AxonError> {
-    runtime.invoke_stream_async(ability, args, None, None).await
+fn local_descriptor_subject(
+    requested_subject_ura: &str,
+) -> Result<(SubjectIdentity, EntityRef), AxonError> {
+    let requested = SubjectIdentity::new(
+        requested_subject_ura.to_string(),
+        UraProfile::EasynetStrictV2,
+    );
+    let subject_ref = EntityRef::try_from_subject_identity(&requested).map_err(|err| {
+        AxonError::invalid_argument(format!(
+            "local dispatch subject `{requested_subject_ura}` is not descriptor-bound: {err}"
+        ))
+    })?;
+    Ok((requested, subject_ref))
 }
 
 pub async fn open_stream_local_with_subject(
@@ -371,47 +464,59 @@ pub async fn open_stream_local_with_subject(
     ability: &str,
     args: Vec<u8>,
 ) -> Result<StreamingInvocationHandle, AxonError> {
-    let caller = AgentIdentity::new(
-        "easynet:///r/_system/agent/_system.local",
-        UraProfile::EasynetStrictV2,
-    );
+    let caller = system_agent_identity();
     let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
-    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
-    let envelope = InvocationEnvelope::from_wire_parts(
+    let (subject, _) = local_descriptor_subject(subject_ura)?;
+    let runtime_ability = ability_ura_for_wire(callee_ura, ability)?;
+    let descriptor_version =
+        registered_descriptor_version(runtime, &runtime_ability, AxonInvocationCallMode::Stream)
+            .await?;
+    let ability = ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_version)?;
+    let descriptor_bound = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller,
         callee,
-        subject,
-        fresh_nonce(),
-        CausalContext::None,
         ability,
-        &args,
-    );
-    open_stream_admitted(
-        runtime,
-        AdmittedWireDispatch {
-            envelope,
-            signature: None,
+        subject,
+        invocation_nonce: fresh_nonce(),
+        causal_context: CausalContext::None,
+        args_bytes: &args,
+    })?;
+    let request = LocalRuntimeRequestFactory::request_for(
+        AxonInvocationCallMode::Stream,
+        LocalRuntimeIngress::LocalSystem {
+            envelope: descriptor_bound,
             payload: args,
-            // Daemon-internal synthetic envelope: no wire trace id.
-            trace_id: String::new(),
         },
-    )
-    .await
+        LocalRuntimeRequestOptions::default(),
+    )?;
+    let (handle, _signed) = runtime
+        .invoke_descriptor_bound_stream_request_async(request)
+        .await?;
+    Ok(handle)
 }
 
+pub async fn open_bidi_external_signed(
+    runtime: &Arc<LocalRuntime>,
+    wire: WireDispatch,
+) -> Result<BidiInvocationHandle, AxonError> {
+    open_bidi(runtime, wire).await
+}
+
+/// Bidi entry for daemon-admitted externally signed callers.
 pub async fn open_bidi_admitted(
     runtime: &Arc<LocalRuntime>,
-    wire: AdmittedWireDispatch,
+    wire: WireDispatch,
 ) -> Result<BidiInvocationHandle, AxonError> {
-    let AdmittedWireDispatch {
-        envelope,
-        signature,
-        payload,
-        trace_id,
-    } = wire;
-    let trace_id = (!trace_id.is_empty()).then_some(trace_id);
+    open_bidi(runtime, wire).await
+}
+
+async fn open_bidi(
+    runtime: &Arc<LocalRuntime>,
+    wire: WireDispatch,
+) -> Result<BidiInvocationHandle, AxonError> {
+    let request = request_for_wire_dispatch(AxonInvocationCallMode::Bidi, wire)?;
     let (handle, _signed) = runtime
-        .invoke_admitted_bidi_async(envelope, signature, payload, None, None, trace_id)
+        .invoke_descriptor_bound_bidi_request_async(request)
         .await?;
     Ok(handle)
 }
@@ -423,86 +528,40 @@ pub async fn open_bidi_local_with_subject(
     ability: &str,
     args: Vec<u8>,
 ) -> Result<BidiInvocationHandle, AxonError> {
-    let caller = AgentIdentity::new(
-        "easynet:///r/_system/agent/_system.local",
-        UraProfile::EasynetStrictV2,
-    );
+    let caller = system_agent_identity();
     let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
-    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
-    let envelope = InvocationEnvelope::from_wire_parts(
+    let (subject, _) = local_descriptor_subject(subject_ura)?;
+    let runtime_ability = ability_ura_for_wire(callee_ura, ability)?;
+    let descriptor_version =
+        registered_descriptor_version(runtime, &runtime_ability, AxonInvocationCallMode::Bidi)
+            .await?;
+    let ability = ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_version)?;
+    let descriptor_bound = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller,
         callee,
-        subject,
-        fresh_nonce(),
-        CausalContext::None,
         ability,
-        &args,
-    );
-    open_bidi_admitted(
-        runtime,
-        AdmittedWireDispatch {
-            envelope,
-            signature: None,
+        subject,
+        invocation_nonce: fresh_nonce(),
+        causal_context: CausalContext::None,
+        args_bytes: &args,
+    })?;
+    let request = LocalRuntimeRequestFactory::request_for(
+        AxonInvocationCallMode::Bidi,
+        LocalRuntimeIngress::LocalSystem {
+            envelope: descriptor_bound,
             payload: args,
-            // Daemon-internal synthetic envelope: no wire trace id.
-            trace_id: String::new(),
         },
-    )
-    .await
+        LocalRuntimeRequestOptions::default(),
+    )?;
+    let (handle, _signed) = runtime
+        .invoke_descriptor_bound_bidi_request_async(request)
+        .await?;
+    Ok(handle)
 }
 
-/// Daemon-internal self-target dispatch — caller is trusted, no
-/// signature verification.
-///
-/// This is the path the existing `<self>.invoke_remote` uses for
-/// dispatching an inner ability whose admission was already done at
-/// the outer boundary (backend authenticated the user, decomposed
-/// the request, and re-issued it as a daemon-internal hub→agent
-/// call). The Axon SDK's `invoke_async` runs with a SystemAgent
-/// binding (AXIOM §3.2) — axiom-bound at the bytes level but
-/// not cryptographically signed.
-///
-/// Why this exists alongside [`dispatch_rpc`]: the daemon serves
-/// two kinds of self-target dispatch right now:
-///   * **End-to-end signed** (`dispatch_rpc`): the caller's
-///     ed25519 signature flows through, admission runs, ledger
-///     records the full receipt chain with the real caller URA.
-///     This is the right path when the wire shape carries the
-///     user's envelope intact (future: Pages frontend → daemon
-///     direct, bypassing the Go shim's re-issue).
-///   * **Trust-domain dispatch** (`dispatch_rpc_local`): the
-///     daemon's caller (the Go backend / a hub peer / itself) is
-///     already trusted; admission is a no-op, the ledger records
-///     a SystemAgent-bound row. This is the only path that
-///     currently keeps the legacy InvokeRemoteUp wire shape
-///     working — `<self>.invoke_remote` doesn't carry an inner
-///     user signature, so end-to-end mode is impossible here
-///     until the wire shape evolves.
-///
-/// Both paths feed the same LedgerSink installed at boot, so the
-/// audit trail is uniform; they only differ in caller identity
-/// strength.
-pub async fn dispatch_rpc_local(
-    runtime: &Arc<LocalRuntime>,
-    ability: &str,
-    args: Vec<u8>,
-) -> RpcDispatchOutcome {
-    match runtime.invoke_async(ability, args, None, None).await {
-        Ok(handle) => drain_to_outcome(handle).await,
-        Err(err) => RpcDispatchOutcome {
-            invocation_id: None,
-            state: InvocationState::Failed,
-            payload_bytes: Vec::new(),
-            error: Some(err),
-            terminal_receipt: None,
-        },
-    }
-}
-
-/// Trust-domain local dispatch that still binds the inner invocation
-/// to an explicit callee/subject pair. `<self>.invoke_remote` uses this
-/// when the transport target is a device but the acted-on object is a
-/// resource such as a camera, microphone, or display.
+/// Daemon-internal dispatch. The shim binds execution to an explicit callee
+/// and `EntityRef` subject, then signs with the synthetic `_system.local`
+/// caller before entering Axon's public admission path.
 pub async fn dispatch_rpc_local_with_subject(
     runtime: &Arc<LocalRuntime>,
     callee_ura: &str,
@@ -510,32 +569,116 @@ pub async fn dispatch_rpc_local_with_subject(
     ability: &str,
     args: Vec<u8>,
 ) -> RpcDispatchOutcome {
-    let caller = AgentIdentity::new(
-        "easynet:///r/_system/agent/_system.local",
-        UraProfile::EasynetStrictV2,
-    );
+    let caller = system_agent_identity();
     let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
-    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
-    let envelope = InvocationEnvelope::from_wire_parts(
+    let (subject, _) = match local_descriptor_subject(subject_ura) {
+        Ok(subject) => subject,
+        Err(err) => {
+            return RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            };
+        }
+    };
+    let runtime_ability = match ability_ura_for_wire(callee_ura, ability) {
+        Ok(runtime_ability) => runtime_ability,
+        Err(err) => {
+            return RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            };
+        }
+    };
+    let descriptor_version =
+        match registered_descriptor_version(runtime, &runtime_ability, AxonInvocationCallMode::Rpc)
+            .await
+        {
+            Ok(descriptor_version) => descriptor_version,
+            Err(err) => {
+                return RpcDispatchOutcome {
+                    invocation_id: None,
+                    state: InvocationState::Failed,
+                    payload_bytes: Vec::new(),
+                    error: Some(err.into()),
+                    admission_receipt: None,
+                    terminal_receipt: None,
+                };
+            }
+        };
+    let ability = match ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_version) {
+        Ok(ability) => ability,
+        Err(err) => {
+            return RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            };
+        }
+    };
+    let descriptor_bound = match DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller,
         callee,
-        subject,
-        fresh_nonce(),
-        CausalContext::None,
         ability,
-        &args,
-    );
-    dispatch_rpc_admitted(
-        runtime,
-        AdmittedWireDispatch {
-            envelope,
-            signature: None,
+        subject,
+        invocation_nonce: fresh_nonce(),
+        causal_context: CausalContext::None,
+        args_bytes: &args,
+    }) {
+        Ok(envelope) => envelope,
+        Err(err) => {
+            return RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            };
+        }
+    };
+    let request = match LocalRuntimeRequestFactory::request_for(
+        AxonInvocationCallMode::Rpc,
+        LocalRuntimeIngress::LocalSystem {
+            envelope: descriptor_bound,
             payload: args,
-            // Daemon-internal synthetic envelope: no wire trace id.
-            trace_id: String::new(),
         },
-    )
-    .await
+        LocalRuntimeRequestOptions::default(),
+    ) {
+        Ok(request) => request,
+        Err(err) => {
+            return RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            };
+        }
+    };
+    let result = runtime.invoke_descriptor_bound_request_async(request).await;
+    match result {
+        Ok((handle, _signed)) => drain_to_outcome(handle).await,
+        Err(err) => RpcDispatchOutcome {
+            invocation_id: None,
+            state: InvocationState::Failed,
+            payload_bytes: Vec::new(),
+            error: Some(err),
+            admission_receipt: None,
+            terminal_receipt: None,
+        },
+    }
 }
 
 /// Project an `RpcDispatchOutcome` into the (payload, error_string)
@@ -560,6 +703,7 @@ pub fn outcome_to_invoke_remote_result(outcome: RpcDispatchOutcome) -> (Vec<u8>,
     let RpcDispatchOutcome {
         invocation_id: _,
         state: _,
+        admission_receipt: _,
         terminal_receipt: _,
         payload_bytes,
         error,
@@ -573,16 +717,35 @@ mod tests {
     use super::*;
 
     use easynet_axon::invocation::{
-        fresh_nonce, make_ability, sha256, sign_invocation, signing_key_from_bytes, AgentIdentity,
-        AxonError, CausalContext, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
-        SubjectIdentity, UraProfile,
+        fresh_nonce, make_ability, sha256, sign_descriptor_bound_invocation,
+        signing_key_from_bytes, AbilityCallModes, AbilityOptions, AgentIdentity, AxonError,
+        CausalContext, DescriptorBoundEnvelope, InvocationLedger, KeyResolver, LedgerSink,
+        LocalRuntime, SubjectIdentity, UraProfile,
     };
+
+    /// RPC options carrying the descriptor proof the receipt-proof
+    /// normalizer requires, stamped at the same version the simulated wire
+    /// envelope uses so `proof_descriptor_version` matches.
+    fn wire_proof_bound_rpc_options() -> AbilityOptions {
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof(WIRE_TEST_DESCRIPTOR_VERSION, [0x11; 32], [0x22; 32])
+    }
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use serde_json::Value;
 
+    /// Descriptor version a simulated upstream client stamps onto the wire
+    /// envelope. Deliberately not the production default constant: the
+    /// inbound wire path must carry whatever version the caller declared,
+    /// and the ledger must record exactly that.
+    const WIRE_TEST_DESCRIPTOR_VERSION: &str = "3.1.4";
+
     struct FixedKey(VerifyingKey);
     impl KeyResolver for FixedKey {
-        fn resolve(&self, _: &str) -> Result<VerifyingKey, AxonError> {
+        fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+            if agent_ura == crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
+                return Ok(crate::runtime::local_invocation_identity::system_verifying_key());
+            }
             Ok(self.0)
         }
     }
@@ -617,16 +780,25 @@ mod tests {
             AgentIdentity::new("easynet:///r/t/device/host", UraProfile::EasynetStrictV2);
         let subject_sdk = SubjectIdentity::from_callee(&callee_sdk);
         let nonce = fresh_nonce();
-        let env_sdk = InvocationEnvelope::from_wire_parts(
-            caller_sdk.clone(),
-            callee_sdk.clone(),
-            subject_sdk.clone(),
-            nonce,
-            CausalContext::None,
-            ability,
-            payload,
-        );
-        let sig_sdk = sign_invocation(sk, &env_sdk, "test-key");
+        let ability_ref =
+            ability_descriptor_ref_for_wire(&callee_sdk.ura, ability, WIRE_TEST_DESCRIPTOR_VERSION)
+                .unwrap();
+        // Carry the versioned descriptor ref as the wire `function_name`
+        // so reassembly preserves WIRE_TEST_DESCRIPTOR_VERSION instead of
+        // defaulting — the same ref the signature is computed over.
+        let wire_function_name = ability_ref.clone();
+        let descriptor_bound_sdk =
+            DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
+                caller: caller_sdk.clone(),
+                callee: callee_sdk.clone(),
+                ability: ability_ref,
+                subject: subject_sdk.clone(),
+                invocation_nonce: nonce,
+                causal_context: CausalContext::None,
+                args_bytes: payload,
+            })
+            .unwrap();
+        let sig_sdk = sign_descriptor_bound_invocation(sk, &descriptor_bound_sdk, "test-key");
 
         // Project the SDK pieces back into wire form. CLI's
         // outbound clients would do the inverse direction; for the
@@ -660,24 +832,27 @@ mod tests {
             caller_signature: Some(wire_sig),
             ..Default::default()
         };
-        let _ = env_sdk;
         let _ = sha256(payload); // assertion in test body
-        (wire_envelope, ability.to_string(), payload.to_vec())
+        (wire_envelope, wire_function_name, payload.to_vec())
     }
 
     #[tokio::test]
     async fn dispatch_rpc_completes_through_axon_runtime_and_persists() {
         let (rt, ledger, sk, _temp) = build_test_runtime();
-        rt.register_ability(
-            "test.echo",
+        let callee_ura = "easynet:///r/t/device/host";
+        let ability_ura = crate::ura::owner_ability_ura(callee_ura, "test.echo").unwrap();
+        rt.register_ability_with_options(
+            ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            wire_proof_bound_rpc_options(),
         )
         .await
         .unwrap();
 
         let payload = serde_json::to_vec(&serde_json::json!({"x": 7})).unwrap();
         let (wire_env, ability, args) = build_wire_envelope(&sk, "test.echo", &payload);
-        let dispatch = from_envelope_open(wire_env, ability, args).expect("translate wire");
+        let dispatch = external_signed_from_wire_parts(wire_env, ability, args, Default::default())
+            .expect("translate wire");
 
         let outcome = dispatch_rpc(&rt, dispatch).await;
         assert_eq!(outcome.state, InvocationState::Completed);
@@ -694,8 +869,11 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let records = ledger.list_all().unwrap();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].ability_name, "test.echo");
-        assert_eq!(records[0].state, "COMPLETED");
+        assert_eq!(
+            records[0].ability_name,
+            format!("{ability_ura}@{WIRE_TEST_DESCRIPTOR_VERSION}")
+        );
+        assert_eq!(records[0].state, "completed");
         assert_eq!(records[0].caller_ura, "easynet:///r/t/agent/u.alice");
         assert_eq!(records[0].callee_ura, "easynet:///r/t/device/host");
         assert_eq!(records[0].subject_ura, "easynet:///r/t/device/host");
@@ -718,7 +896,8 @@ mod tests {
 
         let payload = b"{}".to_vec();
         let (wire_env, ability, args) = build_wire_envelope(&sk, "missing.thing", &payload);
-        let dispatch = from_envelope_open(wire_env, ability, args).expect("translate wire");
+        let dispatch = external_signed_from_wire_parts(wire_env, ability, args, Default::default())
+            .expect("translate wire");
 
         let outcome = dispatch_rpc(&rt, dispatch).await;
         // Axon rejects at the call-mode gate (which also implies
@@ -740,32 +919,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn from_envelope_open_rejects_missing_caller() {
+    async fn external_signed_wire_rejects_missing_caller() {
         // Defensive: the daemon should never receive a wire
-        // envelope without a caller (admission relies on it), but
+        // envelope without a caller, but
         // the shim must reject cleanly instead of panicking when
         // a malformed peer sends one anyway.
-        let wire = pb::Envelope {
-            caller: None,
-            callee: Some(pb::AgentIdentity {
-                ura: "easynet:///r/t/device/h".to_string(),
-                profile: "easynet-strict-v2".to_string(),
-            }),
-            caller_signature: Some(pb::CallerSignature {
-                algorithm: "ed25519".to_string(),
-                signature: vec![0; 64],
-                key_id_hint: String::new(),
-            }),
-            invocation_nonce: vec![0; 16],
-            ..Default::default()
-        };
-        let err = from_envelope_open(wire, "x".to_string(), Vec::new()).unwrap_err();
+        let (_rt, _ledger, sk, _temp) = build_test_runtime();
+        let (mut wire, ability, args) = build_wire_envelope(&sk, "x", b"{}");
+        wire.caller = None;
+        let err =
+            external_signed_from_wire_parts(wire, ability, args, Default::default()).unwrap_err();
         assert!(err.to_string().contains("missing caller"));
     }
 
     #[tokio::test]
-    async fn from_envelope_open_rejects_missing_signature() {
-        let wire = pb::Envelope {
+    async fn external_signed_wire_rejects_missing_signature() {
+        let (_rt, _ledger, sk, _temp) = build_test_runtime();
+        let (mut wire, ability, args) = build_wire_envelope(&sk, "x", b"{}");
+        wire.caller_signature = None;
+        let err =
+            external_signed_from_wire_parts(wire, ability, args, Default::default()).unwrap_err();
+        assert!(err.to_string().contains("missing caller_signature"));
+    }
+
+    #[tokio::test]
+    async fn external_wire_rejects_missing_or_unprojectable_subject() {
+        let base = || pb::Envelope {
             caller: Some(pb::AgentIdentity {
                 ura: "easynet:///r/t/agent/u.x".to_string(),
                 profile: "easynet-strict-v2".to_string(),
@@ -774,29 +953,68 @@ mod tests {
                 ura: "easynet:///r/t/device/h".to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
-            caller_signature: None,
+            subject: Some(pb::SubjectIdentity {
+                ura: "easynet:///r/t/device/h".to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
             invocation_nonce: vec![0; 16],
+            causal_context: Some(pb::CausalContext {
+                form: Some(pb::causal_context::Form::None(pb::Empty {})),
+            }),
             ..Default::default()
         };
-        let err = from_envelope_open(wire, "x".to_string(), Vec::new()).unwrap_err();
-        assert!(err.to_string().contains("missing caller_signature"));
+
+        let mut missing_subject = base();
+        missing_subject.subject = None;
+        let err = external_signed_from_wire_parts(
+            missing_subject,
+            "x".to_string(),
+            Vec::new(),
+            Default::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing subject"));
+
+        let mut unsupported_subject = base();
+        unsupported_subject.subject = Some(pb::SubjectIdentity {
+            ura: "easynet:///r/t/user/alice".to_string(),
+            profile: "easynet-strict-v2".to_string(),
+        });
+        let err = external_signed_from_wire_parts(
+            unsupported_subject,
+            "x".to_string(),
+            Vec::new(),
+            Default::default(),
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("subject_ref_kind_unsupported:User"));
     }
 
     #[tokio::test]
-    async fn dispatch_rpc_local_runs_handler_without_signature() {
-        // The daemon-internal self-target path. No envelope, no
-        // signature — Axon's SystemAgent binding is used. Ledger
-        // still records the row.
+    async fn dispatch_rpc_local_with_subject_runs_handler_with_system_signature() {
         let (rt, ledger, _sk, _temp) = build_test_runtime();
-        rt.register_ability(
-            "demo.daemon_internal",
+        let callee_ura = "easynet:///r/t/device/host";
+        let ability_ura =
+            crate::ura::owner_ability_ura(callee_ura, "demo.daemon_internal").unwrap();
+        rt.register_ability_with_options(
+            ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            wire_proof_bound_rpc_options(),
         )
         .await
         .unwrap();
 
         let payload = b"\"hello-from-daemon\"".to_vec();
-        let outcome = dispatch_rpc_local(&rt, "demo.daemon_internal", payload.clone()).await;
+        let outcome = dispatch_rpc_local_with_subject(
+            &rt,
+            callee_ura,
+            callee_ura,
+            "demo.daemon_internal",
+            payload.clone(),
+        )
+        .await;
         assert_eq!(outcome.state, InvocationState::Completed);
         assert!(outcome.error.is_none());
         assert!(
@@ -809,8 +1027,11 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let records = ledger.list_all().unwrap();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].ability_name, "demo.daemon_internal");
-        assert_eq!(records[0].state, "COMPLETED");
+        assert_eq!(
+            records[0].ability_name,
+            format!("{ability_ura}@{WIRE_TEST_DESCRIPTOR_VERSION}")
+        );
+        assert_eq!(records[0].state, "completed");
         assert_eq!(
             outcome.invocation_id.as_deref(),
             Some(records[0].request_id.as_str())
@@ -818,9 +1039,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_rpc_local_unknown_ability_returns_in_band_error() {
+    async fn dispatch_rpc_local_with_subject_unknown_ability_returns_in_band_error() {
         let (rt, _ledger, _sk, _temp) = build_test_runtime();
-        let outcome = dispatch_rpc_local(&rt, "no.such.thing", b"{}".to_vec()).await;
+        let outcome = dispatch_rpc_local_with_subject(
+            &rt,
+            "easynet:///r/t/device/host",
+            "easynet:///r/t/device/host",
+            "no.such.thing",
+            b"{}".to_vec(),
+        )
+        .await;
         assert!(outcome.error.is_some());
         let err = outcome.error.unwrap();
         assert!(
@@ -837,6 +1065,7 @@ mod tests {
             state: InvocationState::Completed,
             payload_bytes: b"ok".to_vec(),
             error: None,
+            admission_receipt: None,
             terminal_receipt: None,
         };
         let (payload, err) = outcome_to_invoke_remote_result(outcome);
@@ -851,6 +1080,7 @@ mod tests {
             state: InvocationState::Failed,
             payload_bytes: Vec::new(),
             error: Some(AxonError::internal("synthetic boom")),
+            admission_receipt: None,
             terminal_receipt: None,
         };
         let (payload, err) = outcome_to_invoke_remote_result(outcome);
@@ -863,19 +1093,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn from_envelope_open_defaults_subject_to_callee_when_missing() {
-        // RFC 001 §5.1: subject=None ⇒ subject derives from callee.
-        // The boundary helper applies this default so admission
-        // never sees an unpopulated subject.
+    async fn external_signed_wire_rejects_missing_subject() {
         let (_rt, _ledger, sk, _temp) = build_test_runtime();
         let payload = b"{}".to_vec();
         let (mut wire_env, ability, args) = build_wire_envelope(&sk, "any", &payload);
         wire_env.subject = None;
-        let dispatch = from_envelope_open(wire_env, ability, args).expect("translate");
-        // Subject URA must equal callee URA per the default.
+        let err = external_signed_from_wire_parts(wire_env, ability, args, Default::default())
+            .unwrap_err();
         assert_eq!(
-            dispatch.envelope.subject.ura, dispatch.envelope.callee.ura,
-            "subject default must mirror callee per RFC 001 §5.1"
+            err.to_string(),
+            "invalid_argument reason=wire envelope missing subject"
         );
     }
 }

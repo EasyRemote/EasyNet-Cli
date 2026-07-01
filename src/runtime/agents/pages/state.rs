@@ -250,21 +250,28 @@ mod tests {
     use crate::runtime::ability_dispatch::AxonAbilityCatalog;
     use serde_json::json;
 
-    fn clear_registry() {
-        PUBLISHED_PROJECTS.clear();
+    fn clear_registry_for_user(user: &str) {
+        let keys: Vec<_> = PUBLISHED_PROJECTS
+            .iter()
+            .filter_map(|entry| {
+                let key = entry.key();
+                (key.0 == user).then(|| key.clone())
+            })
+            .collect();
+        for key in keys {
+            PUBLISHED_PROJECTS.remove(&key);
+        }
     }
 
     #[test]
     fn publish_snapshot_restores_project_after_map_clear() {
         let _home = crate::facade::cli::test_support::HomeGuard::new();
-        clear_registry();
 
-        let user = "alice";
+        let user = "pages-restore-alice";
+        clear_registry_for_user(user);
         let project_id = "restored-site";
-        let folder = std::env::temp_dir().join("easynet-pages-restore-state-test");
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join("index.html"), "<h1>restored</h1>").unwrap();
+        let folder = tempfile::tempdir().expect("tempdir");
+        fs::write(folder.path().join("index.html"), "<h1>restored</h1>").unwrap();
 
         crate::runtime::agents::pages::publish::handle_publish(
             user,
@@ -272,13 +279,13 @@ mod tests {
             "easynet.run",
             Arc::new(AxonAbilityCatalog::new()),
             json!({
-                "folder": folder.display().to_string(),
+                "folder": folder.path().display().to_string(),
                 "project_id": project_id,
                 "visibility": "public",
             }),
         )
         .unwrap();
-        clear_registry();
+        clear_registry_for_user(user);
 
         let summary = restore_published_projects(user).unwrap();
         assert_eq!(summary.restored, 1);
@@ -298,21 +305,18 @@ mod tests {
             json!({ "project_id": project_id }),
         )
         .unwrap();
-        let _ = fs::remove_dir_all(&folder);
-        clear_registry();
+        clear_registry_for_user(user);
     }
 
     #[test]
     fn restore_skips_missing_folder_and_cleans_snapshot() {
         let _home = crate::facade::cli::test_support::HomeGuard::new();
-        clear_registry();
 
-        let user = "alice";
+        let user = "pages-missing-alice";
+        clear_registry_for_user(user);
         let project_id = "missing-site";
-        let folder = std::env::temp_dir().join("easynet-pages-missing-state-test");
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join("index.html"), "<h1>gone</h1>").unwrap();
+        let folder = tempfile::tempdir().expect("tempdir");
+        fs::write(folder.path().join("index.html"), "<h1>gone</h1>").unwrap();
 
         crate::runtime::agents::pages::publish::handle_publish(
             user,
@@ -320,14 +324,14 @@ mod tests {
             "easynet.run",
             Arc::new(AxonAbilityCatalog::new()),
             json!({
-                "folder": folder.display().to_string(),
+                "folder": folder.path().display().to_string(),
                 "project_id": project_id,
                 "visibility": "public",
             }),
         )
         .unwrap();
-        clear_registry();
-        fs::remove_dir_all(&folder).unwrap();
+        clear_registry_for_user(user);
+        drop(folder);
 
         let summary = restore_published_projects(user).unwrap();
         assert_eq!(summary.restored, 0);
@@ -338,6 +342,6 @@ mod tests {
             "empty cleaned snapshot should be removed"
         );
 
-        clear_registry();
+        clear_registry_for_user(user);
     }
 }

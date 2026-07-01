@@ -4,7 +4,7 @@
 // File: src/runtime/invocation.rs
 // Description: Daemon-local adapter record for scheduled/loop/kernel
 //              execution, plus the Receipt terminal record used by
-//              legacy runtime services.
+//              daemon-internal runtime services.
 //
 // Why this module is the root of runtime types
 // --------------------------------------------
@@ -15,27 +15,18 @@
 // ability/subject/nonce/args into `Kernel::invoke`.
 //
 // The runtime id for this adapter is derived by converting the record
-// into Axon's `InvocationEnvelope` and calling
-// `easynet_axon::invocation::canonical_invocation_bytes`. That keeps
-// byte layout ownership in Axon while preserving the daemon's current
-// session/receipt indexing model during the Step 7 migration.
+// into Axon's `DescriptorBoundEnvelope` and calling Axon's canonical
+// descriptor-bound encoder. That keeps byte layout ownership in Axon
+// while giving daemon-internal Kernel calls the same versioned subject
+// semantics as transport invocations.
 //
-// v1 vs v2 signature status
-// -------------------------
-// `caller_signature` and `callee_signature` are Option<Vec<u8>> and
-// always None in v1 (AXIOM §6.3 signed-invocation is not enabled;
-// federation trust still rides Axon mTLS). The fields exist on the
-// wire so v2 can start populating them without a schema migration.
-// See docs/design/formal-model-v1.md for the C1/C2 non-repudiation
-// invariants that these fields will eventually satisfy.
-//
-// v1 classification (v10.5 R1)
-// ----------------------------
-// The type system here describes *structural* invariants (shape of a
-// runtime invocation record, shape of a Receipt, shape of a causal context). The
-// *semantic* invariants S1–S4 (receipts as runtime inputs) are
-// explicitly not in scope for v1 — v1 is a record system, not a
-// computation system. docs/design/formal-model-v1.md pins this.
+// Signature status
+// ----------------
+// `caller_signature` is optional only for daemon-local `_system.local`
+// loopback calls. Kernel turns those into Axon public signed requests with
+// the synthetic system key; every public transport caller, including Device,
+// User, Agent, Hub, and Backend, must carry the caller signature and Axon
+// remains the owner of verification, replay, and receipt proof semantics.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -43,6 +34,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+
+use easynet_axon::invocation::InvocationState;
 
 /// Unified Resource Address.
 ///
@@ -61,7 +54,7 @@ pub type Ura = String;
 /// envelope/registry layers, not by this dispatch key.
 pub type AbilityName = String;
 
-/// The four legacy daemon-local causal-context shapes.
+/// Daemon-local causal-context adapter shapes.
 ///
 /// - `Null`   — a freshly-initiated runtime invocation with no prior receipt
 ///              in its causal past (e.g. a user-initiated Client FFI
@@ -71,7 +64,7 @@ pub type AbilityName = String;
 /// - `List`   — multiple prior invocation ids forming a set causal
 ///              parent. This is also not sufficient for Axon canonical
 ///              causal encoding.
-/// - `Merkle` — a legacy Merkle root placeholder without an Axon proof
+/// - `Merkle` — a Merkle root placeholder without an Axon proof
 ///              URA.
 ///
 /// v1 emits `Null` and `Scalar` only (schedule tick / loop controller
@@ -80,11 +73,11 @@ pub type AbilityName = String;
 /// scheduling can populate them without a schema migration.
 ///
 /// This is retained for daemon-internal records only. Axon's canonical
-/// causal context requires receipt hashes and receipt URAs; the legacy
+/// causal context requires receipt hashes and receipt URAs; the
 /// `Scalar`/`List` variants here carry only prior invocation ids and
 /// therefore cannot be encoded into Axon canonical bytes without
 /// losing verification semantics. `runtime_invocation_id` rejects
-/// those variants until callers migrate to Axon `ReceiptRef`.
+/// those variants until callers supply Axon `ReceiptRef`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimeCausalContext {
@@ -107,8 +100,9 @@ impl RuntimeCausalContext {
 ///
 /// What this is not: the protocol Invocation primitive, a signing
 /// source, or a canonical byte-layout definition. Call
-/// `runtime_invocation_id` to derive the daemon session key through
-/// Axon's canonical encoder.
+/// `runtime_invocation_id` to derive the daemon-local session key; that
+/// key is version-pinned and is not the Axon canonical invocation
+/// identity (the wire envelope is built on the dispatch path).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeInvocation {
     pub caller: Ura,
@@ -120,8 +114,8 @@ pub struct RuntimeInvocation {
     pub nonce_hex: String,
     pub causal_context: RuntimeCausalContext,
     pub args: Value,
-    /// Caller-produced signature over canonical bytes. v1 = None;
-    /// v2 mandatory (AXIOM §6.3 C1).
+    /// Caller-produced signature over canonical bytes. Optional only for
+    /// daemon-local system calls; public transport callers must provide it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_signature: Option<Vec<u8>>,
 }
@@ -158,14 +152,32 @@ impl RuntimeInvocation {
         Ok(())
     }
 
-    /// Convert the daemon-local record into Axon's canonical envelope
-    /// and return Axon-owned canonical bytes.
+    /// Encode the record into stable bytes for the daemon-local session
+    /// key (see [`runtime_invocation_id`] and [`SESSION_KEY_DESCRIPTOR_VERSION`]).
+    ///
+    /// These bytes are NOT the Axon canonical invocation identity: the key
+    /// is version-pinned on purpose so the same logical invocation maps to
+    /// one session regardless of which descriptor version the dispatch
+    /// path later negotiates. The wire-canonical envelope is built
+    /// separately on the dispatch path, where it is bound to the
+    /// registered descriptor version. The nonce — not the descriptor
+    /// version — is what distinguishes one invocation from another here.
     ///
     /// The adapter intentionally accepts only `RuntimeCausalContext::Null`.
     /// Legacy scalar/list/merkle variants do not carry enough receipt
     /// material to build Axon `ReceiptRef`s, so accepting them would
     /// create a false proof of canonical equivalence.
-    pub fn axon_canonical_bytes(&self) -> Result<Vec<u8>, RuntimeInvocationError> {
+    fn session_key_bytes(&self) -> Result<Vec<u8>, RuntimeInvocationError> {
+        let (envelope, _args_bytes) =
+            self.axon_descriptor_bound_envelope(SESSION_KEY_DESCRIPTOR_VERSION)?;
+        Ok(envelope.canonical_bytes())
+    }
+
+    pub fn axon_descriptor_bound_envelope(
+        &self,
+        descriptor_version: &str,
+    ) -> Result<(easynet_axon::invocation::DescriptorBoundEnvelope, Vec<u8>), RuntimeInvocationError>
+    {
         self.validate()?;
         let nonce = decode_nonce_hex(&self.nonce_hex)?;
         let args_bytes =
@@ -188,27 +200,35 @@ impl RuntimeInvocation {
                 ));
             }
         };
-        let envelope = easynet_axon::invocation::InvocationEnvelope::from_wire_parts(
-            easynet_axon::invocation::AgentIdentity::new(
-                self.caller.clone(),
-                easynet_axon::invocation::UraProfile::EasynetStrictV2,
-            ),
-            easynet_axon::invocation::AgentIdentity::new(
-                self.callee.clone(),
-                easynet_axon::invocation::UraProfile::EasynetStrictV2,
-            ),
-            easynet_axon::invocation::SubjectIdentity::new(
-                self.subject.clone(),
-                easynet_axon::invocation::UraProfile::EasynetStrictV2,
-            ),
-            nonce,
-            causal_context,
-            self.ability.clone(),
-            &args_bytes,
+        let subject = easynet_axon::invocation::SubjectIdentity::new(
+            self.subject.clone(),
+            easynet_axon::invocation::UraProfile::EasynetStrictV2,
         );
-        Ok(easynet_axon::invocation::canonical_invocation_bytes(
-            &envelope,
-        ))
+        let ability = crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            &self.callee,
+            &self.ability,
+            descriptor_version,
+        )
+        .map_err(|err| RuntimeInvocationError::AxonDescriptorBound(err.to_string()))?;
+        let envelope = easynet_axon::invocation::DescriptorBoundEnvelope::from_parts(
+            easynet_axon::invocation::DescriptorBoundEnvelopeParts {
+                caller: easynet_axon::invocation::AgentIdentity::new(
+                    self.caller.clone(),
+                    easynet_axon::invocation::UraProfile::EasynetStrictV2,
+                ),
+                callee: easynet_axon::invocation::AgentIdentity::new(
+                    self.callee.clone(),
+                    easynet_axon::invocation::UraProfile::EasynetStrictV2,
+                ),
+                ability,
+                subject,
+                invocation_nonce: nonce,
+                causal_context,
+                args_bytes: &args_bytes,
+            },
+        )
+        .map_err(|err| RuntimeInvocationError::AxonDescriptorBound(err.to_string()))?;
+        Ok((envelope, args_bytes))
     }
 }
 
@@ -235,6 +255,8 @@ pub enum RuntimeInvocationError {
     NonceLength,
     #[error("args JSON serialization failed: {0}")]
     ArgsJson(serde_json::Error),
+    #[error("Axon descriptor-bound envelope failed: {0}")]
+    AxonDescriptorBound(String),
     #[error("legacy causal context cannot be converted to Axon canonical bytes: {0}")]
     LegacyCausalContext(&'static str),
 }
@@ -282,13 +304,29 @@ fn decode_nonce_hex(value: &str) -> Result<[u8; 16], RuntimeInvocationError> {
     Ok(nonce)
 }
 
-/// Compute `invocation_id = sha256(axon_canonical_bytes(inv))`, hex-encoded.
+/// Fixed descriptor version used solely to encode the daemon-local
+/// session key, intentionally independent of the descriptor version the
+/// dispatch path negotiates.
 ///
-/// This is a daemon-local session/receipt key for the adapter record.
-/// The canonical byte layout is Axon-owned; this function only hashes
-/// the bytes returned by Axon SDK.
+/// `runtime_invocation_id` must be derivable from a `RuntimeInvocation`
+/// record alone, before any runtime is consulted, and must be stable
+/// across descriptor-version changes so admission replay and session
+/// idempotency keep mapping one logical invocation to one session. The
+/// canonical wire envelope — which IS bound to the registered version —
+/// is built separately on the dispatch path. Reusing the runtime's
+/// descriptor-version default here would couple a local key to an
+/// unrelated negotiation and read as a fabricated wire version, which is
+/// exactly what this named constant avoids.
+const SESSION_KEY_DESCRIPTOR_VERSION: &str = "1.0.0";
+
+/// Compute `invocation_id = sha256(session_key_bytes(inv))`, hex-encoded.
+///
+/// This is a daemon-local session/receipt key for the adapter record —
+/// NOT the Axon canonical invocation identity (see [`SESSION_KEY_DESCRIPTOR_VERSION`]).
+/// It is deliberately a pure function of the record so the same logical
+/// invocation always resolves to the same session key.
 pub fn runtime_invocation_id(inv: &RuntimeInvocation) -> Result<String, RuntimeInvocationError> {
-    let canonical = inv.axon_canonical_bytes()?;
+    let canonical = inv.session_key_bytes()?;
     Ok(hex::encode(easynet_axon::invocation::sha256(&canonical)))
 }
 
@@ -303,12 +341,70 @@ pub fn fresh_nonce_hex() -> String {
 
 /// Terminal state of a runtime invocation — the runtime decision that
 /// closes the timeline (AXIOM §6.1 I2 terminal monotonic).
+///
+/// Axon `InvocationState` is the canonical terminal-state vocabulary.
+/// This enum is the daemon-local receipt projection retained for older
+/// schedule/kernel receipts; use [`TerminalState::from_axon_terminal`]
+/// instead of hand-mapping success/failure at call sites.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TerminalState {
     Succeeded,
     Failed { reason: String },
     Cancelled,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum TerminalStateProjectionError {
+    #[error("Axon invocation state `{state}` is not terminal")]
+    NonTerminal { state: &'static str },
+}
+
+impl TerminalState {
+    #[must_use]
+    pub fn axon_terminal_state(&self) -> InvocationState {
+        match self {
+            Self::Succeeded => InvocationState::Completed,
+            Self::Failed { .. } => InvocationState::Failed,
+            Self::Cancelled => InvocationState::Cancelled,
+        }
+    }
+
+    pub fn from_axon_terminal(
+        state: InvocationState,
+        reason: Option<String>,
+    ) -> Result<Self, TerminalStateProjectionError> {
+        if !state.is_terminal() {
+            return Err(TerminalStateProjectionError::NonTerminal {
+                state: state.as_str(),
+            });
+        }
+        Ok(match state {
+            InvocationState::Completed => Self::Succeeded,
+            InvocationState::Failed => Self::Failed {
+                reason: reason.unwrap_or_else(|| "axon invocation failed".to_string()),
+            },
+            InvocationState::TimedOut => Self::Failed {
+                reason: reason.unwrap_or_else(|| "axon invocation timed out".to_string()),
+            },
+            InvocationState::Cancelled => Self::Cancelled,
+            InvocationState::Unspecified
+            | InvocationState::Accepted
+            | InvocationState::Admitted
+            | InvocationState::Dispatched
+            | InvocationState::Running => {
+                unreachable!("is_terminal() gate rejects non-terminal states")
+            }
+        })
+    }
+}
+
+impl TryFrom<InvocationState> for TerminalState {
+    type Error = TerminalStateProjectionError;
+
+    fn try_from(state: InvocationState) -> Result<Self, Self::Error> {
+        Self::from_axon_terminal(state, None)
+    }
 }
 
 /// Prior-receipt reference carried by a Receipt. Mirrors the four
@@ -393,6 +489,58 @@ mod tests {
             runtime_invocation_id(&a).unwrap(),
             runtime_invocation_id(&b).unwrap()
         );
+    }
+
+    #[test]
+    fn terminal_state_projects_every_axon_terminal_state() {
+        let completed = TerminalState::try_from(InvocationState::Completed).unwrap();
+        assert_eq!(completed, TerminalState::Succeeded);
+        assert_eq!(completed.axon_terminal_state(), InvocationState::Completed);
+
+        let failed = TerminalState::from_axon_terminal(
+            InvocationState::Failed,
+            Some("handler failed".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            failed,
+            TerminalState::Failed {
+                reason: "handler failed".to_string()
+            }
+        );
+        assert_eq!(failed.axon_terminal_state(), InvocationState::Failed);
+
+        let timed_out = TerminalState::from_axon_terminal(InvocationState::TimedOut, None).unwrap();
+        assert_eq!(
+            timed_out,
+            TerminalState::Failed {
+                reason: "axon invocation timed out".to_string()
+            }
+        );
+        assert_eq!(timed_out.axon_terminal_state(), InvocationState::Failed);
+
+        let cancelled = TerminalState::try_from(InvocationState::Cancelled).unwrap();
+        assert_eq!(cancelled, TerminalState::Cancelled);
+        assert_eq!(cancelled.axon_terminal_state(), InvocationState::Cancelled);
+    }
+
+    #[test]
+    fn terminal_state_rejects_non_terminal_axon_states() {
+        for state in [
+            InvocationState::Unspecified,
+            InvocationState::Accepted,
+            InvocationState::Admitted,
+            InvocationState::Dispatched,
+            InvocationState::Running,
+        ] {
+            let err = TerminalState::try_from(state).expect_err("non-terminal must reject");
+            assert_eq!(
+                err,
+                TerminalStateProjectionError::NonTerminal {
+                    state: state.as_str()
+                }
+            );
+        }
     }
 
     #[test]

@@ -21,7 +21,6 @@ pub const REASON_SESSION_TERMINAL: &str = "session_terminal";
 pub const REASON_SESSION_EXPIRED: &str = "session_expired";
 pub const REASON_SESSION_TOKEN_REQUIRED: &str = "session_token_required";
 pub const REASON_SESSION_TOKEN_MISMATCH: &str = "session_token_mismatch";
-pub const REASON_SESSION_CALLER_REQUIRED: &str = "session_caller_required";
 pub const REASON_SESSION_CALLER_MISMATCH: &str = "session_caller_mismatch";
 pub const REASON_CONSENT_RECEIPT_REQUIRED: &str = "consent_receipt_required";
 pub const REASON_CONSENT_RECEIPT_MISMATCH: &str = "consent_receipt_mismatch";

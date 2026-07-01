@@ -4,7 +4,7 @@
 // File: src/runtime/plugin_host/manifest.rs
 // Description: Typed `plugin.toml` package model and validation.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime::plugin_host::errors::{PluginHostError, Result};
 
@@ -26,12 +26,98 @@ pub enum PluginCallMode {
 }
 
 /// Wire adapter a bidi plugin ability expects when it crosses the
-/// `<self>.session` bridge.
+/// `session.open` bridge.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginBidiWireKind {
     /// Ability input/output frames are JSON control frames.
     JsonFrames,
+}
+
+/// Realtime device resource family declared by a plugin package.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRealtimeKind {
+    Camera,
+    Mic,
+    Screen,
+    Speaker,
+    Voice,
+}
+
+/// High-level realtime operation a plugin wants the daemon/UI to expose.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRealtimeMode {
+    Snapshot,
+    Subscribe,
+    Record,
+    Publish,
+    Transcribe,
+}
+
+/// Preferred data-plane carrier for realtime plugin traffic.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRealtimeTransport {
+    InvokeStream,
+    InvokeBidi,
+    Webrtc,
+}
+
+/// Package-level realtime capability declaration.
+///
+/// This is activation metadata, not an AbilityDescriptor replacement. Concrete
+/// callable names still live in `[[ability_metadata]]`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeCapability {
+    kind: PluginRealtimeKind,
+    modes: Vec<PluginRealtimeMode>,
+    transport: PluginRealtimeTransport,
+    #[serde(default)]
+    fallback_transport: Option<PluginRealtimeTransport>,
+    #[serde(default)]
+    activation_abilities: Vec<String>,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    resources: Vec<String>,
+    #[serde(default)]
+    quick_add: bool,
+}
+
+impl PluginRealtimeCapability {
+    pub const fn kind(&self) -> PluginRealtimeKind {
+        self.kind
+    }
+
+    pub fn modes(&self) -> &[PluginRealtimeMode] {
+        &self.modes
+    }
+
+    pub const fn transport(&self) -> PluginRealtimeTransport {
+        self.transport
+    }
+
+    pub const fn fallback_transport(&self) -> Option<PluginRealtimeTransport> {
+        self.fallback_transport
+    }
+
+    pub fn activation_abilities(&self) -> &[String] {
+        &self.activation_abilities
+    }
+
+    pub fn permissions(&self) -> &[String] {
+        &self.permissions
+    }
+
+    pub fn resources(&self) -> &[String] {
+        &self.resources
+    }
+
+    pub const fn quick_add(&self) -> bool {
+        self.quick_add
+    }
 }
 
 /// Product/runtime layer declared by a plugin-owned ability.
@@ -188,6 +274,7 @@ pub struct PluginPackageManifest {
     limits: PluginRuntimeLimits,
     declarative: Option<PluginDeclarativeBinding>,
     abilities: Vec<PluginAbilityManifest>,
+    realtime_capabilities: Vec<PluginRealtimeCapability>,
 }
 
 impl PluginPackageManifest {
@@ -262,6 +349,11 @@ impl PluginPackageManifest {
         &self.abilities
     }
 
+    /// Package-level realtime device capabilities.
+    pub fn realtime_capabilities(&self) -> &[PluginRealtimeCapability] {
+        &self.realtime_capabilities
+    }
+
     /// Resolve one package-owned ability.
     pub fn ability(&self, name: &str) -> Option<&PluginAbilityManifest> {
         self.abilities.iter().find(|ability| ability.name() == name)
@@ -294,6 +386,8 @@ struct RawPluginToml {
     declarative: Option<PluginDeclarativeBinding>,
     #[serde(default)]
     ability_metadata: Vec<RawPluginAbilityMetadata>,
+    #[serde(default)]
+    realtime_capability: Vec<PluginRealtimeCapability>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,6 +421,7 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
         return Err(PluginHostError::InvalidRuntimeLimit("max_frame_queue"));
     }
     validate_declarative_binding(&raw)?;
+    validate_realtime_capabilities(&raw.id, &raw.realtime_capability)?;
 
     let mut seen = std::collections::BTreeSet::new();
     let mut abilities = Vec::with_capacity(raw.ability_metadata.len());
@@ -346,6 +441,7 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
             bidi_wire_kind: ability.bidi_wire_kind,
         });
     }
+    validate_realtime_activation_abilities(&raw.id, &raw.realtime_capability, &seen)?;
 
     Ok(PluginPackageManifest {
         schema_version: raw.schema_version,
@@ -360,7 +456,134 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
         limits: raw.limits,
         declarative: raw.declarative,
         abilities,
+        realtime_capabilities: raw.realtime_capability,
     })
+}
+
+fn validate_realtime_capabilities(
+    id: &str,
+    capabilities: &[PluginRealtimeCapability],
+) -> Result<()> {
+    for capability in capabilities {
+        if capability.modes.is_empty() {
+            return Err(PluginHostError::InvalidRealtimeCapability {
+                id: id.to_string(),
+                reason: "modes must not be empty".to_string(),
+            });
+        }
+        let mut modes = std::collections::BTreeSet::new();
+        for mode in &capability.modes {
+            if !modes.insert(*mode) {
+                return Err(PluginHostError::InvalidRealtimeCapability {
+                    id: id.to_string(),
+                    reason: format!("duplicate mode {:?}", mode),
+                });
+            }
+            if !realtime_kind_allows_mode(capability.kind, *mode) {
+                return Err(PluginHostError::InvalidRealtimeCapability {
+                    id: id.to_string(),
+                    reason: format!(
+                        "kind {:?} does not support mode {:?}",
+                        capability.kind, mode
+                    ),
+                });
+            }
+        }
+        let mut activation_abilities = std::collections::BTreeSet::new();
+        for ability in &capability.activation_abilities {
+            if ability.trim().is_empty() {
+                return Err(PluginHostError::InvalidRealtimeCapability {
+                    id: id.to_string(),
+                    reason: "activation ability must not be empty".to_string(),
+                });
+            }
+            validate_ability_name(ability)?;
+            if !activation_abilities.insert(ability) {
+                return Err(PluginHostError::InvalidRealtimeCapability {
+                    id: id.to_string(),
+                    reason: format!("duplicate activation ability {ability:?}"),
+                });
+            }
+        }
+        if capability.fallback_transport == Some(capability.transport) {
+            return Err(PluginHostError::InvalidRealtimeCapability {
+                id: id.to_string(),
+                reason: "fallback_transport must differ from transport".to_string(),
+            });
+        }
+        if capability.quick_add && capability.resources.is_empty() {
+            return Err(PluginHostError::InvalidRealtimeCapability {
+                id: id.to_string(),
+                reason: "quick_add capabilities must declare at least one resource kind"
+                    .to_string(),
+            });
+        }
+        for resource in &capability.resources {
+            if resource.trim().is_empty() {
+                return Err(PluginHostError::InvalidRealtimeCapability {
+                    id: id.to_string(),
+                    reason: "resource kind must not be empty".to_string(),
+                });
+            }
+        }
+        for permission in &capability.permissions {
+            if permission.trim().is_empty() {
+                return Err(PluginHostError::InvalidRealtimeCapability {
+                    id: id.to_string(),
+                    reason: "permission must not be empty".to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_realtime_activation_abilities(
+    id: &str,
+    capabilities: &[PluginRealtimeCapability],
+    package_abilities: &std::collections::BTreeSet<String>,
+) -> Result<()> {
+    for capability in capabilities {
+        for ability in &capability.activation_abilities {
+            if !package_abilities.contains(ability) {
+                return Err(PluginHostError::InvalidRealtimeCapability {
+                    id: id.to_string(),
+                    reason: format!(
+                        "activation ability {ability:?} must be declared in ability_metadata"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn realtime_kind_allows_mode(kind: PluginRealtimeKind, mode: PluginRealtimeMode) -> bool {
+    match kind {
+        PluginRealtimeKind::Camera => matches!(
+            mode,
+            PluginRealtimeMode::Snapshot
+                | PluginRealtimeMode::Subscribe
+                | PluginRealtimeMode::Record
+        ),
+        PluginRealtimeKind::Mic => {
+            matches!(
+                mode,
+                PluginRealtimeMode::Subscribe | PluginRealtimeMode::Record
+            )
+        }
+        PluginRealtimeKind::Screen => matches!(
+            mode,
+            PluginRealtimeMode::Snapshot
+                | PluginRealtimeMode::Subscribe
+                | PluginRealtimeMode::Record
+        ),
+        PluginRealtimeKind::Speaker => matches!(mode, PluginRealtimeMode::Publish),
+        PluginRealtimeKind::Voice => matches!(
+            mode,
+            PluginRealtimeMode::Subscribe | PluginRealtimeMode::Transcribe
+        ),
+    }
 }
 
 fn validate_declarative_binding(raw: &RawPluginToml) -> Result<()> {
@@ -464,4 +687,164 @@ pub fn validate_builtin_entrypoint(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_accepts_realtime_capability_contract() {
+        let manifest = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.camera"
+layer = "operational"
+call_mode = "bidi"
+bidi_wire_kind = "json_frames"
+
+[[realtime_capability]]
+kind = "camera"
+modes = ["snapshot", "subscribe", "record"]
+transport = "invoke_bidi"
+fallback_transport = "invoke_stream"
+activation_abilities = ["test.camera"]
+permissions = ["camera"]
+resources = ["camera"]
+quick_add = true
+"#,
+            ),
+        )
+        .expect("valid realtime manifest");
+
+        let capability = manifest
+            .realtime_capabilities()
+            .first()
+            .expect("realtime capability parsed");
+        assert_eq!(capability.kind(), PluginRealtimeKind::Camera);
+        assert_eq!(
+            capability.modes(),
+            &[
+                PluginRealtimeMode::Snapshot,
+                PluginRealtimeMode::Subscribe,
+                PluginRealtimeMode::Record,
+            ]
+        );
+        assert!(capability.quick_add());
+        assert_eq!(
+            capability.activation_abilities(),
+            &["test.camera".to_string()]
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_invalid_realtime_mode_for_kind() {
+        let err = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.speaker"
+layer = "operational"
+call_mode = "bidi"
+bidi_wire_kind = "json_frames"
+
+[[realtime_capability]]
+kind = "speaker"
+modes = ["subscribe"]
+transport = "invoke_bidi"
+resources = ["speaker"]
+"#,
+            ),
+        )
+        .expect_err("speaker subscribe must reject");
+
+        assert!(
+            matches!(err, PluginHostError::InvalidRealtimeCapability { .. }),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_quick_add_without_resource_kinds() {
+        let err = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.mic"
+layer = "operational"
+call_mode = "stream"
+
+[[realtime_capability]]
+kind = "mic"
+modes = ["subscribe"]
+transport = "invoke_stream"
+quick_add = true
+"#,
+            ),
+        )
+        .expect_err("quick add needs resources");
+
+        assert!(
+            matches!(err, PluginHostError::InvalidRealtimeCapability { .. }),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_realtime_activation_ability_outside_package() {
+        let err = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.camera"
+layer = "operational"
+call_mode = "bidi"
+
+[[realtime_capability]]
+kind = "camera"
+modes = ["snapshot"]
+transport = "invoke_bidi"
+activation_abilities = ["other.camera"]
+resources = ["camera"]
+"#,
+            ),
+        )
+        .expect_err("activation ability must be package-owned");
+
+        assert!(
+            matches!(err, PluginHostError::InvalidRealtimeCapability { .. }),
+            "wrong error: {err}"
+        );
+        assert!(
+            format!("{err}").contains("ability_metadata"),
+            "wrong error: {err}"
+        );
+    }
+
+    fn test_manifest(extra: &str) -> String {
+        format!(
+            r#"
+schema_version = "1"
+id = "test.plugin"
+version = "0.1.0"
+kind = "sidecar"
+entrypoint = "bin/plugin"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+{extra}
+"#
+        )
+    }
 }

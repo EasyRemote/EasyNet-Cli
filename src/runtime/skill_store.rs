@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use crate::persistence::config;
 use crate::registry::agents;
 
+const GLOBAL_SKILL_OWNER_PREFIX: &str = "global:";
+
 /// The normalised install record persisted at
 /// `<agent-root>/skills/<name>/.easynet/install.json`. One file per
 /// installed skill; the file is the source of truth for `list` /
@@ -299,6 +301,64 @@ pub(crate) fn global_skill_pools_for(
         agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
             vec![("codex-global", home.join(".agents").join("skills"))]
         }
+        agents::AgentType::External => Vec::new(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GlobalSkillPoolRef {
+    label: String,
+}
+
+impl GlobalSkillPoolRef {
+    pub(crate) fn parse_owner_id(owner_id: &str, verb: &str) -> anyhow::Result<Option<Self>> {
+        let Some(label) = owner_id.strip_prefix(GLOBAL_SKILL_OWNER_PREFIX) else {
+            return Ok(None);
+        };
+        Ok(Some(Self::from_label(label, verb)?))
+    }
+
+    pub(crate) fn from_label(label: &str, verb: &str) -> anyhow::Result<Self> {
+        let label = label.trim();
+        if label.is_empty() {
+            anyhow::bail!("{verb}: global skill owner must include a pool label");
+        }
+        if !label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            anyhow::bail!(
+                "{verb}: global skill pool label {label:?} must use ASCII alphanumeric, '-' or '_'"
+            );
+        }
+        let this = Self {
+            label: label.to_string(),
+        };
+        if this.dirs().is_empty() {
+            anyhow::bail!("{verb}: unknown global skill pool {label:?}");
+        }
+        Ok(this)
+    }
+
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub(crate) fn owner_agent_id(&self) -> String {
+        format!("{GLOBAL_SKILL_OWNER_PREFIX}{}", self.label)
+    }
+
+    pub(crate) fn dirs(&self) -> Vec<std::path::PathBuf> {
+        global_skill_pool_dirs_for_label(&self.label)
+    }
+
+    pub(crate) fn skill_dir(&self, skill_name: &str) -> Option<std::path::PathBuf> {
+        for pool_dir in self.dirs() {
+            if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name) {
+                return Some(path);
+            }
+        }
+        None
     }
 }
 
@@ -307,27 +367,62 @@ pub(crate) fn global_skill_dir_for(
     skill_name: &str,
 ) -> Option<std::path::PathBuf> {
     for (_label, pool_dir) in global_skill_pools_for(agent_type) {
-        let entries = match fs::read_dir(pool_dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
+        if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn global_skill_pool_dirs_for_label(pool_label: &str) -> Vec<std::path::PathBuf> {
+    let agent_types = [
+        agents::AgentType::ClaudeCode,
+        agents::AgentType::Codex,
+        agents::AgentType::CodexAppServer,
+        agents::AgentType::External,
+    ];
+    let mut dirs = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for agent_type in agent_types {
+        for (label, pool_dir) in global_skill_pools_for(agent_type) {
+            if label != pool_label || !seen.insert(pool_dir.clone()) {
+                continue;
+            }
+            dirs.push(pool_dir);
+        }
+    }
+    dirs
+}
+
+fn skill_dir_in_global_pool(pool_dir: &Path, skill_name: &str) -> Option<std::path::PathBuf> {
+    let direct = pool_dir.join(skill_name);
+    if direct
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| !name.starts_with('.'))
+        && direct.is_dir()
+        && looks_like_skill_dir(&direct)
+    {
+        return Some(direct);
+    }
+
+    let entries = fs::read_dir(pool_dir).ok()?;
+    for dir_entry in entries.flatten() {
+        let path = dir_entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) if !n.starts_with('.') => n.to_string(),
+            _ => continue,
         };
-        for dir_entry in entries.flatten() {
-            let path = dir_entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let dir_name = match path.file_name().and_then(|s| s.to_str()) {
-                Some(n) if !n.starts_with('.') => n.to_string(),
-                _ => continue,
-            };
-            if !looks_like_skill_dir(&path) {
-                continue;
-            }
-            let parsed_name =
-                parse_skill_md_name(&path.join("SKILL.md")).unwrap_or_else(|| dir_name.clone());
-            if parsed_name == skill_name || dir_name == skill_name {
-                return Some(path);
-            }
+        if !looks_like_skill_dir(&path) {
+            continue;
+        }
+        let parsed_name =
+            parse_skill_md_name(&path.join("SKILL.md")).unwrap_or_else(|| dir_name.clone());
+        if parsed_name == skill_name || dir_name == skill_name {
+            return Some(path);
         }
     }
     None
@@ -377,40 +472,57 @@ pub(crate) fn scan_global_pool_into(
             // user folder under ~/.claude. Silent skip.
             continue;
         }
-        // Best-effort metadata extraction. Frontmatter `name` wins
-        // when present; otherwise the directory name is the fallback.
-        let skill_md = path.join("SKILL.md");
-        let parsed_name = parse_skill_md_name(&skill_md).unwrap_or_else(|| dir_name.clone());
-        let size_bytes = directory_size_bytes(&path);
-        let installed_at = file_mtime_iso(&path).unwrap_or_default();
-
-        rows.push(InstallRecord {
-            name: parsed_name,
-            description: skill_description_from_dir(&path),
-            agent_id: agent_name.to_string(),
-            source: SkillSource {
-                // `kind = "global"` distinguishes these from the
-                // `github`-kind records that `easynet skill install`
-                // writes. The to_url() rendering becomes
-                // "global:claude-global" — visible in the SOURCE
-                // column so an operator can tell which pool a row
-                // came from.
-                kind: "global".to_string(),
-                identifier: pool_label.to_string(),
-                ref_: None,
-                subpath: Some(dir_name),
-            },
-            // No tree hash for global skills — they're not pinned by
-            // EasyNet and the file set may change without us
-            // observing. Empty string is the documented "unknown"
-            // sentinel.
-            skill_tree_hash: String::new(),
-            size_bytes,
-            installed_at,
-            last_checked_at: None,
-            upgrade_available: false,
-        });
+        if let Some(record) = global_skill_record_from_dir(agent_name, pool_label, &path) {
+            rows.push(record);
+        }
     }
+}
+
+pub(crate) fn global_skill_record_from_dir(
+    agent_name: &str,
+    pool_label: &str,
+    path: &std::path::Path,
+) -> Option<InstallRecord> {
+    if !path.is_dir() || !looks_like_skill_dir(path) {
+        return None;
+    }
+    let dir_name = path.file_name().and_then(|s| s.to_str())?;
+    if dir_name.starts_with('.') {
+        return None;
+    }
+    // Best-effort metadata extraction. Frontmatter `name` wins
+    // when present; otherwise the directory name is the fallback.
+    let skill_md = path.join("SKILL.md");
+    let parsed_name = parse_skill_md_name(&skill_md).unwrap_or_else(|| dir_name.to_string());
+    let size_bytes = directory_size_bytes(path);
+    let installed_at = file_mtime_iso(path).unwrap_or_default();
+
+    Some(InstallRecord {
+        name: parsed_name,
+        description: skill_description_from_dir(path),
+        agent_id: agent_name.to_string(),
+        source: SkillSource {
+            // `kind = "global"` distinguishes these from the
+            // `github`-kind records that `easynet skill install`
+            // writes. The to_url() rendering becomes
+            // "global:claude-global" — visible in the SOURCE
+            // column so an operator can tell which pool a row
+            // came from.
+            kind: "global".to_string(),
+            identifier: pool_label.to_string(),
+            ref_: None,
+            subpath: Some(dir_name.to_string()),
+        },
+        // No tree hash for global skills — they're not pinned by
+        // EasyNet and the file set may change without us
+        // observing. Empty string is the documented "unknown"
+        // sentinel.
+        skill_tree_hash: String::new(),
+        size_bytes,
+        installed_at,
+        last_checked_at: None,
+        upgrade_available: false,
+    })
 }
 
 fn looks_like_skill_dir(path: &std::path::Path) -> bool {
@@ -807,6 +919,57 @@ pub(crate) fn format_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_skill_pool_ref_parses_known_owner_and_rejects_bad_labels() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let pool = GlobalSkillPoolRef::parse_owner_id("global:claude-global", "skill.test")
+            .expect("parse")
+            .expect("global owner");
+
+        assert_eq!(pool.label(), "claude-global");
+        assert_eq!(pool.owner_agent_id(), "global:claude-global");
+        assert_eq!(pool.dirs().len(), 1);
+
+        let invalid = GlobalSkillPoolRef::parse_owner_id("global:../claude-global", "skill.test")
+            .unwrap_err();
+        assert!(
+            invalid.to_string().contains("pool label"),
+            "wrong error: {invalid}"
+        );
+
+        let unknown =
+            GlobalSkillPoolRef::parse_owner_id("global:missing-pool", "skill.test").unwrap_err();
+        assert!(
+            unknown.to_string().contains("unknown global skill pool"),
+            "wrong error: {unknown}"
+        );
+    }
+
+    #[test]
+    fn global_skill_pool_ref_resolves_directory_name_without_alias_scan() {
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let pool = GlobalSkillPoolRef::from_label("claude-global", "skill.test").unwrap();
+        let skill_dir = config::home_dir()
+            .join(".claude")
+            .join("skills")
+            .join("directory-name");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: frontmatter-alias\ndescription: Alias skill\n---\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            pool.skill_dir("directory-name").as_deref(),
+            Some(skill_dir.as_path())
+        );
+        assert_eq!(
+            pool.skill_dir("frontmatter-alias").as_deref(),
+            Some(skill_dir.as_path())
+        );
+    }
 
     // ─── parse_source_url ─────────────────────────────────────────
 

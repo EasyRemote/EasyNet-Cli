@@ -548,6 +548,7 @@ fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<Str
         match s {
             Statement::LetCall { call, .. } => visit_call(call, out),
             Statement::Call(c) => visit_call(c, out),
+            Statement::Emit(e) => visit_field_value(&e.value),
             Statement::Loop(b) => {
                 for s in &b.body {
                     visit_stmt(s, out);
@@ -826,7 +827,7 @@ mission "<name>" {{
 """
 result_binding = "r"
 
-If the lesson is more nuanced and requires LLM judgement (no deterministic recipe over the listed abilities), omit the [exec] block — the dispatcher will route the call through the agent's chat fallback.
+If the lesson cannot be expressed as a deterministic workflow, do not publish it as an invocable ability yet. A manifest without [exec] is only discoverable metadata and cannot be invoked.
 
 Do NOT wrap the output in a markdown fence. Do NOT preface with prose. Output ONLY the TOML.
 "#,
@@ -1713,9 +1714,10 @@ allowed-tools: [Read]\n\
     }
 
     #[test]
-    fn validate_accepts_chat_fallback_ability_without_exec_block() {
-        // No [exec] block means the dispatcher routes to the agent's
-        // chat fallback. Catalog is irrelevant; validation accepts.
+    fn validate_accepts_discovery_only_ability_without_exec_block() {
+        // No [exec] block means the manifest is discovery-only. Catalog
+        // is irrelevant; validation accepts the TOML shape but dispatch
+        // will not mount it as an invocable handler.
         let body = r#"
 schema_version = "1"
 name = "summarise_complaints"
@@ -1723,7 +1725,7 @@ description = "summarise customer complaint threads"
 [input_schema]
 type = "object"
 "#;
-        validate_authored_ability(body, &[]).expect("chat-fallback ability validates");
+        validate_authored_ability(body, &[]).expect("discovery-only ability validates");
     }
 
     #[test]

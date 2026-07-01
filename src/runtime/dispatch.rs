@@ -81,14 +81,35 @@ pub struct DriverOverrides {
 
 /// One tool call the LLM made during a run. Lifted from the driver
 /// layer's tool-use observability so the chat ability can surface
-/// `tool_calls` in its structured response. Does not carry the
-/// tool's result — claude-code feeds results back to the LLM
-/// internally via subsequent stream blocks; capturing them is a
-/// separate piece of work.
+/// `tool_calls` in its structured response. Result fields are
+/// populated when the driver exposes them as structured stream
+/// events; absent fields mean the driver did not provide them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolCall {
     pub ability: String,
     pub args: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ability_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callee_ura: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_ura: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,39 +199,6 @@ pub(crate) fn resolve_model(
     entry_model: Option<String>,
 ) -> Option<String> {
     spec_model.or(entry_model)
-}
-
-/// Send a prompt to a registered agent and return the response.
-///
-/// Production entry point — reads the active `DispatchContext` via the
-/// thread-local channel in `runtime::context` (which transparently falls
-/// back to the env vars for subprocess children that inherited only the
-/// env state from their parent). Tests should use
-/// `send_to_agent_with_depth(.., Some(depth))` to inject a depth without
-/// touching either channel.
-///
-/// - Routes to the appropriate agent wrapper based on `entry.agent_type`.
-/// - Propagates a *child* `DispatchContext` into the spawned agent's
-///   environment so the next link in the chain inherits the mission id
-///   and incremented depth.
-/// - Creates a per-run directory under the agent workspace and writes
-///   prompt / response / trace / meta files.
-pub fn send_to_agent(
-    agent_name: &str,
-    entry: &AgentEntry,
-    prompt: &str,
-    context: Option<&str>,
-    extra_trace_path: Option<&Path>,
-) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(
-        agent_name,
-        entry,
-        prompt,
-        context,
-        extra_trace_path,
-        None,
-        None,
-    )
 }
 
 /// Send a prompt to a registered agent on behalf of an *external* caller —
@@ -1063,7 +1051,7 @@ mod tests {
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
         let entry = dummy_entry();
-        let err = send_to_agent("alice", &entry, "prompt", None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
             .expect_err("missing mission context must stop dispatch");
         let msg = format!("{err}");
         assert!(
@@ -1082,7 +1070,7 @@ mod tests {
         std::env::set_var("EASYNET_MISSION_ID", "forged-mission");
         std::env::set_var("EASYNET_AGENT_DEPTH", "0");
         let entry = dummy_entry();
-        let err = send_to_agent("alice", &entry, "prompt", None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
             .expect_err("unknown mission id must stop dispatch");
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
@@ -1495,10 +1483,12 @@ mod tests {
                 ToolCall {
                     ability: "alice.voice".into(),
                     args: serde_json::json!({"text": "hi"}),
+                    ..Default::default()
                 },
                 ToolCall {
                     ability: "alice.exec".into(),
                     args: serde_json::json!({"cmd": "ls"}),
+                    ..Default::default()
                 },
             ],
         };
@@ -1529,9 +1519,11 @@ mod tests {
         let a = adapter_for(AgentType::ClaudeCode);
         let b = adapter_for(AgentType::Codex);
         let c = adapter_for(AgentType::CodexAppServer);
+        let d = adapter_for(AgentType::External);
         assert_eq!(a.runtime_id(), "claude-code");
         assert_eq!(b.runtime_id(), "codex");
         assert_eq!(c.runtime_id(), "codex-app-server");
+        assert_eq!(d.runtime_id(), "external");
     }
 
     // ── spec-over-entry precedence (PR-3b.5 / 3b.5.1) ───────────────────

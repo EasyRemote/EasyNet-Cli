@@ -99,6 +99,9 @@ mission "mission-name" {
   call "notify" on "node" with {
     message = "done"
   } optional
+
+  // Archive important mission values for downstream consumers.
+  emit "result" kind answer value var_name.output
 }
 ```
 
@@ -107,6 +110,7 @@ mission "mission-name" {
 - **Dependencies are inferred from variable references** — write `input = photo.output` and the compiler builds the DAG automatically. No manual `depends_on`.
 - **Phase partitioning** — Steps with no mutual dependencies execute in parallel (same phase). Steps that depend on prior steps execute in later phases.
 - **Data flow** — Use `var.output` to pass results between steps across phases.
+- **Emissions** — Use `emit "name" kind answer|context|evidence|diagnostic value <literal-or-var.output>` to append ordered mission archive records. Emits are not ability calls and do not affect the DAG.
 - **Options**: `timeout <secs>`, `retries <n>`, `on_failure abort|skip|retry|continue`, `optional`
 
 ### Agent targets

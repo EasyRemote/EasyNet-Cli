@@ -2,9 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use tonic::transport::Channel;
+use easynet_axon::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
+use tonic::{transport::Channel, Status};
 
+use super::envelope::SessionSigningSeed;
 use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
@@ -49,6 +50,7 @@ pub(super) struct SessionPreludeRun<'a> {
     pub(super) phase: &'a mut SessionPhaseTracker,
     pub(super) hub_endpoint: &'a str,
     pub(super) caller_ura: &'a str,
+    pub(super) signing_seed: Option<SessionSigningSeed>,
     pub(super) inputs: SessionPreludeInputs<'a>,
     pub(super) user_trust_sync: Option<&'a UserTrustSync>,
     pub(super) channels: SessionPreludeChannels,
@@ -67,6 +69,7 @@ pub(super) async fn run_session_preludes(
         phase,
         hub_endpoint,
         caller_ura,
+        signing_seed,
         inputs,
         user_trust_sync,
         channels,
@@ -79,26 +82,36 @@ pub(super) async fn run_session_preludes(
         phase,
         hub_endpoint,
         caller_ura,
+        signing_seed,
         &hub_published_abilities,
     )
     .await;
-    run_owner_projection_prelude(client, phase, hub_endpoint, caller_ura, ability_descriptors)
-        .await?;
+    run_owner_projection_prelude(
+        client,
+        phase,
+        hub_endpoint,
+        caller_ura,
+        signing_seed,
+        ability_descriptors,
+    )
+    .await?;
 
     let user_trust_resync = spawn_user_trust_resync(
         client,
         channels.user_trust_resync,
         caller_ura,
+        signing_seed,
         user_trust_sync,
     )
     .await;
     let federation_heartbeat = spawn_federation_heartbeat(
         channels.federation_heartbeat,
         caller_ura.to_string(),
+        signing_seed,
         Arc::clone(&hub_published_abilities),
     );
 
-    run_hosted_agent_advertise_prelude(client, phase, caller_ura).await;
+    run_hosted_agent_advertise_prelude(client, phase, caller_ura, signing_seed).await;
 
     Ok(SessionPreludeGuards {
         _user_trust_resync: user_trust_resync,
@@ -111,6 +124,7 @@ async fn run_join_prelude(
     phase: &mut SessionPhaseTracker,
     hub_endpoint: &str,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) {
     phase.transition(
@@ -123,12 +137,14 @@ async fn run_join_prelude(
         caller_ura = caller_ura,
         hub_endpoint = hub_endpoint,
     );
-    match send_federation_join_prelude(client, caller_ura, hub_published_abilities).await {
+    match send_federation_join_prelude(client, caller_ura, signing_seed, hub_published_abilities)
+        .await
+    {
         Ok(()) => {
             crate::op_event!(
                 component = session,
                 kind = federation_join_prelude_ok,
-                message = "proceeding to <self>.session",
+                message = "proceeding to session.open",
             );
         }
         Err(err) => {
@@ -139,7 +155,8 @@ async fn run_join_prelude(
                 kind = federation_join_prelude_soft_failed,
                 code = code,
                 error = msg,
-                message = "proceeding to <self>.session — bidi will surface the error if join was required",
+                message =
+                    "proceeding to session.open — bidi will surface the error if join was required",
             );
         }
     }
@@ -150,6 +167,7 @@ async fn run_owner_projection_prelude(
     phase: &mut SessionPhaseTracker,
     hub_endpoint: &str,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     ability_descriptors: &[AbilityDescriptor],
 ) -> Result<(), SessionError> {
     phase.transition(
@@ -171,6 +189,7 @@ async fn run_owner_projection_prelude(
         caller_ura,
         caller_ura,
         caller_ura,
+        signing_seed,
         ability_descriptors,
     )
     .await
@@ -202,17 +221,22 @@ async fn spawn_user_trust_resync(
     client: &mut InvocationClient<Channel>,
     resync_channel: Channel,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     user_trust_sync: Option<&UserTrustSync>,
 ) -> Option<AbortOnDrop> {
     let sync = user_trust_sync?;
-    sync_paired_user_trust_prelude(client, caller_ura, sync).await;
+    sync_realm_hub_trust_prelude(client, caller_ura, signing_seed, sync).await;
+    sync_paired_user_trust_prelude(client, caller_ura, signing_seed, sync).await;
     let sync = sync.clone();
     let resync_caller = caller_ura.to_string();
     Some(AbortOnDrop(tokio::spawn(async move {
         let mut resync_client = InvocationClient::new(resync_channel);
         loop {
             tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
-            sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, &sync).await;
+            sync_realm_hub_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
+                .await;
+            sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
+                .await;
         }
     })))
 }
@@ -221,10 +245,18 @@ async fn run_hosted_agent_advertise_prelude(
     client: &mut InvocationClient<Channel>,
     phase: &mut SessionPhaseTracker,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
 ) {
     let realm = crate::ura::parse_ura(caller_ura)
         .map(|parsed| parsed.realm)
         .unwrap_or_default();
+    // The agent owner-prefix is the USERNAME slug (`<username>.<agent>`, e.g.
+    // `dev.pages`), NOT the user UUID. This is the §15.1-3 dual grammar: subject
+    // URAs anchor on the stable UUID, but owner-prefixed agent/resource URAs keep
+    // the username slug. The backend resolves these owners via
+    // `svc.UsernameForUID` (username), so advertising under the UUID
+    // (`<uuid>.pages`) lands a directory entry the resolver never queries →
+    // `namespace.resolve NXDOMAIN: owner is not online` on `pages.list`/etc.
     let user_segment = std::env::var("EASYNET_PAGES_USER")
         .ok()
         .filter(|v| !v.is_empty())
@@ -272,6 +304,7 @@ async fn run_hosted_agent_advertise_prelude(
             &agent_registry,
             &live_registry,
             entry,
+            signing_seed,
         )
         .await;
     }
@@ -340,6 +373,7 @@ async fn advertise_hosted_agent_entry(
     agent_registry: &crate::registry::agents::AgentRegistry,
     live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
     entry: &AdvertiseEntry,
+    signing_seed: Option<SessionSigningSeed>,
 ) {
     let agent_id = crate::ura::parse_ura(&entry.agent_ura)
         .ok()
@@ -351,21 +385,25 @@ async fn advertise_hosted_agent_entry(
     } else {
         caller_node_id.as_deref()
     };
-    let advertise_agent_result =
-        send_advertise_agent_prelude(client, caller_ura, &entry.agent_ura, host_for_advertise)
-            .await;
+    let advertise_agent_result = send_advertise_agent_prelude(
+        client,
+        caller_ura,
+        &entry.agent_ura,
+        host_for_advertise,
+        signing_seed,
+    )
+    .await;
     match advertise_agent_result {
         Ok(()) => {
-            advertise_hosted_agent_abilities(
+            let mut advertise_ctx = HostedAgentAbilityAdvertiseContext {
                 client,
                 caller_ura,
-                caller_node_id,
+                caller_node_id: caller_node_id.as_deref(),
                 agent_registry,
                 live_registry,
-                entry,
-                &agent_id,
-            )
-            .await;
+                signing_seed,
+            };
+            advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &agent_id).await;
         }
         Err(err) => {
             let agent_ura = entry.agent_ura.clone();
@@ -386,26 +424,31 @@ fn is_user_scoped_synthetic_agent(agent_id: &str) -> bool {
     matches!(agent_id, "pages" | "files")
 }
 
+struct HostedAgentAbilityAdvertiseContext<'a> {
+    client: &'a mut InvocationClient<Channel>,
+    caller_ura: &'a str,
+    caller_node_id: Option<&'a str>,
+    agent_registry: &'a crate::registry::agents::AgentRegistry,
+    live_registry: &'a crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    signing_seed: Option<SessionSigningSeed>,
+}
+
 async fn advertise_hosted_agent_abilities(
-    client: &mut InvocationClient<Channel>,
-    caller_ura: &str,
-    caller_node_id: &Option<String>,
-    agent_registry: &crate::registry::agents::AgentRegistry,
-    live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    ctx: &mut HostedAgentAbilityAdvertiseContext<'_>,
     entry: &AdvertiseEntry,
     agent_id: &str,
 ) {
     let descriptors = match entry.hosted_agent_name.as_deref() {
         Some(agent_name) => {
-            let Some(agent_config) = agent_registry.agents.get(agent_name) else {
+            let Some(agent_config) = ctx.agent_registry.agents.get(agent_name) else {
                 return;
             };
             build_hosted_agent_ability_descriptors(
                 &entry.agent_ura,
                 agent_name,
                 agent_config,
-                caller_node_id.as_deref(),
-                live_registry,
+                ctx.caller_node_id,
+                ctx.live_registry,
             )
         }
         None if agent_id == "pages" => build_synthetic_pages_ability_descriptors(&entry.agent_ura),
@@ -423,10 +466,11 @@ async fn advertise_hosted_agent_abilities(
         ability_count = ability_count,
     );
     if let Err(err) = send_advertise_abilities_prelude(
-        client,
-        caller_ura,
+        ctx.client,
+        ctx.caller_ura,
         &entry.agent_ura,
-        caller_ura,
+        ctx.caller_ura,
+        ctx.signing_seed,
         &descriptors,
     )
     .await
@@ -453,6 +497,7 @@ async fn advertise_hosted_agent_abilities(
 async fn send_federation_join_prelude(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     let realm = crate::ura::parse_ura(caller_ura)
@@ -466,9 +511,13 @@ async fn send_federation_join_prelude(
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
 
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.join", arguments))
-        .map_err(|e| tonic::Status::invalid_argument(format!("federation.join prelude: {e}")))?;
+    let request = signed_prelude_request(
+        caller_ura,
+        caller_ura,
+        "federation.join",
+        arguments,
+        signing_seed,
+    )?;
 
     match client.invoke(request).await {
         Ok(reply) => {
@@ -511,6 +560,7 @@ async fn send_advertise_agent_prelude(
     caller_ura: &str,
     agent_ura: &str,
     host_node_id: Option<&str>,
+    signing_seed: Option<SessionSigningSeed>,
 ) -> Result<(), tonic::Status> {
     let mut body = serde_json::json!({
         "agent_ura": agent_ura,
@@ -531,11 +581,13 @@ async fn send_advertise_agent_prelude(
         tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
     })?;
 
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.advertise_agent", arguments))
-        .map_err(|e| {
-            tonic::Status::invalid_argument(format!("federation.advertise_agent prelude: {e}"))
-        })?;
+    let request = signed_prelude_request(
+        caller_ura,
+        agent_ura,
+        "federation.advertise_agent",
+        arguments,
+        signing_seed,
+    )?;
 
     invoke_prelude_unary(client, request, "federation.advertise_agent")
         .await
@@ -547,6 +599,7 @@ async fn send_advertise_abilities_prelude(
     caller_ura: &str,
     owner_ura: &str,
     host_device_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     descriptors: &[AbilityDescriptor],
 ) -> Result<(), tonic::Status> {
     let projection = crate::runtime::owner_projection::prepare_and_persist(
@@ -574,15 +627,139 @@ async fn send_advertise_abilities_prelude(
         ))
     })?;
 
-    let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(caller_ura)
-        .and_then(|env| env.invoke_request("federation.advertise_abilities", arguments))
-        .map_err(|e| {
-            tonic::Status::invalid_argument(format!("federation.advertise_abilities prelude: {e}"))
-        })?;
+    let request = signed_prelude_request(
+        caller_ura,
+        owner_ura,
+        "federation.advertise_abilities",
+        arguments,
+        signing_seed,
+    )?;
 
     invoke_prelude_unary(client, request, "federation.advertise_abilities")
         .await
         .map(|_| ())
+}
+
+pub(super) fn signed_prelude_request(
+    caller_ura: &str,
+    subject_ura: &str,
+    function_name: &str,
+    arguments: Vec<u8>,
+    signing_seed: Option<SessionSigningSeed>,
+) -> Result<InvokeRequest, Status> {
+    let hub_ura = session_hub_ura(caller_ura)?;
+    let descriptor_subject_ura =
+        descriptor_prelude_subject_ura(&hub_ura, subject_ura, function_name)?;
+    let mut request = crate::services::invocation_transport::ProtoEnvelope::targeted(
+        caller_ura,
+        hub_ura,
+        descriptor_subject_ura,
+    )
+    .and_then(|env| env.invoke_request(function_name, arguments))
+    .map_err(|e| Status::invalid_argument(format!("{function_name} prelude: {e}")))?;
+    if let Some(seed) = signing_seed {
+        sign_descriptor_bound_prelude_request(&mut request, function_name, &seed)?;
+    }
+    Ok(request)
+}
+
+fn sign_descriptor_bound_prelude_request(
+    request: &mut InvokeRequest,
+    function_name: &str,
+    seed: &SessionSigningSeed,
+) -> Result<(), Status> {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    let envelope = request.envelope.as_mut().ok_or_else(|| {
+        Status::internal(format!("{function_name} prelude request missing envelope"))
+    })?;
+    let caller_ura = envelope
+        .caller
+        .as_ref()
+        .map(|caller| caller.ura.trim().to_string())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| Status::internal(format!("{function_name} prelude missing caller URA")))?;
+    let callee_ura = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .ok_or_else(|| Status::internal(format!("{function_name} prelude missing callee URA")))?;
+    // `function_name` is a bare ability name (`federation.advertise_abilities`),
+    // NOT a `<ability-ura>@<version>` descriptor ref. Build the canonical ref
+    // from (callee hub URA, ability name, default descriptor version) — the hub
+    // ingress treats `federation.*` as descriptor-bound on the wire and rejects
+    // a bare name with `ability_descriptor_ref_malformed`. `require_*` only
+    // VALIDATES an already-formed ref; the prelude must CONSTRUCT one. (Commit
+    // 22187b3f tightened ingress + removed the old resolver but left this egress
+    // site passing the bare name — the egress/ingress asymmetry that wedged
+    // session.open into an advertise_abilities reconnect loop.)
+    let descriptor_ref =
+        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura,
+            function_name,
+            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        )
+        .map_err(|err| {
+            Status::internal(format!(
+                "{function_name} prelude signing requires an explicit descriptor ref: {err}"
+            ))
+        })?;
+    let descriptor_bound =
+        crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+            envelope.clone(),
+            descriptor_ref.clone(),
+            &request.arguments,
+            crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+        )
+        .map_err(|err| {
+            Status::internal(format!(
+                "{function_name} prelude descriptor-bound envelope failed: {err}"
+            ))
+        })?;
+    let signing_key = SigningKey::from_bytes(seed);
+    let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
+    envelope.caller_signature = Some(easynet_axon::pb::axon::v1::CallerSignature {
+        algorithm: "ed25519".to_string(),
+        signature: signature.to_bytes().to_vec(),
+        key_id_hint: caller_ura,
+    });
+    request.metadata.insert(
+        crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            .to_string(),
+        descriptor_ref,
+    );
+    Ok(())
+}
+
+fn descriptor_prelude_subject_ura(
+    hub_ura: &str,
+    subject_ura: &str,
+    function_name: &str,
+) -> Result<String, Status> {
+    if crate::services::invocation_transport::invocation_wire::try_entity_ref(
+        subject_ura.to_string(),
+    )
+    .is_ok()
+    {
+        return Ok(subject_ura.to_string());
+    }
+    crate::ura::owner_ability_ura(hub_ura, function_name).ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "{function_name} prelude: subject `{subject_ura}` is not descriptor-bound \
+             and hub `{hub_ura}` cannot own the ability"
+        ))
+    })
+}
+
+fn session_hub_ura(caller_ura: &str) -> Result<String, Status> {
+    crate::ura::parse_ura(caller_ura)
+        .map(|parsed| crate::ura::hub_ura(&parsed.realm))
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "session prelude caller URA `{caller_ura}` is invalid: {err}"
+            ))
+        })
 }
 
 #[derive(Clone)]
@@ -594,41 +771,133 @@ pub struct UserTrustSync {
 
 const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
 
+async fn sync_realm_hub_trust_prelude(
+    client: &mut InvocationClient<Channel>,
+    caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
+    sync: &UserTrustSync,
+) {
+    let Ok(parsed_caller) = crate::ura::parse_ura(caller_ura) else {
+        return;
+    };
+    if parsed_caller.realm.as_str() != sync.daemon_realm.as_str() {
+        return;
+    }
+
+    let hub_ura = crate::ura::hub_ura(&sync.daemon_realm);
+    let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": hub_ura })) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let request = match signed_prelude_request(
+        caller_ura,
+        &hub_ura,
+        crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+        args,
+        signing_seed,
+    ) {
+        Ok(req) => req,
+        Err(_) => return,
+    };
+    let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
+        Ok(resp) => resp,
+        Err(status) => {
+            let code = status.code();
+            let msg = status.message();
+            crate::op_event!(
+                component = session,
+                kind = hub_trust_sync_resolve_failed,
+                code = code,
+                error = msg,
+                hub_ura = hub_ura,
+            );
+            return;
+        }
+    };
+
+    let pubkeys = resolved_public_keys(&response.result);
+    if pubkeys.is_empty() {
+        crate::op_event!(
+            component = session,
+            kind = hub_trust_sync_resolve_empty,
+            hub_ura = hub_ura,
+            message = "hub returned no hub keys — retaining existing local hub trust anchor",
+        );
+        return;
+    }
+
+    for pubkey_b64 in pubkeys {
+        let register_args = match serde_json::to_vec(&serde_json::json!({
+            "agent_ura": hub_ura,
+            "public_key_b64": pubkey_b64,
+            "role": "hub",
+        })) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match crate::services::invocation_transport::register_device_pubkey::handle(
+            &register_args,
+            &sync.daemon_realm,
+            &sync.trust_anchor_path,
+            &sync.cell,
+        ) {
+            Ok(_) => {
+                crate::op_event!(
+                    component = session,
+                    kind = hub_trust_sync_ok,
+                    hub_ura = hub_ura,
+                );
+            }
+            Err(status) if status.code() == tonic::Code::AlreadyExists => {
+                crate::op_event!(
+                    component = session,
+                    kind = hub_trust_sync_already_present,
+                    hub_ura = hub_ura,
+                );
+            }
+            Err(status) => {
+                let code = status.code();
+                let msg = status.message();
+                crate::op_event!(
+                    component = session,
+                    kind = hub_trust_sync_write_failed,
+                    code = code,
+                    error = msg,
+                    hub_ura = hub_ura,
+                );
+            }
+        }
+    }
+}
+
 async fn sync_paired_user_trust_prelude(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
     sync: &UserTrustSync,
 ) {
     let Ok(creds) = crate::persistence::config::load_credentials() else {
         return;
     };
-    let Some(username) = creds
-        .username
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
+    let Ok(user_ura) = creds.user_ura() else {
         return;
     };
     let realm = creds.realm.trim();
     if realm != sync.daemon_realm {
         return;
     }
-    let user_ura = crate::ura::user_ura(realm, username);
 
     let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura })) {
         Ok(v) => v,
         Err(_) => return,
     };
-    let request = match crate::services::invocation_transport::ProtoEnvelope::caller_only(
+    let request = match signed_prelude_request(
         caller_ura,
-    )
-    .and_then(|env| {
-        env.invoke_request(
-            crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
-            args,
-        )
-    }) {
+        &user_ura,
+        crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+        args,
+        signing_seed,
+    ) {
         Ok(req) => req,
         Err(_) => return,
     };
@@ -648,26 +917,7 @@ async fn sync_paired_user_trust_prelude(
         }
     };
 
-    let parsed = serde_json::from_slice::<serde_json::Value>(&response.result).ok();
-    let mut pubkeys: Vec<String> = parsed
-        .as_ref()
-        .and_then(|v| v.get("public_keys_b64"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|k| k.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    if pubkeys.is_empty() {
-        if let Some(pk) = parsed
-            .as_ref()
-            .and_then(|v| v.get("public_key_b64"))
-            .and_then(|pk| pk.as_str())
-        {
-            pubkeys.push(pk.to_string());
-        }
-    }
+    let pubkeys = resolved_public_keys(&response.result);
     if pubkeys.is_empty() {
         crate::op_event!(
             component = session,
@@ -722,6 +972,35 @@ async fn sync_paired_user_trust_prelude(
     }
 }
 
+fn resolved_public_keys(result: &[u8]) -> Vec<String> {
+    let parsed = serde_json::from_slice::<serde_json::Value>(result).ok();
+    let mut pubkeys: Vec<String> = parsed
+        .as_ref()
+        .and_then(|v| v.get("public_keys_b64"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|k| {
+                    let key = k.as_str()?.trim();
+                    (!key.is_empty()).then(|| key.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if pubkeys.is_empty() {
+        if let Some(pk) = parsed
+            .as_ref()
+            .and_then(|v| v.get("public_key_b64"))
+            .and_then(|pk| pk.as_str())
+            .map(str::trim)
+            .filter(|pk| !pk.is_empty())
+        {
+            pubkeys.push(pk.to_string());
+        }
+    }
+    pubkeys
+}
+
 pub(super) async fn invoke_prelude_unary(
     client: &mut InvocationClient<Channel>,
     request: easynet_axon::pb::axon::v1::InvokeRequest,
@@ -751,6 +1030,8 @@ fn build_hosted_agent_ability_descriptors(
     live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
 ) -> Vec<AbilityDescriptor> {
     let mut descriptors = Vec::new();
+    let hint_snapshot =
+        crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(live_registry);
     for spec in crate::runtime::abilities::abilities_for_publication(agent_name, entry) {
         let registry_name = spec.name();
         let owner_local_name = crate::runtime::abilities::public_agent_ability_name(
@@ -768,10 +1049,7 @@ fn build_hosted_agent_ability_descriptors(
         descriptor = descriptor
             .with_description(spec.description())
             .with_input_schema(spec.parameters().clone())
-            .with_hints(crate::runtime::agents::discovery_hints_for(
-                live_registry,
-                registry_name,
-            ))
+            .with_hints(hint_snapshot.for_name(registry_name))
             .with_source(format!("agent:{agent_name}"))
             .with_metadata_entry("runtime", entry.agent_type.to_string())
             .with_metadata_entry("agent_type", entry.agent_type.to_string())
@@ -789,7 +1067,6 @@ fn build_hosted_agent_ability_descriptors(
     descriptors
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<AbilityDescriptor> {
     crate::runtime::agents::pages::management_ability_specs()
         .into_iter()
@@ -809,4 +1086,36 @@ pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_public_keys;
+
+    #[test]
+    fn resolved_public_keys_prefers_array_response() {
+        let body = br#"{
+            "public_key_b64": "fallback",
+            "public_keys_b64": [" key-a ", "", 7, "key-b"]
+        }"#;
+
+        assert_eq!(
+            resolved_public_keys(body),
+            vec!["key-a".to_string(), "key-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolved_public_keys_falls_back_to_single_key() {
+        let body = br#"{ "public_key_b64": " single-key " }"#;
+
+        assert_eq!(resolved_public_keys(body), vec!["single-key".to_string()]);
+    }
+
+    #[test]
+    fn resolved_public_keys_ignores_malformed_or_empty_payloads() {
+        assert!(resolved_public_keys(br#"{"public_keys_b64":[]}"#).is_empty());
+        assert!(resolved_public_keys(br#"not-json"#).is_empty());
+        assert!(resolved_public_keys(br#"{ "public_key_b64": " " }"#).is_empty());
+    }
 }

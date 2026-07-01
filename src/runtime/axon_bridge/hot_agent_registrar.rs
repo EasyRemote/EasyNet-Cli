@@ -10,14 +10,16 @@
 //! advertised.
 //!
 //! This registrar closes the gap. `agent.start` calls
-//! `register_agent(name, entry)` which builds the same three
-//! handler closures the boot path registers for static agents, wraps
-//! each through
-//! [`crate::runtime::ability_dispatch::rpc_handler_to_ability_fn`],
-//! and inserts them into [`LocalRuntime`] under the canonical
-//! `<agent>.<verb>` names. `agent.stop` calls
-//! `unregister_agent(name)` which uses `unregister_ability_by_prefix`
-//! to wipe the `<agent>.*` set in one atomic call.
+//! `register_agent(name, entry)` which builds the same handler set
+//! the boot path needs, then commits every row through
+//! [`AxonAbilityCatalog`]'s dynamic registration transaction. That
+//! transaction is the single writer for descriptor facts, authority
+//! binding, implementation binding, dynamic catalogue metadata, and
+//! the [`LocalRuntime`] executable row. Product-facing
+//! `<agent>.<verb>` names stay at the catalog/manifest boundary only.
+//! `agent.stop` calls `unregister_agent(name)`, which decodes runtime
+//! keys back to owner-local public names and removes the matching
+//! dynamic rows through the same catalogue transaction.
 //!
 //! ## Boot-order rationale
 //!
@@ -35,23 +37,120 @@
 //! Any `register_agent` call that lands before the runtime is wired
 //! returns `runtime_not_ready` and emits a diagnostic op_event —
 //! the disk-side `agents.json` write still succeeds, so the next
-//! daemon restart picks up the agent through the boot-time
-//! registration loop (`for agent_name in agents.agents.keys()` in
-//! `build_registry_with_services`).
+//! daemon restart replays the current hosted-agent registry through
+//! this same dynamic registrar after the catalogue OnceLock is set.
 
 use std::sync::{Arc, OnceLock};
 
-use easynet_axon::invocation::{AbilityOptions, LocalRuntime};
+use easynet_axon::invocation::LocalRuntime;
 
 use crate::registry::agents::AgentEntry;
-use crate::runtime::ability_dispatch::{rpc_handler_to_ability_fn, AxonAbilityCatalog};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::runtime::agents::chat_ability::{
-    build_agent_ability_handler, build_chat_handler_for, build_discover_handler_for,
-    build_invoke_handler_for, ContextLoader,
+    build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
+    build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
 };
 
+pub(crate) fn block_on_hot_registrar<F, T>(future: F) -> Option<T>
+where
+    F: std::future::Future<Output = T> + Send,
+    T: Send,
+{
+    crate::support::async_bridge::try_run_blocking_in_tokio(future)
+}
+
+#[derive(Debug, Clone)]
+struct HostedAgentRuntimeBinding {
+    agent_ura: String,
+}
+
+struct HotAgentRuntimeSyncContext<'a> {
+    runtime: &'a Arc<LocalRuntime>,
+    catalog: &'a Arc<AxonAbilityCatalog>,
+    binding: &'a HostedAgentRuntimeBinding,
+    outcome: &'a mut HotAgentRuntimeSyncOutcome,
+}
+
+impl HostedAgentRuntimeBinding {
+    fn load(name: &str) -> anyhow::Result<Self> {
+        let local_agents = crate::persistence::local_agents::load()
+            .map_err(|err| anyhow::anyhow!("load local hosted agents: {err}"))?;
+        let entry =
+            crate::persistence::local_agents::lookup_hosted_agent_by_name(&local_agents, name)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("hosted agent {name:?} is missing from local-agents.json")
+                })?;
+        let parsed = crate::ura::parse_ura(&entry.agent_ura).map_err(|err| {
+            anyhow::anyhow!("invalid hosted agent URA {:?}: {err}", entry.agent_ura)
+        })?;
+        if parsed.kind != crate::ura::URAKind::Agent {
+            anyhow::bail!(
+                "hosted agent {name:?} resolved to non-Agent URA {:?}",
+                entry.agent_ura
+            );
+        }
+        let Some((_, agent_id)) = parsed.agent_ids().or_else(|| parsed.device_agent_ids()) else {
+            anyhow::bail!(
+                "hosted agent {name:?} URA {:?} does not expose an agent id",
+                entry.agent_ura
+            );
+        };
+        if agent_id != name {
+            anyhow::bail!(
+                "hosted agent {name:?} resolved to URA {:?} with mismatched agent id {agent_id:?}",
+                entry.agent_ura
+            );
+        }
+        Ok(Self {
+            agent_ura: entry.agent_ura.clone(),
+        })
+    }
+
+    fn runtime_ability_ura(&self, registry_ability: &str) -> Option<String> {
+        let public_name = crate::ura::owner_local_ability_name(&self.agent_ura, registry_ability);
+        crate::ura::owner_ability_ura(&self.agent_ura, &public_name)
+    }
+}
+
+fn dispatch_key_for_hosted_agent_runtime_key(
+    runtime_key: &str,
+    expected_agent: &str,
+) -> Option<String> {
+    let selector = crate::ura::AbilitySelector::parse(runtime_key).ok()?;
+    let parsed_owner = crate::ura::parse_ura(selector.owner_ura()).ok()?;
+    if parsed_owner.kind != crate::ura::URAKind::Agent {
+        return None;
+    }
+    let (_, agent_id) = parsed_owner
+        .agent_ids()
+        .or_else(|| parsed_owner.device_agent_ids())?;
+    if agent_id != expected_agent {
+        return None;
+    }
+    Some(crate::ura::local_dispatch_ability_key(
+        selector.owner_ura(),
+        selector.public_name(),
+    ))
+}
+
+async fn hosted_agent_runtime_ability_uras_for_agent(
+    runtime: &Arc<LocalRuntime>,
+    agent: &str,
+) -> Vec<String> {
+    let prefix = format!("{agent}.");
+    runtime
+        .list_abilities()
+        .await
+        .into_iter()
+        .filter_map(|descriptor| {
+            let dispatch_key = dispatch_key_for_hosted_agent_runtime_key(&descriptor.name, agent)?;
+            dispatch_key.starts_with(&prefix).then_some(descriptor.name)
+        })
+        .collect()
+}
+
 /// Captures every dependency a hot-add path needs to synthesise an
-/// agent's static handler set + register it into `LocalRuntime`.
+/// agent's handler set + register it into the ability catalogue.
 ///
 /// Constructed *pending* (without a runtime) at registry-build time
 /// via [`HotAgentRegistrar::new_pending`]. Boot calls
@@ -67,11 +166,16 @@ pub struct HotAgentRegistrar {
     /// The discover + invoke handlers re-enter local dispatch through
     /// this handle to resolve peer-agent ability descriptors.
     dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    /// Federation resolver used by hot-added `<agent>.discover`
+    /// handlers. Must match the boot-time handler dependency so hot
+    /// agents do not observe a different user/public tier.
+    discover_federation_resolver:
+        crate::runtime::agents::discover_ability::SharedDiscoverFederationResolver,
     /// Optional hub-advertise bridge for hot-added hosted agents.
     ///
     /// Runtime registration is local; hub visibility is separate.
     /// Device-mode boot wires this after the long-lived
-    /// `<self>.session` escalation channel exists. Tests and
+    /// `session.open` escalation channel exists. Tests and
     /// non-device modes leave it empty, in which case
     /// `agent.start` still succeeds locally and the next
     /// reconnect/boot advertise sweep repairs hub visibility.
@@ -113,6 +217,11 @@ pub struct HotAgentRuntimeSyncOutcome {
     /// "every register attempt errored". The disk side still wrote
     /// `agents.json`, so the agent comes up on daemon restart.
     pub runtime_not_ready: bool,
+    /// True when the catalogue `OnceLock` has not been populated yet.
+    /// Runtime-only registration is forbidden: a hosted-agent ability
+    /// row without descriptor/authority/implementation facts is not a
+    /// valid EasyNet ability.
+    pub catalog_not_ready: bool,
 }
 
 /// Input for a hot hosted-agent advertise pass.
@@ -157,7 +266,7 @@ pub struct HotAgentRevokeRequest {
 /// The registrar owns the trait object so runtime lifecycle code
 /// does not depend on `services::invocation_transport` concrete
 /// session types. Device-mode boot supplies an implementation backed
-/// by the current `<self>.session` bidi; tests can supply a recorder.
+/// by the current `session.open` bidi; tests can supply a recorder.
 pub trait HotAgentAdvertiser: Send + Sync {
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
         -> HotAgentAdvertiseOutcome;
@@ -185,11 +294,13 @@ impl HotAgentRegistrar {
     pub fn new_pending(
         loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
         dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+        discover_federation_resolver: crate::runtime::agents::discover_ability::SharedDiscoverFederationResolver,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime: OnceLock::new(),
             loaders,
             dispatch_handle,
+            discover_federation_resolver,
             hot_advertiser: OnceLock::new(),
         })
     }
@@ -216,24 +327,23 @@ impl HotAgentRegistrar {
     }
 
     /// Register the canonical `<agent>.chat / discover / invoke`
-    /// triple plus every TOML-declared `<agent>.<verb>` for `name`
-    /// into [`LocalRuntime`].
+    /// triple plus every executable TOML-declared `<agent>.<verb>`
+    /// for `name` through the dynamic catalogue transaction.
     ///
-    /// **Replace-capable.** Existing rows are overwritten through
-    /// `LocalRuntime::replace_ability`, not ignored as duplicates.
-    /// This is required for `agent set` and `agent.refresh`:
-    /// both update `agents.json` first and then call this registrar
-    /// against names that may already be live in the runtime. The
-    /// runtime must therefore swap the handler closure atomically so
-    /// subsequent invokes observe the updated `AgentEntry` and TOML
-    /// ability set without requiring a daemon restart.
+    /// **Replace-capable.** Dynamic registration is idempotent at
+    /// the product ability name: existing catalogue/control-plane/
+    /// runtime rows are replaced as one unit. This is required for
+    /// `agent set`, `agent.refresh`, and `meta.acquire`/`forget`,
+    /// which update durable state first and then refresh live rows
+    /// for names that may already be present.
     pub async fn register_agent(
         &self,
         name: &str,
         entry: &AgentEntry,
     ) -> HotAgentRuntimeSyncOutcome {
-        // DEC-F048 enforcement gate: the registrar owns the
-        // `<agent>.*` LocalRuntime namespace and refuses to mint rows
+        // DEC-F048 enforcement gate: the registrar owns hosted
+        // agents' owner-local public namespace before mapping it to
+        // LocalRuntime Ability URA keys. It refuses to mint rows
         // under the reserved `device.` owner token regardless of
         // caller — the lifecycle surface rejects earlier with a
         // user-facing error; this is the invariant's home.
@@ -265,96 +375,227 @@ impl HotAgentRegistrar {
                 ..Default::default()
             };
         };
+        let Some(catalog) = self.dispatch_handle.get().cloned() else {
+            crate::op_event!(
+                component = axon_bridge,
+                kind = hot_agent_register_catalog_not_ready,
+                agent = name,
+                message = "agent runtime registration refused because the live ability \
+                          catalogue is not wired; runtime-only rows are invalid",
+            );
+            return HotAgentRuntimeSyncOutcome {
+                failed: 1,
+                catalog_not_ready: true,
+                ..Default::default()
+            };
+        };
+
+        let binding = match HostedAgentRuntimeBinding::load(name) {
+            Ok(binding) => binding,
+            Err(err) => {
+                let err_msg = err.to_string();
+                crate::op_event!(
+                    component = axon_bridge,
+                    kind = hot_agent_register_identity_missing,
+                    agent = name,
+                    error = err_msg.as_str(),
+                    message = "hosted agent runtime registration requires canonical local-agents identity",
+                );
+                return HotAgentRuntimeSyncOutcome {
+                    failed: 1,
+                    ..Default::default()
+                };
+            }
+        };
 
         let mut outcome = HotAgentRuntimeSyncOutcome::default();
-        // Every row this sync (re-)registers; the reconcile pass at
-        // the end removes any other `<name>.*` row still in the
-        // runtime — its backing manifest is gone.
+        let owner = OwnerKind::Agent(name.to_string());
+        // Every catalogue row this sync (re-)registers; the reconcile pass at
+        // the end removes any other row whose decoded public ability name is
+        // `<name>.*` — its backing manifest is gone.
         let mut synced: std::collections::HashSet<String> = std::collections::HashSet::new();
+        {
+            let mut sync_ctx = HotAgentRuntimeSyncContext {
+                runtime,
+                catalog: &catalog,
+                binding: &binding,
+                outcome: &mut outcome,
+            };
 
-        // ── chat
-        let chat_handler =
-            build_chat_handler_for(name.to_string(), entry.clone(), Arc::clone(&self.loaders));
-        synced.insert(format!("{name}.chat"));
-        Self::try_replace(runtime, &format!("{name}.chat"), chat_handler, &mut outcome).await;
-
-        // ── discover
-        let discover_handler =
-            build_discover_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
-        synced.insert(format!("{name}.discover"));
-        Self::try_replace(
-            runtime,
-            &format!("{name}.discover"),
-            discover_handler,
-            &mut outcome,
-        )
-        .await;
-
-        // ── invoke
-        let invoke_handler =
-            build_invoke_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
-        synced.insert(format!("{name}.invoke"));
-        Self::try_replace(
-            runtime,
-            &format!("{name}.invoke"),
-            invoke_handler,
-            &mut outcome,
-        )
-        .await;
-
-        // ── TOML-declared abilities (same chat-translation path
-        // the boot-time `register_for_agent` loop uses).
-        let chat_name = format!("{name}.chat");
-        for spec in crate::runtime::abilities::abilities_for(name, entry) {
-            let ability_name = spec.name().to_string();
-            if ability_name == chat_name {
-                continue;
+            // ── chat
+            let chat_ability = format!("{name}.chat");
+            let chat_handler =
+                build_chat_handler_for(name.to_string(), entry.clone(), Arc::clone(&self.loaders));
+            if Self::register_rpc_with_spec(
+                &mut sync_ctx,
+                &chat_ability,
+                owner.clone(),
+                crate::core::ability_spec::default_chat_manifest(),
+                chat_handler,
+            )
+            .await
+            {
+                synced.insert(chat_ability.clone());
             }
-            let bare = ability_name
-                .strip_prefix(&format!("{name}."))
-                .unwrap_or(&ability_name)
-                .to_string();
-            let h = build_agent_ability_handler(
+
+            let chat_stream_handler = build_chat_stream_handler_for(
                 name.to_string(),
                 entry.clone(),
                 Arc::clone(&self.loaders),
-                bare,
             );
-            synced.insert(ability_name.clone());
-            Self::try_replace(runtime, &ability_name, h, &mut outcome).await;
+            if Self::register_stream_with_spec(
+                &mut sync_ctx,
+                &chat_ability,
+                owner.clone(),
+                crate::core::ability_spec::default_chat_manifest(),
+                chat_stream_handler,
+            )
+            .await
+            {
+                synced.insert(chat_ability.clone());
+            }
+
+            // ── discover
+            let discover_handler = build_discover_handler_for(
+                name.to_string(),
+                Arc::clone(&self.dispatch_handle),
+                Arc::clone(&self.discover_federation_resolver),
+            );
+            let discover_ability = format!("{name}.discover");
+            if Self::register_rpc_with_spec(
+                &mut sync_ctx,
+                &discover_ability,
+                owner.clone(),
+                crate::runtime::agents::discover_ability::manifest(),
+                discover_handler,
+            )
+            .await
+            {
+                synced.insert(discover_ability);
+            }
+
+            // ── invoke
+            let invoke_handler =
+                build_invoke_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
+            let invoke_ability = format!("{name}.invoke");
+            if Self::register_rpc_with_spec(
+                &mut sync_ctx,
+                &invoke_ability,
+                owner.clone(),
+                crate::runtime::agents::invoke_ability::manifest(),
+                invoke_handler,
+            )
+            .await
+            {
+                synced.insert(invoke_ability);
+            }
+
+            // ── TOML-declared executor-bound abilities. Manifests without
+            // `[exec]` are discoverable declarations, not invocable runtime
+            // handlers.
+            let chat_name = format!("{name}.chat");
+            let manifests = crate::runtime::abilities::manifests_for(name, entry);
+            for spec in crate::runtime::abilities::abilities_for(name, entry) {
+                let ability_name = spec.name().to_string();
+                if ability_name == chat_name {
+                    continue;
+                }
+                let bare = ability_name
+                    .strip_prefix(&format!("{name}."))
+                    .unwrap_or(&ability_name)
+                    .to_string();
+
+                let Some(manifest) = manifests.iter().find(|m| m.name() == bare) else {
+                    continue;
+                };
+                let Some(exec) = manifest.exec() else {
+                    continue;
+                };
+                match exec {
+                    crate::core::ability_spec::AbilityExec::HostStream(stream_spec) => {
+                        let h = build_host_stream_handler(stream_spec.clone());
+                        if Self::register_stream_with_envelope_and_spec(
+                            &mut sync_ctx,
+                            &ability_name,
+                            owner.clone(),
+                            manifest.clone(),
+                            h,
+                        )
+                        .await
+                        {
+                            synced.insert(ability_name);
+                        }
+                    }
+                    _ => {
+                        let h = build_agent_ability_handler(
+                            name.to_string(),
+                            entry.clone(),
+                            Arc::clone(&self.loaders),
+                            bare,
+                        );
+                        if Self::register_rpc_with_spec(
+                            &mut sync_ctx,
+                            &ability_name,
+                            owner.clone(),
+                            manifest.clone(),
+                            h,
+                        )
+                        .await
+                        {
+                            synced.insert(ability_name);
+                        }
+                    }
+                }
+            }
         }
 
         // ── reconcile: a provider withdraws an ability by deleting
         // its TOML; the row must leave the live runtime on the next
         // sync, not on the next daemon restart.
-        for stale in runtime.ability_names_with_prefix(&format!("{name}.")).await {
-            if synced.contains(&stale) {
+        for stale in hosted_agent_runtime_ability_uras_for_agent(runtime, name).await {
+            let Some(dispatch_key) = dispatch_key_for_hosted_agent_runtime_key(&stale, name) else {
+                continue;
+            };
+            if synced.contains(&dispatch_key) {
                 continue;
             }
-            if runtime.unregister_ability(&stale).await.is_some() {
-                outcome.removed += 1;
-                crate::op_event!(
-                    component = axon_bridge,
-                    kind = hot_agent_ability_reconciled_removed,
-                    agent = name,
-                    ability = stale.as_str(),
-                    message = "ability manifest gone; row removed from LocalRuntime",
-                );
+            match catalog.hot_unregister(&dispatch_key) {
+                Ok(true) => {
+                    outcome.removed += 1;
+                    crate::op_event!(
+                        component = axon_bridge,
+                        kind = hot_agent_ability_reconciled_removed,
+                        agent = name,
+                        ability = dispatch_key.as_str(),
+                        message = "ability manifest gone; dynamic catalogue row removed",
+                    );
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    outcome.failed += 1;
+                    let err_msg = err.to_string();
+                    crate::op_event!(
+                        component = axon_bridge,
+                        kind = hot_agent_ability_reconcile_failed,
+                        agent = name,
+                        ability = dispatch_key.as_str(),
+                        error = err_msg.as_str(),
+                    );
+                }
             }
         }
 
         outcome
     }
 
-    /// Unregister every `<name>.*` ability from `LocalRuntime`.
-    /// Returns the count of rows actually removed.
+    /// Unregister every dynamic `<name>.*` hosted-agent ability.
+    /// Returns the count of catalogue rows actually removed.
     ///
-    /// Uses `unregister_ability_by_prefix` so a single lock-cycle
-    /// drops the whole set atomically + fires one
-    /// `AbilityChangeEvent::Unregistered` per removed row, in
-    /// sorted order. The trailing dot in the prefix prevents
-    /// accidentally taking out a sibling agent whose name happens
-    /// to share a non-dot prefix (e.g. "alice" vs "alice-2").
+    /// Runtime rows are keyed by hosted-agent Ability URAs. Removal
+    /// decodes each row back to its owner-local public name before
+    /// matching the `<name>.*` product namespace, then removes it
+    /// through `AxonAbilityCatalog::hot_unregister` so control-plane
+    /// and dynamic side tables cannot drift from the executable row.
     ///
     /// No-op (returns 0) when the runtime is not yet wired —
     /// the disk-side `agents.json` row is already gone, so the
@@ -363,45 +604,205 @@ impl HotAgentRegistrar {
         let Some(runtime) = self.runtime.get() else {
             return 0;
         };
-        match runtime
-            .unregister_ability_by_prefix(&format!("{name}."))
-            .await
+        let Some(catalog) = self.dispatch_handle.get().cloned() else {
+            crate::op_event!(
+                component = axon_bridge,
+                kind = hot_agent_unregister_catalog_not_ready,
+                agent = name,
+                message = "agent runtime unregister refused because the live ability \
+                          catalogue is not wired",
+            );
+            return 0;
+        };
+        let mut removed = 0;
+        for runtime_key in hosted_agent_runtime_ability_uras_for_agent(runtime, name).await {
+            let Some(dispatch_key) = dispatch_key_for_hosted_agent_runtime_key(&runtime_key, name)
+            else {
+                continue;
+            };
+            match catalog.hot_unregister(&dispatch_key) {
+                Ok(true) => removed += 1,
+                Ok(false) => {}
+                Err(err) => {
+                    let err_msg = err.to_string();
+                    crate::op_event!(
+                        component = axon_bridge,
+                        kind = hot_agent_unregister_failed,
+                        agent = name,
+                        ability = dispatch_key.as_str(),
+                        error = err_msg.as_str(),
+                    );
+                }
+            }
+        }
+        removed
+    }
+
+    async fn register_rpc_with_spec(
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
+        ability_name: &str,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: crate::runtime::ability_dispatch::LocalRpcHandler,
+    ) -> bool {
+        let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
+            Some(runtime_key) => {
+                Self::runtime_has_mode(
+                    ctx.runtime,
+                    &runtime_key,
+                    crate::runtime::ability::CallMode::Rpc,
+                )
+                .await
+            }
+            None => {
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
+                return false;
+            }
+        };
+        match ctx
+            .catalog
+            .hot_register_rpc_with_spec(ability_name, owner, manifest, handler)
         {
-            Ok(removed) => removed.len(),
-            // Empty-prefix is the only error shape the runtime can
-            // return; we always pass `"<name>."` which is non-empty.
-            Err(_) => 0,
+            Ok(()) if was_present => {
+                ctx.outcome.replaced += 1;
+                true
+            }
+            Ok(()) => {
+                ctx.outcome.registered += 1;
+                true
+            }
+            Err(err) => {
+                Self::record_registration_error(ability_name, err, ctx.outcome);
+                false
+            }
         }
     }
 
-    async fn try_replace(
-        runtime: &Arc<LocalRuntime>,
+    async fn register_stream_with_spec(
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
-        handler: crate::runtime::ability_dispatch::LocalRpcHandler,
-        outcome: &mut HotAgentRuntimeSyncOutcome,
-    ) {
-        let ability_fn = rpc_handler_to_ability_fn(handler);
-        match runtime
-            .replace_ability(
-                ability_name.to_string(),
-                ability_fn,
-                AbilityOptions::default(),
-            )
-            .await
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
+    ) -> bool {
+        let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
+            Some(runtime_key) => {
+                Self::runtime_has_mode(
+                    ctx.runtime,
+                    &runtime_key,
+                    crate::runtime::ability::CallMode::Stream,
+                )
+                .await
+            }
+            None => {
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
+                return false;
+            }
+        };
+        match ctx
+            .catalog
+            .hot_register_stream_with_spec(ability_name, owner, manifest, handler)
         {
-            Ok(Some(_)) => outcome.replaced += 1,
-            Ok(None) => outcome.registered += 1,
+            Ok(()) if was_present => {
+                ctx.outcome.replaced += 1;
+                true
+            }
+            Ok(()) => {
+                ctx.outcome.registered += 1;
+                true
+            }
             Err(err) => {
-                outcome.failed += 1;
-                let err_msg = format!("{err}");
-                crate::op_event!(
-                    component = axon_bridge,
-                    kind = hot_agent_register_failed,
-                    ability = ability_name,
-                    error = err_msg.as_str(),
-                );
+                Self::record_registration_error(ability_name, err, ctx.outcome);
+                false
             }
         }
+    }
+
+    async fn register_stream_with_envelope_and_spec(
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
+        ability_name: &str,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: crate::runtime::ability_dispatch::LocalStreamHandlerWithEnvelope,
+    ) -> bool {
+        let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
+            Some(runtime_key) => {
+                Self::runtime_has_mode(
+                    ctx.runtime,
+                    &runtime_key,
+                    crate::runtime::ability::CallMode::Stream,
+                )
+                .await
+            }
+            None => {
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
+                return false;
+            }
+        };
+        match ctx.catalog.hot_register_stream_with_envelope_and_spec(
+            ability_name,
+            owner,
+            manifest,
+            handler,
+        ) {
+            Ok(()) if was_present => {
+                ctx.outcome.replaced += 1;
+                true
+            }
+            Ok(()) => {
+                ctx.outcome.registered += 1;
+                true
+            }
+            Err(err) => {
+                Self::record_registration_error(ability_name, err, ctx.outcome);
+                false
+            }
+        }
+    }
+
+    fn record_bad_runtime_key(
+        binding: &HostedAgentRuntimeBinding,
+        ability_name: &str,
+        outcome: &mut HotAgentRuntimeSyncOutcome,
+    ) {
+        outcome.failed += 1;
+        crate::op_event!(
+            component = axon_bridge,
+            kind = hot_agent_register_failed,
+            ability = ability_name,
+            agent_ura = binding.agent_ura.as_str(),
+            error = "derive hosted agent ability URA failed",
+        );
+    }
+
+    async fn runtime_has_mode(
+        runtime: &Arc<LocalRuntime>,
+        runtime_key: &str,
+        call_mode: crate::runtime::ability::CallMode,
+    ) -> bool {
+        let Some(descriptor) = runtime.ability_descriptor(runtime_key).await else {
+            return false;
+        };
+        match call_mode {
+            crate::runtime::ability::CallMode::Rpc => descriptor.options.modes.rpc,
+            crate::runtime::ability::CallMode::Stream => descriptor.options.modes.stream,
+            crate::runtime::ability::CallMode::Bidi => descriptor.options.modes.bidi,
+        }
+    }
+
+    fn record_registration_error(
+        ability_name: &str,
+        err: anyhow::Error,
+        outcome: &mut HotAgentRuntimeSyncOutcome,
+    ) {
+        outcome.failed += 1;
+        let err_msg = format!("{err}");
+        crate::op_event!(
+            component = axon_bridge,
+            kind = hot_agent_register_failed,
+            ability = ability_name,
+            error = err_msg.as_str(),
+        );
     }
 }
 
@@ -411,8 +812,50 @@ mod tests {
 
     use crate::registry::agents::{AgentEntry, AgentType};
 
+    fn seed_hosted_agent(name: &str) -> String {
+        let host_device_ura = crate::ura::device_ura("localhost", "dev");
+        let agent_ura = crate::ura::agent_ura("localhost", "dev", name);
+        crate::persistence::local_agents::save(
+            &crate::persistence::local_agents::LocalAgentsFile {
+                host_device_agent_ura: host_device_ura.clone(),
+                hosted_agents: vec![crate::persistence::local_agents::HostedAgentEntry {
+                    profile: "llm".to_string(),
+                    name: name.to_string(),
+                    agent_ura: agent_ura.clone(),
+                    signing_authority: format!("hosted_by:{host_device_ura}"),
+                    first_seen_at: "2026-06-24T00:00:00Z".to_string(),
+                }],
+            },
+        )
+        .expect("seed local-agents.json");
+        agent_ura
+    }
+
+    fn runtime_key(agent: &str, registry_ability: &str) -> String {
+        let agent_ura = crate::ura::agent_ura("localhost", "dev", agent);
+        let public_name = crate::ura::owner_local_ability_name(&agent_ura, registry_ability);
+        crate::ura::owner_ability_ura(&agent_ura, &public_name).expect("runtime key")
+    }
+
     fn build_pending() -> Arc<HotAgentRegistrar> {
-        HotAgentRegistrar::new_pending(Arc::new(Vec::new()), Arc::new(OnceLock::new()))
+        HotAgentRegistrar::new_pending(
+            Arc::new(Vec::new()),
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::runtime::agents::discover_ability::BridgeDiscoverFederationResolver),
+        )
+    }
+
+    fn wire_runtime_and_catalog(
+        registrar: &Arc<HotAgentRegistrar>,
+        runtime: Arc<LocalRuntime>,
+    ) -> Arc<AxonAbilityCatalog> {
+        registrar.set_runtime(Arc::clone(&runtime));
+        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(runtime));
+        registrar
+            .dispatch_handle
+            .set(Arc::clone(&catalog))
+            .expect("test catalog wired once");
+        catalog
     }
 
     /// Reconcile pin: a `<agent>.*` row whose backing manifest is
@@ -424,7 +867,7 @@ mod tests {
     async fn register_agent_rejects_reserved_device_owner_token() {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
-        registrar.set_runtime(Arc::clone(&rt));
+        let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
 
         // Dotted form — would mint rows that read as device-owned
@@ -433,7 +876,7 @@ mod tests {
         assert!(outcome.rejected_reserved_owner);
         assert_eq!(outcome.registered, 0);
         assert!(
-            !rt.has_ability("device.dev-1.sys.chat").await,
+            rt.list_abilities().await.is_empty(),
             "no device-owned-shaped rows may reach the runtime"
         );
 
@@ -441,43 +884,52 @@ mod tests {
         // system ability namespace.
         let outcome = registrar.register_agent("device", &entry).await;
         assert!(outcome.rejected_reserved_owner);
-        assert!(!rt.has_ability("device.chat").await);
+        assert!(rt.list_abilities().await.is_empty());
 
         // User-owned shape passes the same gate untouched.
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        seed_hosted_agent("liangbing");
         let outcome = registrar.register_agent("liangbing", &entry).await;
         assert!(!outcome.rejected_reserved_owner);
-        assert!(rt.has_ability("liangbing.chat").await);
+        assert!(
+            rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
+                .await
+        );
     }
 
     #[tokio::test]
     async fn register_agent_reconciles_rows_without_backing_manifests() {
-        use easynet_axon::invocation::make_ability;
-
         let registrar = build_pending();
         let rt = LocalRuntime::new();
-        registrar.set_runtime(Arc::clone(&rt));
+        let catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        seed_hosted_agent("liangbing");
 
         // Simulate an earlier sync's TOML ability whose manifest has
         // since been deleted: the row exists in the runtime but no
         // current source will re-register it.
-        rt.register_ability(
-            "liangbing.ghost_op",
-            make_ability(|_ctx| async move { Ok(Vec::new()) }),
-        )
-        .await
-        .expect("seed registration must succeed");
-        assert!(rt.has_ability("liangbing.ghost_op").await);
+        let ghost_key = runtime_key("liangbing", "liangbing.ghost_op");
+        catalog
+            .hot_register_rpc_with_spec(
+                "liangbing.ghost_op",
+                OwnerKind::Agent("liangbing".to_string()),
+                crate::core::ability_spec::default_chat_manifest(),
+                Arc::new(|_args| Ok(serde_json::Value::Null)),
+            )
+            .expect("seed dynamic ghost ability");
+        assert!(rt.has_ability(&ghost_key).await);
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
         let outcome = registrar.register_agent("liangbing", &entry).await;
 
         assert_eq!(outcome.removed, 1, "stale row must be reconciled away");
         assert!(
-            !rt.has_ability("liangbing.ghost_op").await,
+            !rt.has_ability(&ghost_key).await,
             "withdrawn ability must leave the live runtime"
         );
         assert!(
-            rt.has_ability("liangbing.chat").await,
+            rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
+                .await,
             "rows owned by this sync must survive the reconcile"
         );
     }
@@ -489,7 +941,7 @@ mod tests {
         // After `set_runtime`, calling `register_agent("liangbing", entry)`
         // MUST make `runtime.has_ability("liangbing.chat") == true` —
         // the load-bearing property the dispatcher's Phase-4 arm
-        // (`<self>.invoke_remote`) and the host's session-receive
+        // (`runtime.invoke_remote`) and the host's session-receive
         // Axon arm (`LocalAxonSessionDispatcher`) both gate on.
         //
         // Pre-this-PR, `agent.start` only wrote `agents.json`
@@ -502,7 +954,9 @@ mod tests {
         // wiring are tested separately.
         let registrar = build_pending();
         let rt = LocalRuntime::new();
-        registrar.set_runtime(Arc::clone(&rt));
+        let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
         let outcome = registrar.register_agent("liangbing", &entry).await;
@@ -518,11 +972,18 @@ mod tests {
         // The load-bearing checks — these are what the Phase-4 arm
         // and the Phase-5d session-receive arm gate on.
         assert!(
-            rt.has_ability("liangbing.chat").await,
+            rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
+                .await,
             "liangbing.chat MUST be in LocalRuntime after register_agent"
         );
-        assert!(rt.has_ability("liangbing.discover").await);
-        assert!(rt.has_ability("liangbing.invoke").await);
+        assert!(
+            rt.has_ability(&runtime_key("liangbing", "liangbing.discover"))
+                .await
+        );
+        assert!(
+            rt.has_ability(&runtime_key("liangbing", "liangbing.invoke"))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -536,7 +997,9 @@ mod tests {
 
         let registrar = build_pending();
         let rt = LocalRuntime::new();
-        registrar.set_runtime(Arc::clone(&rt));
+        let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        seed_hosted_agent("liangbing");
 
         let first_entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
         let first = registrar.register_agent("liangbing", &first_entry).await;
@@ -560,6 +1023,9 @@ mod tests {
             "duplicate-name failures would leave stale handler closures live"
         );
 
+        let expected_chat = runtime_key("liangbing", "liangbing.chat");
+        let expected_discover = runtime_key("liangbing", "liangbing.discover");
+        let expected_invoke = runtime_key("liangbing", "liangbing.invoke");
         let mut replaced = std::collections::BTreeSet::new();
         for _ in 0..16 {
             let Ok(event) =
@@ -570,17 +1036,17 @@ mod tests {
             if let Ok(AbilityChangeEvent::Replaced { name, .. }) = event {
                 replaced.insert(name);
             }
-            if replaced.contains("liangbing.chat")
-                && replaced.contains("liangbing.discover")
-                && replaced.contains("liangbing.invoke")
+            if replaced.contains(&expected_chat)
+                && replaced.contains(&expected_discover)
+                && replaced.contains(&expected_invoke)
             {
                 break;
             }
         }
         assert!(
-            replaced.contains("liangbing.chat")
-                && replaced.contains("liangbing.discover")
-                && replaced.contains("liangbing.invoke"),
+            replaced.contains(&expected_chat)
+                && replaced.contains(&expected_discover)
+                && replaced.contains(&expected_invoke),
             "runtime must broadcast replacement for the canonical agent triple, got {replaced:?}"
         );
     }
@@ -604,26 +1070,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unregister_agent_removes_every_prefix_match_atomically() {
+    async fn unregister_agent_removes_every_matching_hosted_agent_runtime_key() {
         // The reverse runtime-sync invariant: `agent.stop`
-        // must wipe the `<name>.*` set so `runtime.has_ability`
-        // flips back to `false`. Uses `unregister_ability_by_prefix`
-        // so the whole set drops in one atomic lock cycle.
+        // must wipe the `<name>.*` public set after decoding
+        // LocalRuntime Ability URA keys back to owner-local public
+        // names, so `runtime.has_ability` flips back to `false`.
         let registrar = build_pending();
         let rt = LocalRuntime::new();
-        registrar.set_runtime(Arc::clone(&rt));
+        let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
         registrar.register_agent("liangbing", &entry).await;
-        assert!(rt.has_ability("liangbing.chat").await);
+        assert!(
+            rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
+                .await
+        );
 
         let removed = registrar.unregister_agent("liangbing").await;
         assert!(
             removed >= 3,
             "chat/discover/invoke triple must be removed, got {removed}"
         );
-        assert!(!rt.has_ability("liangbing.chat").await);
-        assert!(!rt.has_ability("liangbing.discover").await);
-        assert!(!rt.has_ability("liangbing.invoke").await);
+        assert!(
+            !rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
+                .await
+        );
+        assert!(
+            !rt.has_ability(&runtime_key("liangbing", "liangbing.discover"))
+                .await
+        );
+        assert!(
+            !rt.has_ability(&runtime_key("liangbing", "liangbing.invoke"))
+                .await
+        );
     }
 }

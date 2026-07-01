@@ -5,8 +5,9 @@
 // Description: CLI façade for Axon-owned URA builders and parser.
 //
 // URA is protocol state owned by Axon. This file deliberately contains
-// no grammar implementation and no string construction logic; it only
-// re-exports `easynet_axon::ura` so existing CLI modules can keep using
+// no grammar implementation; it re-exports `easynet_axon::ura` and
+// centralizes the few CLI-local projections that sit immediately on top
+// of Axon's canonical builders. Existing CLI modules can keep using
 // `crate::ura::*` while the source of truth remains in Axon SDK.
 //
 // Canonical shapes, all built by Axon:
@@ -37,6 +38,28 @@
 
 pub use easynet_axon::ura::*;
 
+/// Synthetic system Agent URA for daemon-internal LocalRuntime calls.
+///
+/// This is a CLI-owned identity layered on top of Axon's URA grammar: it is
+/// not a user, device, or hub identity, but it still uses the canonical Agent
+/// URA shape so admission snapshots and persisted grants can compare it
+/// without depending on runtime internals.
+pub(crate) const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_system.local";
+
+/// Canonical whole-realm prefix used by directory/federation filters.
+///
+/// Directory queries use prefix matching instead of a concrete role URA.
+/// Axon exposes canonical role builders, so the CLI derives the prefix
+/// from the canonical Hub URA here instead of letting callers assemble
+/// scheme fragments.
+pub fn realm_prefix_ura(realm: &str) -> anyhow::Result<String> {
+    let hub = hub_ura(realm);
+    let prefix = hub.strip_suffix("/hub").ok_or_else(|| {
+        anyhow::anyhow!("Axon hub_ura returned unexpected hub identity shape: {hub:?}")
+    })?;
+    Ok(format!("{prefix}/"))
+}
+
 /// Parsed canonical Ability URA selector.
 ///
 /// What this is: a small boundary object that projects an Ability URA
@@ -51,6 +74,7 @@ pub use easynet_axon::ura::*;
 pub struct AbilitySelector {
     ability_ura: String,
     owner_ura: String,
+    owner_kind: &'static str,
     dispatch_target: String,
     public_name: String,
     local_registry_ability: String,
@@ -73,18 +97,19 @@ impl AbilitySelector {
             anyhow::bail!("invalid Ability URA {ability_ura:?}: missing typed ability owner");
         };
 
-        let (owner_ura, dispatch_target) = match ability.owner {
+        let (owner_ura, owner_kind, dispatch_target) = match ability.owner {
             AbilityOwner::Agent { user_id, agent_id } => (
                 agent_ura(&parsed.realm, &user_id, &agent_id),
+                "agent",
                 agent_id.clone(),
             ),
             AbilityOwner::Device { device_id } => {
                 let owner_ura = device_ura(&parsed.realm, &device_id);
-                (owner_ura.clone(), owner_ura)
+                (owner_ura.clone(), "device", owner_ura)
             }
             AbilityOwner::Hub => {
                 let owner_ura = hub_ura(&parsed.realm);
-                (owner_ura.clone(), owner_ura)
+                (owner_ura.clone(), "hub", owner_ura)
             }
         };
         let public_name = ability_name_from_parts(&parsed).ok_or_else(|| {
@@ -95,6 +120,7 @@ impl AbilitySelector {
         Ok(Self {
             ability_ura: ability_ura.to_string(),
             owner_ura,
+            owner_kind,
             dispatch_target,
             public_name,
             local_registry_ability,
@@ -111,6 +137,13 @@ impl AbilitySelector {
         &self.owner_ura
     }
 
+    /// Owner kind encoded by the Ability URA: `"agent"`, `"device"`,
+    /// or `"hub"`. Derived from the typed `AbilityOwner` arm at parse
+    /// time — consumers never re-sniff URA strings (F-047).
+    pub fn owner_kind(&self) -> &'static str {
+        self.owner_kind
+    }
+
     /// Dispatch target used by local/federation routing.
     pub fn dispatch_target(&self) -> &str {
         &self.dispatch_target
@@ -124,6 +157,62 @@ impl AbilitySelector {
     /// Daemon `AxonAbilityCatalog` registry key.
     pub fn local_registry_ability(&self) -> &str {
         &self.local_registry_ability
+    }
+}
+
+/// Parsed owner-local registry key in the CLI's `<agent>.<ability>` shape.
+///
+/// What this is: a daemon-local value object for registry keys that combine a
+/// hosted agent short name with the public ability name it advertises.
+///
+/// What this is not: it is not a URA parser and it is not a network identity.
+/// The owner segment is the local short name from `local-agents.json`; callers
+/// must still resolve it to an Agent URA before minting protocol identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerLocalAbilityName {
+    registry_name: String,
+    owner: String,
+    public_name: String,
+}
+
+impl OwnerLocalAbilityName {
+    /// Parse `<agent>.<ability>` exactly once for local registry surfaces.
+    ///
+    /// Invariant 1: agent short names are dot-free (`AgentSpec` validates this),
+    /// so the first dot is the only owner/ability boundary.
+    ///
+    /// Invariant 2: public ability names may contain dots (`fs.read`,
+    /// `meta.acquire`), so callers must not use `rsplit_once('.')`.
+    pub fn parse(raw: &str) -> anyhow::Result<Self> {
+        let raw = raw.trim();
+        let Some((owner, public_name)) = raw.split_once('.') else {
+            anyhow::bail!("owner-local ability must use `<agent>.<ability>` form; got {raw:?}");
+        };
+        let owner = owner.trim();
+        let public_name = public_name.trim();
+        if owner.is_empty() || public_name.is_empty() {
+            anyhow::bail!("owner-local ability must have non-empty owner and ability segments");
+        }
+        if owner.contains('.') {
+            anyhow::bail!("owner-local ability owner segment must not contain `.`");
+        }
+        Ok(Self {
+            registry_name: format!("{owner}.{public_name}"),
+            owner: owner.to_string(),
+            public_name: public_name.to_string(),
+        })
+    }
+
+    pub fn registry_name(&self) -> &str {
+        &self.registry_name
+    }
+
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub fn public_name(&self) -> &str {
+        &self.public_name
     }
 }
 
@@ -228,6 +317,14 @@ mod tests {
     }
 
     #[test]
+    fn realm_prefix_ura_is_derived_from_canonical_hub_builder() {
+        assert_eq!(
+            realm_prefix_ura("localhost").expect("realm prefix"),
+            "easynet:///r/localhost/"
+        );
+    }
+
+    #[test]
     fn owner_local_ability_name_projects_registry_key_to_public_name() {
         assert_eq!(
             owner_local_ability_name("easynet:///r/localhost/device/dev-1", "fs.read"),
@@ -281,6 +378,22 @@ mod tests {
             local_dispatch_ability_key("easynet:///r/localhost/agent/alice.claude", "chat"),
             "claude.chat"
         );
+    }
+
+    #[test]
+    fn owner_local_ability_name_keeps_dotted_public_ability() {
+        let parsed =
+            OwnerLocalAbilityName::parse("mentor.meta.acquire").expect("owner-local ability");
+
+        assert_eq!(parsed.registry_name(), "mentor.meta.acquire");
+        assert_eq!(parsed.owner(), "mentor");
+        assert_eq!(parsed.public_name(), "meta.acquire");
+    }
+
+    #[test]
+    fn owner_local_ability_name_rejects_missing_boundary() {
+        let err = OwnerLocalAbilityName::parse("mentor").expect_err("missing dot must fail");
+        assert!(err.to_string().contains("<agent>.<ability>"), "{err}");
     }
 
     #[test]

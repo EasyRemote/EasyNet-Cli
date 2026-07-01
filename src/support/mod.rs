@@ -100,12 +100,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-/// PR-N1 commit 8/N: CLI bridge from `easynet ability invoke
-/// --node` to the local daemon's `federation.forward_invoke`
-/// gRPC ability. Mirrors the placement of `local_invoke.rs` so a
-/// reader looking for "where does the CLI talk to the daemon"
-/// finds both helpers in one directory; this one is for the
-/// cross-hub path.
 /// `run_blocking()` + `try_run_blocking_in_tokio()` — the single
 /// recipe for driving a future to completion from sync code,
 /// with explicit fallback policy. Replaces three near-identical
@@ -115,10 +109,16 @@
 /// `runtime/local_runtime_invoker.rs`.
 pub mod async_bridge;
 
-// federation_invoke + federation_invoke_shim moved to
-// services::invocation_transport (T4.1 pre-move b): they import the
-// transport's ProtoEnvelope, which made `support` reach upward into
-// `services` — the one production back-edge in this module.
+/// `append_cleanup_error()` — fold a best-effort cleanup outcome into a
+/// primary error so transactional rollback paths report both what failed
+/// and whether compensation completed. Shared by `runtime::agents` and
+/// `persistence` rollback sites; see `errors.rs` for the rationale.
+pub(crate) mod errors;
+
+// federation_invoke moved under services::invocation_transport, and the
+// product read boundary lives in services::federated_directory_reader.
+// Keeping both out of support prevents this module from reaching upward into
+// services — the production back-edge this split removed.
 
 /// Transport plumbing for the local daemon's Invocation gRPC
 /// surface — socket resolution, UDS / named-pipe connect, tonic
@@ -131,6 +131,7 @@ pub mod async_bridge;
 /// helpers here are pub(crate) for that one shim; widening their
 /// usage re-spawns the "one CLI subcommand opens its own IPC"
 /// anti-pattern this module file was created to eliminate.
+pub(crate) mod invocation_receipt_projection;
 pub(crate) mod local_daemon_grpc;
 
 /// **Canonical CLI ability-invocation surface.** One helper —

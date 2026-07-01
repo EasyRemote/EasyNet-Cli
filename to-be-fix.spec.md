@@ -1,6 +1,6 @@
 # to-be-fix.spec.md — 跨仓技术债修复总规格(v2,2026-06-12)
 
-> 三件套之三:`to-be-fix.md`(债清单,50 编号 = 44 活跃 + 6 撤销,全部已核验)·
+> 三件套之三:`to-be-fix.md`(债清单,51 编号 = 45 活跃 + 6 撤销,全部已核验)·
 > `to-be-fix.plan.md`(状态机现状/理想态 + 排序)· 本文件(**修复执行总规格**)。
 > v2 相对 v1 的变化:① 覆盖补全——v1 漏编的 F-041…F-046、F-049/F-050 残留全部入批;
 > ② 基线刷新(F-049 主修 fc8df1b、F-050 主修 c03df45 + backend 半边 0716861、T0.5d=52bb764a);
@@ -46,7 +46,7 @@ Skill 支撑 Ability 实现(资源面,不可寻址)。  EasyNet backend/browser 
   跨仓 fixture(F-038 类)漂移在结构上不再可能——因为只有一个形状源。
 - **backend 零协议 fork**:`internal/axon/` 7,765 行被 Axon Go SDK 替换殆尽;
   backend 向 daemon 提交完整七元组 Invocation,daemon 拥有 callee 本地性解析/转发;
-  `<self>.invoke_remote` 包装与手抄 struct 退役。
+  `runtime.invoke_remote` 包装与手抄 struct 退役。
 - **会话/槽位状态机显式化**:DeviceSessionState + CloseClass 一等公民,转移单点发
   op_event;hub 槽位带 claimant 指纹,乒乓类事故在源头被识别为 claimant_conflict。
 - **三仓守卫对称**:URA 裸构造防回潮阀 Cli 9 脚本 + backend 1 + Frontend 1;
@@ -93,13 +93,28 @@ Skill 支撑 Ability 实现(资源面,不可寻址)。  EasyNet backend/browser 
 ## §2 架构问题定性(九类 + 模式债)
 
 ### A1. 会话平面:隐式状态机 + 顶替无源头防御(F-008 / F-009)
-**本质**:`<self>.session` 生命周期无类型表示(状态 = dial 函数控制流位置);hub 槽位
+**本质**:`session.open` 生命周期无类型表示(状态 = dial 函数控制流位置);hub 槽位
 只认 URA 不认申领者,「同设备换代」与「双设备打架」不可区分。
 **已付利息**:2026-06-11 的 5428 次乒乓重连事故;F-049 心跳断裂的诊断过程再次付费
 (阶段不可观测,只能 grep 日志 kind)。device 侧放大器已修(b2ba441 + F-003),根架构未动。
 **终态**(plan §2.1/2.2):`DeviceSessionState` + `CloseClass` 一等化、转移 op_event;
 frame0 携 boot-nonce 指纹 → `claimant_conflict`;admission receipt 携契约版本号。
 → T1.1 / T1.2
+
+**第二支柱——调用层语义统一(F-051,AXON-RFC-008 v3)**:A1 的隐式状态机债有两层。
+T1.1 治**连接层**(`DeviceSessionState`:Dialing→Live→Backoff,一条会话的生死);
+但**一次调用的协议语义生命周期**(admission→authorization→scheduling→terminal)同样曾
+散在巨型 handler 里彼此漂移。**终态(CTO 进行中实现)**:不是「一个 LifecycleDriver 整吞
+四个 dispatcher」(v1/v2 的错误方向,抽公共 RPC loop),而是**统一 Invocation 语义内核 +
+多 transport surface**——语义统一(admission 先于 dispatch、idempotency 可查、terminal 唯一
+可审计、receipt/ledger/watch/idempotency 单点落地),机制各自保留(unary response/stream
+chunk/bidi frame-chain/hub-forward peer transport)。落点在 `EasyNet-Axon/core/runtime-rs/
+src/services/invocation/` 的 ~30 个 phase 模块:统一 `admission_phase`→`authorization_phase`→
+`invocation_scheduling_phase`→**唯一 terminal owner `TerminalFinalizationService`**(三 geometry
+全 delegate finalize,无 per-geometry terminal side effect)。强类型相位 token 不传 loose strings。
+**两层状态分清**:internal phase ≠ protocol-visible event。**v1/v2 sans-IO LifecycleDriver 作废,
+SDK S0-S3 已 revert。** 见 `docs/rfc/AXON-RFC-008-invocation-lifecycle-sans-io.md`(v3)。
+→ T1.6
 
 ### A2. 第二 invocation 载体:SessionDispatch JSON 帧(F-004 + F-038 + F-040 + F-044)
 **本质**:会话业务帧 = protobuf BinaryChunk 包 JSON,携带 ability+args+origin claim+result
@@ -212,6 +227,7 @@ DEC-F046 拍板签名路线。→ T0.5a–c / T0.6 / T2.3 / T5.11 / T5.1(F-045 �
 | T1.3 | **✅ 已完成(EasyNet c54c59c,2026-06-12)** F-031:src/lib/backoff.ts 共享 util(full-jitter,250ms×2^n 封顶 30s,对齐 Cli F-003;random 可注入);terminal-store 永久硬停换为时间门控窗口(成功清零、窗口外放行、文案"next attempt allowed in ~Ns");曲线/jitter 边界单测 + store 测试改钉新语义(注入 state 保证确定性);36/36 + tsc 干净 | EasyNet FE | 完成 | ✓ |
 | T1.4 | **✅ 已完成(Cli f206026,2026-06-12;axon-pb 全量 3183/3183 验证过)** F-024:契约单一剥离点落 src/eal/string_escape.rs(规范注释 + unescape_string_literal——只剥作者层 `\"`/`\\`,其余转义原样属载荷);mod.rs 管线文档载规范行;`\"…\"` 端到端往返测试钉住。**刻意不在 planner 自动应用**(存量自行 unescape 的 wrapper 会双重解码)。wrapper 迁移半边复核为仓内空集(审计"两个 wrapper"系盘点级;"新 wrapper 有据可依"由规范行+helper 满足) | Cli | 完成 | ✓ |
 | T1.5 | **F-049 残留:①② ✅ 已完成(2026-06-12)**。① sidecar 退役(Cli fbbad85,−978 行:heartbeat.rs + 隐藏命令 + boot 门控全删,边界契约测试换 Auth 锚点;grep 三关键词零命中,bins 双特性编译,facade::cli 240/240,script_checks 27/27);② device-state 映射(EasyNet e1c332b):`suspended`(15s 清扫降级,事故本体)→ SUSPECT,`revoked` 显式 → REMOVED,未知词汇/无条目 → UNKNOWN——REMOVED 只留操作员撤销,UNKNOWN 留在 ratified 7 态词汇内不发明 OFFLINE;③(可选,M)hub bidi 活跃兜底刷新目录——设计随 T1.1 一并定,**仍开放** | Cli+BE | ①②完成(+M) | ③ 若做:断 device 心跳仅留 bidi,目录不降级 |
+| T1.6 | **F-051 Invocation 相位架构:统一语义内核 + 多 transport surface(AXON-RFC-008 v3)**。**核心判断修正**:理想架构不是「一个 LifecycleDriver 整吞四个 dispatcher」,而是**统一 Invocation 语义内核 + 多条 transport-specific surface**——生命周期*语义*统一(admission 先于 dispatch、replay/idempotency 可查、route/policy/delegation 执行前定型、terminal 唯一单调可审计、receipt/ledger/watch/idempotency-mapping 单点落地),wire/stream/frame/session *机制*各自保留。**真实落点**:`EasyNet-Axon/core/runtime-rs/src/services/invocation/`(server 侧,非 SDK 非 CLI dispatcher)。**统一相位**:`admission_phase`/`admission_flow`(强类型 `InvokeAdmissionState{Unsigned→Verified→Admitted}`,不传 loose strings)→`authorization_phase`(`InvocationAuthorization`)→`invocation_scheduling_phase`(`InvocationSchedulingDecision::Scheduled\|Terminal`)→**唯一 terminal owner `TerminalFinalizationService::finalize`**(`terminal_finalization.rs:44`,独占 record upsert/idempotency mapping/inflight decrement/circuit metrics/terminal event/audit;**无 per-geometry terminal side effect**,frame/response shaping 在 finalize 之后)。**per-geometry surface**:unary(`unary_{idempotency,route,scheduling,dispatch,execution}_phase`,RAII idempotency claim + dispatch opening)/server-stream(`server_stream_{opening,route,execution,loop,terminal}_phase` + StreamGate)/bidi(`bidi_{frame_zero,opening,up_frame,down_frame,payload,loop,session,terminal}_phase`,frame-chain/HMAC/session attach)/hub-forward(`hub_forward`/`hub_profile/*`)。**两层状态**:internal phase(admission→idempotency→routing→policy→dispatch→terminal)≠ protocol-visible(ACCEPTED→ADMITTED→DISPATCHED→RUNNING→terminal),不再混为一谈。**v1/v2 作废**:sans-IO LifecycleDriver 抽的是「公共 RPC loop」(方向错),对应 SDK S0-S3 已 revert(`23b629e1`等5 commit)。详见 docs/rfc/AXON-RFC-008 v3 | Axon runtime-rs | XL(CTO 进行中) | 唯一 terminal owner 落地;三 geometry 全 delegate finalize;强类型相位 token 不传 loose strings;admission 先于 dispatch;待裁:RouteDecision sealed enum 是否物化、SDK conformance algebra 归宿、ReceiptProjection 定位 |
 
 ### Phase 2 — 协议形状(P0 长线;T2.0 ✅)
 
@@ -223,7 +239,7 @@ DEC-F046 拍板签名路线。→ T0.5a–c / T0.6 / T2.3 / T5.11 / T5.1(F-045 �
 |---|---|---|---|---|
 | T2.1-pre | **dispatch 帧 mini-RFC**(设计件,T2.1 施工硬前置):① proto schema——SessionDispatch::{Request,Result} 字段 ↔ canonical Invocation 七元组逐字段映射,origin-caller claim 与 receipt 回程归位;② 版本协商——契约版本号载于 frame0 admission receipt,**与 T1.1 同一设计(frame0 只动一次)**;③ JSON 残留面清单(status/boot/lifecycle/diagnostics 哪些帧留下);④ 滚动升级序(双读单写一版,新旧 hub×device 四象限行为表) | Axon+Cli | M → T2.0✅ | mini-RFC 经 CTO 评审;字段映射表零「待定」格;四象限表完整 |
 | T2.1 | **F-004 载体归一**:按 T2.1-pre 设计施工(proto 定义落 Axon,Cli 消费——boundary Rule 1);JSON 降级诊断面。性能基准(T0.4)做对照而非 gate——边界违例本身已构成改造理由 | Cli(+Axon proto) | L → T2.1-pre, T0.4 | 基准对比落档;新旧帧互通一个版本;352+ transport 测试迁移;Fed-MVP 基线随新帧重生(T0.3 终态);「单一形状源」= F-038 类漂移结构性不可能 |
-| T2.1b | **F-040 收口(🟢 execution-ready;Cli unary 臂已落)**:backend 改为向 daemon Invocation 面提交完整七元组;退役 `<self>.invoke_remote` 包装与手抄 struct。**施工准备件已落**(docs/t2.1b-backend-cutover-prep-2026-06-12.md,2026-06-12):消费面 9+6 文件盘点齐——真切口仅 daemon_grpc 一层(handler 经 routing client 隔离零感知);降级层 remote_routing 路由矩阵随 callee 本地性解析归 daemon 而退役;五步序列单批可完。**当前 Cli WIP 已补齐 step-4 unary 远端臂**:resolver-selected remote host 进入 `dispatch_remote_rpc_selected_route`;v1 走 canonical carrier, v0 只保留一版 JSON fallback 且不伪造 origin-caller claim;forward_invoke 与 canonical Invoke 共享 `dispatch_frame_to_presence` 单-settle 核心。**剩余真工作在 BE cutover**:daemon_grpc 改投 Invocation 七元组、删除 invoke_remote.go 与 remote_routing 降级矩阵、contract test 改面。**搭车 F-044 勘正**:陈旧 cliipc 注释实为 **3 处**(client.go:12 / servicecontext.go:179 / mapping.go:348 新发现) | EasyNet BE(+Cli) | M → T2.1 | invoke_remote.go(546)删除;contract test 改打 Invocation 面;grep cliipc 零命中(3 处);Cli `invocation_transport` 回归绿 |
+| T2.1b | **F-040 收口(🟢 execution-ready;Cli unary 臂已落)**:backend 改为向 daemon Invocation 面提交完整七元组;退役 `runtime.invoke_remote` 包装与手抄 struct。**施工准备件已落**(docs/t2.1b-backend-cutover-prep-2026-06-12.md,2026-06-12):消费面 9+6 文件盘点齐——真切口仅 daemon_grpc 一层(handler 经 routing client 隔离零感知);降级层 remote_routing 路由矩阵随 callee 本地性解析归 daemon 而退役;五步序列单批可完。**当前 Cli WIP 已补齐 step-4 unary 远端臂**:resolver-selected remote host 进入 `dispatch_remote_rpc_selected_route`;v1 走 canonical carrier, v0 只保留一版 JSON fallback 且不伪造 origin-caller claim;forward_invoke 与 canonical Invoke 共享 `dispatch_frame_to_presence` 单-settle 核心。**剩余真工作在 BE cutover**:daemon_grpc 改投 Invocation 七元组、删除 invoke_remote.go 与 remote_routing 降级矩阵、contract test 改面。**搭车 F-044 勘正**:陈旧 cliipc 注释实为 **3 处**(client.go:12 / servicecontext.go:179 / mapping.go:348 新发现) | EasyNet BE(+Cli) | M → T2.1 | invoke_remote.go(546)删除;contract test 改打 Invocation 面;grep cliipc 零命中(3 处);Cli `invocation_transport` 回归绿 |
 | T2.2a | **✅ 已完成(2026-06-12;「验收收尾」改判被兑现)**:urns.go 实已 SDK 门面(48 委托/0 拼接);9/9 SDK-covered 验收抽查通过(盘点 §三·六,Cli 7665536),密码学旗标双双排除。**F-041 搭车落地(EasyNet b8b2114)**:backend+Frontend 双阀,三态验证,入 conformance CI | EasyNet BE+FE | 完成 | ✓ 阀注入即红验证过 |
 | T2.2b | **✅ 已完成(2026-06-12)**:admission fork 验明薄委托;**F-017 收口(EasyNet 8bc917d)**:SubjectGate 注入对象替双全局+init() 暗读——boot 显式读 env、SetEnforcement 运行时翻转、sink 构造期入结构化日志;5 生产点+streambridge 必填字段+urautil 显式收参;测试自建 gate 零复位+翻转钉死;32/32 | EasyNet BE | 完成 | ✓ 运行时可重配 ✓ 测试无复位 |
 | T2.2c | **🟡 F-015 C 批,2/3 收口(2026-06-12)**:① descriptor 读面上移——SDK 读写同档互逆(Axon b58d124c + EasyNet 2edbc56,−71 行 wire 知识);② OriginCaller 钉 SDK 类型——NewOriginCallerClaim 单一编码+校验边界(Axon fe6060e7),backend 三表示收一、legacy metadata 双写退役(EasyNet 7a0feed,−80 行;Cli origin_caller.rs from_metadata 回退面成死代码,transport 释放后删)。**余**:answer codec 批(盘点 §三-2 重定义待 CTO 签;Rust 产者半边待 pbjson 基建批) | EasyNet BE | M → 盘点签字 | descriptor 读写同源 ✓;claim 单编码边界 ✓;余项随 §三-2 裁决 |
@@ -322,7 +338,7 @@ T0.1–T0.3 / T0.7 / T1.3 / T1.4 / T1.5①② / T5.6–T5.9 / T5.11① 互不依
 T2.1-pre(帧 mini-RFC)· T2.2 parity 盘点(逐函数映射表)· T4.1 crate 依赖图 ·
 其余 TODO 按行内描述即可直接施工。T5.3 run/meta.json 消费面清单已落并闭合。
 
-## §6 条目 → TODO 完整映射(防丢核对表;44 活跃条,每条恰有一个主归宿)
+## §6 条目 → TODO 完整映射(防丢核对表;45 活跃条,每条恰有一个主归宿)
 
 | 条目 | 主归宿 | 搭车/备注 |
 |---|---|---|
@@ -335,6 +351,7 @@ T2.1-pre(帧 mini-RFC)· T2.2 parity 盘点(逐函数映射表)· T4.1 crate 依
 | F-007 ✅ | 基线 | |
 | F-008 | T1.1 | |
 | F-009 | T1.2 | |
+| F-051 | T1.6 | Invocation 相位架构:统一语义内核+多 transport surface(AXON-RFC-008 v3,runtime-rs phase 模块);唯一 terminal owner;A1 第二支柱 |
 | F-010 | T4.1 | |
 | F-011 | T3.1 | 含 prefix 扫描附注 |
 | F-012 | T5.5 | |

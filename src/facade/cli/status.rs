@@ -50,17 +50,9 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         let hub_ura = ura::hub_ura(realm);
         let device_ura = ura::device_ura(realm, &creds.node_id);
         // Per RFC-001 §3.2, hub / user / device are all first-class
-        // agents; we surface all three URAs in scope-broadest-first
-        // order to match the banner. The user row is conditional on
-        // a non-empty `username` field — Phase 14 backends populate
-        // it during validate-pairing; older paired devices won't
-        // have it and we suppress the row rather than show a
-        // placeholder.
-        let user_ura = creds
-            .username
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|u| ura::user_ura(realm, u));
+        // agents; the user row must use the immutable product user id,
+        // not the display username slug.
+        let user_ura = creds.user_ura().ok();
         let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
         if let Some(ref u) = user_ura {
             rows.push(("Current user", u.as_str()));
@@ -253,9 +245,8 @@ fn run_json() -> anyhow::Result<()> {
 /// above; whether any peers are advertised is a softer signal).
 #[cfg(feature = "axon-pb")]
 fn fetch_directory_entries() -> Vec<Value> {
-    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(
-        None, None,
-    ) {
+    match crate::services::invocation_transport::federation_invoke::invoke_federation_discover(None)
+    {
         Ok(entries) => entries,
         Err(e) => {
             output::info(&format!("Fleet: cannot query federation.discover ('{e}')"));

@@ -137,8 +137,9 @@ impl EalError {
     ///   [`EalError::DeadlineExceeded`]: the SDK tells us the call
     ///   exceeded its budget. Retry with a longer backoff; a tighter
     ///   retry can compound peer overload.
-    /// - [`AxonError::Bridge`] / [`AxonError::Stream`] /
-    ///   [`AxonError::Invocation`] / [`AxonError::Mcp`] →
+    /// - [`AxonError::Bridge`] / [`AxonError::NativeBridge`] /
+    ///   [`AxonError::Stream`] / [`AxonError::Invocation`] /
+    ///   [`AxonError::Mcp`] →
     ///   [`EalError::Unavailable`]: transport / peer-side failures
     ///   that may succeed on retry after recovery. `Invocation` is a
     ///   *remote* execution failure (the SDK already split local
@@ -167,9 +168,12 @@ impl EalError {
             A::Validation(_) | A::PolicyDenied(_) => EalError::Validation(msg),
             A::NotInstalled(_) | A::NotActivated(_) => EalError::NotFound(msg),
             A::DeadlineExceeded(_) => EalError::DeadlineExceeded(msg),
-            A::Bridge(_) | A::Stream(_) | A::Invocation(_) | A::Mcp(_) | A::Io(_) => {
-                EalError::Unavailable(msg)
-            }
+            A::Bridge(_)
+            | A::NativeBridge { .. }
+            | A::Stream(_)
+            | A::Invocation(_)
+            | A::Mcp(_)
+            | A::Io(_) => EalError::Unavailable(msg),
             A::SymbolNotFound(_) | A::Json(_) | A::PartialSuccess { .. } => EalError::Internal(msg),
         }
     }

@@ -90,7 +90,7 @@ stateDiagram-v2
     S300_RUNTIME_STARTING --> S310_HUB_CREDENTIAL_VERIFIED: verify credential
     S310_HUB_CREDENTIAL_VERIFIED --> S320_HUB_SESSION_ENDPOINT_REACHABLE: socket preflight
     S320_HUB_SESSION_ENDPOINT_REACHABLE --> S330_DAEMON_BOOTED: daemon process up
-    S330_DAEMON_BOOTED --> S340_SESSION_ADMITTED: <self>.session admitted
+    S330_DAEMON_BOOTED --> S340_SESSION_ADMITTED: session.open admitted
     S340_SESSION_ADMITTED --> N500_NAMESPACE_VISIBLE: PresenceRegistry has device
     N500_NAMESPACE_VISIBLE --> C700_FRONTEND_CONNECTED: frontend refetch shows ONLINE
     S300_RUNTIME_STARTING --> F550_DAEMON_BOOT_FAILED: boot failed
@@ -120,7 +120,7 @@ stateDiagram-v2
 | `S310` | `HUB_CREDENTIAL_VERIFIED` | CLI/Backend | Backend 接受 credential token | doctor 可查 | No |
 | `S320` | `HUB_SESSION_ENDPOINT_REACHABLE` | CLI | Hub session endpoint TCP/TLS 可达 | doctor 可查 | No |
 | `S330` | `DAEMON_BOOTED` | CLI | daemon.sock up, runtime process alive | doctor 显示 daemon up | No |
-| `S340` | `SESSION_ADMITTED` | CLI daemon/Hub | `<self>.session` admission 成功, Hub 认可 device identity | doctor 显示 session admitted | No |
+| `S340` | `SESSION_ADMITTED` | CLI daemon/Hub | `session.open` admission 成功, Hub 认可 device identity | doctor 显示 session admitted | No |
 | `N500` | `NAMESPACE_VISIBLE` | Axon/Hub/CLI | device URA 已进入 resolver/PresenceRegistry 可见面 | backend resolve 正向 | No |
 | `C700` | `FRONTEND_CONNECTED` | Backend/Frontend | 后端 read model 投影 ONLINE, 前端显示 connected | Yes | No |
 | `C710` | `FRONTEND_DEGRADED` | Backend/Frontend | DB row 可显示, runtime resolver 有 typed unavailable | Yes | No |
@@ -490,7 +490,7 @@ Frontend 禁止:
 | Variant | Predicate | Resolver answer | Dispatch next hop | Required policy | Canonical failures |
 | --- | --- | --- | --- | --- | --- |
 | `V0_LOCAL_SAME_DEVICE` | caller, subject, callee 在同一 device runtime | `FinalRoute(LocalDeviceAbility)` | local ability registry | local device ownership/session admitted | `NXDOMAIN`, `NODATA`, `UNAUTHORIZED`, `RECEIPT_FAILURE_MISSING` |
-| `V1_SAME_REALM_SAME_USER_REMOTE_DEVICE` | 同 realm、同 user、目标 device 在线 | `FinalRoute(RemoteDeviceAbility)` | hub `<self>.invoke_remote` to target device | target in PresenceRegistry, same owner or explicit grant | `TARGET_NOT_IN_PRESENCE_REGISTRY`, `NOROUTE`, `STALE` |
+| `V1_SAME_REALM_SAME_USER_REMOTE_DEVICE` | 同 realm、同 user、目标 device 在线 | `FinalRoute(RemoteDeviceAbility)` | hub `runtime.invoke_remote` to target device | target in PresenceRegistry, same owner or explicit grant | `TARGET_NOT_IN_PRESENCE_REGISTRY`, `NOROUTE`, `STALE` |
 | `V2_SAME_REALM_CROSS_USER` | 同 realm、跨 user 访问共享资源/授权 ability | `FinalRoute(RemoteDeviceAbility)` or `Negative(UNAUTHORIZED)` | hub remote route | ACL/delegation grant, subject key registered | `UNAUTHORIZED`, `SUBJECT_KEY_UNREGISTERED`, `DELEGATION_INVALID` |
 | `V3_CROSS_REALM` | target realm != caller realm | `Delegation` then peer `FinalRoute` | trusted peer hub | realm trust, peer hub reachable, delegation proof | `REALM_NOT_TRUSTED`, `PEER_HUB_UNAVAILABLE`, `DELEGATION_REQUIRED`, `DELEGATION_INVALID` |
 | `V4_HOSTED_AGENT_LOCAL_DEVICE` | ability belongs to agent hosted on local device | `FinalRoute(HostedAgentAbility)` | local agent runtime | agent advertised and admitted | `AGENT_NOT_ADVERTISED`, `AGENT_NOT_RUNNING`, `NOROUTE` |

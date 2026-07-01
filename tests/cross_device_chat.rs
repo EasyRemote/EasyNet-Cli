@@ -10,7 +10,7 @@
 #[ignore = "PR-3 owns the real cross-device chat transport path"]
 fn cross_device_chat_round_trip_fixture_pending_pr3() {
     // Placeholder only. The real implementation lands once
-    // `<self>.invoke_remote` + chat ability routing are both live.
+    // `runtime.invoke_remote` + chat ability routing are both live.
     // Keeping a concrete ignored test here turns the checklist item
     // into a tracked artefact instead of a TODO in prose.
 }

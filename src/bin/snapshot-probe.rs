@@ -1,7 +1,7 @@
-// Operator-only probe that exercises the same `NokhwaBackend::capture_jpeg`
-// path the `camera.snapshot` ability uses. Skips the envelope/subject layer
-// so the operator can verify camera permission + JPEG encode end-to-end
-// without wiring a registered resource.
+// Operator-only probe that exercises the same production
+// `SnapshotBackend::capture_jpeg` path the `camera.snapshot` ability uses.
+// Skips the envelope/subject layer so the operator can verify camera
+// permission + JPEG encode end-to-end without wiring a registered resource.
 //
 // Usage: cargo run --bin snapshot-probe -- /tmp/probe.jpg
 
@@ -28,10 +28,10 @@ fn main() -> anyhow::Result<()> {
     let backend: Arc<dyn easynet_cli::runtime::agents::media::camera_snapshot::SnapshotBackend> =
         Arc::new(easynet_cli::runtime::agents::media::camera_snapshot::NokhwaBackend);
 
-    eprintln!("opening default camera (index 0)…");
+    eprintln!("opening default camera (index 0)...");
     let frame = backend
         .capture_jpeg(&entry)
-        .context("NokhwaBackend::capture_jpeg failed")?;
+        .context("production camera capture failed")?;
 
     std::fs::write(&path, &frame.jpeg_bytes)?;
     eprintln!(

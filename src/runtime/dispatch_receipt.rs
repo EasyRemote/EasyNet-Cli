@@ -4,8 +4,9 @@
 // File: src/runtime/dispatch_receipt.rs
 //
 // When the IPC dispatcher returns a result for a local ability, it
-// must attach a §A12 receipt header so the caller can verify which
-// Agent the result came from. This module centralises the
+// may attach a legacy §A12 hosted-agent receipt header so older
+// callers can verify the local authority projection behind the result.
+// This module centralises the
 // "ability_name + local-agents.json + host_device_ura →
 // HostedAgentReceiptHeader" lookup that the proxy needs on every
 // successful dispatch.
@@ -14,7 +15,7 @@
 // ----------------------
 // The mapping has three inputs that must agree:
 //
-//   1. The owner classification for the ability.
+//   1. The authority/projection classification for the ability.
 //   2. The hosted Agent URA recorded in `local-agents.json`.
 //   3. The host device-profile URA from the same file.
 //
@@ -25,7 +26,7 @@
 // What this module DOES
 // ---------------------
 // `header_for_ability(ability_name, &local_agents_file)` returns
-// the right header for an ability whose owner the file knows about.
+// the right header for an ability whose authority projection the file knows about.
 // Returns `None` for abilities the file cannot map (e.g. before
 // the daemon has joined a realm); the dispatcher then omits the
 // optional `receipt_header` field and the wire is unchanged from
@@ -47,9 +48,7 @@ use easynet_axon::invocation::audit::HostedAgentReceiptHeader;
 
 use crate::persistence::local_agents::{lookup_hosted_ura, LocalAgentsFile};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::agents::profiles::{
-    DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID, DEFAULT_POLICY_AGENT_ID,
-};
+use crate::runtime::agents::profiles::{DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID};
 
 pub trait HostAttestationProvider {
     fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>>;
@@ -75,17 +74,17 @@ impl HostAttestationProvider for NoHostAttestation {
 /// Build a receipt header for the given ability, given the daemon's
 /// local-agents.json snapshot. Returns:
 ///
-///   * `Some(Selfsigned)` when the ability is owned by the device-
-///     profile and the file has the host URA.
-///   * `Some(HostedBy)` when the ability is owned by a hosted
-///     profile (consent / policy / mcp / llm) and the file has both
+///   * `Some(Selfsigned)` when the ability is governed by device
+///     authority and the file has the host URA.
+///   * `Some(HostedBy)` when the ability is dispatched through a hosted
+///     profile projection (consent / mcp / llm) and the file has both
 ///     the hosted URA and the host URA.
 ///   * `None` otherwise — the dispatcher omits the receipt_header
 ///     field and the wire is unchanged from pre-RFC behaviour.
 ///
 /// The caller may also pass `Some(sub_agent_name)` when the ability
 /// is in the `skill.*` / `conversation.*` namespace and the
-/// dispatch context knows which sub-agent owns it (chat dispatch
+/// dispatch context knows which sub-agent projected it (chat dispatch
 /// has this context; static system abilities don't).
 pub fn header_for_ability(
     ability_name: &str,
@@ -108,7 +107,7 @@ pub fn header_for_ability_with_attestation(
 
     let (profile_key, name) = match crate::runtime::agents::system_ability_owner(ability_name) {
         Some(OwnerKind::Device) => {
-            // Self-signed: the device-profile dispatched its own ability.
+            // Self-signed: device authority projected through the host profile.
             return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();
         }
         Some(OwnerKind::Agent(agent_id)) => hosted_system_profile_for_agent_id(&agent_id)?,
@@ -125,7 +124,6 @@ pub fn header_for_ability_with_attestation(
 fn hosted_system_profile_for_agent_id(agent_id: &str) -> Option<(&'static str, &'static str)> {
     match agent_id {
         DEFAULT_CONSENT_AGENT_ID => Some(("consent", "default")),
-        DEFAULT_POLICY_AGENT_ID => Some(("policy", "default")),
         DEFAULT_MCP_AGENT_ID => Some(("mcp", "default")),
         _ => None,
     }
@@ -155,14 +153,24 @@ fn is_llm_contextual_ability(ability_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::facade::cli::test_support::HomeGuard;
     use crate::persistence::local_agents::{upsert_hosted_agent, LocalAgentsFile};
     use easynet_axon::invocation::audit::SigningModel;
 
-    fn file_with(host: &str) -> LocalAgentsFile {
-        LocalAgentsFile {
+    /// Build the test agents file together with a [`HomeGuard`]. The header
+    /// builder resolves ability owners through the process-global static
+    /// catalog, whose registration reads `HOME` / `EASYNET_PAGES_USER`.
+    /// Without the guard, a parallel HomeGuard-holding test in another module
+    /// can mutate those vars mid-sync and make the static-runtime sync panic.
+    /// Returning the guard from the universal setup helper guarantees every
+    /// test in this module — present and future — serializes against it.
+    fn file_with(host: &str) -> (HomeGuard, LocalAgentsFile) {
+        let guard = HomeGuard::new();
+        let file = LocalAgentsFile {
             host_device_agent_ura: host.into(),
             hosted_agents: Vec::new(),
-        }
+        };
+        (guard, file)
     }
 
     fn test_attestation(callee: &str, host: &str) -> Option<Vec<u8>> {
@@ -176,7 +184,7 @@ mod tests {
 
     #[test]
     fn device_ability_emits_selfsigned_header() {
-        let file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, file) = file_with("easynet:///r/acme/device/01DEV");
         let h = header_for_ability("observe.health", &file, None)
             .expect("device ability must produce a header");
         assert_eq!(h.callee_agent_ura, "easynet:///r/acme/device/01DEV");
@@ -186,7 +194,7 @@ mod tests {
 
     #[test]
     fn consent_ability_emits_hosted_by_header_when_ura_persisted() {
-        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, mut file) = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "consent",
@@ -220,7 +228,7 @@ mod tests {
         // local-agents.json doesn't yet have a consent row (e.g.
         // bootstrap hasn't run). Better to return None than mint a
         // header pointing at a URA the hub doesn't know about.
-        let file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, file) = file_with("easynet:///r/acme/device/01DEV");
         assert!(
             header_for_ability("consent.request", &file, None).is_none(),
             "missing hosted URA must surface as None, not a fabricated header"
@@ -229,7 +237,7 @@ mod tests {
 
     #[test]
     fn llm_ability_requires_sub_agent_name_to_resolve_owner() {
-        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, mut file) = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "llm",
@@ -255,7 +263,7 @@ mod tests {
 
     #[test]
     fn llm_skill_ability_resolves_to_named_sub_agent() {
-        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, mut file) = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "llm",
@@ -274,7 +282,7 @@ mod tests {
 
     #[test]
     fn mcp_bridge_ability_emits_hosted_by_header() {
-        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, mut file) = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "mcp",
@@ -296,7 +304,7 @@ mod tests {
     fn empty_host_ura_yields_none_for_every_ability() {
         // Pre-join state: the dispatcher should not emit headers
         // because the host URA itself is unknown.
-        let file = file_with("");
+        let (_home, file) = file_with("");
         assert!(header_for_ability("observe.health", &file, None).is_none());
         assert!(header_for_ability("consent.subscribe", &file, None).is_none());
     }
@@ -306,7 +314,7 @@ mod tests {
         // The wire shape `<agent>.chat` embeds the sub-agent name.
         // The header builder special-cases this so chat dispatch
         // doesn't need out-of-band sub-agent context.
-        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, mut file) = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "llm",
@@ -321,7 +329,7 @@ mod tests {
 
     #[test]
     fn agent_dot_chat_returns_none_when_sub_agent_not_registered() {
-        let file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, file) = file_with("easynet:///r/acme/device/01DEV");
         // No `llm/claude` row — no header.
         assert!(header_for_ability("claude.chat", &file, None).is_none());
     }
@@ -331,14 +339,14 @@ mod tests {
         // Some abilities (e.g. federation.* dispatched against the
         // local-process cache) are not owned by any profile this
         // file knows about — header builder must just return None.
-        let file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, file) = file_with("easynet:///r/acme/device/01DEV");
         assert!(header_for_ability("federation.heartbeat", &file, None).is_none());
         assert!(header_for_ability("totally.unknown", &file, None).is_none());
     }
 
     #[test]
     fn hosted_ability_without_attestation_yields_none() {
-        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, mut file) = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "consent",
@@ -353,7 +361,7 @@ mod tests {
 
     #[test]
     fn header_passes_validate() {
-        let file = file_with("easynet:///r/acme/device/01DEV");
+        let (_home, file) = file_with("easynet:///r/acme/device/01DEV");
         let h = header_for_ability("observe.health", &file, None).unwrap();
         assert!(
             h.validate().is_ok(),

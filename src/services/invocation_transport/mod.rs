@@ -13,13 +13,13 @@
 //
 // - Configuration parsing — that lives in `persistence::daemon_config`
 //   and is loaded in the daemon binary's `main` and threaded down
-// - Admission gate semantics — those live in `easynet-axon`'s
-//   `domain::admission` helpers; this module *invokes* them at the
-//   start of every RPC method but never re-implements them
+// - Transport policy gate semantics — this module owns daemon/product
+//   routing checks, while descriptor-bound Axon runtime admission
+//   remains inside `easynet-axon::invocation::LocalRuntime`
 // - Ability dispatch — `runtime::ability_dispatch` continues to own
 //   the AxonAbilityCatalog and the registered handler set; this
 //   module routes inbound RPC calls into that runtime surface
-// - Federation `<self>.session` / `<self>.invoke_remote` reverse-
+// - Federation `session.open` / `runtime.invoke_remote` reverse-
 //   channel liveness — that lives in `presence_registry` and the
 //   session-specific modules below, not in the top-level service
 //   namespace
@@ -30,7 +30,7 @@
 //    `tonic` trait impl
 // 2. The boundary error mapping from internal typed errors to
 //    `tonic::Status`
-// 3. The construction recipe that wires admission gate, presence
+// 3. The construction recipe that wires transport policy, presence
 //    registry, Axon LocalRuntime, plugin runtime manager, invocation
 //    ledger, federation dialers, and local session dispatch together
 //    at daemon boot
@@ -66,6 +66,7 @@ pub(crate) mod bidi_dispatcher;
 pub mod boot;
 pub mod daemon_invocation_service;
 pub(crate) mod deps;
+pub(crate) mod descriptor_binding;
 pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;
@@ -73,18 +74,10 @@ pub mod federated_key_resolver;
 /// T4.1 pre-move b — it consumes this module's ProtoEnvelope).
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_invoke;
-/// Feature-agnostic shim over [`federation_invoke`]. Callers in the
-/// hot path (ability discovery, federation surfaces) depend on this
-/// module instead of `federation_invoke` directly so they remain
-/// compilable under default features (axon-pb off). With axon-pb on,
-/// the shim re-exports the real implementation; with axon-pb off, it
-/// returns empty/typed-error responses so the caller's logic stays
-/// uniform and degrades to a local-only view. One shim, one place
-/// that knows the feature exists — the alternative scatters a
-/// transport-layer flag through product-layer branches.
-pub(crate) mod federation_invoke_shim;
 pub mod federation_wrappers;
+pub(crate) mod hosted_agent_delegation;
 pub mod hub_resolver;
+pub(crate) mod identity_write_gate;
 pub mod invocation_wire;
 pub mod invoke_remote_initiator;
 pub(crate) mod ledger_projection;
@@ -96,6 +89,8 @@ pub(crate) mod quota_meter;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;
 pub mod route_resolver;
+pub(crate) mod runtime_trust;
+pub(crate) mod runtime_trust_invalidator;
 pub mod session_escalation;
 pub mod session_initiator;
 pub(crate) mod stream_dispatcher;
@@ -110,6 +105,6 @@ pub use invoke_remote_initiator::{
     invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
     ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
-pub use list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
-pub use register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
-pub use revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;
+pub use list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+pub use register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+pub use revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;

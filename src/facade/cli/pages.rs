@@ -22,7 +22,9 @@
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::support::local_invoke::invoke_local_ability;
+use crate::support::local_invoke::{
+    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget,
+};
 
 /// User-owned Pages ability verbs exposed by the local daemon.
 ///
@@ -79,6 +81,11 @@ impl PagesAbility {
 
     fn local_registry_ability(&self) -> String {
         self.verb.public_name().to_string()
+    }
+
+    fn local_target(&self, realm: &str) -> anyhow::Result<LocalAbilityTarget> {
+        let callee = crate::ura::agent_ura(realm, &self.user, "pages");
+        LocalAbilityTarget::new(self.local_registry_ability(), callee.clone(), callee)
     }
 }
 
@@ -175,7 +182,7 @@ pub fn run(args: PagesArgs) -> anyhow::Result<()> {
 fn current_user() -> anyhow::Result<String> {
     // Production: read username from `EASYNET_PAGES_USER` env or
     // `credentials.json`. M5 of the system-namespace migration
-    // banned the `<self>` placeholder — an unpaired daemon has no
+    // banned the `legacy self alias` placeholder — an unpaired daemon has no
     // user-rooted ability surface, so the CLI MUST surface the
     // missing-identity error rather than silently dialling
     // `self.pages.*` (which the registry no longer answers).
@@ -198,6 +205,29 @@ fn current_user() -> anyhow::Result<String> {
     )
 }
 
+fn current_realm() -> String {
+    std::env::var("EASYNET_PAGES_REALM")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            crate::persistence::config::load_credentials()
+                .ok()
+                .map(|c| c.realm)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string())
+}
+
+fn invoke_pages_ability(ability: &PagesAbility, args: Value) -> anyhow::Result<Value> {
+    let target = ability.local_target(&current_realm())?;
+    invoke_local_ability_target_with_subject_timeout(
+        &target,
+        args,
+        None,
+        std::time::Duration::from_secs(30),
+    )
+}
+
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
     let user = current_user()?;
     let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Publish)?;
@@ -206,7 +236,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
         "project_id": a.project_id,
         "visibility": a.visibility,
     });
-    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages create failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -229,7 +259,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
     let user = current_user()?;
     let ability = PagesAbility::for_user(&user, PagesAbilityVerb::List)?;
-    let result = invoke_local_ability(&ability.local_registry_ability(), json!({}))
+    let result = invoke_pages_ability(&ability, json!({}))
         .map_err(|e| anyhow::anyhow!("pages list failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -265,7 +295,7 @@ fn run_show(a: ShowArgs) -> anyhow::Result<()> {
     let user = current_user()?;
     let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages show failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -339,7 +369,7 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
     let user = current_user()?;
     let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Unpublish)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages delete failed: {e}"))?;
     let removed = result
         .get("removed")
@@ -357,7 +387,7 @@ fn run_url(a: UrlArgs) -> anyhow::Result<()> {
     let user = current_user()?;
     let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_local_ability(&ability.local_registry_ability(), args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages url failed: {e}"))?;
     let url = result
         .get("url_root")
@@ -376,6 +406,23 @@ mod tests {
         let ability =
             PagesAbility::for_user("alice", PagesAbilityVerb::Publish).expect("pages ability");
         assert_eq!(ability.local_registry_ability(), "pages.publish");
+    }
+
+    #[test]
+    fn pages_ability_targets_pages_agent_callee() {
+        let ability =
+            PagesAbility::for_user("alice", PagesAbilityVerb::List).expect("pages ability");
+        let target = ability.local_target("localhost").expect("local target");
+
+        assert_eq!(target.dispatch_name(), "pages.list");
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/localhost/agent/alice.pages"
+        );
+        assert_eq!(
+            target.default_subject_ura(),
+            "easynet:///r/localhost/agent/alice.pages"
+        );
     }
 
     #[test]

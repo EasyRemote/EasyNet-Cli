@@ -4,11 +4,11 @@
 
 After the C-M9a / C-M10 / C-M13 work landed nine new abilities, the
 surface risked reading as "a bag of RPCs." This doc articulates the
-three semantic layers every published ability MUST belong to and
+four semantic classes every published ability MUST belong to and
 the invariants each layer guarantees. The invariants are
 machine-checkable and lock the surface against drift.
 
-## The three layers
+## The semantic classes
 
 ### 1. Introspection (`meta.*`, `*.bridge.list_*`, `fleet.list_*`)
 
@@ -37,17 +37,17 @@ any order, and observe one of two things:
 | `context.favorites.list`   | persisted favorites file              |
 | `context.captures.list` / `.get` | persisted media-capture index + payloads |
 
-### 2. Control / decision (`policy.*`, `consent.decide`)
+### 2. Control / decision (`consent.decide`; historical `policy.*`)
 
-**Promise:** *pure decision functions. No mutation of catalog
-state, no hidden state across calls.*
+**Promise:** *decision logic is explicit about what it mutates. No
+mutation of catalog state, no hidden state across calls.*
 
-Decision abilities take a candidate envelope (or a candidate
-permission ID) and return Allowed / Denied / Pending. Calling
-`policy.evaluate` for the same input twice yields the same decision
-within the decision's TTL. They MAY consult persisted policy state,
-but they MUST NOT mutate it (`policy.publish` is a separate verb,
-intentionally absent from v1).
+Decision abilities take a candidate envelope or permission ID and
+return Allowed / Denied / Pending. The standalone `policy.evaluate`
+and `policy.simulate` ability names are historical governance design
+notes, not published EasyNet-Cli P0 abilities. If that product surface
+is reintroduced later, it must be pure for identical inputs within the
+decision TTL and must not mutate policy state.
 
 Device-context configuration writes also live here:
 `context.clipboard.track` (flip history capture on/off) and
@@ -63,11 +63,10 @@ side effect of the decision logic. The invariant is "no observation
 ability's response changes because consent.decide ran." Verify with
 `consent.list_pending` before/after.
 
-| Ability                | Mutation? |
-|------------------------|-----------|
-| `policy.evaluate`      | none      |
-| `policy.simulate`      | none (named distinctly to make it obvious) |
-| `consent.decide`       | broker queue (write-only after decision) |
+| Ability / concept             | Current status | Mutation? |
+|-------------------------------|----------------|-----------|
+| `consent.decide`              | published      | broker queue (write-only after decision) |
+| `policy.evaluate` / `.simulate` | historical design note | none if reintroduced |
 
 ### 3. Observation (`observe.*`)
 
@@ -91,16 +90,32 @@ documented inline in the handler when that lands.
 | `observe.health`         | per-call snapshot (timestamp from now) |
 | `observe.network_health` | per-call snapshot of local-agents.json + hosted Agents |
 
+### 4. Operational
+
+**Promise:** *the ability invocation is the work.* These abilities may
+read or mutate state, dispatch to a subprocess, call another ability, or
+change an agent workspace. They are not coalesced as pure reads.
+
+`meta.teach`, `meta.acquire`, and `meta.forget` live here: they mutate
+the teach grant ledger or a learner agent workspace. They are not
+introspection simply because they use the `meta.*` namespace.
+
+| Ability family | Work performed |
+|----------------|----------------|
+| `meta.teach` / `meta.acquire` / `meta.forget` | capability transfer grant, learned manifest copy, learned-copy removal |
+| `ability.*` / `skill.*` mutation verbs | write/remove manifests or skill package state |
+| `fs.*`, `process.exec`, `shell.run`, `http.request` | host locomotion / execution work |
+| `terminal.*`, `mic.*`, `camera.*`, `screen.*`, `speaker.*`, `voice.*`, `browser.*`, `mission.*` | session, media, browser, or orchestration work |
+
 ## Cross-layer rules
 
 - An introspection ability MUST NOT call a control ability.
   (Otherwise calling `meta.list_abilities` could trigger a
   policy.evaluate audit log entry — observation with side effects.)
-- A control ability MAY call an introspection ability.
-  (`policy.evaluate` legitimately fetches the descriptor catalog
-  to score the envelope's ability against the descriptor.visibility
-  rules.)
-- An observation ability MUST NOT call either of the other two.
+- A control ability MAY call an introspection ability. For example, a
+  future policy evaluator may fetch the descriptor catalog to score
+  an envelope against descriptor visibility rules.
+- An observation ability MUST NOT call any non-observation class.
   (Otherwise observation can trigger admission, which is the
   textbook anti-pattern.)
 

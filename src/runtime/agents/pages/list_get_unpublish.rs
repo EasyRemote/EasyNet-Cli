@@ -144,7 +144,8 @@ fn handle_unpublish_inner(
         return Err(err).context("persist pages publish registry");
     }
     if let Some(registry) = registry {
-        super::unregister_project_abilities(registry, ability_names);
+        super::unregister_project_abilities(registry, ability_names)
+            .context("unregister pages project abilities")?;
     }
     Ok(json!({
         "user":       user,

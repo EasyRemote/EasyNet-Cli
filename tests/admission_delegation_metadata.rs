@@ -4,22 +4,24 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use easynet_axon::invocation::axiom::{
-    canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-    InvocationEnvelope, SubjectIdentity, UraProfile,
+    sign_descriptor_bound_invocation, AgentIdentity as AxiomAgentIdentity, CausalContext,
+    DescriptorBoundEnvelope, InvocationEnvelope, SubjectIdentity, UraProfile,
 };
 use easynet_axon::pb::axon::v1::{
     AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope, EnvelopeOpen,
     InvocationTarget, InvokeRequest, InvokeServerStreamRequest,
     SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::runtime::ability::{canonical_json_bytes, DEFAULT_ABILITY_DESCRIPTOR_VERSION};
 use easynet_cli::services::invocation_transport::AdmissionFacade;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
+use sha2::Digest as _;
 
 const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
 const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
+const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 #[derive(Serialize)]
 struct DelegationPayload {
@@ -82,23 +84,30 @@ fn signed_request(
     signing_key: &SigningKey,
     nonce: [u8; 16],
 ) -> InvokeRequest {
-    let mut hasher = Sha256::new();
-    hasher.update(args);
-    let args_digest: [u8; 32] = hasher.finalize().into();
-
+    let caller = AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2);
+    let callee = AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2);
+    let subject = SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
+    let ability_ref = format!(
+        "{}@{}",
+        easynet_cli::ura::owner_ability_ura(callee_ura, ability).expect("callee-owned ability URA"),
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    );
     let axiom_env = InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-        subject: SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2),
-        ability: ability.to_string(),
-        args_digest,
+        caller,
+        callee,
+        subject,
+        ability: ability_ref.clone(),
+        args_digest: sha2::Sha256::digest(args).into(),
         invocation_nonce: nonce,
         causal_context: CausalContext::None,
     };
-    let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_env));
     let key_id_hint = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+    let descriptor_bound =
+        DescriptorBoundEnvelope::new(axiom_env).expect("descriptor-bound test envelope");
+    let signature =
+        sign_descriptor_bound_invocation(signing_key, &descriptor_bound, key_id_hint.as_str());
 
-    InvokeRequest {
+    let mut request = InvokeRequest {
         envelope: Some(Envelope {
             caller: Some(PbAgentIdentity {
                 ura: caller_ura.to_string(),
@@ -114,16 +123,20 @@ fn signed_request(
             }),
             invocation_nonce: nonce.to_vec(),
             caller_signature: Some(PbCallerSignature {
-                algorithm: "ed25519".to_string(),
-                signature: signature.to_bytes().to_vec(),
-                key_id_hint,
+                algorithm: signature.algorithm,
+                signature: signature.signature,
+                key_id_hint: signature.key_id_hint,
             }),
             ..Envelope::default()
         }),
         function_name: ability.to_string(),
         arguments: args.to_vec(),
         ..InvokeRequest::default()
-    }
+    };
+    request
+        .metadata
+        .insert(SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(), ability_ref);
+    request
 }
 
 fn delegation_metadata(
@@ -143,7 +156,7 @@ fn delegation_metadata(
         issued_at_ms: 1_700_000_000_000,
         expires_at_ms: 4_102_444_800_000,
     };
-    let payload_bytes = serde_json::to_vec(&payload).expect("canonical delegation payload");
+    let payload_bytes = canonical_payload_bytes(&payload);
     let signature = signer.sign(&payload_bytes);
     let raw = serde_json::json!({
         "payload": serde_json::from_slice::<serde_json::Value>(&payload_bytes)
@@ -173,7 +186,7 @@ fn session_authority_metadata(
         issued_at_ms: 1_700_000_000_000,
         expires_at_ms: 4_102_444_800_000,
     };
-    let payload_bytes = serde_json::to_vec(&payload).expect("canonical session authority payload");
+    let payload_bytes = canonical_payload_bytes(&payload);
     let signature = signer.sign(&payload_bytes);
     let raw = serde_json::json!({
         "payload": serde_json::from_slice::<serde_json::Value>(&payload_bytes)
@@ -183,16 +196,32 @@ fn session_authority_metadata(
     BASE64_STANDARD.encode(serde_json::to_vec(&raw).expect("raw session authority"))
 }
 
+fn canonical_payload_bytes<T: Serialize>(payload: &T) -> Vec<u8> {
+    let value = serde_json::to_value(payload).expect("payload value");
+    canonical_json_bytes(&value)
+}
+
+fn delegation_metadata_from_value(signer: &SigningKey, payload: serde_json::Value) -> String {
+    let payload_bytes = canonical_json_bytes(&payload);
+    let signature = signer.sign(&payload_bytes);
+    let raw = serde_json::json!({
+        "payload": payload,
+        "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+    });
+    BASE64_STANDARD.encode(serde_json::to_vec(&raw).expect("raw delegation proof"))
+}
+
 #[test]
-fn backend_user_subject_accepts_user_signed_delegation_metadata() {
+fn backend_session_subject_accepts_user_signed_delegation_metadata() {
     let backend_key = SigningKey::from_bytes(&[0x31; 32]);
     let user_key = SigningKey::from_bytes(&[0x41; 32]);
     let caller_ura = easynet_cli::ura::hub_ura("delegation-it");
     let callee_ura = "easynet:///r/realm/device/device-it";
-    let subject_ura = "easynet:///r/realm/user/alice";
+    let user_ura = "easynet:///r/realm/user/alice";
+    let subject_ura = "easynet:///r/realm/session/sess-alice-1";
     let ability = "agent.list";
     let facade =
-        admission_facade_with_identities(&[(&caller_ura, &backend_key), (subject_ura, &user_key)]);
+        admission_facade_with_identities(&[(&caller_ura, &backend_key), (user_ura, &user_key)]);
 
     let mut request = signed_request(
         &caller_ura,
@@ -207,7 +236,7 @@ fn backend_user_subject_accepts_user_signed_delegation_metadata() {
         DELEGATION_METADATA_KEY.to_string(),
         delegation_metadata(
             &user_key,
-            subject_ura,
+            user_ura,
             subject_ura,
             &caller_ura,
             callee_ura,
@@ -217,15 +246,58 @@ fn backend_user_subject_accepts_user_signed_delegation_metadata() {
 
     facade
         .verify_invoke(&request)
-        .expect("user-signed delegation admits backend acting for user subject");
+        .expect("user-signed delegation admits backend acting for session subject");
 }
 
 #[test]
-fn backend_user_subject_accepts_backend_signed_session_authority() {
+fn delegation_metadata_verifies_against_canonical_payload_order() {
+    let backend_key = SigningKey::from_bytes(&[0x35; 32]);
+    let user_key = SigningKey::from_bytes(&[0x45; 32]);
+    let caller_ura = easynet_cli::ura::hub_ura("delegation-it-canonical");
+    let callee_ura = "easynet:///r/realm/device/device-canonical";
+    let user_ura = "easynet:///r/realm/user/alice";
+    let subject_ura = "easynet:///r/realm/session/sess-canonical-1";
+    let ability = "agent.list";
+    let facade =
+        admission_facade_with_identities(&[(&caller_ura, &backend_key), (user_ura, &user_key)]);
+
+    let mut request = signed_request(
+        &caller_ura,
+        callee_ura,
+        subject_ura,
+        ability,
+        b"{}",
+        &backend_key,
+        [0x55; 16],
+    );
+    request.metadata.insert(
+        DELEGATION_METADATA_KEY.to_string(),
+        delegation_metadata_from_value(
+            &user_key,
+            serde_json::json!({
+                "scopes": [ability],
+                "expires_at_ms": 4_102_444_800_000_i64,
+                "audience": callee_ura,
+                "caller_ura": caller_ura,
+                "issued_at_ms": 1_700_000_000_000_i64,
+                "subject_ura": subject_ura,
+                "issuer_ura": user_ura,
+            }),
+        ),
+    );
+
+    facade
+        .verify_invoke(&request)
+        .expect("delegation signature must verify canonical payload bytes, not struct field order");
+}
+
+#[test]
+fn backend_session_subject_accepts_backend_signed_session_authority() {
     let signing_key = SigningKey::from_bytes(&[0x37; 32]);
     let caller_ura = easynet_cli::ura::hub_ura("session-it");
     let callee_ura = "easynet:///r/realm/device/device-it";
-    let subject_ura = "easynet:///r/realm/user/alice";
+    let user_ura = "easynet:///r/realm/user/alice";
+    let subject_ura = "easynet:///r/realm/session/sess-alice-1";
     let ability = "agent.list";
     let facade = admission_facade(&caller_ura, &signing_key);
 
@@ -243,7 +315,7 @@ fn backend_user_subject_accepts_backend_signed_session_authority() {
         session_authority_metadata(
             &signing_key,
             &caller_ura,
-            subject_ura,
+            user_ura,
             "sess-alice-1",
             &[callee_ura],
             &[ability],
@@ -252,18 +324,18 @@ fn backend_user_subject_accepts_backend_signed_session_authority() {
 
     facade
         .verify_invoke(&request)
-        .expect("backend-signed session authority admits backend acting for user subject");
+        .expect("backend-signed session authority admits backend acting for session subject");
 }
 
 #[test]
-fn backend_user_subject_without_delegation_metadata_is_denied() {
+fn backend_session_subject_without_authority_metadata_is_denied() {
     let signing_key = SigningKey::from_bytes(&[0x32; 32]);
     let caller_ura = easynet_cli::ura::hub_ura("delegation-it-missing");
     let facade = admission_facade(&caller_ura, &signing_key);
     let request = signed_request(
         &caller_ura,
         "easynet:///r/realm/device/device-it-missing",
-        "easynet:///r/realm/user/bob",
+        "easynet:///r/realm/session/sess-bob-1",
         "agent.read",
         b"{}",
         &signing_key,
@@ -272,23 +344,23 @@ fn backend_user_subject_without_delegation_metadata_is_denied() {
 
     let err = facade
         .verify_invoke(&request)
-        .expect_err("user subject authority metadata is mandatory");
+        .expect_err("session subject authority metadata is mandatory");
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
     assert!(err.message().contains("AUTHORITY_REQUIRED"));
 }
 
 #[test]
-fn bootstrap_authority_user_subject_without_delegation_metadata_is_admitted() {
+fn bootstrap_authority_session_subject_without_delegation_metadata_is_admitted() {
     let signing_key = SigningKey::from_bytes(&[0x34; 32]);
     let caller_ura = easynet_cli::ura::hub_ura("bootstrap-authority");
     let callee_ura = caller_ura.clone();
-    let subject_ura = "easynet:///r/bootstrap-authority/user/alice";
+    let subject_ura = "easynet:///r/bootstrap-authority/session/bootstrap-alice";
     let facade = admission_facade(&caller_ura, &signing_key);
 
     for (index, ability) in [
-        "<self>.register_device_pubkey",
-        "<self>.list_user_pubkeys",
-        "<self>.revoke_user_pubkey",
+        "identity.register_pubkey",
+        "identity.list_user_pubkeys",
+        "identity.revoke_user_pubkey",
         "runtime.bootstrap_self_identity",
         "federation.advertise_agent",
     ]
@@ -319,8 +391,8 @@ fn bootstrap_authority_still_rejects_bad_caller_signature() {
     let request = signed_request(
         &caller_ura,
         &caller_ura,
-        "easynet:///r/bootstrap-authority-bad-sig/user/alice",
-        "<self>.register_device_pubkey",
+        "easynet:///r/bootstrap-authority-bad-sig/session/bootstrap-alice",
+        "identity.register_pubkey",
         b"{}",
         &wrong_key,
         [0x65; 16],
@@ -337,15 +409,14 @@ fn stream_and_bidi_verify_delegation_metadata() {
     let signing_key = SigningKey::from_bytes(&[0x33; 32]);
     let caller_ura = easynet_cli::ura::hub_ura("delegation-it-stream");
     let callee_ura = "easynet:///r/realm/device/device-it-stream";
-    let subject_ura = "easynet:///r/realm/user/carla";
+    let user_ura = "easynet:///r/realm/user/carla";
+    let subject_ura = "easynet:///r/realm/session/sess-carla-1";
     let ability = "agent.watch";
-    let facade = admission_facade_with_identities(&[
-        (&caller_ura, &signing_key),
-        (subject_ura, &signing_key),
-    ]);
+    let facade =
+        admission_facade_with_identities(&[(&caller_ura, &signing_key), (user_ura, &signing_key)]);
     let proof = delegation_metadata(
         &signing_key,
-        subject_ura,
+        user_ura,
         subject_ura,
         &caller_ura,
         callee_ura,
@@ -365,6 +436,7 @@ fn stream_and_bidi_verify_delegation_metadata() {
         envelope: stream_base.envelope.clone(),
         function_name: ability.to_string(),
         arguments: b"{}".to_vec(),
+        metadata: stream_base.metadata.clone(),
         ..InvokeServerStreamRequest::default()
     };
     stream_request
@@ -390,6 +462,7 @@ fn stream_and_bidi_verify_delegation_metadata() {
             ..InvocationTarget::default()
         }),
         initial_args: b"{}".to_vec(),
+        metadata: bidi_base.metadata.clone(),
         ..EnvelopeOpen::default()
     };
     open.metadata

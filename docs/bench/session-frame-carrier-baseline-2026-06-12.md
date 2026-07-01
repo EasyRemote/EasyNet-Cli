@@ -6,7 +6,7 @@ as the signal, absolute numbers as machine-relative.
 
 ## What is measured
 
-Today's session business frames (`<self>.invoke_remote` dispatch over the
+Today's session business frames (`runtime.invoke_remote` dispatch over the
 device session channel) travel as **serde-JSON `SessionDispatch` inside a
 proto `BinaryChunk` inside `InvokeBidiDown`** — every frame pays a JSON
 encode + proto encode on send and a proto decode + JSON decode on receive,

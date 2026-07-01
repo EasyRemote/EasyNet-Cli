@@ -1,19 +1,19 @@
-// EasyNet CLI — System Abilities (`system.*` namespace)
-// ======================================================
+// EasyNet CLI — Daemon-Owned Abilities
+// ====================================
 //
 // File: src/runtime/system/mod.rs
 // Description: Device-level abilities published by `easynet-daemon`.
-//              Distinct from agent abilities (which live under
-//              `runtime::abilities` and bind to one registered AI
-//              agent), system abilities belong to the *node*
-//              itself: ping, schedule, session-attach, permission,
-//              discuss, loop. Their handlers run inside the daemon,
-//              not inside an agent subprocess.
+//              Distinct from agent abilities (which bind to one registered
+//              AI agent), daemon-owned abilities belong to the node itself:
+//              ping, schedule, session-attach, permission, discuss, loop.
+//              Their handlers run inside the daemon, not inside an agent
+//              subprocess.
 //
 // Naming
 // ------
-// All system abilities are named `system.<feature>[.<verb>]`. Today
-// only `observe.health` exists; PR-ATTACH onwards extends the namespace.
+// Names are explicit device/control-plane prefixes such as `observe.*`,
+// `session.*`, `consent.*`, and the existing boot-control
+// `system.watch_boot` wire subscription.
 //
 // Per-feature module layout
 // -------------------------
@@ -72,6 +72,8 @@ pub mod chat_ability;
 pub mod chat_history_ability;
 pub mod context_ability;
 pub mod context_loaders;
+pub mod device_ability_registrar;
+pub mod device_ability_store;
 pub mod device_ops_ability;
 pub mod discover_ability;
 pub mod discuss_ability;
@@ -81,10 +83,9 @@ pub mod discuss_ability;
 /// shell_executor; both consume `template` for `{{ var }}`
 /// substitution before dispatching.
 pub mod eal_executor;
-/// device-hosted node/ability/remote operations: list_nodes, describe_node,
-/// remove_node, deploy_ability, uninstall_ability, exec_remote,
-/// register_self, deregister_self. The CLI side
-/// (`easynet device …`, `easynet ability deploy / uninstall / exec`)
+/// device-hosted node/ability operations: list_nodes, describe_node,
+/// remove_node, deploy_ability, uninstall_ability. The CLI side
+/// (`easynet device …`, `easynet ability deploy / uninstall`)
 /// reaches these through `support::local_invoke::invoke_local_ability`,
 /// the same path every other CLI surface uses.
 pub(crate) mod federation_probe;
@@ -120,12 +121,13 @@ pub mod fs_edit_ability;
 /// from every receipt the auditor may persist. Schemes
 /// restricted to http / https; CR/LF in header values
 /// rejected; redirect / timeout / body caps enforced.
+pub mod host_stream_executor;
 pub mod http_executor;
 pub mod http_request_ability;
 pub mod invocation_history_ability;
 pub mod invoke_ability;
-/// RFC-005 v3.2 A9 — `meta.list_resources`. Resource discovery
-/// surface for the eight media abilities above. Reads
+/// `meta.list_resources`. Resource discovery surface for the media
+/// abilities above. Reads
 /// `~/.easynet/resources.json` via `persistence::resources` and
 /// projects to the wire shape; no device backend needed, so it
 /// ships fully working.
@@ -140,12 +142,11 @@ pub mod mcp_reflective_registry;
 /// the `camera.snapshot` vertical slice with a deterministic
 /// synthetic backend; PR3 lands cpal/nokhwa/screen.
 pub mod media;
-/// RFC-005 v3.2 A1–A8 — eight physical-channel media abilities
-/// (mic.subscribe, camera.subscribe/snapshot, screen.subscribe/
-/// snapshot, speaker.publish, voice.subscribe, voice.transcribe).
-/// PR2 ships every handler as a stub that enforces
-/// INV-SUBJECT-ENVELOPE; PR3 / PR3a swap individual stubs out for
-/// real implementations.
+/// RFC-005 v3.2 physical-channel media abilities
+/// (mic.subscribe, camera.subscribe/snapshot/record_start/record_stop,
+/// screen.subscribe/snapshot, speaker.publish, voice.subscribe,
+/// voice.transcribe). Real modules replace the shared stubs one
+/// ability family at a time.
 pub mod media_abilities;
 pub mod meta_ability;
 pub mod mission_ability;
@@ -164,7 +165,6 @@ pub mod pages;
 pub mod permission_ability;
 pub mod ping;
 pub mod plugin_lifecycle_ability;
-pub mod policy_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile,
 /// structured-execution member. `process.exec` spawns one
 /// process via OS-level argv (NO shell interpretation);
@@ -222,6 +222,8 @@ pub mod skill_install_ability;
 /// skill (lives in the agent's own skill pool). The judge's
 /// `value_kind` field picks between the two.
 pub mod skill_publish_ability;
+pub(crate) mod system_ability_manifest;
+pub mod teach_ability;
 /// `{{ var }}` template substitution shared by every executor that
 /// consumes `[exec]`-bound ability manifests (shell argv, EAL
 /// source, …). Pulled out so the substitution model — including

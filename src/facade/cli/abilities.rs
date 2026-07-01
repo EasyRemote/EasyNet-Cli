@@ -520,14 +520,13 @@ fn invoke_remote_list_abilities(
 ) -> anyhow::Result<Value> {
     let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::remote_device::caller_device_ura_from_credentials();
-    let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
+    let target_call = crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
         &target_ura,
         "meta.list_abilities",
     )?;
-    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-        ability_ura.as_str(),
+    crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target(
+        &target_call,
         query.to_request(),
-        &target_ura,
         caller_ura.as_deref(),
     )
     .with_context(|| format!("forward meta.list_abilities to target={target_ura}"))
@@ -544,12 +543,8 @@ fn invoke_remote_list_abilities(
 }
 
 fn extract_abilities(value: &Value) -> anyhow::Result<Vec<Value>> {
-    // The handler returns `{"abilities": [...]}`. Tolerate the
-    // older spelling `tools` for forward-compat in case a follow-up
-    // renames it; either way we extract a Vec<Value>.
     Ok(value
         .get("abilities")
-        .or_else(|| value.get("tools"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())

@@ -74,10 +74,10 @@
 //
 // The output schema's `usage`, `tool_calls`, and `context_used`
 // fields are populated by the driver layer's tool-use observability
-// (via dispatch::ToolCall, projected from claude-code's tool_use
-// stream events). Codex adapters return empty `tool_calls` because
-// they do not surface tool-use events. `usage` mirrors
-// `AgentResponse.usage` when the driver reports it.
+// (via dispatch::ToolCall, projected from driver stream events).
+// Drivers that do not expose tool-use observability return empty
+// `tool_calls`. `usage` mirrors `AgentResponse.usage` when the driver
+// reports it.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -89,7 +89,7 @@ use serde_json::{json, Value};
 
 use crate::registry::agents::{AgentEntry, AgentRegistry};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::runtime::dispatch::DriverOverrides;
+use crate::runtime::dispatch::{AgentResponse, DriverOverrides, ToolCall};
 
 /// The wire-level *verb* portion of every chat ability name. The
 /// fully-qualified ability name is always `<agent>.chat`. A future
@@ -217,11 +217,8 @@ pub fn register_for_agent(
     // invoke them: the dispatcher returns NOT_FOUND for every
     // <agent>.<ability> name that isn't `<agent>.chat`.
     //
-    // The adapter handler is intentionally simple: "act as
-    // ability X with args Y" — the agent's own CLAUDE.md /
-    // SKILL.md define what fulfilling the ability means; this
-    // function just routes the call.
     let other_abilities = crate::runtime::abilities::abilities_for(&agent_name, &entry);
+    let manifests = crate::runtime::abilities::manifests_for(&agent_name, &entry);
     let chat_name = ability.clone();
     for spec in other_abilities {
         if spec.name() == chat_name {
@@ -232,13 +229,28 @@ pub fn register_for_agent(
             .strip_prefix(&format!("{agent_name}."))
             .unwrap_or(&ability_name)
             .to_string();
-        let h = build_agent_ability_handler(
-            agent_name.clone(),
-            entry.clone(),
-            Arc::clone(&loaders),
-            bare_ability,
-        );
-        reg.register_rpc_with_owner(&ability_name, owner.clone(), h);
+
+        let Some(manifest) = manifests.iter().find(|m| m.name() == bare_ability) else {
+            continue;
+        };
+        let Some(exec) = manifest.exec() else {
+            continue;
+        };
+        match exec {
+            crate::core::ability_spec::AbilityExec::HostStream(stream_spec) => {
+                let h = build_host_stream_handler(stream_spec.clone());
+                reg.register_stream_with_envelope_and_owner(&ability_name, owner.clone(), h);
+            }
+            _ => {
+                let h = build_agent_ability_handler(
+                    agent_name.clone(),
+                    entry.clone(),
+                    Arc::clone(&loaders),
+                    bare_ability,
+                );
+                reg.register_rpc_with_owner(&ability_name, owner.clone(), h);
+            }
+        }
     }
 
     // Stream: emit framed events. v1 ships a Snapshot variant
@@ -254,19 +266,49 @@ pub fn register_for_agent(
     );
 }
 
-/// Build one chat-translation RPC handler for an agent's
+/// Build the envelope-aware stream handler for a `host_stream` ability.
+///
+/// Registered via `register_stream_with_envelope_and_owner` so the
+/// ability is stream-mode (`modes.stream = true`) and so the handler
+/// sees the AXIOM seven-tuple: the runtime invocation id becomes the
+/// wire `call_id` correlating the request to the external host. The
+/// handler is the once-per-call `Fn` the stream registry expects — it
+/// opens the host stream and returns the live `StreamSource`
+/// immediately; anything that can fail the open surfaces as `Err` so a
+/// failed open never produces a half-live session.
+pub(crate) fn build_host_stream_handler(
+    spec: crate::core::ability_spec::HostStreamExec,
+) -> crate::runtime::ability_dispatch::LocalStreamHandlerWithEnvelope {
+    Arc::new(
+        move |env: crate::runtime::ability_dispatch::EnvelopeContext, args: Value| {
+            let call_id = env.invocation_id().to_string();
+            let caller = env.caller().to_string();
+            crate::runtime::agents::host_stream_executor::run_host_stream(
+                &spec, &args, &call_id, &caller,
+            )
+        },
+    )
+}
+
+/// Build the server-stream `<agent>.chat` handler used by both
+/// boot-time and hot lifecycle registration.
+///
+/// This is intentionally a handler factory rather than a registration
+/// helper: lifecycle registration owns the catalogue transaction, while
+/// this module owns only chat execution semantics.
+pub(crate) fn build_chat_stream_handler_for(
+    agent_name: String,
+    entry: AgentEntry,
+    loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
+) -> crate::runtime::ability_dispatch::LocalStreamHandler {
+    Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args))
+}
+
+/// Build one executor-bound RPC handler for an agent's
 /// non-`chat` ability. Pulled out as a free fn so both the
 /// boot-time pre-registration loop in `register_for_agent` and
 /// HotAgentRegistrar produce byte-for-byte the same handler. This
-/// keeps the "ability fulfilled by chat" contract in exactly one
-/// place.
-///
-/// The handler synthesises a prompt instructing the agent to
-/// fulfill the declared ability `<bare_ability>` with the caller's
-/// args, then routes through the agent's chat handler. The chat
-/// reply is wrapped in a `{result, fulfilled_by, agent, usage,
-/// elapsed_ms}` envelope so callers can distinguish an LLM-
-/// fulfilled call from a synchronous one.
+/// keeps manifest executor routing in exactly one place.
 pub(crate) fn build_agent_ability_handler(
     agent_name: String,
     entry: AgentEntry,
@@ -274,19 +316,8 @@ pub(crate) fn build_agent_ability_handler(
     bare_ability: String,
 ) -> crate::runtime::ability_dispatch::LocalRpcHandler {
     Arc::new(move |args: Value| {
-        // Re-read this agent's manifests at invoke time so we see
-        // edits made post-boot. Two pieces of state come out of the
-        // matching manifest:
-        //
-        //   * `exec`: when present, route directly to the bound
-        //     executor (shell argv, future http/wasm) — no chat in
-        //     the loop, sub-second turnaround, deterministic.
-        //   * `description`: when no exec is bound, the chat
-        //     fallback embeds the manifest's description verbatim
-        //     into the prompt so the agent has the contract to
-        //     fulfil. Losing this was the root cause of "the
-        //     ability is registered, the call routes, but the
-        //     agent ignores the brief and fabricates an answer".
+        // Re-read this agent's manifests at invoke time so edits made
+        // post-boot change the executor binding without a daemon restart.
         let matching_manifest = crate::runtime::abilities::manifests_for(&agent_name, &entry)
             .into_iter()
             .find(|m| m.name() == bare_ability);
@@ -310,72 +341,26 @@ pub(crate) fn build_agent_ability_handler(
                         let _ = timeout;
                         crate::runtime::agents::mcp_executor::run_mcp_exec(spec, &args)
                     }
+                    crate::core::ability_spec::AbilityExec::HostStream(_) => {
+                        // host_stream registers as a stream-mode ability
+                        // (see register_for_agent): it is dispatched
+                        // through the stream handler, never this unary RPC
+                        // adapter. Reaching here means the ability was
+                        // mis-registered as RPC — fail loudly rather than
+                        // silently collapsing the stream to one value.
+                        Err(anyhow::anyhow!(
+                            "host_stream ability '{bare_ability}' reached the unary \
+                             RPC path; it must be invoked as a server-stream"
+                        ))
+                    }
                 };
             }
         }
 
-        let manifest_description: String = matching_manifest
-            .as_ref()
-            .map(|m| m.description().to_string())
-            .unwrap_or_default();
-
-        let prompt = if manifest_description.trim().is_empty() {
-            format!(
-                "Fulfill your declared ability `{bare}` with the following arguments \
-                 (JSON, may be empty object): {args}\n\n\
-                 Reply with the ability's result as plain text — no preamble, no markdown \
-                 fence, no commentary. If the arguments are invalid for this ability, \
-                 reply with a single line starting with `error: `.",
-                bare = bare_ability,
-                args = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string()),
-            )
-        } else {
-            format!(
-                "You are fulfilling your declared ability `{bare}`.\n\n\
-                 The ability's contract (from its TOML manifest description) is:\n\n\
-                 ----- BEGIN ABILITY CONTRACT -----\n\
-                 {desc}\n\
-                 ----- END ABILITY CONTRACT -----\n\n\
-                 You MUST follow the contract literally — if it tells you to run a \
-                 specific shell command (curl, ffmpeg, git, …), run THAT command via \
-                 your Bash tool. Do not substitute a different tool (no WebSearch, \
-                 no fabrication). If the contract names a particular response prefix \
-                 or format, use it.\n\n\
-                 Caller arguments (JSON, may be empty object): {args}\n\n\
-                 Reply with the ability's result as plain text — no preamble, no markdown \
-                 fence, no commentary. If the arguments are invalid for this ability, \
-                 reply with a single line starting with `error: `.",
-                bare = bare_ability,
-                desc = manifest_description.trim(),
-                args = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string()),
-            )
-        };
-
-        let chat_args = serde_json::json!({
-            "prompt": prompt,
-            "stream": false,
-        });
-        handler(&agent_name, &entry, &loaders, chat_args).map(|chat_resp| {
-            let reply = chat_resp
-                .get("reply")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let usage = chat_resp
-                .get("usage")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let elapsed_ms = chat_resp
-                .get("elapsed_ms")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            serde_json::json!({
-                "result": reply,
-                "fulfilled_by": "agent_chat",
-                "agent": agent_name,
-                "usage": usage,
-                "elapsed_ms": elapsed_ms,
-            })
-        })
+        let _ = (&agent_name, &entry, &loaders, args);
+        Err(anyhow::anyhow!(
+            "ability {bare_ability:?} is not executable: its manifest has no [exec] binding"
+        ))
     })
 }
 
@@ -391,6 +376,73 @@ pub(crate) fn build_chat_handler_for(
     Arc::new(move |args: Value| handler(&agent_name, &entry, &loaders, args))
 }
 
+fn usage_to_json(resp: &AgentResponse) -> Option<Value> {
+    resp.usage.as_ref().map(|u| {
+        json!({
+            "input_tokens": u.input_tokens,
+            "output_tokens": u.output_tokens,
+            "cache_read_tokens": u.cache_read_tokens,
+            "cached_input_tokens": u.cache_read_tokens,
+            "cache_creation_tokens": u.cache_creation_tokens,
+            "num_turns": u.num_turns,
+            "total_cost_usd": u.total_cost_usd,
+            "model": resp.model.clone(),
+        })
+    })
+}
+
+fn tool_calls_to_json(tool_calls: &[ToolCall]) -> Vec<Value> {
+    tool_calls.iter().map(tool_call_to_json).collect()
+}
+
+fn tool_call_to_json(tool_call: &ToolCall) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert("ability".to_string(), json!(tool_call.ability.clone()));
+    object.insert("args".to_string(), tool_call.args.clone());
+    insert_optional_value(&mut object, "result", tool_call.result.clone());
+    insert_optional_string(&mut object, "error", tool_call.error.as_deref());
+    if let Some(elapsed_ms) = tool_call.elapsed_ms {
+        object.insert("elapsed_ms".to_string(), json!(elapsed_ms));
+    }
+    insert_optional_string(&mut object, "tool_use_id", tool_call.tool_use_id.as_deref());
+    insert_optional_string(
+        &mut object,
+        "mcp_tool_name",
+        tool_call.mcp_tool_name.as_deref(),
+    );
+    insert_optional_string(&mut object, "request_id", tool_call.request_id.as_deref());
+    insert_optional_string(&mut object, "ability_ura", tool_call.ability_ura.as_deref());
+    insert_optional_string(
+        &mut object,
+        "invocation_ura",
+        tool_call.invocation_ura.as_deref(),
+    );
+    insert_optional_string(&mut object, "caller_ura", tool_call.caller_ura.as_deref());
+    insert_optional_string(&mut object, "callee_ura", tool_call.callee_ura.as_deref());
+    insert_optional_string(&mut object, "subject_ura", tool_call.subject_ura.as_deref());
+    Value::Object(object)
+}
+
+fn insert_optional_string(
+    object: &mut serde_json::Map<String, Value>,
+    key: &'static str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        object.insert(key.to_string(), json!(value));
+    }
+}
+
+fn insert_optional_value(
+    object: &mut serde_json::Map<String, Value>,
+    key: &'static str,
+    value: Option<Value>,
+) {
+    if let Some(value) = value {
+        object.insert(key.to_string(), value);
+    }
+}
+
 /// Synthesise an `<agent>.discover` handler for a hot-added agent.
 /// The handler closes over `agent_name` for caller identity and
 /// re-loads `agents.json` per call so the discover ladder sees
@@ -399,6 +451,7 @@ pub(crate) fn build_chat_handler_for(
 pub(crate) fn build_discover_handler_for(
     agent_name: String,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+    federation_resolver: crate::runtime::agents::discover_ability::SharedDiscoverFederationResolver,
 ) -> crate::runtime::ability_dispatch::LocalRpcHandler {
     // Replicate the surface of `discover_ability::register_for_agent`
     // without going through that function (it expects a `&mut
@@ -414,6 +467,7 @@ pub(crate) fn build_discover_handler_for(
             &agent_name,
             &provider,
             &dispatch_handle,
+            federation_resolver.as_ref(),
             args,
         )
     })
@@ -687,35 +741,8 @@ pub(crate) fn invoke_direct_with_progress(
     } else {
         session_id
     };
-    let usage = resp.usage.as_ref().map(|u| {
-        json!({
-            "input_tokens": u.input_tokens,
-            "output_tokens": u.output_tokens,
-            "model": resp.model.clone(),
-        })
-    });
-
-    // tool_calls comes from the driver layer's tool-use observability
-    // (see runtime::drivers::claude_code::ToolCallRecord). Codex
-    // adapters return an empty Vec so the field is `[]` for codex
-    // agents — present for schema stability, just empty.
-    let tool_calls_json: Vec<Value> = resp
-        .tool_calls
-        .iter()
-        .map(|tc| {
-            json!({
-                "ability": tc.ability,
-                "args": tc.args,
-                // elapsed_ms per-call is not yet captured by the
-                // driver; the schema lists it as required so emit a
-                // 0 placeholder rather than dropping the field. A
-                // future driver upgrade can populate per-call timing.
-                "elapsed_ms": 0,
-            })
-        })
-        .collect();
-
-    let usage_value = usage.unwrap_or(Value::Null);
+    let usage_value = usage_to_json(&resp).unwrap_or(Value::Null);
+    let tool_calls_json = tool_calls_to_json(&resp.tool_calls);
 
     // Persist the turn to the agent's per-session JSONL transcript —
     // same contract as the `agent send` CLI path (run_send). Without
@@ -723,13 +750,14 @@ pub(crate) fn invoke_direct_with_progress(
     // Frontend Group page) leaves no trace for `chat.history.{list,
     // get}` to read. Best-effort: a disk failure must not break the
     // in-flight reply.
-    crate::persistence::chat_sessions::write_turn_best_effort(
+    crate::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
         agent_name,
         &session_id,
         &parsed.prompt,
         &resp.content,
         &tool_calls_json,
         &usage_value,
+        elapsed_ms,
     );
     // Bind (or re-affirm) the lifelong pointer after the turn is on
     // disk, so the next sentinel turn resumes this same thread.
@@ -974,24 +1002,8 @@ fn stream_handler(
             let elapsed_ms = started.elapsed().as_millis() as u64;
             let frame = match result {
                 Ok(resp) => {
-                    let usage = resp.usage.as_ref().map(|u| {
-                        json!({
-                            "input_tokens": u.input_tokens,
-                            "output_tokens": u.output_tokens,
-                            "model": resp.model.clone(),
-                        })
-                    });
-                    let tool_calls_json: Vec<Value> = resp
-                        .tool_calls
-                        .iter()
-                        .map(|tc| {
-                            json!({
-                                "ability": tc.ability,
-                                "args": tc.args,
-                                "elapsed_ms": 0,
-                            })
-                        })
-                        .collect();
+                    let usage_value = usage_to_json(&resp).unwrap_or(Value::Null);
+                    let tool_calls_json = tool_calls_to_json(&resp.tool_calls);
                     // Resolve the terminal-frame session id with the
                     // same precedence as handle_invoke:
                     //   1. Resume turn → echo caller's id unchanged.
@@ -1005,16 +1017,16 @@ fn stream_handler(
                     } else {
                         session_id_for_thread.clone()
                     };
-                    let usage_value = usage.unwrap_or(Value::Null);
                     // Persist the streamed turn too — same transcript
                     // contract as the RPC path (invoke_direct_with_progress).
-                    crate::persistence::chat_sessions::write_turn_best_effort(
+                    crate::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
                         &agent_name_owned,
                         &resolved_session_id,
                         &prompt_owned,
                         &resp.content,
                         &tool_calls_json,
                         &usage_value,
+                        elapsed_ms,
                     );
                     if lifelong_requested {
                         crate::persistence::chat_sessions::set_lifelong_session_best_effort(
@@ -1097,9 +1109,8 @@ fn enumerate_skill_specs(
 /// `<other>.weather` alongside agent A's own skills, and the LLM
 /// — seeing the qualified name as an available tool — calls it.
 /// The registered cross-process route (runtime_local_tools +
-/// daemon dispatcher) carries the call to agent B, whose own
-/// chat-translation handler then fulfils it with whatever skills
-/// agent B has installed (e.g. an HTTP weather skill).
+/// daemon dispatcher) carries the call to agent B's executor-bound
+/// handler.
 ///
 /// Excluded:
 ///   * The calling agent itself (its own abilities are already
@@ -1428,7 +1439,7 @@ fn format_cross_agent_hint(
     }
     let mut out = String::from("## Available abilities (other agents on this device)\n\n");
     out.push_str(
-        "These abilities are owned by other agents installed alongside you. They are \
+        "These abilities are advertised by other agents installed alongside you. They are \
          exposed to you as MCP tools too — calling them lets the other agent fulfil \
          the request with its own skills. Prefer them over guessing when the user's \
          intent matches a name listed here.\n\n",
@@ -1832,6 +1843,9 @@ mod tests {
 
     #[test]
     fn register_mounts_one_handler_per_agent() {
+        // Hold the env lock: register() consults HOME-rooted registry
+        // state, so a concurrent HOME-mutating test must not race it.
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         let mut agents = AgentRegistry::default();
         agents.agents.insert("alice".into(), entry());
@@ -1853,6 +1867,48 @@ mod tests {
         assert!(
             reg.resolve_rpc("charlie.chat").is_none(),
             "lookup miss must stay a miss; hot agents are materialised through HotAgentRegistrar"
+        );
+    }
+
+    #[test]
+    fn register_does_not_mount_unbound_manifest_as_chat_fallback() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let root = crate::persistence::config::agents_root().join("alice");
+        let abilities_dir = root.join("abilities");
+        std::fs::create_dir_all(&abilities_dir).expect("abilities dir");
+        std::fs::write(
+            root.join("agent.toml"),
+            "name = \"alice\"\nruntime = \"claude-code\"\n",
+        )
+        .expect("agent.toml");
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "echo",
+            "Unbound manifest.",
+            json!({"type": "object"}),
+        )
+        .expect("manifest");
+        std::fs::write(
+            abilities_dir.join("echo.ability.toml"),
+            manifest.to_toml_string().expect("manifest toml"),
+        )
+        .expect("ability manifest");
+
+        let mut entry = entry();
+        entry.root_path = Some(root);
+        let mut agents = AgentRegistry::default();
+        agents.agents.insert("alice".into(), entry);
+        let mut reg = AxonAbilityCatalog::new();
+        register(
+            &mut reg,
+            &agents,
+            Arc::new(Vec::new()),
+            Arc::new(std::sync::OnceLock::new()),
+        );
+
+        assert!(reg.get_rpc("alice.chat").is_some());
+        assert!(
+            reg.get_rpc("alice.echo").is_none(),
+            "manifest without [exec] must not be routed through an LLM-mediated handler"
         );
     }
 
@@ -2184,8 +2240,8 @@ mod tests {
         // skills list — that would invite infinite recursion when
         // the LLM picks "chat" as a tool.
         let entry = entry();
-        // Use an in-memory entry (no root_path) so abilities_for
-        // returns the synthesized chat fallback only.
+        // Use an in-memory entry (no root_path) so abilities_for returns
+        // no manifest-backed tools.
         let listed = enumerate_skills(
             "alice",
             &entry,
@@ -2312,19 +2368,43 @@ mod tests {
         use crate::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
         use crate::runtime::kernel::Kernel;
         use crate::runtime::kernel_api::KernelApi;
-        use easynet_axon::invocation::{make_ability, LocalRuntime};
+        use easynet_axon::invocation::{
+            make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes, AxonError,
+            KeyResolver, LocalRuntime,
+        };
+        use ed25519_dalek::VerifyingKey;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let _g = crate::facade::cli::test_support::HomeGuard::new();
+
+        struct FixedKey(VerifyingKey);
+        impl KeyResolver for FixedKey {
+            fn resolve(&self, _agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+                Ok(self.0)
+            }
+        }
 
         // Fake chat handler — increments a counter on every call so we
         // can prove the registered handler is the one that fired.
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_for_handler = Arc::clone(&counter);
         let rt = LocalRuntime::new();
+        let chat_options = easynet_axon::invocation::AbilityOptions::default()
+            .with_modes(easynet_axon::invocation::AbilityCallModes::RPC)
+            .with_descriptor_proof(
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [0x11; 32],
+                [0x22; 32],
+            );
+        // Register under the canonical owner ability URA the kernel
+        // resolves (`device.a.alice.chat`), not the bare handler name — a
+        // raw LocalRuntime has no catalog to mirror the bare key.
+        let chat_runtime_ability =
+            crate::ura::owner_ability_ura(&crate::ura::device_ura("localhost", "a"), "alice.chat")
+                .expect("derive alice.chat runtime URA");
         crate::support::async_bridge::run_blocking(
-            rt.register_ability(
-                "alice.chat",
+            rt.register_ability_with_options(
+                chat_runtime_ability,
                 make_ability(move |_ctx| {
                     let counter_for_handler = Arc::clone(&counter_for_handler);
                     async move {
@@ -2336,16 +2416,19 @@ mod tests {
                         })
                     }
                 }),
+                chat_options,
             ),
             crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
         )
         .expect("register runtime chat ability");
+        let signing_key = signing_key_from_bytes(&[0x42; 32]);
+        rt.set_admission_key_resolver(Arc::new(FixedKey(signing_key.verifying_key())));
 
         let kernel = Kernel::new(Arc::new(NoopGateway));
         kernel.set_local_runtime(Arc::clone(&rt));
 
         let device_ura = crate::ura::device_ura("localhost", "a");
-        let inv = RuntimeInvocation {
+        let mut inv = RuntimeInvocation {
             caller: device_ura.clone(),
             callee: device_ura.clone(),
             ability: "alice.chat".into(),
@@ -2355,6 +2438,13 @@ mod tests {
             args: json!({"prompt": "hi"}),
             caller_signature: None,
         };
+        let (envelope, _) = inv
+            .axon_descriptor_bound_envelope(
+                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            )
+            .expect("descriptor-bound envelope");
+        let signature = sign_descriptor_bound_invocation(&signing_key, &envelope, "test-key");
+        inv.caller_signature = Some(signature.signature);
         let receipt = kernel.invoke(inv).expect("invoke ok");
         assert!(matches!(
             receipt.terminal,
@@ -2736,7 +2826,7 @@ mod tests {
 
     /// Integration-level proof that an ability whose manifest pins
     /// `[exec] kind = "shell"` dispatches through the shell executor
-    /// rather than the chat-translation fallback.
+    /// rather than an LLM-mediated route.
     ///
     /// What this protects against
     /// --------------------------
@@ -2849,7 +2939,7 @@ model = "sonnet"
             envelope.get("fulfilled_by").and_then(|v| v.as_str()),
             Some("shell"),
             "manifest with [exec] kind=\"shell\" MUST dispatch through the shell \
-             executor, not the chat fallback. Envelope was: {envelope}"
+             executor. Envelope was: {envelope}"
         );
         assert_eq!(
             envelope.get("result").and_then(|v| v.as_str()),

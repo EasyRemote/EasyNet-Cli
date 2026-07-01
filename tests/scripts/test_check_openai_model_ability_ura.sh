@@ -15,7 +15,7 @@ make_sandbox() {
     mkdir -p "$sandbox/src/facade/cli" "$sandbox/src/runtime/agents" "$sandbox/docs" "$sandbox/abilities/system"
     cp "$REPO_ROOT/src/facade/cli/llm_api.rs" "$sandbox/src/facade/cli/llm_api.rs"
     cp "$REPO_ROOT/src/runtime/agents/openai_compat_ability.rs" "$sandbox/src/runtime/agents/openai_compat_ability.rs"
-    cp "$REPO_ROOT/src/runtime/agents/mod.rs" "$sandbox/src/runtime/agents/mod.rs"
+    cp "$REPO_ROOT/src/runtime/agents/catalog_metadata.rs" "$sandbox/src/runtime/agents/catalog_metadata.rs"
     cp "$REPO_ROOT/docs/PAGES_AND_LLM_API.md" "$sandbox/docs/PAGES_AND_LLM_API.md"
     cp "$REPO_ROOT/abilities/system/openai.chat_completions.ability.toml" "$sandbox/abilities/system/openai.chat_completions.ability.toml"
     cp "$REPO_ROOT/abilities/system/openai.list_models.ability.toml" "$sandbox/abilities/system/openai.list_models.ability.toml"

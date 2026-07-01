@@ -57,6 +57,8 @@ use easynet_axon::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, 
 use ed25519_dalek::VerifyingKey;
 
 use crate::services::federation_client::FederationClient;
+use crate::services::invocation_transport::peer_envelope_signer::PeerInvokeRequest;
+use crate::services::invocation_transport::session_initiator::SessionSigningSeed;
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1::InvokeRequest;
@@ -156,6 +158,7 @@ pub struct FederatedKeyResolver {
     /// admission call and never deliver any savings.
     cache: SharedFederatedKeyCache,
     cache_ttl: Duration,
+    hub_signing_seed: Option<SessionSigningSeed>,
 }
 
 impl FederatedKeyResolver {
@@ -179,6 +182,7 @@ impl FederatedKeyResolver {
             presented_pubkey_b64: None,
             cache: SharedFederatedKeyCache::new(),
             cache_ttl: DEFAULT_FEDERATED_RESOLVE_CACHE_TTL,
+            hub_signing_seed: None,
         }
     }
 
@@ -212,6 +216,16 @@ impl FederatedKeyResolver {
         if !trimmed.is_empty() {
             self.presented_pubkey_b64 = Some(trimmed);
         }
+        self
+    }
+
+    /// Attach the local hub signing seed used for outbound
+    /// cross-hub `federation.resolve_key` requests. Absence remains
+    /// fail-closed in production because the shared peer signer will
+    /// require the persisted hub identity seed.
+    #[must_use]
+    pub fn with_hub_signing_seed(mut self, seed: Option<&SessionSigningSeed>) -> Self {
+        self.hub_signing_seed = seed.copied();
         self
     }
 
@@ -406,19 +420,33 @@ impl FederatedKeyResolver {
         let Some(self_realm) = self.self_realm.as_deref() else {
             return Err(caller_key_not_found(agent_ura, "missing_self_realm"));
         };
-        let local_hub_ura = crate::ura::hub_ura(self_realm);
-        let request = crate::services::invocation_transport::ProtoEnvelope::caller_only(local_hub_ura)
-            .and_then(|env| {
-                env.invoke_request(
-                    crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
-                    args_bytes,
-                )
-            })
-            .map_err(|e| {
+        let peer_hub_ura = crate::ura::hub_ura(&caller_realm);
+        let ability =
+            crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY;
+        let subject_ura =
+            crate::ura::owner_ability_ura(&peer_hub_ura, ability).ok_or_else(|| {
                 AxonError::new(AxonErrorKind::Internal)
-                    .with_reason("resolve_key_envelope_build")
-                    .with_message(format!("agent_ura:{agent_ura}:{e}"))
+                    .with_reason("resolve_key_subject_build")
+                    .with_message(format!("peer_hub_ura:{peer_hub_ura}:ability:{ability}"))
             })?;
+        let request = PeerInvokeRequest::new(
+            None,
+            &subject_ura,
+            ability,
+            args_bytes,
+            Some(self_realm),
+            self.hub_signing_seed.as_ref(),
+        )
+        .into_invoke_request()
+        .map_err(|status| {
+            AxonError::new(AxonErrorKind::Internal)
+                .with_reason("resolve_key_peer_request_build")
+                .with_message(format!(
+                    "agent_ura:{agent_ura}:code={:?}:{}",
+                    status.code(),
+                    status.message()
+                ))
+        })?;
 
         // Bridge sync trait → async tonic call.
         let target_hub = peer_hub_endpoint.clone();

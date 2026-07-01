@@ -93,7 +93,11 @@ pub(crate) fn fetch_ability_name(user: &str, project_id: &str) -> String {
 /// Register `<user>.<project_id>.page.fetch` into the daemon-hosted
 /// Axon runtime. Called by `publish.rs` at publish time and by
 /// `pages::register` after restart restore.
-pub fn register_fetch_ability(registry: &AxonAbilityCatalog, user: &str, project_id: &str) {
+pub fn register_fetch_ability(
+    registry: &AxonAbilityCatalog,
+    user: &str,
+    project_id: &str,
+) -> anyhow::Result<()> {
     let ability = fetch_ability_name(user, project_id);
     let owner = OwnerKind::User(user.to_string());
     let user = user.to_string();
@@ -102,5 +106,5 @@ pub fn register_fetch_ability(registry: &AxonAbilityCatalog, user: &str, project
         ability,
         owner,
         Arc::new(move |args| handle_fetch(&user, &project_id, args)),
-    );
+    )
 }

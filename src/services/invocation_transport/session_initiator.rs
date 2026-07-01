@@ -1,23 +1,23 @@
-// EasyNet CLI — invocation_transport — <self>.session initiator (device side)
+// EasyNet CLI — invocation_transport — session.open initiator (device side)
 // ====================================================================
 //
 // File: src/services/invocation_transport/session_initiator.rs
-// Description: Device-side caller for `<self>.session`. At daemon
+// Description: Device-side caller for `session.open`. At daemon
 //              boot a device opens one long-lived `InvokeBidi`
 //              stream against its configured hub, sends frame 0 =
 //              `EnvelopeOpen` carrying the caller URA, then keeps
 //              the stream open for the lifetime of the daemon —
 //              this is the canonical reverse channel through which
-//              the hub pushes `<self>.invoke_remote` and
+//              the hub pushes `runtime.invoke_remote` and
 //              `federation.forward_invoke` frames back to the
 //              device.
 //
 // Where this fits in RFC-003
 // --------------------------
 // PR-1 lands the daemon-side InvocationServer.
-// PR-2 (this commit) lands two halves of `<self>.session`:
+// PR-2 (this commit) lands two halves of `session.open`:
 //
-//   commit 1/N  — hub-side acceptor: the `<self>.session` arm of
+//   commit 1/N  — hub-side acceptor: the `session.open` arm of
 //                 the daemon's `invoke_bidi` dispatcher. (Adjacent
 //                 file `daemon_invocation_service.rs`; coordinated
 //                 with PR-3 commit 1/3 currently being written,
@@ -128,27 +128,16 @@ use easynet_axon::pb::axon::v1::{BidiControl, BinaryChunk, InvokeBidiDown, Invok
 /// `InvokeBidi` dispatcher routes on
 /// `EnvelopeOpen.target.ability_name`.
 ///
-/// **Wire-pinned** — the production hub at `easynet.run` only
-/// accepts the `<self>.session` literal today. The M4
-/// canonical rename to `device.session` is held until EasyNet-Axon
-/// (the hub-side gRPC dispatcher) ships matching dual-name
-/// acceptance. EasyNet-Cli's M1 dual-aliasing answers both names
-/// inbound, so the rename is safe on the device side; the
-/// blocker is the hub's bidi dispatch table.
-///
-/// See `docs/open-questions/deprecate-self-alias-in-ability-names.md`
-/// Stage 2 / Stage 4. RFC-001 v4.1.6 is the carrier window for the
-/// wire-break.
-// TODO(RFC-001-v4.1.6 stage-2): rename to `device.session` once the
-// hub ships dual-name acceptance. Single grep anchor for all
-// wire-pinned `<self>.*` constants.
-pub const ABILITY_SELF_SESSION: &str = "<self>.session";
+/// `session.open` is the daemon-owned long-lived carrier for device
+/// session membership. It is a direct wire break from the historical
+/// caller-relative alias; no dual-name acceptance is retained.
+pub const ABILITY_SESSION_OPEN: &str = "session.open";
 
 /// Stream id used by every BinaryChunk on the session bidi. PR-2
 /// sub-spec §2.1 (and the wider RFC-003 transport plane) declares
 /// one StreamDescriptor (id=0, content_type="application/json",
 /// ordering=STRICT). Multiple streams on the same bidi are
-/// reserved for future RFCs and not used by `<self>.session`.
+/// reserved for future RFCs and not used by `session.open`.
 pub const SESSION_STREAM_ID: u32 = 0;
 
 /// Capacity of the device-side outbound mpsc that
@@ -246,7 +235,7 @@ pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
 pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Device → hub application-level heartbeat cadence for the
-/// `<self>.session` up-stream.
+/// `session.open` up-stream.
 ///
 /// The hub-side failure signature the user observed is
 /// specifically "error reading a body from connection" — i.e. the
@@ -319,7 +308,7 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
 ///   mental model today.
 ///
 /// This wrapper is the single source of truth for post-frame-0
-/// up-direction sequencing within one `<self>.session`.
+/// up-direction sequencing within one `session.open`.
 #[derive(Clone, Debug)]
 pub struct SessionUpSender {
     tx: mpsc::Sender<InvokeBidiUp>,
@@ -453,7 +442,7 @@ pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
     pub(crate) cancel: tokio::sync::oneshot::Receiver<()>,
 }
 
-/// Run one `<self>.session` bidi against `hub_endpoint`. Connects,
+/// Run one `session.open` bidi against `hub_endpoint`. Connects,
 /// sends frame 0, streams frames until either the hub closes the
 /// down-stream (returns `Ok(())`) or a transport error occurs
 /// (returns `Err(...)`).
@@ -538,7 +527,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     let heartbeat_channel = channel.clone();
 
     // Bump client-side gRPC message limits to match the server side.
-    // The tonic-default 4 MiB decoder cap aborted `<self>.session`
+    // The tonic-default 4 MiB decoder cap aborted `session.open`
     // mid-stream the moment a single down-frame envelope exceeded it.
     // The shared 64 MiB transport-envelope cap keeps legitimate
     // chunked traffic flowing without permitting near-unbounded
@@ -551,6 +540,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         phase,
         hub_endpoint: &hub_endpoint,
         caller_ura: &caller_ura,
+        signing_seed,
         inputs: preludes,
         user_trust_sync,
         channels: prelude_channels,
@@ -660,6 +650,17 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
             }
             Err(err) => {
                 phase.transition(DeviceSessionPhase::Backoff, "session_error");
+                // The hub session errored and we are about to back off and
+                // reconnect — presence is NOT admitted. Downgrade the snapshot to
+                // ConnectedSuspect so `doctor` stops reporting FRONTEND_CONNECTED
+                // while session.open is wedged in a reconnect loop (the exact lie
+                // that hid the descriptor-ref rejection). frame_loop promotes back
+                // to ConnectedOnline once a reconnect re-negotiates the contract.
+                frame_loop::record_connection_state(
+                    crate::runtime::join_connection_state::JoinConnectionState::ConnectedSuspect,
+                    crate::runtime::join_connection_state::JoinTransition::OpenSelfSession,
+                    "session.error_reconnecting",
+                );
                 // `{err:#}` walks the std::error::Error source
                 // chain so opaque `tonic::transport::Error`
                 // ("transport error") surfaces the underlying
@@ -722,7 +723,7 @@ pub enum SessionError {
         source: tonic::transport::Error,
     },
 
-    #[error("hub `{endpoint}` rejected `<self>.session` bidi: {status}")]
+    #[error("hub `{endpoint}` rejected `session.open` bidi: {status}")]
     HubRejected { endpoint: String, status: Status },
 
     #[error("hub `{endpoint}` sent error frame on down stream: {status}")]
@@ -793,10 +794,9 @@ mod tests {
     /// This is NOT a product SLA — it only guards against a genuine hang.
     /// Kept generous because the full `cargo test --lib` run (3000+ tests)
     /// saturates the scheduler and an in-process loopback bidi handshake
-    /// can take well over a second under that contention; a 2 s bound
-    /// flaked here as `Elapsed`. The supervisor's own connect timeout is
-    /// 10 s, so 10 s still fails fast on a real stall.
-    const TEST_SUPERVISOR_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
+    /// can spend most of the old 10 s budget in prelude reflection before
+    /// reporting admission. This remains a hang guard, not a product SLA.
+    const TEST_SUPERVISOR_PROGRESS_TIMEOUT: Duration = Duration::from_secs(30);
 
     fn hub_store() -> Arc<HubPublishedAbilityStore> {
         HubPublishedAbilityStore::new()
@@ -1171,7 +1171,7 @@ mod tests {
                 .as_ref()
                 .map(|t| t.ability_name.as_str())
                 .unwrap_or(""),
-            ABILITY_SELF_SESSION,
+            ABILITY_SESSION_OPEN,
         );
         assert_eq!(
             eo.envelope
@@ -1436,8 +1436,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: Some("http://127.0.0.1:1".to_string()),
             username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
 
         let outcome =
@@ -1518,8 +1520,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: Some(format!("http://{addr}")),
             username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
 
         let outcome =
@@ -1646,8 +1650,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         })
         .expect("save test credentials");
         crate::persistence::local_agents::save(

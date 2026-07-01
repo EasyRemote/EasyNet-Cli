@@ -40,6 +40,8 @@ fn dispatch_remote_via_forward_invoke(
     node_id: &str,
     ability_name: &str,
     arguments: &Value,
+    causal_parents: &[Value],
+    timeout_ms: Option<u64>,
 ) -> Result<Value, EalError> {
     #[cfg(feature = "axon-pb")]
     {
@@ -60,13 +62,10 @@ fn dispatch_remote_via_forward_invoke(
                 .as_deref()
                 .is_some_and(|n| !n.is_empty() && trimmed == n);
         if is_local {
-            return crate::support::local_invoke::invoke_local_ability(
-                ability_name,
-                arguments.clone(),
-            )
-            .map_err(|e| {
-                EalError::Unavailable(format!("invoke_local_ability {ability_name} (local): {e}"))
-            });
+            let timeout = timeout_ms
+                .map(std::time::Duration::from_millis)
+                .unwrap_or_else(|| std::time::Duration::from_secs(30));
+            return dispatch_local_device_ability(ability_name, arguments, timeout);
         }
 
         let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
@@ -85,16 +84,16 @@ fn dispatch_remote_via_forward_invoke(
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let ability_ura = crate::services::invocation_transport::federation_invoke::TargetOwnedAbilityUra::from_selector(
+        let target_call = crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
             &target_ura,
             ability_name,
         )
         .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
-        crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_ability_ura(
-            ability_ura.as_str(),
+        crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
+            &target_call,
             arguments.clone(),
-            &target_ura,
             caller_ura.as_deref(),
+            causal_parents,
         )
         .map_err(|e| {
             EalError::Unavailable(format!("forward_invoke {ability_name} → {target_ura}: {e}"))
@@ -102,12 +101,83 @@ fn dispatch_remote_via_forward_invoke(
     }
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = (tenant, node_id, ability_name, arguments);
+        let _ = (
+            tenant,
+            node_id,
+            ability_name,
+            arguments,
+            causal_parents,
+            timeout_ms,
+        );
         Err(EalError::Unavailable(
             "EAL device-targeted dispatch requires the `axon-pb` feature; \
              rebuild with `--features axon-pb` (production builds always do)."
                 .to_string(),
         ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalDeviceDispatchMode {
+    Rpc,
+    StreamFirstPayload,
+    BidiUnsupported,
+}
+
+fn dispatch_local_device_ability(
+    ability_name: &str,
+    arguments: &Value,
+    timeout: std::time::Duration,
+) -> Result<Value, EalError> {
+    match local_device_dispatch_mode(ability_name) {
+        LocalDeviceDispatchMode::Rpc => {
+            crate::support::local_invoke::invoke_local_ability_with_subject_timeout(
+                ability_name,
+                arguments.clone(),
+                None,
+                timeout,
+            )
+            .map_err(|e| {
+                EalError::Unavailable(format!("invoke_local_ability {ability_name} (local): {e}"))
+            })
+        }
+        LocalDeviceDispatchMode::StreamFirstPayload => {
+            crate::support::local_invoke::invoke_local_stream_ability_first_payload(
+                ability_name,
+                arguments.clone(),
+                None,
+                timeout,
+            )
+            .map_err(|e| {
+                EalError::Unavailable(format!(
+                    "invoke_local_stream_ability {ability_name} (local): {e}"
+                ))
+            })
+        }
+        LocalDeviceDispatchMode::BidiUnsupported => Err(EalError::Validation(format!(
+            "local ability `{ability_name}` is bidirectional; EAL scalar call steps cannot open \
+             InvokeBidi sessions"
+        ))),
+    }
+}
+
+fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
+    crate::runtime::agents::published_abilities()
+        .into_iter()
+        .find(|meta| meta.name == ability_name)
+        .map(|meta| dispatch_mode_from_hints(&meta.hints))
+        .unwrap_or(LocalDeviceDispatchMode::Rpc)
+}
+
+fn dispatch_mode_from_hints(
+    hints: &crate::runtime::ability_descriptor::AbilityHints,
+) -> LocalDeviceDispatchMode {
+    if hints.bidi_only {
+        LocalDeviceDispatchMode::BidiUnsupported
+    } else if hints.streaming_only {
+        LocalDeviceDispatchMode::StreamFirstPayload
+    } else {
+        LocalDeviceDispatchMode::Rpc
     }
 }
 
@@ -182,9 +252,18 @@ impl StepDispatcher for AgentAwareDispatcher {
                 run.trace_id,
             ),
             IrTarget::Device { node_id } => {
-                let _ = timeout_ms;
-                dispatch_remote_via_forward_invoke(run.tenant, node_id, ability.as_str(), arguments)
-                    .map(Into::into)
+                // Thread the live causal parents onto the device forward hop
+                // too — the sibling agent branch already lowers them, and
+                // dropping them here re-rooted the receipt DAG (SPEC §15.1-1).
+                dispatch_remote_via_forward_invoke(
+                    run.tenant,
+                    node_id,
+                    ability.as_str(),
+                    arguments,
+                    causal_parents,
+                    timeout_ms,
+                )
+                .map(Into::into)
             }
         }
     }
@@ -261,7 +340,7 @@ pub(super) fn dispatch_to_agent(
             // fails to preserve causal placement, so the invocation is
             // emitted with an empty causal_context while the argument
             // still reaches the adapter.
-            let qualified = format!("{}.{}", agent_id.name, bare_ability);
+            let display_name = format!("{}.{}", agent_id.name, bare_ability);
             let timeout = manifest
                 .timeout_seconds()
                 .map(std::time::Duration::from_secs);
@@ -274,7 +353,7 @@ pub(super) fn dispatch_to_agent(
                     causal_parents
                 };
             match crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
-                &qualified,
+                bare_ability,
                 arguments.clone(),
                 None,
                 effective_parents,
@@ -303,7 +382,7 @@ pub(super) fn dispatch_to_agent(
                         // a side-effecting ability to mask a true error.
                         LocalInvokeErrorKind::Failed => {
                             return Err(EalError::Unavailable(format!(
-                                "daemon invoke {qualified}: {err}"
+                                "daemon invoke {display_name}: {err}"
                             )));
                         }
                     }
@@ -326,6 +405,19 @@ pub(super) fn dispatch_to_agent(
                     let _ = timeout;
                     crate::runtime::agents::mcp_executor::run_mcp_exec(spec, arguments)
                         .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
+                }
+                crate::core::ability_spec::AbilityExec::HostStream(_) => {
+                    // host_stream is a server-stream executor; an EAL step
+                    // is a unary child invocation and cannot carry its
+                    // many-frame output. Such an ability registers as
+                    // stream-mode and is reached via the stream dispatch
+                    // path, never here — surface a clear error if an EAL
+                    // program nonetheless targets one as a unary step.
+                    Err(EalError::Unavailable(
+                        "host_stream exec is server-stream; it cannot run as a \
+                         unary EAL step — call it as a stream invocation"
+                            .to_string(),
+                    ))
                 }
             })
             .map(Into::into);
@@ -352,64 +444,37 @@ pub(super) fn dispatch_to_agent(
     }
 
     // Second fast path: try the local daemon's ability registry over
-    // the control socket. The daemon registers per-agent self-bundle
-    // verbs (`<agent>.discover`, `<agent>.invoke`, …) plus any
-    // workspace-declared `<agent>.<verb>` whose manifest does NOT
-    // pin an `[exec]` block but DOES have a real registered handler
-    // (Rust builtin or shell-via-handler). Without this branch EAL
-    // would fall straight through to the chat-fulfils path even when
-    // a deterministic handler existed in the daemon — a 30 s LLM
-    // round-trip for what should be a sub-second registry call.
+    // the control socket. The daemon's public function name is the
+    // owner-local ability (`echo`, `discover`, `invoke`, ...); the
+    // hosted agent name is passed separately as callee/delegation
+    // context so Axon can bind the call to the canonical owner Ability
+    // URA. Keeping `<agent>.<verb>` out of the wire function_name is
+    // the convergence point with DescriptorBoundEnvelope dispatch:
+    // display names are not dispatch keys.
     //
     // We do the IPC round-trip here only when the manifest path
-    // above did NOT short-circuit. Failure modes are explicit:
-    //
-    //   * daemon down → propagate as Unavailable (caller may retry).
-    //   * daemon returned `ability_not_found` → fall through to the
-    //     chat path (preserves the legacy "manifest declares an
-    //     ability but only chat can fulfil it" behaviour).
-    //   * daemon returned any other typed error → propagate.
-    let qualified = format!("{}.{}", agent_id.name, ability.as_str());
-    match try_dispatch_via_daemon(&qualified, arguments) {
-        DaemonDispatch::Result(value) => return Ok(value.into()),
-        DaemonDispatch::AbilityNotFound => { /* fall through to chat */ }
-        DaemonDispatch::DaemonDown(reason) => {
-            return Err(EalError::Unavailable(format!("daemon: {reason}")));
-        }
-        DaemonDispatch::Error(reason) => {
-            return Err(EalError::Unavailable(format!("daemon: {reason}")));
-        }
+    // above did NOT short-circuit. Every outcome is terminal — there is
+    // no chat fall-through. An ability the daemon does not recognise is a
+    // NOT_FOUND, the same answer the daemon/MCP surface gives; the EAL
+    // path must not divert to an LLM-fabricated reply for an ability that
+    // does not exist (that would make the same call return different
+    // results depending on the entry point). The only abilities reachable
+    // by chatting an agent are the explicit `<agent>.chat` verb handled
+    // above and declared abilities with a real `exec`, handled in-process
+    // or registered on the daemon.
+    let display_name = format!("{}.{}", agent_id.name, ability.as_str());
+    match try_dispatch_via_daemon(&agent_id.name, ability.as_str(), arguments) {
+        DaemonDispatch::Result(value) => Ok(value.into()),
+        DaemonDispatch::AbilityNotFound => Err(EalError::NotFound(format!(
+            "unknown ability: {display_name}"
+        ))),
+        DaemonDispatch::DaemonDown(reason) => Err(EalError::Unavailable(format!(
+            "daemon {display_name}: {reason}"
+        ))),
+        DaemonDispatch::Error(reason) => Err(EalError::Unavailable(format!(
+            "daemon {display_name}: {reason}"
+        ))),
     }
-
-    let prompt = build_agent_prompt(ability.as_str(), arguments);
-
-    // Agent CLI dispatch failures (process spawn, IO, model error) are
-    // transport-class — `unavailable` is the right bucket so the
-    // interpreter's retry policy can fire when configured.
-    //
-    // IMPORTANT: pass the BARE agent name to send_to_agent, not the
-    // namespaced AgentId form (`default/claude`). Downstream
-    // workspace::ensure_workspace runs the registry name validator
-    // against this string, and the validator legitimately rejects
-    // anything containing `/`. The namespaced form is the registry
-    // *lookup* identity above; the *runtime* identity is the bare
-    // name. Using the wrong one here was the root cause of every
-    // EAL→agent dispatch failing with
-    // "workspace provisioning failed: agent.toml: name = "default/claude"
-    //  must contain only lowercase ASCII letters, …" before the
-    // CLI could even spawn.
-    let response =
-        crate::runtime::dispatch::send_to_agent(&agent_id.name, entry, &prompt, None, None)
-            .map_err(|e| EalError::Unavailable(format!("agent dispatch: {e}")))?;
-
-    Ok(serde_json::json!({
-        "ok": true,
-        "agent": response.agent,
-        "output": response.content,
-        "model": response.model,
-        "duration_ms": response.duration_ms,
-    })
-    .into())
 }
 
 /// Outcome of attempting to dispatch a `<agent>.<verb>` call through
@@ -417,21 +482,17 @@ pub(super) fn dispatch_to_agent(
 ///
 /// Why a custom enum (rather than `Result<Option<Value>, ...>`)
 /// -----------------------------------------------------------
-/// `dispatch_to_agent` needs to make three decisions on the result:
-///   1. Got a value → return it directly.
-///   2. Daemon told us "no such ability" → silently fall through to
-///      the chat path. Legacy abilities that exist in name only (a
-///      manifest declares the verb but the daemon never registered
-///      a handler) STILL need the chat translation, and the caller
-///      must not see a stack trace just because the daemon was
-///      consulted first.
-///   3. Daemon down / daemon errored → propagate as Unavailable and
-///      stop. Continuing to chat in this case would mask transport
-///      failures.
+/// `dispatch_to_agent` maps each outcome onto a distinct terminal answer:
+///   1. Got a value → return it.
+///   2. Daemon told us "no such ability" → NOT_FOUND. The same answer the
+///      daemon/MCP surface gives; the call does not divert to a chat
+///      reply just because the daemon was consulted first.
+///   3. Daemon down / daemon errored → Unavailable. Surfacing the error
+///      is the point — masking a transport failure would be worse.
 ///
-/// A flat `Result<Option<Value>, ...>` collapses (2) and (3) into the
-/// "Err" axis, which the chat-fall-through code can't distinguish
-/// without string-matching the error message — fragile.
+/// A flat `Result<Option<Value>, ...>` would collapse (2) and (3) into
+/// the "Err" axis, indistinguishable without string-matching the error
+/// message — fragile.
 enum DaemonDispatch {
     Result(Value),
     AbilityNotFound,
@@ -439,13 +500,26 @@ enum DaemonDispatch {
     Error(String),
 }
 
-/// Dispatch a fully-qualified `<agent>.<verb>` against the local
-/// daemon through Axon's local Invocation gRPC surface. Returns one
-/// of the four outcome variants the caller branches on.
-fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDispatch {
+/// Dispatch an owner-local ability against the local daemon through
+/// Axon's local Invocation gRPC surface, with the hosted agent carried
+/// as explicit callee context. Returns one of the four outcome variants
+/// the caller branches on.
+fn try_dispatch_via_daemon(
+    agent_name: &str,
+    ability_name: &str,
+    arguments: &Value,
+) -> DaemonDispatch {
     use crate::support::local_invoke::{classify_invoke_error, LocalInvokeErrorKind};
-    match crate::support::local_invoke::invoke_local_ability(qualified_name, arguments.clone()) {
-        Ok(value) => DaemonDispatch::Result(value),
+    match crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
+        ability_name,
+        arguments.clone(),
+        None,
+        &[],
+        None,
+        None,
+        Some(agent_name),
+    ) {
+        Ok((value, _meta)) => DaemonDispatch::Result(value),
         Err(err) => match classify_invoke_error(&err) {
             LocalInvokeErrorKind::DaemonOffline => DaemonDispatch::DaemonDown(format!("{err}")),
             LocalInvokeErrorKind::AbilityUnregistered => DaemonDispatch::AbilityNotFound,
@@ -454,25 +528,30 @@ fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDis
     }
 }
 
-/// Build a prompt for an agent from an EAL step's `function_name` and arguments.
-///
-/// The convention is: `function_name` becomes the task description,
-/// arguments become context. The `prompt` argument, if present, is used directly.
-fn build_agent_prompt(function_name: &str, arguments: &Value) -> String {
-    // If there's a "prompt" key, use it directly.
-    if let Some(prompt) = arguments.get("prompt").and_then(|v| v.as_str()) {
-        return prompt.to_string();
-    }
+#[cfg(test)]
+mod tests {
+    use super::{dispatch_mode_from_hints, LocalDeviceDispatchMode};
+    use crate::runtime::ability_descriptor::AbilityHints;
 
-    // Otherwise, build from function name + all argument key-values.
-    let mut parts = vec![format!("Task: {function_name}")];
-    if let Some(obj) = arguments.as_object() {
-        for (key, val) in obj {
-            match val {
-                Value::String(s) => parts.push(format!("{key}: {s}")),
-                other => parts.push(format!("{key}: {other}")),
-            }
-        }
+    #[test]
+    fn local_device_dispatch_mode_is_derived_from_descriptor_hints() {
+        assert_eq!(
+            dispatch_mode_from_hints(&AbilityHints::default()),
+            LocalDeviceDispatchMode::Rpc
+        );
+        assert_eq!(
+            dispatch_mode_from_hints(&AbilityHints {
+                streaming_only: true,
+                ..Default::default()
+            }),
+            LocalDeviceDispatchMode::StreamFirstPayload
+        );
+        assert_eq!(
+            dispatch_mode_from_hints(&AbilityHints {
+                bidi_only: true,
+                ..Default::default()
+            }),
+            LocalDeviceDispatchMode::BidiUnsupported
+        );
     }
-    parts.join("\n\n")
 }

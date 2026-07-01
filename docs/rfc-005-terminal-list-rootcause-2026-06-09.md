@@ -19,7 +19,7 @@
 
 ## 旧镜像里观察到的强模式(决定性对比)
 
-同一台 device,同一批 device-owned ability,经 `<self>.invoke_remote`(ROUTE 解析):
+同一台 device,同一批 device-owned ability,经 `runtime.invoke_remote`(ROUTE 解析):
 
 | 通过 ✓ | 失败 ✗ (NODATA / route missing) |
 |---|---|

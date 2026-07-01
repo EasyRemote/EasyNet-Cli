@@ -40,6 +40,41 @@
 
 use serde_json::Value;
 
+pub use crate::runtime::invocation_target::LocalAbilityTarget;
+
+/// One decoded frame from a daemon-hosted server-stream ability.
+///
+/// This is the CLI/support-layer projection of Axon's
+/// `InvokeStreamChunk`: transport metadata stays visible, while the
+/// business payload is decoded to JSON for frontend and script
+/// consumers. It is not a live subscription handle; callers receive
+/// a finite vector only after the helper has drained until terminal
+/// or an explicit frame limit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalStreamFrame {
+    /// Zero-based frame sequence assigned by the daemon transport.
+    pub sequence: u64,
+    /// Content type advertised by the daemon for this frame.
+    pub content_type: String,
+    /// Whether this frame is terminal for the stream.
+    pub terminal: bool,
+    /// Decoded JSON business payload. Empty payloads decode to null.
+    pub payload: Value,
+}
+
+/// One decoded down-frame from a daemon-hosted bidirectional ability.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalBidiFrame {
+    /// Sequence assigned by the daemon transport.
+    pub sequence: u64,
+    /// Best-effort content type for the projected payload.
+    pub content_type: String,
+    /// Whether this frame terminates the bidi session.
+    pub terminal: bool,
+    /// JSON projection of the frame payload.
+    pub payload: Value,
+}
+
 /// Typed failure classes for local-daemon invocation (F-023).
 ///
 /// Minted at the transport layer where the cause is structurally known
@@ -140,6 +175,99 @@ pub fn invoke_local_ability_with_subject(
     )
 }
 
+pub fn invoke_local_ability_with_subject_timeout(
+    ability: &str,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_with_subject_timeout(
+        ability, args, subject, timeout,
+    )
+}
+
+/// Explicit local projection for stream-mode abilities when a scalar caller
+/// needs one JSON value. This opens InvokeStream directly and returns the first
+/// non-empty payload frame; it never probes unary first.
+pub fn invoke_local_stream_ability_first_payload(
+    ability: &str,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_stream_first_payload_with_subject(
+        ability, args, subject, timeout,
+    )
+}
+
+/// Invoke a canonical local Ability URA target through the daemon.
+///
+/// This path preserves the full descriptor owner identity in the signed
+/// envelope. Use it for user-facing `ability invoke <ability-ura>` surfaces;
+/// use the string-only helper only for daemon-owned system surfaces whose
+/// callee really is the local device.
+pub fn invoke_local_ability_target_with_subject_timeout(
+    target: &LocalAbilityTarget,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_targeted_timeout(
+        target.dispatch_name(),
+        args,
+        target.callee_ura(),
+        target.default_subject_ura(),
+        subject,
+        timeout,
+    )
+}
+
+/// Stream a canonical local Ability URA target through the daemon.
+///
+/// This is the stream-mode twin of
+/// [`invoke_local_ability_target_with_subject_timeout`]; it keeps callee and
+/// default subject tied to the canonical Ability owner instead of defaulting
+/// them to the local device signer.
+pub fn invoke_local_ability_target_stream_with_subject(
+    target: &LocalAbilityTarget,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<LocalStreamFrame>> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_with_subject(
+        target.dispatch_name(),
+        args,
+        target.callee_ura(),
+        target.default_subject_ura(),
+        subject,
+        timeout,
+        max_frames,
+    )
+}
+
+/// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
+/// session and drain a bounded number of down frames.
+pub fn invoke_local_ability_target_bidi_json_frames_with_subject(
+    target: &LocalAbilityTarget,
+    args: Value,
+    subject: Option<String>,
+    timeout: std::time::Duration,
+    input_frames: Vec<Value>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<LocalBidiFrame>> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
+        target.dispatch_name(),
+        args,
+        target.callee_ura(),
+        target.default_subject_ura(),
+        subject,
+        timeout,
+        input_frames,
+        max_frames,
+    )
+}
+
 /// Same as [`invoke_local_ability_with_subject`] but returns the
 /// invocation record alongside the result.
 ///
@@ -177,6 +305,33 @@ pub fn invoke_local_ability_with_invocation_meta(
     )
 }
 
+/// Same as [`invoke_local_ability_with_invocation_meta`], but annotates the
+/// returned metadata with the hosted agent whose local device signed the call.
+///
+/// This does NOT rewrite the hosted agent into Axon's caller. The signed
+/// Invocation caller is the local daemon IPC system identity; hosted-agent
+/// intent is carried as explicit delegation metadata and ability arguments,
+/// not by rewriting caller identity.
+pub fn invoke_local_ability_with_hosted_agent_delegation(
+    ability: &str,
+    args: Value,
+    subject: Option<String>,
+    causal_parents: &[Value],
+    step_timeout: Option<std::time::Duration>,
+    trace_id: Option<&str>,
+    hosted_agent_ura: &str,
+) -> anyhow::Result<(Value, Value)> {
+    crate::support::local_daemon_grpc::invoke_local_daemon_ability_with_hosted_agent_delegation(
+        ability,
+        args,
+        subject,
+        causal_parents,
+        step_timeout,
+        trace_id,
+        hosted_agent_ura,
+    )
+}
+
 /// Standard error message for any CLI surface that semantically
 /// requires the federation tier (cross-node enumeration, remote
 /// dispatch, voice/video signaling). The federation Invoke surface
@@ -208,6 +363,36 @@ pub fn federation_not_wired_error(action: &str) -> anyhow::Error {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn local_ability_target_preserves_agent_owner_as_callee_and_subject() {
+        let selector =
+            crate::ura::AbilitySelector::parse("easynet:///r/acme/ability/alice.claude.weather")
+                .expect("agent ability selector");
+        let target = LocalAbilityTarget::from_selector(&selector);
+
+        assert_eq!(target.dispatch_name(), "claude.weather");
+        assert_eq!(target.callee_ura(), "easynet:///r/acme/agent/alice.claude");
+        assert_eq!(
+            target.default_subject_ura(),
+            "easynet:///r/acme/agent/alice.claude"
+        );
+    }
+
+    #[test]
+    fn local_ability_target_uses_ability_subject_for_hub_owner() {
+        let selector =
+            crate::ura::AbilitySelector::parse("easynet:///r/acme/ability/hub.federation.resolve")
+                .expect("hub ability selector");
+        let target = LocalAbilityTarget::from_selector(&selector);
+
+        assert_eq!(target.dispatch_name(), "federation.resolve");
+        assert_eq!(target.callee_ura(), "easynet:///r/acme/hub");
+        assert_eq!(
+            target.default_subject_ura(),
+            "easynet:///r/acme/ability/hub.federation.resolve"
+        );
+    }
 
     #[test]
     fn invoke_local_ability_surfaces_daemon_down_with_actionable_message() {

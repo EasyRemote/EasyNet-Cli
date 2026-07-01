@@ -93,6 +93,9 @@ pub struct TurnRecord {
     /// the schema every time a new tool surfaces.
     #[serde(default)]
     pub tool_calls: Vec<Value>,
+    /// End-to-end model turn duration captured by the chat ability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
     /// Free-form usage bag (input_tokens, output_tokens, cache_read,
     /// cache_write, model). The chat handler's own shape; we don't
     /// repackage.
@@ -247,6 +250,38 @@ pub fn write_turn(
     tool_calls: &[Value],
     usage: &Value,
 ) -> anyhow::Result<()> {
+    write_turn_inner(agent, session_id, prompt, reply, tool_calls, usage, None)
+}
+
+pub fn write_turn_with_elapsed(
+    agent: &str,
+    session_id: &str,
+    prompt: &str,
+    reply: &str,
+    tool_calls: &[Value],
+    usage: &Value,
+    elapsed_ms: u64,
+) -> anyhow::Result<()> {
+    write_turn_inner(
+        agent,
+        session_id,
+        prompt,
+        reply,
+        tool_calls,
+        usage,
+        Some(elapsed_ms),
+    )
+}
+
+fn write_turn_inner(
+    agent: &str,
+    session_id: &str,
+    prompt: &str,
+    reply: &str,
+    tool_calls: &[Value],
+    usage: &Value,
+    elapsed_ms: Option<u64>,
+) -> anyhow::Result<()> {
     let dir = sessions_dir(agent);
     fs::create_dir_all(&dir).with_context(|| format!("create sessions dir {}", dir.display()))?;
 
@@ -278,6 +313,7 @@ pub fn write_turn(
         prompt: prompt.to_string(),
         reply: reply.to_string(),
         tool_calls: tool_calls.to_vec(),
+        elapsed_ms,
         usage: usage.clone(),
     };
     buf.push_str(&serde_json::to_string(&turn)?);
@@ -389,6 +425,22 @@ pub fn write_turn_best_effort(
     usage: &Value,
 ) {
     if let Err(e) = write_turn(agent, session_id, prompt, reply, tool_calls, usage) {
+        eprintln!("[agent send] warning: failed to persist session turn: {e}");
+    }
+}
+
+pub fn write_turn_best_effort_with_elapsed(
+    agent: &str,
+    session_id: &str,
+    prompt: &str,
+    reply: &str,
+    tool_calls: &[Value],
+    usage: &Value,
+    elapsed_ms: u64,
+) {
+    if let Err(e) = write_turn_with_elapsed(
+        agent, session_id, prompt, reply, tool_calls, usage, elapsed_ms,
+    ) {
         eprintln!("[agent send] warning: failed to persist session turn: {e}");
     }
 }
@@ -505,6 +557,25 @@ mod tests {
         assert_eq!(lines[1]["prompt"], "hi");
         assert_eq!(lines[1]["reply"], "hello");
         assert_eq!(lines[1]["usage"]["input_tokens"], 10);
+    }
+
+    #[test]
+    fn write_turn_with_elapsed_persists_duration() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        write_turn_with_elapsed(
+            "demot",
+            "timed",
+            "hi",
+            "hello",
+            &[json!({"ability": "clock.now"})],
+            &json!({"input_tokens": 1}),
+            42,
+        )
+        .expect("write");
+        let lines = load_session("demot", "timed").expect("load");
+        assert_eq!(lines.len(), 2, "session_meta + 1 turn");
+        assert_eq!(lines[1]["elapsed_ms"], 42);
+        assert_eq!(lines[1]["tool_calls"][0]["ability"], "clock.now");
     }
 
     #[test]

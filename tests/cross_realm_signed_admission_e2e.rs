@@ -63,12 +63,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use ed25519_dalek::{Signer, SigningKey};
-use sha2::{Digest, Sha256};
+use ed25519_dalek::SigningKey;
+use sha2::Digest as _;
 
 use easynet_axon::invocation::axiom::{
-    canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-    InvocationEnvelope, SubjectIdentity, UraProfile,
+    sign_descriptor_bound_invocation, AgentIdentity as AxiomAgentIdentity, CausalContext,
+    DescriptorBoundEnvelope, InvocationEnvelope, SubjectIdentity, UraProfile,
 };
 use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
@@ -76,12 +76,16 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
     InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::services::federated_peers_cell::SharedFederatedPeers;
 use easynet_cli::services::federation_client::{FederationClient, FederationClientError, HubUri};
 use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
 use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+
+const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
+const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 /// In-process federation client that forwards every `forward_invoke`
 /// to a target `DaemonInvocationService`. Used so daemon B's
@@ -144,15 +148,8 @@ impl FederationClient for InProcessForwarder {
     }
 }
 
-/// Build a signed `InvokeRequest` where:
-/// - caller URA is `caller_ura`
-/// - callee/subject URA is `callee_ura`
-/// - ability is `ability`, args is `args`
-/// - the envelope's `caller_signature` is a real Ed25519 signature
-///   over the canonical invocation bytes computed by axon's encoder
-///
-/// Mirrors the production CLI bridge's signing path so admission
-/// verifies against bytes the test really signed.
+/// Mirrors the production descriptor-bound signing path so admission
+/// verifies exactly the bytes the test signed.
 fn signed_request(
     caller_ura: &str,
     callee_ura: &str,
@@ -161,21 +158,29 @@ fn signed_request(
     signing_key: &SigningKey,
     nonce: [u8; 16],
 ) -> InvokeRequest {
-    let mut hasher = Sha256::new();
-    hasher.update(args);
-    let args_digest: [u8; 32] = hasher.finalize().into();
-
+    let subject_ura = easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+        .expect("callee-owned descriptor ability subject");
+    let subject = SubjectIdentity::new(&subject_ura, UraProfile::EasynetStrictV2);
+    let ability_ref = format!(
+        "{}@{}",
+        easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+            .expect("callee-owned descriptor ability"),
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    );
     let axiom_env = InvocationEnvelope {
         caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
         callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-        subject: SubjectIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
-        ability: ability.to_string(),
-        args_digest,
+        subject: subject.clone(),
+        ability: ability_ref.clone(),
+        args_digest: sha2::Sha256::digest(args).into(),
         invocation_nonce: nonce,
         causal_context: CausalContext::None,
     };
-    let bytes = canonical_invocation_bytes(&axiom_env);
-    let sig = signing_key.sign(&bytes);
+    let descriptor_bound =
+        DescriptorBoundEnvelope::new(axiom_env).expect("descriptor-bound test envelope");
+    let key_id_hint = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+    let sig =
+        sign_descriptor_bound_invocation(signing_key, &descriptor_bound, key_id_hint.as_str());
 
     let envelope = Envelope {
         caller: Some(PbAgentIdentity {
@@ -187,14 +192,14 @@ fn signed_request(
             profile: "easynet-strict-v2".to_string(),
         }),
         subject: Some(PbSubjectIdentity {
-            ura: callee_ura.to_string(),
+            ura: subject_ura.clone(),
             profile: "easynet-strict-v2".to_string(),
         }),
         invocation_nonce: nonce.to_vec(),
         caller_signature: Some(PbCallerSignature {
-            algorithm: "ed25519".to_string(),
-            signature: sig.to_bytes().to_vec(),
-            key_id_hint: String::new(),
+            algorithm: sig.algorithm,
+            signature: sig.signature,
+            key_id_hint: sig.key_id_hint,
         }),
         ..Envelope::default()
     };
@@ -203,12 +208,16 @@ fn signed_request(
         envelope: Some(envelope),
         function_name: ability.to_string(),
         arguments: args.to_vec(),
+        metadata: std::collections::HashMap::from([(
+            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
+            ability_ref,
+        )]),
         ..InvokeRequest::default()
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
+async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
@@ -257,7 +266,8 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
         Arc::new(RealmTrustAnchor::default()),
         Some(daemon_b_ura.clone()),
     )
-    .with_federation(Arc::clone(&federation_client), peers_cell.clone());
+    .with_federation(Arc::clone(&federation_client), peers_cell.clone())
+    .with_hub_signing_seed(REALM_B_HUB_SIGNING_SEED);
     let daemon_b = DaemonInvocationService::new(
         Arc::new(PresenceRegistry::new()),
         daemon_b_admission.clone(),
@@ -272,10 +282,10 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     //
     // `self.echo` does not need to actually be implemented for the
     // test — admission acceptance is the assertion target. Daemon B
-    // has an empty LocalRuntime wired, so it returns `Status::not_found`
-    // for unknown abilities AFTER admission has already passed; the
-    // test catches that as the success signal (admission succeeded;
-    // dispatch then fails for an unrelated reason).
+    // has an empty LocalRuntime wired, so resolve-first dispatch now
+    // rejects the unbound ability with ROUTE_NEGATIVE/NODATA AFTER
+    // admission has already passed; the test catches that as the
+    // success signal.
     let signed = signed_request(
         DEVICE_A_URA,
         &daemon_b_ura,
@@ -294,15 +304,21 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
             // working dispatcher returns Ok we accept that too.
         }
         Err(status) => {
-            // Admission acceptance is proven by the failure code
-            // being `NotFound` (post-admission dispatch miss)
-            // rather than the §5.2 reject codes
-            // (`PermissionDenied` / `InvalidArgument`).
+            // Admission acceptance is proven by reaching the
+            // resolve-first route gate: this is a post-admission
+            // unbound-ability miss, not a §5.2 signature/nonce
+            // rejection (`PermissionDenied` / `InvalidArgument`).
             assert_eq!(
                 status.code(),
-                tonic::Code::NotFound,
-                "expected post-admission unknown-ability dispatch miss, but got code={:?} message={}",
+                tonic::Code::FailedPrecondition,
+                "expected post-admission unbound-ability route miss, but got code={:?} message={}",
                 status.code(),
+                status.message()
+            );
+            assert!(
+                status.message().contains("ROUTE_NEGATIVE")
+                    && status.message().contains("NEGATIVE_REASON_NODATA"),
+                "expected route NODATA after admission, got message={}",
                 status.message()
             );
         }
@@ -313,9 +329,9 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // exactly one `"admitted"` receipt naming device-A as caller.
     // That ring-buffer is gone — admission success is now observable
     // through the dispatch outcome assertions above (the call passed
-    // admission and reached the `NotFound` dispatch arm, which
-    // proves the caller's signature verified and the nonce was
-    // accepted). Audit-trail-level persistence of "who admitted what"
+    // admission and reached the resolve-first NODATA arm, which proves
+    // the caller's signature verified and the nonce was accepted).
+    // Audit-trail-level persistence of "who admitted what"
     // moved to the `InvocationLedger` rows the `LedgerSink` writes
     // at terminal time; this test scenario doesn't reach terminal
     // (intentionally — it stops at admission), so no ledger row is
@@ -450,7 +466,8 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
         Arc::new(RealmTrustAnchor::default()),
         Some(daemon_b_ura.clone()),
     )
-    .with_federation(Arc::clone(&federation_client), peers_cell);
+    .with_federation(Arc::clone(&federation_client), peers_cell)
+    .with_hub_signing_seed(REALM_B_HUB_SIGNING_SEED);
     let daemon_b =
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_b_admission)
             .with_session_realm(REALM_B)

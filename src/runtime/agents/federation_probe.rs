@@ -118,8 +118,9 @@ pub(crate) fn local_identity() -> LocalIdentity {
             paired: true,
         },
         Err(_) => LocalIdentity {
-            node_id: "local".to_string(),
-            tenant_id: "default".to_string(),
+            node_id: crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_DEVICE_ID
+                .to_string(),
+            tenant_id: crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM.to_string(),
             hub_endpoint: None,
             paired: false,
         },

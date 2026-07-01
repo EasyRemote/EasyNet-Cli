@@ -40,9 +40,6 @@ const RESOURCE_NAMESPACE_FS: &str = "fs";
 const VIRTUAL_ROOT_WORKSPACE: &str = "workspace";
 const VIRTUAL_ROOT_TMP: &str = "tmp";
 const VIRTUAL_ROOT_HOME: &str = "home";
-const LOCAL_RESOURCE_REF_REALM: &str = "localhost";
-const LOCAL_RESOURCE_REF_DEVICE_ID: &str = "local-device";
-const LOCAL_RESOURCE_REF_OWNER: &str = "device.local-device";
 const LOCAL_RESOURCE_REF_REVISION: &str = "fs-local-mapping-v1";
 const DEFAULT_LOCAL_RESOURCE_REF_TTL_MS: i64 = 5 * 60 * 1000;
 
@@ -260,11 +257,28 @@ fn resource_ref_value(
     capability: FilesystemResourceCapability,
     expires_unix_ms: i64,
 ) -> Value {
-    let owner_ura = crate::ura::device_ura(LOCAL_RESOURCE_REF_REALM, LOCAL_RESOURCE_REF_DEVICE_ID);
+    // Bind the local-mapping ResourceRef to this device's REAL paired identity
+    // (realm + node_id), not a fixed `localhost`/`local-device` placeholder. The
+    // realm is hub-issued at join and every other URA mint honours it; this was
+    // the one production site that advertised `easynet:///r/localhost/...` while
+    // the device's real URA lives under its paired realm. Fall back to the
+    // canonical unpaired sentinel (default/local) when no credentials exist,
+    // mirroring `local_invocation_identity::local_device_ura`.
+    let (realm, device_id) = crate::persistence::config::load_credentials()
+        .ok()
+        .map(|c| (c.realm, c.node_id))
+        .unwrap_or_else(|| {
+            (
+                crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM.to_string(),
+                crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_DEVICE_ID.to_string(),
+            )
+        });
+    let owner_token = format!("device.{device_id}");
+    let owner_ura = crate::ura::device_ura(&realm, &device_id);
     json!({
         "resource_ura": crate::ura::resource_dot_ura(
-            LOCAL_RESOURCE_REF_REALM,
-            LOCAL_RESOURCE_REF_OWNER,
+            &realm,
+            &owner_token,
             &format!("fs/{virtual_root}/{relative_path}")
         ),
         "owner_ura": owner_ura,
@@ -696,14 +710,28 @@ mod tests {
 
     #[test]
     fn unmapped_virtual_root_rejects() {
+        // Mint a ResourceRef the normal way, then re-point its resource_ura at an
+        // UNMAPPED virtual root (`vault`) keyed on the SAME minted identity so
+        // the owner-consistency check passes and we exercise the virtual-root
+        // rejection, not an owner mismatch. We parse the Resource URA instead
+        // of splitting by `/`, because URA grammar belongs to Axon and tests
+        // must not duplicate segment math that can drift under new subjects.
         let mut reference = resource_ref(
             "file.txt",
             FilesystemResourceCapability::Read,
             expires_in_ms(60_000),
         );
+        let minted = reference["resource_ura"]
+            .as_str()
+            .expect("minted resource_ura is a string")
+            .to_string();
+        let parsed = crate::ura::parse_ura(&minted).expect("minted resource_ura parses");
+        let owner_token = parsed
+            .resource_owner_id()
+            .expect("resource_ura carries an owner token");
         reference["resource_ura"] = json!(crate::ura::resource_dot_ura(
-            LOCAL_RESOURCE_REF_REALM,
-            LOCAL_RESOURCE_REF_OWNER,
+            &parsed.realm,
+            owner_token,
             "fs/vault/file.txt"
         ));
 
@@ -713,7 +741,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("no local mapping"));
+        assert!(
+            err.to_string().contains("no local mapping"),
+            "expected unmapped virtual-root rejection, got: {err}"
+        );
     }
 
     #[cfg(unix)]

@@ -320,7 +320,7 @@ if ! list_out="$(easynet ability list 2>&1)"; then
     printf '%s\n' "$list_out" >&2
     exit 1
 fi
-list_count="$(printf '%s' "$list_out" | grep -cE '^\s+(device|hub|<self>|test|dev)\.' || true)"
+list_count="$(printf '%s' "$list_out" | grep -cE '^\s+(device|hub|identity|runtime|session|test|dev)\.' || true)"
 echo "    ability list returned non-empty"
 
 echo "==> [6/7] agent add codex + claude"

@@ -1,17 +1,17 @@
 //! llm profile — RFC-001 §1.
 //!
-//! An Agent advertising conversation.* + session.* +
-//! per-skill abilities. One per registered AI sub-agent (claude /
-//! codex / future). Per RFC §1.1 + §A15: each LLM sub-agent's
-//! installed skills are PRIVATE abilities owned by that sub-agent.
+//! An Agent advertising conversation.* plus per-skill abilities. One per
+//! registered AI sub-agent (claude / codex / future). Per RFC §1.1 + §A15:
+//! each LLM sub-agent's installed skills are PRIVATE abilities advertised by
+//! that sub-agent projection.
 //!
-//! Descriptor ownership
-//! --------------------
+//! Descriptor projection
+//! ---------------------
 //! LLM profile descriptors are dynamic because each registered AI sub-agent has
 //! its own `<agent>.chat` and manifest-provided abilities. Static system-registry
-//! ownership is therefore not enough for this profile. This module keeps the
+//! projection is therefore not enough for this profile. This module keeps the
 //! dynamic LLM ability-shape filter private; no other module may use it as a
-//! generic ownership classifier.
+//! generic projection classifier.
 //!
 //! Currently wired in agents/chat_ability.rs (which renames to
 //! conversation_ability.rs in a follow-up cleanup). The chat handler
@@ -19,9 +19,9 @@
 
 const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // RFC-005 owner-local catalogue names: `meta.*` and the built-in
-    // `skill.<operation>` abilities are device-profile-owned. LLM profile's
-    // dynamic surface is `conversation.*` / `session.*` / private per-skill
-    // `skill.<skill-name>` entries.
+    // `session.*` and `skill.<operation>` abilities are device-profile-owned.
+    // LLM profile's dynamic surface is `conversation.*` plus private
+    // per-skill `skill.<skill-name>` entries.
     //
     // `voice.*` was previously listed here on the
     // assumption that voice signaling is an LLM-owned ability
@@ -38,7 +38,6 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // hardware lives on the device) and is now described through
     // registry `OwnerKind::Device`, not through an LLM prefix claim.
     "conversation.",
-    "session.",
     "skill.",
 ];
 
@@ -62,18 +61,17 @@ fn is_llm_dynamic_ability(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
-/// AbilityDescriptors for every conversation.* / session.* /
-/// skill.* in the live registry, anchored to the LLM-profile
-/// Agent's URA. Per RFC §1.1 + §18:
+/// AbilityDescriptors for every conversation.* / private skill.* in the live
+/// registry, anchored to the LLM-profile Agent's URA. Per RFC §1.1 + §18:
 ///   * skill.*         → PRIVATE (per-skill, owner-only by default)
 ///   * conversation.*  → SCOPED  (default per [P8] correction)
-///   * session.*       → SCOPED
 ///
 /// P4.7 narrows the SCOPED axes.
 pub fn descriptors_for(
     owner_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    descriptors_for_with_metadata(owner_ura, None)
+    let catalog = LlmProfileAbilityCatalog::load();
+    descriptors_for_with_catalog(owner_ura, None, &catalog)
 }
 
 /// Same as `descriptors_for`, but stamps each emitted descriptor's
@@ -95,10 +93,53 @@ pub fn descriptors_for_with_metadata(
     owner_ura: &str,
     agent_type_display: Option<&str>,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    let catalog = LlmProfileAbilityCatalog::load();
+    descriptors_for_with_catalog(owner_ura, agent_type_display, &catalog)
+}
+
+/// Pre-filtered system ability catalogue for LLM-profile projection.
+///
+/// `published_abilities()` builds the live system catalogue and its transport
+/// hint snapshot. Calling it once per hosted LLM turns `meta.list_abilities`
+/// into O(hosted_agents * system_abilities). This value object makes the read
+/// model explicit: one catalogue snapshot, then a cheap owner-specific
+/// projection for each hosted agent.
+#[derive(Debug, Clone)]
+pub struct LlmProfileAbilityCatalog {
+    abilities: Vec<crate::runtime::agents::SystemAbilityMetadata>,
+}
+
+impl LlmProfileAbilityCatalog {
+    #[must_use]
+    pub fn load() -> Self {
+        Self::from_system_abilities(crate::runtime::agents::published_abilities())
+    }
+
+    #[must_use]
+    pub fn from_system_abilities(
+        abilities: Vec<crate::runtime::agents::SystemAbilityMetadata>,
+    ) -> Self {
+        Self {
+            abilities: abilities
+                .into_iter()
+                .filter(|m| is_llm_dynamic_ability(&m.name))
+                .collect(),
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &crate::runtime::agents::SystemAbilityMetadata> {
+        self.abilities.iter()
+    }
+}
+
+pub fn descriptors_for_with_catalog(
+    owner_ura: &str,
+    agent_type_display: Option<&str>,
+    catalog: &LlmProfileAbilityCatalog,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-    crate::runtime::agents::published_abilities()
-        .into_iter()
-        .filter(|m| is_llm_dynamic_ability(&m.name))
+    catalog
+        .iter()
         .map(|m| {
             let visibility = if m.name.starts_with("skill.") {
                 Visibility::Private
@@ -110,7 +151,7 @@ pub fn descriptors_for_with_metadata(
                 .with_input_schema(m.input_schema.clone())
                 .with_hints(m.hints.clone())
                 .with_source("kernel:built-in")
-                .with_description(m.description);
+                .with_description(m.description.clone());
             if let Some(t) = agent_type_display {
                 desc = desc.with_metadata_entry("agent_type", t);
             }
@@ -127,11 +168,11 @@ mod tests {
     fn dynamic_filter_recognizes_llm_namespaces() {
         // Q3 of truth-table spec: meta.* and skill.* are
         // device-profile-owned, NOT llm-profile. The LLM surface is
-        // conversation.*, session.*, and private skill.*.
+        // conversation.* and private skill.*.
         assert!(is_llm_dynamic_ability("conversation.send"));
         assert!(is_llm_dynamic_ability("conversation.stream"));
-        assert!(is_llm_dynamic_ability("session.create"));
-        assert!(is_llm_dynamic_ability("session.resume"));
+        assert!(!is_llm_dynamic_ability("session.list"));
+        assert!(!is_llm_dynamic_ability("session.attach"));
         assert!(is_llm_dynamic_ability("skill.alive-video"));
         assert!(is_llm_dynamic_ability("skill.design"));
         assert!(!is_llm_dynamic_ability("skill.list"));
@@ -147,7 +188,6 @@ mod tests {
     fn dynamic_filter_rejects_other_profiles() {
         assert!(!is_llm_dynamic_ability("skill.list"));
         assert!(!is_llm_dynamic_ability("consent.subscribe"));
-        assert!(!is_llm_dynamic_ability("policy.evaluate"));
     }
 
     #[test]
@@ -197,5 +237,57 @@ mod tests {
                 d.name,
             );
         }
+    }
+
+    #[test]
+    fn catalog_snapshot_projects_to_multiple_llm_owners_without_mutating_source() {
+        let catalog = LlmProfileAbilityCatalog::from_system_abilities(vec![
+            crate::runtime::agents::SystemAbilityMetadata {
+                name: "conversation.send".to_string(),
+                description: "Send a prompt".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                hints: Default::default(),
+            },
+            crate::runtime::agents::SystemAbilityMetadata {
+                name: "skill.design".to_string(),
+                description: "Run a private skill".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                hints: Default::default(),
+            },
+            crate::runtime::agents::SystemAbilityMetadata {
+                name: "meta.list_abilities".to_string(),
+                description: "Device-owned metadata".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                hints: Default::default(),
+            },
+        ]);
+
+        let alice = descriptors_for_with_catalog(
+            "easynet:///r/acme/agent/u1.alice",
+            Some("claude-code"),
+            &catalog,
+        );
+        let bob =
+            descriptors_for_with_catalog("easynet:///r/acme/agent/u1.bob", Some("codex"), &catalog);
+
+        assert_eq!(alice.len(), 2);
+        assert_eq!(bob.len(), 2);
+        assert!(alice
+            .iter()
+            .all(|descriptor| descriptor.owner_ura == "easynet:///r/acme/agent/u1.alice"));
+        assert!(bob
+            .iter()
+            .all(|descriptor| descriptor.owner_ura == "easynet:///r/acme/agent/u1.bob"));
+        assert!(alice
+            .iter()
+            .all(|descriptor| descriptor.name != "meta.list_abilities"));
+        assert_eq!(
+            alice
+                .iter()
+                .find(|descriptor| descriptor.name == "skill.design")
+                .expect("skill descriptor")
+                .visibility,
+            crate::runtime::ability_descriptor::Visibility::Private
+        );
     }
 }

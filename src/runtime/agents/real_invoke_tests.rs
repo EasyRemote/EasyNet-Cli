@@ -508,9 +508,9 @@ fn real_device_ability_deploy_validates_resource_ref_argument() {
 }
 
 #[test]
-fn real_device_ability_uninstall_acknowledges_local_intent() {
+fn real_device_ability_uninstall_refuses_unwired_runtime() {
     let (reg, _g) = registry_with_temp_home();
-    let resp = dispatcher_for(reg)
+    let err = dispatcher_for(reg)
         .execute_rpc(target(
             "ability.uninstall",
             json!({
@@ -518,19 +518,15 @@ fn real_device_ability_uninstall_acknowledges_local_intent() {
                 "node_id": "local"
             }),
         ))
-        .expect("ability.uninstall local");
-    assert_eq!(resp.get("state").and_then(Value::as_str), Some("REMOVED"));
-    assert_eq!(
-        resp.get("ability_ura").and_then(Value::as_str),
-        Some("easynet:///r/localhost/ability/alice.claude.weather")
-    );
+        .expect_err("unwired registrar must not report REMOVED");
+    let msg = format!("{err}");
+    assert!(msg.contains("runtime not wired yet"), "{msg}");
 }
 
 #[test]
-fn real_device_remote_exec_local_runs_argv() {
-    // Use printf — POSIX, deterministic, available on macOS + Linux.
+fn real_device_remote_exec_is_not_registered_without_permission_broker() {
     let (reg, _g) = registry_with_temp_home();
-    let resp = dispatcher_for(reg)
+    let err = dispatcher_for(reg)
         .execute_rpc(target(
             "remote.exec",
             json!({
@@ -538,30 +534,27 @@ fn real_device_remote_exec_local_runs_argv() {
                 "command": ["printf", "%s", "ok"],
             }),
         ))
-        .expect("remote.exec local");
-    assert_eq!(resp.get("stdout").and_then(Value::as_str), Some("ok"));
-    assert_eq!(resp.get("exit_code"), Some(&json!(0)));
+        .expect_err("remote.exec must not be a public ability without a permission broker");
+    let msg = format!("{err}");
+    assert!(msg.contains("unknown_ability:remote.exec"), "{msg}");
 }
 
 #[test]
-fn real_device_node_register_acknowledges_intent() {
+fn real_device_node_register_is_not_a_runtime_surface() {
     let (reg, _g) = registry_with_temp_home();
-    let resp = dispatcher_for(reg)
+    let err = dispatcher_for(reg)
         .execute_rpc(target("node.register", json!({})))
-        .expect("node.register");
-    assert!(resp.get("state").is_some());
+        .expect_err("node.register must not be registered until transport exists");
+    assert!(format!("{err}").contains("unknown_ability"), "{err}");
 }
 
 #[test]
-fn real_device_node_deregister_acknowledges_intent() {
+fn real_device_node_deregister_is_not_a_runtime_surface() {
     let (reg, _g) = registry_with_temp_home();
-    let resp = dispatcher_for(reg)
+    let err = dispatcher_for(reg)
         .execute_rpc(target("node.deregister", json!({})))
-        .expect("node.deregister");
-    assert_eq!(
-        resp.get("state").and_then(Value::as_str),
-        Some("DEREGISTERED")
-    );
+        .expect_err("node.deregister must not be registered until transport exists");
+    assert!(format!("{err}").contains("unknown_ability"), "{err}");
 }
 
 // ── voice.* call signaling abilities ────────────────────────────
@@ -786,44 +779,6 @@ fn real_mission_discuss_round_rejects_zero_max_cycles() {
     ));
     let err = result.expect_err("zero max_cycles must fail");
     assert!(format!("{err}").contains("max_cycles"));
-}
-
-#[test]
-fn real_policy_evaluate_admits_a_realistic_envelope() {
-    // policy.evaluate takes an `invocation_envelope` field; the
-    // v1 evaluator returns Allowed for everything.
-    let (reg, _g) = registry_with_temp_home();
-    let envelope = json!({
-        "subject": "test",
-        "ability": "observe.health",
-        "scope": "local",
-    });
-    let resp = dispatcher_for(reg)
-        .execute_rpc(target(
-            "policy.evaluate",
-            json!({"invocation_envelope": envelope}),
-        ))
-        .expect("policy.evaluate");
-    assert!(resp.is_object());
-    // v1 always allows; the response should reflect that somewhere.
-    let s = resp.to_string().to_ascii_lowercase();
-    assert!(
-        s.contains("allow") || s.contains("ok"),
-        "policy.evaluate v1 should admit; got {resp}"
-    );
-}
-
-#[test]
-fn real_policy_simulate_returns_a_decision() {
-    let (reg, _g) = registry_with_temp_home();
-    let envelope = json!({"subject":"x","ability":"observe.health","scope":"local"});
-    let resp = dispatcher_for(reg)
-        .execute_rpc(target(
-            "policy.simulate",
-            json!({"invocation_envelope": envelope}),
-        ))
-        .expect("policy.simulate");
-    assert!(resp.is_object());
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1472,6 +1427,7 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
         hub_endpoint: "axon://hub.test:50051".to_string(),
         realm: "localhost".to_string(),
         username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
         ..Default::default()
     })
     .expect("seed joined credentials");
@@ -1498,7 +1454,13 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
 }
 
 #[test]
-fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
+fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
+    // A daemon-built registry wires the HotAgentRegistrar into the shared
+    // cell at construction (registry_builder stashes it immediately), so
+    // `agent.refresh` no longer reports the boot-window `runtime_not_ready`
+    // case — it scans the persisted agents through the registrar and
+    // returns `ok=true`. A hosted agent with no runtime row to sync simply
+    // reports `runtime_registered=0` without failing.
     let (reg, _g) = registry_with_temp_home();
     crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
         node_id: "dev-1".to_string(),
@@ -1506,6 +1468,7 @@ fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
         hub_endpoint: "axon://hub.test:50051".to_string(),
         realm: "localhost".to_string(),
         username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
         ..Default::default()
     })
     .expect("seed joined credentials");
@@ -1521,11 +1484,12 @@ fn real_device_agent_refresh_reports_runtime_not_ready_without_registrar() {
     let resp = d
         .execute_rpc(target("agent.refresh", json!({})))
         .expect("agent.refresh");
-    assert_eq!(resp.get("ok"), Some(&json!(false)));
-    assert_eq!(resp.get("runtime_not_ready"), Some(&json!(true)));
+    assert_eq!(resp.get("ok"), Some(&json!(true)));
+    assert_eq!(resp.get("runtime_not_ready"), Some(&json!(false)));
+    assert_eq!(resp.get("agents_scanned"), Some(&json!(1)));
     assert!(
         resp.get("agents").and_then(Value::as_array).is_some(),
-        "refresh must return an agents array even when runtime is not ready: {resp}"
+        "refresh must return an agents array: {resp}"
     );
 }
 
@@ -2022,6 +1986,51 @@ fn real_a2a_client_send_task_routes_with_realistic_args() {
     }
 }
 
+#[test]
+fn real_meta_teach_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let r = dispatcher_for(reg).execute_rpc(target("meta.teach", json!({})));
+    match r {
+        Ok(v) => assert!(v.is_object()),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
+            "meta.teach must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_meta_acquire_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let r = dispatcher_for(reg).execute_rpc(target("meta.acquire", json!({})));
+    match r {
+        Ok(v) => assert!(v.is_object()),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
+            "meta.acquire must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_meta_forget_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let r = dispatcher_for(reg).execute_rpc(target("meta.forget", json!({})));
+    match r {
+        Ok(v) => assert!(v.is_object()),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
+            "meta.forget must be routed: {e}"
+        ),
+    }
+}
+
 // ════════════════════════════════════════════════════════════════
 // Coverage matrix: every published ability is exercised above
 // ════════════════════════════════════════════════════════════════
@@ -2044,6 +2053,7 @@ fn every_published_ability_has_a_real_invoke_test() {
     let published: std::collections::BTreeSet<String> = build_registry()
         .list_abilities()
         .into_iter()
+        .filter(|n| is_publishable_catalog_name(n))
         .filter(|n| !n.ends_with(".chat")) // dynamic per-agent, not in this catalog
         // RFC-002 §3.3: keyring abilities are owner-namespaced and
         // covered by their own unit tests in
@@ -2129,6 +2139,26 @@ fn real_device_plugin_reload_reports_registration_diff() {
         report["unregistered_abilities"].is_array(),
         "plugin.reload must include unregistered_abilities: {report}"
     );
+}
+
+#[test]
+fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let result = d.execute_rpc(target(
+        "plugin.activate_realtime",
+        json!({"package_id": "missing.test"}),
+    ));
+    match result {
+        Ok(value) => assert!(value.is_object()),
+        Err(err) => assert!(
+            !format!("{err}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
+            "plugin.activate_realtime must be routed: {err}"
+        ),
+    }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2541,14 +2571,19 @@ fn real_mic_subscribe_routes_to_subject_gate() {
 }
 
 #[test]
-fn real_camera_subscribe_routes_to_media_stub() {
+fn real_camera_subscribe_routes_to_media_subject_gate() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("camera.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
-    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("camera.subscribe", &err);
+    let err = d
+        .execute_stream(t)
+        .expect_err("missing camera subject must reject before opening hardware");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "camera.subscribe must route to media subject gate; got {err}"
+    );
 }
 
 #[test]
@@ -2565,6 +2600,37 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
     assert!(
         err.to_string().contains("subject_required"),
         "camera.snapshot: expected reason=subject_required; got {err}"
+    );
+}
+
+#[test]
+fn real_camera_record_start_with_no_subject_returns_subject_required() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target("camera.record_start", json!({})))
+        .expect_err("camera.record_start without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "camera.record_start: expected reason=subject_required; got {err}"
+    );
+}
+
+#[test]
+fn real_camera_record_stop_with_no_subject_returns_subject_required() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target(
+            "camera.record_stop",
+            json!({"recording_session_id": "missing-real-invoke-session"}),
+        ))
+        .expect_err("camera.record_stop without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "camera.record_stop: expected reason=subject_required; got {err}"
     );
 }
 
@@ -2650,13 +2716,14 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let subject = seed_real_invoke_display_resource("remote-desktop-real-invoke-display");
     let reg = build_registry();
     let d = dispatcher_for(reg);
+    let session_id = unique_call_id("remote-desktop");
 
     let created = d
         .execute_rpc(
             target(
                 "remote_desktop.create_session",
                 json!({
-                    "session_id": "rd-real-invoke",
+                    "session_id": session_id,
                     "mode": "view_only",
                     "lease_ttl_ms": 5000,
                 }),
@@ -2665,7 +2732,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
             .with_causal_context(remote_desktop_test_consent_causal_context()),
         )
         .expect("remote_desktop.create_session must create a session");
-    assert_eq!(created["session_id"], "rd-real-invoke");
+    assert_eq!(created["session_id"], session_id);
     let token = created["session_token"]
         .as_str()
         .expect("create_session must return session_token")
@@ -2675,13 +2742,13 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
         .execute_rpc(
             target(
                 "remote_desktop.show_session",
-                json!({"session_id": "rd-real-invoke", "session_token": token}),
+                json!({"session_id": session_id, "session_token": token}),
             )
             .with_subject(subject.clone())
             .with_causal_context(remote_desktop_test_consent_causal_context()),
         )
         .expect("remote_desktop.show_session must dispatch");
-    assert_eq!(shown["session_id"], "rd-real-invoke");
+    assert_eq!(shown["session_id"], session_id);
     assert!(
         shown.get("session_token").is_none(),
         "show_session must not leak session_token"
@@ -2693,7 +2760,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
             target(
                 "remote_desktop.set_description",
                 json!({
-                    "session_id": "rd-real-invoke",
+                    "session_id": session_id,
                     "session_token": token,
                     "side": "local",
                     "description": {"type": "answer", "sdp": "v=0"}
@@ -2711,7 +2778,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
             target(
                 "remote_desktop.add_ice_candidate",
                 json!({
-                    "session_id": "rd-real-invoke",
+                    "session_id": session_id,
                     "session_token": token,
                     "candidate": {"candidate": "candidate:1"}
                 }),
@@ -2725,7 +2792,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
 
     let mut watch = target(
         "remote_desktop.watch_events",
-        json!({"session_id": "rd-real-invoke", "session_token": token}),
+        json!({"session_id": session_id, "session_token": token}),
     )
     .with_subject(subject.clone())
     .with_causal_context(remote_desktop_test_consent_causal_context());
@@ -2747,7 +2814,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
             target(
                 "remote_desktop.refresh_lease",
                 json!({
-                    "session_id": "rd-real-invoke",
+                    "session_id": session_id,
                     "session_token": token,
                     "lease_ttl_ms": 5000
                 }),
@@ -2756,14 +2823,14 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
             .with_causal_context(remote_desktop_test_consent_causal_context()),
         )
         .expect("remote_desktop.refresh_lease must dispatch");
-    assert_eq!(refreshed["session_id"], "rd-real-invoke");
+    assert_eq!(refreshed["session_id"], session_id);
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let ended = d
         .execute_rpc(
             target(
                 "remote_desktop.end_session",
-                json!({"session_id": "rd-real-invoke", "session_token": token}),
+                json!({"session_id": session_id, "session_token": token}),
             )
             .with_subject(subject)
             .with_causal_context(remote_desktop_test_consent_causal_context()),
@@ -2897,6 +2964,60 @@ fn real_browser_capture_viewport_emits_one_placeholder_frame() {
         "v0 mock must emit exactly one placeholder frame"
     );
     assert_eq!(frames[0]["is_placeholder"], true);
+}
+
+#[tokio::test]
+async fn real_browser_attach_session_emits_ready_frame_and_accepts_close() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let open = d
+        .execute_rpc(target(
+            "browser.open_session",
+            json!({"url": "https://example.com"}),
+        ))
+        .expect("open_session ok");
+    let ura = open["session_ura"].as_str().unwrap().to_string();
+
+    let mut target = target(
+        "browser.attach_session",
+        json!({"session_ura": ura.clone()}),
+    );
+    target.call_mode = CallMode::Bidi;
+    let mut bidi = d
+        .execute_bidi(target)
+        .expect("attach_session must open bidi source");
+
+    let ready = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+        .await
+        .expect("ready frame timed out")
+        .expect("ready frame missing")
+        .into_json_value()
+        .expect("ready frame json");
+    assert_eq!(ready["type"], "browser.ready");
+    assert_eq!(ready["session_ura"], ura);
+
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+        .await
+        .expect("initial frame timed out")
+        .expect("initial frame missing")
+        .into_json_value()
+        .expect("initial frame json");
+    assert_eq!(frame["type"], "browser.frame");
+    assert_eq!(frame["frame"]["is_placeholder"], true);
+
+    bidi.to_client
+        .send(json!({"type": "browser.close"}))
+        .await
+        .expect("send close frame");
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
+        .await
+        .expect("closed frame timed out")
+        .expect("closed frame missing")
+        .into_json_value()
+        .expect("closed frame json");
+    assert_eq!(closed["type"], "closed");
+    assert_eq!(closed["session_ura"], ura);
 }
 
 #[test]
@@ -3224,6 +3345,17 @@ fn real_context_clipboard_and_favorites_round_trip() {
     assert_eq!(favs["favorites"][0]["reference"], json!("clip-1"));
     let removed = invoke("context.favorites.remove", json!({"id": fav_id}));
     assert_eq!(removed["reference"], json!("clip-1"));
+
+    // Remove the clip itself: the removed entry is the receipt and
+    // the list forgets it.
+    let removed_clip = invoke("context.clipboard.remove", json!({"id": "clip-1"}));
+    assert_eq!(removed_clip["id"], json!("clip-1"));
+    let after = invoke("context.clipboard.list", json!({"limit": 10}));
+    assert_eq!(
+        after["entries"].as_array().expect("entries array").len(),
+        0,
+        "removed clip must not reappear in the list"
+    );
 }
 
 #[test]

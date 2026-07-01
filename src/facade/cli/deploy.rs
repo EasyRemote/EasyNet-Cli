@@ -37,20 +37,27 @@ use serde_json::json;
 use crate::runtime::resources::filesystem::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
-use crate::support::local_invoke::invoke_local_ability;
+use crate::support::local_invoke::invoke_local_ability_with_subject;
 use crate::support::output;
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
     /// Path to the ability directory (must contain `ability.json`).
     /// The CLI converts it to a short-lived ResourceRef before invocation.
+    /// Current device deployment accepts executable manifests whose `[exec]`
+    /// binding is `kind = "host_stream"`; other exec kinds are rejected by
+    /// the daemon until their runtime boundaries are implemented.
     pub path: String,
-    /// Target device node id. Use 'local' to deploy onto this
-    /// device's own ability registry; any other node id requires
-    /// the federation Invoke transport (the handler returns a
-    /// typed 'federation_not_wired' error in that case until it
-    /// ships).
-    #[arg(long = "node", short = 'n', value_name = "NODE_ID")]
+    /// Target device node id. Defaults to 'local', the only fully
+    /// implemented target in this release. Any other node id requires
+    /// the federation Invoke transport and returns a typed
+    /// 'federation_not_wired' error until that transport ships.
+    #[arg(
+        long = "node",
+        short = 'n',
+        value_name = "NODE_ID",
+        default_value = "local"
+    )]
     pub node: String,
 }
 
@@ -69,12 +76,19 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     );
     let resource_ref = resource_ref_for_local_path(dir, FilesystemResourceCapability::Read)
         .context("mint ability bundle ResourceRef")?;
-    let result = invoke_local_ability(
+    let subject_ura = resource_ref
+        .get("resource_ura")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("minted ResourceRef did not include resource_ura"))?;
+    let result = invoke_local_ability_with_subject(
         "ability.deploy",
         json!({
             "resource_ref": resource_ref,
             "node_id": args.node,
         }),
+        Some(subject_ura),
     )
     .context("invoke ability.deploy")?;
     eprintln!("{}", style("✓").green());
@@ -82,13 +96,22 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     if let Some(install_id) = result.get("install_id").and_then(|v| v.as_str()) {
         output::step(&format!("install_id: {install_id}"));
     }
-    if let Some(ability_ura) = result.get("ability_ura").and_then(|v| v.as_str()) {
-        output::success(&format!(
-            "activated — {ability_ura} is live on {}",
-            args.node
-        ));
-    } else {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+    match (
+        result.get("state").and_then(|v| v.as_str()),
+        result.get("ability_ura").and_then(|v| v.as_str()),
+    ) {
+        (Some("ACTIVE"), Some(ability_ura)) => {
+            output::success(&format!("{ability_ura} is active on {}", args.node));
+        }
+        (Some("INSTALLED"), Some(ability_ura)) => {
+            output::step(&format!(
+                "{ability_ura} installed on {}; activation is pending route availability",
+                args.node
+            ));
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
     }
     Ok(())
 }

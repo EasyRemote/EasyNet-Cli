@@ -21,7 +21,7 @@
 // - A caller that observes a failed transition must record a snapshot before
 //   returning the error.
 // - `ONLINE` is recorded only after device-mode daemon boot has completed its
-//   initial `<self>.session` admission gate.
+//   initial `session.open` admission gate.
 //
 // Architectural Position:
 // - Runtime product state object. CLI facade commands render and update it;
@@ -419,7 +419,7 @@ pub fn latest_snapshot() -> JoinConnectionSnapshot {
 pub fn classify_boot_failure(message: &str) -> (JoinFailureCode, JoinTransition, bool) {
     let lower = message.to_ascii_lowercase();
     if message.contains("CALLER_SIGNATURE_INVALID")
-        || lower.contains("<self>.session")
+        || lower.contains("session.open")
         || lower.contains("self session")
         || lower.contains("session admission")
     {
@@ -455,8 +455,10 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: Some("http://127.0.0.1:8080".into()),
             username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             hub_pubkey_b64: None,
             hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         }
     }
 
@@ -536,7 +538,7 @@ mod tests {
     #[test]
     fn boot_failure_classifier_pins_self_session_admission() {
         let (code, transition, retryable) =
-            classify_boot_failure("CALLER_SIGNATURE_INVALID: rejected <self>.session");
+            classify_boot_failure("CALLER_SIGNATURE_INVALID: rejected session.open");
         assert_eq!(code, JoinFailureCode::StartFailedSelfSessionAdmission);
         assert_eq!(transition, JoinTransition::OpenSelfSession);
         assert!(!retryable);

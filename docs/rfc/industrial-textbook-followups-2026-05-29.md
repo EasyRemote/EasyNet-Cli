@@ -4,7 +4,7 @@
 
 This document records the structural debts identified in that review whose **execution** is too large to land alongside the current PR without making the diff itself an unreviewable mega-change. Each section is a self-contained follow-up PR scope: trigger, motivation, proposed shape, scope boundary (what's in, what's out), and ship criteria.
 
-The in-PR fixes (kernel-boundary CI, dead-code prune, ProcessSingleton diagnostic mirror, async/sync bridge dedup, typed not-found classification, test-seam isolation, local_invoke collapse, `<self>.*` grep-anchored TODOs, RuntimeHandlerSet drain extraction, async list_abilities propagation, classified try_send helper) are NOT repeated here — those are in the current PR's diff.
+The in-PR fixes (kernel-boundary CI, dead-code prune, ProcessSingleton diagnostic mirror, async/sync bridge dedup, typed not-found classification, test-seam isolation, local_invoke collapse, `legacy self alias.*` grep-anchored TODOs, RuntimeHandlerSet drain extraction, async list_abilities propagation, classified try_send helper) are NOT repeated here — those are in the current PR's diff.
 
 ---
 
@@ -21,7 +21,7 @@ src/services/invocation_transport/daemon_invocation_service/
 ├── federation_arms.rs      # dispatch_federation_* helpers
 ├── pubkey_arms.rs          # register_*/revoke_*/list_* pubkey
 ├── session_accept.rs       # dispatch_self_session_accept + downstream wiring
-├── invoke_remote.rs        # <self>.invoke_remote initiator + correlation
+├── invoke_remote.rs        # runtime.invoke_remote initiator + correlation
 ├── bidi_streams.rs         # SessionDownStream / LocalBidiDownStream / frame mappers
 ├── ledger_record.rs        # InvocationLedger record building (~free fns at the file tail)
 └── tests/
@@ -242,7 +242,7 @@ Search-and-replace in `docs/rfc/AXON-RFC-001-discovery-planes.md`, `…-edge-ada
 - OUT: any breaking wire change with the hub (MCP names are device-local, no wire pinning).
 
 **Ship criteria.**
-1. `agents/mod.rs:2576-2584` lint passes the new shape unchanged (lint already covers `<self>.*`; extending to "owner-kind first segment" closes the same hole for MCP).
+1. `agents/mod.rs:2576-2584` lint passes the new shape unchanged (lint already covers `legacy self alias.*`; extending to "owner-kind first segment" closes the same hole for MCP).
 2. RFC tables consistent with actual ability registration (grep the registration sites, compare).
 3. `easynet ability list` output renders the chosen shape; truth-table spec updated.
 

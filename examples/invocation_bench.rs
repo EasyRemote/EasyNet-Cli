@@ -5,7 +5,7 @@
 //! `DaemonInvocationService` + `PresenceRegistry` + pending maps,
 //! same wiring as `boot.rs`):
 //!
-//!   latency  — serial `<self>.invoke_remote` echo RTT distribution
+//!   latency  — serial `runtime.invoke_remote` echo RTT distribution
 //!   sweep    — concurrency sweep: N parallel invoke_remote calls,
 //!              N in {1,2,4,...,512}; p50/p95/p99, throughput, errors
 //!   hol      — head-of-line blocking proof: one slow streaming
@@ -43,7 +43,7 @@ use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
 };
 use easynet_cli::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
 use easynet_cli::services::invocation_transport::session_initiator::{
-    SessionFrameDispatcher, SessionUpSender, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
+    SessionFrameDispatcher, SessionUpSender, ABILITY_SESSION_OPEN, SESSION_STREAM_ID,
 };
 use easynet_cli::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
 use easynet_cli::services::presence_registry::PresenceRegistry;
@@ -256,7 +256,7 @@ async fn publish_projection_on(
     assert_eq!(body["count"], count, "all abilities published");
 }
 
-/// Echo responder device: holds a `<self>.session` open and answers
+/// Echo responder device: holds a `session.open` open and answers
 /// every Dispatch frame concurrently (spawn per frame, mirroring a
 /// well-behaved device). `test.flood` dispatches instead emit
 /// FLOOD_FRAMES non-terminal chunks and never terminate — the
@@ -289,7 +289,7 @@ async fn start_echo_responder(channel: Channel, device_ura: &str) -> Responder {
                 ..Envelope::default()
             }),
             target: Some(InvocationTarget {
-                ability_name: ABILITY_SELF_SESSION.to_string(),
+                ability_name: ABILITY_SESSION_OPEN.to_string(),
                 ..InvocationTarget::default()
             }),
             streams: vec![StreamDescriptor {
@@ -388,7 +388,7 @@ async fn start_echo_responder(channel: Channel, device_ura: &str) -> Responder {
     }
 }
 
-/// One `<self>.invoke_remote` echo round trip. Returns latency.
+/// One `runtime.invoke_remote` echo round trip. Returns latency.
 async fn invoke_remote_once(
     channel: Channel,
     ability_ura: &str,
@@ -400,7 +400,7 @@ async fn invoke_remote_once(
 
     let request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: String::new(),
         ability_ura: ability_ura.to_string(),
         args,
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -478,7 +478,7 @@ async fn open_unread_flood_call(
     let mut client = InvocationClient::new(channel);
     let request = InvokeRemoteUp::Request {
         subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: None,
+        subject_ura: String::new(),
         ability_ura: FLOOD_B_URA.to_string(),
         args: b"{}".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -616,7 +616,7 @@ async fn invoke_remote_echo_c(channel: Channel, timeout: Duration) -> Result<Dur
     let mut client = InvocationClient::new(channel);
     let request = InvokeRemoteUp::Request {
         subject_device: DEVICE_C_URI.to_string(),
-        subject_ura: None,
+        subject_ura: String::new(),
         ability_ura: ECHO_C_URA.to_string(),
         args: SWEEP_PAYLOAD.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),

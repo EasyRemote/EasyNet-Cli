@@ -32,6 +32,44 @@ pub const ABILITY_HISTORY_GET: &str = "invocation.history.get";
 pub const ABILITY_TRACE_GET: &str = "invocation.trace.get";
 pub const ABILITY_HISTORY_PATH: &str = "invocation.history.path";
 
+/// Daemon-internal, side-effect-free read RPC: fetch one ledger record by
+/// `request_id`.
+///
+/// Distinct from [`ABILITY_HISTORY_GET`]: this is NOT dispatched through the
+/// Axon LocalRuntime (which would append a second ledger row and corrupt the
+/// audit trail the caller is observing). The daemon `invoke` handler services
+/// it directly off the in-process `InvocationLedger` and writes no ledger row.
+/// It is the channel an out-of-process CLI uses to observe the receipt
+/// projection of a request it just issued, instead of opening the daemon-owned
+/// redb file (which redb forbids from a second process via its exclusive lock).
+pub const ABILITY_INVOCATION_RECORD_GET: &str = "invocation.record.get";
+
+/// Fetch one ledger record by `request_id` directly off an in-process ledger
+/// handle, with no dispatch and no ledger write. Returns `None` when no record
+/// exists yet (the sink persists asynchronously after the unary response).
+///
+/// Side-effect-free by construction: it only issues a redb read transaction on
+/// a handle the daemon already holds open, so it never takes a second
+/// cross-process lock and never appends to the ledger.
+pub fn record_by_request_id(
+    ledger: &InvocationLedger,
+    request_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        anyhow::bail!("invocation.record.get: request_id must not be empty");
+    }
+    let query = InvocationLedgerQuery::new()
+        .key(InvocationLedgerFetchKey::RequestId(request_id.to_string()))
+        .limit(1);
+    let Some(record) = ledger.fetch_one(query)? else {
+        return Ok(None);
+    };
+    serde_json::to_value(record)
+        .map(Some)
+        .map_err(|err| anyhow::anyhow!("serialize invocation ledger record: {err}"))
+}
+
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 
@@ -39,27 +77,47 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     let reader = Arc::new(InvocationLedgerReader::new(ledger));
 
     let list_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_HISTORY_LIST,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_HISTORY_LIST,
+            list_history_description(),
+            list_history_input_schema(),
+        ),
         Arc::new(move |args| list_reader.list_history(args)),
     );
     let get_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_HISTORY_GET,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_HISTORY_GET,
+            get_history_description(),
+            get_history_input_schema(),
+        ),
         Arc::new(move |args| get_reader.get_history(args)),
     );
     let trace_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_TRACE_GET,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_TRACE_GET,
+            get_trace_description(),
+            get_trace_input_schema(),
+        ),
         Arc::new(move |args| trace_reader.get_trace(args)),
     );
     let path_reader = Arc::clone(&reader);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_HISTORY_PATH,
         OwnerKind::Device,
+        crate::runtime::agents::system_ability_manifest::registry_manifest(
+            ABILITY_HISTORY_PATH,
+            get_path_description(),
+            get_path_input_schema(),
+        ),
         Arc::new(move |args| path_reader.get_path(args)),
     );
 }
@@ -570,6 +628,28 @@ mod tests {
         assert!(reg.get_rpc(ABILITY_HISTORY_GET).is_some());
         assert!(reg.get_rpc(ABILITY_TRACE_GET).is_some());
         assert!(reg.get_rpc(ABILITY_HISTORY_PATH).is_some());
+    }
+
+    #[test]
+    fn registration_publishes_invocation_history_manifests() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, None);
+
+        for ability in [
+            ABILITY_HISTORY_LIST,
+            ABILITY_HISTORY_GET,
+            ABILITY_TRACE_GET,
+            ABILITY_HISTORY_PATH,
+        ] {
+            let manifest = reg
+                .control_plane_manifest(ability)
+                .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
+            assert_eq!(
+                manifest.input_schema().get("type").and_then(Value::as_str),
+                Some("object"),
+                "{ability} must publish an object input schema"
+            );
+        }
     }
 
     #[test]

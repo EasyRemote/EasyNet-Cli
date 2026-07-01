@@ -25,6 +25,8 @@ pub(super) fn run_add(args: AddArgs) -> anyhow::Result<()> {
             "model": args.model,
             "model_present": true,
             "label": args.label,
+            "command": args.command,
+            "command_args": args.args,
             "materialize_directory": true,
             "update_existing_spec": false,
             "project_workspace": true,
@@ -80,10 +82,12 @@ pub(super) fn run_add(args: AddArgs) -> anyhow::Result<()> {
 #[cfg(feature = "axon-pb")]
 fn resolve_local_daemon_caller_ura() -> Option<String> {
     let creds = crate::persistence::config::load_credentials().ok()?;
+    let user_id = creds.user_id().ok()?;
     let username = creds.username_slug().ok()?;
     let plan = crate::facade::cli::start::build_bootstrap_plan_from(
         &creds.realm,
         &creds.node_id,
+        user_id,
         username,
     )
     .ok()?;

@@ -23,7 +23,7 @@ What exists now:
 
 - Backend pairing and device APIs expose string states such as `JOINING`, `ONLINE`, `SUSPECT`, `DRAINING`, `REMOVED`, and `UNKNOWN`.
 - Axon proto already has numeric node states for part of the runtime plane: `JOINING=1`, `PROBATION=2`, `HEALTHY=3`, `SUSPECT=4`, `QUARANTINED=5`, `DRAINING=6`, `REMOVED=7`.
-- CLI runtime boot has staged boot events and now fails closed if Hub credential verification or initial `<self>.session` admission fails.
+- CLI runtime boot has staged boot events and now fails closed if Hub credential verification or initial `session.open` admission fails.
 - Hub-side `PresenceRegistry` is the real liveness owner. A device is connected only when its device URA is present and active in that registry.
 - Backend HTTP read models now carry `resolve_unavailable` for resolver/runtime failures in the device, session, ability, agent, page, skill, and call listing surfaces instead of silently returning empty results or plain 500s.
 
@@ -42,7 +42,7 @@ The target invariant is now enforced at the CLI/operator boundary: every visible
 | Frontend | Create pairing token, show CLI command, subscribe to SSE invalidation, render backend read model | Device liveness truth |
 | Backend HTTP | Pairing lifecycle, user ownership, credential issuance, read model projection, resolver failure DTOs | Axon runtime implementation, daemon session admission |
 | EasyNet-Cli facade | `join`, `start`, `doctor`, operator output, local credential/trust persistence | Backend read model policy |
-| CLI daemon / Axon runtime | `<self>.session`, ability routing, local abilities, PresenceRegistry, namespace resolve product call surface | Frontend pairing UX |
+| CLI daemon / Axon runtime | `session.open`, ability routing, local abilities, PresenceRegistry, namespace resolve product call surface | Frontend pairing UX |
 | Hub PresenceRegistry | Current online/offline membership | Long-term user pairing ownership |
 
 ## Current Data Flow
@@ -59,7 +59,7 @@ The target invariant is now enforced at the CLI/operator boundary: every visible
 10. CLI starts the local daemon unless `--boot no`.
 11. CLI start verifies the credential with backend `/verify-credential`.
 12. CLI start verifies the Hub session endpoint is reachable with a plain socket preflight. This step must not load the dendrite bridge.
-13. Daemon boots invocation transport, loads the bridge/runtime implementation as needed, and opens `<self>.session` to the Hub.
+13. Daemon boots invocation transport, loads the bridge/runtime implementation as needed, and opens `session.open` to the Hub.
 14. Hub admission validates the caller signature and inserts the device URA into `PresenceRegistry`.
 15. Hub directory/SSE broker emits an invalidation event.
 16. Frontend invalidates React Query caches and refetches `/api/v1/devices`.
@@ -219,7 +219,7 @@ The following table is the missing product contract. These codes should be added
 | S310 | `HUB_CREDENTIAL_VERIFIED` | CLI/backend | Backend accepted the stored credential token | No |
 | S320 | `HUB_SESSION_ENDPOINT_REACHABLE` | CLI | Hub session endpoint accepted TCP/TLS connection | No |
 | S330 | `DAEMON_BOOTING` | CLI daemon | Daemon boot stages are running | No |
-| S340 | `SELF_SESSION_ADMISSION_PENDING` | CLI daemon/Hub | Daemon opened `<self>.session`; Hub admission not yet proven | No |
+| S340 | `SELF_SESSION_ADMISSION_PENDING` | CLI daemon/Hub | Daemon opened `session.open`; Hub admission not yet proven | No |
 | C400 | `CONNECTED_ONLINE` | Hub/backend/frontend | PresenceRegistry has active device URA and backend projected `ONLINE` | No |
 | C410 | `CONNECTED_SUSPECT` | Hub/backend/frontend | Directory reports stale heartbeat | No |
 | C420 | `CONNECTED_DRAINING` | Hub/backend/frontend | Directory reports graceful drain | No |
@@ -229,7 +229,7 @@ The following table is the missing product contract. These codes should be added
 | F510 | `JOIN_FAILED_VALIDATE` | CLI/backend | Validate failed or node/trust envelope mismatched | Yes |
 | F520 | `START_FAILED_CREDENTIAL_VERIFY` | CLI/backend | Backend credential verification failed or was unavailable | Yes |
 | F530 | `START_FAILED_SESSION_ENDPOINT` | CLI | Hub session endpoint could not be reached | Yes |
-| F540 | `START_FAILED_SELF_SESSION_ADMISSION` | CLI daemon/Hub | Hub rejected initial `<self>.session`, for example `CALLER_SIGNATURE_INVALID` | Yes |
+| F540 | `START_FAILED_SELF_SESSION_ADMISSION` | CLI daemon/Hub | Hub rejected initial `session.open`, for example `CALLER_SIGNATURE_INVALID` | Yes |
 | F550 | `START_FAILED_BOOT_STAGE` | CLI daemon | A daemon boot stage failed before ready; `failure.code` carries the concrete local cause such as `DENDRITE_BRIDGE_LIBRARY_NOT_FOUND` | Yes |
 | F560 | `RESOLVE_UNAVAILABLE` | Backend/frontend | Runtime may be fine, but read model could not resolve namespace/directory state | No |
 
@@ -245,7 +245,7 @@ The following table is the missing product contract. These codes should be added
 | T06_VERIFY_CREDENTIAL | J220 | S310 | CLI/backend | saved credential token | F520 |
 | T07_CONNECT_SESSION_ENDPOINT | S310 | S320 | CLI | Hub session endpoint TCP socket reachability only | F530 |
 | T08_BOOT_DAEMON | S320 | S330 | CLI daemon | local config, keyring, bridge/runtime dependencies | F550 |
-| T09_OPEN_SELF_SESSION | S330 | S340 | CLI daemon/Hub | signed `<self>.session` bidi | F540 |
+| T09_OPEN_SELF_SESSION | S330 | S340 | CLI daemon/Hub | signed `session.open` bidi | F540 |
 | T10_ADMIT_PRESENCE | S340 | C400 | Hub | valid caller signature and trust anchor | F540 |
 | T11_REFETCH_READ_MODEL | C400/C410/C420/C430/C440 | same projection | Frontend/backend | SSE invalidation or polling | F560 |
 | T12_REMOVE_PRESENCE | C400 | C430/C440 | Hub/backend | stream close, reset, send failure, admin revoke | F560 |
@@ -339,7 +339,7 @@ sequenceDiagram
     API-->>CLI: "credential valid"
     CLI->>Hub: "probe session endpoint"
     CLI->>D: "start daemon"
-    D->>Hub: "open signed <self>.session"
+    D->>Hub: "open signed session.open"
     Hub->>Hub: "verify caller signature and trust"
     Hub->>PR: "insert active device URA"
     PR-->>Hub: "online event"
@@ -503,7 +503,7 @@ The target JSON output should be:
   "interrupted_transition": "T09_OPEN_SELF_SESSION",
   "failure": {
     "code": "CALLER_SIGNATURE_INVALID",
-    "message": "Hub rejected <self>.session during initial admission",
+    "message": "Hub rejected session.open during initial admission",
     "stage": "self_session_admission",
     "retryable": false
   },
@@ -528,7 +528,7 @@ It must not invent a separate Docker-only state model. Docker is an execution en
 
 Short answer: yes, but they are not all the same class of fact.
 
-The `easynet join <token> --hub <backend>` output is a live stage renderer. A green check means the function backing that stage returned success. It does not automatically mean "the device is connected to Hub PresenceRegistry" unless the stage is part of daemon start and the daemon has passed the initial `<self>.session` admission gate.
+The `easynet join <token> --hub <backend>` output is a live stage renderer. A green check means the function backing that stage returned success. It does not automatically mean "the device is connected to Hub PresenceRegistry" unless the stage is part of daemon start and the daemon has passed the initial `session.open` admission gate.
 
 | Stage shown by CLI | Source of truth | What it proves | What it does not prove |
 | --- | --- | --- | --- |
@@ -541,7 +541,7 @@ The `easynet join <token> --hub <backend>` output is a live stage renderer. A gr
 | `realm-trust` | Local `realm-trust.toml` edit | Device and hub trust entries were written; latest implementation requires hub trust material instead of silently marking partial trust as complete | It is still local file state until daemon reads it |
 | `refresh-runtime` | Local runtime refresh attempt | Existing runtime was asked to republish, or no running runtime needed refresh | It is best-effort and not the final connection proof |
 | `kernel` through `pages-listener` | Daemon `BootBus` events | The daemon actually emitted boot-stage events from `easynet-daemon` | Only `daemon-invocation-transport` gates initial self-session admission |
-| `daemon-invocation-transport` | Daemon invocation transport boot | In device mode, this does not return success until the first `<self>.session` admission probe succeeds or fails closed | It does not prove frontend cache has already refetched |
+| `daemon-invocation-transport` | Daemon invocation transport boot | In device mode, this does not return success until the first `session.open` admission probe succeeds or fails closed | It does not prove frontend cache has already refetched |
 | `daemon ready` | Daemon terminal `BootEvent::Ready` | Local daemon completed all boot stages after invocation transport admission gate | Frontend may still need SSE/polling to render `ONLINE` |
 | `Join complete` | CLI summary after `runtime start` returns `Ok` | Pairing and local daemon startup completed | Backend read model still needs to project live state |
 
@@ -577,7 +577,7 @@ Product rule: `REMOVED` must only mean "directory was reachable and the device i
 6. SSE events are cache invalidations, not state authority.
 7. If `namespace.resolve` fails, backend returns `resolve_unavailable`; frontend renders degraded state.
 8. If directory is available and a validated device is absent, backend may render `REMOVED`.
-9. CLI daemon startup must be fail-closed for device mode: do not report ready until initial `<self>.session` admission succeeds.
+9. CLI daemon startup must be fail-closed for device mode: do not report ready until initial `session.open` admission succeeds.
 10. `CALLER_SIGNATURE_INVALID` is a hard admission failure at `T09_OPEN_SELF_SESSION`, not a frontend polling issue.
 11. Non-device runtime list surfaces such as `voice.list_calls` must distinguish "empty successful list" from "runtime query unavailable" through `resolve_unavailable`.
 12. Dendrite bridge loading is daemon/runtime boot work, not the Hub reachability oracle for `T07_CONNECT_SESSION_ENDPOINT`.

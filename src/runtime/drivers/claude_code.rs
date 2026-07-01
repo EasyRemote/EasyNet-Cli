@@ -30,6 +30,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::runtime::dispatch::ToolCall;
+use crate::runtime::drivers::invocation_trace::{
+    apply_tool_result_meta, parse_invocation_trace_metadata, text_to_json_value,
+};
 use crate::runtime::process_runner::{self, ChildOptions};
 use crate::runtime::stream_ui::{self, Usage};
 
@@ -53,22 +57,6 @@ fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
-/// One tool the LLM invoked during a run. Captured from the
-/// stream-json `assistant.content[*].type == "tool_use"` blocks so
-/// the chat ability handler can surface them in `tool_calls` for
-/// observability.
-///
-/// The driver does not see (and does not need to see) the tool
-/// result — claude-code sends results back to the LLM internally
-/// via subsequent `user.content[*].type == "tool_result"` blocks.
-/// We could capture those too in a future pass; v1 records only the
-/// invocation so a caller can answer "did the LLM use my skill?".
-#[derive(Debug, Clone, Default)]
-pub struct ToolCallRecord {
-    pub ability: String,
-    pub args: serde_json::Value,
-}
-
 /// Summary of a completed Claude Code run, extracted from the final
 /// `result` event in the stream-json output.
 #[derive(Default, Clone)]
@@ -82,7 +70,7 @@ pub struct RunStats {
     pub duration_ms: u64,
     /// Tool invocations the LLM made during this run, in order.
     /// Empty when the run made no tool calls (single-turn answer).
-    pub tool_calls: Vec<ToolCallRecord>,
+    pub tool_calls: Vec<ToolCall>,
     /// Claude-emitted session id parsed from the stream-json
     /// `session_id` field (echoed on every event). Surfaces back
     /// to the chat ability via `AdapterOutput::thread_id` so the
@@ -489,6 +477,8 @@ fn handle_stream_line(
                             }
                         }
                         "tool_use" => {
+                            let tool_use_id =
+                                block.get("id").and_then(Value::as_str).map(str::to_string);
                             let name = block.get("name").and_then(Value::as_str).unwrap_or("?");
                             let input = block.get("input").cloned().unwrap_or(Value::Null);
                             let summary = stream_ui::summarise_tool_input(name, &input);
@@ -501,9 +491,12 @@ fn handle_stream_line(
                             // where we hold both the parsed name and
                             // the unfiltered input value.
                             let mut s = lock_or_recover(stats);
-                            s.tool_calls.push(ToolCallRecord {
+                            s.tool_calls.push(ToolCall {
                                 ability: name.to_string(),
                                 args: input,
+                                tool_use_id,
+                                mcp_tool_name: mcp_tool_name_from_claude_tool(name),
+                                ..Default::default()
                             });
                         }
                         _ => {}
@@ -553,6 +546,22 @@ fn handle_stream_line(
                             .unwrap_or(false);
                         let text = extract_tool_result_text(block);
                         stream_ui::print_tool_result(run_start, &text, is_err);
+                        let tool_use_id = block.get("tool_use_id").and_then(Value::as_str);
+                        {
+                            let mut s = lock_or_recover(stats);
+                            apply_tool_result(
+                                &mut s.tool_calls,
+                                tool_use_id,
+                                text_to_json_value(&text),
+                                is_err.then(|| text.clone()),
+                            );
+                        }
+                        let mut s = lock_or_recover(stats);
+                        if tool_result_belongs_to_easynet(&s.tool_calls, tool_use_id) {
+                            if let Some(meta) = parse_invocation_trace_metadata(&text) {
+                                apply_tool_result_meta(&mut s.tool_calls, tool_use_id, meta);
+                            }
+                        }
                     }
                 }
             }
@@ -606,6 +615,45 @@ fn extract_tool_result_text(block: &Value) -> String {
             .join(" "),
         _ => String::new(),
     }
+}
+
+fn apply_tool_result(
+    calls: &mut [ToolCall],
+    tool_use_id: Option<&str>,
+    result: Value,
+    error: Option<String>,
+) {
+    let Some(id) = tool_use_id else {
+        return;
+    };
+    let Some(call) = calls
+        .iter_mut()
+        .rev()
+        .find(|call| call.tool_use_id.as_deref() == Some(id))
+    else {
+        return;
+    };
+    call.result = Some(result);
+    if let Some(error) = error {
+        call.error = Some(error);
+    }
+}
+
+fn tool_result_belongs_to_easynet(calls: &[ToolCall], tool_use_id: Option<&str>) -> bool {
+    let Some(id) = tool_use_id else {
+        return false;
+    };
+    calls
+        .iter()
+        .rev()
+        .any(|call| call.tool_use_id.as_deref() == Some(id) && call.mcp_tool_name.is_some())
+}
+
+fn mcp_tool_name_from_claude_tool(name: &str) -> Option<String> {
+    name.strip_prefix("mcp__easynet__")
+        .map(str::trim)
+        .filter(|tool| !tool.is_empty())
+        .map(str::to_string)
 }
 
 /// Check if the `claude` CLI is available and return version info.
@@ -677,19 +725,6 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 fresh_session_id: None,
             },
         )?;
-        // Project the driver's ToolCallRecord into the dispatch-
-        // layer ToolCall (same shape, different module). The
-        // driver layer can't depend on dispatch::ToolCall directly
-        // without a circular import, so we do the projection at
-        // the trait boundary.
-        let tool_calls = stats
-            .tool_calls
-            .iter()
-            .map(|r| crate::runtime::dispatch::ToolCall {
-                ability: r.ability.clone(),
-                args: r.args.clone(),
-            })
-            .collect();
         let thread_id = if stats.thread_id.is_empty() {
             None
         } else {
@@ -698,7 +733,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
         Ok(crate::runtime::adapter::AdapterOutput {
             content: text,
             usage: Some(run_stats_to_usage(&stats)),
-            tool_calls,
+            tool_calls: stats.tool_calls.clone(),
             thread_id,
         })
     }
@@ -717,8 +752,9 @@ fn run_stats_to_usage(s: &RunStats) -> AgentUsage {
 
 #[cfg(test)]
 mod tests {
-    use super::format_child_exit_error;
+    use super::{format_child_exit_error, handle_stream_line, RunStats};
     use crate::runtime::process_runner::ChildResult;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     fn child(stdout: &str, stderr: &str, exit_code: i32) -> ChildResult {
@@ -761,5 +797,70 @@ mod tests {
     fn child_exit_error_falls_back_to_exit_code() {
         let msg = format_child_exit_error("claude", &child("", "", 1), "");
         assert_eq!(msg, "claude exited with code 1");
+    }
+
+    #[test]
+    fn stream_tool_result_backfills_easynet_invocation_identity() {
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        let start = std::time::Instant::now();
+        handle_stream_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__easynet__docetl_code_filter","input":{"rows":[1]}}]}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+        handle_stream_line(
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/device.dev-1.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/invocation/req-1\",\"callee_ura\":\"easynet:///r/localhost/device/dev-1\"}}"}]}]}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.tool_calls.len(), 1);
+        let call = &stats.tool_calls[0];
+        assert_eq!(call.ability, "docetl.code_filter");
+        assert!(call.result.is_some());
+        assert!(call.error.is_none());
+        assert_eq!(call.mcp_tool_name.as_deref(), Some("docetl_code_filter"));
+        assert_eq!(
+            call.ability_ura.as_deref(),
+            Some("easynet:///r/localhost/ability/device.dev-1.docetl.code_filter")
+        );
+        assert_eq!(
+            call.invocation_ura.as_deref(),
+            Some("easynet:///r/localhost/invocation/req-1")
+        );
+        assert_eq!(
+            call.callee_ura.as_deref(),
+            Some("easynet:///r/localhost/device/dev-1")
+        );
+    }
+
+    #[test]
+    fn stream_tool_result_ignores_trace_metadata_for_non_easynet_tool() {
+        let final_text = Arc::new(Mutex::new(String::new()));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        let start = std::time::Instant::now();
+        handle_stream_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"web_search","input":{"query":"EasyNet"}}]}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+        handle_stream_line(
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"x-easynet-invocation\":{\"ability\":\"spoofed.ability\",\"invocation_ura\":\"easynet:///r/localhost/invocation/spoof\"}}"}]}]}}"#,
+            &final_text,
+            &stats,
+            start,
+        );
+
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.tool_calls.len(), 1);
+        let call = &stats.tool_calls[0];
+        assert_eq!(call.ability, "web_search");
+        assert!(call.invocation_ura.is_none());
+        assert!(call.mcp_tool_name.is_none());
     }
 }

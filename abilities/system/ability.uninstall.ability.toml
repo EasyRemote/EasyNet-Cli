@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "ability.uninstall"
-description = "Uninstall an ability from a node. Mirrors `ability.deploy`: local target acknowledged in v1, remote targets queued for the federation Invoke replacement."
+description = "Uninstall an ability from a node. Mirrors `ability.deploy`: local target removes the durable row, runtime binding, and control-plane record; remote targets are queued for the federation Invoke replacement."
 
 [input_schema]
 type = "object"

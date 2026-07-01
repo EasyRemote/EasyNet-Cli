@@ -12,7 +12,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::plugin_host::errors::{PluginHostError, Result};
 use crate::runtime::plugin_host::manifest::{
     validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginCallMode,
@@ -76,6 +75,33 @@ pub struct BuiltinPluginAbilitySpec {
     pub bidi_wire_kind: Option<PluginBidiWireKind>,
     pub description: fn() -> &'static str,
     pub input_schema: fn() -> Value,
+}
+
+impl BuiltinPluginAbilitySpec {
+    /// Project this compiled builtin plugin spec into the daemon registry
+    /// manifest shape used by `meta.list_abilities`.
+    ///
+    /// Builtin plugin ability names are full daemon names
+    /// (`remote_desktop.create_session`), while `AbilityManifest` names are
+    /// verb-local. The catalog key remains the full ability name at
+    /// registration; only the manifest body stores the local verb.
+    pub fn to_registry_manifest(&self) -> Result<crate::core::ability_spec::AbilityManifest> {
+        let verb = self.name.rsplit('.').next().ok_or_else(|| {
+            PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.to_string(),
+                reason: "ability name has no verb segment".to_string(),
+            }
+        })?;
+        crate::core::ability_spec::AbilityManifest::new(
+            verb,
+            (self.description)(),
+            (self.input_schema)(),
+        )
+        .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+            ability: self.name.to_string(),
+            reason: source.to_string(),
+        })
+    }
 }
 
 /// Descriptor metadata loaded from the package ability descriptor surface.
@@ -159,7 +185,10 @@ pub struct BuiltinPluginBinding {
     pub expected_entrypoint: &'static str,
     pub enabled_env_var: Option<&'static str>,
     pub ability_specs: fn() -> Vec<BuiltinPluginAbilitySpec>,
-    pub register: fn(&mut AxonAbilityCatalog, PluginRuntimeLimits),
+    pub contribute: fn(
+        &mut crate::runtime::plugin_host::contribution::PluginContributionBuilder,
+        PluginRuntimeLimits,
+    ) -> Result<()>,
 }
 
 /// Source class for a package in the package index.
@@ -635,7 +664,12 @@ pub(crate) mod tests {
         fn input_schema() -> Value {
             serde_json::json!({"type": "object", "additionalProperties": false})
         }
-        fn register(_: &mut AxonAbilityCatalog, _: PluginRuntimeLimits) {}
+        fn contribute(
+            _: &mut crate::runtime::plugin_host::PluginContributionBuilder,
+            _: PluginRuntimeLimits,
+        ) -> Result<()> {
+            Ok(())
+        }
         fn ability_specs() -> Vec<BuiltinPluginAbilitySpec> {
             vec![BuiltinPluginAbilitySpec {
                 name: "test.echo",
@@ -673,7 +707,7 @@ layer = "control"
             expected_entrypoint: "test::register",
             enabled_env_var: None,
             ability_specs,
-            register,
+            contribute,
         }) {
             Ok(_) => panic!("manifest layer must match compiled spec"),
             Err(err) => err,

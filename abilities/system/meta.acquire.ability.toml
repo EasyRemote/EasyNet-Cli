@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "meta.acquire"
+description = "Import a previously granted declaration-only ability manifest into a learner agent workspace. The imported descriptor is discoverable but not invokable."
+
+[input_schema]
+type = "object"
+required = ["ability_ura", "learner"]
+additionalProperties = false
+
+[input_schema.properties.ability_ura]
+type = "string"
+description = "Canonical Ability URA whose declaration manifest was granted to the learner."
+
+[input_schema.properties.learner]
+type = "string"
+description = "Local learner agent name whose workspace receives the descriptor copy."

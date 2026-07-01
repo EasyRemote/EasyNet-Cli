@@ -27,6 +27,8 @@
 
 pub(crate) mod claude_code;
 pub(crate) mod codex;
+pub(crate) mod external;
+pub(crate) mod invocation_trace;
 
 use super::adapter::AgentAdapter;
 use crate::registry::agents::AgentType;
@@ -45,5 +47,6 @@ pub(crate) fn adapter_for(agent_type: AgentType) -> &'static dyn AgentAdapter {
         AgentType::ClaudeCode => &claude_code::ClaudeCodeAdapter,
         AgentType::Codex => &codex::CodexExecAdapter,
         AgentType::CodexAppServer => &codex::CodexAppServerAdapter,
+        AgentType::External => &external::ExternalAdapter,
     }
 }
