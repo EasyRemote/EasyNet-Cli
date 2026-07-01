@@ -463,10 +463,14 @@ fn invoke_plugin_control_ability_via_daemon(
     ability: &'static str,
     args: serde_json::Value,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let Some(_subject) = plugin_control_subject_ura()? else {
+    let Some(subject) = plugin_control_subject_ura()? else {
         return Ok(None);
     };
-    match crate::support::local_invoke::invoke_local_ability(ability, args) {
+    match crate::support::local_invoke::invoke_local_ability_with_subject(
+        ability,
+        args,
+        Some(subject),
+    ) {
         Ok(value) => Ok(Some(value)),
         Err(err)
             if crate::support::local_invoke::classify_invoke_error(&err)
