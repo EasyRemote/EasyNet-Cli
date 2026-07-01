@@ -627,11 +627,29 @@ mod tests {
     use super::*;
     use crate::services::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 
+    struct IsolatedRuntimeDispatchAdapter {
+        _home: crate::facade::cli::test_support::HomeGuard,
+        adapter: RuntimeDispatchAdapter,
+    }
+
+    impl std::ops::Deref for IsolatedRuntimeDispatchAdapter {
+        type Target = RuntimeDispatchAdapter;
+
+        fn deref(&self) -> &Self::Target {
+            &self.adapter
+        }
+    }
+
     /// Bare adapter used by every test. The dispatcher under it is
     /// the live system-ability registry — `observe.health` is the
     /// canonical "always-registered, no fixture needed" probe.
-    fn fresh_adapter() -> RuntimeDispatchAdapter {
-        RuntimeDispatchAdapter::new_for_test()
+    fn fresh_adapter() -> IsolatedRuntimeDispatchAdapter {
+        let home = crate::facade::cli::test_support::HomeGuard::new();
+        let adapter = RuntimeDispatchAdapter::new_for_test();
+        IsolatedRuntimeDispatchAdapter {
+            _home: home,
+            adapter,
+        }
     }
 
     /// Test helper: drive a raw request line through the same
@@ -810,9 +828,10 @@ mod tests {
 
         let listener = UnixListener::bind(&socket_path).unwrap();
         let adapter = fresh_adapter();
+        let server_adapter = adapter.adapter.clone();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            serve_one(stream, adapter).await.unwrap();
+            serve_one(stream, server_adapter).await.unwrap();
         });
 
         // Client side: open, send request, read response, close.
@@ -854,9 +873,10 @@ mod tests {
 
         let listener = UnixListener::bind(&socket_path).unwrap();
         let adapter = fresh_adapter();
+        let server_adapter = adapter.adapter.clone();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            serve_one(stream, adapter).await.unwrap();
+            serve_one(stream, server_adapter).await.unwrap();
         });
 
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
@@ -909,9 +929,10 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path).unwrap();
         let adapter = fresh_adapter();
+        let server_adapter = adapter.adapter.clone();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            serve_one(stream, adapter).await.unwrap();
+            serve_one(stream, server_adapter).await.unwrap();
         });
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
         let req = json!({

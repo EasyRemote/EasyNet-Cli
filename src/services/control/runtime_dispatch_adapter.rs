@@ -77,7 +77,7 @@ impl RuntimeDispatchAdapter {
     /// `observe.health` without constructing the whole daemon.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
-        let agents = crate::registry::agents::load_agents().unwrap_or_default();
+        let agents = crate::registry::agents::AgentRegistry::default();
         let local_runtime = LocalRuntime::new();
         let mut config = crate::runtime::agents::RegistryBuildConfig::new(
             crate::runtime::agents::RegistryBuildServices::fresh(),
