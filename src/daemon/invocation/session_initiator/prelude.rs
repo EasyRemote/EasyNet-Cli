@@ -524,7 +524,7 @@ async fn send_federation_join_prelude(
             let body_bytes = reply.into_inner().result;
             if !body_bytes.is_empty() {
                 if let Ok(body) = serde_json::from_slice::<
-                    crate::runtime::federation_client::JoinReceipt,
+                    crate::daemon::federation::client::ability_contract::JoinReceipt,
                 >(&body_bytes)
                 {
                     hub_published_abilities.seed_from_snapshot(

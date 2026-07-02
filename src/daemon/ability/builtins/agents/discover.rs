@@ -115,7 +115,10 @@ pub trait DiscoverFederationResolver: Send + Sync {
         realm: &str,
         caller_ura: String,
         tenant_filter: Option<String>,
-    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>;
+    ) -> Result<
+        Vec<crate::daemon::federation::client::ability_contract::ResolvedAgent>,
+        DiscoverFederationResolveError,
+    >;
 }
 
 /// Axon-bridge resolver used by historical bridge runtimes and
@@ -130,8 +133,10 @@ impl DiscoverFederationResolver for BridgeDiscoverFederationResolver {
         realm: &str,
         caller_ura: String,
         tenant_filter: Option<String>,
-    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>
-    {
+    ) -> Result<
+        Vec<crate::daemon::federation::client::ability_contract::ResolvedAgent>,
+        DiscoverFederationResolveError,
+    > {
         let (bridge, _) = crate::persistence::config::load_and_connect().map_err(|e| {
             DiscoverFederationResolveError::NotJoined(format!(
                 "no usable Axon bridge runtime ({e}); start the daemon and join a realm before \
@@ -183,8 +188,10 @@ impl DiscoverFederationResolver for DeferredDiscoverFederationResolver {
         realm: &str,
         caller_ura: String,
         tenant_filter: Option<String>,
-    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>
-    {
+    ) -> Result<
+        Vec<crate::daemon::federation::client::ability_contract::ResolvedAgent>,
+        DiscoverFederationResolveError,
+    > {
         let Some(resolver) = self.resolver.get() else {
             return Err(DiscoverFederationResolveError::NotJoined(
                 "daemon directory resolver is not attached yet; retry after Invocation transport boot"
@@ -239,8 +246,10 @@ impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
         realm: &str,
         _caller_ura: String,
         tenant_filter: Option<String>,
-    ) -> Result<Vec<crate::runtime::federation_client::ResolvedAgent>, DiscoverFederationResolveError>
-    {
+    ) -> Result<
+        Vec<crate::daemon::federation::client::ability_contract::ResolvedAgent>,
+        DiscoverFederationResolveError,
+    > {
         let ura_prefix = local_resolve_prefix(tenant, realm, tenant_filter.as_deref())?;
         let request = crate::daemon::invocation::federation_wrappers::ResolveRequest {
             ura_prefix,
@@ -256,12 +265,13 @@ impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
         );
         let value = serde_json::to_value(response)
             .map_err(|e| DiscoverFederationResolveError::Unavailable(e.to_string()))?;
-        let receipt: crate::runtime::federation_client::ResolveReceipt =
-            crate::runtime::federation_client::parse_receipt_value(&value).map_err(|e| {
-                DiscoverFederationResolveError::Unavailable(format!(
-                    "parse local federation.resolve response: {e}"
-                ))
-            })?;
+        let receipt: crate::daemon::federation::client::ability_contract::ResolveReceipt =
+            crate::daemon::federation::client::ability_contract::parse_receipt_value(&value)
+                .map_err(|e| {
+                    DiscoverFederationResolveError::Unavailable(format!(
+                        "parse local federation.resolve response: {e}"
+                    ))
+                })?;
         Ok(receipt.agents)
     }
 }

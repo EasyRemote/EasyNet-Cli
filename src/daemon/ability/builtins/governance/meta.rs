@@ -1060,7 +1060,7 @@ mod tests {
         // passes `scope = "realm"`, the merged catalogue includes
         // entries cached from `federation.{join,heartbeat}`. The
         // default-local path stays disjoint — pin both axes.
-        use crate::runtime::federation_client::HubAbilityEntry;
+        use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
         let hub_published_abilities = HubPublishedAbilityStore::new();
 
         let mut reg = AxonAbilityCatalog::new();
@@ -1071,17 +1071,19 @@ mod tests {
             None,
             Arc::clone(&hub_published_abilities),
         );
-        hub_published_abilities.apply_diff(crate::runtime::federation_client::HubAbilitiesDiff {
-            revision: 99,
-            added: vec![HubAbilityEntry {
-                name: "hub.test.scope".to_string(),
-                descriptor: serde_json::json!({
-                    "name": "hub.test.scope",
-                    "description": "smoke entry"
-                }),
-            }],
-            removed: vec![],
-        });
+        hub_published_abilities.apply_diff(
+            crate::daemon::federation::client::ability_contract::HubAbilitiesDiff {
+                revision: 99,
+                added: vec![HubAbilityEntry {
+                    name: "hub.test.scope".to_string(),
+                    descriptor: serde_json::json!({
+                        "name": "hub.test.scope",
+                        "description": "smoke entry"
+                    }),
+                }],
+                removed: vec![],
+            },
+        );
 
         let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
 

@@ -387,7 +387,7 @@ fn run_ura_join_stages(
 
 #[derive(Debug)]
 struct UraJoinResult {
-    receipt: crate::runtime::federation_client::JoinReceipt,
+    receipt: crate::daemon::federation::client::ability_contract::JoinReceipt,
     hub_public_key_hex: String,
 }
 
@@ -450,7 +450,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
     let public_key = hex::decode(public_key_hex).context("decode device public key hex")?;
     let provisional_caller =
         crate::runtime::provisional_ura::provisional_ura_for_pubkey(&public_key);
-    let join_args = crate::runtime::federation_client::JoinArgs {
+    let join_args = crate::daemon::federation::client::ability_contract::JoinArgs {
         realm: target.realm.clone(),
         membership_ura: membership_ura.to_string(),
         public_key_hex: public_key_hex.to_string(),
@@ -463,7 +463,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
     )?
     .invoke_request(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
-        crate::runtime::federation_client::args_to_bytes(&join_args),
+        crate::daemon::federation::client::ability_contract::args_to_bytes(&join_args),
     )?;
     let join_response = client.invoke(join_request).await.map_err(|status| {
         anyhow::anyhow!(
@@ -477,8 +477,8 @@ async fn do_federation_join_and_resolve_hub_key_async(
         "federation.join",
         &join_response,
     )?;
-    let receipt: crate::runtime::federation_client::JoinReceipt =
-        crate::runtime::federation_client::parse_receipt(&join_response.result)?;
+    let receipt: crate::daemon::federation::client::ability_contract::JoinReceipt =
+        crate::daemon::federation::client::ability_contract::parse_receipt(&join_response.result)?;
     if receipt.realm != target.realm {
         anyhow::bail!(
             "federation.join receipt realm `{}` does not match requested realm `{}`",
@@ -496,10 +496,11 @@ async fn do_federation_join_and_resolve_hub_key_async(
     let membership_device_id = membership_ura_device_id(membership_ura)?;
     let seed = derive_device_seed_hex(&target.realm, &membership_device_id)?;
     let signer = DeterministicJoinSigner::from_seed_hex(&seed)?;
-    let resolve_args = crate::runtime::federation_client::ResolveKeyArgs {
+    let resolve_args = crate::daemon::federation::client::ability_contract::ResolveKeyArgs {
         agent_ura: target.hub_ura.clone(),
     };
-    let resolve_arguments = crate::runtime::federation_client::args_to_bytes(&resolve_args);
+    let resolve_arguments =
+        crate::daemon::federation::client::ability_contract::args_to_bytes(&resolve_args);
     let subject = crate::ura::owner_ability_ura(
         &target.hub_ura,
         crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
@@ -535,8 +536,10 @@ async fn do_federation_join_and_resolve_hub_key_async(
         "federation.resolve_key",
         &resolve_response,
     )?;
-    let resolved: crate::runtime::federation_client::ResolveKeyReceipt =
-        crate::runtime::federation_client::parse_receipt(&resolve_response.result)?;
+    let resolved: crate::daemon::federation::client::ability_contract::ResolveKeyReceipt =
+        crate::daemon::federation::client::ability_contract::parse_receipt(
+            &resolve_response.result,
+        )?;
     if resolved.public_key_hex.trim().is_empty() {
         anyhow::bail!("federation.resolve_key returned an empty hub public key");
     }

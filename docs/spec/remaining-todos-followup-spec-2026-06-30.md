@@ -220,7 +220,7 @@ value → existing HTTP flow (kept until Phase 3).
 
 ### Exact edits (Phase 1)
 
-- **`src/runtime/federation_client.rs`**: `JoinArgs` already gained
+- **`src/daemon/federation/client/ability_contract.rs`**: `JoinArgs` already gained
   `membership_ura` (done). Keep `realm`, `public_key_hex`, `pairing_secret`
   (hub discards the latter, harmless).
 - **`src/cli/join.rs`**:

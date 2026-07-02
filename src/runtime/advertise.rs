@@ -20,7 +20,7 @@
 // What this module IS
 // -------------------
 // A typed, testable wrapper around the bridge's raw ability_call.
-// It builds the §1.4 / §1.6 wire payloads using `federation_client`
+// It builds the §1.4 / §1.6 wire payloads using `ability_contract`
 // shapes, hands them to the bridge, parses the receipt body, and
 // returns a strongly-typed outcome the daemon-boot path consumes.
 //
@@ -37,11 +37,11 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
-use crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary;
-use crate::runtime::federation_client::{
+use crate::daemon::federation::client::ability_contract::{
     args_to_bytes, parse_receipt_value, AdvertiseAgentArgs, AdvertiseAgentReceipt,
     AdvertisedSigningAuthority, ResolveArgs, ResolveFilter, ResolveReceipt, ResolvedAgent,
 };
+use crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -104,7 +104,7 @@ pub fn heartbeat_resource_ura(realm: &str, _tenant_id: &str) -> String {
 }
 
 /// Wire shape for `federation.advertise_abilities` arguments. Not in
-/// federation_client.rs because this is CLI owner-projection publication:
+/// ability_contract.rs because this is CLI owner-projection publication:
 /// descriptors are local input, while the wire carries bounded summaries and
 /// projection metadata only.
 #[derive(Debug, Serialize)]
@@ -491,7 +491,7 @@ pub fn heartbeat<I: AbilityInvoker>(
     tenant_id: &str,
     realm: &str,
     store: &crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
-) -> Result<crate::runtime::federation_client::HeartbeatReceipt, String> {
+) -> Result<crate::daemon::federation::client::ability_contract::HeartbeatReceipt, String> {
     let resource_ura = heartbeat_resource_ura(realm, tenant_id);
     // AXON-RFC-001 v4.1.7 hub-broadcast contract: pass the
     // device's last-seen hub-abilities revision so the hub can
@@ -513,9 +513,10 @@ pub fn heartbeat<I: AbilityInvoker>(
     // that doesn't speak the contract leaves the store unchanged
     // (same as before this PR landed).
     let body = unwrap_result_json(response);
-    let receipt =
-        serde_json::from_value::<crate::runtime::federation_client::HeartbeatReceipt>(body)
-            .unwrap_or_default();
+    let receipt = serde_json::from_value::<
+        crate::daemon::federation::client::ability_contract::HeartbeatReceipt,
+    >(body)
+    .unwrap_or_default();
     let diff = receipt.hub_abilities_diff.clone();
     let added_n = diff.added.len();
     let removed_n = diff.removed.len();
@@ -536,7 +537,7 @@ pub fn resolve_key<I: AbilityInvoker>(
     tenant_id: &str,
     realm: &str,
     agent_ura: &str,
-) -> Result<crate::runtime::federation_client::ResolveKeyReceipt, String> {
+) -> Result<crate::daemon::federation::client::ability_contract::ResolveKeyReceipt, String> {
     let resource_ura = hub_ability_resource_ura(realm, FED_RESOLVE_KEY_ABILITY_NAME);
     let payload = serde_json::json!({ "agent_ura": agent_ura });
     let response = invoker.invoke_ability(tenant_id, &resource_ura, payload)?;
@@ -554,7 +555,7 @@ pub fn forward_invoke<I: AbilityInvoker>(
     target_ura: &str,
     ability_name: &str,
     arguments: &Value,
-) -> Result<crate::runtime::federation_client::ForwardInvokeReceipt, String> {
+) -> Result<crate::daemon::federation::client::ability_contract::ForwardInvokeReceipt, String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
     let resource_ura = hub_ability_resource_ura(realm, FED_FORWARD_INVOKE_ABILITY_NAME);

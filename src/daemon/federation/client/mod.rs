@@ -51,10 +51,15 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod ability_contract;
+#[cfg(feature = "axon-pb")]
 pub mod cross_hub_dial;
+#[cfg(feature = "axon-pb")]
 pub mod peer_dial;
 
+#[cfg(feature = "axon-pb")]
 pub use cross_hub_dial::{
     CrossHubDialer, DirectoryEventStream, FederationClient, FederationClientError, HubUri,
 };
+#[cfg(feature = "axon-pb")]
 pub use peer_dial::{pinned_tls_config, PinnedTlsError};

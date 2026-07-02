@@ -146,7 +146,7 @@ async fn send_federation_heartbeat(
     let body_bytes = response.result;
     if !body_bytes.is_empty() {
         if let Ok(receipt) = serde_json::from_slice::<
-            crate::runtime::federation_client::HeartbeatReceipt,
+            crate::daemon::federation::client::ability_contract::HeartbeatReceipt,
         >(&body_bytes)
         {
             let diff = receipt.hub_abilities_diff;

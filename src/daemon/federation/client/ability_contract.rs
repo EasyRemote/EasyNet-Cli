@@ -1,7 +1,7 @@
-// EasyNet CLI — Federation Ability Client (RFC-001 §3, §1.4)
-// ============================================================
+// EasyNet CLI — Federation Ability Contract DTOs (RFC-001 §3, §1.4)
+// =================================================================
 //
-// File: src/runtime/federation_client.rs
+// File: src/daemon/federation/client/ability_contract.rs
 //
 // Typed argument/response helpers for the four `federation.*`
 // abilities the hub-profile Agent exposes (per AXON-RFC-001 plan
@@ -25,7 +25,7 @@
 // Why this split exists
 // ---------------------
 // Keeping arg/response shapes here (instead of inlining JSON in
-// `publish.rs` or the daemon boot path) gives us:
+// federation publish/advertise or the daemon boot path) gives us:
 //
 //   1. One file the hub-profile maintainer can grep when its
 //      ability schemas change. The hub-profile's serde structs and

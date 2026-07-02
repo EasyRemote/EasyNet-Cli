@@ -71,6 +71,7 @@ make_sandbox() {
     printf '%s\n' '// daemon control root' > "$sandbox/src/daemon/control/mod.rs"
     printf '%s\n' '// daemon execution root' > "$sandbox/src/daemon/execution/mod.rs"
     printf '%s\n' '// daemon federation root' > "$sandbox/src/daemon/federation/mod.rs"
+    printf '%s\n' '// federation ability contract DTOs' > "$sandbox/src/daemon/federation/client/ability_contract.rs"
     printf '%s\n' '// daemon federation client root' > "$sandbox/src/daemon/federation/client/mod.rs"
     printf '%s\n' '// daemon federation directory' > "$sandbox/src/daemon/federation/directory.rs"
     printf '%s\n' '// daemon federation directory reader' > "$sandbox/src/daemon/federation/directory_reader.rs"
@@ -199,6 +200,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/execution directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired federation ability contract DTOs' > "$SB/src/runtime/federation_client.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/federation_client.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// retired gateway' > "$SB/src/runtime/gateway.rs"
@@ -371,6 +379,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::execution import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::federation_client::JoinArgs; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::federation_client import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::gateway::NoopGateway::new; }' > "$SB/src/lib.rs"
@@ -653,6 +668,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/client should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/client/ability_contract.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/client/ability_contract.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/federation/directory.rs"

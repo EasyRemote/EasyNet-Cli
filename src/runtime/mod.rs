@@ -79,7 +79,6 @@ pub mod executors;
 // PR-ATTACH onwards extends this).
 pub mod advertise;
 pub mod dispatch_receipt;
-pub mod federation_client;
 pub mod provisional_ura;
 pub mod publish;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.

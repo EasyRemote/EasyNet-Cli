@@ -36,7 +36,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use crate::runtime::federation_client::{HubAbilitiesDiff, HubAbilityEntry};
+use crate::daemon::federation::client::ability_contract::{HubAbilitiesDiff, HubAbilityEntry};
 
 /// In-memory cache of hub-published ability descriptors, scoped
 /// to one realm session. The store lives behind an `Arc` so the
