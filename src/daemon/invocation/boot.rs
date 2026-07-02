@@ -88,13 +88,13 @@ use crate::daemon::invocation::local_session_dispatcher::LocalAxonSessionDispatc
 use crate::daemon::invocation::session_initiator::{
     initial_session_admission_probe, run_session_supervisor,
 };
+use crate::daemon::invocation::state::pending_dispatch::PendingDispatchMap;
+use crate::daemon::invocation::state::presence::PresenceRegistry;
+use crate::daemon::invocation::state::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::persistence::daemon_config::{
     DaemonConfig, DaemonConfigError, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
 };
-use crate::services::pending_dispatch::PendingDispatchMap;
-use crate::services::presence_registry::PresenceRegistry;
-use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
 mod identity;
 mod listeners;
@@ -273,8 +273,9 @@ pub fn start_daemon_invocation_transport(
         }
     }
     let pending = Arc::new(PendingDispatchMap::new());
-    let pending_stream =
-        Arc::new(crate::services::pending_dispatch::PendingStreamDispatchMap::new());
+    let pending_stream = Arc::new(
+        crate::daemon::invocation::state::pending_dispatch::PendingStreamDispatchMap::new(),
+    );
 
     seed_boot_presence(config.mode(), daemon_ura.as_deref(), &presence);
 

@@ -22,6 +22,7 @@ make_sandbox() {
         "$sandbox/src/daemon/federation/client" \
         "$sandbox/src/daemon/identity" \
         "$sandbox/src/daemon/invocation" \
+        "$sandbox/src/daemon/invocation/state" \
         "$sandbox/src/daemon/keyring" \
         "$sandbox/src/daemon/trust" \
         "$sandbox/src/services" \
@@ -48,6 +49,12 @@ make_sandbox() {
     printf '%s\n' '// daemon identity root' > "$sandbox/src/daemon/identity/mod.rs"
     printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
+    printf '%s\n' '// daemon invocation state root' > "$sandbox/src/daemon/invocation/state/mod.rs"
+    printf '%s\n' '// nonce replay' > "$sandbox/src/daemon/invocation/state/nonce_replay.rs"
+    printf '%s\n' '// pending dispatch' > "$sandbox/src/daemon/invocation/state/pending_dispatch.rs"
+    printf '%s\n' '// presence' > "$sandbox/src/daemon/invocation/state/presence.rs"
+    printf '%s\n' '// session failure' > "$sandbox/src/daemon/invocation/state/session_failure.rs"
+    printf '%s\n' '// usage quota' > "$sandbox/src/daemon/invocation/state/usage_quota.rs"
     printf '%s\n' '// daemon keyring root' > "$sandbox/src/daemon/keyring/mod.rs"
     printf '%s\n' '// daemon trust root' > "$sandbox/src/daemon/trust/mod.rs"
     printf '%s\n' '// daemon trust anchor' > "$sandbox/src/daemon/trust/anchor.rs"
@@ -200,6 +207,41 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "services::self_identity import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::presence_registry::PresenceRegistry; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::presence_registry import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::pending_dispatch::PendingDispatchMap; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::pending_dispatch import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::nonce_replay_store::SharedNonceReplayStore; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::nonce_replay_store import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::usage_quota_store::SharedUsageQuotaGate; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::usage_quota_store import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::session_failure::SessionFailure; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::session_failure import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/facade/cli"
 printf '%s\n' '// retired cli path' > "$SB/src/facade/cli/mod.rs"
 rc=0
@@ -298,6 +340,41 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/keyring/mod.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/state/nonce_replay.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/state/nonce_replay.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/state/pending_dispatch.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/state/pending_dispatch.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/state/presence.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/state/presence.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/state/session_failure.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/state/session_failure.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/state/usage_quota.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/state/usage_quota.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/trust/anchor.rs"
@@ -401,6 +478,41 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/self_identity.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired presence registry path' > "$SB/src/services/presence_registry.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/presence_registry.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired pending dispatch path' > "$SB/src/services/pending_dispatch.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/pending_dispatch.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired nonce replay store path' > "$SB/src/services/nonce_replay_store.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/nonce_replay_store.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired usage quota store path' > "$SB/src/services/usage_quota_store.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/usage_quota_store.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired session failure path' > "$SB/src/services/session_failure.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/session_failure.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/daemon.rs' > "$SB/src/lib.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -497,6 +609,41 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/services/self_identity.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/presence_registry.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/presence_registry.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/pending_dispatch.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/pending_dispatch.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/nonce_replay_store.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/nonce_replay_store.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/usage_quota_store.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/usage_quota_store.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/session_failure.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/session_failure.rs reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/docker"

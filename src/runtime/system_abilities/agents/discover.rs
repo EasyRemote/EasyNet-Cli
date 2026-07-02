@@ -200,7 +200,7 @@ impl DiscoverFederationResolver for DeferredDiscoverFederationResolver {
 /// update.
 #[cfg(feature = "axon-pb")]
 pub struct LocalDirectoryDiscoverFederationResolver {
-    presence: Arc<crate::services::presence_registry::PresenceRegistry>,
+    presence: Arc<crate::daemon::invocation::state::presence::PresenceRegistry>,
     advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
     ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
     self_device_ura: Option<String>,
@@ -211,7 +211,7 @@ impl LocalDirectoryDiscoverFederationResolver {
     /// Construct a resolver over daemon-owned directory stores.
     #[must_use]
     pub fn new(
-        presence: Arc<crate::services::presence_registry::PresenceRegistry>,
+        presence: Arc<crate::daemon::invocation::state::presence::PresenceRegistry>,
         advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
         ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
         self_device_ura: Option<String>,

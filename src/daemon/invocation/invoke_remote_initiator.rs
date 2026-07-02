@@ -65,7 +65,7 @@ use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::{Response, Status};
 
-use crate::services::session_failure::SessionFailure;
+use crate::daemon::invocation::state::session_failure::SessionFailure;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{
@@ -74,7 +74,7 @@ use easynet_axon::pb::axon::v1::{
 
 use crate::daemon::invocation::invocation_wire::BoxedDownStream;
 use crate::daemon::invocation::peer_envelope_signer::decode_inner_envelope;
-use crate::services::presence_registry::DispatchFrame;
+use crate::daemon::invocation::state::presence::DispatchFrame;
 use easynet_axon::pb::axon::v1::{
     invoke_bidi_up::Payload as UpPayload, ContentEnvelope, EnvelopeOpen, InvocationTarget,
     InvokeBidiUp, StreamDescriptor,

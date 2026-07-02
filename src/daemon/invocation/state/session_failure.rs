@@ -1,7 +1,7 @@
-// EasyNet CLI — Session Failure Projection
+// EasyNet CLI - daemon Invocation session failure projection
 // ========================================
 //
-// File: src/services/session_failure.rs
+// File: src/daemon/invocation/state/session_failure.rs
 // Description: Typed failure value object shared by product session wires.
 //
 // This type intentionally lives outside the axon-pb-gated invocation

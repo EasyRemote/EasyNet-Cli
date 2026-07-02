@@ -7,7 +7,7 @@
 // quota policy the daemon enforces (`[daemon.quota]` in
 // `~/.easynet/daemon-config.toml`). Quota meters an already-admitted
 // caller; it is a governance refinement on top of the permission gate,
-// not an identity decision. See `services::usage_quota_store` for the
+// not an identity decision. See `daemon::invocation::state::usage_quota` for the
 // enforcement counter and `persistence::daemon_config::QuotaConfig` for
 // the policy shape.
 //

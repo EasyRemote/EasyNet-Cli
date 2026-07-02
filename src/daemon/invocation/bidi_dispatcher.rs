@@ -75,15 +75,15 @@ use crate::daemon::invocation::target_gate::{
 use crate::daemon::invocation::unary_dispatcher::UnaryDispatcher;
 use easynet_axon::invocation::{AbilityFrame, BidiInputFrame};
 
-use crate::daemon::trust::anchor::RealmTrustAnchor;
-use crate::services::pending_dispatch::{
+use crate::daemon::invocation::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
 };
-use crate::services::presence_registry::{
+use crate::daemon::invocation::state::presence::{
     DispatchFrame, DispatchSender, OfflineReason, PresenceRegistry, SessionContract,
     SessionTrustContext, DISPATCH_CHANNEL_CAPACITY,
 };
-use crate::services::session_failure::SessionFailure;
+use crate::daemon::invocation::state::session_failure::SessionFailure;
+use crate::daemon::trust::anchor::RealmTrustAnchor;
 
 /// Named runtime-admin abilities the `InvokeBidi` dispatcher routes by
 /// exact name (as opposed to the generic `is_bidi_wire_ability` remote
@@ -402,7 +402,7 @@ impl BidiDispatcher {
                 self.directory.presence.remove_if_session(
                     &selected_route.execution_host_ura,
                     session_id,
-                    crate::services::presence_registry::OfflineReason::StreamClosed,
+                    crate::daemon::invocation::state::presence::OfflineReason::StreamClosed,
                 );
                 return Err(Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -599,7 +599,7 @@ impl BidiDispatcher {
                         presence_for_up.remove_if_session(
                             &execution_host_ura_owned,
                             session_id,
-                            crate::services::presence_registry::OfflineReason::StreamClosed,
+                            crate::daemon::invocation::state::presence::OfflineReason::StreamClosed,
                         );
                         let reason =
                             federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON.to_string();
@@ -2376,7 +2376,7 @@ fn map_status_to_session_request_error(status: Status) -> RequestOutcome {
 pub(crate) fn build_session_request_result_frame(
     call_id: [u8; 16],
     outcome: RequestOutcome,
-) -> crate::services::presence_registry::DispatchFrame {
+) -> crate::daemon::invocation::state::presence::DispatchFrame {
     use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
     use easynet_axon::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
 
@@ -2399,7 +2399,7 @@ pub(crate) fn build_session_request_result_frame(
             serde_json::to_vec(&fallback).expect("typed error variant must always encode")
         }
     };
-    crate::services::presence_registry::DispatchFrame {
+    crate::daemon::invocation::state::presence::DispatchFrame {
         frame: InvokeBidiDown {
             payload: Some(Payload::BinaryChunk(BinaryChunk {
                 data,
@@ -2424,7 +2424,7 @@ pub(crate) fn push_session_request_result(
     presence: &Arc<PresenceRegistry>,
     caller_ura: &str,
     id_hex: &str,
-    frame: crate::services::presence_registry::DispatchFrame,
+    frame: crate::daemon::invocation::state::presence::DispatchFrame,
 ) {
     let Some((session_id, sender)) = presence.lookup_tracked(caller_ura) else {
         crate::op_event!(
@@ -2562,8 +2562,10 @@ fn settle_terminal_result(
     let mut completed = false;
     if let Some(pending_stream) = pending_stream.as_ref() {
         match pending_stream.try_finish(call_id, dispatch_result.clone()) {
-            crate::services::pending_dispatch::StreamDeliver::Delivered => completed = true,
-            crate::services::pending_dispatch::StreamDeliver::ConsumerStalled => {
+            crate::daemon::invocation::state::pending_dispatch::StreamDeliver::Delivered => {
+                completed = true
+            }
+            crate::daemon::invocation::state::pending_dispatch::StreamDeliver::ConsumerStalled => {
                 crate::op_event!(
                     component = session_accept,
                     kind = terminal_result_consumer_stalled,
@@ -2573,7 +2575,7 @@ fn settle_terminal_result(
                 );
                 return;
             }
-            crate::services::pending_dispatch::StreamDeliver::NoMatch => {}
+            crate::daemon::invocation::state::pending_dispatch::StreamDeliver::NoMatch => {}
         }
     }
     if !completed {
@@ -2604,13 +2606,13 @@ fn settle_terminal_result(
 /// cut so the drain (and every other invocation on the device's
 /// session) keeps flowing.
 fn report_chunk_delivery(
-    outcome: crate::services::pending_dispatch::StreamDeliver,
+    outcome: crate::daemon::invocation::state::pending_dispatch::StreamDeliver,
     caller_ura: &str,
     call_id: u64,
 ) {
     match outcome {
-        crate::services::pending_dispatch::StreamDeliver::Delivered => {}
-        crate::services::pending_dispatch::StreamDeliver::NoMatch => {
+        crate::daemon::invocation::state::pending_dispatch::StreamDeliver::Delivered => {}
+        crate::daemon::invocation::state::pending_dispatch::StreamDeliver::NoMatch => {
             crate::op_event!(
                 component = session_accept,
                 kind = streaming_result_chunk_no_match,
@@ -2618,7 +2620,7 @@ fn report_chunk_delivery(
                 call_id = call_id,
             );
         }
-        crate::services::pending_dispatch::StreamDeliver::ConsumerStalled => {
+        crate::daemon::invocation::state::pending_dispatch::StreamDeliver::ConsumerStalled => {
             crate::op_event!(
                 component = session_accept,
                 kind = streaming_result_consumer_stalled,
@@ -2643,7 +2645,7 @@ fn report_chunk_delivery(
 async fn drain_session_up_stream(
     mut up: Streaming<InvokeBidiUp>,
     caller_ura: String,
-    session_id: crate::services::presence_registry::PresenceSessionId,
+    session_id: crate::daemon::invocation::state::presence::PresenceSessionId,
     presence: Arc<PresenceRegistry>,
     pending: Option<Arc<PendingDispatchMap>>,
     pending_stream: Option<Arc<PendingStreamDispatchMap>>,

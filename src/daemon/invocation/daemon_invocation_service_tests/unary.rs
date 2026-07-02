@@ -1283,8 +1283,8 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
     presence.insert_negotiated_with_trust(
         user_ura.to_string(),
         tx,
-        crate::services::presence_registry::SessionContract::legacy(),
-        crate::services::presence_registry::SessionTrustContext::user_pubkey(
+        crate::daemon::invocation::state::presence::SessionContract::legacy(),
+        crate::daemon::invocation::state::presence::SessionTrustContext::user_pubkey(
             user_pubkey_b64.clone(),
         ),
     );
@@ -1343,11 +1343,11 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
         .expect("offline event emitted")
         .expect("presence event");
     match event {
-        crate::services::presence_registry::PresenceEvent::Offline { ura, reason } => {
+        crate::daemon::invocation::state::presence::PresenceEvent::Offline { ura, reason } => {
             assert_eq!(ura, user_ura);
             assert_eq!(
                 reason,
-                crate::services::presence_registry::OfflineReason::AdminRevoked,
+                crate::daemon::invocation::state::presence::OfflineReason::AdminRevoked,
             );
         }
         other => panic!("expected AdminRevoked offline event, got {other:?}"),
@@ -1486,11 +1486,11 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
         .expect("offline event emitted")
         .expect("presence event");
     match event {
-        crate::services::presence_registry::PresenceEvent::Offline { ura, reason } => {
+        crate::daemon::invocation::state::presence::PresenceEvent::Offline { ura, reason } => {
             assert_eq!(ura, host_ura);
             assert_eq!(
                 reason,
-                crate::services::presence_registry::OfflineReason::AdminRevoked,
+                crate::daemon::invocation::state::presence::OfflineReason::AdminRevoked,
             );
         }
         other => panic!("expected AdminRevoked host offline event, got {other:?}"),

@@ -1,7 +1,7 @@
-// EasyNet CLI — Services Layer — PendingDispatchMap
+// EasyNet CLI - daemon Invocation pending dispatch state
 // ===================================================
 //
-// File: src/services/pending_dispatch.rs
+// File: src/daemon/invocation/state/pending_dispatch.rs
 // Description: Cross-call correlation table for `runtime.invoke_remote`
 //              dispatches awaiting their reply on a target device's
 //              `session.open` stream.
@@ -66,7 +66,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::services::session_failure::SessionFailure;
+use crate::daemon::invocation::state::session_failure::SessionFailure;
 
 #[cfg(feature = "axon-pb")]
 pub type DispatchReceipt = easynet_axon::pb::axon::v1::InvocationReceipt;

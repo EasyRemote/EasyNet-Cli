@@ -157,7 +157,7 @@ pub fn now_unix_ms() -> i64 {
 #[cfg(feature = "axon-pb")]
 #[must_use]
 pub fn presence_event_to_directory_event(
-    event: &crate::services::presence_registry::PresenceEvent,
+    event: &crate::daemon::invocation::state::presence::PresenceEvent,
 ) -> DirectoryEvent {
     presence_event_to_directory_event_at(event, now_unix_ms())
 }
@@ -165,10 +165,10 @@ pub fn presence_event_to_directory_event(
 #[cfg(feature = "axon-pb")]
 #[must_use]
 pub fn presence_event_to_directory_event_at(
-    event: &crate::services::presence_registry::PresenceEvent,
+    event: &crate::daemon::invocation::state::presence::PresenceEvent,
     unix_ms: i64,
 ) -> DirectoryEvent {
-    use crate::services::presence_registry::PresenceEvent;
+    use crate::daemon::invocation::state::presence::PresenceEvent;
     match event {
         PresenceEvent::Online { ura } => DirectoryEvent::AgentAdvertised {
             agent_ura: ura.clone(),
@@ -2795,7 +2795,7 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     mod presence_adapter_tests {
         use super::*;
-        use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+        use crate::daemon::invocation::state::presence::{OfflineReason, PresenceEvent};
 
         #[test]
         fn presence_ura_to_directory_entry_extracts_node_id_from_canonical_shape() {

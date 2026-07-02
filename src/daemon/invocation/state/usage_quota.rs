@@ -1,7 +1,7 @@
-// EasyNet CLI — usage quota gate (per-consumer invoke metering)
+// EasyNet CLI - daemon Invocation usage quota gate
 // =============================================================
 //
-// File: src/services/usage_quota_store.rs
+// File: src/daemon/invocation/state/usage_quota.rs
 //
 // Per-(consumer-URA, ability) invocation quota for unary invokes.
 // The admission gate consults this module only AFTER identity,

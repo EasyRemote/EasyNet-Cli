@@ -23,7 +23,7 @@
 // - The dispatcher itself (lives in `daemon_invocation_service.rs`)
 // - The admission gate (lives in `easynet-axon`'s `domain::admission`;
 //   the dispatcher calls it before the wrapper runs)
-// - The PresenceRegistry (lives in `services::presence_registry`;
+// - The PresenceRegistry (lives in `daemon::invocation::state::presence`;
 //   wrappers borrow `&PresenceRegistry` to read membership state)
 // - A re-implementation of the axon-runtime admission / membership /
 //   delegation machinery — those are unchanged in axon and the
@@ -48,11 +48,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::runtime::ability::conformance;
 use crate::services::advertised_agent_store::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
-use crate::services::presence_registry::PresenceRegistry;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1 as axon_pb;
 pub use easynet_axon::{
@@ -1127,7 +1127,7 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
-    fn make_dispatch_sender() -> crate::services::presence_registry::DispatchSender {
+    fn make_dispatch_sender() -> crate::daemon::invocation::state::presence::DispatchSender {
         let (tx, _rx) = mpsc::channel(256);
         tx
     }

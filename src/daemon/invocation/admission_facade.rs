@@ -113,6 +113,8 @@ use crate::daemon::invocation::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUB
 use crate::daemon::invocation::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::session_initiator::SessionSigningSeed;
+use crate::daemon::invocation::state::nonce_replay::SharedNonceReplayStore;
+use crate::daemon::invocation::state::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::runtime::ability::canonical_json_bytes;
@@ -122,8 +124,6 @@ use crate::runtime::ability::{
 use crate::runtime::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
-use crate::services::nonce_replay_store::SharedNonceReplayStore;
-use crate::services::usage_quota_store::{QuotaDenyReason, SharedUsageQuotaGate};
 use easynet_axon::pb::axon::v1::{
     Envelope, EnvelopeOpen, InvokeRequest, InvokeServerStreamRequest, RateLimitInfo,
 };
@@ -1942,8 +1942,8 @@ mod tests {
 
     #[test]
     fn quota_meters_then_exhausts_external_caller() {
+        use crate::daemon::invocation::state::usage_quota::SharedUsageQuotaGate;
         use crate::persistence::daemon_config::QuotaConfig;
-        use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
         let caller = "easynet:///r/realm/agent/a.b";
         let config = QuotaConfig::new(2, 10_000, std::collections::BTreeMap::new());
@@ -1971,8 +1971,8 @@ mod tests {
 
     #[test]
     fn quota_exempts_loopback_self_caller() {
+        use crate::daemon::invocation::state::usage_quota::SharedUsageQuotaGate;
         use crate::persistence::daemon_config::QuotaConfig;
-        use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
         let daemon_ura = hub_ura("realm");
         // A cap of 1, but the daemon calling itself must never be
@@ -1997,10 +1997,10 @@ mod tests {
 
     #[test]
     fn quota_rejects_oversized_ability_key_as_invalid_argument() {
-        use crate::persistence::daemon_config::QuotaConfig;
-        use crate::services::usage_quota_store::{
+        use crate::daemon::invocation::state::usage_quota::{
             SharedUsageQuotaGate, MAX_QUOTA_ABILITY_NAME_BYTES,
         };
+        use crate::persistence::daemon_config::QuotaConfig;
 
         let caller = "easynet:///r/realm/agent/a.b";
         let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());

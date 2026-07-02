@@ -848,25 +848,25 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
     let mut handle = pending_stream.register_pending_for(target_ura);
     assert_eq!(
         pending_stream.try_push_chunk(handle.call_id(), b"partial".to_vec()),
-        crate::services::pending_dispatch::StreamDeliver::Delivered
+        crate::daemon::invocation::state::pending_dispatch::StreamDeliver::Delivered
     );
 
     let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             let (sender, _rx) = tokio::sync::mpsc::channel::<
-                Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+                Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
             >(1);
             presence.insert(target_ura.to_string(), sender);
             presence.remove(
                 target_ura,
-                crate::services::presence_registry::OfflineReason::StreamClosed,
+                crate::daemon::invocation::state::presence::OfflineReason::StreamClosed,
             );
 
             match tokio::time::timeout(std::time::Duration::from_millis(20), handle.recv()).await {
-                Ok(Some(crate::services::pending_dispatch::DispatchStreamEvent::Chunk(bytes))) => {
+                Ok(Some(crate::daemon::invocation::state::pending_dispatch::DispatchStreamEvent::Chunk(bytes))) => {
                     assert_eq!(bytes, b"partial");
                 }
-                Ok(Some(crate::services::pending_dispatch::DispatchStreamEvent::Terminal(
+                Ok(Some(crate::daemon::invocation::state::pending_dispatch::DispatchStreamEvent::Terminal(
                     result,
                 ))) => break result,
                 Ok(None) => panic!("stream handle closed before terminal failure"),

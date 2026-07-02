@@ -138,9 +138,11 @@ use crate::runtime::system_abilities::governance::invocation_history::{
 };
 
 use crate::daemon::federation::directory::now_unix_ms;
+use crate::daemon::invocation::state::pending_dispatch::{
+    PendingDispatchMap, PendingStreamDispatchMap,
+};
+use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::daemon::trust::cell::SharedTrustAnchor;
-use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
-use crate::services::presence_registry::PresenceRegistry;
 
 /// Production unary daemon Invocation routes served by the exact-match arms
 /// in [`Invocation::invoke`]. The dispatcher and conformance gate both use
@@ -607,7 +609,7 @@ impl DaemonInvocationService {
         let watcher_pending = Arc::clone(&pending);
         let watcher_presence = Arc::clone(&self.directory.presence);
         tokio::spawn(async move {
-            use crate::services::presence_registry::PresenceEvent;
+            use crate::daemon::invocation::state::presence::PresenceEvent;
             let mut events = watcher_presence.subscribe_events();
             loop {
                 match events.recv().await {
@@ -648,7 +650,7 @@ impl DaemonInvocationService {
         let watcher_pending = Arc::clone(&pending);
         let watcher_presence = Arc::clone(&self.directory.presence);
         tokio::spawn(async move {
-            use crate::services::presence_registry::PresenceEvent;
+            use crate::daemon::invocation::state::presence::PresenceEvent;
             let mut events = watcher_presence.subscribe_events();
             loop {
                 match events.recv().await {

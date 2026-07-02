@@ -79,13 +79,13 @@ use crate::daemon::invocation::runtime_trust::RuntimeTrust;
 use crate::daemon::invocation::runtime_trust_invalidator::{
     RuntimeTrustConnectionStateProjector, RuntimeTrustInvalidator,
 };
+use crate::daemon::invocation::state::pending_dispatch::DispatchResult;
+use crate::daemon::invocation::state::session_failure::SessionFailure;
 use crate::daemon::invocation::target_gate::{
     envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
     selected_host_unavailable_message, TargetGate,
 };
 use crate::daemon::trust::anchor::TrustedAgentRole;
-use crate::services::pending_dispatch::DispatchResult;
-use crate::services::session_failure::SessionFailure;
 use tokio_stream::wrappers::ReceiverStream;
 
 fn rpc_dispatch_outcome_response(
@@ -1419,8 +1419,10 @@ impl UnaryDispatcher {
         label: &str,
         build_frame: impl FnOnce(
             u64,
-        )
-            -> Result<crate::services::presence_registry::DispatchFrame, Status>,
+        ) -> Result<
+            crate::daemon::invocation::state::presence::DispatchFrame,
+            Status,
+        >,
     ) -> Result<(u64, DispatchResult), Status> {
         // Self guard: in device mode the boot seed registers a
         // resolve-only no-op presence entry under the daemon's own URA
@@ -1479,7 +1481,7 @@ impl UnaryDispatcher {
                 self.directory.presence.remove_if_session(
                     &selected_route.execution_host_ura,
                     session_id,
-                    crate::services::presence_registry::OfflineReason::StreamClosed,
+                    crate::daemon::invocation::state::presence::OfflineReason::StreamClosed,
                 );
                 return Err(Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,

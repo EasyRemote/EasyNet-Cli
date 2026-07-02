@@ -66,23 +66,6 @@
 /// self-heal). Advisory only — the invoke path never consults it.
 pub mod ability_health;
 pub mod clipboard_tracker;
-pub mod session_failure;
-
-/// In-memory registry of live `session.open` reverse-channel
-/// senders keyed by caller URI. RFC-003 PR-1 spec §3 — hub-side
-/// liveness model that replaces unary heartbeats. Gated on `axon-pb`
-/// because the dispatch sender type holds the proto-generated
-/// `InvokeBidiDown` frame and the rejection path uses `tonic::Status`;
-/// neither is available off-feature.
-#[cfg(feature = "axon-pb")]
-pub mod presence_registry;
-
-/// Cross-call correlation table for `runtime.invoke_remote` (PR-3
-/// writer) and `session.open` (PR-2 completer). Outside
-/// `presence_registry` because the concerns differ: presence is
-/// "who is online right now"; pending_dispatch is "outstanding
-/// cross-device calls awaiting reply". Pure data — no feature gate.
-pub mod pending_dispatch;
 
 /// Owner projection read model updated by `federation.advertise_abilities`.
 /// Read by `federation.resolve` when the caller sets `include_abilities =
@@ -106,22 +89,6 @@ pub mod advertised_agent_store;
 /// this cache with the device-local registry so users see both
 /// device-owned and hub-owned abilities through one query.
 pub mod hub_published_ability_store;
-
-/// Per-daemon nonce replay store (RFC 001 §5.2 step 4). Wraps the
-/// axon SDK's time-wheel store in `Arc<Mutex<…>>` so a single
-/// instance is shared across every concurrent invoke through the
-/// admission gate. PR-7 commit 4/N introduces the wrapper alongside
-/// the admission upgrade. DEC-011 confirms RFC-003 ships in-memory
-/// only; persistence is a Week-5+ topic.
-pub mod nonce_replay_store;
-
-/// Per-(consumer-URA, ability) usage quota counter (#185). Meters an
-/// already-admitted caller against a per-window cap and surfaces the
-/// result as the Axon `RateLimitInfo` contract on invoke responses.
-/// In-memory tumbling-window state, peer to `nonce_replay_store`;
-/// enforcement is serving-node runtime state, the wire shape stays
-/// Axon's.
-pub mod usage_quota_store;
 
 // `axon_bridge` moved to `crate::runtime::axon_bridge` per the
 // 2026-05-29 industrial-textbook review: its imports go almost

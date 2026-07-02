@@ -143,7 +143,7 @@ pub const SESSION_STREAM_ID: u32 = 0;
 /// Capacity of the device-side outbound mpsc that
 /// `dial_and_run_session` consumes when writing `InvokeBidiUp`
 /// frames into the gRPC stream. Sized matching
-/// `services::presence_registry::DISPATCH_CHANNEL_CAPACITY` so
+/// `daemon::invocation::state::presence::DISPATCH_CHANNEL_CAPACITY` so
 /// the hub side and device side use symmetric backpressure
 /// budgets.
 const SESSION_UP_CHANNEL_CAPACITY: usize = 256;

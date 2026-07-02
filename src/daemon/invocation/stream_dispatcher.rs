@@ -44,11 +44,11 @@ use crate::daemon::invocation::invoke_remote_initiator::{
     InvokeRemoteDispatchFrameRequest, SessionContentEnvelope,
 };
 use crate::daemon::invocation::route_resolver::SelectedInvokeRoute;
+use crate::daemon::invocation::state::pending_dispatch::{DispatchResult, DispatchStreamEvent};
 use crate::daemon::invocation::target_gate::{
     envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
     selected_host_unavailable_message, TargetGate,
 };
-use crate::services::pending_dispatch::{DispatchResult, DispatchStreamEvent};
 
 /// `InvokeStream` routing surface. Cheap per-call construction: both
 /// planes and the gate are `Arc`-shaped.
@@ -571,7 +571,7 @@ impl StreamDispatcher {
                 self.directory.presence.remove_if_session(
                     &selected_route.execution_host_ura,
                     session_id,
-                    crate::services::presence_registry::OfflineReason::StreamClosed,
+                    crate::daemon::invocation::state::presence::OfflineReason::StreamClosed,
                 );
                 return Err(Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -715,7 +715,7 @@ fn remote_stream_chunk(parts: RemoteStreamChunkParts) -> InvokeStreamChunk {
 
 fn remote_stream_error(
     error: Option<String>,
-    failure: Option<crate::services::session_failure::SessionFailure>,
+    failure: Option<crate::daemon::invocation::state::session_failure::SessionFailure>,
 ) -> Option<Error> {
     match (failure, error) {
         (Some(failure), _) => Some(Error {
@@ -727,11 +727,12 @@ fn remote_stream_error(
             ..Error::default()
         }),
         (None, Some(message)) => {
-            let failure = crate::services::session_failure::SessionFailure::from_reason(
-                message,
-                "INVOCATION_FAILED",
-                false,
-            );
+            let failure =
+                crate::daemon::invocation::state::session_failure::SessionFailure::from_reason(
+                    message,
+                    "INVOCATION_FAILED",
+                    false,
+                );
             Some(Error {
                 code: failure.code,
                 message: failure.message,
@@ -748,7 +749,7 @@ fn remote_stream_error(
 /// Wire projection of a presence transition for the v1
 /// `federation.subscribe_directory` stream.
 ///
-/// Mirrors `services::presence_registry::PresenceEvent` but with
+/// Mirrors `daemon::invocation::state::presence::PresenceEvent` but with
 /// `serde::Serialize`-friendly field naming so the JSON encoding
 /// is stable for PR-4's schema-compat captures.
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -763,9 +764,9 @@ pub(crate) enum PresenceEventDelta {
     },
 }
 
-impl From<crate::services::presence_registry::PresenceEvent> for PresenceEventDelta {
-    fn from(event: crate::services::presence_registry::PresenceEvent) -> Self {
-        use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+impl From<crate::daemon::invocation::state::presence::PresenceEvent> for PresenceEventDelta {
+    fn from(event: crate::daemon::invocation::state::presence::PresenceEvent) -> Self {
+        use crate::daemon::invocation::state::presence::{OfflineReason, PresenceEvent};
         match event {
             PresenceEvent::Online { ura } => Self::Online {
                 membership_ura: ura,

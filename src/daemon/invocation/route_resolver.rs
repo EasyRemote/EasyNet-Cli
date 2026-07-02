@@ -32,9 +32,9 @@ use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::invocation::federation_wrappers::{self, ResolveAgentSummary, ResolveRequest};
 use crate::daemon::invocation::hub_resolver::{HubResolution, HubResolver};
+use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::services::ability_catalog_store::AbilityCatalogStore;
 use crate::services::advertised_agent_store::AdvertisedAgentStore;
-use crate::services::presence_registry::PresenceRegistry;
 
 use easynet_axon::pb::axon::v1 as axon_pb;
 
@@ -1678,11 +1678,11 @@ mod tests {
 
     use crate::daemon::federation::directory::SharedFederatedDirectoryView;
     use crate::daemon::federation::peers::SharedFederatedPeers;
+    use crate::daemon::invocation::state::presence::PresenceRegistry;
     use crate::services::ability_catalog_store::{AbilityCatalogStore, OwnerAbilityProjectionRow};
     use crate::services::advertised_agent_store::{
         AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
     };
-    use crate::services::presence_registry::PresenceRegistry;
 
     const TEST_NOW_MS: i64 = 1_700_000_000_000;
     const LEASE_EXPIRES_MS: i64 = 4_102_444_800_000;
@@ -1694,7 +1694,7 @@ mod tests {
     /// Build a `DispatchSender` whose receiver is dropped immediately.
     /// Presence only needs a live entry (the URA in `snapshot()`); the
     /// resolver never sends on the channel.
-    fn make_dispatch_sender() -> crate::services::presence_registry::DispatchSender {
+    fn make_dispatch_sender() -> crate::daemon::invocation::state::presence::DispatchSender {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         tx
     }

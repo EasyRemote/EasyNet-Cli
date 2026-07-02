@@ -102,6 +102,11 @@ require_path "src/daemon/federation/directory_reader.rs"
 require_path "src/daemon/federation/peers.rs"
 require_path "src/daemon/identity/self_identity.rs"
 require_path "src/daemon/invocation"
+require_path "src/daemon/invocation/state/nonce_replay.rs"
+require_path "src/daemon/invocation/state/pending_dispatch.rs"
+require_path "src/daemon/invocation/state/presence.rs"
+require_path "src/daemon/invocation/state/session_failure.rs"
+require_path "src/daemon/invocation/state/usage_quota.rs"
 require_path "src/daemon/keyring/mod.rs"
 require_path "src/daemon/trust/anchor.rs"
 require_path "src/daemon/trust/cell.rs"
@@ -130,10 +135,15 @@ reject_path "src/services/federation_client"
 reject_path "src/services/federation_directory.rs"
 reject_path "src/services/invocation_transport"
 reject_path "src/services/keyring.rs"
+reject_path "src/services/nonce_replay_store.rs"
+reject_path "src/services/pending_dispatch.rs"
+reject_path "src/services/presence_registry.rs"
 reject_path "src/services/realm_trust_anchor.rs"
 reject_path "src/services/self_identity.rs"
+reject_path "src/services/session_failure.rs"
 reject_path "src/services/trust_anchor_cell.rs"
 reject_path "src/services/trust_anchor_key_resolver.rs"
+reject_path "src/services/usage_quota_store.rs"
 reject_path "abilities/system"
 reject_path "docker"
 reject_path "macos"
@@ -226,6 +236,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired services Invocation state paths" \
+    '(^|[^[:alnum:]_])(crate::services::presence_registry::|easynet_cli::services::presence_registry::|services::presence_registry::|crate::services::pending_dispatch::|easynet_cli::services::pending_dispatch::|services::pending_dispatch::|crate::services::nonce_replay_store::|easynet_cli::services::nonce_replay_store::|services::nonce_replay_store::|crate::services::usage_quota_store::|easynet_cli::services::usage_quota_store::|services::usage_quota_store::|crate::services::session_failure::|easynet_cli::services::session_failure::|services::session_failure::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not reference retired src/facade physical paths" \
     'src/facade(/|$)' \
     "${SCAN_ROOTS[@]}"
@@ -258,6 +273,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/services identity/keyring physical paths" \
     'src/services/(keyring\.rs|self_identity\.rs)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/services Invocation state physical paths" \
+    'src/services/(presence_registry\.rs|pending_dispatch\.rs|nonce_replay_store\.rs|usage_quota_store\.rs|session_failure\.rs)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

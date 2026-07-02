@@ -41,7 +41,7 @@ async fn invoke_stream_dispatches_subscribe_directory_initial_frame_then_pump() 
     // Frame 2 — an Online delta after a registry insert is
     // pumped through the broadcast subscriber.
     let (sender, _rx) = tokio::sync::mpsc::channel::<
-        Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(1);
     presence.insert("easynet:///r/test-realm/device/n1".to_string(), sender);
 
@@ -116,7 +116,7 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
 
     // Frame 2: AgentAdvertised after a registry insert.
     let (sender, _rx) = tokio::sync::mpsc::channel::<
-        Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(1);
     presence.insert("easynet:///r/test-realm/device/n1".to_string(), sender);
     let second = stream.next().await.expect("second frame").expect("Ok");
@@ -144,7 +144,7 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
     // explicitly remove via the registry surface.
     presence.remove(
         "easynet:///r/test-realm/device/n1",
-        crate::services::presence_registry::OfflineReason::AdminRevoked,
+        crate::daemon::invocation::state::presence::OfflineReason::AdminRevoked,
     );
     let third = stream.next().await.expect("third frame").expect("Ok");
     let evt3: DirectoryEvent =
@@ -552,7 +552,7 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
 
 #[tokio::test]
 async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() {
-    use crate::services::pending_dispatch::PendingStreamDispatchMap;
+    use crate::daemon::invocation::state::pending_dispatch::PendingStreamDispatchMap;
     use futures::StreamExt;
 
     const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/stream-target";
@@ -621,7 +621,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
 
     assert_eq!(
         pending_stream.try_push_chunk(call_id, br#"{"delta":"part-1"}"#.to_vec()),
-        crate::services::pending_dispatch::StreamDeliver::Delivered
+        crate::daemon::invocation::state::pending_dispatch::StreamDeliver::Delivered
     );
     assert_eq!(
         pending_stream.try_finish(
@@ -634,7 +634,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
                 request_id: Some("inv_remote_stream_1".to_string()),
             },
         ),
-        crate::services::pending_dispatch::StreamDeliver::Delivered
+        crate::daemon::invocation::state::pending_dispatch::StreamDeliver::Delivered
     );
 
     let mut stream = resp.into_inner();

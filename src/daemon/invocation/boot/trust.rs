@@ -5,10 +5,10 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 
+use crate::daemon::invocation::state::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::persistence::daemon_config::DaemonConfig;
-use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
 pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
     match RealmTrustAnchor::load_or_empty(path) {

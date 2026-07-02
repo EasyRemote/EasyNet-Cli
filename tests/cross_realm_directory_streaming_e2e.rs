@@ -57,8 +57,8 @@ use easynet_cli::daemon::federation::directory::{
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
+use easynet_cli::daemon::invocation::state::presence::PresenceRegistry;
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
-use easynet_cli::services::presence_registry::PresenceRegistry;
 
 /// In-process forwarder. `subscribe_directory_v2` opens an
 /// `invoke_stream` call against the target daemon, then JSON-
@@ -168,7 +168,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     // cell publishes.
     let target_ura = "easynet:///r/realm-a/device/device-X";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
-        Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<easynet_cli::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(8);
     daemon_a_presence.insert(target_ura.to_string(), tx);
 
@@ -242,7 +242,7 @@ async fn streaming_chain_propagates_presence_remove() {
     // Insert a device on A; wait for B's cell to reflect.
     let target_ura = "easynet:///r/realm-a/device/disappearing";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
-        Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<easynet_cli::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(8);
     daemon_a_presence.insert(target_ura.to_string(), tx);
     for _ in 0..40 {
@@ -261,7 +261,7 @@ async fn streaming_chain_propagates_presence_remove() {
     // disappears from B's view.
     daemon_a_presence.remove(
         target_ura,
-        easynet_cli::services::presence_registry::OfflineReason::AdminRevoked,
+        easynet_cli::daemon::invocation::state::presence::OfflineReason::AdminRevoked,
     );
     let mut removed = false;
     for _ in 0..40 {

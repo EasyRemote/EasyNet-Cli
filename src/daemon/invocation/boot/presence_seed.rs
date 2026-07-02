@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::persistence::daemon_config::DaemonMode;
-use crate::services::presence_registry::PresenceRegistry;
 
 pub(super) fn seed_boot_presence(
     mode: DaemonMode,
@@ -55,8 +55,9 @@ fn seed_device_mode_self_presence(daemon_ura: Option<&str>, presence: &Arc<Prese
     // the local Axon runtime (matches_self_target_ura fork), and
     // `dispatch_frame_to_presence` refuses any selected execution
     // host equal to the daemon's own URA before try_send fires.
-    let (noop_tx, mut noop_rx) =
-        tokio::sync::mpsc::channel(crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY);
+    let (noop_tx, mut noop_rx) = tokio::sync::mpsc::channel(
+        crate::daemon::invocation::state::presence::DISPATCH_CHANNEL_CAPACITY,
+    );
     // Drain task: holds the receiver alive for the lifetime
     // of the daemon process. Without this, the receiver
     // gets dropped when the seeding scope ends and the
@@ -107,7 +108,7 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
         .filter(|s| !s.is_empty())
     {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
-            Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+            Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
         >(8);
         presence.insert(seed_ura.to_string(), tx);
         tokio::spawn(async move {

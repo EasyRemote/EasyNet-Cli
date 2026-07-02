@@ -36,6 +36,7 @@ use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityErr
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::invocation::state::presence::PresenceRegistry;
 use easynet_cli::daemon::keyring::{
     home_relative, vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource,
     Vault, DEFAULT_VAULT_REL,
@@ -47,7 +48,6 @@ use easynet_cli::persistence::config::{self, RuntimeKind, RuntimeState};
 use easynet_cli::runtime::system_ability_catalog::{
     build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
 };
-use easynet_cli::services::presence_registry::PresenceRegistry;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -909,7 +909,7 @@ fn start_daemon_at(
             // LocalRuntime — the drain task only swallows defensive
             // out-of-path frames.
             let (noop_tx, mut noop_rx) = tokio::sync::mpsc::channel(
-                easynet_cli::services::presence_registry::DISPATCH_CHANNEL_CAPACITY,
+                easynet_cli::daemon::invocation::state::presence::DISPATCH_CHANNEL_CAPACITY,
             );
             tokio::spawn(async move { while noop_rx.recv().await.is_some() {} });
             presence.insert(daemon_ura_for_presence, noop_tx);

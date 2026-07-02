@@ -677,7 +677,7 @@ pub(crate) struct RawQuotaSection {
 ///
 /// **Granularity (read before setting a cap).** The cap is keyed by
 /// consumer URA but applies *per ability, per window*: the enforcement
-/// counter ([`crate::services::usage_quota_store`]) windows on
+/// counter ([`crate::daemon::invocation::state::usage_quota`]) windows on
 /// `(consumer_ura, ability)`, so a cap of `N` admits up to `N` calls
 /// to *each distinct ability* per window, not `N` calls total across
 /// all abilities. This is deliberate — one hot ability cannot starve a

@@ -1,7 +1,7 @@
-// EasyNet CLI — nonce replay store (admission §5.2 step 4)
+// EasyNet CLI - daemon Invocation nonce replay store
 // =========================================================
 //
-// File: src/services/nonce_replay_store.rs
+// File: src/daemon/invocation/state/nonce_replay.rs
 //
 // Thread-safe wrapper around `easynet_axon::invocation::admission::
 // NonceReplayStore` so the daemon's `AdmissionFacade` can share one

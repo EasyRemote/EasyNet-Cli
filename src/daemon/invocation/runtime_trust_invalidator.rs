@@ -26,12 +26,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::persistence::config::Credentials;
 use crate::runtime::join_connection_state::{
     record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinTransition,
 };
 use crate::services::advertised_agent_store::AdvertisedAgentStore;
-use crate::services::presence_registry::PresenceRegistry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeTrustInvalidation {
@@ -191,14 +191,14 @@ impl RuntimeTrustInvalidator {
 mod tests {
     use super::*;
     use crate::cli::test_support::HomeGuard;
+    use crate::daemon::invocation::state::presence::DISPATCH_CHANNEL_CAPACITY;
     use crate::persistence::config::Credentials;
     use crate::runtime::join_connection_state::load_snapshot;
     use crate::services::advertised_agent_store::{
         AdvertisedAgentRecord, AdvertisedAgentSigningAuthority,
     };
-    use crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY;
 
-    fn sender() -> crate::services::presence_registry::DispatchSender {
+    fn sender() -> crate::daemon::invocation::state::presence::DispatchSender {
         let (tx, _rx) = tokio::sync::mpsc::channel(DISPATCH_CHANNEL_CAPACITY);
         tx
     }
@@ -241,8 +241,10 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.to_string(),
             sender(),
-            crate::services::presence_registry::SessionContract::legacy(),
-            crate::services::presence_registry::SessionTrustContext::user_pubkey("pubkey-a"),
+            crate::daemon::invocation::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::state::presence::SessionTrustContext::user_pubkey(
+                "pubkey-a",
+            ),
         );
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
@@ -261,8 +263,10 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.to_string(),
             sender(),
-            crate::services::presence_registry::SessionContract::legacy(),
-            crate::services::presence_registry::SessionTrustContext::user_pubkey("pubkey-b"),
+            crate::daemon::invocation::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::state::presence::SessionTrustContext::user_pubkey(
+                "pubkey-b",
+            ),
         );
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
@@ -282,8 +286,10 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.clone(),
             sender(),
-            crate::services::presence_registry::SessionContract::legacy(),
-            crate::services::presence_registry::SessionTrustContext::user_pubkey("pubkey-a"),
+            crate::daemon::invocation::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::state::presence::SessionTrustContext::user_pubkey(
+                "pubkey-a",
+            ),
         );
 
         let projector =
@@ -318,8 +324,10 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.clone(),
             sender(),
-            crate::services::presence_registry::SessionContract::legacy(),
-            crate::services::presence_registry::SessionTrustContext::user_pubkey("pubkey-a"),
+            crate::daemon::invocation::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::state::presence::SessionTrustContext::user_pubkey(
+                "pubkey-a",
+            ),
         );
 
         let projector =

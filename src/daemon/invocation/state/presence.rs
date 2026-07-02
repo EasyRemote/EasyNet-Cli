@@ -1,7 +1,7 @@
-// EasyNet CLI — Services Layer — PresenceRegistry
+// EasyNet CLI - daemon Invocation presence state
 // =================================================
 //
-// File: src/services/presence_registry.rs
+// File: src/daemon/invocation/state/presence.rs
 // Description: In-memory, sharded, broadcast-equipped registry of
 //              live `session.open` reverse channels keyed by
 //              caller URA. Hub-side liveness model for the new

@@ -32,12 +32,14 @@ use crate::daemon::invocation::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::session_escalation::SessionEscalationHandle;
 use crate::daemon::invocation::session_initiator::SessionSigningSeed;
+use crate::daemon::invocation::state::pending_dispatch::{
+    PendingDispatchMap, PendingStreamDispatchMap,
+};
+use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::runtime::ability_wire::AbilityWireRegistry;
 use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
 use crate::services::ability_catalog_store::AbilityCatalogStore;
 use crate::services::advertised_agent_store::AdvertisedAgentStore;
-use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
-use crate::services::presence_registry::PresenceRegistry;
 
 /// Directory read plane: live device sessions, hosted-agent rows,
 /// per-agent ability catalogs, and the federated directory view.

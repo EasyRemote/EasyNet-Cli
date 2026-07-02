@@ -37,10 +37,10 @@ use crate::daemon::invocation::invoke_remote_initiator::{
 use crate::daemon::invocation::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
+use crate::daemon::invocation::state::session_failure::SessionFailure;
 use crate::daemon::invocation::{
     descriptor_binding::RuntimeBoundAbility, invocation_wire::target_ura_from_envelope,
 };
-use crate::services::session_failure::SessionFailure;
 use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 #[cfg(test)]
@@ -373,7 +373,7 @@ impl LocalAxonSessionDispatcher {
                 payload,
                 terminal: true,
                 failure: error.as_ref().map(|reason| {
-                    crate::services::session_failure::SessionFailure::from_reason(
+                    crate::daemon::invocation::state::session_failure::SessionFailure::from_reason(
                         reason,
                         "INVOCATION_FAILED",
                         false,

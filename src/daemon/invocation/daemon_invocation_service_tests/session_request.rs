@@ -198,12 +198,12 @@ async fn carrier_v1_slot_without_caller_envelope_falls_back_to_json_dispatch() {
     publish_test_route(&svc, target_ura, "observe.health");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
-        Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(4);
     svc.directory.presence.insert_negotiated(
         target_ura.to_string(),
         tx,
-        crate::services::presence_registry::SessionContract {
+        crate::daemon::invocation::state::presence::SessionContract {
             version: 1,
             claimant_boot_nonce: vec![5; 16],
         },
@@ -342,7 +342,7 @@ async fn dispatch_session_request_forward_invoke_hits_selected_local_session() {
     publish_test_route(&svc, target_ura, "observe.health");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
-        Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(4);
     svc.directory.presence.insert(target_ura.to_string(), tx);
 
@@ -426,7 +426,7 @@ async fn dispatch_session_request_forward_invoke_preserves_target_failure_code()
     publish_test_route(&svc, target_ura, "observe.health");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
-        Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(4);
     svc.directory.presence.insert(target_ura.to_string(), tx);
 
@@ -494,7 +494,7 @@ async fn dispatch_session_request_forward_invoke_scopes_agent_target_ability() {
     publish_test_route_hosted_by(&svc, target_ura, "alice.chat", host_ura);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
-        Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(4);
     svc.directory.presence.insert(host_ura.to_string(), tx);
 
@@ -824,7 +824,7 @@ async fn dispatch_session_request_routes_selected_route_when_cross_realm_target_
     publish_test_route(&svc, target_ura, "observe.health");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
-        Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<crate::daemon::invocation::state::presence::DispatchFrame, tonic::Status>,
     >(4);
     svc.directory.presence.insert(target_ura.to_string(), tx);
 
@@ -971,7 +971,7 @@ async fn end_to_end_device_escalation_resolves_via_hub_session_request() {
         spawn_escalation_consumer, EscalationCorrelation,
     };
     use crate::daemon::invocation::session_initiator::SessionUpSender;
-    use crate::services::presence_registry::DispatchSender;
+    use crate::daemon::invocation::state::presence::DispatchSender;
     use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
     use tokio::sync::mpsc;
 
@@ -1157,7 +1157,7 @@ async fn build_session_request_result_frame_round_trips_through_serde() {
 
 #[tokio::test]
 async fn push_session_request_result_drops_frame_but_keeps_slow_device_when_channel_full() {
-    use crate::services::presence_registry::PresenceEvent;
+    use crate::daemon::invocation::state::presence::PresenceEvent;
     use tokio::sync::mpsc;
 
     let presence = Arc::new(PresenceRegistry::new());

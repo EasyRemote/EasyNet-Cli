@@ -138,7 +138,7 @@ ctrlc = "3"
 # tuned via `with_shard_amount(num_cpus * 4)`. The full feature
 # justification — bounded backpressure, shard-locked sub-millisecond
 # lookups across thousands of devices — is documented in
-# `services/presence_registry.rs` module docs.
+# `daemon/invocation/state/presence.rs` module docs.
 dashmap = "6"
 # async-trait — required by RFC-003 PR-2's `SessionFrameDispatcher`
 # trait so trait method bodies can be `async fn`. Already pulled in
