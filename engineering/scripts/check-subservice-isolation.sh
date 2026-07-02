@@ -6,7 +6,7 @@
 # Documented under docs/design/daemon-layers-v1.md "Execution
 # internal sub-service partition".
 #
-# Execution sub-services under `src/runtime/execution/<name>/` must
+# Execution sub-services under `src/daemon/execution/<name>/` must
 # not import each other directly. All cross-sub-service calls are
 # routed through the Kernel (`src/runtime/kernel.rs`) so that a bug
 # in one sub-service does not corrupt the others' state and so that
@@ -24,8 +24,8 @@ cd "$ROOT"
 
 echo "== check-subservice-isolation.sh =="
 
-# Enumerate sub-services under src/runtime/execution.
-if [ ! -d "src/runtime/execution" ]; then
+# Enumerate sub-services under src/daemon/execution.
+if [ ! -d "src/daemon/execution" ]; then
     echo "ok (no execution/ tree; nothing to check)"
     exit 0
 fi
@@ -34,18 +34,18 @@ subs=(session permission discuss schedule loop_instance)
 violations=0
 
 for self in "${subs[@]}"; do
-    dir="src/runtime/execution/$self"
+    dir="src/daemon/execution/$self"
     [ -d "$dir" ] || continue
     for other in "${subs[@]}"; do
         [ "$self" = "$other" ] && continue
-        # Match `crate::runtime::execution::<other>` or the super::
+        # Match `crate::daemon::execution::<other>` or the super::
         # shortcut that bypasses the module path.
-        pattern="crate::runtime::execution::${other}\b"
+        pattern="crate::daemon::execution::${other}\b"
         offending=$(grep -rnE "$pattern" "$dir" || true)
         if [ -n "$offending" ]; then
             echo "ERROR: sub-service '$self' imports sibling '$other':"
             echo "$offending"
-            echo "  All cross-sub-service calls go through runtime::kernel."
+            echo "  All cross-sub-service calls go through the Kernel boundary."
             violations=$((violations + 1))
         fi
     done

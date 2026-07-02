@@ -1,7 +1,7 @@
 // EasyNet CLI — Schedule disk-backed JSON store
 // ==============================================
 //
-// File: src/runtime/execution/schedule/store.rs
+// File: src/daemon/execution/schedule/store.rs
 // Description: One JSON file per schedule under
 //              `~/.easynet/tenants/<tenant>/schedules/<id>.json`.
 //              The file format is `serde_json::to_string_pretty`

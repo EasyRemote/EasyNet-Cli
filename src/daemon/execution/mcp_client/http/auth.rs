@@ -1,7 +1,7 @@
 // EasyNet CLI — Streamable HTTP / auth header injection
 // =====================================================
 //
-// File: src/runtime/execution/mcp_client/http/auth.rs
+// File: src/daemon/execution/mcp_client/http/auth.rs
 //
 // Applies the per-server [`AuthSpec`] to an outgoing request
 // builder. One implementation drives both the POST request path
@@ -14,7 +14,7 @@
 use anyhow::Context;
 use hyper::header::AUTHORIZATION;
 
-use crate::runtime::execution::mcp_client::AuthSpec;
+use crate::daemon::execution::mcp_client::AuthSpec;
 
 /// Apply the per-server auth credentials to an outgoing request
 /// builder. Returns the builder with the appropriate headers

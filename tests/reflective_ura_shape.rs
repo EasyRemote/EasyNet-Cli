@@ -15,7 +15,7 @@
 //      URA, not deleted).
 //
 // The test uses an in-process Python echo MCP server (same fixture
-// pattern as `runtime::execution::mcp_client::tests`) so it stays
+// pattern as `daemon::execution::mcp_client::tests`) so it stays
 // dependency-free and runs in CI without any external network or
 // MCP installs.
 
@@ -25,10 +25,8 @@ use std::sync::Arc;
 
 use easynet_axon::ura::{ability_ura, agent_ura};
 use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all;
+use easynet_cli::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
 use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::execution::mcp_client::{
-    McpClientService, McpClientsFile, McpServerSpec,
-};
 
 fn write_echo_script(dir: &std::path::Path) -> std::path::PathBuf {
     let script = dir.join("echo_mcp.sh");

@@ -67,9 +67,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
+use crate::daemon::execution::discuss::DiscussService;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::execution::discuss::DiscussService;
 
 pub const ABILITY_DISCUSS_ROUND: &str =
     crate::daemon::ability::names::automation::MISSION_DISCUSS_ROUND;
@@ -474,7 +474,7 @@ enum AgentCycleOutcome {
 
 // ── Prompt construction ─────────────────────────────────────────
 
-fn render_transcript(turns: &[crate::runtime::execution::discuss::DiscussTurn]) -> String {
+fn render_transcript(turns: &[crate::daemon::execution::discuss::DiscussTurn]) -> String {
     if turns.is_empty() {
         return "(no turns yet)".to_string();
     }
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn render_transcript_prefixes_each_speaker() {
-        use crate::runtime::execution::discuss::DiscussTurn;
+        use crate::daemon::execution::discuss::DiscussTurn;
         let turns = vec![DiscussTurn {
             sequence: 0,
             timestamp_unix_ms: 0,

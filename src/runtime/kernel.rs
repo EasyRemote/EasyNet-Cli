@@ -32,7 +32,7 @@ use crate::core::domain::{
 use crate::daemon::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
-use crate::runtime::execution::{
+use crate::daemon::execution::{
     discuss::DiscussService,
     loop_instance::LoopService,
     permission::{AskContext, PermissionService},

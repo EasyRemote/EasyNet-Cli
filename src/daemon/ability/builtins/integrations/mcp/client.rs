@@ -49,9 +49,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
+use crate::daemon::execution::mcp_client::McpClientService;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::execution::mcp_client::McpClientService;
 
 pub const ABILITY_LIST: &str = crate::daemon::ability::names::integrations::MCP_CLIENT_LIST;
 pub const ABILITY_CALL: &str = crate::daemon::ability::names::integrations::MCP_CLIENT_CALL;
@@ -240,7 +240,7 @@ pub fn call_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::execution::mcp_client::{McpClientsFile, McpServerSpec};
+    use crate::daemon::execution::mcp_client::{McpClientsFile, McpServerSpec};
     use std::path::PathBuf;
 
     fn empty_svc() -> Arc<McpClientService> {

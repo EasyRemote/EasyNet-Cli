@@ -1,7 +1,7 @@
 // EasyNet CLI — Execution / Session sub-service
 // ==============================================
 //
-// File: src/runtime/execution/session/mod.rs
+// File: src/daemon/execution/session/mod.rs
 // Description: Session sub-service. Tracks the live-agent-run
 //              registry that `session.list` /
 //              `session.attach` abilities query and

@@ -100,6 +100,7 @@ require_path "src/daemon/ability/wire/mod.rs"
 require_path "src/daemon/axon_bridge/mod.rs"
 require_path "src/daemon/context/clipboard_tracker.rs"
 require_path "src/daemon/control"
+require_path "src/daemon/execution/mod.rs"
 require_path "src/daemon/federation/client"
 require_path "src/daemon/federation/directory.rs"
 require_path "src/daemon/federation/directory_reader.rs"
@@ -136,6 +137,7 @@ reject_path "src/runtime/agents"
 reject_path "src/runtime/ability_names"
 reject_path "src/runtime/ability_wire.rs"
 reject_path "src/runtime/axon_bridge"
+reject_path "src/runtime/execution"
 reject_path "src/runtime/plugin_host"
 reject_path "src/runtime/resources"
 reject_path "src/runtime/system_abilities"
@@ -208,6 +210,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::execution paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::execution::|easynet_cli::runtime::execution::|runtime::execution::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::plugin_host paths" \
     '(^|[^[:alnum:]_])(crate::runtime::plugin_host::|easynet_cli::runtime::plugin_host::|runtime::plugin_host::)' \
     "${SCAN_ROOTS[@]}"
@@ -250,6 +257,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/axon_bridge physical path" \
     'src/runtime/axon_bridge(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/execution physical path" \
+    'src/runtime/execution(/|$)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

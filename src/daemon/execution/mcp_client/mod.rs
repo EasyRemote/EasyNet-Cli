@@ -1,7 +1,7 @@
 // EasyNet CLI — McpClientService (C-M9b)
 // =======================================
 //
-// File: src/runtime/execution/mcp_client/mod.rs
+// File: src/daemon/execution/mcp_client/mod.rs
 //
 // Sub-service that owns every outbound MCP server connection the
 // daemon spawns. Mirrors PtyService's process-wide-Arc shape: one

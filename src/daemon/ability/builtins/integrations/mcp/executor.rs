@@ -67,7 +67,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::McpExec;
-use crate::runtime::execution::mcp_client::McpClientService;
+use crate::daemon::execution::mcp_client::McpClientService;
 use crate::support::process_singleton::ProcessSingleton;
 
 /// Process-wide `McpClientService` handle. Populated at daemon boot
@@ -250,7 +250,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
+    use crate::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
 
     #[test]
     fn rejects_non_object_args_with_typed_messages() {

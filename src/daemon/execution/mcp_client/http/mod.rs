@@ -1,7 +1,7 @@
 // EasyNet CLI — Streamable HTTP transport for outbound MCP
 // =========================================================
 //
-// File: src/runtime/execution/mcp_client/http/mod.rs
+// File: src/daemon/execution/mcp_client/http/mod.rs
 //
 // Per MCP spec 2025-06-18 §"Streamable HTTP" transport. Sibling of
 // the stdio transport in `mcp_client/mod.rs`.
@@ -628,7 +628,7 @@ impl HttpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::execution::mcp_client::McpServerSpec;
+    use crate::daemon::execution::mcp_client::McpServerSpec;
     use http_body_util::Full as RespFull;
     use hyper::body::Incoming;
     use hyper::server::conn::http1::Builder as ServerBuilder;
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn tls_spec_round_trips_through_serde() {
-        use crate::runtime::execution::mcp_client::{AuthSpec, TlsSpec};
+        use crate::daemon::execution::mcp_client::{AuthSpec, TlsSpec};
         let mut headers = std::collections::HashMap::new();
         headers.insert("X-K".into(), "V".into());
         let spec = McpServerSpec {
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_https_options_on_plain_http() {
-        use crate::runtime::execution::mcp_client::TlsSpec;
+        use crate::daemon::execution::mcp_client::TlsSpec;
         let spec = McpServerSpec {
             name: "mismatch".into(),
             transport: "http".into(),

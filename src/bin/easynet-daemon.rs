@@ -41,6 +41,8 @@ use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
 use easynet_cli::daemon::control::discovery::DaemonIdentity;
 use easynet_cli::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 use easynet_cli::daemon::control::{discovery, runtime_dispatch, server};
+use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
+use easynet_cli::daemon::execution::schedule::ScheduleService;
 use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{
@@ -53,8 +55,6 @@ use easynet_cli::runtime::ability::conformance::{
 use easynet_cli::runtime::ability::conformance::{
     DaemonInvocationSurface, RuntimeAdminConformance,
 };
-use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
-use easynet_cli::runtime::execution::schedule::ScheduleService;
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
@@ -704,7 +704,7 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                 // The template renderer substitutes {{schedule_id}},
                 // {{fire_at_iso}}, {{catch_up}}, {{target_agent}}.
                 let prompt = match &entry.prompt {
-                    Some(template) => easynet_cli::runtime::execution::schedule::render_prompt(
+                    Some(template) => easynet_cli::daemon::execution::schedule::render_prompt(
                         template,
                         fire.schedule_id.as_str(),
                         &fire.fire_at,

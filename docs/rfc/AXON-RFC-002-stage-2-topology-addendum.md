@@ -63,7 +63,7 @@ Stage 2 to make the new path live.
 
 ### Path A — Move PTY hosting into Axon process
 
-**Change**: Move CLI's `runtime/execution/pty/` into Axon as a
+**Change**: Move CLI's `daemon/execution/pty/` into Axon as a
 first-class provider. CLI's `fleet.pty_session_*` ability handlers
 become thin RPC forwarders to Axon's `fleet.session_*` over the
 existing Axon SDK.
@@ -157,7 +157,7 @@ For the record, here is the production state after Stage 1:
 
 | Layer | What runs | Where it lives |
 |---|---|---|
-| CLI PTY abilities | `fleet.pty_session_create / _close / _attach` against daemon `LocalRuntime` | `EasyNet-Cli/src/runtime/agents/pty_*_ability.rs` + `runtime/execution/pty/` |
+| CLI PTY abilities | `fleet.pty_session_create / _close / _attach` against daemon `LocalRuntime` | `EasyNet-Cli/src/runtime/agents/pty_*_ability.rs` + `daemon/execution/pty/` |
 | Axon PTY plumbing | `BuiltinPtySessionProvider` auto-registered into `SessionRegistry`; serves `fleet.session_attach` if ever called | `EasyNet-Axon/core/runtime-rs/src/services/invocation/builtin_pty_provider.rs` |
 | Wire dispatch (today) | Backend → CLI daemon over CLI IPC; PTY traffic uses `fleet.pty_session_attach` (BIDI) | unchanged |
 | Wire dispatch (post-Stage-2) | Backend → Axon daemon over Axon RPC; PTY traffic uses `fleet.session_attach` (BIDI) → `SessionRegistry` → Path-A/B-dependent backend | depends on path chosen |

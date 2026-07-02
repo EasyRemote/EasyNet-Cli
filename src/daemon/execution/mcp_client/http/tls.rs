@@ -1,7 +1,7 @@
 // EasyNet CLI — Streamable HTTP / TLS connector
 // =============================================
 //
-// File: src/runtime/execution/mcp_client/http/tls.rs
+// File: src/daemon/execution/mcp_client/http/tls.rs
 //
 // Builds a `tokio_rustls::TlsConnector` for one MCP server's
 // per-spec TLS posture:
@@ -26,7 +26,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::runtime::execution::mcp_client::TlsSpec;
+use crate::daemon::execution::mcp_client::TlsSpec;
 
 /// Marker trait so `HyperTokioIo` can wrap either a plain
 /// `TcpStream` or a `tokio_rustls::client::TlsStream<TcpStream>`.

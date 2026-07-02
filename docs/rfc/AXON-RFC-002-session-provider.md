@@ -32,7 +32,7 @@ But "session" as a runtime concept currently lives in two places:
   * **Axon** has `services/invocation/pty_attach.rs` and
     `interop_native/session_bridge.rs` — both directly spawn PTY
     children via `pty/{unix,windows}.rs`.
-  * **CLI** has `runtime/execution/{session,pty,mcp_client,...}` —
+  * **CLI** has `daemon/execution/{session,pty,mcp_client,...}` —
     each its own service for one kind of persistent resource.
 
 Result: **PTY is implemented twice** (axon + CLI), the boundary is
@@ -396,7 +396,7 @@ let session_registry = axon::session_registry::SessionRegistry::new();
 // Register concrete backends. Order doesn't matter; kinds must
 // be unique.
 session_registry.register_provider(Arc::new(
-    crate::runtime::execution::pty::PtySessionProvider::new()
+    crate::daemon::execution::pty::PtySessionProvider::new()
 ));
 // Future:
 // session_registry.register_provider(Arc::new(LlmSessionProvider::new(...)));
@@ -558,7 +558,7 @@ Convention: bare kind for the canonical singleton (`"pty"`,
 
 The current state has axon directly owning PTY (`pty_attach.rs` +
 `session_bridge.rs` + `pty/{unix,windows}.rs`) and CLI also owning
-PTY (`runtime/execution/pty/` + `agents/pty_*.rs`). Cleanup is
+PTY (`daemon/execution/pty/` + `agents/pty_*.rs`). Cleanup is
 staged so `fleet.session_attach` keeps working at every commit.
 
 ### Stage 1: axon — introduce SessionProvider, keep PTY backend as opt-in
@@ -598,7 +598,7 @@ After Stage 1:
 
 ### Stage 2: CLI — implement PtySessionProvider, register at daemon boot (FAIL-CLOSED), deprecate `fleet.pty_session_*`
 
-  * Move CLI's `runtime/execution/pty/` into a `PtySessionProvider`
+  * Move CLI's `daemon/execution/pty/` into a `PtySessionProvider`
     impl (it already has `PtyService` doing the spawning; wrap that
     behind the trait).
   * In `bin/easynet-daemon.rs`, register the CLI's

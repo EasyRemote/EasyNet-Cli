@@ -27,9 +27,9 @@ pub(super) fn run_mcp(args: McpArgs) -> anyhow::Result<()> {
 pub(crate) fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
     let dir = open_registered_agent(&args.name)?;
     let config_path = args.config.clone().unwrap_or_else(
-        crate::runtime::execution::mcp_client::McpClientService::default_config_path,
+        crate::daemon::execution::mcp_client::McpClientService::default_config_path,
     );
-    let svc = crate::runtime::execution::mcp_client::McpClientService::from_path(&config_path)?;
+    let svc = crate::daemon::execution::mcp_client::McpClientService::from_path(&config_path)?;
 
     let declared_cost = build_cost_meta(args.cost_kind, args.cost_label.as_deref())?;
     let plan = plan_mcp_additions(
@@ -104,7 +104,7 @@ pub(super) fn build_cost_meta(
 }
 
 fn plan_mcp_additions(
-    svc: &crate::runtime::execution::mcp_client::McpClientService,
+    svc: &crate::daemon::execution::mcp_client::McpClientService,
     config_path: &std::path::Path,
     server_filter: Option<&str>,
     tool_filter: &[String],
@@ -315,7 +315,7 @@ pub(super) struct McpAbilityPlan {
 }
 
 fn select_mcp_servers(
-    svc: &crate::runtime::execution::mcp_client::McpClientService,
+    svc: &crate::daemon::execution::mcp_client::McpClientService,
     server: Option<&str>,
 ) -> anyhow::Result<Vec<String>> {
     mcp_block_on(async {
@@ -337,7 +337,7 @@ fn select_mcp_servers(
 }
 
 fn mcp_rpc_blocking_timeout(
-    svc: &crate::runtime::execution::mcp_client::McpClientService,
+    svc: &crate::daemon::execution::mcp_client::McpClientService,
     server: &str,
     method: &str,
     params: Value,

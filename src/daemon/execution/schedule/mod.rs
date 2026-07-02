@@ -1,7 +1,7 @@
 // EasyNet CLI — Execution / Schedule sub-service
 // ===============================================
 //
-// File: src/runtime/execution/schedule/mod.rs
+// File: src/daemon/execution/schedule/mod.rs
 // Description: Cron-driven schedule store + tick runner. Backed by
 //              JSON files under
 //              `~/.easynet/tenants/<tenant>/schedules/<id>.json`

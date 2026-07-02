@@ -33,7 +33,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 use crate::daemon::ability::builtins::agents::chat::ContextLoader;
-use crate::runtime::execution::schedule::ScheduleService;
+use crate::daemon::execution::schedule::ScheduleService;
 
 /// Default horizon: 24 hours. Schedules firing later than this are
 /// excluded from the chat context block so the LLM's prompt stays

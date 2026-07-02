@@ -1,7 +1,7 @@
 // EasyNet CLI — Execution / Loop sub-service
 // ===========================================
 //
-// File: src/runtime/execution/loop_instance/mod.rs
+// File: src/daemon/execution/loop_instance/mod.rs
 // Description: Loop-instance registry + status store + controller
 //              runner. `loop.create` persists a loop
 //              instance; the daemon-side controller drives it from

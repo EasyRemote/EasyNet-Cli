@@ -47,14 +47,14 @@ use crate::daemon::ability::builtins::{
         voice as voice_call_ability,
     },
 };
+use crate::daemon::execution::discuss::DiscussService;
+use crate::daemon::execution::loop_instance::LoopService;
+use crate::daemon::execution::permission::PermissionService;
+use crate::daemon::execution::pty::PtyService;
+use crate::daemon::execution::schedule::ScheduleService;
+use crate::daemon::execution::session::SessionService;
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::execution::discuss::DiscussService;
-use crate::runtime::execution::loop_instance::LoopService;
-use crate::runtime::execution::permission::PermissionService;
-use crate::runtime::execution::pty::PtyService;
-use crate::runtime::execution::schedule::ScheduleService;
-use crate::runtime::execution::session::SessionService;
 use std::sync::Arc;
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
@@ -805,25 +805,25 @@ fn build_registry_with_services_result_inner(
     // because a malformed file is an operator typo, not a "no
     // upstreams" condition.
     let mcp_clients_path =
-        crate::runtime::execution::mcp_client::McpClientService::default_config_path();
-    let mcp_client_svc =
-        match crate::runtime::execution::mcp_client::McpClientService::from_path(&mcp_clients_path)
-        {
-            Ok(svc) => Arc::new(svc),
-            Err(e) => {
-                let path_display = format!("{}", mcp_clients_path.display());
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = mcp_client,
-                    kind = config_load_failed,
-                    level = "warn",
-                    path = path_display,
-                    error = err_msg,
-                    fallback = "empty_service",
-                );
-                Arc::new(crate::runtime::execution::mcp_client::McpClientService::new())
-            }
-        };
+        crate::daemon::execution::mcp_client::McpClientService::default_config_path();
+    let mcp_client_svc = match crate::daemon::execution::mcp_client::McpClientService::from_path(
+        &mcp_clients_path,
+    ) {
+        Ok(svc) => Arc::new(svc),
+        Err(e) => {
+            let path_display = format!("{}", mcp_clients_path.display());
+            let err_msg = format!("{e}");
+            crate::op_event!(
+                component = mcp_client,
+                kind = config_load_failed,
+                level = "warn",
+                path = path_display,
+                error = err_msg,
+                fallback = "empty_service",
+            );
+            Arc::new(crate::daemon::execution::mcp_client::McpClientService::new())
+        }
+    };
     mcp_client_ability::register(&mut reg, mcp_client_svc.clone());
 
     // Install the same `Arc<McpClientService>` as the process-wide

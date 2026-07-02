@@ -1,7 +1,7 @@
 // EasyNet CLI — PtyService (C-M3b)
 // =================================
 //
-// File: src/runtime/execution/pty/mod.rs
+// File: src/daemon/execution/pty/mod.rs
 //
 // Sub-service that owns every live PTY-hosted child process the
 // daemon spawns through `terminal.create`. v1 surface is

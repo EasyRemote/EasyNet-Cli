@@ -38,6 +38,7 @@ mod client;
 pub mod context;
 pub mod control;
 mod error;
+pub mod execution;
 pub mod federation;
 pub mod identity;
 #[cfg(feature = "axon-pb")]

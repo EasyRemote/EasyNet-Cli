@@ -1,7 +1,7 @@
 // EasyNet CLI — Streamable HTTP / GET listener channel
 // ====================================================
 //
-// File: src/runtime/execution/mcp_client/http/listener.rs
+// File: src/daemon/execution/mcp_client/http/listener.rs
 //
 // Implements the GET listener channel from MCP spec 2025-06-18
 // §"Listening for Messages from the Server". The listener is a
@@ -45,7 +45,7 @@ use super::hyper_io::HyperTokioIo;
 use super::sse::{find_event_terminator, parse_one_sse_event};
 use super::tls::AsyncStream;
 use super::{HEADER_PROTOCOL_VERSION, HEADER_SESSION_ID, PROTOCOL_VERSION};
-use crate::runtime::execution::mcp_client::{McpServerSpec, NotificationSink};
+use crate::daemon::execution::mcp_client::{McpServerSpec, NotificationSink};
 
 /// Backoff cap for the GET listener reconnect loop. The SSE `retry:`
 /// field, when emitted by a server, overrides this for the next

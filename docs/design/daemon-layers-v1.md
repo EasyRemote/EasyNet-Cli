@@ -44,7 +44,7 @@ Inside `easynet-daemon`:
     ↓  (only via KernelApi trait)
 [KernelApi]              src/runtime/kernel_api.rs        ← SYSCALL BOUNDARY
     ↓  (trait impl on the Kernel)
-[Execution]              src/runtime/execution/
+[Execution]              src/daemon/execution/
     ├── session/         one session per agent run         (PR-ATTACH)
     ├── permission/      broker + pending queue            (PR-PERM)
     ├── discuss/         multi-agent room store            (PR-DISCUSS)

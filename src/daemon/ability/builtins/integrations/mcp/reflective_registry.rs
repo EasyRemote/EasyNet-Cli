@@ -44,10 +44,10 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
+use crate::daemon::execution::mcp_client::McpClientService;
 use crate::runtime::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
-use crate::runtime::execution::mcp_client::McpClientService;
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
 /// reflectively-registered upstream MCP tool, before the
@@ -828,7 +828,7 @@ enum CatalogFetch {
 }
 
 struct CatalogFetchOk {
-    spec: crate::runtime::execution::mcp_client::McpServerSpec,
+    spec: crate::daemon::execution::mcp_client::McpServerSpec,
     tools: Vec<Value>,
 }
 
@@ -1210,7 +1210,7 @@ fn register_one_tool<W: RegistryWriter>(
     client: &McpClientService,
     server_name: &str,
     owner_ura: &str,
-    spec: &crate::runtime::execution::mcp_client::McpServerSpec,
+    spec: &crate::daemon::execution::mcp_client::McpServerSpec,
     tool: &Value,
 ) -> Result<ReflectedAbility, ReflectFailure> {
     let upstream_tool = tool
@@ -1446,8 +1446,8 @@ struct StreamForwardingSink {
     sender: tokio::sync::broadcast::Sender<Value>,
 }
 
-impl crate::runtime::execution::mcp_client::NotificationSink for StreamForwardingSink {
-    fn observe(&mut self, n: crate::runtime::execution::mcp_client::ObservedNotification) {
+impl crate::daemon::execution::mcp_client::NotificationSink for StreamForwardingSink {
+    fn observe(&mut self, n: crate::daemon::execution::mcp_client::ObservedNotification) {
         if let Some(p) = n.as_progress() {
             let frame = serde_json::json!({
                 "type": "progress",
@@ -1487,7 +1487,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for StreamForwardin
 /// can retire vanished names without leaving stale entries.
 pub struct RegistryRefreshSink {
     registry: std::sync::Weak<AxonAbilityCatalog>,
-    client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
+    client: std::sync::Weak<crate::daemon::execution::mcp_client::McpClientService>,
     server_name: String,
     owner_ura: String,
     /// Names previously reflected through this sink. Wrapped in Arc
@@ -1501,7 +1501,7 @@ pub struct RegistryRefreshSink {
 impl RegistryRefreshSink {
     pub fn new(
         registry: std::sync::Weak<AxonAbilityCatalog>,
-        client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
+        client: std::sync::Weak<crate::daemon::execution::mcp_client::McpClientService>,
         server_name: String,
         owner_ura: String,
         initially_reflected: Vec<String>,
@@ -1516,8 +1516,8 @@ impl RegistryRefreshSink {
     }
 }
 
-impl crate::runtime::execution::mcp_client::NotificationSink for RegistryRefreshSink {
-    fn observe(&mut self, n: crate::runtime::execution::mcp_client::ObservedNotification) {
+impl crate::daemon::execution::mcp_client::NotificationSink for RegistryRefreshSink {
+    fn observe(&mut self, n: crate::daemon::execution::mcp_client::ObservedNotification) {
         if n.method != "notifications/tools/list_changed" {
             return;
         }
@@ -1568,7 +1568,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for RegistryRefresh
 /// The future ends with `tx` dropping, which closes the broadcast
 /// channel and signals end-of-stream to the receiver.
 async fn stream_one_upstream_call(
-    client: crate::runtime::execution::mcp_client::McpClientService,
+    client: crate::daemon::execution::mcp_client::McpClientService,
     server: String,
     upstream_tool: String,
     args: Value,
@@ -1604,7 +1604,7 @@ async fn stream_one_upstream_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
+    use crate::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
     use std::collections::HashMap;
 
     #[test]
@@ -2153,7 +2153,7 @@ while True:
         let script = write_script(dir.path(), &["a", "b"], "before");
 
         let svc =
-            McpClientService::from_file(crate::runtime::execution::mcp_client::McpClientsFile {
+            McpClientService::from_file(crate::daemon::execution::mcp_client::McpClientsFile {
                 servers: vec![McpServerSpec {
                     name: "echo".into(),
                     command: script.to_string_lossy().to_string(),
@@ -2183,7 +2183,7 @@ while True:
 
         let script2 = write_script(dir.path(), &["b", "c"], "after");
         let svc2 =
-            McpClientService::from_file(crate::runtime::execution::mcp_client::McpClientsFile {
+            McpClientService::from_file(crate::daemon::execution::mcp_client::McpClientsFile {
                 servers: vec![McpServerSpec {
                     name: "echo".into(),
                     command: script2.to_string_lossy().to_string(),
@@ -2303,9 +2303,9 @@ while True:
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let svc = crate::runtime::execution::mcp_client::McpClientService::from_file(
-            crate::runtime::execution::mcp_client::McpClientsFile {
-                servers: vec![crate::runtime::execution::mcp_client::McpServerSpec {
+        let svc = crate::daemon::execution::mcp_client::McpClientService::from_file(
+            crate::daemon::execution::mcp_client::McpClientsFile {
+                servers: vec![crate::daemon::execution::mcp_client::McpServerSpec {
                     name: "prg".into(),
                     command: script.to_string_lossy().to_string(),
                     stdio_framing: "content-length".into(),

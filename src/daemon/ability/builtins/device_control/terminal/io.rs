@@ -71,9 +71,9 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::{json, Value};
 
+use crate::daemon::execution::pty::{PtyService, PtySessionId};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_INPUT: &str =
     crate::daemon::ability::names::device_control::TERMINAL_INPUT;
@@ -662,7 +662,7 @@ pub fn resize_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::execution::pty::PtyCreateSpec;
+    use crate::daemon::execution::pty::PtyCreateSpec;
 
     fn fresh() -> (Arc<PtyService>, PtyIoService) {
         (Arc::new(PtyService::new()), PtyIoService::new())

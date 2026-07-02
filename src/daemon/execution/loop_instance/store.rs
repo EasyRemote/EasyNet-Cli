@@ -1,7 +1,7 @@
 // EasyNet CLI — Loop disk-backed JSON store
 // ==========================================
 //
-// File: src/runtime/execution/loop_instance/store.rs
+// File: src/daemon/execution/loop_instance/store.rs
 // Description: One JSON file per loop instance under
 //              `~/.easynet/tenants/<tenant>/loops/<id>.json`.
 //              Same atomic-overwrite semantics as the schedule

@@ -21,7 +21,7 @@
 # Rule 2 (unity entry point)
 # --------------------------
 # The ONLY place Kernel::invoke may be called from inside the
-# runtime's execution layer is via the Kernel itself. Handlers
+# daemon execution layer is via the Kernel itself. Handlers
 # (PR-ATTACH / PR-PERM / etc.) route execution entries through the
 # Kernel, not by constructing a parallel dispatch.
 #
@@ -65,13 +65,13 @@ done
 # than the kernel itself. Sub-services must not "self-invoke" by
 # reaching for Kernel; they return values to the Kernel that calls
 # them. Flag if PR-INVOCATION-EXEC-UNITY leaks.
-if [ -d "src/runtime/execution" ]; then
+if [ -d "src/daemon/execution" ]; then
     # Look for actual call syntax `Kernel::invoke(` — excluding
     # backtick-wrapped prose in `// doc comments`. A simple rule
     # that works: reject the file when a non-comment line contains
     # `Kernel::invoke(`. `grep -v '^\s*//'` strips whole-line doc
     # comments; any call-site will fail that filter.
-    bad=$(grep -rnE 'Kernel::invoke\(' src/runtime/execution \
+    bad=$(grep -rnE 'Kernel::invoke\(' src/daemon/execution \
         | grep -vE '^[^:]+:[0-9]+:\s*//' || true)
     if [ -n "$bad" ]; then
         echo "ERROR: Kernel::invoke is called from an Execution sub-service:"
@@ -117,9 +117,9 @@ rule3_check() {
         violations=$((violations + 1))
     fi
 }
-rule3_check "src/runtime/execution/schedule"      'run_mission_inproc'
-rule3_check "src/runtime/execution/loop_instance" 'Session::subscribe|send_to_agent\(|run_mission_inproc'
-rule3_check "src/runtime/execution/permission"    'run_mission_inproc'
+rule3_check "src/daemon/execution/schedule"      'run_mission_inproc'
+rule3_check "src/daemon/execution/loop_instance" 'Session::subscribe|send_to_agent\(|run_mission_inproc'
+rule3_check "src/daemon/execution/permission"    'run_mission_inproc'
 
 if [ "$violations" -eq 0 ]; then
     echo "ok (no invocation-unity violations)"

@@ -111,12 +111,6 @@ pub mod local_runtime_invoker;
 pub mod gateway;
 pub mod kernel;
 
-// Execution sub-services (v10.2 isolation layer). Each sub-service
-// owns its own state; the Kernel holds handles to all of them and
-// routes inter-service calls so sub-services never import each
-// other. engineering/scripts/check-subservice-isolation.sh grep-enforces the
-// "no peer import" rule.
-pub mod execution;
 pub mod executors;
 
 // Stage-2 dispatch executor for daemon-owned and agent-owned abilities.

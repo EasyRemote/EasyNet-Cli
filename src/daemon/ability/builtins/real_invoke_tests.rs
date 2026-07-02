@@ -1164,7 +1164,7 @@ fn real_consent_decide_records_a_decision() {
     // gracefully. We assert the structured error mentions the
     // unknown id rather than panicking.
     let _g = crate::cli::test_support::HomeGuard::new();
-    let perms = Arc::new(crate::runtime::execution::permission::PermissionService::new());
+    let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = AxonAbilityCatalog::new();
     permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
@@ -1193,7 +1193,7 @@ fn real_consent_decide_records_a_decision() {
 #[test]
 fn real_consent_list_pending_returns_empty_on_fresh_service() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let perms = Arc::new(crate::runtime::execution::permission::PermissionService::new());
+    let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = AxonAbilityCatalog::new();
     permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
@@ -1214,7 +1214,7 @@ fn real_consent_list_pending_returns_empty_on_fresh_service() {
 #[test]
 fn real_discuss_create_then_post_round_trips_through_the_service() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::discuss::DiscussService::new());
+    let svc = Arc::new(crate::daemon::execution::discuss::DiscussService::new());
     let mut reg = AxonAbilityCatalog::new();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -1259,7 +1259,7 @@ fn real_discuss_create_then_post_round_trips_through_the_service() {
 #[test]
 fn real_schedule_add_then_list_then_remove_round_trip() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::schedule::ScheduleService::new());
+    let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
     let mut reg = AxonAbilityCatalog::new();
     schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -1297,7 +1297,7 @@ fn real_schedule_add_then_list_then_remove_round_trip() {
 #[test]
 fn real_schedule_enable_routes_to_handler() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::schedule::ScheduleService::new());
+    let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
     let mut reg = AxonAbilityCatalog::new();
     schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -1320,7 +1320,7 @@ fn real_schedule_enable_routes_to_handler() {
 #[test]
 fn real_schedule_remove_routes_to_handler() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::schedule::ScheduleService::new());
+    let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
     let mut reg = AxonAbilityCatalog::new();
     schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -1339,7 +1339,7 @@ fn real_schedule_remove_routes_to_handler() {
 #[test]
 fn real_loop_create_then_status_then_cancel() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
+    let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -1377,7 +1377,7 @@ fn real_loop_create_then_status_then_cancel() {
 #[test]
 fn real_loop_status_routes_for_unknown_id() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
+    let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -1393,7 +1393,7 @@ fn real_loop_status_routes_for_unknown_id() {
 #[test]
 fn real_loop_cancel_routes_for_unknown_id() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
+    let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -2174,7 +2174,7 @@ fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
 #[test]
 fn real_consent_subscribe_returns_a_stream_source() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let perms = Arc::new(crate::runtime::execution::permission::PermissionService::new());
+    let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = AxonAbilityCatalog::new();
     permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
@@ -2188,7 +2188,7 @@ fn real_consent_subscribe_returns_a_stream_source() {
 #[test]
 fn real_discuss_subscribe_returns_a_stream_source() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::discuss::DiscussService::new());
+    let svc = Arc::new(crate::daemon::execution::discuss::DiscussService::new());
     let mut reg = AxonAbilityCatalog::new();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -2209,7 +2209,7 @@ fn real_discuss_subscribe_returns_a_stream_source() {
 #[test]
 fn real_loop_subscribe_returns_a_stream_source() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::loop_instance::LoopService::new());
+    let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -2227,7 +2227,7 @@ fn real_loop_subscribe_returns_a_stream_source() {
 #[test]
 fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::runtime::execution::session::SessionService::new());
+    let svc = Arc::new(crate::daemon::execution::session::SessionService::new());
     let mut reg = AxonAbilityCatalog::new();
     session_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -2245,7 +2245,7 @@ fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
 #[test]
 fn real_device_terminal_create_then_close_round_trip() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
@@ -2288,7 +2288,7 @@ fn real_device_terminal_create_then_close_round_trip() {
 #[test]
 fn real_device_terminal_input_read_resize_round_trip() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let io = pty_io_ability::PtyIoService::new();
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
@@ -2359,7 +2359,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_terminal_attach_returns_a_bidi_source() {
     let _g = crate::cli::test_support::HomeGuard::new();
-    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     pty_attach_ability::register(&mut reg, Arc::clone(&pty));
@@ -3087,7 +3087,7 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     // canonical names. Coverage walker pins the current public
     // namespace so an accidental reintroduction of old names fails.
     let _g = crate::cli::test_support::HomeGuard::new();
-    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
@@ -3113,7 +3113,7 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     // exercising the v2 aliases. Same PTY service / IO service
     // wiring; same printf marker pattern.
     let _g = crate::cli::test_support::HomeGuard::new();
-    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let io = pty_io_ability::PtyIoService::new();
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
@@ -3176,7 +3176,7 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     // the v2 name" — full bidi round-trip coverage already lives
     // on the legacy alias's test.
     let _g = crate::cli::test_support::HomeGuard::new();
-    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_attach_ability::register(&mut reg, pty);
     assert!(

@@ -80,11 +80,11 @@ use std::sync::Arc;
 use base64::Engine;
 use serde_json::{json, Value};
 
+use crate::daemon::execution::pty::{PtyService, PtySessionId};
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{
     AxonAbilityCatalog, BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND,
 };
-use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str =
     crate::daemon::ability::names::device_control::TERMINAL_ATTACH;
@@ -107,7 +107,7 @@ pub fn description() -> &'static str {
 /// `{type:\"stdin\", data: <base64>}` and `{type:\"resize\", \
 /// cols, rows}` — those are stream-payload schemas, not
 /// initial-args schemas, so they sit in the
-/// runtime/execution/pty module's docs rather than here.
+/// daemon/execution/pty module's docs rather than here.
 pub fn input_schema() -> Value {
     json!({
         "type": "object",
@@ -183,7 +183,7 @@ fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSour
 /// T1: PTY master → wire. Blocking read on a dedicated thread
 /// pool, send each chunk as a `stdout` base64 frame.
 fn spawn_pty_reader(
-    session: Arc<crate::runtime::execution::pty::PtySession>,
+    session: Arc<crate::daemon::execution::pty::PtySession>,
     to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
 ) {
     tokio::spawn(async move {
@@ -243,7 +243,7 @@ fn spawn_pty_reader(
 /// the resize fast path (for resize). Exits when the receiver
 /// yields None.
 fn spawn_pty_writer(
-    session: Arc<crate::runtime::execution::pty::PtySession>,
+    session: Arc<crate::daemon::execution::pty::PtySession>,
     mut from_client: tokio::sync::mpsc::Receiver<Value>,
     to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
 ) {
@@ -342,7 +342,7 @@ fn spawn_pty_writer(
 /// frame when the child terminates. The frame carries the exit
 /// status when waitable; null when the child was reaped externally.
 fn spawn_exit_watcher(
-    session: Arc<crate::runtime::execution::pty::PtySession>,
+    session: Arc<crate::daemon::execution::pty::PtySession>,
     to_client: tokio::sync::mpsc::Sender<BidiOutputFrame>,
     pty: Arc<PtyService>,
     id: PtySessionId,
@@ -418,7 +418,7 @@ pub fn attach_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::execution::pty::PtyCreateSpec;
+    use crate::daemon::execution::pty::PtyCreateSpec;
 
     fn fresh_service() -> Arc<PtyService> {
         Arc::new(PtyService::new())

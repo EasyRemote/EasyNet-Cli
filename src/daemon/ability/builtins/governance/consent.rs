@@ -34,9 +34,9 @@ use serde_json::{json, Value};
 
 use crate::core::domain::{PermissionDecision, PermissionId};
 use crate::daemon::ability::catalog::profiles::DEFAULT_CONSENT_AGENT_ID;
+use crate::daemon::execution::permission::PermissionService;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::runtime::execution::permission::PermissionService;
 
 pub const ABILITY_SUBSCRIBE: &str = crate::daemon::ability::names::governance::CONSENT_SUBSCRIBE;
 pub const ABILITY_DECIDE: &str = crate::daemon::ability::names::governance::CONSENT_DECIDE;

@@ -411,7 +411,7 @@ fn main() -> anyhow::Result<()> {
         // attached, instead of an empty Vec like the other
         // smoke probes use.
         let schedule_svc =
-            Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new());
+            Arc::new(easynet_cli::daemon::execution::schedule::ScheduleService::new());
         let default_loaders = Arc::new(
             easynet_cli::daemon::ability::builtins::resources::context::loaders::default_loaders(
                 Arc::clone(&schedule_svc),

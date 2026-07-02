@@ -1,7 +1,7 @@
 // EasyNet CLI — Execution / Discuss sub-service
 // ==============================================
 //
-// File: src/runtime/execution/discuss/mod.rs
+// File: src/daemon/execution/discuss/mod.rs
 // Description: Multi-agent room registry + per-room turn broadcast.
 //              PR-DISCUSS surfaces this as the
 //              `discuss.{create,post,subscribe}` ability
@@ -19,11 +19,10 @@
 //
 // What this is NOT
 // ----------------
-// Not the existing `runtime::conversation` synchronous round-
-// robin engine. That module is a single-shot "run N rounds of
-// these agents and return the log"; this sub-service is a long-
-// lived room a Client can attach to and post into at any time.
-// They serve different products.
+// Not the synchronous "run N rounds of these agents and return
+// the log" orchestration path. This sub-service is a long-lived
+// room a Client can attach to and post into at any time. They
+// serve different products.
 //
 // Room persistence
 // ----------------

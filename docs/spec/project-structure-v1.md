@@ -202,7 +202,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `daemon/ability/catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
 | `daemon/ability/builtins/` | daemon-owned/system ability handlers grouped by product module | transport admission, receipt canonicalization, persistent service state |
 | `runtime/executors/` | reusable execution engines used by handlers or manifest-bound abilities | public ability registration |
-| `runtime/execution/` | stateful runtime services such as PTY, schedule, loop, permission, session, MCP execution state | descriptor identity, facade rendering |
+| `daemon/execution/` | stateful runtime services such as PTY, schedule, loop, permission, session, MCP execution state | descriptor identity, facade rendering |
 | `daemon/resources/` | resource models and shared resource projection helpers | product ability handler bodies |
 | `daemon/plugins/` | plugin manifest parsing, install/activation, sidecar protocol, daemon contribution registration | core Ability ontology |
 | `daemon/axon_bridge/` | Axon SDK glue and wire/type adapters | EasyNet product policy, plugin lifecycle decisions |
@@ -685,7 +685,7 @@ Disallowed content:
 
 OOP/encapsulation rules:
 
-1. Stateful managers live under `runtime/execution/`, explicit `daemon/`
+1. Stateful managers live under `daemon/execution/`, explicit `daemon/`
    semantic directories, or `persistence/`, not inside handler modules.
 2. Stateful structs must have private fields and constructor-based dependency
    injection. No public fields on state-holding structs.
@@ -736,7 +736,7 @@ manifest-bound AbilityImpl bindings:
 Executors are implementation machinery. They must not register public abilities
 directly.
 
-`runtime/execution/` owns long-lived runtime services and stateful managers:
+`daemon/execution/` owns long-lived runtime services and stateful managers:
 
 - PTY service;
 - schedule service;

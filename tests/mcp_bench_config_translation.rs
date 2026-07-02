@@ -18,7 +18,7 @@
 // If McpServerSpec evolves and the script's python block doesn't
 // follow, this test trips before an operator does at boot time.
 
-use easynet_cli::runtime::execution::mcp_client::McpClientsFile;
+use easynet_cli::daemon::execution::mcp_client::McpClientsFile;
 use serde_json::{json, Value};
 
 fn translate_commands_json(commands: &Value, mcp_bench_dir: &str) -> Value {

@@ -1,9 +1,9 @@
 // EasyNet CLI — Execution Sub-Services
 // =====================================
 //
-// File: src/runtime/execution/mod.rs
-// Description: The v10.2 sub-service partition of the Execution
-//              layer. Each child module owns one slice of runtime
+// File: src/daemon/execution/mod.rs
+// Description: Daemon-owned long-lived execution sub-services.
+//              Each child module owns one slice of execution
 //              state (session / permission / discuss / schedule /
 //              loop) and is forbidden — by CI grep in
 //              `engineering/scripts/check-subservice-isolation.sh` — from
@@ -20,17 +20,16 @@
 //
 // Communication between sub-services always goes through the
 // Kernel (`runtime::kernel`), which holds one handle per sub-
-// service and brokers every cross-module call. This is the same
-// shape a Unix kernel enforces between subsystems, which is why
-// the plan calls this a "kernel-like runtime boundary".
+// service and brokers every cross-module call. The execution
+// services own daemon state; the Kernel remains the chokepoint
+// for cross-service orchestration and Invocation entry.
 //
-// v1 state
-// --------
-// Every sub-service here is a skeleton. The feature PR for each
-// feature (PR-ATTACH / PR-PERM / PR-DISCUSS / PR-SCHED / PR-LOOP)
-// fills in its body and its Kernel handle. Shipping the empty
-// skeleton keeps every downstream PR additive — no file renames,
-// no import-path breakage.
+// State ownership
+// ---------------
+// These modules are intentionally stateful services, not ability
+// handler bodies. Handlers receive typed handles from catalog/daemon
+// construction and call into these services; the services do not
+// import handler modules to discover product ability names.
 //
 // Sub-service layout
 // ------------------

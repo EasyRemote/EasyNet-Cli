@@ -32,9 +32,7 @@
 use std::sync::Arc;
 
 use easynet_axon::invocation::LocalRuntime;
-use easynet_cli::runtime::execution::mcp_client::{
-    McpClientService, McpClientsFile, McpServerSpec,
-};
+use easynet_cli::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::runtime::local_runtime_invoker::open_local_stream;
 

@@ -1,7 +1,7 @@
 // EasyNet CLI — Streamable HTTP / hyper ↔ tokio IO adapter
 // ========================================================
 //
-// File: src/runtime/execution/mcp_client/http/hyper_io.rs
+// File: src/daemon/execution/mcp_client/http/hyper_io.rs
 //
 // Minimal hyper IO adapter for tokio `AsyncRead` / `AsyncWrite`.
 // `hyper` 1.x expects its own `hyper::rt::{Read, Write}` traits;

@@ -1,7 +1,7 @@
 // EasyNet CLI — Execution / Permission sub-service
 // =================================================
 //
-// File: src/runtime/execution/permission/mod.rs
+// File: src/daemon/execution/permission/mod.rs
 // Description: Approval broker + pending-request queue. v1 contract
 //              is the "approval broker" semantics frozen in
 //              docs/rfc/permission-broker-v1.md — interactive

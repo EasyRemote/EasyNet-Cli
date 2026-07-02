@@ -57,7 +57,7 @@ use crate::daemon::ability::builtins::agents::chat::ContextLoader;
 /// Tests and the standalone MCP server can pass an empty Vec to
 /// disable all loaders or build a curated subset.
 pub fn default_loaders(
-    schedule_service: Arc<crate::runtime::execution::schedule::ScheduleService>,
+    schedule_service: Arc<crate::daemon::execution::schedule::ScheduleService>,
 ) -> Vec<Arc<dyn ContextLoader>> {
     vec![
         Arc::new(user_profile::UserProfileLoader::new()),

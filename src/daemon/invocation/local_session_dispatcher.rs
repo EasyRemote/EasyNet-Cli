@@ -3429,11 +3429,11 @@ mod tests {
     fn build_real_daemon_registry_with_runtime(
         local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
     ) -> Arc<crate::runtime::ability_dispatch::AxonAbilityCatalog> {
-        use crate::runtime::execution::discuss::DiscussService;
-        use crate::runtime::execution::loop_instance::LoopService;
-        use crate::runtime::execution::permission::PermissionService;
-        use crate::runtime::execution::schedule::ScheduleService;
-        use crate::runtime::execution::session::SessionService;
+        use crate::daemon::execution::discuss::DiscussService;
+        use crate::daemon::execution::loop_instance::LoopService;
+        use crate::daemon::execution::permission::PermissionService;
+        use crate::daemon::execution::schedule::ScheduleService;
+        use crate::daemon::execution::session::SessionService;
         let agents = Default::default();
         let mut config = crate::daemon::ability::catalog::RegistryBuildConfig::new(
             crate::daemon::ability::catalog::RegistryBuildServices::new(

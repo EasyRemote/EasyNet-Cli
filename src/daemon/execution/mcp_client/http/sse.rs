@@ -1,7 +1,7 @@
 // EasyNet CLI — Streamable HTTP / SSE parsers
 // ===========================================
 //
-// File: src/runtime/execution/mcp_client/http/sse.rs
+// File: src/daemon/execution/mcp_client/http/sse.rs
 //
 // Server-Sent Events parsing for the MCP 2025-06-18 Streamable HTTP
 // transport. Two surfaces:
@@ -26,7 +26,7 @@
 use anyhow::{anyhow, Context};
 use serde_json::Value;
 
-use crate::runtime::execution::mcp_client::ObservedNotification;
+use crate::daemon::execution::mcp_client::ObservedNotification;
 
 #[derive(Debug)]
 pub(super) struct SseParseResult {

@@ -989,7 +989,9 @@ mod tests {
 
     #[test]
     fn list_abilities_stamps_health_metadata_from_monitor_store() {
-        use crate::daemon::ability::health::{self, AbilityHealthRecord, HealthStatus};
+        use crate::daemon::ability::health::{
+            self as ability_health, AbilityHealthRecord, HealthStatus,
+        };
 
         // Seed the process-wide health store under THIS test's unique
         // owner so parallel tests cannot collide (same residue

@@ -198,8 +198,8 @@ fi
 # ── Rule 3 ────────────────────────────────────────────────────────
 # Execution layer must not reach into the concrete gateway impl.
 # Execution → GatewayApi trait only.
-if [ -d "src/runtime/execution" ]; then
-    offending=$(grep -rnE "crate::runtime::gateway\b" src/runtime/execution \
+if [ -d "src/daemon/execution" ]; then
+    offending=$(grep -rnE "crate::runtime::gateway\b" src/daemon/execution \
         | grep -v "crate::runtime::gateway_api" || true)
     if [ -n "$offending" ]; then
         echo "ERROR: Execution layer must not import crate::runtime::gateway directly."
