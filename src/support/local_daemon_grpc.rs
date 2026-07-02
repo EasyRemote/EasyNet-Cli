@@ -1767,12 +1767,12 @@ pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
 
 #[cfg(feature = "axon-pb")]
 fn local_daemon_loopback_caller_ura() -> anyhow::Result<String> {
-    Ok(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA.to_string())
+    Ok(crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA.to_string())
 }
 
 #[cfg(feature = "axon-pb")]
 fn local_daemon_default_callee_ura() -> String {
-    crate::runtime::local_invocation_identity::local_device_ura()
+    crate::daemon::identity::local_invocation::local_device_ura()
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1817,7 +1817,7 @@ struct LocalMissionSubjectOwner {
 #[cfg(feature = "axon-pb")]
 impl LocalMissionSubjectOwner {
     fn from_runtime_identity() -> anyhow::Result<Self> {
-        Self::from_device_ura(&crate::runtime::local_invocation_identity::local_device_ura())
+        Self::from_device_ura(&crate::daemon::identity::local_invocation::local_device_ura())
     }
 
     fn from_device_ura(device_ura: &str) -> anyhow::Result<Self> {
@@ -1905,7 +1905,7 @@ mod tests {
         let envelope = request.envelope.as_ref().expect("request envelope");
         assert_eq!(
             envelope.caller.as_ref().map(|caller| caller.ura.as_str()),
-            Some(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA)
+            Some(crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA)
         );
         assert!(
             envelope.caller_signature.is_none(),

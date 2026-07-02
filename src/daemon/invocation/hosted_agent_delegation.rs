@@ -91,7 +91,7 @@ impl HostedAgentDelegationIssuer {
                     "hosted-agent delegation request requires envelope.caller.ura",
                 )
             })?;
-        if caller_ura != crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
+        if caller_ura != crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
             return Err(Status::permission_denied(format!(
                 "HOSTED_AGENT_DELEGATION_LOCAL_ONLY: hosted-agent delegation requests must use \
                  the local system caller, got `{caller_ura}`"
@@ -128,7 +128,7 @@ impl HostedAgentDelegationIssuer {
         let claims = request
             .into_claims("host_device", binding)
             .map_err(|err| Status::invalid_argument(format!("hosted_agent_delegation: {err}")))?;
-        let signature = crate::runtime::local_invocation_identity::process_local_system_identity()
+        let signature = crate::daemon::identity::local_invocation::process_local_system_identity()
             .signing_key()
             .sign(&claims.signing_payload_bytes(caller_ura));
         let signed_metadata = claims
@@ -153,7 +153,7 @@ mod tests {
 
     fn loopback_envelope() -> Envelope {
         let mut envelope = ProtoEnvelope::targeted(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
         )
@@ -188,7 +188,7 @@ mod tests {
             .get(HOSTED_AGENT_DELEGATION_METADATA_KEY)
             .expect("signed delegation metadata");
         let binding = HostedAgentDelegationEnvelopeBinding::new(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
             hex::encode([0x44; 16]),
@@ -198,7 +198,7 @@ mod tests {
         HostedAgentDelegationContext::from_signed_metadata(
             raw,
             &binding,
-            crate::runtime::local_invocation_identity::system_verifying_key(),
+            crate::daemon::identity::local_invocation::system_verifying_key(),
         )
         .expect("daemon-issued token verifies with daemon local-system key");
     }

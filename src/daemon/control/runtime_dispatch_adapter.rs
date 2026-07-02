@@ -86,7 +86,7 @@ impl RuntimeDispatchAdapter {
         config.local_runtime = Some(Arc::clone(&local_runtime));
         config.authority_context = Some(
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                crate::runtime::local_invocation_identity::local_device_ura(),
+                crate::daemon::identity::local_invocation::local_device_ura(),
             )
             .expect("local device URA is a valid device authority root"),
         );

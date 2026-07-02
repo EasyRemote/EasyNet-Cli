@@ -19,7 +19,7 @@ use easynet_axon::invocation::{
     AxiomBinding, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
 };
 
-use crate::runtime::local_invocation_identity::LocalSystemKeyResolver;
+use crate::daemon::identity::local_invocation::LocalSystemKeyResolver;
 
 /// Construct an `Arc<LocalRuntime>` wired with:
 ///

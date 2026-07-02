@@ -23,10 +23,10 @@ use crate::daemon::axon_bridge::descriptor_ref::{
 use crate::daemon::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
-use crate::runtime::invocation_target::{InvocationTarget, TargetScope};
-use crate::runtime::local_invocation_identity::{
+use crate::daemon::identity::local_invocation::{
     agent_identity, local_device_ura, system_agent_identity,
 };
+use crate::runtime::invocation_target::{InvocationTarget, TargetScope};
 
 pub struct RuntimeBidiSource {
     pub to_client: BidiInputSender,

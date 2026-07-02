@@ -55,8 +55,8 @@ use anyhow::{anyhow, bail, Context};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
 
+use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::daemon::invocation::ProtoEnvelope;
-use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{
     Error as WireError, InvocationState as WireInvocationState, InvokeResponse,
@@ -893,7 +893,7 @@ pub fn invoke_federation_discover_filtered(
     }
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
-    let local_device_ura = crate::runtime::local_invocation_identity::local_device_ura();
+    let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
     let request = ProtoEnvelope::targeted(
         LOCAL_SYSTEM_AGENT_URA,
         local_device_ura.as_str(),
@@ -968,7 +968,7 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
     });
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
-    let local_device_ura = crate::runtime::local_invocation_identity::local_device_ura();
+    let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
     let request = ProtoEnvelope::targeted(
         LOCAL_SYSTEM_AGENT_URA,
         local_device_ura.as_str(),

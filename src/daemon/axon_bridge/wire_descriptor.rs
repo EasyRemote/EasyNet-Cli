@@ -12,7 +12,7 @@ use easynet_axon::invocation::{
 use easynet_axon::pb::axon::v1 as pb;
 
 use crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire;
-use crate::runtime::local_invocation_identity::system_agent_identity;
+use crate::daemon::identity::local_invocation::system_agent_identity;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum WireCallerIdentity {

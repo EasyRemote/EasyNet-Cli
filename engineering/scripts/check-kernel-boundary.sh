@@ -127,10 +127,6 @@ fi
 #                           and admission.
 #   * publish             — federation.advertise_abilities backing
 #                           store.
-#   * local_invocation_identity
-#                         — daemon-local caller identity used for
-#                           self-authored forwarding, hosted-agent
-#                           delegation, and local system invocations.
 #   * failure_codes       — typed failure classifier used when
 #                           projecting terminal daemon Invocation
 #                           status into receipts.
@@ -155,7 +151,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

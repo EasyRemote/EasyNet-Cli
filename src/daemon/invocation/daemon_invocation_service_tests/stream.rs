@@ -277,7 +277,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
                 ProtoEnvelope::targeted(
-                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URI,
                     subject_ura,
                 )
@@ -339,7 +339,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     );
     assert_eq!(
         frame.get("caller").and_then(|value| value.as_str()),
-        Some(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA)
+        Some(crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA)
     );
     assert_eq!(
         frame.get("subject").and_then(|value| value.as_str()),
@@ -387,7 +387,7 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
                 ProtoEnvelope::targeted(
-                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URI,
                     TEST_DAEMON_URI,
                 )
@@ -434,7 +434,7 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
                 ProtoEnvelope::targeted(
-                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URI,
                     TEST_DAEMON_URI,
                 )
@@ -527,7 +527,7 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
                 ProtoEnvelope::targeted(
-                    crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                    crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URI,
                     TEST_DAEMON_URI,
                 )

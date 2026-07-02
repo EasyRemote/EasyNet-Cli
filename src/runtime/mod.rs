@@ -99,7 +99,6 @@ pub mod gateway_api;
 // Stage 2 (the executor) is a follow-up file `ability_dispatch.rs`;
 // PR-SYS swaps the existing dispatch.rs call sites over to it.
 pub mod invocation_target;
-pub(crate) mod local_invocation_identity;
 pub mod local_runtime_invoker;
 
 // Kernel + Gateway implementations.

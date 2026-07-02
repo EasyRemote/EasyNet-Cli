@@ -508,6 +508,9 @@ src/daemon/
 │  ├─ conformance.rs
 │  ├─ wire/
 │  └─ names/
+├─ identity/
+│  ├─ local_invocation.rs
+│  └─ self_identity.rs
 └─ axon_bridge/
 ```
 

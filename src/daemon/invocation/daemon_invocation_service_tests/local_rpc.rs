@@ -590,7 +590,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     let request = InvokeRequest {
         envelope: Some(
             ProtoEnvelope::targeted(
-                crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+                crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                 TEST_DAEMON_URI,
                 "easynet:///r/test-realm/resource/camera-1",
             )
@@ -617,7 +617,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
         serde_json::from_slice(&body.result).expect("decode handler payload");
     assert_eq!(
         decoded["caller"],
-        crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA
+        crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
     );
     assert_eq!(decoded["callee"], TEST_DAEMON_URI);
     assert_eq!(
@@ -643,7 +643,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     );
     assert_eq!(
         records[0].caller_ura,
-        crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+        crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         "loopback dispatch must be signed by daemon-local system identity"
     );
     assert_eq!(records[0].callee_ura, TEST_DAEMON_URI);

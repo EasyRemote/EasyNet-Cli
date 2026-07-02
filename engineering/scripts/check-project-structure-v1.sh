@@ -116,6 +116,7 @@ require_path "src/daemon/federation/peers.rs"
 require_path "src/daemon/federation/read_model/ability_catalog.rs"
 require_path "src/daemon/federation/read_model/advertised_agents.rs"
 require_path "src/daemon/federation/read_model/hub_published_abilities.rs"
+require_path "src/daemon/identity/local_invocation.rs"
 require_path "src/daemon/identity/self_identity.rs"
 require_path "src/daemon/invocation"
 require_path "src/daemon/invocation/state/nonce_replay.rs"
@@ -149,6 +150,7 @@ reject_path "src/runtime/ability_names"
 reject_path "src/runtime/ability_wire.rs"
 reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/execution"
+reject_path "src/runtime/local_invocation_identity.rs"
 reject_path "src/runtime/plugin_host"
 reject_path "src/runtime/resources"
 reject_path "src/runtime/system_abilities"
@@ -241,6 +243,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::local_invocation_identity paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::local_invocation_identity::|easynet_cli::runtime::local_invocation_identity::|runtime::local_invocation_identity::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::plugin_host paths" \
     '(^|[^[:alnum:]_])(crate::runtime::plugin_host::|easynet_cli::runtime::plugin_host::|runtime::plugin_host::)' \
     "${SCAN_ROOTS[@]}"
@@ -303,6 +310,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/execution physical path" \
     'src/runtime/execution(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/local_invocation_identity.rs physical path" \
+    'src/runtime/local_invocation_identity\.rs|runtime/local_invocation_identity\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

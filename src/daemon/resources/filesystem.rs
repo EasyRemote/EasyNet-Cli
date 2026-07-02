@@ -269,8 +269,8 @@ fn resource_ref_value(
         .map(|c| (c.realm, c.node_id))
         .unwrap_or_else(|| {
             (
-                crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM.to_string(),
-                crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_DEVICE_ID.to_string(),
+                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string(),
+                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID.to_string(),
             )
         });
     let owner_token = format!("device.{device_id}");

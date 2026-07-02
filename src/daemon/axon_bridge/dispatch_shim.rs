@@ -50,7 +50,7 @@ use crate::daemon::axon_bridge::local_runtime_request::{
 use crate::daemon::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
-use crate::runtime::local_invocation_identity::system_agent_identity;
+use crate::daemon::identity::local_invocation::system_agent_identity;
 
 /// Explicit admission class for a wire-shaped LocalRuntime dispatch.
 #[derive(Debug)]
@@ -743,8 +743,8 @@ mod tests {
     struct FixedKey(VerifyingKey);
     impl KeyResolver for FixedKey {
         fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-            if agent_ura == crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
-                return Ok(crate::runtime::local_invocation_identity::system_verifying_key());
+            if agent_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
+                return Ok(crate::daemon::identity::local_invocation::system_verifying_key());
             }
             Ok(self.0)
         }

@@ -19,7 +19,7 @@ const POLICY_OWNER_SELF_CONSENT: &str = "owner_self_consent";
 /// paired; unpaired devices own nothing and fail closed.
 fn caller_is_device_owner(caller: Option<&str>) -> bool {
     let Some(caller) = caller else { return false };
-    if caller == crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
+    if caller == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
         return crate::persistence::config::load_credentials().is_ok();
     }
     let Ok(parsed) = crate::ura::parse_ura(caller) else {
@@ -262,7 +262,7 @@ mod tests {
         let _g = crate::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         let env = EnvelopeContext::for_test(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/acme/resource/display-1",
         );
         let grant = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s-local", &env)
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(grant.policy, POLICY_OWNER_SELF_CONSENT);
         assert_eq!(
             grant.approval_actor_ura.as_deref(),
-            Some(crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA)
+            Some(crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA)
         );
     }
 
@@ -278,7 +278,7 @@ mod tests {
     fn unpaired_local_system_caller_still_requires_consent_receipt() {
         let _g = crate::cli::test_support::HomeGuard::new();
         let env = EnvelopeContext::for_test(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/acme/resource/display-1",
         );
         let err =

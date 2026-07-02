@@ -79,6 +79,7 @@ make_sandbox() {
     printf '%s\n' '// advertised agents read model' > "$sandbox/src/daemon/federation/read_model/advertised_agents.rs"
     printf '%s\n' '// hub published abilities read model' > "$sandbox/src/daemon/federation/read_model/hub_published_abilities.rs"
     printf '%s\n' '// daemon identity root' > "$sandbox/src/daemon/identity/mod.rs"
+    printf '%s\n' '// daemon local invocation identity' > "$sandbox/src/daemon/identity/local_invocation.rs"
     printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
     printf '%s\n' '// daemon invocation state root' > "$sandbox/src/daemon/invocation/state/mod.rs"
@@ -190,6 +191,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/execution directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired local invocation identity' > "$SB/src/runtime/local_invocation_identity.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/local_invocation_identity.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/plugin_host"
 printf '%s\n' '// retired plugin host root' > "$SB/src/runtime/plugin_host/mod.rs"
 rc=0
@@ -290,6 +298,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::execution import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::local_invocation_identity import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::plugin_host::PluginRuntimeManager::new; }' > "$SB/src/lib.rs"

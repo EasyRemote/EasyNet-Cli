@@ -39,12 +39,12 @@ use crate::daemon::execution::{
     schedule::ScheduleService,
     session::SessionService,
 };
+use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::runtime::gateway_api::GatewayApi;
 use crate::runtime::invocation::{
     runtime_invocation_id, PriorChain, Receipt, ReceiptEvent, RuntimeInvocation, TerminalState,
 };
 use crate::runtime::kernel_api::KernelApi;
-use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
 
 /// The runtime kernel. Holds one sub-service per feature and one
 /// Gateway handle for federation calls. Feature PRs extend the

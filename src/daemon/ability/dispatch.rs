@@ -767,7 +767,7 @@ fn parse_hosted_agent_delegation_context(
     HostedAgentDelegationContext::from_signed_metadata(
         raw,
         envelope,
-        crate::runtime::local_invocation_identity::system_verifying_key(),
+        crate::daemon::identity::local_invocation::system_verifying_key(),
     )
     .map(Some)
     .map_err(|err| AxonError::invalid_argument(format!("hosted_agent_delegation: {err}")))
@@ -1293,7 +1293,7 @@ impl AbilityAuthorityContext {
                     .map(|ura| ura.realm)
             })
             .unwrap_or_else(|| {
-                crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM.to_string()
+                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string()
             });
         crate::ura::agent_ura(&realm, user_id, "account")
     }
@@ -1303,11 +1303,11 @@ impl AbilityAuthorityContext {
         let realm = parsed
             .as_ref()
             .map(|ura| ura.realm.as_str())
-            .unwrap_or(crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM);
+            .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM);
         let device_id = parsed
             .as_ref()
             .and_then(|ura| ura.device_id())
-            .unwrap_or(crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_DEVICE_ID);
+            .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID);
         crate::ura::device_agent_ura(realm, device_id, agent_id)
     }
 
@@ -1316,13 +1316,13 @@ impl AbilityAuthorityContext {
         let realm = parsed
             .as_ref()
             .map(|ura| ura.realm.as_str())
-            .unwrap_or(crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM);
+            .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM);
         crate::ura::agent_ura(realm, user_id, "account")
     }
 }
 
 fn local_device_authority_root() -> String {
-    crate::runtime::local_invocation_identity::local_device_ura()
+    crate::daemon::identity::local_invocation::local_device_ura()
 }
 
 fn local_hub_authority_root() -> String {
@@ -1330,7 +1330,7 @@ fn local_hub_authority_root() -> String {
         .ok()
         .map(|creds| creds.realm)
         .unwrap_or_else(|| {
-            crate::runtime::local_invocation_identity::UNPAIRED_LOCAL_REALM.to_string()
+            crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string()
         });
     crate::ura::hub_ura(&realm)
 }

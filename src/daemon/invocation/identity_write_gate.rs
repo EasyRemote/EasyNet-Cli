@@ -32,10 +32,10 @@ use std::sync::Arc;
 use easynet_axon::pb::axon::v1::Envelope;
 use tonic::Status;
 
+use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::daemon::invocation::register_device_pubkey::RegisterPubkeyIntent;
 use crate::daemon::invocation::revoke_user_pubkey::RevokeUserPubkeyIntent;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
-use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
 
 pub(crate) struct IdentityWriteGate {
     trust_anchor: Arc<RealmTrustAnchor>,

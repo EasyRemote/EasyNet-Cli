@@ -2082,7 +2082,7 @@ mod tests {
         assert_eq!(resp["descriptor_transaction_status"], "committed");
         assert_eq!(resp["runtime_sync"]["status"], "committed");
         let runtime_key = crate::ura::owner_ability_ura(
-            &crate::runtime::local_invocation_identity::local_device_ura(),
+            &crate::daemon::identity::local_invocation::local_device_ura(),
             "apprentice.quote",
         )
         .expect("runtime key");
@@ -2128,7 +2128,7 @@ mod tests {
             "precondition: acquire persisted the descriptor-import ledger row"
         );
         let runtime_key = crate::ura::owner_ability_ura(
-            &crate::runtime::local_invocation_identity::local_device_ura(),
+            &crate::daemon::identity::local_invocation::local_device_ura(),
             "apprentice.quote",
         )
         .expect("runtime key");

@@ -821,7 +821,7 @@ impl AdmissionFacade {
         if !self.loopback_trusted {
             return false;
         }
-        if caller_ura == crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA {
+        if caller_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
             return true;
         }
         match self.daemon_ura.as_deref() {
@@ -1840,7 +1840,7 @@ mod tests {
             Some(hub_ura("realm")),
         );
         let req = invoke_request(Some(envelope_with_caller(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         )));
 
         facade
@@ -1869,7 +1869,7 @@ mod tests {
     #[test]
     fn tcp_origin_facade_does_not_honour_local_system_bypass() {
         let req = invoke_request(Some(envelope_with_caller(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         )));
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
@@ -2167,7 +2167,7 @@ mod tests {
         let daemon_ura = hub_ura("realm");
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
         let mut req = invoke_request(Some(envelope_with_caller(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         )));
         req.metadata.insert(
             HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
@@ -2185,7 +2185,7 @@ mod tests {
         let daemon_ura = hub_ura("realm");
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
         let mut req = invoke_request(Some(envelope_with_caller(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         )));
         let request = crate::daemon::ability::HostedAgentDelegationRequest::new(
             crate::ura::agent_ura("realm", "u", "a"),

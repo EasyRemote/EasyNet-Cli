@@ -7,4 +7,5 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub(crate) mod local_invocation;
 pub mod self_identity;

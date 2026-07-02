@@ -939,7 +939,7 @@ mod tests {
         use ed25519_dalek::Signer as _;
 
         let signer = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
-        let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
+        let caller = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
         let callee = "easynet:///r/default/device/local";
         let subject = "easynet:///r/default/device/local";
         let nonce_hex = hex::encode([0x42u8; 16]);
@@ -1004,7 +1004,7 @@ mod tests {
         use ed25519_dalek::Signer as _;
 
         let signer = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
-        let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
+        let caller = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
         let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
         let nonce_hex = hex::encode([0x24u8; 16]);
         let ability = "meta.acquire";
@@ -1046,7 +1046,7 @@ mod tests {
         use ed25519_dalek::Signer as _;
 
         let signer = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
-        let caller = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
+        let caller = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
         let callee = "easynet:///r/default/device/local";
         let subject = "easynet:///r/default/device/local";
         let nonce_hex = hex::encode([0x33u8; 16]);
@@ -1099,7 +1099,7 @@ mod tests {
         );
 
         let err = HostedAgentDelegationEnvelopeBinding::new(
-            crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
             hex::encode([0x33u8; 16]),

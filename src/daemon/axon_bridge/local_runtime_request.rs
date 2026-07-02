@@ -35,7 +35,7 @@ use easynet_axon::invocation::{
     DescriptorBoundInvocationRequest,
 };
 
-use crate::runtime::local_invocation_identity::{
+use crate::daemon::identity::local_invocation::{
     process_local_system_identity, LOCAL_SYSTEM_AGENT_URA,
 };
 
