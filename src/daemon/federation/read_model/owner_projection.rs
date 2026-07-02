@@ -1,10 +1,11 @@
-// EasyNet CLI — Owner Projection Publication (AXON-RFC-005 Phase C)
-// =================================================================
+// EasyNet CLI — Federation Owner Projection Read Model
+// ====================================================
 //
-// Converts the CLI's local ability descriptors into the compact
-// owner projection shape consumed by Axon's resolver read model.
-// This module owns protocol semantics; persistence only stores the
-// last publication cursor.
+// File: src/daemon/federation/read_model/owner_projection.rs
+// Description: Converts daemon-local ability descriptors into the compact
+//              owner projection shape consumed by the federation resolver
+//              read model. Persistence stores only the last publication
+//              cursor; this module owns the daemon read-model projection.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

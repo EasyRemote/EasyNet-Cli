@@ -806,7 +806,9 @@ mod tests {
     }
 
     fn ability_summary_public_name(value: &Value) -> Option<String> {
-        crate::runtime::owner_projection::summary_public_name_from_value(value)
+        crate::daemon::federation::read_model::owner_projection::summary_public_name_from_value(
+            value,
+        )
     }
 
     #[test]

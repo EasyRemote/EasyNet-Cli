@@ -4,8 +4,8 @@
 // Owns ~/.easynet/owner-projections.json. The file is intentionally
 // only a publication cursor: protocol semantics such as ability
 // summaries, descriptor hashes, and projection digests live in
-// runtime::owner_projection. Keeping this layer dumb prevents the
-// on-disk schema from becoming a second resolver implementation.
+// daemon::federation::read_model::owner_projection. Keeping this layer dumb
+// prevents the on-disk schema from becoming a second resolver implementation.
 
 use std::fs;
 use std::path::PathBuf;

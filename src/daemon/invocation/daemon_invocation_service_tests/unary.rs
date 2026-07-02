@@ -238,7 +238,7 @@ fn session_control_heartbeat_renews_caller_owner_projection_lease() {
             1,
             "sha256:test".to_string(),
             1,
-            vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+            vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
                 ability_ura: ability_ura.clone(),
                 owner_ura: owner_ura.to_string(),
                 namespace: "agent".to_string(),
@@ -249,7 +249,7 @@ fn session_control_heartbeat_renews_caller_owner_projection_lease() {
                 policy_ref: "visibility:PUBLIC".to_string(),
                 route_summary_ref: Some(format!("route-ref::{ability_ura}")),
                 tags: vec!["class:unary".to_string()],
-                callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                     public_name.to_string(),
                 ),
             }],
@@ -308,7 +308,7 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
             1,
             "sha256:test".to_string(),
             4_102_444_800_000,
-            vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+            vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
                 ability_ura: ability_ura.clone(),
                 owner_ura: owner_ura.to_string(),
                 namespace: "agent".to_string(),
@@ -319,7 +319,7 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
                 policy_ref: "visibility:PUBLIC".to_string(),
                 route_summary_ref: Some(format!("route-ref::{ability_ura}")),
                 tags: vec!["class:unary".to_string()],
-                callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                     "agent.list",
                 ),
             }],

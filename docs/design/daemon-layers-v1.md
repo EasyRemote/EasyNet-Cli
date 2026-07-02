@@ -69,8 +69,8 @@ The layering is enforced at CI time:
   needs to translate Axon `Invocation` frames into daemon-local
   execution. The allowed names are the current semantic owners:
   ability model/descriptors/names, system abilities, system ability catalog,
-  hosted-agent ability specs, local invocation identity, owner projection,
-  resources, failure-code projection, keyring, publish/advertise, federation
+  hosted-agent ability specs, local invocation identity, resources,
+  failure-code projection, keyring, publish/advertise, federation
   helpers, Axon bridge, execution handles, ability wire metadata, and
   plugin-host runtime handles. `ability_wire` is allowed only as a metadata
   boundary: the transport reads the local bidi codec profile from

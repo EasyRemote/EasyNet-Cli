@@ -425,7 +425,7 @@ fn start_agent_handler(
         .map(|creds| crate::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
         .filter(|ura| !ura.is_empty())
     {
-        match crate::runtime::owner_projection::prepare_and_persist(
+        match crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
             &agent_ura,
             &host_device_ura,
             &owner_projection_descriptors,
@@ -676,7 +676,7 @@ fn stop_agent_handler(
             // Step 1: tombstone the agent's abilities (empty complete-set
             // → hub removes all prior projected abilities) + drop the
             // local cursor so the owner leaves the heartbeat batch.
-            match crate::runtime::owner_projection::prepare_removal_and_persist(
+            match crate::daemon::federation::read_model::owner_projection::prepare_removal_and_persist(
                 &agent_ura,
                 &host_device_ura,
             ) {

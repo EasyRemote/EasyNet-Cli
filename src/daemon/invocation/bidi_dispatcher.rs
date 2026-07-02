@@ -3079,7 +3079,8 @@ pub(crate) fn refresh_session_owner_projection_lease_at(
     if owner_ura.is_empty() {
         return false;
     }
-    let new_expiry = crate::runtime::owner_projection::lease_expiry_from_now(now_unix_ms);
+    let new_expiry =
+        crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(now_unix_ms);
     dispatcher
         .directory
         .ability_catalog

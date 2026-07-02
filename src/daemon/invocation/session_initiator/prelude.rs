@@ -602,7 +602,7 @@ async fn send_advertise_abilities_prelude(
     signing_seed: Option<SessionSigningSeed>,
     descriptors: &[AbilityDescriptor],
 ) -> Result<(), tonic::Status> {
-    let projection = crate::runtime::owner_projection::prepare_and_persist(
+    let projection = crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
         owner_ura,
         host_device_ura,
         descriptors,

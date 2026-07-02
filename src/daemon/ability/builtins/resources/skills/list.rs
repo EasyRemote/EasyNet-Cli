@@ -368,7 +368,7 @@ impl SkillListScope {
         let agent_ura = string_arg(object, "agent_ura");
         let subject = string_arg(object, "subject_ura")
             .map(|subject| {
-                crate::runtime::owner_projection::project_agent_skill_subject(&subject)
+                crate::daemon::federation::read_model::owner_projection::project_agent_skill_subject(&subject)
                     .map_err(|e| anyhow::anyhow!("skill.list: {e}"))
             })
             .transpose()?;
@@ -447,7 +447,9 @@ fn string_arg(object: &serde_json::Map<String, Value>, key: &str) -> Option<Stri
 
 fn merge_agent_scope(
     agent_ura: Option<String>,
-    subject: Option<&crate::runtime::owner_projection::AgentSkillSubjectProjection>,
+    subject: Option<
+        &crate::daemon::federation::read_model::owner_projection::AgentSkillSubjectProjection,
+    >,
 ) -> anyhow::Result<Option<String>> {
     match (agent_ura, subject) {
         (Some(agent_ura), Some(subject)) if agent_ura != subject.agent_ura => {
@@ -485,7 +487,9 @@ fn scoped_skill_resource_ura(
             .hosted_ura_for(agent_name)
             .map(str::to_string)
     })?;
-    crate::runtime::owner_projection::skill_resource_ura(&agent_ura, skill_name)
+    crate::daemon::federation::read_model::owner_projection::skill_resource_ura(
+        &agent_ura, skill_name,
+    )
 }
 
 /// JSON Schema for the input.

@@ -57,7 +57,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::runtime::owner_projection::skill_resource_ura;
+use crate::daemon::federation::read_model::owner_projection::skill_resource_ura;
 use crate::runtime::skill_store::{install_skill, remove_skill, upgrade_skill, InstallRecord};
 
 use crate::daemon::ability::dispatch::OwnerKind;

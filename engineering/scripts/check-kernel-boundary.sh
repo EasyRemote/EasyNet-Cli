@@ -114,10 +114,6 @@ fi
 #   * failure_codes       — typed failure classifier used when
 #                           projecting terminal daemon Invocation
 #                           status into receipts.
-#   * owner_projection    — read model for owner/ability projection,
-#                           lease expiry, and advertised callable
-#                           summaries used during session/presence
-#                           updates.
 #   * join_connection_state
 #                         — typed presence/join state snapshots
 #                           recorded by session initiation.
@@ -135,7 +131,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='domain|system|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
+    serve_allowed='domain|system|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

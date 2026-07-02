@@ -44,7 +44,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use serde_json::Value;
 
-use crate::runtime::owner_projection::AbilityProjectionSummary;
+use crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary;
 
 /// Latest accepted owner ability projection retained by the hub read model.
 ///
@@ -488,7 +488,7 @@ mod tests {
             policy_ref: "visibility:PUBLIC".to_string(),
             route_summary_ref: None,
             tags: vec!["class:unary".to_string()],
-            callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+            callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                 ability_id,
             ),
         }

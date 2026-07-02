@@ -126,7 +126,7 @@ fn publish_test_route_hosted_by(
             1,
             "sha256:test".to_string(),
             4_102_444_800_000,
-            vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+            vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
                 ability_ura: ability_ura.clone(),
                 owner_ura: owner_ura.to_string(),
                 namespace: namespace.to_string(),
@@ -137,7 +137,7 @@ fn publish_test_route_hosted_by(
                 policy_ref: "visibility:PUBLIC".to_string(),
                 route_summary_ref: Some(format!("route-ref::{ability_ura}")),
                 tags: vec!["class:unary".to_string()],
-                callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                     public_name.to_string(),
                 ),
             }],

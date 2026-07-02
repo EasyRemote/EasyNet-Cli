@@ -733,11 +733,15 @@ fn resolve_via_federation(
         }
         let owner = agent.ura.clone();
         for desc in agent.ability_summaries {
-            let Some(summary) = crate::runtime::owner_projection::summary_from_value(&desc) else {
+            let Some(summary) =
+                crate::daemon::federation::read_model::owner_projection::summary_from_value(&desc)
+            else {
                 continue;
             };
             let Some(bare_ability) =
-                crate::runtime::owner_projection::summary_public_name(&summary)
+                crate::daemon::federation::read_model::owner_projection::summary_public_name(
+                    &summary,
+                )
             else {
                 continue;
             };
@@ -1005,7 +1009,7 @@ impl Candidate {
 
 fn candidate_from_federated_summary(
     owner: &str,
-    summary: &crate::runtime::owner_projection::AbilityProjectionSummary,
+    summary: &crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary,
     public_name: String,
     scope: Scope,
 ) -> Option<Candidate> {
@@ -2052,8 +2056,8 @@ mod tests {
 
     fn federated_summary(
         ability_ura: &str,
-    ) -> crate::runtime::owner_projection::AbilityProjectionSummary {
-        crate::runtime::owner_projection::AbilityProjectionSummary {
+    ) -> crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
+        crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
             ability_ura: ability_ura.to_string(),
             owner_ura: "easynet:///r/acme/agent/alice.bot".to_string(),
             namespace: String::new(),
@@ -2064,7 +2068,7 @@ mod tests {
             policy_ref: "visibility:PUBLIC".to_string(),
             route_summary_ref: None,
             tags: Vec::new(),
-            callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+            callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                 "chat",
             ),
         }

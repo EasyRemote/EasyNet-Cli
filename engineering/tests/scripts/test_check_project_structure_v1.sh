@@ -81,6 +81,7 @@ make_sandbox() {
     printf '%s\n' '// ability catalog read model' > "$sandbox/src/daemon/federation/read_model/ability_catalog.rs"
     printf '%s\n' '// advertised agents read model' > "$sandbox/src/daemon/federation/read_model/advertised_agents.rs"
     printf '%s\n' '// hub published abilities read model' > "$sandbox/src/daemon/federation/read_model/hub_published_abilities.rs"
+    printf '%s\n' '// owner projection read model' > "$sandbox/src/daemon/federation/read_model/owner_projection.rs"
     printf '%s\n' '// daemon identity root' > "$sandbox/src/daemon/identity/mod.rs"
     printf '%s\n' '// daemon local invocation identity' > "$sandbox/src/daemon/identity/local_invocation.rs"
     printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
@@ -256,6 +257,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/local_runtime_invoker.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired owner projection read model' > "$SB/src/runtime/owner_projection.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/owner_projection.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/plugin_host"
 printf '%s\n' '// retired plugin host root' > "$SB/src/runtime/plugin_host/mod.rs"
 rc=0
@@ -419,6 +427,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::local_runtime_invoker import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::owner_projection::AbilityProjectionSummary; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::owner_projection import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::plugin_host::PluginRuntimeManager::new; }' > "$SB/src/lib.rs"
@@ -666,6 +681,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/gateway_api.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/read_model/owner_projection.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/read_model/owner_projection.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/federation/peers.rs"

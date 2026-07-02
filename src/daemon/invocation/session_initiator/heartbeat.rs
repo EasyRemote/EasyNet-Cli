@@ -126,7 +126,8 @@ async fn send_federation_heartbeat(
     hub_published_abilities: &HubPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     let mut refresh_owner_uras =
-        crate::runtime::owner_projection::heartbeat_refresh_owner_uras().unwrap_or_default();
+        crate::daemon::federation::read_model::owner_projection::heartbeat_refresh_owner_uras()
+            .unwrap_or_default();
     refresh_owner_uras.truncate(MAX_HEARTBEAT_LEASE_REFRESH_OWNERS);
     let body = serde_json::json!({
         "since_abilities_revision": hub_published_abilities.revision(),

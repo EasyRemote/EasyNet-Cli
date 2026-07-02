@@ -37,11 +37,11 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
+use crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary;
 use crate::runtime::federation_client::{
     args_to_bytes, parse_receipt_value, AdvertiseAgentArgs, AdvertiseAgentReceipt,
     AdvertisedSigningAuthority, ResolveArgs, ResolveFilter, ResolveReceipt, ResolvedAgent,
 };
-use crate::runtime::owner_projection::AbilityProjectionSummary;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -357,7 +357,7 @@ pub fn advertise_abilities<I: AbilityInvoker>(
     abilities: &[AbilityDescriptor],
 ) -> Result<Value, String> {
     let resource_ura = advertise_abilities_resource_ura(realm, tenant_id);
-    let projection = crate::runtime::owner_projection::prepare_and_persist(
+    let projection = crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
         agent_ura,
         host_device_ura,
         abilities,
@@ -373,7 +373,7 @@ pub fn advertise_abilities<I: AbilityInvoker>(
 /// `session.open` advertiser) cannot drift. ISS-002.
 pub(crate) fn advertise_abilities_payload(
     agent_ura: &str,
-    projection: &crate::runtime::owner_projection::OwnerProjectionPublication,
+    projection: &crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication,
 ) -> Result<Value, String> {
     let args = AdvertiseAbilitiesArgs {
         agent_ura,
@@ -502,7 +502,8 @@ pub fn heartbeat<I: AbilityInvoker>(
     // omit `hub_abilities_diff` from the receipt; the parse path
     // below treats absent diff as "no change".
     let since = store.revision();
-    let refresh_owner_uras = crate::runtime::owner_projection::heartbeat_refresh_owner_uras()?;
+    let refresh_owner_uras =
+        crate::daemon::federation::read_model::owner_projection::heartbeat_refresh_owner_uras()?;
     let payload = serde_json::json!({
         "since_abilities_revision": since,
         "refresh_owner_uras": refresh_owner_uras,

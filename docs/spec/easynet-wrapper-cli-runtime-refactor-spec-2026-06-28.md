@@ -1365,5 +1365,5 @@ Register user
 以下三处不是 review 引用，而是本重构必须修掉的具体缺陷，已逐一在代码中核实(2026-06-28):
 
 1. `src/services/invocation_transport/federation_invoke.rs:319` — `causal_context_bytes: Vec::new()`：`federation.forward_invoke` 外层跳没有透传 causal context,违反第 5 节不变量 1(七元组完整)。必须把 inbound invocation 的 causal context 接到 forward hop。
-2. `src/runtime/owner_projection.rs:74` — `AbilityProjectionSummary` 手写第 11 个字段 `callable_summary`,携带 proto(`namespace.proto`)不承认的 impl-private 数据。这是当前唯一真实的 Axon wire 手写镜像 fork;必须 reconcile 进 Axon descriptor projection contract,或证明它纯属 daemon-local 不跨边界。
+2. `src/daemon/federation/read_model/owner_projection.rs:74` — `AbilityProjectionSummary` 手写第 11 个字段 `callable_summary`,携带 proto(`namespace.proto`)不承认的 impl-private 数据。这是当前唯一真实的 Axon wire 手写镜像 fork;必须 reconcile 进 Axon descriptor projection contract,或证明它纯属 daemon-local 不跨边界。
 3. `backend/internal/axon/urns.go` 文档说 `UserURA` 参数是 `users.id`(UUID),但 `prepareEnvelopeLogic.go` 传 `username`(见第 6.1 节规则 4)。必须钉死 canonical subject 锚点并统一两条路径。

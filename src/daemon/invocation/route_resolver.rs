@@ -1783,7 +1783,7 @@ mod tests {
             1,
             "sha256:test".to_string(),
             LEASE_EXPIRES_MS,
-            vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+            vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
                 ability_ura: ability_ura.clone(),
                 owner_ura: owner_ura.to_string(),
                 namespace: namespace.to_string(),
@@ -1795,7 +1795,7 @@ mod tests {
                 route_summary_ref: include_route_summary
                     .then(|| format!("route-ref::{ability_ura}")),
                 tags: vec!["class:unary".to_string()],
-                callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                     public_name,
                 ),
             }],

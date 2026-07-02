@@ -378,7 +378,8 @@ pub(crate) struct AdvertiseAbilitiesRequest {
     pub projection_digest: String,
     pub lease_expires_unix_ms: i64,
     #[serde(default)]
-    pub ability_summaries: Vec<crate::runtime::owner_projection::AbilityProjectionSummary>,
+    pub ability_summaries:
+        Vec<crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary>,
 }
 
 /// Response payload for `federation.advertise_abilities`. Matches the
@@ -477,7 +478,10 @@ pub(crate) fn handle_heartbeat(
     // `advertise_abilities` before its first projection exists).
     let mut refreshed_owner_count = 0_usize;
     if let Some(catalog) = catalog {
-        let new_expiry = crate::runtime::owner_projection::lease_expiry_from_now(now_unix_ms);
+        let new_expiry =
+            crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(
+                now_unix_ms,
+            );
         for owner_ura in &request.refresh_owner_uras {
             let owner_ura = owner_ura.trim();
             if !owner_ura.is_empty() && catalog.refresh_lease(owner_ura, new_expiry) {
@@ -683,8 +687,13 @@ fn resolved_owner_projection_values(
     let mut by_public_name = std::collections::BTreeMap::<String, serde_json::Value>::new();
     let mut order = Vec::new();
     let mut push = |summary: serde_json::Value| {
-        let Some(key) = crate::runtime::owner_projection::summary_from_value(&summary)
-            .and_then(|parsed| crate::runtime::owner_projection::summary_public_name(&parsed))
+        let Some(key) =
+            crate::daemon::federation::read_model::owner_projection::summary_from_value(&summary)
+                .and_then(|parsed| {
+                    crate::daemon::federation::read_model::owner_projection::summary_public_name(
+                        &parsed,
+                    )
+                })
         else {
             return;
         };
@@ -722,7 +731,10 @@ fn device_owner_projection_values(owner_ura: &str) -> Vec<serde_json::Value> {
     crate::daemon::ability::catalog::profiles::device::descriptors_for(owner_ura)
         .iter()
         .filter_map(|descriptor| {
-            crate::runtime::owner_projection::summary_from_descriptor(descriptor).ok()
+            crate::daemon::federation::read_model::owner_projection::summary_from_descriptor(
+                descriptor,
+            )
+            .ok()
         })
         .filter_map(|summary| serde_json::to_value(summary).ok())
         .collect()
@@ -1137,8 +1149,8 @@ mod tests {
         ability_ura: &str,
         namespace: &str,
         local_name: &str,
-    ) -> crate::runtime::owner_projection::AbilityProjectionSummary {
-        crate::runtime::owner_projection::AbilityProjectionSummary {
+    ) -> crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
+        crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
             ability_ura: ability_ura.to_string(),
             owner_ura: owner_ura.to_string(),
             namespace: namespace.to_string(),
@@ -1149,7 +1161,7 @@ mod tests {
             policy_ref: "visibility:SCOPED".to_string(),
             route_summary_ref: Some(format!("route-ref::{ability_ura}")),
             tags: vec!["class:unary".to_string()],
-            callable_summary: crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+            callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                 if namespace.is_empty() {
                     local_name.to_string()
                 } else {
@@ -1161,7 +1173,9 @@ mod tests {
 
     fn projection_row_for(
         owner_ura: &str,
-        summaries: Vec<crate::runtime::owner_projection::AbilityProjectionSummary>,
+        summaries: Vec<
+            crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary,
+        >,
     ) -> crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow {
         crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
@@ -1434,7 +1448,9 @@ mod tests {
         let ability_ura =
             crate::ura::owner_ability_ura(owner_ura, "terminal.list").expect("ability ura");
         let publish_at = 1_000_i64;
-        let lease = crate::runtime::owner_projection::lease_expiry_from_now(publish_at);
+        let lease = crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(
+            publish_at,
+        );
         catalog.upsert_projection(
             crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
                 owner_ura.to_string(),
@@ -1442,7 +1458,7 @@ mod tests {
                 1,
                 "sha256:digest".to_string(),
                 lease,
-                vec![crate::runtime::owner_projection::AbilityProjectionSummary {
+                vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
                     ability_ura: ability_ura.clone(),
                     owner_ura: owner_ura.to_string(),
                     namespace: "terminal".to_string(),
@@ -1454,7 +1470,7 @@ mod tests {
                     route_summary_ref: Some(format!("route-ref::{ability_ura}")),
                     tags: Vec::new(),
                     callable_summary:
-                        crate::runtime::owner_projection::AbilityCallableSummary::minimal(
+                        crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
                             "terminal.list",
                         ),
                 }],

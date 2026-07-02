@@ -421,7 +421,8 @@ fn is_device_profile_agent(agent: &ResolvedAgent) -> bool {
 }
 
 fn device_profile_public_ability_name(owner_ura: &str, summary: &Value) -> Option<String> {
-    let summary = crate::runtime::owner_projection::summary_from_value(summary)?;
+    let summary =
+        crate::daemon::federation::read_model::owner_projection::summary_from_value(summary)?;
     let ability_ura = summary.ability_ura.trim();
     if ability_ura.is_empty() {
         return None;
