@@ -650,7 +650,7 @@ impl HotAgentRegistrar {
                 Self::runtime_has_mode(
                     ctx.runtime,
                     &runtime_key,
-                    crate::runtime::ability::CallMode::Rpc,
+                    crate::daemon::ability::CallMode::Rpc,
                 )
                 .await
             }
@@ -690,7 +690,7 @@ impl HotAgentRegistrar {
                 Self::runtime_has_mode(
                     ctx.runtime,
                     &runtime_key,
-                    crate::runtime::ability::CallMode::Stream,
+                    crate::daemon::ability::CallMode::Stream,
                 )
                 .await
             }
@@ -730,7 +730,7 @@ impl HotAgentRegistrar {
                 Self::runtime_has_mode(
                     ctx.runtime,
                     &runtime_key,
-                    crate::runtime::ability::CallMode::Stream,
+                    crate::daemon::ability::CallMode::Stream,
                 )
                 .await
             }
@@ -778,15 +778,15 @@ impl HotAgentRegistrar {
     async fn runtime_has_mode(
         runtime: &Arc<LocalRuntime>,
         runtime_key: &str,
-        call_mode: crate::runtime::ability::CallMode,
+        call_mode: crate::daemon::ability::CallMode,
     ) -> bool {
         let Some(descriptor) = runtime.ability_descriptor(runtime_key).await else {
             return false;
         };
         match call_mode {
-            crate::runtime::ability::CallMode::Rpc => descriptor.options.modes.rpc,
-            crate::runtime::ability::CallMode::Stream => descriptor.options.modes.stream,
-            crate::runtime::ability::CallMode::Bidi => descriptor.options.modes.bidi,
+            crate::daemon::ability::CallMode::Rpc => descriptor.options.modes.rpc,
+            crate::daemon::ability::CallMode::Stream => descriptor.options.modes.stream,
+            crate::daemon::ability::CallMode::Bidi => descriptor.options.modes.bidi,
         }
     }
 

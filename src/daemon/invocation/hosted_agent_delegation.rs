@@ -30,7 +30,7 @@ use easynet_axon::pb::axon::v1::Envelope;
 use ed25519_dalek::Signer as _;
 use tonic::Status;
 
-use crate::runtime::ability::{
+use crate::daemon::ability::{
     HostedAgentDelegationEnvelopeBinding, HostedAgentDelegationRequest,
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
@@ -148,8 +148,8 @@ impl HostedAgentDelegationIssuer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::ability::HostedAgentDelegationContext;
     use crate::daemon::invocation::ProtoEnvelope;
-    use crate::runtime::ability::HostedAgentDelegationContext;
 
     fn loopback_envelope() -> Envelope {
         let mut envelope = ProtoEnvelope::targeted(

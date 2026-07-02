@@ -23,7 +23,7 @@ runtime semantics, these sources are higher priority:
 2. `docs/spec/daemon-sdk-requirements-v1.md` for daemon SDK object model,
    directory/listing complexity, facade rules, and aggregate fan-out state
    machines.
-3. `src/runtime/ability/mod.rs`, `src/runtime/ability_dispatch.rs`,
+3. `src/daemon/ability/mod.rs`, `src/runtime/ability_dispatch.rs`,
    `src/daemon/ability/wire/mod.rs`, and `src/daemon/axon_bridge/` for the current
    daemon-side split among AbilityDescriptor, AuthorityBinding, AbilityImpl,
    dispatch compatibility, wire-profile lookup, and Axon glue.
@@ -49,7 +49,7 @@ The old draft made `src/runtime/abilities/` and `src/runtime/ability_runtime/`
 look like semantic owners. That is wrong for the current codebase. The semantic
 owners already exist:
 
-- `runtime/ability/` owns the daemon-local control-plane model:
+- `daemon/ability/` owns the daemon-local control-plane model:
   AbilityDescriptor, AuthorityBinding, AbilityImpl, and their registries.
 - `runtime/ability_dispatch.rs` is a compatibility facade over the catalog and
   handler registration path, not a new protocol layer.
@@ -81,7 +81,7 @@ production code must import `runtime/agent_ability_specs.rs` directly.
 ### 3. Registry, Catalog, Descriptor, And Handler Ownership Were Collapsed
 
 The previous draft used `ability_registry` for catalog construction while the
-current code already has `runtime/ability/registry.rs` for control-plane
+current code already has `daemon/ability/control_plane.rs` for control-plane
 registration. Reusing the word `registry` for both would make call sites harder
 to audit.
 
@@ -126,7 +126,7 @@ they do not loop over targets and invoke governed abilities directly.
 ### 7. Migration Was Not Grounded In The Current Checkout
 
 The old draft listed moves from `runtime/agents/`, but did not acknowledge the
-current adjacent modules such as `runtime/ability/`, `ability_dispatch.rs`,
+current adjacent modules such as `daemon/ability/`, `ability_dispatch.rs`,
 `ability_wire.rs`, `runtime/agent_ability_specs.rs`, daemon semantic
 directories, and plugin packages.
 
@@ -170,7 +170,7 @@ stable cross-module core contract.
    Invocation, Receipt, URA, descriptor version, or Axon admission semantics.
 4. Axon owns canonical Invocation/Receipt wire semantics. EasyNet-Cli owns
    daemon product/device policy and local execution.
-5. `runtime/ability/` remains the owner of daemon-local AbilityDescriptor,
+5. `daemon/ability/` remains the owner of daemon-local AbilityDescriptor,
    AuthorityBinding, and AbilityImpl registration.
 6. `daemon/ability/builtins/` owns daemon-owned ability handlers only.
 7. `runtime/agents/` was the temporary compatibility facade during migration;
@@ -196,7 +196,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | Layer | Owns | Must not own |
 | --- | --- | --- |
 | `core/` | zero-dependency domain/value types | filesystem walking, daemon policy, transport |
-| `runtime/ability/` | AbilityDescriptor, AuthorityBinding, AbilityImpl, control-plane registration | product handler bodies, plugin process management |
+| `daemon/ability/{descriptors,authority,impl_bindings,control_plane}` | AbilityDescriptor, AuthorityBinding, AbilityImpl, control-plane registration | product handler bodies, plugin process management |
 | `runtime/ability_dispatch.rs` | compatibility catalog facade and handler registration bridge | new protocol semantics, product policy branching |
 | `daemon/ability/wire/mod.rs` | local ability-to-wire-profile projection | plugin package loading, transport sessions |
 | `daemon/ability/catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
@@ -207,7 +207,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `daemon/plugins/` | plugin manifest parsing, install/activation, sidecar protocol, daemon contribution registration | core Ability ontology |
 | `daemon/axon_bridge/` | Axon SDK glue and wire/type adapters | EasyNet product policy, plugin lifecycle decisions |
 | `daemon/federation/read_model/` | federation resolver/catalog read models such as advertised agents, owner ability projections, and hub-published abilities | Axon protocol authority, transport dialing, product handler bodies |
-| `daemon/ability/` | daemon-owned ability support services such as manifest ability health monitoring | AbilityDescriptor ontology, handler implementation bodies, plugin process ownership |
+| `daemon/ability/health.rs` | daemon-owned ability support services such as manifest ability health monitoring | handler implementation bodies, plugin process ownership |
 | `daemon/ability/names/` | stable public Ability wire-name constants and stable public metadata keys | private reason strings, test fixtures, env vars |
 | `daemon/context/` | daemon-owned background loops for the local Context surface | context persistence format, product ability handler bodies |
 | `daemon/` | Rust daemon SDK facade, local boot/status IPC under `daemon/control`, daemon-owned Invocation transport under `daemon/invocation`, and daemon semantic state directories | Axon protocol semantics, one method per ability, generic service catch-all ownership |
@@ -488,6 +488,11 @@ src/runtime/
 ```text
 src/daemon/
 ├─ ability/
+│  ├─ authority/
+│  ├─ descriptors/
+│  ├─ impl_bindings/
+│  ├─ control_plane.rs
+│  ├─ control_plane_error.rs
 │  ├─ catalog/
 │  │  ├─ mod.rs
 │  │  ├─ build.rs
@@ -504,6 +509,8 @@ src/daemon/
 │  │  ├─ integrations/
 │  │  └─ governance/
 │  ├─ health.rs
+│  ├─ conformance.rs
+│  ├─ wire/
 │  └─ names/
 └─ axon_bridge/
 ```
@@ -511,7 +518,7 @@ src/daemon/
 Notes:
 
 - `runtime/ability_runtime/` must not be introduced. It duplicates the existing
-  `runtime/ability/`, `ability_dispatch.rs`, `ability_wire.rs`, and
+  `daemon/ability/`, `ability_dispatch.rs`, `ability_wire.rs`, and
   `daemon/axon_bridge/` ownership split.
 - `daemon/ability/builtins/` is used instead of `runtime/abilities/` to avoid
   reintroducing the retired agent-ability-specs module name and to state that

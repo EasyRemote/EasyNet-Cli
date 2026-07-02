@@ -196,7 +196,7 @@ mod tests {
         OriginCallerClaim {
             caller_ura: "easynet:///r/localhost/user/dev".into(),
             ability: ability.into(),
-            descriptor_version: crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.into(),
+            descriptor_version: crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.into(),
             signature_b64: b64(&[9u8; 64]),
             signer_pubkey_b64: b64(&[8u8; 32]),
             nonce_b64: b64(&[7u8; 16]),
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(oc.ability, "typed.name");
         assert_eq!(
             oc.descriptor_version,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
         assert_eq!(oc.signature.len(), 64);
         assert_eq!(oc.signer_pubkey.len(), 32);
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(oc.ability, "typed.name");
         assert_eq!(
             oc.descriptor_version,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
     }
 
@@ -317,7 +317,7 @@ mod tests {
                 "remote_desktop.create_session"
             )
             .expect("ability URA"),
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
         assert_eq!(wire.envelope.envelope().ability, expected_ability);
         let WireDispatchIngress::ExternalSigned(signature) = &wire.ingress else {

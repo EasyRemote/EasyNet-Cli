@@ -1,7 +1,7 @@
 // EasyNet CLI - Ability control-plane errors
 // ==========================================
 //
-// File: src/runtime/ability/error.rs
+// File: src/daemon/ability/error.rs
 // Description: Typed boundary errors for daemon-local ability descriptor,
 //              authority, and implementation facts.
 

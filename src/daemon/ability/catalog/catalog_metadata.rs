@@ -50,7 +50,7 @@ use crate::daemon::ability::names::{
     federation as federation_names, governance as governance_names,
     integrations as integration_names, resources as resource_names,
 };
-use crate::runtime::ability::CallMode as DescriptorCallMode;
+use crate::daemon::ability::CallMode as DescriptorCallMode;
 use crate::runtime::ability_descriptor::AbilityHints;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 

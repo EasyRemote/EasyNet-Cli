@@ -9,7 +9,7 @@ fn test_rpc_options() -> easynet_axon::invocation::AbilityOptions {
     AbilityOptions::default()
         .with_modes(AbilityCallModes::RPC)
         .with_descriptor_proof(
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
             [0x11; 32],
             [0x22; 32],
         )
@@ -19,7 +19,7 @@ fn test_stream_options() -> easynet_axon::invocation::AbilityOptions {
     use easynet_axon::invocation::{AbilityOptions, CallMode};
     AbilityOptions::streaming().with_mode_descriptor_proof(
         CallMode::Stream,
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
         [0x11; 32],
         [0x22; 32],
     )
@@ -274,7 +274,7 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     let claim = crate::daemon::invocation::origin_caller::OriginCallerClaim {
         caller_ura: "easynet:///r/test-realm/device/first-contact".into(),
         ability: "chat".into(),
-        descriptor_version: crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.into(),
+        descriptor_version: crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.into(),
         signature_b64: B64.encode([0_u8; 64]),
         signer_pubkey_b64: B64.encode([0_u8; 32]),
         nonce_b64: B64.encode([0_u8; 16]),
@@ -495,7 +495,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         records[0].ability_name,
         format!(
             "{runtime_ability}@{}",
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         )
     );
     assert_eq!(records[0].state, "completed");
@@ -638,7 +638,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
         records[0].ability_name,
         format!(
             "{runtime_ability}@{}",
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         )
     );
     assert_eq!(

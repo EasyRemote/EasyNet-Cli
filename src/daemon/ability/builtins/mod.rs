@@ -1,7 +1,7 @@
 //! Daemon-owned built-in ability handlers grouped by product module.
 //!
 //! Product grouping here is source organization only. The control-plane model
-//! remains in `runtime::ability`, descriptor/catalog projection remains in
+//! remains in `daemon::ability`, descriptor/catalog projection remains in
 //! `daemon::ability::catalog`, and Axon glue remains in
 //! `daemon::axon_bridge`.
 

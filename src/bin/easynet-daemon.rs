@@ -35,6 +35,11 @@ use easynet_cli::daemon::ability::builtins::agents::{
     discover as discover_ability, lifecycle as agent_lifecycle_ability,
 };
 use easynet_cli::daemon::ability::catalog as ability_catalog;
+use easynet_cli::daemon::ability::conformance::{
+    BaselineConformanceReport, DeviceBaseline, HubBaseline, RegistryConformance,
+};
+#[cfg(feature = "axon-pb")]
+use easynet_cli::daemon::ability::conformance::{DaemonInvocationSurface, RuntimeAdminConformance};
 use easynet_cli::daemon::ability::health as ability_health;
 use easynet_cli::daemon::context::clipboard_tracker;
 use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
@@ -47,13 +52,6 @@ use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPub
 use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
-};
-use easynet_cli::runtime::ability::conformance::{
-    BaselineConformanceReport, DeviceBaseline, HubBaseline, RegistryConformance,
-};
-#[cfg(feature = "axon-pb")]
-use easynet_cli::runtime::ability::conformance::{
-    DaemonInvocationSurface, RuntimeAdminConformance,
 };
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};

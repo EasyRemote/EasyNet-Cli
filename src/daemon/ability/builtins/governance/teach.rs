@@ -30,6 +30,7 @@ use sha2::{Digest, Sha256};
 
 use crate::core::ability_spec::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell;
+use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentRuntimeSyncOutcome,
 };
@@ -40,7 +41,6 @@ use crate::persistence::teach_grants::{
     TeachGrantAdmissionSnapshotDraft, TeachGrantAuthoritySnapshot, TeachGrantDraft,
     TeachGrantStore, EXECUTION_MODE_DEFAULT,
 };
-use crate::runtime::ability::HostedAgentAuthority;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::support::errors::append_cleanup_error;
 use crate::ura::AbilitySelector;
@@ -1732,7 +1732,7 @@ mod tests {
         let env = teach_env(caller, owner_ura);
         let signer = ed25519_dalek::SigningKey::from_bytes(&[0x44; 32]);
         let nonce_hex = hex::encode(env.invocation_nonce());
-        let envelope = crate::runtime::ability::HostedAgentDelegationEnvelopeBinding::new(
+        let envelope = crate::daemon::ability::HostedAgentDelegationEnvelopeBinding::new(
             env.caller(),
             env.callee(),
             env.subject(),
@@ -1740,7 +1740,7 @@ mod tests {
             TEACH,
         )
         .expect("test hosted-agent delegation envelope");
-        let claims = crate::runtime::ability::HostedAgentDelegationClaims::new(
+        let claims = crate::daemon::ability::HostedAgentDelegationClaims::new(
             hosted_agent_ura,
             "host_device",
             envelope.clone(),
@@ -1751,7 +1751,7 @@ mod tests {
             .signed_metadata_value(env.caller(), &signature)
             .expect("test hosted-agent delegation token");
         let delegation =
-            crate::runtime::ability::HostedAgentDelegationContext::from_signed_metadata(
+            crate::daemon::ability::HostedAgentDelegationContext::from_signed_metadata(
                 &raw,
                 &envelope,
                 signer.verifying_key(),

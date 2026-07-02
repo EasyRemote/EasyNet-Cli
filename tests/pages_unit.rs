@@ -483,7 +483,7 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     assert_eq!(ability, "pages.list");
     assert!(reg.has_rpc(&ability));
     let facts = reg
-        .runtime_binding_facts_for_mode(&ability, easynet_cli::runtime::ability::CallMode::Rpc)
+        .runtime_binding_facts_for_mode(&ability, easynet_cli::daemon::ability::CallMode::Rpc)
         .expect("runtime facts lookup")
         .expect("pages.list runtime facts");
     assert_eq!(facts.authority_owner_projection, "agent:pages");

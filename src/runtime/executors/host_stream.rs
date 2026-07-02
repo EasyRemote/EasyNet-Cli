@@ -39,7 +39,7 @@ use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 
 use crate::core::ability_spec::HostStreamExec;
-use crate::runtime::ability::canonical_json_bytes;
+use crate::daemon::ability::canonical_json_bytes;
 use crate::runtime::ability_dispatch::StreamSource;
 
 /// Broadcast depth. Frames are small JSON values; a generous buffer

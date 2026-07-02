@@ -40,7 +40,7 @@ use crate::daemon::ability::builtins::agents::chat::build_host_stream_handler;
 use crate::daemon::ability::builtins::device_control::ability_management::store::{
     manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
 };
-use crate::runtime::ability::{
+use crate::daemon::ability::{
     AbilityControlPlaneRecord, AbilityDescriptorKey, AbilityImplSource, AuthorityScope,
     CallMode as DescriptorCallMode, RuntimeEnv,
 };

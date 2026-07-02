@@ -276,20 +276,20 @@ URA（EasyNet 资源地址）是身份主干。语法规范**只定义一次**�
 
 ### 3.2 CLI 能力控制面 —— 三注册表模型
 
-CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三张表。落在 `src/runtime/ability/`。
+CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三张表。落在 `src/daemon/ability/`。
 
 #### 3.2.1 三张表 + 统一键
 
 | 类型 | 种类 | 角色 | 文件:行 |
 |---|---|---|---|
-| `AbilityDescriptorRecord` | struct | 第一表：版本化受治理接口契约（name / version / call_mode / schema_hash / descriptor_hash） | `src/runtime/ability/descriptor.rs:278-402` |
+| `AbilityDescriptorRecord` | struct | 第一表：版本化受治理接口契约（name / version / call_mode / schema_hash / descriptor_hash） | `src/daemon/ability/descriptor.rs:278-402` |
 | `AbilityDescriptorRegistry` | struct | 第一表存储；`BTreeMap` 确定性迭代 | `descriptor.rs:436-501` |
-| `AuthorityBindingRecord` | struct | 第二表：治理谓词（governs_advertise / governs_invoke）+ policy binding + scope | `src/runtime/ability/authority.rs:484-582` |
+| `AuthorityBindingRecord` | struct | 第二表：治理谓词（governs_advertise / governs_invoke）+ policy binding + scope | `src/daemon/ability/authority.rs:484-582` |
 | `AuthorityBindingRegistry` | struct | 第二表存储 | `authority.rs:597-619` |
-| `AbilityImplBinding` | struct | 第三表：可执行事实（runtime_env / impl_source / impl_hash / content_hash） | `src/runtime/ability/impl_binding.rs:98-219` |
+| `AbilityImplBinding` | struct | 第三表：可执行事实（runtime_env / impl_source / impl_hash / content_hash） | `src/daemon/ability/impl_binding.rs:98-219` |
 | `AbilityImplRegistry` | struct | 第三表存储 | `impl_binding.rs:221-243` |
 | `AbilityControlPlaneKey` | struct（**复合 newtype**） | (authority_root, ability, descriptor_version, call_mode) —— **统一三表的唯一规范键** | `descriptor.rs:130-217` |
-| `AbilityControlPlaneRecord` | struct | (descriptor, authority, impl) 三元原子，dispatch 层作为整体读 | `src/runtime/ability/registry.rs:17-83` |
+| `AbilityControlPlaneRecord` | struct | (descriptor, authority, impl) 三元原子，dispatch 层作为整体读 | `src/daemon/ability/registry.rs:17-83` |
 | `AbilityControlPlaneRegistry` | struct | 聚合 facade，持三表；注册经物化状态机写入，查询统一三行 | `registry.rs:85-629` |
 
 **不变量（已验证磁盘）：** 每个键要么在三表全在，要么全不在（`assert_record_keys_match` 强制）。这是三注册表模型的灵魂。
@@ -305,7 +305,7 @@ CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三�
 | `RuntimeEnv` | struct：执行环境不透明标签（如 `easynet-cli/0.23.1;rust-native`），绑入 impl_hash | `impl_binding.rs:19-68` |
 | `AbilityImplSource` | enum：NativeDaemon / BuiltinPlugin / SidecarPlugin / DeclarativePlugin / DeviceDeploy / Eal / Mcp / Test | `impl_binding.rs:70-96` |
 | `OwnerKind` | enum：Device / Hub / Agent(id) / User(id)；**RFC-001 结构性根治**（M0 前 owner 从名字前缀推断，M0 起注册时声明） | `src/runtime/ability_dispatch.rs:974`（已验证磁盘） |
-| `AbilityControlPlaneError` | enum（45+ 变体），所有公共构造器无 panic，边界一律返回 Result | `src/runtime/ability/error.rs:8-100` |
+| `AbilityControlPlaneError` | enum（45+ 变体），所有公共构造器无 panic，边界一律返回 Result | `src/daemon/ability/error.rs:8-100` |
 
 #### 3.2.3 三阶段提交 typestate（已验证磁盘 `registry.rs:138`）
 

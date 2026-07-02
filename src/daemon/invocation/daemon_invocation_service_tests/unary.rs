@@ -75,7 +75,7 @@ fn quota_for_forward_invoke_meters_inner_user_ability_only() {
 
 #[test]
 fn hub_daemon_invocation_surface_satisfies_baseline_contract() {
-    use crate::runtime::ability::conformance::{DaemonInvocationSurface, HubBaseline};
+    use crate::daemon::ability::conformance::{DaemonInvocationSurface, HubBaseline};
 
     let report = DaemonInvocationSurface::from_daemon_surface()
         .check("hub", HubBaseline::required_abilities());
@@ -2027,7 +2027,7 @@ async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
         AbilityOptions::default()
             .with_modes(AbilityCallModes::RPC)
             .with_descriptor_proof(
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
                 [0x11; 32],
                 [0x22; 32],
             ),

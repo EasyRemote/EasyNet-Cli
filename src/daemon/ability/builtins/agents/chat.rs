@@ -2400,7 +2400,7 @@ mod tests {
         let chat_options = easynet_axon::invocation::AbilityOptions::default()
             .with_modes(easynet_axon::invocation::AbilityCallModes::RPC)
             .with_descriptor_proof(
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
                 [0x11; 32],
                 [0x22; 32],
             );
@@ -2448,7 +2448,7 @@ mod tests {
         };
         let (envelope, _) = inv
             .axon_descriptor_bound_envelope(
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
             )
             .expect("descriptor-bound envelope");
         let signature = sign_descriptor_bound_invocation(&signing_key, &envelope, "test-key");

@@ -237,7 +237,7 @@ fn invoke(
         "{}@{}",
         easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
             .expect("fixture ability URA"),
-        easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
     Request::new(
         ProtoEnvelope::targeted(DEVICE_URI, callee_ura, callee_ura)

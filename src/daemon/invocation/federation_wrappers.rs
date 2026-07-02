@@ -5,7 +5,7 @@
 // Description: Small daemon-owned handlers for the Hub/Federation
 //              baseline ability family served over Axon
 //              `Invocation::{Invoke,InvokeStream}`. Ability names
-//              come from `runtime::ability::conformance`; this module owns
+//              come from `daemon::ability::conformance`; this module owns
 //              transport request/response decoding only.
 //
 // What this module is
@@ -48,11 +48,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::daemon::ability::conformance;
 use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
 use crate::daemon::invocation::state::presence::PresenceRegistry;
-use crate::runtime::ability::conformance;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1 as axon_pb;
 pub use easynet_axon::{

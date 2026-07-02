@@ -6,11 +6,11 @@
 
 use std::collections::BTreeSet;
 
+use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::manifest::{
     PluginCallMode, PluginKind, PluginRealtimeCapability, PluginRuntimeLimits,
 };
-use crate::runtime::ability::{AbilityImplSource, RuntimeEnv};
 use crate::runtime::ability_dispatch::{
     AxonAbilityCatalog, ControlPlaneImplementation, LocalBidiHandlerWithEnvelope,
     LocalRpcHandlerWithEnvelope, LocalStreamHandlerWithEnvelope, OwnerKind,

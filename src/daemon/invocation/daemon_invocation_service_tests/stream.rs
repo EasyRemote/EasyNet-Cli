@@ -260,7 +260,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
         }),
         AbilityOptions::streaming().with_mode_descriptor_proof(
             CallMode::Stream,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
             [0x11; 32],
             [0x22; 32],
         ),
@@ -370,7 +370,7 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
         AbilityOptions::streaming().with_mode_descriptor_proof(
             CallMode::Stream,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
             [0x11; 32],
             [0x22; 32],
         ),

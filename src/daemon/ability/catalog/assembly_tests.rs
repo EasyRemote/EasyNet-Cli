@@ -538,8 +538,8 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
 fn build_registry_satisfies_device_baseline_contract() {
     let _home = crate::cli::test_support::HomeGuard::new();
     let reg = build_registry();
-    let device = crate::runtime::ability::conformance::DeviceBaseline::required_abilities();
-    let report = crate::runtime::ability::conformance::RegistryConformance::new(&reg)
+    let device = crate::daemon::ability::conformance::DeviceBaseline::required_abilities();
+    let report = crate::daemon::ability::conformance::RegistryConformance::new(&reg)
         .check("device", &device);
 
     assert!(

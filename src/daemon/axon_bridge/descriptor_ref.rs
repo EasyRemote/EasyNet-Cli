@@ -255,13 +255,13 @@ mod tests {
         let ability_ura = crate::ura::owner_ability_ura(&other, "fs.read").unwrap();
         let ability_ref = format!(
             "{ability_ura}@{}",
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
 
         let err = ability_descriptor_ref_for_wire(
             &callee,
             &ability_ref,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
         )
         .unwrap_err();
 
@@ -274,13 +274,13 @@ mod tests {
         let ability_ura = crate::ura::owner_ability_ura(&callee, "fs.read").unwrap();
         let ability_ref = format!(
             "{ability_ura}@{}",
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
 
         let normalized = ability_descriptor_ref_for_wire(
             &callee,
             &ability_ref,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
         )
         .unwrap();
 
@@ -314,7 +314,7 @@ mod tests {
         let built = ability_descriptor_ref_for_wire(
             &callee,
             "fs.read",
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
         )
         .expect("builder accepts a bare ability name plus an explicit version");
 
@@ -323,7 +323,7 @@ mod tests {
             built,
             format!(
                 "{expected_ura}@{}",
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
             )
         );
         // The built ref carries EXACTLY one `@`, which is what the hub ingress

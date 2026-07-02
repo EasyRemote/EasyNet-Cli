@@ -76,13 +76,13 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
     InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
 use easynet_cli::daemon::federation::peers::SharedFederatedPeers;
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::state::presence::PresenceRegistry;
 use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
-use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
 const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";

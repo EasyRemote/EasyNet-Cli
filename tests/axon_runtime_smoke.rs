@@ -27,7 +27,7 @@ use easynet_axon::invocation::{
     DescriptorBoundInvocationRequest, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
     SubjectIdentity, UraProfile,
 };
-use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 const REALM: &str = "cli-smoke";

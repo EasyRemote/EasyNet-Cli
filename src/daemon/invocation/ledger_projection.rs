@@ -20,6 +20,7 @@ use easynet_axon::pb::axon::v1::{causal_context, Envelope, InvokeRequest, Invoke
 
 use std::collections::BTreeMap;
 
+use crate::daemon::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 use crate::daemon::invocation::bidi_dispatcher::terminal_failure_message;
 use crate::daemon::invocation::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
@@ -32,7 +33,6 @@ use crate::daemon::invocation::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::target_gate::RESOLVE_SELECTED_HOST_UNAVAILABLE_CODE;
-use crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 
 pub(crate) fn build_unary_ledger_record(
     request: &InvokeRequest,

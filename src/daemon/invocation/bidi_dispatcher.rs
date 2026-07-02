@@ -88,7 +88,7 @@ use crate::daemon::trust::anchor::RealmTrustAnchor;
 /// Named runtime-admin abilities the `InvokeBidi` dispatcher routes by
 /// exact name (as opposed to the generic `is_bidi_wire_ability` remote
 /// bridge fall-through). This is the single source of truth consumed by
-/// `runtime::ability::conformance::RuntimeAdminConformance`; the `match`
+/// `daemon::ability::conformance::RuntimeAdminConformance`; the `match`
 /// arms in `dispatch` reference the same constants, so a baseline row can
 /// never claim an `AxonRuntimeAdmin` ability the dispatcher does not
 /// actually install (SPEC §7.1 notes 6/7, §7.3 item 7, §9.1 item 13).
@@ -3372,7 +3372,7 @@ mod tests {
         let ability_ura = crate::ura::owner_ability_ura(&owner_ura, ability).unwrap();
         let descriptor_ref = format!(
             "{ability_ura}@{}",
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
 
         assert!(local_is_bidi_wire_ability(&registry, &descriptor_ref));

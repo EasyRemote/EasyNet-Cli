@@ -1,7 +1,7 @@
 // EasyNet CLI - AuthorityBinding registry facts
 // =============================================
 //
-// File: src/runtime/ability/authority.rs
+// File: src/daemon/ability/authority/mod.rs
 // Description: Daemon-local governance predicates for ability advertisement
 //              and invocation. Axon owns the proof envelope; EasyNet-Cli owns
 //              the local policy source and binding decision.
@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::descriptor::{
+use super::descriptors::{
     canonical_json_bytes, is_valid_ability_name, is_valid_descriptor_version, sha256_bytes,
     AbilityControlPlaneKey, CallMode,
 };

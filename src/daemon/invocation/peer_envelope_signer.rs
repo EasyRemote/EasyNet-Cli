@@ -302,7 +302,7 @@ fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Resul
     crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         callee_ura,
         ability,
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
     )
     .map_err(|err| {
         Status::internal(format!(

@@ -462,7 +462,7 @@ impl AbilityDescriptorWire {
         } else {
             self.version.trim().to_string()
         };
-        crate::runtime::ability::descriptor::AbilityDescriptorVersion::new(version.clone())
+        crate::daemon::ability::descriptors::AbilityDescriptorVersion::new(version.clone())
             .map_err(|err| format!("invalid descriptor version {version:?}: {err}"))?;
 
         // Wire `class`, when present, becomes the explicit override.
@@ -519,7 +519,7 @@ impl AbilityDescriptorWire {
 }
 
 fn default_descriptor_version() -> String {
-    crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string()
+    crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string()
 }
 
 /// Construction error. Shape mirrors `AgentAbilitySpec::new`: a
@@ -615,7 +615,7 @@ impl AbilityDescriptor {
     pub fn with_version(mut self, version: impl Into<String>) -> Result<Self, DescriptorError> {
         let version = version.into();
         let version = version.trim().to_string();
-        if !crate::runtime::ability::descriptor::is_valid_descriptor_version(&version) {
+        if !crate::daemon::ability::descriptors::is_valid_descriptor_version(&version) {
             return Err(DescriptorError::InvalidVersion { version });
         }
         self.version = version;
@@ -686,17 +686,17 @@ impl AbilityDescriptor {
 
     pub fn schema_hash_bytes(&self) -> [u8; 32] {
         let governed = self.governed_schema_summary();
-        crate::runtime::ability::descriptor::schema_hash_for_governed_summary(&governed).0
+        crate::daemon::ability::descriptors::schema_hash_for_governed_summary(&governed).0
     }
 
     fn governed_schema_summary(&self) -> Value {
-        let access_policy = crate::runtime::ability::descriptor::governed_access_policy_summary(
+        let access_policy = crate::daemon::ability::descriptors::governed_access_policy_summary(
             serde_json::to_value(self.visibility).expect("visibility serializes"),
             governed_scope_rule_value(&self.scope_subjects),
             governed_scope_rule_value(&self.scope_agents),
             serde_json::json!([]),
         );
-        crate::runtime::ability::descriptor::governed_schema_summary(
+        crate::daemon::ability::descriptors::governed_schema_summary(
             &self.schema_summary.input,
             &self.schema_summary.output_receipt_body,
             access_policy,
@@ -705,32 +705,30 @@ impl AbilityDescriptor {
     }
 
     pub fn schema_hash_prefixed(&self) -> String {
-        crate::runtime::ability::descriptor::SchemaHash(self.schema_hash_bytes()).prefixed_hex()
+        crate::daemon::ability::descriptors::SchemaHash(self.schema_hash_bytes()).prefixed_hex()
     }
 
     pub fn descriptor_hash_bytes(&self) -> [u8; 32] {
         let call_mode = match self.ability_class() {
-            AbilityClass::Stream => crate::runtime::ability::CallMode::Stream,
-            AbilityClass::Bidi => crate::runtime::ability::CallMode::Bidi,
-            AbilityClass::Query | AbilityClass::Transition => {
-                crate::runtime::ability::CallMode::Rpc
-            }
+            AbilityClass::Stream => crate::daemon::ability::CallMode::Stream,
+            AbilityClass::Bidi => crate::daemon::ability::CallMode::Bidi,
+            AbilityClass::Query | AbilityClass::Transition => crate::daemon::ability::CallMode::Rpc,
         };
         let ability_ura = self
             .canonical_ability_ura()
             .unwrap_or_else(|| self.public_name());
-        crate::runtime::ability::descriptor::descriptor_hash_for_ability_ura_parts(
+        crate::daemon::ability::descriptors::descriptor_hash_for_ability_ura_parts(
             &ability_ura,
             &self.public_name(),
             &self.version,
             call_mode,
-            crate::runtime::ability::descriptor::SchemaHash(self.schema_hash_bytes()),
+            crate::daemon::ability::descriptors::SchemaHash(self.schema_hash_bytes()),
         )
         .0
     }
 
     pub fn descriptor_hash_prefixed(&self) -> String {
-        crate::runtime::ability::descriptor::DescriptorHash(self.descriptor_hash_bytes())
+        crate::daemon::ability::descriptors::DescriptorHash(self.descriptor_hash_bytes())
             .prefixed_hex()
     }
 

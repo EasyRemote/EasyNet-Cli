@@ -1,7 +1,7 @@
 // EasyNet CLI - AbilityDescriptor registry facts
 // ==============================================
 //
-// File: src/runtime/ability/descriptor.rs
+// File: src/daemon/ability/descriptors/mod.rs
 // Description: Versioned governed interface facts for daemon-published
 //              abilities. These are local control-plane records, not handler
 //              implementations.
@@ -178,7 +178,7 @@ impl AbilityControlPlaneKey {
         )
     }
 
-    pub(crate) fn for_authority(binding: &crate::runtime::ability::AuthorityBindingRecord) -> Self {
+    pub(crate) fn for_authority(binding: &crate::daemon::ability::AuthorityBindingRecord) -> Self {
         Self::from_validated_parts(
             binding.scope().authority_root().to_string(),
             binding.ability().to_string(),
@@ -189,7 +189,7 @@ impl AbilityControlPlaneKey {
 
     pub(crate) fn for_impl(
         authority_root: impl Into<String>,
-        binding: &crate::runtime::ability::AbilityImplBinding,
+        binding: &crate::daemon::ability::AbilityImplBinding,
     ) -> Self {
         Self::from_validated_parts(
             authority_root,

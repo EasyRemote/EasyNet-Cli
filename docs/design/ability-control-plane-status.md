@@ -13,7 +13,7 @@ as archival context only.
 
 ## 1. Landed Model
 
-The control-plane model is implemented under `src/runtime/ability/`:
+The control-plane model is implemented under `src/daemon/ability/`:
 
 | Concept | Lives in | State |
 |---|---|---|

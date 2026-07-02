@@ -314,7 +314,7 @@ Browser HTTP/WS
 
 ### 7.2 Device runtime baseline
 
-以下能力组应由 EasyNet-Cli daemon 作为设备侧基础能力承载。本节是产品能力族概览；规范性的 concrete rows 必须落在 `src/runtime/ability/conformance.rs` 的 `DeviceBaseline`，并标注 call mode、surface、domain、feature gate。
+以下能力组应由 EasyNet-Cli daemon 作为设备侧基础能力承载。本节是产品能力族概览；规范性的 concrete rows 必须落在 `src/daemon/ability/conformance.rs` 的 `DeviceBaseline`，并标注 call mode、surface、domain、feature gate。
 
 Health / Admin / Meta:
 
@@ -633,7 +633,7 @@ Daemon 负责:
 
 必须更新:
 
-1. 建立 `runtime::ability::conformance` typed baseline model 与 conformance 检查。
+1. 建立 `daemon::ability::conformance` typed baseline model 与 conformance 检查。
 2. 确保 Hub mode / Both mode 注册第 7.1 节所有 Hub baseline abilities。
 3. 确保 Device mode 注册第 7.2 节所有 Device baseline ability groups。
 4. 补齐 `namespace.resolve`、`namespace.proxy_resolve`、`federation.resolve_key`、`list_user_devices`、`subscribe_directory_v2` 的统一 daemon invocation surface。
@@ -841,7 +841,7 @@ EasyNet-Cli/
 4. `src/runtime/agents/profiles` 继续承载 device/profile projection，但不应变成 backend profile source。
 5. `src/cli/groups` 可以保留现有命令组织，新 join/hub/device 命令可按现有风格接入。
 6. `abilities/system` 与 `plugins/builtin` 作为 ability implementation/resource plane，不能替代 `AbilityDescriptor` registry。
-7. `src/runtime/ability/conformance.rs` 是 baseline contract 的 canonical source；Hub、Device、transport、registry 测试只能消费它，不能复制列表。
+7. `src/daemon/ability/conformance.rs` 是 baseline contract 的 canonical source；Hub、Device、transport、registry 测试只能消费它，不能复制列表。
 
 #### 9.4.2 EasyNet 目标结构
 
@@ -1321,7 +1321,7 @@ Register user
 
 1. `aggregate.list_abilities_catalog` 不进入 canonical daemon baseline。默认迁移到 `meta.list_abilities` + daemon catalog projection。
 2. `federation.status` 成为 daemon read-only ability，读取 `FederationStatusProbe` / `FederationInitOutcome` 投影。
-3. Baseline contract canonical source 放在 EasyNet-Cli `src/runtime/ability/conformance.rs`，不是 `src/runtime/hub` 或 transport wrapper。
+3. Baseline contract canonical source 放在 EasyNet-Cli `src/daemon/ability/conformance.rs`，不是 `src/runtime/hub` 或 transport wrapper。
 4. 通配 ability group 必须在实现前展开成 typed rows。
 5. EasyNet backend 当前 `daemon_grpc` 是 daemon client 边界的具体实现；迁移不得并行制造第二套 runtime client。
 6. EasyNet backend `runtime` 可以作为产品会话 kernel / driver adapter 保留，但不能成为 ability runtime。

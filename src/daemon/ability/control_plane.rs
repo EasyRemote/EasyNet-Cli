@@ -1,7 +1,7 @@
 // EasyNet CLI - Ability control-plane registry
 // ============================================
 //
-// File: src/runtime/ability/registry.rs
+// File: src/daemon/ability/control_plane.rs
 // Description: Aggregates descriptor, authority, and implementation binding
 //              registries for daemon-local ability registration.
 

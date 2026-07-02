@@ -1,7 +1,7 @@
 // EasyNet CLI - AbilityImpl binding registry facts
 // ================================================
 //
-// File: src/runtime/ability/impl_binding.rs
+// File: src/daemon/ability/impl_bindings/mod.rs
 // Description: Versioned executable binding records for local ability
 //              implementations. Plugin/native/EAL/MCP side effects live here,
 //              not in AbilityDescriptor.
@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::descriptor::{
+use super::descriptors::{
     canonical_json_bytes, is_valid_ability_name, is_valid_descriptor_version, sha256_bytes,
     AbilityControlPlaneKey, CallMode,
 };

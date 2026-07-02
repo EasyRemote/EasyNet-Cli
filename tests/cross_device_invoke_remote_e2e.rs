@@ -63,6 +63,7 @@ use easynet_axon::pb::axon::v1::{
     InvocationTarget, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeServerStreamRequest,
     StreamDescriptor, SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::invocation_wire::ProtoEnvelope;
@@ -79,7 +80,6 @@ use easynet_cli::daemon::invocation::state::presence::{
     OfflineReason, PresenceEvent, PresenceRegistry,
 };
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
-use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use ed25519_dalek::SigningKey;
 use futures::StreamExt;
 use serde_json::json;

@@ -698,7 +698,7 @@ fn sign_descriptor_bound_prelude_request(
         crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             callee_ura,
             function_name,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
         )
         .map_err(|err| {
             Status::internal(format!(

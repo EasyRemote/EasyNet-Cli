@@ -17,6 +17,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use super::*;
+use crate::daemon::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 use crate::daemon::invocation::bidi_dispatcher::{
     build_bidi_terminal_receipt, build_remote_bidi_open_dispatch_frame,
     build_remote_bidi_open_frame_for_contract, build_session_request_result_frame,
@@ -46,7 +47,6 @@ use crate::daemon::invocation::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::state::session_failure::SessionFailure;
 use crate::daemon::invocation::target_gate::ROUTE_NEGATIVE_CODE;
 use crate::daemon::invocation::ProtoEnvelope;
-use crate::runtime::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
 use easynet_axon::invocation::{AbilityFrame, BidiInputFrame};
 use easynet_axon::pb::axon::v1::Error;
 use easynet_axon::pb::axon::v1::{
@@ -182,7 +182,7 @@ fn signed_delegation_metadata_for_test(
         expires_at_ms: 4_102_444_800_000,
     };
     let payload_value = serde_json::to_value(&payload).expect("delegation payload");
-    let payload_bytes = crate::runtime::ability::canonical_json_bytes(&payload_value);
+    let payload_bytes = crate::daemon::ability::canonical_json_bytes(&payload_value);
     let signature = signer.sign(&payload_bytes);
     let raw = serde_json::json!({
         "payload": payload_value,
@@ -249,7 +249,7 @@ async fn runtime_with_json_echo(
         AbilityOptions::default()
             .with_modes(AbilityCallModes::RPC)
             .with_descriptor_proof(
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
                 [0x11; 32],
                 [0x22; 32],
             ),
@@ -296,7 +296,7 @@ fn test_descriptor_ref(callee_ura: &str, ability: &str) -> String {
     crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         callee_ura,
         ability,
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
     )
     .expect("test descriptor ref")
 }

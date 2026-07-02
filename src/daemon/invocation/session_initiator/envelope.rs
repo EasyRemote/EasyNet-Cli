@@ -70,7 +70,7 @@ pub fn build_session_envelope_open_with_seed(
             crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 caller_ura,
                 ABILITY_SESSION_OPEN,
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
             )
             .expect("session.open descriptor ref is well-formed for the device's own URA");
         if envelope.invocation_nonce.len() != 16 {

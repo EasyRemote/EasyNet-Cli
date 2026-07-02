@@ -28,7 +28,7 @@ build; the default proto-free build must also compile.
 
 ### Background
 
-The typed conformance model (`runtime::ability::conformance`:
+The typed conformance model (`daemon::ability::conformance`:
 `BaselineAbility`, `HubBaseline`, `DeviceBaseline`, `RegistryConformance`,
 `RuntimeAdminConformance`, `BaselineConformanceReport`) and its integration
 gate (`tests/conformance_baseline_gate.rs`) already exist and pass. They prove,
@@ -84,7 +84,7 @@ failure stage and panics with the same `panic_message()` shape used by CI.
 
 **Status: DONE** — implemented in
 `src/services/invocation_transport/daemon_invocation_service.rs` and
-`src/runtime/ability/conformance.rs`.
+`src/daemon/ability/conformance.rs`.
 
 ### Background
 
@@ -101,7 +101,7 @@ uncommitted work.
 ### Current state
 
 - `DaemonInvocationSurface` (the typed model) exists in
-  `runtime::ability::conformance`.
+  `daemon::ability::conformance`.
 - `bidi_dispatcher.rs` already exposes `RUNTIME_ADMIN_BIDI_ROUTES`
   (the bidi carrier routes) as a const — the pattern to follow.
 - The unary/stream `federation.*`/`namespace.*`/`identity.*` routes are still

@@ -94,7 +94,13 @@ require_path "src/runtime/executors"
 require_path "src/runtime/agent_ability_specs.rs"
 require_path "src/cli/mod.rs"
 require_path "src/daemon/mod.rs"
+require_path "src/daemon/ability/authority/mod.rs"
+require_path "src/daemon/ability/conformance.rs"
+require_path "src/daemon/ability/control_plane.rs"
+require_path "src/daemon/ability/control_plane_error.rs"
+require_path "src/daemon/ability/descriptors/mod.rs"
 require_path "src/daemon/ability/health.rs"
+require_path "src/daemon/ability/impl_bindings/mod.rs"
 require_path "src/daemon/ability/names"
 require_path "src/daemon/ability/wire/mod.rs"
 require_path "src/daemon/axon_bridge/mod.rs"
@@ -132,6 +138,7 @@ require_path "platforms/windows"
 require_path "scripts"
 require_path "tests/scripts"
 
+reject_path "src/runtime/ability"
 reject_path "src/runtime/ability_runtime"
 reject_path "src/runtime/agents"
 reject_path "src/runtime/ability_names"
@@ -195,6 +202,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::ability paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::ability::|easynet_cli::runtime::ability::|runtime::ability::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::ability_names paths" \
     '(^|[^[:alnum:]_])(crate::runtime::ability_names::|easynet_cli::runtime::ability_names::|runtime::ability_names::)' \
     "${SCAN_ROOTS[@]}"
@@ -242,6 +254,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/agents physical paths" \
     'src/runtime/agents/' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/ability physical path" \
+    'src/runtime/ability(/|$)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

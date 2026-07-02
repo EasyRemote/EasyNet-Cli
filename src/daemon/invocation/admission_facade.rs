@@ -99,6 +99,10 @@ use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
+use crate::daemon::ability::canonical_json_bytes;
+use crate::daemon::ability::{
+    HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+};
 use crate::daemon::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
@@ -120,10 +124,6 @@ use crate::daemon::invocation::state::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::state::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::daemon::trust::cell::SharedTrustAnchor;
-use crate::runtime::ability::canonical_json_bytes;
-use crate::runtime::ability::{
-    HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
-};
 use easynet_axon::pb::axon::v1::{
     Envelope, EnvelopeOpen, InvokeRequest, InvokeServerStreamRequest, RateLimitInfo,
 };
@@ -2137,7 +2137,7 @@ mod tests {
             &signing_key,
             [0x44u8; 16],
         );
-        let request = crate::runtime::ability::HostedAgentDelegationRequest::new(
+        let request = crate::daemon::ability::HostedAgentDelegationRequest::new(
             crate::ura::agent_ura("realm", "u", "a"),
         )
         .expect("valid delegation request");
@@ -2187,7 +2187,7 @@ mod tests {
         let mut req = invoke_request(Some(envelope_with_caller(
             crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
         )));
-        let request = crate::runtime::ability::HostedAgentDelegationRequest::new(
+        let request = crate::daemon::ability::HostedAgentDelegationRequest::new(
             crate::ura::agent_ura("realm", "u", "a"),
         )
         .expect("valid delegation request");

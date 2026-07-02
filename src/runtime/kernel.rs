@@ -966,7 +966,7 @@ mod tests {
                         AbilityOptions::default()
                             .with_modes(AbilityCallModes::RPC)
                             .with_descriptor_proof(
-                                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
                                 [0x11; 32],
                                 [0x22; 32],
                             ),

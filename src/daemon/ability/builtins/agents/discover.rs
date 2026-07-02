@@ -572,7 +572,7 @@ impl DiscoverProviderTarget {
         }
         let registry_name = provider.as_registry_name();
         let record = registry
-            .control_plane_record_for_mode(&registry_name, crate::runtime::ability::CallMode::Rpc)
+            .control_plane_record_for_mode(&registry_name, crate::daemon::ability::CallMode::Rpc)
             .map_err(|err| anyhow::anyhow!("discover provider control-plane lookup: {err}"))?
             .ok_or_else(|| {
                 anyhow::anyhow!(

@@ -123,8 +123,11 @@ fi
 # Allowlist:
 #   * The full control set (rule 1) — every syscall type is also
 #     legitimately used here.
-#   * ability, ability_descriptor
-#                         — descriptor versions, metadata keys,
+#   * ability_dispatch, ability_descriptor
+#                         — dispatch facade and legacy descriptor DTOs;
+#                           daemon-owned ability control-plane objects
+#                           live under daemon::ability.
+#                           Descriptor versions, metadata keys,
 #                           canonical JSON bytes, and conformance
 #                           metadata used to validate and project
 #                           daemon Invocation requests.
@@ -152,11 +155,6 @@ fi
 #                           admission/bootstrap paths.
 #   * federation_init     — daemon-side federation initialization
 #                           decision surface referenced by boot.
-#   * execution           — handle-level access to mcp_client / pty
-#                           supervisors that handlers dispatch into.
-#                           NOTE: this is the broadest exception
-#                           and the one most likely to want
-#                           narrowing in a follow-up PR.
 #   * advertise           — federation.advertise_* helpers the boot
 #                           sequence drives to register the daemon's
 #                           Agents in the realm directory. Pure
@@ -164,17 +162,10 @@ fi
 #   * federation_client   — typed argument/response helpers for the
 #                           four federation.* abilities the hub-
 #                           profile Agent exposes. Wire-shape only.
-#   * axon_bridge         — Axon-SDK glue (admission/dispatch
-#                           shim, key resolver, runtime factory,
-#                           hot agent registrar). The Invocation
-#                           transport is the natural consumer: the gRPC server
-#                           translates each wire frame into an
-#                           Axon LocalRuntime invocation through
-#                           the bridge.
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(feature = "axon-pb")]
-use crate::runtime::ability::{
+use crate::daemon::ability::{
     HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 

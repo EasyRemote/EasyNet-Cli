@@ -1,7 +1,7 @@
 //! EasyNet Axon for AgentNet
 //! =========================
 //!
-//! File: src/runtime/ability/conformance.rs
+//! File: src/daemon/ability/conformance.rs
 //! Description: Typed daemon baseline ability contract for Hub and Device
 //! modes.
 //!
@@ -24,7 +24,7 @@
 //!   daemon baseline abilities.
 //!
 //! Architectural Position:
-//! - Lives in `runtime::ability` because this is an ability control-plane
+//! - Lives in `daemon::ability` because this is an ability control-plane
 //!   contract, not a Hub handler implementation.
 
 use std::collections::BTreeSet;

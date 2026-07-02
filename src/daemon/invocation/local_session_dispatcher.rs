@@ -2122,7 +2122,7 @@ mod tests {
     // match what the descriptor-bound dispatch path stamps on the envelope —
     // the default descriptor version for these owner-local test abilities.
     const TEST_DESCRIPTOR_VERSION: &str =
-        crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+        crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
     const TEST_DESCRIPTOR_VERSION_V2: &str = "2.0.0";
     const TEST_SCHEMA_HASH: [u8; 32] = [0x11; 32];
     const TEST_IMPL_HASH: [u8; 32] = [0x22; 32];
@@ -3032,7 +3032,7 @@ mod tests {
             format!(
                 "{}@{}",
                 runtime_ability_for(TEST_DEVICE_URA, "demo.session_echo"),
-                crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
             )
         );
         assert_eq!(records[0].state, "completed");

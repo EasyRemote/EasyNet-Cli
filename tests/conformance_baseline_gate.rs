@@ -4,7 +4,7 @@
 //! Spec §9.1 item 7 requires Hub mode and Device mode to *pass baseline
 //! conformance* — a missing baseline ability must be a build/CI failure,
 //! not a silent runtime gap. The typed model lives in
-//! `runtime::ability::conformance`; this integration test is the
+//! `daemon::ability::conformance`; this integration test is the
 //! deterministic gate that exercises it against the **real** daemon
 //! registry built by `daemon::ability::catalog::build_registry()`.
 //!
@@ -20,7 +20,7 @@
 //!   * `DaemonInvocation` — checked against the production route tables
 //!     exported beside the tonic `Invoke` / `InvokeStream` match arms.
 
-use easynet_cli::runtime::ability::conformance::{
+use easynet_cli::daemon::ability::conformance::{
     DaemonInvocationSurface, DeviceBaseline, HubBaseline, RegistryConformance,
     RuntimeAdminConformance,
 };

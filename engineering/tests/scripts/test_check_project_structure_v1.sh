@@ -15,6 +15,9 @@ make_sandbox() {
     mkdir -p \
         "$sandbox/src/daemon/ability/builtins" \
         "$sandbox/src/daemon/ability/catalog" \
+        "$sandbox/src/daemon/ability/authority" \
+        "$sandbox/src/daemon/ability/descriptors" \
+        "$sandbox/src/daemon/ability/impl_bindings" \
         "$sandbox/src/runtime/executors" \
         "$sandbox/src/cli" \
         "$sandbox/src/daemon/ability" \
@@ -48,9 +51,15 @@ make_sandbox() {
     printf '%s\n' '// cli root' > "$sandbox/src/cli/mod.rs"
     printf '%s\n' '// daemon root' > "$sandbox/src/daemon/mod.rs"
     printf '%s\n' '// daemon ability root' > "$sandbox/src/daemon/ability/mod.rs"
+    printf '%s\n' '// daemon ability authority root' > "$sandbox/src/daemon/ability/authority/mod.rs"
     printf '%s\n' '// daemon ability builtins root' > "$sandbox/src/daemon/ability/builtins/mod.rs"
     printf '%s\n' '// daemon ability catalog root' > "$sandbox/src/daemon/ability/catalog/mod.rs"
+    printf '%s\n' '// daemon ability conformance' > "$sandbox/src/daemon/ability/conformance.rs"
+    printf '%s\n' '// daemon ability control plane' > "$sandbox/src/daemon/ability/control_plane.rs"
+    printf '%s\n' '// daemon ability control plane error' > "$sandbox/src/daemon/ability/control_plane_error.rs"
+    printf '%s\n' '// daemon ability descriptors root' > "$sandbox/src/daemon/ability/descriptors/mod.rs"
     printf '%s\n' '// daemon ability health' > "$sandbox/src/daemon/ability/health.rs"
+    printf '%s\n' '// daemon ability impl bindings root' > "$sandbox/src/daemon/ability/impl_bindings/mod.rs"
     printf '%s\n' '// daemon ability names root' > "$sandbox/src/daemon/ability/names/mod.rs"
     printf '%s\n' '// daemon ability wire root' > "$sandbox/src/daemon/ability/wire/mod.rs"
     printf '%s\n' '// daemon axon bridge root' > "$sandbox/src/daemon/axon_bridge/mod.rs"
@@ -124,6 +133,14 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/agents directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/ability"
+printf '%s\n' '// retired ability control plane root' > "$SB/src/runtime/ability/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/ability directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/ability_names"
@@ -208,6 +225,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::abilities import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::ability import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::ability_names::agents::CHAT; }' > "$SB/src/lib.rs"

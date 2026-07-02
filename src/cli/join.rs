@@ -462,7 +462,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         membership_ura.to_string(),
     )?
     .invoke_request(
-        crate::runtime::ability::conformance::ABILITY_FEDERATION_JOIN,
+        crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
         crate::runtime::federation_client::args_to_bytes(&join_args),
     )?;
     let join_response = client.invoke(join_request).await.map_err(|status| {
@@ -502,14 +502,14 @@ async fn do_federation_join_and_resolve_hub_key_async(
     let resolve_arguments = crate::runtime::federation_client::args_to_bytes(&resolve_args);
     let subject = crate::ura::owner_ability_ura(
         &target.hub_ura,
-        crate::runtime::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
+        crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
     )
     .ok_or_else(|| anyhow::anyhow!("derive federation.resolve_key subject URA"))?;
     let descriptor_ref =
         crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             &target.hub_ura,
-            crate::runtime::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
-            crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
         )
         .map_err(|err| anyhow::anyhow!("derive federation.resolve_key descriptor ref: {err}"))?;
     let resolve_request = crate::daemon::invocation::ProtoEnvelope::targeted(
@@ -518,7 +518,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         subject,
     )?
     .signed_descriptor_ref_invoke_request(
-        crate::runtime::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
+        crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
         descriptor_ref,
         resolve_arguments,
         &signer,

@@ -26,7 +26,7 @@ use easynet_axon::invocation::{
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::runtime::ability::{
+use crate::daemon::ability::{
     public_route_ability_from_descriptor_ref, AbilityControlPlaneAuthorityModeLookupError,
     AbilityControlPlaneError, AbilityControlPlaneKey, AbilityControlPlaneLookupError,
     AbilityControlPlaneRecord, AbilityControlPlaneRegistration, AbilityControlPlaneRegistry,
