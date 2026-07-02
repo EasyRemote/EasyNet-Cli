@@ -688,7 +688,7 @@ fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
 #[test]
 fn published_abilities_excludes_per_agent_chat_handlers() {
     // `<agent>.chat` is published via the per-agent manifest path
-    // (`runtime::publish::republish_abilities_via_advertise`) off the
+    // (`daemon::federation::publish::republish_abilities_via_advertise`) off the
     // on-disk `chat.ability.toml`. Re-publishing it through the
     // system path would double-register with a synthesised schema
     // that shadows the manifest's real one. The filter in

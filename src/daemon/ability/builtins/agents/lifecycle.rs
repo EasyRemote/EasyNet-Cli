@@ -521,7 +521,7 @@ fn start_agent_handler(
 
 /// Build the owner-projection ability descriptors for one hot-added
 /// agent, using the SAME construction as the boot-time republish path
-/// (`runtime::publish` step 5b): `abilities_for_publication` →
+/// (`daemon::federation::publish` step 5b): `abilities_for_publication` →
 /// owner-local public name → `AbilityDescriptor`. Kept byte-equivalent
 /// to boot so the hot-add path is not a second, lossy catalogue (the
 /// divergence that previously omitted newly-added abilities from

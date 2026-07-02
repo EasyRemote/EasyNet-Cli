@@ -1351,7 +1351,7 @@ fn derive_device_seed_hex(realm: &str, node_id: &str) -> anyhow::Result<String> 
 
 fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
     let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
-    crate::runtime::publish::derive_subject_keypair(realm, &subject_id)
+    crate::daemon::federation::publish::derive_subject_keypair(realm, &subject_id)
 }
 
 // Deregister the previously-paired device from the hub before a re-pair
@@ -1634,7 +1634,8 @@ mod tests {
         let realm = "tenant-a";
         let node_id = "en-test-node";
         let got = derive_device_public_key_hex(realm, node_id).expect("derive hex");
-        let want_b64 = crate::runtime::publish::derive_owner_public_key_b64(realm, node_id);
+        let want_b64 =
+            crate::daemon::federation::publish::derive_owner_public_key_b64(realm, node_id);
         let want = hex::encode(
             base64::engine::general_purpose::STANDARD
                 .decode(want_b64.as_bytes())

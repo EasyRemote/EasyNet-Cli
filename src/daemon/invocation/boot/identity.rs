@@ -1,5 +1,5 @@
+use crate::daemon::federation::publish::derive_subject_keypair;
 use crate::daemon::invocation::session_initiator::SessionSigningSeed;
-use crate::runtime::publish::derive_subject_keypair;
 
 use super::paths::expand_home;
 
@@ -189,7 +189,7 @@ pub(super) fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
         &bridge,
         identity.caller_ura.clone(),
     );
-    match crate::runtime::publish::bootstrap_self_identity_via_runtime(
+    match crate::daemon::federation::publish::bootstrap_self_identity_via_runtime(
         &invoker, &realm, &realm, &node_id,
     )
     .result

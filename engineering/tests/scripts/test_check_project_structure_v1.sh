@@ -72,6 +72,7 @@ make_sandbox() {
     printf '%s\n' '// daemon execution root' > "$sandbox/src/daemon/execution/mod.rs"
     printf '%s\n' '// daemon federation root' > "$sandbox/src/daemon/federation/mod.rs"
     printf '%s\n' '// daemon federation advertise client' > "$sandbox/src/daemon/federation/advertise.rs"
+    printf '%s\n' '// daemon federation publish orchestration' > "$sandbox/src/daemon/federation/publish.rs"
     printf '%s\n' '// federation ability contract DTOs' > "$sandbox/src/daemon/federation/client/ability_contract.rs"
     printf '%s\n' '// daemon federation client root' > "$sandbox/src/daemon/federation/client/mod.rs"
     printf '%s\n' '// daemon federation directory' > "$sandbox/src/daemon/federation/directory.rs"
@@ -280,6 +281,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/owner_projection.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired publish orchestration' > "$SB/src/runtime/publish.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/publish.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/plugin_host"
 printf '%s\n' '// retired plugin host root' > "$SB/src/runtime/plugin_host/mod.rs"
 rc=0
@@ -464,6 +472,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::owner_projection import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::publish::republish_abilities_via_advertise; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::publish import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::plugin_host::PluginRuntimeManager::new; }' > "$SB/src/lib.rs"
@@ -725,6 +740,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/gateway_api.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/publish.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/publish.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/federation/read_model/owner_projection.rs"
@@ -1000,6 +1022,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/runtime/abilities.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/runtime/publish.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/runtime/publish.rs reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/facade/mcp' > "$SB/src/lib.rs"

@@ -94,7 +94,7 @@ pub fn is_publishable_catalog_name(name: &str) -> bool {
 ///
 /// Centralises (name, description, input_schema) so every consumer —
 /// the federation label builder (`registry::a2a_labels`), the
-/// runtime-local register publisher (`runtime::publish`), and any
+/// runtime-local register publisher (`daemon::federation::publish`), and any
 /// future `easynet ability list --system` surface — pulls from one
 /// table. Adding a new system ability now requires updating exactly
 /// one match arm in `metadata_for`; previously the same name lived
@@ -112,7 +112,7 @@ pub struct SystemAbilityMetadata {
 ///
 /// `<agent>.chat` is **excluded** even when the live registry would
 /// include it: those entries are already published to the
-/// axon-runtime via `runtime::publish::republish_abilities_via_advertise`
+/// axon-runtime via `daemon::federation::publish::republish_abilities_via_advertise`
 /// off the on-disk `chat.ability.toml` manifest, and re-publishing
 /// them through the system path would double-register with a
 /// different (synthesised) schema. Filter is by suffix because the

@@ -117,6 +117,7 @@ require_path "src/daemon/federation/directory_reader.rs"
 require_path "src/daemon/federation/gateway.rs"
 require_path "src/daemon/federation/gateway_api.rs"
 require_path "src/daemon/federation/peers.rs"
+require_path "src/daemon/federation/publish.rs"
 require_path "src/daemon/federation/read_model/ability_catalog.rs"
 require_path "src/daemon/federation/read_model/advertised_agents.rs"
 require_path "src/daemon/federation/read_model/hub_published_abilities.rs"
@@ -173,6 +174,7 @@ reject_path "src/runtime/local_invocation_identity.rs"
 reject_path "src/runtime/local_runtime_invoker.rs"
 reject_path "src/runtime/owner_projection.rs"
 reject_path "src/runtime/plugin_host"
+reject_path "src/runtime/publish.rs"
 reject_path "src/runtime/receipt_subscriber.rs"
 reject_path "src/runtime/resources"
 reject_path "src/runtime/system_abilities"
@@ -320,6 +322,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::publish paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::publish::|easynet_cli::runtime::publish::|runtime::publish::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::plugin_host paths" \
     '(^|[^[:alnum:]_])(crate::runtime::plugin_host::|easynet_cli::runtime::plugin_host::|runtime::plugin_host::)' \
     "${SCAN_ROOTS[@]}"
@@ -442,6 +449,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/owner_projection.rs physical path" \
     'src/runtime/owner_projection\.rs|runtime/owner_projection\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/publish.rs physical path" \
+    'src/runtime/publish\.rs|runtime/publish\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

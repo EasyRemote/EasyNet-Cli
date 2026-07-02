@@ -62,6 +62,7 @@ exit_code() {
 # ──────────────────────────────────────────────────────────
 echo "Case 1: clean fixture"
 mkdir -p "$FIXTURE_ROOT/src/runtime"
+mkdir -p "$FIXTURE_ROOT/src/daemon/federation"
 mkdir -p "$FIXTURE_ROOT/src/facade"
 cat > "$FIXTURE_ROOT/src/runtime/clean.rs" << 'EOF'
 pub fn clean() {}
@@ -78,7 +79,7 @@ assert "Case 1 — enforce exit code = 0"       "$(exit_code enforce)"  "0"
 # ──────────────────────────────────────────────────────────
 echo
 echo "Case 2: inject register_runtime_local_mcp_tool"
-cat > "$FIXTURE_ROOT/src/runtime/publish.rs" << 'EOF'
+cat > "$FIXTURE_ROOT/src/daemon/federation/publish.rs" << 'EOF'
 pub fn publish() {
     register_runtime_local_mcp_tool();
 }

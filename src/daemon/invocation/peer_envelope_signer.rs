@@ -401,8 +401,10 @@ pub(crate) fn read_hub_identity_seed(realm: &str) -> Result<[u8; 32], String> {
                 // green. Production never takes this path (see
                 // function-level docs).
                 let hub_subject_id = easynet_axon::invocation::private_hub_subject_id(realm);
-                let (seed, _pk_b64) =
-                    crate::runtime::publish::derive_subject_keypair(realm, &hub_subject_id);
+                let (seed, _pk_b64) = crate::daemon::federation::publish::derive_subject_keypair(
+                    realm,
+                    &hub_subject_id,
+                );
                 Ok(seed)
             }
             #[cfg(not(test))]

@@ -722,7 +722,7 @@ fn device_origin_claim(
 
     let subject_id = easynet_axon::invocation::private_agent_subject_id(&device_id);
     let (seed, signer_pubkey_b64) =
-        crate::runtime::publish::derive_subject_keypair(&parsed.realm, &subject_id);
+        crate::daemon::federation::publish::derive_subject_keypair(&parsed.realm, &subject_id);
     let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
 
     let nonce = easynet_axon::invocation::fresh_nonce();

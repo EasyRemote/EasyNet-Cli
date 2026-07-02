@@ -486,12 +486,13 @@ pub(crate) fn republish_via_federation_best_effort(
     // runtime lifetime; it is a no-op on subsequent calls (the
     // first-writer-wins guard returns replaced_prior=true).
     if !plan.realm.is_empty() {
-        let identity_outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
-            &invoker,
-            &creds.realm,
-            &plan.realm,
-            &creds.node_id,
-        );
+        let identity_outcome =
+            crate::daemon::federation::publish::bootstrap_self_identity_via_runtime(
+                &invoker,
+                &creds.realm,
+                &plan.realm,
+                &creds.node_id,
+            );
         match &identity_outcome.result {
             Ok(_) => output::detail(
                 "runtime-identity",
@@ -505,8 +506,11 @@ pub(crate) fn republish_via_federation_best_effort(
         }
     }
 
-    let outcomes =
-        crate::runtime::publish::republish_abilities_via_advertise(&invoker, &creds.realm, &plan);
+    let outcomes = crate::daemon::federation::publish::republish_abilities_via_advertise(
+        &invoker,
+        &creds.realm,
+        &plan,
+    );
 
     let mut ok = 0usize;
     let mut total = 0usize;
@@ -547,7 +551,7 @@ pub(crate) fn republish_via_federation_best_effort(
     // dispatch path degraded but keeps boot moving.
     if !plan.realm.is_empty() && !plan.host_device_ura.is_empty() {
         let dispatch_endpoint = crate::daemon::control::runtime_dispatch::dispatch_endpoint_uri();
-        let reg_outcomes = crate::runtime::publish::register_local_tools_via_runtime(
+        let reg_outcomes = crate::daemon::federation::publish::register_local_tools_via_runtime(
             &invoker,
             &creds.realm,
             &plan.realm,

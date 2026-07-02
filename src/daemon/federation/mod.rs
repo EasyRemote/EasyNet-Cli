@@ -17,4 +17,5 @@ pub mod directory_reader;
 pub mod gateway;
 pub mod gateway_api;
 pub mod peers;
+pub mod publish;
 pub mod read_model;

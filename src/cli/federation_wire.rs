@@ -347,7 +347,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // shape would land in a parallel namespace the parser
     // strict-rejects.
     let agent_ura = crate::ura::device_ura(creds.realm.trim(), creds.node_id.trim());
-    let public_key_b64 = crate::runtime::publish::derive_owner_public_key_b64(
+    let public_key_b64 = crate::daemon::federation::publish::derive_owner_public_key_b64(
         creds.realm.trim(),
         creds.node_id.trim(),
     );
@@ -1334,7 +1334,7 @@ added_at_unix_ms = 1
             Some("easynet:///r/tenant-a/device/dev-1"),
         );
         let expected_dev_pk =
-            crate::runtime::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
+            crate::daemon::federation::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
         assert_eq!(
             device_row.get("public_key_b64").and_then(|v| v.as_str()),
             Some(expected_dev_pk.as_str()),

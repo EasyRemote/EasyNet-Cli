@@ -473,7 +473,6 @@ src/runtime/
 ├─ executors/
 ├─ keyring/
 ├─ hub/
-├─ publish.rs
 └─ resolver/
 ```
 
@@ -520,6 +519,7 @@ src/daemon/
 │  └─ local_runtime_invoker.rs
 ├─ federation/
 │  ├─ advertise.rs
+│  ├─ publish.rs
 │  ├─ client/
 │  │  └─ ability_contract.rs
 │  ├─ read_model/
@@ -579,6 +579,11 @@ Notes:
 - `daemon/federation/advertise.rs` owns typed federation advertise, heartbeat,
   resolve, resolve_key, revoke, and forward_invoke ability calls. The retired
   `runtime/advertise.rs` path and `runtime::advertise` import must not return.
+- `daemon/federation/publish.rs` owns daemon federation publish orchestration:
+  local-agent bootstrap, self-identity bootstrap calls, runtime-local tool
+  registration, advertise batching, descriptor publication, and revoke. The
+  retired `runtime/publish.rs` path and `runtime::publish` import must not
+  return.
 
 ## CLI Boundary
 
@@ -1357,6 +1362,7 @@ the phase blocked.
 | Daemon federation owner projection ownership | Owner projection read-model move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/read_model/owner_projection.rs` exists, `src/runtime/owner_projection.rs` is retired, and active code does not import through `runtime::owner_projection` | New owner ability projection, lease refresh, or advertised callable summary logic lands under `src/runtime/owner_projection.rs`, or active code imports the retired runtime owner projection path |
 | Daemon federation ability contract ownership | federation.* DTO source move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/ability_contract.rs` exists, `src/runtime/federation_client.rs` is retired, and active code does not import through `runtime::federation_client` | New typed argument/response helpers for hub-profile `federation.*` abilities land under `src/runtime/federation_client.rs`, or active code imports the retired runtime federation client path |
 | Daemon federation advertise ownership | federation.* advertise/heartbeat client move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/advertise.rs` exists, `src/runtime/advertise.rs` is retired, and active code does not import through `runtime::advertise` | New federation advertise, heartbeat, resolve, revoke, resolve_key, or forward_invoke wrapper logic lands under `src/runtime/advertise.rs`, or active code imports the retired runtime advertise path |
+| Daemon federation publish ownership | federation publish/registration orchestration move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/publish.rs` exists, `src/runtime/publish.rs` is retired, and active code does not import through `runtime::publish` | New local-agent bootstrap, self-identity bootstrap caller, runtime-local registration, advertise batching, descriptor publication, or revoke orchestration lands under `src/runtime/publish.rs`, or active code imports the retired runtime publish path |
 | Daemon Invocation state ownership | Invocation presence, pending dispatch, replay, quota, and failure-state source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/state/{presence,pending_dispatch,nonce_replay,usage_quota,session_failure}.rs` exist; retired Invocation state files under `src/services/` do not; active code does not import through retired services Invocation-state paths | New daemon Invocation liveness, pending-dispatch, replay, quota, or failure-state code lands under `src/services`, or active code imports retired services state paths |
 | Daemon federation ownership | Federation transport, directory, peer-map, discovery read-boundary, and read-model source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, `src/daemon/federation/peers.rs`, and `src/daemon/federation/read_model/{ability_catalog,advertised_agents,hub_published_abilities}.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::*` paths | New daemon federation transport, directory, peer-map, discovery-reader, or read-model code lands under `src/services`, or active code imports retired services paths |
 | Daemon trust ownership | Trust-anchor state, hot-reload cell, and Axon key-resolver source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/trust/anchor.rs`, `src/daemon/trust/cell.rs`, and `src/daemon/trust/key_resolver.rs` exist; retired trust files under `src/services/` do not; active code does not import through retired `services::realm_trust_anchor`, `services::trust_anchor_cell`, or `services::trust_anchor_key_resolver` paths | New daemon trust state or key-resolution adapters land under `src/services`, or active code imports retired services trust paths |
@@ -1412,17 +1418,19 @@ Code and structure:
     live under `daemon/federation/client/`.
 15. `runtime/advertise.rs` is absent; typed federation advertise/heartbeat
     client code lives under `daemon/federation/`.
+16. `runtime/publish.rs` is absent; federation publish/registration
+    orchestration lives under `daemon/federation/`.
 
 Behavior:
 
-16. Existing public Ability names remain byte-identical.
-17. `meta.list_abilities` returns the same ability names before and after a
+17. Existing public Ability names remain byte-identical.
+18. `meta.list_abilities` returns the same ability names before and after a
    structural move.
-18. Ability call modes remain unchanged.
-19. Descriptor generation output remains byte-identical unless the phase is
+19. Ability call modes remain unchanged.
+20. Descriptor generation output remains byte-identical unless the phase is
     explicitly a descriptor-format change.
-20. No product-module source move changes Invocation or Receipt semantics.
-21. No runtime registry tree is introduced.
+21. No product-module source move changes Invocation or Receipt semantics.
+22. No runtime registry tree is introduced.
 
 Complexity/fan-out:
 

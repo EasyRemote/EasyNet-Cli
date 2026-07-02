@@ -1,7 +1,7 @@
-// EasyNet CLI — Ability publishing via federation.advertise_*
-// =============================================================
+// EasyNet CLI — Daemon federation ability publishing
+// ==================================================
 //
-// File: src/runtime/publish.rs
+// File: src/daemon/federation/publish.rs
 //
 // Per AXON-RFC-001 §A4 + plan v4.1.2 §1, abilities are published to
 // the realm directory by invoking the hub-profile Agent's

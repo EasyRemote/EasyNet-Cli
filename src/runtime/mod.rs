@@ -79,7 +79,6 @@ pub mod executors;
 // PR-ATTACH onwards extends this).
 pub mod dispatch_receipt;
 pub mod provisional_ura;
-pub mod publish;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
 pub mod keyring;
 // RFC-002 tenant suffix resolver: maps tenant_id to admission mode +
