@@ -6,7 +6,7 @@
 //              layer. Each child module owns one slice of runtime
 //              state (session / permission / discuss / schedule /
 //              loop) and is forbidden — by CI grep in
-//              `scripts/check-subservice-isolation.sh` — from
+//              `engineering/scripts/check-subservice-isolation.sh` — from
 //              importing sibling sub-services.
 //
 // Why this partition exists

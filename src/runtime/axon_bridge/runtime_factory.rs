@@ -3,7 +3,7 @@
 //! Centralises the "build Axon's runtime + install KeyResolver +
 //! install LedgerSink" recipe so that:
 //!
-//!   * production boot (`services::invocation_transport::start_daemon_invocation_transport`)
+//!   * production boot (`daemon::invocation::start_daemon_invocation_transport`)
 //!     gets the runtime wired the same way every time, and
 //!   * integration tests can call the same factory with a tempdir
 //!     ledger + a stub trust anchor without duplicating the

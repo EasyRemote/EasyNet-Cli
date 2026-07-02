@@ -24,7 +24,7 @@ named consumer. For this block form:
    (`auto-review-loop.eal`) compose conferences at the mission
    *boundary*, not inside a single EAL mission.
 2. `easynet discuss` exists at the CLI verb layer
-   (`src/facade/cli/discuss.rs`) and is the current operator
+   (`src/cli/discuss.rs`) and is the current operator
    interface. Shipping the same capability in two layers without
    a consumer driving the choice would be premature.
 3. `chat` is already the canonical single-agent invocation ability

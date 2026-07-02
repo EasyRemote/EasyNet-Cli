@@ -246,7 +246,7 @@ fn scan() -> ScanPlan {
         else {
             continue;
         };
-        for manifest in crate::runtime::abilities::manifests_for(agent_name, entry) {
+        for manifest in crate::runtime::agent_ability_specs::manifests_for(agent_name, entry) {
             let class = classify_manifest(&manifest);
             if class == ManifestHealthClass::Unmanaged {
                 continue;

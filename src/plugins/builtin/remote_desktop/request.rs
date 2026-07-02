@@ -16,7 +16,9 @@ use crate::plugins::remote_desktop::constants::{
     REASON_INVALID_ARGUMENT, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
 use crate::plugins::remote_desktop::session::RemoteDesktopSession;
-use crate::runtime::agents::media::screen_snapshot::{ScreenCaptureOptions, VideoResolution};
+use crate::runtime::system_abilities::resources::media::screen_snapshot::{
+    ScreenCaptureOptions, VideoResolution,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteDesktopVideoConstraints {

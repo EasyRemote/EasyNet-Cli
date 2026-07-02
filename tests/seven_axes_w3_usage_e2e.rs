@@ -34,7 +34,7 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::invocation_watch::{self, WatchArgs, WatchEvent};
+use easynet_cli::cli::invocation_watch::{self, WatchArgs, WatchEvent};
 use seven_axes_fixture::{SevenAxesHome, TESTBOT_ECHO_DESCRIPTOR_VERSION};
 
 #[test]

@@ -28,7 +28,7 @@ use crate::runtime::ability::{
 /// Resolve the local daemon Invocation endpoint. Thin re-export of
 /// [`crate::persistence::daemon_config::resolved_local_uds_path_with_env_override`]
 /// kept here so the existing CLI call sites
-/// (`facade/cli/federation_discover.rs`, `facade/cli/start.rs`,
+/// (`cli/federation_discover.rs`, `cli/start.rs`,
 /// `support/federation_invoke.rs`) need no rewrite. The body itself
 /// lives in `persistence/` because it consults `daemon-config.toml`
 /// — keeping it there preserves the `support/` leaf-layer invariant
@@ -308,7 +308,7 @@ impl LocalDaemonLoopbackInvocation {
     }
 
     fn envelope(&self) -> anyhow::Result<easynet_axon::pb::axon::v1::Envelope> {
-        let mut envelope = crate::services::invocation_transport::ProtoEnvelope::targeted(
+        let mut envelope = crate::daemon::invocation::ProtoEnvelope::targeted(
             self.caller_ura.clone(),
             self.callee_ura.clone(),
             self.subject_ura.clone(),
@@ -556,13 +556,13 @@ fn invoke_agent_management_in_process(
     payload_json: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let mut catalog = crate::runtime::ability_dispatch::AxonAbilityCatalog::new();
-    crate::runtime::agents::agent_list_ability::register(&mut catalog, || {
+    crate::runtime::system_abilities::agents::list::register(&mut catalog, || {
         crate::registry::agents::load_agents().unwrap_or_default()
     });
     let hot_registrar: std::sync::Arc<
-        crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell,
+        crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell,
     > = std::sync::Arc::new(std::sync::OnceLock::new());
-    crate::runtime::agents::agent_lifecycle_ability::register(&mut catalog, hot_registrar);
+    crate::runtime::system_abilities::agents::lifecycle::register(&mut catalog, hot_registrar);
     catalog.invoke_rpc_json(function_name, payload_json)
 }
 
@@ -861,10 +861,10 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel)
                 .max_decoding_message_size(
-                    crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+                    crate::daemon::invocation::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
                 )
                 .max_encoding_message_size(
-                    crate::services::invocation_transport::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+                    crate::daemon::invocation::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
                 );
 
         let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(16);
@@ -1572,7 +1572,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     let mut ledger_record = Value::Null;
     for _ in 0..10 {
         let response = record_reader.invoke(
-            crate::runtime::agents::invocation_history_ability::ABILITY_INVOCATION_RECORD_GET,
+            crate::runtime::system_abilities::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
             serde_json::json!({ "request_id": request_id }),
         )?;
         if let Some(record) = response.get("record").filter(|record| !record.is_null()) {
@@ -1898,7 +1898,7 @@ mod tests {
         assert_eq!(request.function_name, "discover");
         assert!(
             !request.metadata.contains_key(
-                crate::services::invocation_transport::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                crate::daemon::invocation::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
             ),
             "local loopback projection must not pre-bind descriptor metadata"
         );

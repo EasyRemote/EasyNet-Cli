@@ -34,8 +34,8 @@
 use std::path::PathBuf;
 
 use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all;
 use easynet_cli::runtime::execution::mcp_client::McpClientService;
+use easynet_cli::runtime::system_abilities::integrations::mcp::reflective_registry::reflect_all;
 
 /// Minimum reachable-server count below which the verifier fails.
 /// Pinned to the round-1 baseline so a regression in setup or in

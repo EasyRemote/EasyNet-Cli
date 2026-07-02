@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn owner_user_caller_grants_self_consent_without_receipt() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         let env = EnvelopeContext::for_test(
             "easynet:///r/acme/user/user-alice",
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn owner_device_caller_grants_self_consent_without_receipt() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         let env = EnvelopeContext::for_test(
             "easynet:///r/acme/device/dev-1",
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn local_system_caller_grants_self_consent_for_paired_device() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         let env = EnvelopeContext::for_test(
             crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn unpaired_local_system_caller_still_requires_consent_receipt() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let env = EnvelopeContext::for_test(
             crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/acme/resource/display-1",
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn foreign_or_mismatched_callers_stay_fail_closed_without_receipt() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         for caller in [
             "easynet:///r/acme/user/mallory",            // different user
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn receipt_still_wins_over_owner_self_consent() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
         let env = EnvelopeContext::for_test(
             "easynet:///r/acme/user/user-alice",

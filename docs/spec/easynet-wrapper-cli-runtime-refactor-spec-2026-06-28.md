@@ -829,7 +829,7 @@ EasyNet-Cli/
 3. `src/runtime/ability` 承载 descriptor、registry、catalog projection、baseline conformance。
 4. `src/services/invocation_transport/route_resolver.rs` 是当前 namespace/proxy route owner；若迁移到 `src/runtime/resolver`，必须删除旧 owner 并更新所有 call sites，EasyNet backend 不再有 authoritative resolver。
 5. `src/services/invocation_transport` 承载 unary/stream/bidi 的 daemon transport 与 wrapper，不承载产品 API。
-6. `src/facade/cli` 提供 CLI 命令，包括 `easynet join <token>`、hub/device status、ability catalog 查询。
+6. `src/cli` 提供 CLI 命令，包括 `easynet join <token>`、hub/device status、ability catalog 查询。
 7. `src/ffi` / `libeasynet_cli` 只暴露 daemon lifecycle 与 generic Invocation，不新增 one-method-per-ability ABI。
 8. `tests/conformance` 固化 Hub baseline、Device baseline 与 stream/bidi terminal closure。
 
@@ -839,7 +839,7 @@ EasyNet-Cli/
 2. `src/services/invocation_transport` 继续作为 daemon invocation transport 收口点，但需要确保完整 Invocation 七元组。
 3. `src/services/invocation_transport/route_resolver.rs` 继续作为当前 concrete route resolver；不得为了目标目录图再创建第二个 `src/runtime/resolver`。
 4. `src/runtime/agents/profiles` 继续承载 device/profile projection，但不应变成 backend profile source。
-5. `src/facade/cli/groups` 可以保留现有命令组织，新 join/hub/device 命令可按现有风格接入。
+5. `src/cli/groups` 可以保留现有命令组织，新 join/hub/device 命令可按现有风格接入。
 6. `abilities/system` 与 `plugins/builtin` 作为 ability implementation/resource plane，不能替代 `AbilityDescriptor` registry。
 7. `src/runtime/ability/conformance.rs` 是 baseline contract 的 canonical source；Hub、Device、transport、registry 测试只能消费它，不能复制列表。
 

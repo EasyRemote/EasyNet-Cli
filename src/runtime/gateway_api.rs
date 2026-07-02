@@ -50,7 +50,7 @@ pub struct PeerInfo {
 /// the `TargetScope::Remote` dispatch branch they backed. Cross-
 /// device dispatch now flows through the daemon's
 /// `federation.forward_invoke` ability instead — one path, one
-/// helper (`services::invocation_transport::federation_invoke::invoke_via_federation_forward`).
+/// helper (`daemon::invocation::federation_invoke::invoke_via_federation_forward`).
 /// The remaining trait methods (publish_ability / list_peers /
 /// send_heartbeat) describe lifecycle / discovery surfaces that
 /// are unrelated to remote dispatch and stay.

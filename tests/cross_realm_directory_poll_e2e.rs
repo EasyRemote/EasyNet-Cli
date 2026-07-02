@@ -41,12 +41,12 @@ use async_trait::async_trait;
 
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse};
+use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::federation_client::{FederationClient, FederationClientError, HubUri};
 use easynet_cli::services::federation_directory::{
     poll_once, DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
 };
-use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
-use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 
@@ -252,7 +252,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
         }))
         .await
         .expect("federation.discover ok");
-    let body: easynet_cli::services::invocation_transport::federation_wrappers::DiscoverResponse =
+    let body: easynet_cli::daemon::invocation::federation_wrappers::DiscoverResponse =
         serde_json::from_slice(&resp.into_inner().result).expect("DiscoverResponse");
 
     // The CLI should see at least one entry — device-Y from

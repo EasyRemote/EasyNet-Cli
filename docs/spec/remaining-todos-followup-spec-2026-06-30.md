@@ -223,7 +223,7 @@ value → existing HTTP flow (kept until Phase 3).
 - **`src/runtime/federation_client.rs`**: `JoinArgs` already gained
   `membership_ura` (done). Keep `realm`, `public_key_hex`, `pairing_secret`
   (hub discards the latter, harmless).
-- **`src/facade/cli/join.rs`**:
+- **`src/cli/join.rs`**:
   - `parse_hub_ura(&str) -> Result<(realm, port: Option<u16>)>` wrapping
     `crate::ura::parse_ura`, asserting `kind == Hub`.
   - `hub_endpoint_for_realm(realm, port)` → `localhost`-family special-case +

@@ -66,7 +66,7 @@ use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::services::invocation_transport::federation_wrappers::{
+use easynet_cli::daemon::invocation::federation_wrappers::{
     ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
 };
 

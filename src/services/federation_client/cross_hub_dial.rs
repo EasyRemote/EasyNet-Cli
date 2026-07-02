@@ -406,7 +406,7 @@ impl CrossHubDialer {
     /// visible to the next federation dispatch without
     /// reconstructing the dialer or restarting the daemon.
     ///
-    /// `services::invocation_transport::start_daemon_invocation_transport`
+    /// `daemon::invocation::start_daemon_invocation_transport`
     /// uses this constructor in `Hub` / `Both` modes so operators
     /// editing the federation peer set (adding `[[trusted_agent]]
     /// role = "hub"` blocks with the schema-B `origin_realm` /

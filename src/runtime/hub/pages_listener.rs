@@ -221,7 +221,7 @@ async fn handle(req: Request<Body>) -> Response<Body> {
         let verb_owned = verb.to_string();
         let method_str = method.to_string();
         let api_result = tokio::task::spawn_blocking(move || {
-            crate::runtime::agents::pages::api::handle_api(
+            crate::runtime::system_abilities::resources::pages::api::handle_api(
                 &user_owned,
                 &project_owned,
                 &verb_owned,
@@ -420,13 +420,13 @@ fn pages_health_response(head_only: bool) -> Response<Body> {
 async fn handle_v1_models(req: Request<Body>) -> Response<Body> {
     let openai_runtime = req
         .extensions()
-        .get::<crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime>()
+        .get::<crate::runtime::system_abilities::integrations::openai_compat::OpenAICompatRuntime>()
         .cloned();
     let result = tokio::task::spawn_blocking(move || match openai_runtime {
         Some(runtime) => runtime.handle_list_models(serde_json::json!({})),
-        None => {
-            crate::runtime::agents::openai_compat_ability::handle_list_models(serde_json::json!({}))
-        }
+        None => crate::runtime::system_abilities::integrations::openai_compat::handle_list_models(
+            serde_json::json!({}),
+        ),
     })
     .await;
 
@@ -445,7 +445,7 @@ async fn handle_v1_models(req: Request<Body>) -> Response<Body> {
 async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
     let openai_runtime = req
         .extensions()
-        .get::<crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime>()
+        .get::<crate::runtime::system_abilities::integrations::openai_compat::OpenAICompatRuntime>()
         .cloned();
 
     // Parse Authorization → Bearer token. Missing → 401.
@@ -485,7 +485,9 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
     let adapter_result = tokio::task::spawn_blocking(move || match openai_runtime {
         Some(runtime) => runtime.handle_chat_completions(adapter_args),
         None => {
-            crate::runtime::agents::openai_compat_ability::handle_chat_completions(adapter_args)
+            crate::runtime::system_abilities::integrations::openai_compat::handle_chat_completions(
+                adapter_args,
+            )
         }
     })
     .await;
@@ -595,8 +597,8 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
-    use crate::runtime::agents::pages::sandbox::open_directory;
-    use crate::runtime::agents::pages::state::{
+    use crate::runtime::system_abilities::resources::pages::sandbox::open_directory;
+    use crate::runtime::system_abilities::resources::pages::state::{
         ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
     };
 
@@ -663,7 +665,8 @@ mod tests {
         dir
     }
 
-    fn openai_http_runtime() -> crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime {
+    fn openai_http_runtime(
+    ) -> crate::runtime::system_abilities::integrations::openai_compat::OpenAICompatRuntime {
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner(
             "codex.chat",
@@ -675,9 +678,9 @@ mod tests {
         handle
             .set(reg)
             .expect("dispatch handle OnceLock should set once");
-        crate::runtime::agents::openai_compat_ability::OpenAICompatRuntime::from_pages_identity(
+        crate::runtime::system_abilities::integrations::openai_compat::OpenAICompatRuntime::from_pages_identity(
             handle,
-            crate::runtime::agents::PagesIdentity {
+            crate::runtime::system_abilities::resources::pages::PagesIdentity {
                 user: Some("alice".into()),
                 realm: Some("easynet.run".into()),
                 listener_port: Some(8787),

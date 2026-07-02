@@ -400,7 +400,7 @@ mod tests {
         // compatibility helper must surface the same actionable
         // daemon-down message while routing through daemon.sock,
         // not the legacy control socket frame.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let err =
             invoke_local_ability("observe.health", json!({})).expect_err("daemon-down must fail");
         let msg = format!("{err}");

@@ -37,7 +37,7 @@ use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::plugins::remote_desktop::transport::{
     DirectWebRtcEndpoint, RemoteDesktopTransportManager,
 };
-use crate::runtime::agents::media::screen_snapshot::ScreenSnapshotBackend;
+use crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenSnapshotBackend;
 
 /// Runtime-owned state for the remote desktop plugin.
 ///

@@ -32,13 +32,13 @@ use base64::Engine as _;
 use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::invocation_wire::ProtoEnvelope;
 use easynet_cli::persistence::config::{self, RuntimeKind, RuntimeState};
-use easynet_cli::runtime::agents::{
+use easynet_cli::runtime::system_ability_catalog::{
     build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
 };
-use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
-use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::invocation_transport::invocation_wire::ProtoEnvelope;
 use easynet_cli::services::keyring::{
     home_relative, vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource,
     Vault, DEFAULT_VAULT_REL,
@@ -850,7 +850,7 @@ fn start_daemon_at(
     let ability_catalog =
         Arc::new(easynet_cli::services::ability_catalog_store::AbilityCatalogStore::new());
     let discover_resolver = Arc::new(
-        easynet_cli::runtime::agents::discover_ability::LocalDirectoryDiscoverFederationResolver::new(
+        easynet_cli::runtime::system_abilities::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
             Arc::clone(&presence),
             Arc::clone(&advertised_agents),
             Arc::clone(&ability_catalog),
@@ -861,7 +861,7 @@ fn start_daemon_at(
         RegistryBuildServices::fresh().with_discover_federation_resolver(discover_resolver);
     let mut config = RegistryBuildConfig::new(services, &agents);
     let hot_agent_registrar_cell: Arc<
-        easynet_cli::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell,
+        easynet_cli::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell,
     > = Arc::new(std::sync::OnceLock::new());
     config.hot_agent_registrar_cell = Arc::clone(&hot_agent_registrar_cell);
     config.local_runtime = Some(Arc::clone(&runtime));

@@ -69,7 +69,7 @@ fn dispatch_remote_via_forward_invoke(
         }
 
         let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
-            crate::services::invocation_transport::federation_invoke::parse_node_ura(trimmed)
+            crate::daemon::invocation::federation_invoke::parse_node_ura(trimmed)
                 .map_err(|e| EalError::Validation(format!("parse target URA: {e}")))?
         } else if !tenant.is_empty() {
             crate::ura::device_ura(tenant, trimmed)
@@ -84,12 +84,12 @@ fn dispatch_remote_via_forward_invoke(
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let target_call = crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+        let target_call = crate::daemon::invocation::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
             &target_ura,
             ability_name,
         )
         .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
-        crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
+        crate::daemon::invocation::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
             &target_call,
             arguments.clone(),
             caller_ura.as_deref(),
@@ -162,7 +162,7 @@ fn dispatch_local_device_ability(
 }
 
 fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
-    crate::runtime::agents::published_abilities()
+    crate::runtime::system_ability_catalog::published_abilities()
         .into_iter()
         .find(|meta| meta.name == ability_name)
         .map(|meta| dispatch_mode_from_hints(&meta.hints))
@@ -319,7 +319,7 @@ pub(super) fn dispatch_to_agent(
     // weather lookup that should take 200 ms would burn 30 s of LLM
     // tool-search latency.
     let bare_ability = ability.as_str();
-    let manifest_match = crate::runtime::abilities::manifests_for(&agent_id.name, entry)
+    let manifest_match = crate::runtime::agent_ability_specs::manifests_for(&agent_id.name, entry)
         .into_iter()
         .find(|m| m.name() == bare_ability);
     if let Some(manifest) = manifest_match {
@@ -390,21 +390,23 @@ pub(super) fn dispatch_to_agent(
             }
             return (match exec {
                 crate::core::ability_spec::AbilityExec::Shell(spec) => {
-                    crate::runtime::agents::shell_executor::run_shell_exec(spec, arguments, timeout)
+                    crate::runtime::executors::shell::run_shell_exec(spec, arguments, timeout)
                         .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
                 }
                 crate::core::ability_spec::AbilityExec::Http(spec) => {
-                    crate::runtime::agents::http_executor::run_http_exec(spec, arguments, timeout)
+                    crate::runtime::executors::http::run_http_exec(spec, arguments, timeout)
                         .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
                 }
                 crate::core::ability_spec::AbilityExec::Eal(spec) => {
-                    crate::runtime::agents::eal_executor::run_eal_exec(spec, arguments, timeout)
+                    crate::runtime::executors::eal::run_eal_exec(spec, arguments, timeout)
                         .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
                 }
                 crate::core::ability_spec::AbilityExec::Mcp(spec) => {
                     let _ = timeout;
-                    crate::runtime::agents::mcp_executor::run_mcp_exec(spec, arguments)
-                        .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
+                    crate::runtime::system_abilities::integrations::mcp::executor::run_mcp_exec(
+                        spec, arguments,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
                 }
                 crate::core::ability_spec::AbilityExec::HostStream(_) => {
                     // host_stream is a server-stream executor; an EAL step
@@ -431,8 +433,8 @@ pub(super) fn dispatch_to_agent(
     // the daemon process and reduce the caller to a final snapshot.
     // Keep chat local by reusing the daemon handler's own parsing /
     // context / resume logic directly in-process.
-    if bare_ability == crate::runtime::agents::chat_ability::ABILITY_VERB {
-        return crate::runtime::agents::chat_ability::invoke_direct_with_progress(
+    if bare_ability == crate::runtime::system_abilities::agents::chat::ABILITY_VERB {
+        return crate::runtime::system_abilities::agents::chat::invoke_direct_with_progress(
             &agent_id.name,
             entry,
             &[],

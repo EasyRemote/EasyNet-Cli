@@ -14,8 +14,8 @@
 //   * KernelApi      — Control ↔ runtime  (this file)
 //   * GatewayApi     — runtime ↔ network  (see gateway_api.rs)
 //
-// CI enforcement lives in `scripts/check-kernel-boundary.sh`:
-// anything under `src/services/control/` may import
+// CI enforcement lives in `engineering/scripts/check-kernel-boundary.sh`:
+// anything under `src/daemon/control/` may import
 // `crate::runtime::kernel_api`, `crate::runtime::invocation`,
 // `crate::core::domain`, and nothing else from `crate::runtime`.
 //

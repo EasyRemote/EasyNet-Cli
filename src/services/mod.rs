@@ -2,57 +2,38 @@
 // =============================
 //
 // File: src/services/mod.rs
-// Description: Long-running, non-CLI surfaces hosted by the daemon
-//              process. Today that means the local `control` plane
-//              that Client FFI libraries dial into and the daemon
-//              Invocation transport that product paths use for Axon
-//              calls, with room for future sibling services
-//              (IPC-over-vsock for a future hypervisor mode, a
-//              planner service, etc.) to sit without polluting
-//              `facade/` or `runtime/`.
+// Description: Long-running daemon service state that has not yet
+//              been promoted into the Clean Final daemon source
+//              layout. The local control plane already lives under
+//              `daemon/control` and daemon Invocation already lives
+//              under `daemon/invocation`; this module now holds the
+//              remaining migration-stage service stores.
 //
 // Layering rule
 // -------------
-// `services/` sits at the same layer as `facade/` and reaches the
+// `services/` sits below user-facing `cli`/`ffi` surfaces and reaches the
 // runtime through hard trait/type boundaries. The exact allowlist
-// is per-subtree because the three subdirs play different roles:
-//
-//   * `services/control/` — Control-plane wire adapter. Narrow
-//     allowlist: kernel_api, invocation, invocation_target, domain,
-//     ability_dispatch, gateway_api, gateway, system,
-//     local_runtime_invoker, hosted_receipt. Every entry is a
-//     syscall-boundary type.
-//
-//   * `services/invocation_transport/` — daemon-owned gRPC
-//     Invocation transport.
-//     Wider allowlist (adds agents, keyring, publish, execution,
-//     advertise, federation_client, abilities, axon_bridge,
-//     ability_wire, plugin_host) because the gRPC surface legitimately
-//     translates each of those concerns. `ability_wire` is read-only
-//     codec metadata for local bidi abilities; `plugin_host` is only
-//     the boot-injected runtime manager for already-loaded plugin
-//     abilities. Package ownership remains in `runtime/plugin_host`.
+// is per-subtree because the remaining service families play
+// different roles:
 //
 //   * `services/trust_anchor_key_resolver` — the adapter from the
 //     daemon-owned trust-anchor cell to Axon's `KeyResolver` trait.
 //     It stays in services so `runtime/axon_bridge` receives only a
 //     trait object and never imports services internals.
 //
-// `scripts/check-kernel-boundary.sh` is the CI gate. Adding a new
+// `engineering/scripts/check-kernel-boundary.sh` is the CI gate. Adding a new
 // permitted import requires updating both the allowlist there AND
 // the rationale comment next to it — the script's own header
 // documents the convention.
 //
-// Why a separate top-level layer instead of a sibling under facade/
-// -----------------------------------------------------------------
-// `facade/cli` and `facade/mcp` are user-or-agent surfaces hit from
-// *outside* the daemon process: the CLI user's terminal, a remote
-// MCP client. `services/control` is an *intra-machine* surface
-// hit by a Client FFI library loaded into another process on the
-// same host. The trust model, transport, and lifetime are all
-// different enough that keeping them in peer namespaces prevents
-// accidental conflation (e.g. a CLI subcommand reaching into the
-// IPC server's state, or vice versa).
+// Clean-final direction
+// ---------------------
+// This module is a migration-stage holding area, not the final
+// architecture. New daemon-owned control-plane code goes under
+// `daemon/control`; daemon Invocation has moved under
+// `daemon/invocation`; trust, federation, persistence, and resource
+// state should keep moving toward the semantic directories named in
+// `docs/spec/project-structure-v1.md`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -90,14 +71,8 @@
 /// self-heal). Advisory only — the invoke path never consults it.
 pub mod ability_health;
 pub mod clipboard_tracker;
-pub mod control;
 pub(crate) mod federated_directory_reader;
 pub mod session_failure;
-
-/// Daemon-owned Axon `Invocation` transport hosted by
-/// `easynet-daemon`.
-#[cfg(feature = "axon-pb")]
-pub mod invocation_transport;
 
 /// In-memory registry of live `session.open` reverse-channel
 /// senders keyed by caller URI. RFC-003 PR-1 spec §3 — hub-side
@@ -113,7 +88,7 @@ pub mod presence_registry;
 /// join this realm". RFC-003 PR-1 spec §5.2 — PR-1 reads, PR-7
 /// authors via the device-pairing flow. Always built into the
 /// library since the data structure is pure data + std crates;
-/// only consumers in `invocation_transport` need the proto plumbing the
+/// only consumers in `daemon::invocation` need the proto plumbing the
 /// `axon-pb` feature gates.
 pub mod realm_trust_anchor;
 
@@ -226,8 +201,8 @@ pub mod federation_directory;
 
 // `axon_bridge` moved to `crate::runtime::axon_bridge` per the
 // 2026-05-29 industrial-textbook review: its imports go almost
-// entirely to `crate::runtime::*` (`ability_dispatch`, `agents::*`,
-// `invocation_target`); it carries no `services/`-layer
+// entirely to `crate::runtime::*` (`ability_dispatch`,
+// `system_abilities`, `invocation_target`); it carries no `services/`-layer
 // concern of its own. Keeping a re-export here would only
 // reintroduce the false hierarchy. Search by name (`axon_bridge`)
 // or by symbol — every public type is unchanged.
@@ -236,7 +211,7 @@ pub mod federation_directory;
 mod tests {
     #[test]
     fn quota_meters_user_abilities_but_exempts_control_plane() {
-        let meters = crate::services::invocation_transport::quota_meter::quota_meters_function;
+        let meters = crate::daemon::invocation::quota_meter::quota_meters_function;
 
         assert!(meters("observe.health"));
         assert!(meters("agent.todo.run"));

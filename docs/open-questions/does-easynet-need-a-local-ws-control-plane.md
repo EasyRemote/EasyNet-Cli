@@ -6,7 +6,7 @@
 
 Earlier drafts of the plan listed "PR-6 — daemon + WS control plane + pidfile + bearer auth" as a standalone item. Two facts, established by grepping the code and tracing actual customer paths, contradicted that framing:
 
-1. **`run_daemon()` already exists** in `src/facade/cli/heartbeat.rs:428`. The CLI is not daemon-less. What it is not is a *session*-owning daemon — heartbeat only keeps the node's registration alive.
+1. **`run_daemon()` already exists** in `src/cli/heartbeat.rs:428`. The CLI is not daemon-less. What it is not is a *session*-owning daemon — heartbeat only keeps the node's registration alive.
 2. **No local client connects to a WS on the CLI.** The Frontend reaches the backend over HTTP; the backend reaches the CLI as an Axon node; cross-agent calls ride the Axon invocation layer, not a local WS. Mobile is explicitly out of scope (retracted in earlier plan audits). `easynet attach` / `easynet watch` / `easynet tail` verbs do not exist, neither as implementations nor as named customer asks.
 
 Given that, "WS control plane" has no user. Merging it into PR-7 would drag a ~500-line subsystem in with no consumer — the ACP pattern we agreed is forbidden now.

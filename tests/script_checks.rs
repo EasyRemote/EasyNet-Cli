@@ -4,8 +4,10 @@
 // needing a separate CI step.
 //
 // The individual cases live in shell so they can be invoked directly by
-// contributors: `bash tests/scripts/test_trace_parity.sh`. This Rust
-// shim is the automation seam.
+// contributors: `bash tests/scripts/test_trace_parity.sh`. The shell
+// bodies live under `engineering/tests/scripts/`; `tests/scripts/`
+// remains the Cargo-friendly wrapper entrypoint. This Rust shim is the
+// automation seam.
 //
 // A shell driver is selected explicitly (`bash`) instead of relying on
 // the user's `$SHELL` because the scripts use `[[ ... ]]` and
@@ -37,6 +39,13 @@ fn run_bash_script(relative_path: &str) {
             String::from_utf8_lossy(&output.stderr),
         );
     }
+}
+
+#[test]
+fn project_structure_v1_script_contract_holds() {
+    // Pins the migration-compatible root layout: production source
+    // roots, retired compatibility paths, and tool-discovery wrappers.
+    run_bash_script("tests/scripts/test_check_project_structure_v1.sh");
 }
 
 #[test]

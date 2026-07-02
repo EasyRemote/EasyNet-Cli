@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn advertise_abilities_serializes_owner_projection_without_raw_descriptors() {
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let descriptors = vec![
             AbilityDescriptor::new(
@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn advertise_abilities_targets_correct_resource_ura() {
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         // Fake invokers observe the canonical business-layer URA.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let _ = advertise_abilities(
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn heartbeat_includes_owner_projection_refresh_batch() {
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         let mut file = crate::persistence::owner_projections::OwnerProjectionCursorFile::default();
         file.upsert(owner_projection_cursor(
             "easynet:///r/acme/agent/u1.01AGENT",

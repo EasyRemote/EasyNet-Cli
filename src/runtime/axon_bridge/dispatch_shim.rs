@@ -691,7 +691,7 @@ pub async fn dispatch_rpc_local_with_subject(
 /// rejection — produces `Some(<diagnostic>)` with the original
 /// `AxonError`'s `Display` rendering. Caller wires this directly
 /// into the in-band terminal frame helper at
-/// `services::invocation_transport::daemon_invocation_service::
+/// `daemon::invocation::daemon_invocation_service::
 ///  invoke_remote_inband_error_response` (already in place from
 /// the earlier Phase-2 follow-up).
 ///

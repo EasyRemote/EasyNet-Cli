@@ -12,8 +12,8 @@ use easynet_axon::pb::axon::v1::{
     InvocationTarget, InvokeRequest, InvokeServerStreamRequest,
     SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::daemon::invocation::AdmissionFacade;
 use easynet_cli::runtime::ability::{canonical_json_bytes, DEFAULT_ABILITY_DESCRIPTOR_VERSION};
-use easynet_cli::services::invocation_transport::AdmissionFacade;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;

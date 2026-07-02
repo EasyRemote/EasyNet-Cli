@@ -55,10 +55,10 @@
 | Area | Current source | Current fact | Gap |
 | --- | --- | --- | --- |
 | Join snapshot | `EasyNet-Cli/src/runtime/join_connection_state.rs` | 定义 `JoinConnectionState`, `JoinTransition`, `JoinFailureCode`, `JoinConnectionSnapshot`, 持久化到 `~/.easynet/connection-state.json` | code 不是一一对应: `PairingTokenPending/Preflighted/Consumed` 都是 `J100`; `CredentialsSaved/LocalTrustWired/HubCredentialVerified/HubSessionEndpointReachable` 都是 `J300`; boot/admission failure 也有合并 |
-| Join autostart | `EasyNet-Cli/src/facade/cli/join.rs` | pairing accepted 后默认调用 `runtime start`; start 失败时报 `pairing credentials were saved, but daemon startup failed` | 文案已经正确, 但 failure code 粒度仍不足 |
-| Runtime start | `EasyNet-Cli/src/facade/cli/start.rs` | credential verify、Hub session endpoint probe、daemon boot failure 都记录 snapshot | `ConnectedOnline` 需要确保只在 `session.open` admission / PresenceRegistry evidence 成立后记录 |
-| Stop | `EasyNet-Cli/src/facade/cli/stop.rs` | `StopPlan` 分阶段执行 revoke、heartbeat、daemon、sweep、axon runtime、cleanup | 不是持久化状态机; doctor 无法报告 stop code/transition |
-| Reset | `EasyNet-Cli/src/facade/cli/reset.rs` | active runtime 时拒绝 reset; daemon alive 时 best-effort revoke; 然后删除本地 credentials | 不是 self uninstall; revoke 失败仍继续 local reset, 需要明确状态和风险 |
+| Join autostart | `EasyNet-Cli/src/cli/join.rs` | pairing accepted 后默认调用 `runtime start`; start 失败时报 `pairing credentials were saved, but daemon startup failed` | 文案已经正确, 但 failure code 粒度仍不足 |
+| Runtime start | `EasyNet-Cli/src/cli/start.rs` | credential verify、Hub session endpoint probe、daemon boot failure 都记录 snapshot | `ConnectedOnline` 需要确保只在 `session.open` admission / PresenceRegistry evidence 成立后记录 |
+| Stop | `EasyNet-Cli/src/cli/stop.rs` | `StopPlan` 分阶段执行 revoke、heartbeat、daemon、sweep、axon runtime、cleanup | 不是持久化状态机; doctor 无法报告 stop code/transition |
+| Reset | `EasyNet-Cli/src/cli/reset.rs` | active runtime 时拒绝 reset; daemon alive 时 best-effort revoke; 然后删除本地 credentials | 不是 self uninstall; revoke 失败仍继续 local reset, 需要明确状态和风险 |
 | Backend route facade | `EasyNet/backend/internal/logic/ability/resolve_invoke_route.go` | 使用 daemon `ResolveInvokeRoute`; negative answer 转 typed validation error | 基本方向正确 |
 | Backend prepare | `EasyNet/backend/internal/logic/ability/prepareEnvelopeLogic.go` | request 使用 `target_ura/tool_name`; response 绑定 selected ability/route/dispatch | 基本方向正确 |
 | Backend submit | `EasyNet/backend/internal/logic/ability/submitSignedInvocationLogic.go` | submit 不重新 resolve, 验证 prepare-time route binding | 基本方向正确 |
@@ -385,7 +385,7 @@ The current `pages.list` path has a partial version of this, but still recognize
 
 ### 7.1 Current implementation
 
-Current source: `EasyNet-Cli/src/facade/cli/stop.rs`.
+Current source: `EasyNet-Cli/src/cli/stop.rs`.
 
 Current objects:
 
@@ -433,7 +433,7 @@ stateDiagram-v2
 
 ### 8.1 Current implementation
 
-Current source: `EasyNet-Cli/src/facade/cli/reset.rs`.
+Current source: `EasyNet-Cli/src/cli/reset.rs`.
 
 Current behavior:
 

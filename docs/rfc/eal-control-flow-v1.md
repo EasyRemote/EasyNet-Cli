@@ -273,7 +273,7 @@ open-question.** Two issues:
    the same token at two semantic layers with two different
    meanings.
 2. *No consumer at the block layer*. `easynet discuss` already
-   exists as a CLI verb (`src/facade/cli/discuss.rs`,
+   exists as a CLI verb (`src/cli/discuss.rs`,
    `easynet discuss --agents … --rounds … --topic …`) and
    orchestrates multi-agent conferences at the command layer.
    No gallery mission requests conferences *as an EAL block*.

@@ -6,6 +6,7 @@ Specs that bind future code. A reader entering this directory should start here.
 
 - **[daemon-sdk-requirements-v1.md](daemon-sdk-requirements-v1.md)** — Product-facing Daemon SDK requirements for `easynet-daemon`: supported languages, Axon-style project structure, complete OOP object model, daemon/client/invocation/stream/bidi/directory/fan-out state machines, complete Invocation, listing complexity bounds, facade fan-out bans, typed errors, EasyRemote relationship, and EasyNet backend cutover constraints.
 - **[node-roster-label-v2.md](node-roster-label-v2.md)** — Format of the `a2a.agents_json` node-level discovery hint attached to Axon node registration. Strictly a rendering hint for the EasyNet Frontend's agents page. **Not** an Agent-layer publish. Retirement path tracked in [`../open-questions/retire-a2a-agents-json-label.md`](../open-questions/retire-a2a-agents-json-label.md).
+- **[project-structure-v1.md](project-structure-v1.md)** — Target repository/module layout for EasyNet-Cli: product-module ability handlers, centralized ability wire constants, runtime/registry boundary split, descriptor asset placement, engineering/platform directories, and migration-risk classification.
 
 ## Superseded — do not build on these
 

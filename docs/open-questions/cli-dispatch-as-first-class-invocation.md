@@ -63,7 +63,7 @@ Estimated scope when unblocked: 6–8 sessions. Not pre-reserved in the plan; th
 
 
 
-`src/facade/cli/skill.rs::hash_tree` computes the skill's `content_hash` as SHA-256 over the sorted file tree of the skill directory (code only). AXIOM §6.1 (Q6, added to AXIOM on the `rev10-signed-mcp-wip` branch) explicitly rules this out:
+`src/cli/skill.rs::hash_tree` computes the skill's `content_hash` as SHA-256 over the sorted file tree of the skill directory (code only). AXIOM §6.1 (Q6, added to AXIOM on the `rev10-signed-mcp-wip` branch) explicitly rules this out:
 
 > "A receipt whose snapshot is SHA-256 of code alone fails Q6, because the executed behaviour depends on schema and dependencies as well as code."
 

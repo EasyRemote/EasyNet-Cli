@@ -141,7 +141,7 @@ mod tests {
         let _lock = test_lock();
         let plugin = test_plugin();
         reset_store(&plugin);
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "remote-desktop-no-consent-display");
         resources::save(&file).unwrap();

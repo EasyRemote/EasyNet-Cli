@@ -8,7 +8,7 @@
 //              `IncomingFrame`. Owned by `ClientSession`; never
 //              directly visible across the C ABI.
 //
-// Why this module, distinct from services::control::server
+// Why this module, distinct from daemon::control::server
 // --------------------------------------------------------
 // `server.rs` is the daemon side; `client.rs` is the lib side. Both
 // speak `frames::IncomingFrame` / `frames::OutgoingFrame` over a
@@ -44,10 +44,8 @@ use tokio::net::windows::named_pipe::NamedPipeClient;
 #[cfg(unix)]
 use tokio::net::UnixStream;
 
-use crate::services::control::discovery::{
-    self, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1,
-};
-use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
+use crate::daemon::control::discovery::{self, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1};
+use crate::daemon::control::frames::{IncomingFrame, OutgoingFrame};
 
 /// Open IPC connection to the daemon, owned by a `ClientSession`.
 ///
@@ -230,13 +228,13 @@ impl IpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::control::boot_events::BootBus;
-    use crate::services::control::discovery::{flags, ControlDiscovery, IpcVersionRange};
-    use crate::services::control::server;
-    use crate::services::control::transport::{self, ControlListener};
+    use crate::daemon::control::boot_events::BootBus;
+    use crate::daemon::control::discovery::{flags, ControlDiscovery, IpcVersionRange};
+    use crate::daemon::control::server;
+    use crate::daemon::control::transport::{self, ControlListener};
     use std::path::PathBuf;
 
-    /// Short-prefix temp dir; see same comment in services/control/{server,transport}.rs.
+    /// Short-prefix temp dir; see same comment in daemon/control/{server,transport}.rs.
     /// macOS `SUN_LEN` ~= 104 bytes for sockaddr_un.sun_path; the default
     /// `std::env::temp_dir()` already eats ~50 bytes which leaves no
     /// room for a sub-dir + `.sock` filename.

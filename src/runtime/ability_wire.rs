@@ -145,13 +145,16 @@ pub fn is_bidi_wire_ability(ability: &str) -> bool {
 }
 
 pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
-    if ability == crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH {
+    if ability == crate::runtime::system_abilities::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
         return Some(AbilityBidiWireKind::Pty);
     }
-    if ability == crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER {
+    if ability
+        == crate::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER
+    {
         return Some(AbilityBidiWireKind::FileTransfer);
     }
-    if ability == crate::runtime::agents::browser_session_ability::ABILITY_ATTACH_SESSION {
+    if ability == crate::runtime::system_abilities::device_control::browser::ABILITY_ATTACH_SESSION
+    {
         return Some(AbilityBidiWireKind::JsonFrames);
     }
     None
@@ -173,19 +176,19 @@ mod tests {
         let registry = AbilityWireRegistry::core();
         assert_eq!(
             registry.bidi_wire_kind_for(
-                crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
+                crate::runtime::system_abilities::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH
             ),
             Some(AbilityBidiWireKind::Pty)
         );
         assert_eq!(
             registry.bidi_wire_kind_for(
-                crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                crate::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER
             ),
             Some(AbilityBidiWireKind::FileTransfer)
         );
         assert_eq!(
             registry.bidi_wire_kind_for(
-                crate::runtime::agents::browser_session_ability::ABILITY_ATTACH_SESSION
+                crate::runtime::system_abilities::device_control::browser::ABILITY_ATTACH_SESSION
             ),
             Some(AbilityBidiWireKind::JsonFrames)
         );

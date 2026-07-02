@@ -254,8 +254,8 @@ The current implementation is still converging on this model. Review these
 areas when changing the ability control plane:
 
 - `src/runtime/ability_dispatch.rs`
-- `src/runtime/agents/profiles/device.rs`
+- `src/runtime/system_ability_catalog/profiles/device.rs`
+- `src/runtime/system_abilities/`
 - `src/runtime/plugin_host/host_api.rs`
-- `src/runtime/system/`
 - `src/services/invocation_transport/`
-- `abilities/system/*.ability.toml`
+- `ability-descriptors/system/*.ability.toml`

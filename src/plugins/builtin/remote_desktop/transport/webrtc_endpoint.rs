@@ -42,7 +42,7 @@ use crate::plugins::remote_desktop::transport::{
     apply_pending_remote_ice_candidates, run_direct_webrtc_media_loop, DirectWebRtcEndpoint,
     DirectWebRtcHandler, DirectWebRtcSession, RemoteDesktopTransportManager,
 };
-use crate::runtime::agents::media::screen_snapshot::ScreenCaptureOptions;
+use crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenCaptureOptions;
 
 const DIRECT_WEBRTC_ICE_GATHER_TIMEOUT_MS: u64 = 2_500;
 

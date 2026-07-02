@@ -25,8 +25,8 @@ fn main() -> anyhow::Result<()> {
         first_seen_at: chrono::Utc::now().to_rfc3339(),
     };
 
-    let backend: Arc<dyn easynet_cli::runtime::agents::media::camera_snapshot::SnapshotBackend> =
-        Arc::new(easynet_cli::runtime::agents::media::camera_snapshot::NokhwaBackend);
+    let backend: Arc<dyn easynet_cli::runtime::system_abilities::resources::media::camera_snapshot::SnapshotBackend> =
+        Arc::new(easynet_cli::runtime::system_abilities::resources::media::camera_snapshot::NokhwaBackend);
 
     eprintln!("opening default camera (index 0)...");
     let frame = backend

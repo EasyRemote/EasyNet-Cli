@@ -130,7 +130,7 @@ Each check prints pass/warn/fail with a one-line remediation (`agent publish --r
 
 - `publish/axon_handle.rs` owns the read/write of this file.
 - `publish/ability_publish.rs` drives the state machine during the two-phase publish.
-- `facade/cli/agent::run_doctor` gains the six checks above as a new section in its output.
+- `cli/agent::run_doctor` gains the six checks above as a new section in its output.
 - `agent remove` deletes `publish.json` after unregistering from Axon (order matters: unregister first so a crash mid-way leaves a `partial` file instead of an orphan adapter registration with no local record).
 
 ## `agent publish --rollback` exit codes

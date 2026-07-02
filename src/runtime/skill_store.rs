@@ -107,8 +107,8 @@ impl SkillSource {
 /// `skill.install` ability (daemon ability dispatch).
 ///
 /// `pub(crate)` because the only callers are in this crate
-/// (run_install in this file + skill_install_ability handler in
-/// runtime/agents). Public visibility would invite external
+/// (run_install in this file + the skill.install system ability
+/// handler). Public visibility would invite external
 /// callers to bind to a helper that exists for in-tree wiring,
 /// not as a stable downstream API.
 ///
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn global_skill_pool_ref_parses_known_owner_and_rejects_bad_labels() {
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         let pool = GlobalSkillPoolRef::parse_owner_id("global:claude-global", "skill.test")
             .expect("parse")
             .expect("global owner");
@@ -948,7 +948,7 @@ mod tests {
 
     #[test]
     fn global_skill_pool_ref_resolves_directory_name_without_alias_scan() {
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         let pool = GlobalSkillPoolRef::from_label("claude-global", "skill.test").unwrap();
         let skill_dir = config::home_dir()
             .join(".claude")

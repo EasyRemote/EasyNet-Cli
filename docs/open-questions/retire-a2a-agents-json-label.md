@@ -33,7 +33,7 @@ The retirement PR will not re-introduce a tolerant parser on the backend for a t
 ## What to do in the meantime
 
 - The label is live until retirement. Treat it as a Frontend-rendering contract, not as a publish contract.
-- `agent publish --dry-run` (PR-4) is allowed to keep its name — the CLI verb is an operator-facing concept that will become honest once retirement lands. Until then its scope is "enumerate what the label would advertise"; it does not claim to perform a protocol-level publish. The spec for this CLI verb's current behaviour lives in `agent publish`'s implementation in `src/facade/cli/agent.rs::run_publish`.
+- `agent publish --dry-run` (PR-4) is allowed to keep its name — the CLI verb is an operator-facing concept that will become honest once retirement lands. Until then its scope is "enumerate what the label would advertise"; it does not claim to perform a protocol-level publish. The spec for this CLI verb's current behaviour lives in `agent publish`'s implementation in `src/cli/agent.rs::run_publish`.
 - Do not build a `publish/` Rust module, a `publish.json` local ledger, or a publish state machine against the current label. Those were designed in the retracted specs (`agent-publish-mechanism.md`, `publish-json-format.md`) under the wrong mental model.
 
 ## Log

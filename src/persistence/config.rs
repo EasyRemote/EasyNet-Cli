@@ -1127,7 +1127,7 @@ mod tests {
     // concurrent tests via a global mutex, which is load-bearing because
     // `agents_root()` reads `HOME`.
 
-    use crate::facade::cli::test_support::HomeGuard;
+    use crate::cli::test_support::HomeGuard;
 
     #[test]
     fn agents_root_prefers_new_layout_when_only_new_exists() {

@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn plugin_index_default_resilient_skips_installed_collision_with_builtin() {
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         let root = default_plugin_root();
         let shadow = root.join("installed/easynet.remote_desktop/9.9.9");
         write_test_package_with_id(&shadow, "easynet.remote_desktop", "9.9.9", "test.shadow");

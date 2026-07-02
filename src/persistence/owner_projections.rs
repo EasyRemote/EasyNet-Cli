@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn save_load_round_trip_preserves_owner_cursor() {
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         let mut file = OwnerProjectionCursorFile::default();
         file.upsert(OwnerProjectionCursor {
             owner_ura: "easynet:///r/acme/device/01DEV".into(),

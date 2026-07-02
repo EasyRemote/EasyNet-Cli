@@ -458,7 +458,7 @@ pub type LocalStreamHandlerWithEnvelope =
 /// SSE) so the registration API never grows a tuning surface.
 ///
 /// Sized to match the per-connection IPC writer queue
-/// (services/control/server.rs) so a single saturated session
+/// (daemon/control/server.rs) so a single saturated session
 /// cannot exceed the writer's own backlog.
 pub const BIDI_CHANNEL_BOUND: usize = 256;
 
@@ -5102,7 +5102,7 @@ mod tests {
         // routes through GatewayApi (deleted along with
         // NoopGateway's invoke_remote_ability stub). Cross-device
         // dispatch flows through
-        // `services::invocation_transport::federation_invoke::invoke_via_federation_forward`
+        // `daemon::invocation::federation_invoke::invoke_via_federation_forward`
         // instead. The dispatcher surfaces a typed error
         // pointing the caller at the new path so a stale Remote
         // construction fails loud instead of silently bouncing

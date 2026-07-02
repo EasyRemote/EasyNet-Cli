@@ -7,7 +7,7 @@
 //              anchor shape the CLI threads as a causal parent.
 //
 // Both the daemon-invoke metadata path (support::local_daemon_grpc) and the
-// discover realm-anchor resolver (facade::cli::discover) consume this exact
+// discover realm-anchor resolver (cli::discover) consume this exact
 // projection. Keeping it in one place means the "what is the head anchor of a
 // completed invocation" contract — and the completeness predicate that gates
 // realm-tier causal anchoring — cannot drift between the two readers.

@@ -744,7 +744,7 @@ pub async fn poll_once(
         let request = InvokeRequest {
             envelope,
             function_name:
-                crate::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_DISCOVER
+                crate::daemon::invocation::federation_wrappers::ABILITY_FEDERATION_DISCOVER
                     .to_string(),
             arguments: br#"{}"#.to_vec(),
             ..InvokeRequest::default()
@@ -756,7 +756,7 @@ pub async fn poll_once(
         {
             Ok(response) => {
                 let parsed: Result<
-                    crate::services::invocation_transport::federation_wrappers::DiscoverResponse,
+                    crate::daemon::invocation::federation_wrappers::DiscoverResponse,
                     _,
                 > = serde_json::from_slice(&response.result);
                 match parsed {
@@ -1081,7 +1081,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         };
         let request = InvokeServerStreamRequest {
             envelope: Some(envelope),
-            function_name: crate::services::invocation_transport::federation_wrappers
+            function_name: crate::daemon::invocation::federation_wrappers
                 ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
                 .to_string(),
             ..InvokeServerStreamRequest::default()
@@ -2066,7 +2066,7 @@ mod tests {
             assert!(
                 names.iter().any(|name| {
                     name
-                        == crate::services::invocation_transport::federation_wrappers
+                        == crate::daemon::invocation::federation_wrappers
                             ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
                 }),
                 "supervisor must dial the v2 stream ability; got {names:?}",
@@ -2074,7 +2074,7 @@ mod tests {
             assert!(
                 names.iter().all(|name| {
                     name
-                        != crate::services::invocation_transport::federation_wrappers
+                        != crate::daemon::invocation::federation_wrappers
                             ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
                 }),
                 "supervisor must not dial the legacy v1 stream ability; got {names:?}",
@@ -2948,10 +2948,7 @@ mod tests {
         }
 
         fn build_canned_response(entries: Vec<DirectoryEntry>) -> Vec<u8> {
-            let resp =
-                crate::services::invocation_transport::federation_wrappers::DiscoverResponse {
-                    entries,
-                };
+            let resp = crate::daemon::invocation::federation_wrappers::DiscoverResponse { entries };
             serde_json::to_vec(&resp).unwrap()
         }
 

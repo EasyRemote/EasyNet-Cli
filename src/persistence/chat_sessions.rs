@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn write_then_load_round_trip() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn(
             "demot",
             "sess-1",
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn write_turn_with_elapsed_persists_duration() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn_with_elapsed(
             "demot",
             "timed",
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn second_write_appends_does_not_double_meta() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn("demot", "sess-1", "hi", "hello", &[], &json!({})).unwrap();
         write_turn("demot", "sess-1", "again", "ok", &[], &json!({})).unwrap();
         let lines = load_session("demot", "sess-1").unwrap();
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn latest_session_tracks_most_recent() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn("demot", "older", "x", "y", &[], &json!({})).unwrap();
         // Sleep is unnecessary in tests since timestamps include
         // sub-second precision via chrono. The second write below
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn list_sessions_orders_most_recent_first() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn("demot", "a", "first", "r1", &[], &json!({})).unwrap();
         write_turn("demot", "b", "second", "r2", &[], &json!({})).unwrap();
         let sessions = list_sessions("demot");
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn list_sessions_falls_back_to_dir_scan_when_index_missing() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn("demot", "scratch", "hi", "ok", &[], &json!({})).unwrap();
         // Simulate a corrupt / missing index.
         let _ = std::fs::remove_file(index_file("demot"));
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn set_latest_session_bumps_pointer_for_known_id() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn("demot", "old", "x", "y", &[], &json!({})).unwrap();
         write_turn("demot", "new", "x", "y", &[], &json!({})).unwrap();
         // After both writes "new" is latest.
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn lifelong_session_round_trip() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         assert_eq!(lifelong_session("demot"), None, "fresh agent has none");
         write_turn("demot", "sess-1", "hi", "hello", &[], &json!({})).unwrap();
         assert_eq!(
@@ -695,7 +695,7 @@ mod tests {
 
     #[test]
     fn set_latest_session_rejects_unknown_id() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         write_turn("demot", "real", "x", "y", &[], &json!({})).unwrap();
         let err = set_latest_session("demot", "ghost")
             .expect_err("unknown id must surface a typed error");

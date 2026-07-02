@@ -231,7 +231,7 @@ Decision criterion: how does an LLM discover MCP tools? Today the discover abili
 
 ### E-2 Apply the choice
 
-Sweep `runtime/agents/mcp_*.rs` and `facade/cli/agent.rs:2061-2092` to emit the canonical shape. Add the post-Stage-4 lint envisioned in `docs/open-questions/deprecate-self-alias-in-ability-names.md` §"Stage 4 ship criterion 6" so any new `register_rpc(name, ...)` whose first segment isn't in `{device, hub, <agent-id>, <user-id>}` fails the build.
+Sweep `runtime/agents/mcp_*.rs` and `cli/agent.rs:2061-2092` to emit the canonical shape. Add the post-Stage-4 lint envisioned in `docs/open-questions/deprecate-self-alias-in-ability-names.md` §"Stage 4 ship criterion 6" so any new `register_rpc(name, ...)` whose first segment isn't in `{device, hub, <agent-id>, <user-id>}` fails the build.
 
 ### E-3 RFC doc sweep
 
@@ -304,7 +304,7 @@ src/runtime/skill_store/
 
 ### G-3 Apply PR-E's MCP namespace decision
 
-Sweep `runtime/agents/mcp_*.rs` and `facade/cli/agent.rs:2061-2092` to emit the canonical shape PR-E chose. Update the post-Stage-4 `OwnerKind`-first-segment lint to require the shape.
+Sweep `runtime/agents/mcp_*.rs` and `cli/agent.rs:2061-2092` to emit the canonical shape PR-E chose. Update the post-Stage-4 `OwnerKind`-first-segment lint to require the shape.
 
 **Scope boundary.**
 - IN: rename + a single round of `git grep` / `cargo check` verification per family.
@@ -377,7 +377,7 @@ These are the items the second-pass review identified that were small enough to 
 - **`block_on_runtime` wrapper deleted** in `runtime/local_runtime_invoker.rs`; three call sites now reach `support::async_bridge::run_blocking(..., NoRuntimeFallback::BuildCurrentThreadTokio)` directly. `block_on_runtime_sync` retained in `ability_dispatch.rs` (7 call sites, all under the same in-memory-only invariant, documented in the helper's docstring).
 - **`stamp_bidi_down_sequence` helper extracted** in `daemon_invocation_service.rs`; the two byte-identical `stamp_sequence` methods on `LocalBidiDownStream` and `SessionDownStream` now both delegate. Future PR-A's per-arm split can move them anywhere without splitting the saturating_add semantic.
 - **`late_bound_rpc_handler` op_event** in `runtime/ability_dispatch.rs::invoke_rpc_json`. The self-heal path (handler in catalogue but missing from LocalRuntime) is no longer silent — operators see when boot's sync_runtime_ability is incomplete.
-- **`invoke_daemon_ability_required` helper** in `facade/cli/agent.rs`. The four `invoke_daemon_agent_*_required` wrappers now delegate to one shared helper that owns the error-format policy. The wrappers stay as 1-line named entry points for `git grep`.
+- **`invoke_daemon_ability_required` helper** in `cli/agent.rs`. The four `invoke_daemon_agent_*_required` wrappers now delegate to one shared helper that owns the error-format policy. The wrappers stay as 1-line named entry points for `git grep`.
 - **CLI `agent refresh --agent <name>`** new flag. Previously `easynet agent refresh` always rebuilt every row; now operators can target one row. Wired through the `agent.refresh` `name` field that was already in the input schema.
 - **`runtime/axon_bridge/` moved from `services/`** — its imports went almost entirely to `runtime/*`; the `services/` placement was a false hierarchy. `crate::services::trust_anchor_cell` borrows stay as the one legitimate upward reference and are now bounded by a new boundary rule.
 - **`check-kernel-boundary.sh` extended with rules 4 + 5** — bounds `runtime/agents/` and `runtime/axon_bridge/` upward imports into `services/*` with explicit one-token allowlists (`hub_published_ability_store` for agents; `trust_anchor_cell|realm_trust_anchor` for axon_bridge). Any new upward reference must edit both the allowlist AND the rationale comment in this script.

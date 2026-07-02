@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::facade::cli::discover::{
+use easynet_cli::cli::discover::{
     self, DiscoverArgs, DiscoverScopeMode, OutputFormat, SourceWindowMode,
 };
 use easynet_cli::persistence::config;

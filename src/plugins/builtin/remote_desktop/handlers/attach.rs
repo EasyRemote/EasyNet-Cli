@@ -92,13 +92,13 @@ mod tests {
         env_for, seed_display, test_consent_causal_context, test_lock, test_runtime_limits,
     };
     use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-    use crate::runtime::agents::media::screen_snapshot::{
-        EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend, SyntheticScreenBackend,
-    };
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
     use crate::runtime::plugin_host::{
         DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
         PluginRequirementSet,
+    };
+    use crate::runtime::system_abilities::resources::media::screen_snapshot::{
+        EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend, SyntheticScreenBackend,
     };
 
     #[derive(Debug)]
@@ -153,7 +153,7 @@ mod tests {
     fn attach_bidi_emits_synthetic_frame_and_closes_on_request() {
         let _lock = test_lock();
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let _g = crate::facade::cli::test_support::HomeGuard::new();
+            let _g = crate::cli::test_support::HomeGuard::new();
             let mut file = ResourcesFile::default();
             let ura = seed_display(&mut file, "remote-desktop-bidi-display");
             resources::save(&file).unwrap();
@@ -233,7 +233,7 @@ mod tests {
     fn attach_bidi_client_close_detaches_preview_transport_state() {
         let _lock = test_lock();
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let _g = crate::facade::cli::test_support::HomeGuard::new();
+            let _g = crate::cli::test_support::HomeGuard::new();
             let plugin = RemoteDesktopPlugin::new(
                 Arc::new(SyntheticScreenBackend),
                 test_runtime_limits().into(),
@@ -301,7 +301,7 @@ mod tests {
     fn attach_bidi_capture_failure_marks_session_failed() {
         let _lock = test_lock();
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let _g = crate::facade::cli::test_support::HomeGuard::new();
+            let _g = crate::cli::test_support::HomeGuard::new();
             let plugin = RemoteDesktopPlugin::new(
                 Arc::new(FailingScreenBackend),
                 test_runtime_limits().into(),
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn attach_bidi_rejects_subject_mismatch() {
         let _lock = test_lock();
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "remote-desktop-bidi-display");
         let other_ura = seed_display(&mut file, "remote-desktop-bidi-other-display");
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn attach_bidi_requires_resource_subject() {
         let _lock = test_lock();
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "remote-desktop-bidi-missing-subject-display");
         resources::save(&file).unwrap();

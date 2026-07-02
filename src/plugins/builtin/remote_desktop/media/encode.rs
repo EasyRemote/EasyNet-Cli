@@ -32,7 +32,7 @@ use crate::plugins::remote_desktop::media::{
 };
 use crate::plugins::remote_desktop::transport::BidiTerminalGuard;
 use crate::runtime::ability_dispatch::BidiOutputFrame;
-use crate::runtime::agents::media::screen_snapshot::{
+use crate::runtime::system_abilities::resources::media::screen_snapshot::{
     capture_rgb_with_xcap, open_display_recorder_with_xcap, rgba_bytes_to_rgb_frame, RawRgbFrame,
     ScreenCaptureOptions,
 };

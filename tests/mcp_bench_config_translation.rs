@@ -1,4 +1,4 @@
-// Integration test for scripts/mcp_bench_setup.sh — verifies the
+// Integration test for engineering/scripts/mcp_bench_setup.sh — verifies the
 // commands.json → mcp_clients.json translation produces JSON that
 // the daemon's McpClientService::from_path actually accepts.
 //
@@ -22,7 +22,7 @@ use easynet_cli::runtime::execution::mcp_client::McpClientsFile;
 use serde_json::{json, Value};
 
 fn translate_commands_json(commands: &Value, mcp_bench_dir: &str) -> Value {
-    // Mirrors the python heredoc in scripts/mcp_bench_setup.sh —
+    // Mirrors the python heredoc in engineering/scripts/mcp_bench_setup.sh —
     // any divergence between the two implementations breaks the
     // operator's boot. Keep them in lock-step.
     let servers_dir = format!("{mcp_bench_dir}/mcp_servers");
@@ -35,7 +35,7 @@ fn translate_commands_json(commands: &Value, mcp_bench_dir: &str) -> Value {
         let cwd_rel = entry.get("cwd").and_then(Value::as_str);
         let cwd_abs = cwd_rel.map(|c| {
             // shell-quote-safe enough for test purposes: mirror
-            // scripts/mcp_bench_setup.sh's handling of mcp-bench's
+            // engineering/scripts/mcp_bench_setup.sh's handling of mcp-bench's
             // "../server" cwd values. install.sh places those
             // checkouts under mcp_servers/server.
             if c.starts_with("../") {
@@ -178,16 +178,20 @@ fn translation_script_file_is_present_and_executable() {
     // makes sure the script wasn't accidentally deleted while
     // this test continues to enforce the schema.
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("engineering")
         .join("scripts")
         .join("mcp_bench_setup.sh");
-    assert!(script.exists(), "scripts/mcp_bench_setup.sh missing");
+    assert!(
+        script.exists(),
+        "engineering/scripts/mcp_bench_setup.sh missing"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&script).unwrap().permissions().mode();
         assert!(
             mode & 0o111 != 0,
-            "scripts/mcp_bench_setup.sh not executable"
+            "engineering/scripts/mcp_bench_setup.sh not executable"
         );
     }
 }

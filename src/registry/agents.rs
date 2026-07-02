@@ -119,7 +119,7 @@ pub struct AgentEntry {
     /// Path to this agent's on-disk root directory. v2-only
     /// field: absent on v1 rows (load-path fills it from the
     /// legacy workspace path). Having it present is what lets
-    /// `runtime::workspace` and `facade::cli::agent list`
+    /// `runtime::workspace` and `cli::agent list`
     /// resolve where an agent lives without re-computing the
     /// path from `state_dir + name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,7 +172,7 @@ fn is_default_max_output(n: &usize) -> bool {
 }
 
 /// Value a fresh v2 row should carry in `timeout_secs`. Exposed
-/// so `facade::cli::agent::run_add` can set it explicitly rather
+/// so `cli::agent::run_add` can set it explicitly rather
 /// than rely on `AgentEntry::new`'s current behaviour — see the
 /// rationale block in `run_add` for why that symmetry matters.
 pub(crate) fn default_timeout_for_new_rows() -> u64 {
@@ -787,7 +787,7 @@ mod tests {
     // v1 env to `<agent-root>/.env`, and preserves non-env
     // fields on the registry row.
 
-    use crate::facade::cli::test_support::HomeGuard;
+    use crate::cli::test_support::HomeGuard;
 
     /// Compose a v1-shaped agents.json on disk. Each caller
     /// tunes the shape; returns the absolute path.

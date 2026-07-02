@@ -34,11 +34,13 @@ use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::schema;
 use crate::runtime::ability::AbilityImplSource;
 use crate::runtime::ability_dispatch::{BidiSource, EnvelopeContext, StreamSource};
-use crate::runtime::agents::media::screen_snapshot::{ScreenSnapshotBackend, XcapBackend};
 use crate::runtime::plugin_host::package::BuiltinPluginAbilitySpec;
 use crate::runtime::plugin_host::{
     PluginAbilityLayer, PluginBidiWireKind, PluginCallMode, PluginContributionBuilder,
     PluginRuntimeLimits, Result,
+};
+use crate::runtime::system_abilities::resources::media::screen_snapshot::{
+    ScreenSnapshotBackend, XcapBackend,
 };
 
 type PluginRpcHandler =
@@ -294,10 +296,10 @@ mod tests {
     use super::*;
     use crate::runtime::ability::CallMode as DescriptorCallMode;
     use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-    use crate::runtime::agents::media::screen_snapshot::SyntheticScreenBackend;
     use crate::runtime::plugin_host::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
+    use crate::runtime::system_abilities::resources::media::screen_snapshot::SyntheticScreenBackend;
 
     #[test]
     fn every_remote_desktop_spec_is_projected_from_binding_table() {

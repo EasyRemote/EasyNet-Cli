@@ -29,10 +29,10 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::discover::{
+use easynet_cli::cli::discover::{
     self, DiscoverArgs, DiscoverScopeMode, OutputFormat, SourceWindowMode,
 };
-use easynet_cli::facade::cli::teach::{self, ForgetArgs, LearnArgs, TeachArgs};
+use easynet_cli::cli::teach::{self, ForgetArgs, LearnArgs, TeachArgs};
 use seven_axes_fixture::SevenAxesHome;
 
 const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_system.local";

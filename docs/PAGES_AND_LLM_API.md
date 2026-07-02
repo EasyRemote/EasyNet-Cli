@@ -155,8 +155,8 @@ Per RFC-006-B v0.6 INV-3 + INV-5:
 
 The hub can run in two shapes:
 
-  - `docker/hub-pages/full/` — full daemon container. Cross-compile the linux binaries with the existing `easynet-linux-build:bookworm-arm64` image, then `docker compose build && docker compose up -d`. Volume-mount `./sites/` to publish projects from host. Browser hits `:8787` → goes straight into container daemon.
-  - `docker/hub-pages/nginx-sidecar/` — nginx-only container, host daemon stays on `:8788`, container forwards `:8787` to host. Useful when disk pressure prevents a Rust toolchain build.
+  - `engineering/docker/hub-pages/full/` — full daemon container. Cross-compile the linux binaries with the existing `easynet-linux-build:bookworm-arm64` image, then `docker compose build && docker compose up -d`. Volume-mount `./sites/` to publish projects from host. Browser hits `:8787` → goes straight into container daemon.
+  - `engineering/docker/hub-pages/nginx-sidecar/` — nginx-only container, host daemon stays on `:8788`, container forwards `:8787` to host. Useful when disk pressure prevents a Rust toolchain build.
 
 Both containerised shapes preserve the same INV-1 (Adapter Purity): the container is the HTTP boundary, the daemon (host or container) is the substrate. Production drops the in-daemon listener and routes only through the container; dev tolerates either.
 
@@ -299,9 +299,9 @@ The same flow works for `easynet:///r/easynet.run/ability/alice.web-builder.chat
 
 ### 4.2 Daemon-side runtime
 
-  - `src/runtime/agents/pages/{api.rs, fetch.rs, mod.rs, publish.rs, sandbox.rs, state.rs, mime.rs, list_get_unpublish.rs}` — Pages reference system.
-  - `src/runtime/agents/api_key_ability.rs` — `<user>.api_key.{create,list,revoke}` capability mint/revoke.
-  - `src/runtime/agents/openai_compat_ability.rs` — `01HUB.openai.{chat_completions,list_models}` adapters.
+  - `src/runtime/system_abilities/resources/pages/{api.rs, fetch.rs, mod.rs, publish.rs, sandbox.rs, state.rs, mime.rs, list_get_unpublish.rs, identity.rs}` — Pages reference system.
+  - `src/runtime/system_abilities/governance/api_key.rs` — `<user>.api_key.{create,list,revoke}` capability mint/revoke.
+  - `src/runtime/system_abilities/integrations/openai_compat.rs` — `01HUB.openai.{chat_completions,list_models}` adapters.
   - `src/runtime/hub/{pages_listener.rs, pages_serve_ability.rs}` — HTTP boundary on axum, routes `/v1/*` and `*.*.pages.<realm>/*`.
   - `src/runtime/ability_dispatch.rs` — `chain_rpc_fallback` (resolver chaining), `list_rpc_names` (used by `list_models`), `resolve_rpc` (used by adapter).
   - `src/runtime/workspace.rs` — `write_pages_author_seed` + `write_ability_author_seed` (skill seeding into every agent workspace).
@@ -309,10 +309,10 @@ The same flow works for `easynet:///r/easynet.run/ability/alice.web-builder.chat
 
 ### 4.3 CLI
 
-  - `src/facade/cli/pages.rs` — `easynet pages create/list/show/delete/url`.
-  - `src/facade/cli/api_key_cli.rs` — `easynet api-key create/list/revoke`.
-  - `src/facade/cli/llm_api.rs` — `easynet llm-api "<prompt>"`.
-  - `src/facade/cli/agent.rs` — eager workspace projection on `agent add`.
+  - `src/cli/pages.rs` — `easynet pages create/list/show/delete/url`.
+  - `src/cli/api_key_cli.rs` — `easynet api-key create/list/revoke`.
+  - `src/cli/llm_api.rs` — `easynet llm-api "<prompt>"`.
+  - `src/cli/agent.rs` — eager workspace projection on `agent add`.
 
 ### 4.4 Skills (project-level seeds for agent workspaces)
 
@@ -321,8 +321,8 @@ The same flow works for `easynet:///r/easynet.run/ability/alice.web-builder.chat
 
 ### 4.5 Containers
 
-  - `docker/hub-pages/full/{Dockerfile, docker-compose.yml, entrypoint.sh, vendor.sh, sites/}` — full-daemon container.
-  - `docker/hub-pages/nginx-sidecar/{conf/nginx.conf, docker-compose.yml}` — nginx-only fallback.
+  - `engineering/docker/hub-pages/full/{Dockerfile, docker-compose.yml, entrypoint.sh, vendor.sh, sites/}` — full-daemon container.
+  - `engineering/docker/hub-pages/nginx-sidecar/{conf/nginx.conf, docker-compose.yml}` — nginx-only fallback.
   - `.dockerignore` — keeps docker-build context lean.
 
 ---

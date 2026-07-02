@@ -355,8 +355,8 @@ rm ~/.easynet/api_keys.local.toml
 | OpenAI compat spec | [`docs/rfc/AXON-RFC-006-C-openai-compat.tex`](../docs/rfc/AXON-RFC-006-C-openai-compat.tex) |
 | Skill 教 agent 写网站 | [`skills/easynet-pages-author/SKILL.md`](../skills/easynet-pages-author/SKILL.md) |
 | Skill 教 agent 写真 ability | [`skills/easynet-ability-author/SKILL.md`](../skills/easynet-ability-author/SKILL.md) |
-| Hub-in-Docker 部署 | [`docker/hub-pages/full/`](../docker/hub-pages/full/) |
-| 现存 e2e 测试 | [`docker/e2e/pages/pages-mvp.sh`](../docker/e2e/pages/pages-mvp.sh) |
+| Hub-in-Docker 部署 | [`engineering/docker/hub-pages/full/`](../engineering/docker/hub-pages/full/) |
+| 现存 e2e 测试 | [`engineering/docker/e2e/pages/pages-mvp.sh`](../engineering/docker/e2e/pages/pages-mvp.sh) |
 
 ---
 

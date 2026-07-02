@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn record_text_truncates_oversized_clips() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let huge = "y".repeat(TEXT_CAP_BYTES + 10);
         record_text("easynet:///r/localhost/device/d1", &huge).unwrap();
         let clips = crate::persistence::context_store::list_clips(1);

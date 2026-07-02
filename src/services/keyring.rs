@@ -787,7 +787,7 @@ mod tests {
     /// afterwards. Serialised against the rest of the env-mutating tests
     /// through the shared process-env lock.
     fn with_home_and_env<R>(env_pass: Option<&str>, f: impl FnOnce(&std::path::Path) -> R) -> R {
-        let _lock = crate::facade::cli::test_support::env_lock();
+        let _lock = crate::cli::test_support::env_lock();
         let prev_home = std::env::var("HOME").ok();
         let prev_pass = std::env::var("EASYNET_KEYRING_PASSPHRASE").ok();
         let dir = TempDir::new().unwrap();

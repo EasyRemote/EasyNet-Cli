@@ -154,7 +154,7 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
     // codex reads `<root>/.agents/skills/`. Earlier code wrote to
     // `<root>/skills/` for both, which Claude Code's loader did not
     // scan — the seed existed but never activated. Same path-routing
-    // pattern as `skill.publish` in `runtime::agents::skill_publish_ability`.
+    // pattern as `skill.publish` in `runtime::system_abilities::resources::skills::publish`.
     write_collaborate_seed(&root, runtime)?;
 
     // RFC-006-B v0.6 — seed the `easynet-pages-author` skill so
@@ -179,7 +179,7 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
 }
 
 /// Legacy path helper retained for a small number of read-side
-/// callers (`facade::cli::agent::read_latest_agent_usage`). The
+/// callers (`cli::agent::read_latest_agent_usage`). The
 /// source of truth for "where does agent N live on disk?" is
 /// `AgentDirectory::root()`; this helper only answers the question
 /// when no `AgentEntry` is in hand.
@@ -280,7 +280,7 @@ fn write_codex_config(ws: &Path, model: Option<&str>, agent_name: &str) -> anyho
 /// loader never matched it.
 ///
 /// Mirrors the routing in
-/// `runtime::agents::skill_publish_ability::skills_dir_for` so a
+/// `runtime::system_abilities::resources::skills::publish::skills_dir_for` so a
 /// curator-published skill and a freshly-seeded skill both land in
 /// the location the runtime actually scans.
 fn write_collaborate_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()> {
@@ -496,7 +496,7 @@ pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_j
     let mut env = serde_json::Map::new();
 
     // `easynet mcp serve` accepts only --tenant and --agent
-    // (see facade/cli/mcp_server.rs::McpServerArgs). Two flags
+    // (see cli/mcp_server.rs::McpServerArgs). Two flags
     // we used to write — --endpoint and --enable-agent-dispatch
     // — were dropped in the P4.9 quarantine when MCP server
     // construction moved into the mcp profile. Writing them
@@ -962,7 +962,7 @@ mod tests {
         // whether --endpoint/--tenant args appear). Scoping HOME
         // to a private tmp dir makes the "no runtime started"
         // branch deterministic.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let (dir, root) = scratch_dir("idem", RuntimeKind::Codex);
         ensure_from_directory(&dir).unwrap();
         let mcp_before = fs::read(root.join(".mcp.json")).unwrap();

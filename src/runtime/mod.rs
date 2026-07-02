@@ -30,8 +30,8 @@
 //                     CLAUDE.md / AGENTS.md / .git/) from the
 //                     AgentDirectory source of truth.
 
-pub(crate) mod abilities;
 pub(crate) mod adapter;
+pub(crate) mod agent_ability_specs;
 pub(crate) mod context;
 pub(crate) mod directory;
 pub(crate) mod dispatch;
@@ -51,7 +51,7 @@ pub(crate) mod workspace;
 ///
 /// This is the narrow public bridge used by crate binaries that must exercise
 /// runtime dispatch directly instead of entering through
-/// `facade::cli::mission_runs::run_mission_inproc`. It intentionally does not
+/// `cli::mission_runs::run_mission_inproc`. It intentionally does not
 /// expose the full `context` module: production mission execution still owns
 /// context construction, while subprocess propagation remains centralized in
 /// `DispatchContext::serialize_to_env`.
@@ -72,7 +72,7 @@ pub fn enter_mission_context_for_current_thread(
 // because:
 //   * `domain` and `invocation` types appear in KernelApi method
 //     signatures and must be reachable from Control-layer code
-//     under `src/services/control/` (to be added in a follow-up
+//     under `src/daemon/control/` (to be added in a follow-up
 //     commit of PR-DAEMON).
 //   * `kernel_api` is the trait the Control layer consumes; its
 //     only legal import path from Control is via this crate root.
@@ -91,7 +91,7 @@ pub mod receipt_subscriber;
 // in `gateway.rs` holds the DendriteBridge; Execution code never
 // imports `gateway` directly, only `gateway_api`. This split is the
 // second hard boundary (the first being KernelApi above) enforced
-// by scripts/check-kernel-boundary.sh.
+// by engineering/scripts/check-kernel-boundary.sh.
 pub mod gateway_api;
 
 // Stage 1 of two-stage dispatch: InvocationPlan → InvocationTarget.
@@ -115,23 +115,24 @@ pub mod kernel;
 // Execution sub-services (v10.2 isolation layer). Each sub-service
 // owns its own state; the Kernel holds handles to all of them and
 // routes inter-service calls so sub-services never import each
-// other. scripts/check-subservice-isolation.sh grep-enforces the
+// other. engineering/scripts/check-subservice-isolation.sh grep-enforces the
 // "no peer import" rule.
 pub mod execution;
+pub mod executors;
 
 // Stage-2 dispatch executor for daemon-owned and agent-owned abilities.
 // `ability_dispatch` consumes `InvocationTarget` (from
 // stage-1 resolver in `invocation_target.rs`) and routes either to
 // the in-process `AxonAbilityCatalog` or via `GatewayApi`.
-// `agents::build_registry` populates the registry with every
+// `system_ability_catalog::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
 pub mod ability;
 pub mod ability_descriptor;
 pub mod ability_dispatch;
+pub mod ability_names;
 pub mod ability_wire;
 pub mod advertise;
-pub mod agents;
 /// Bridge layer between CLI's existing services (RealmTrustAnchor,
 /// InvocationLedger, etc.) and `easynet_axon::invocation`'s SDK
 /// types (`KeyResolver`, `LedgerSink`, `LocalRuntime`). Phase 1–5
@@ -141,7 +142,7 @@ pub mod agents;
 /// existing services + the constructed Axon objects.
 ///
 /// Lives under `runtime/` (not `services/`) because it imports only
-/// Axon SDK types and runtime ability dispatch / agents /
+/// Axon SDK types and runtime ability dispatch, system abilities, and
 /// invocation_target glue. Service-owned state is adapted in the
 /// services layer and injected through traits.
 pub mod axon_bridge;
@@ -151,6 +152,8 @@ pub(crate) mod owner_projection;
 pub mod plugin_host;
 pub mod provisional_ura;
 pub mod publish;
+pub mod system_abilities;
+pub mod system_ability_catalog;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
 pub mod keyring;
 // RFC-002 tenant suffix resolver: maps tenant_id to admission mode +

@@ -25,7 +25,7 @@
 //!
 //! The `AxonAbilityCatalog` is constructed *before* the Axon
 //! `LocalRuntime` (registry comes from
-//! `runtime::agents::build_registry_with_services` in the daemon's
+//! `runtime::system_ability_catalog::build_registry_with_services` in the daemon's
 //! Stage 2; runtime comes later in
 //! `invocation_transport::start_daemon_invocation_transport`).
 //! But `agent.start`'s handler closure has to be installed at
@@ -46,7 +46,7 @@ use easynet_axon::invocation::LocalRuntime;
 
 use crate::registry::agents::AgentEntry;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::runtime::agents::chat_ability::{
+use crate::runtime::system_abilities::agents::chat::{
     build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
     build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
 };
@@ -170,7 +170,7 @@ pub struct HotAgentRegistrar {
     /// handlers. Must match the boot-time handler dependency so hot
     /// agents do not observe a different user/public tier.
     discover_federation_resolver:
-        crate::runtime::agents::discover_ability::SharedDiscoverFederationResolver,
+        crate::runtime::system_abilities::agents::discover::SharedDiscoverFederationResolver,
     /// Optional hub-advertise bridge for hot-added hosted agents.
     ///
     /// Runtime registration is local; hub visibility is separate.
@@ -264,7 +264,7 @@ pub struct HotAgentRevokeRequest {
 /// about a hot-added hosted agent.
 ///
 /// The registrar owns the trait object so runtime lifecycle code
-/// does not depend on `services::invocation_transport` concrete
+/// does not depend on `daemon::invocation` concrete
 /// session types. Device-mode boot supplies an implementation backed
 /// by the current `session.open` bidi; tests can supply a recorder.
 pub trait HotAgentAdvertiser: Send + Sync {
@@ -294,7 +294,7 @@ impl HotAgentRegistrar {
     pub fn new_pending(
         loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
         dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
-        discover_federation_resolver: crate::runtime::agents::discover_ability::SharedDiscoverFederationResolver,
+        discover_federation_resolver: crate::runtime::system_abilities::agents::discover::SharedDiscoverFederationResolver,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime: OnceLock::new(),
@@ -466,7 +466,7 @@ impl HotAgentRegistrar {
                 &mut sync_ctx,
                 &discover_ability,
                 owner.clone(),
-                crate::runtime::agents::discover_ability::manifest(),
+                crate::runtime::system_abilities::agents::discover::manifest(),
                 discover_handler,
             )
             .await
@@ -482,7 +482,7 @@ impl HotAgentRegistrar {
                 &mut sync_ctx,
                 &invoke_ability,
                 owner.clone(),
-                crate::runtime::agents::invoke_ability::manifest(),
+                crate::runtime::system_abilities::agents::invoke::manifest(),
                 invoke_handler,
             )
             .await
@@ -494,8 +494,8 @@ impl HotAgentRegistrar {
             // `[exec]` are discoverable declarations, not invocable runtime
             // handlers.
             let chat_name = format!("{name}.chat");
-            let manifests = crate::runtime::abilities::manifests_for(name, entry);
-            for spec in crate::runtime::abilities::abilities_for(name, entry) {
+            let manifests = crate::runtime::agent_ability_specs::manifests_for(name, entry);
+            for spec in crate::runtime::agent_ability_specs::abilities_for(name, entry) {
                 let ability_name = spec.name().to_string();
                 if ability_name == chat_name {
                     continue;
@@ -841,7 +841,7 @@ mod tests {
         HotAgentRegistrar::new_pending(
             Arc::new(Vec::new()),
             Arc::new(OnceLock::new()),
-            Arc::new(crate::runtime::agents::discover_ability::BridgeDiscoverFederationResolver),
+            Arc::new(crate::runtime::system_abilities::agents::discover::BridgeDiscoverFederationResolver),
         )
     }
 
@@ -887,7 +887,7 @@ mod tests {
         assert!(rt.list_abilities().await.is_empty());
 
         // User-owned shape passes the same gate untouched.
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
         let outcome = registrar.register_agent("liangbing", &entry).await;
         assert!(!outcome.rejected_reserved_owner);
@@ -902,7 +902,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         // Simulate an earlier sync's TOML ability whose manifest has
@@ -955,7 +955,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
@@ -998,7 +998,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         let first_entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
@@ -1078,7 +1078,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);

@@ -10,7 +10,7 @@ use crate::plugins::remote_desktop::errors::{RemoteDesktopError, RemoteDesktopRe
 use crate::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::plugins::remote_desktop::session_consent::causal_context_contains_receipt;
 use crate::runtime::ability_dispatch::EnvelopeContext;
-use crate::runtime::agents::media::resource_subject::{
+use crate::runtime::system_abilities::resources::media::resource_subject::{
     reject_subject_in_args, require_resource_ura_subject,
 };
 

@@ -321,7 +321,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 ## 4. 能力层
 
-本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。落在 `src/runtime/agents/` 与 `src/runtime/ability_dispatch.rs`。
+本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。当前实现落在 `src/runtime/system_abilities/`、`src/runtime/system_ability_catalog/`、`src/runtime/executors/` 与 `src/runtime/ability_dispatch.rs`；旧 `runtime::agents` 兼容 facade 已退休。
 
 ### 4.1 中央派发枢纽
 
@@ -358,10 +358,10 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 | trait | 角色 | 实现 | 文件:行 |
 |---|---|---|---|
-| `ContextLoader` | 可插拔 chat 上下文贡献者：`name()` + `load(agent, session) -> Option<String>` | UserProfileLoader / ScheduleLoader / MemoryLoader | `src/runtime/agents/chat_ability.rs:132` |
-| `DiscoverFederationResolver` | discover ladder 与 realm directory 之间的依赖边界 | Bridge / Deferred / LocalDirectory 三实现 | `src/runtime/agents/discover_ability.rs:109` |
-| `TeachClock` | teach grant 事务的确定性时间 seam | —— | `src/runtime/agents/teach_ability.rs:54` |
-| `DeviceOpsClock` | device op 事务的 boot-timestamp seam | —— | `device_ops_ability.rs` |
+| `ContextLoader` | 可插拔 chat 上下文贡献者：`name()` + `load(agent, session) -> Option<String>` | UserProfileLoader / ScheduleLoader / MemoryLoader | `src/runtime/system_abilities/agents/chat.rs:132` |
+| `DiscoverFederationResolver` | discover ladder 与 realm directory 之间的依赖边界 | Bridge / Deferred / LocalDirectory 三实现 | `src/runtime/system_abilities/agents/discover.rs:110` |
+| `TeachClock` | teach grant 事务的确定性时间 seam | —— | `src/runtime/system_abilities/governance/teach.rs:59` |
+| `DeviceOpsClock` | device op 事务的 boot-timestamp seam | —— | `src/runtime/system_abilities/device_control/ability_management/ops.rs:72` |
 | `AcquiringArtifactTxn` | 两阶段 descriptor 暂存 commit/rollback | manifest provisioning | `src/persistence/teach_grants.rs:266` |
 
 **ContextLoader 是正确的扩展点：** 未来 loader（memory、project folders）实现它即可，无需改 `chat_ability.rs`。Registry 把 `Arc<Vec<Arc<dyn ContextLoader>>>` 传进每个 chat handler。
@@ -374,8 +374,8 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `RegistryBuildConfig` | 传给 `build_registry_with_services()` 的不可变配置 | `src/runtime/agents/registry_builder.rs:205` |
-| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `registry_builder.rs:116` |
+| `RegistryBuildConfig` | 传给 `build_registry_with_services()` 的不可变配置 | `src/runtime/system_ability_catalog/build.rs:243` |
+| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `src/runtime/system_ability_catalog/build.rs:155` |
 | `HotAgentRegistrar` | post-boot 把 hosted-agent handler 集物化进 LocalRuntime + catalog | `src/runtime/axon_bridge/hot_agent_registrar.rs:160` |
 
 **late-binding 解决 bootstrap 鸡生蛋：** `local_registry_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>`——handler 闭合在 `OnceLock` 而非 `Arc` 本身，使 handler 注册可以先于 catalog 被 `Arc::new` 包裹。`HotAgentRegistrar` 是 phase-5c"内存里注册 agent"与 phase-6"持久化 descriptor 元数据"之间的桥；把它放在 `axon_bridge/` 强调 **LocalRuntime 才是可用性的真理源，AxonAbilityCatalog 是元数据 + 派发**。
@@ -533,7 +533,7 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `MissionRunStore` | mission-run 持久化 facade，锚定 `~/.easynet/missions/runs/` | `src/facade/cli/mission_runs.rs:51` |
+| `MissionRunStore` | mission-run 持久化 facade，锚定 `~/.easynet/missions/runs/` | `src/cli/mission_runs.rs:51` |
 | `MissionRunDir` | 打开的运行目录句柄；持 `PathBuf` + 可选 `HeartbeatPump`；`Drop` 停心跳 | `mission_runs.rs:142` |
 
 **F-022 liveness：** 用 heartbeat 文件 mtime 新鲜度替代 pid-file 存在性（< 15s = 存活）。`MissionRunStatus`：Running → {Completed | Failed | Aborted}。
@@ -542,7 +542,7 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `App` | 顶层 clap Parser；noun-first 命令组：agent / ability / device / mission / runtime / mcp + 横切 doctor / completion | `src/facade/cli/mod.rs:198` |
+| `App` | 顶层 clap Parser；noun-first 命令组：agent / ability / device / mission / runtime / mcp + 横切 doctor / completion | `src/cli/mod.rs:198` |
 
 facade 极薄：`mission` 子命令 → `mission_runs.rs::run_mission_inproc()` → `eal::planner::compile` + `eal::interpreter::execute_*`。
 

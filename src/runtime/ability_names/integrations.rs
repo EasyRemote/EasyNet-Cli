@@ -1,0 +1,15 @@
+pub const A2A_BRIDGE_LIST_SKILLS: &str = "a2a.bridge.list_skills";
+pub const A2A_BRIDGE_SEND_TASK: &str = "a2a.bridge.send_task";
+pub const A2A_CLIENT_SEND_TASK: &str = "a2a.client.send_task";
+
+pub const MCP_BRIDGE_LIST_TOOLS: &str = "mcp.bridge.list_tools";
+pub const MCP_BRIDGE_CALL_TOOL: &str = "mcp.bridge.call_tool";
+pub const MCP_CLIENT_LIST: &str = "mcp.client.list";
+pub const MCP_CLIENT_CALL: &str = "mcp.client.call";
+
+pub const OPENAI_CHAT_COMPLETIONS: &str = "openai.chat_completions";
+pub const OPENAI_LIST_MODELS: &str = "openai.list_models";
+
+pub const PLUGIN_RELOAD: &str = "plugin.reload";
+pub const PLUGIN_STATUS: &str = "plugin.status";
+pub const PLUGIN_ACTIVATE_REALTIME: &str = "plugin.activate_realtime";

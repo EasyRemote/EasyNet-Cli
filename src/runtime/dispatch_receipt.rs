@@ -48,7 +48,9 @@ use easynet_axon::invocation::audit::HostedAgentReceiptHeader;
 
 use crate::persistence::local_agents::{lookup_hosted_ura, LocalAgentsFile};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::agents::profiles::{DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID};
+use crate::runtime::system_ability_catalog::profiles::{
+    DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID,
+};
 
 pub trait HostAttestationProvider {
     fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>>;
@@ -105,16 +107,17 @@ pub fn header_for_ability_with_attestation(
         return None;
     }
 
-    let (profile_key, name) = match crate::runtime::agents::system_ability_owner(ability_name) {
-        Some(OwnerKind::Device) => {
-            // Self-signed: device authority projected through the host profile.
-            return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();
-        }
-        Some(OwnerKind::Agent(agent_id)) => hosted_system_profile_for_agent_id(&agent_id)?,
-        Some(OwnerKind::Hub) | Some(OwnerKind::User(_)) | None => {
-            llm_dynamic_profile_for_ability(ability_name, llm_sub_agent_name)?
-        }
-    };
+    let (profile_key, name) =
+        match crate::runtime::system_ability_catalog::system_ability_owner(ability_name) {
+            Some(OwnerKind::Device) => {
+                // Self-signed: device authority projected through the host profile.
+                return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();
+            }
+            Some(OwnerKind::Agent(agent_id)) => hosted_system_profile_for_agent_id(&agent_id)?,
+            Some(OwnerKind::Hub) | Some(OwnerKind::User(_)) | None => {
+                llm_dynamic_profile_for_ability(ability_name, llm_sub_agent_name)?
+            }
+        };
 
     let callee_ura = lookup_hosted_ura(file, profile_key, name)?;
     let host_attestation = attestation_provider.host_attestation(&callee_ura, host_ura)?;
@@ -153,7 +156,7 @@ fn is_llm_contextual_ability(ability_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::facade::cli::test_support::HomeGuard;
+    use crate::cli::test_support::HomeGuard;
     use crate::persistence::local_agents::{upsert_hosted_agent, LocalAgentsFile};
     use easynet_axon::invocation::audit::SigningModel;
 

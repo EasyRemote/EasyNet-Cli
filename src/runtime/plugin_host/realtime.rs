@@ -8,11 +8,11 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::agents::media_abilities;
 use crate::runtime::plugin_host::manifest::{
     PluginPackageManifest, PluginRealtimeCapability, PluginRealtimeKind, PluginRealtimeMode,
     PluginRealtimeTransport,
 };
+use crate::runtime::system_abilities::resources::media;
 
 /// Runtime readiness for one plugin realtime capability declaration.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -433,32 +433,32 @@ fn canonical_abilities_for_mode(
 ) -> Option<&'static [&'static str]> {
     match (kind, mode) {
         (PluginRealtimeKind::Camera, PluginRealtimeMode::Snapshot) => {
-            Some(&[media_abilities::ABILITY_CAMERA_SNAPSHOT])
+            Some(&[media::ABILITY_CAMERA_SNAPSHOT])
         }
         (PluginRealtimeKind::Camera, PluginRealtimeMode::Subscribe) => {
-            Some(&[media_abilities::ABILITY_CAMERA_SUBSCRIBE])
+            Some(&[media::ABILITY_CAMERA_SUBSCRIBE])
         }
         (PluginRealtimeKind::Camera, PluginRealtimeMode::Record) => Some(&[
-            media_abilities::ABILITY_CAMERA_RECORD_START,
-            media_abilities::ABILITY_CAMERA_RECORD_STOP,
+            media::ABILITY_CAMERA_RECORD_START,
+            media::ABILITY_CAMERA_RECORD_STOP,
         ]),
         (PluginRealtimeKind::Mic, PluginRealtimeMode::Subscribe) => {
-            Some(&[media_abilities::ABILITY_MIC_SUBSCRIBE])
+            Some(&[media::ABILITY_MIC_SUBSCRIBE])
         }
         (PluginRealtimeKind::Screen, PluginRealtimeMode::Snapshot) => {
-            Some(&[media_abilities::ABILITY_SCREEN_SNAPSHOT])
+            Some(&[media::ABILITY_SCREEN_SNAPSHOT])
         }
         (PluginRealtimeKind::Screen, PluginRealtimeMode::Subscribe) => {
-            Some(&[media_abilities::ABILITY_SCREEN_SUBSCRIBE])
+            Some(&[media::ABILITY_SCREEN_SUBSCRIBE])
         }
         (PluginRealtimeKind::Speaker, PluginRealtimeMode::Publish) => {
-            Some(&[media_abilities::ABILITY_SPEAKER_PUBLISH])
+            Some(&[media::ABILITY_SPEAKER_PUBLISH])
         }
         (PluginRealtimeKind::Voice, PluginRealtimeMode::Subscribe) => {
-            Some(&[media_abilities::ABILITY_VOICE_SUBSCRIBE])
+            Some(&[media::ABILITY_VOICE_SUBSCRIBE])
         }
         (PluginRealtimeKind::Voice, PluginRealtimeMode::Transcribe) => {
-            Some(&[media_abilities::ABILITY_VOICE_TRANSCRIBE])
+            Some(&[media::ABILITY_VOICE_TRANSCRIBE])
         }
         (PluginRealtimeKind::Mic, PluginRealtimeMode::Record)
         | (PluginRealtimeKind::Screen, PluginRealtimeMode::Record) => None,

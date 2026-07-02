@@ -24,7 +24,7 @@ collapses into the fence.
 | `pending_dispatch.rs`, `origin_caller.rs`, `mod.rs`, `federation_invoke.rs`, `hot_agent_registrar.rs` | 1 each | re-exports / single references; `origin_caller.rs` parallel verification re-run after the cut |
 
 Also in the same cut:
-- `benches/session_frame_carrier.rs`: delete the `carrier_roundtrip`
+- `engineering/benches/session_frame_carrier.rs`: delete the `carrier_roundtrip`
   (JSON) and `json_encode`/`json_decode` arms — the before-side is
   archived in `docs/bench/session-frame-carrier-baseline-2026-06-12.md`.
 - `presence_registry.rs`: `SessionContract::legacy()` constructor dies

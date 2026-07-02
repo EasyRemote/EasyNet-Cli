@@ -21,7 +21,7 @@
 // Use this binary as a manual reproducer when you want to
 // confirm the end-to-end paths work on a fresh checkout. The
 // assertions also live as unit tests in
-// runtime::agents::real_invoke_tests for the deterministic
+// runtime::system_abilities::real_invoke_tests for the deterministic
 // CI-runnable subset.
 //
 //   cargo run --bin real-user-smoke
@@ -38,15 +38,15 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::agents::chat_ability::ContextLoader;
-use easynet_cli::runtime::agents::{
-    build_registry_for_daemon, build_registry_with_runtime, RegistryBuildServices,
-    RegistryDaemonBuildConfig,
-};
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
 use easynet_cli::runtime::resources::filesystem::{
     resource_ref_for_local_path, FilesystemResourceCapability,
+};
+use easynet_cli::runtime::system_abilities::agents::chat::ContextLoader;
+use easynet_cli::runtime::system_ability_catalog::{
+    build_registry_for_daemon, build_registry_with_runtime, RegistryBuildServices,
+    RegistryDaemonBuildConfig,
 };
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
@@ -77,7 +77,8 @@ impl RuntimeSmoke {
         let runtime = LocalRuntime::new();
         let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
         config.loaders = loaders;
-        config.pages_identity = easynet_cli::runtime::agents::PagesIdentity::from_env();
+        config.pages_identity =
+            easynet_cli::runtime::system_abilities::resources::pages::PagesIdentity::from_env();
         config.local_runtime = Some(Arc::clone(&runtime));
         let catalog = build_registry_for_daemon(config);
         Self { runtime, catalog }
@@ -322,7 +323,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         // 1. Spin up a mission run dir so the dispatch invariant is
         //    satisfied. Mirrors what
-        //    facade::cli::mission_runs::root_dir() returns:
+        //    cli::mission_runs::root_dir() returns:
         //    `$HOME/.easynet/missions/runs/`.
         let mission_id = format!("smoke-{}", std::process::id());
         let home = std::env::var("HOME")
@@ -412,9 +413,9 @@ fn main() -> anyhow::Result<()> {
         let schedule_svc =
             Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new());
         let default_loaders = Arc::new(
-            easynet_cli::runtime::agents::context_loaders::default_loaders(Arc::clone(
-                &schedule_svc,
-            )),
+            easynet_cli::runtime::system_abilities::resources::context::loaders::default_loaders(
+                Arc::clone(&schedule_svc),
+            ),
         );
         let ctx_runtime = RuntimeSmoke::daemon(Some(default_loaders));
         let canary_for_thread = canary.clone();

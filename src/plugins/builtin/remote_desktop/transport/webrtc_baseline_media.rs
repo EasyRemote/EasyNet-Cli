@@ -16,7 +16,7 @@ use crate::plugins::remote_desktop::media::encode::{
     build_openh264_encoder, even_rgb_frame, latest_recorder_frame, write_h264_sample,
     BuiltinH264Config,
 };
-use crate::runtime::agents::media::screen_snapshot::{
+use crate::runtime::system_abilities::resources::media::screen_snapshot::{
     capture_rgb_with_xcap, rgba_bytes_to_rgb_frame, ScreenCaptureOptions,
 };
 

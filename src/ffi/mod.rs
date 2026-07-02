@@ -58,6 +58,7 @@ pub mod strings;
 
 use std::os::raw::c_char;
 
+use crate::daemon::control::discovery;
 use crate::ffi::client as ipc_client;
 use crate::ffi::errors::{
     clear_last_error, set_last_error, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
@@ -65,7 +66,6 @@ use crate::ffi::errors::{
 };
 use crate::ffi::handle::{alloc, get, lib_runtime, release, ClientSession, EasynetHandle};
 use crate::ffi::strings::read_cstr;
-use crate::services::control::discovery;
 
 /// Current ABI version. Every breaking change to an exported
 /// `#[no_mangle] extern "C"` function bumps this integer; the CI
@@ -95,7 +95,7 @@ pub extern "C" fn easynet_abi_version() -> u32 {
 /// `control_path` is an optional UTF-8 path to the daemon's
 /// `control.json`. Pass NULL to use the default
 /// (`~/.easynet/control.json`) — the path the daemon writes when
-/// `services::control::server::run` boots.
+/// `daemon::control::server::run` boots.
 ///
 /// On success: writes the new handle to `*out_handle`, returns
 /// `EASYNET_OK`, clears the last-error slot.

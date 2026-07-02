@@ -11,7 +11,7 @@ use crate::plugins::remote_desktop::input::{
     input_injection_available, request_input_injection_permission,
 };
 use crate::runtime::ability_dispatch::EnvelopeContext;
-use crate::runtime::agents::media::resource_subject::{
+use crate::runtime::system_abilities::resources::media::resource_subject::{
     is_resource_ura_subject, reject_subject_in_args,
 };
 

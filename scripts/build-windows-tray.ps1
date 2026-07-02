@@ -1,10 +1,5 @@
-param(
-    [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Release"
-)
-
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$Project = Join-Path $Root "windows\EasyNetTray\EasyNetTray.csproj"
-
-dotnet build $Project -c $Configuration
+$Target = Join-Path $Root "engineering/scripts/build-windows-tray.ps1"
+& $Target @args
+exit $LASTEXITCODE

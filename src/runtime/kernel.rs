@@ -529,7 +529,7 @@ fn receipt_event_payload(
 /// permission gate. Device-host/control-plane abilities run inside the
 /// daemon authority; agent-shaped abilities require broker approval.
 ///
-/// A future per-ability sensitivity config (`runtime::abilities` or
+/// A future per-ability sensitivity config (`runtime::agent_ability_specs` or
 /// the manifest layer) would replace this name-prefix check with a
 /// lookup; until then the prefix-based rule is exactly what was
 /// there before, just generalised away from "is_chat" to "is_agent".
@@ -861,7 +861,7 @@ mod tests {
         // back as Failed("permission denied") and the session
         // timeline contains permission_pending → permission_denied
         // events the GUI needs to render the dialog.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let k = Arc::new(Kernel::new_with_subscriber_broker(Arc::new(NoopGateway)));
 
         // Subscribe to the broker BEFORE invoking — has_subscribers()
@@ -923,7 +923,7 @@ mod tests {
         // through the daemon's current source of truth.
         let k = Kernel::new(Arc::new(NoopGateway));
         k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let device_ura = crate::ura::device_ura("localhost", "a");
         let inv = RuntimeInvocation {
             caller: LOCAL_SYSTEM_AGENT_URA.to_string(),
@@ -1017,7 +1017,7 @@ mod tests {
     fn invoke_user_without_signature_rejects_before_local_runtime_dispatch() {
         let k = Kernel::new(Arc::new(NoopGateway));
         k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let caller_ura = crate::ura::user_ura("localhost", "alice");
         let device_ura = crate::ura::device_ura("localhost", "a");
         let inv = RuntimeInvocation {
@@ -1049,7 +1049,7 @@ mod tests {
         // Returning Succeeded here would turn a daemon boot wiring
         // regression into a false-positive invocation receipt.
         let k = Kernel::new(Arc::new(NoopGateway));
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let device_ura = crate::ura::device_ura("localhost", "a");
         let inv = RuntimeInvocation {
             caller: device_ura.clone(),

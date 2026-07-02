@@ -165,8 +165,8 @@ pub fn ability_frame_to_json(frame: &AbilityFrame) -> Result<Value, String> {
 
 /// Reason-string fragments that the Axon SDK + the CLI's own local
 /// dispatch arm produce when an ability is unknown. Centralised so
-/// every consumer (`ability_dispatch`, `services/control/runtime_dispatch`,
-/// `services/control/runtime_dispatch_adapter`) classifies "not found" through
+/// every consumer (`ability_dispatch`, `daemon/control/runtime_dispatch`,
+/// `daemon/control/runtime_dispatch_adapter`) classifies "not found" through
 /// the same predicate. If a future SDK version rephrases its
 /// reason, this is the single grep target.
 pub const NOT_FOUND_REASON_FRAGMENTS: &[&str] = &[

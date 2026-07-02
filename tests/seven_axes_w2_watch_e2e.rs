@@ -33,11 +33,11 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::invocation_watch::{self, WatchArgs, WatchEvent};
-use easynet_cli::facade::cli::mission_runs::{
+use easynet_cli::cli::invocation_watch::{self, WatchArgs, WatchEvent};
+use easynet_cli::cli::mission_runs::{
     self, MissionRunDir, MissionRunMeta, MissionRunOpts, MissionRunStatus,
 };
-use easynet_cli::facade::cli::receipt_verification::CliReceiptChainVerification;
+use easynet_cli::cli::receipt_verification::CliReceiptChainVerification;
 use seven_axes_fixture::{SevenAxesHome, TESTBOT_ECHO_DESCRIPTOR_VERSION};
 
 #[test]

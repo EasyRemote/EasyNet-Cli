@@ -105,17 +105,17 @@
 /// with explicit fallback policy. Replaces three near-identical
 /// `block_on_*` helpers that used to live in
 /// `runtime/ability_dispatch.rs`,
-/// `runtime/agents/agent_lifecycle_ability.rs`, and
+/// the agent lifecycle system ability, and
 /// `runtime/local_runtime_invoker.rs`.
 pub mod async_bridge;
 
 /// `append_cleanup_error()` — fold a best-effort cleanup outcome into a
 /// primary error so transactional rollback paths report both what failed
-/// and whether compensation completed. Shared by `runtime::agents` and
-/// `persistence` rollback sites; see `errors.rs` for the rationale.
+/// and whether compensation completed. Shared by `runtime::system_abilities`
+/// and `persistence` rollback sites; see `errors.rs` for the rationale.
 pub(crate) mod errors;
 
-// federation_invoke moved under services::invocation_transport, and the
+// federation_invoke moved under daemon::invocation, and the
 // product read boundary lives in services::federated_directory_reader.
 // Keeping both out of support prevents this module from reaching upward into
 // services — the production back-edge this split removed.

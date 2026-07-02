@@ -90,7 +90,7 @@ pub fn build_agents_envelope(registry: &AgentRegistry) -> serde_json::Value {
         .iter()
         .map(|(name, e)| {
             let mut skills: Vec<serde_json::Value> =
-                crate::runtime::abilities::abilities_for(name, e)
+                crate::runtime::agent_ability_specs::abilities_for(name, e)
                     .iter()
                     .map(|spec| spec.to_discovery_json())
                     .collect();
@@ -462,7 +462,7 @@ mod tests {
         // HomeGuard isolates config lookups that may happen below
         // this registry layer. Ability discovery itself is now driven
         // only by the explicit root_path on each test AgentEntry.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
 
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
@@ -491,7 +491,7 @@ mod tests {
         // manifest. The writer no longer synthesizes skills from a
         // registry row, so this golden pins the current wire shape
         // without relying on compatibility fallback state.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
 
         let mut registry = AgentRegistry::default();
         let mut alice = entry("alice", AgentType::ClaudeCode, Some("claude-opus-4-7"));

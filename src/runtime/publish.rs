@@ -37,7 +37,7 @@
 
 use crate::persistence::local_agents::{self, LocalAgentsFile};
 use crate::runtime::advertise::{self, AbilityInvoker, AdvertiseOutcome};
-use crate::runtime::agents::profiles::{
+use crate::runtime::system_ability_catalog::profiles::{
     self as profiles_mod,
     bootstrap::{self, BootstrapOutcome, BootstrapPlan, UraMinter, UuidMinter},
 };
@@ -231,9 +231,11 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // A registry-load failure degrades to "no per-agent advertise
     // this cycle" rather than blocking the rest of publish — the
     // outcome row surfaces the reason.
-    let live_registry = crate::runtime::agents::build_registry();
+    let live_registry = crate::runtime::system_ability_catalog::build_registry();
     let hint_snapshot =
-        crate::runtime::agents::AbilityDiscoveryHintSnapshot::from_registry(&live_registry);
+        crate::runtime::system_ability_catalog::AbilityDiscoveryHintSnapshot::from_registry(
+            &live_registry,
+        );
     match crate::registry::agents::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
@@ -245,14 +247,16 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                     Some(u) => u,
                     None => continue, // bootstrap didn't mint a URA for this agent
                 };
-                let specs = crate::runtime::abilities::abilities_for_publication(name, entry);
+                let specs =
+                    crate::runtime::agent_ability_specs::abilities_for_publication(name, entry);
                 for spec in specs {
                     let registry_name = spec.name();
-                    let owner_local_name = crate::runtime::abilities::public_agent_ability_name(
-                        &owner_ura,
-                        name,
-                        registry_name,
-                    );
+                    let owner_local_name =
+                        crate::runtime::agent_ability_specs::public_agent_ability_name(
+                            &owner_ura,
+                            name,
+                            registry_name,
+                        );
                     let desc = crate::runtime::ability_descriptor::AbilityDescriptor::new(
                         owner_local_name,
                         &owner_ura,
@@ -326,7 +330,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
 /// returns, an external Invoke arriving at axon-runtime for any
 /// of the registered ability names is routed back to the daemon's
 /// `dispatch_endpoint` (a UDS path the daemon's
-/// `services::control::runtime_dispatch` server is listening on).
+/// `daemon::control::runtime_dispatch` server is listening on).
 ///
 /// This is Step 3-completion on the daemon side. The runtime side
 /// (EasyNet-Axon `runtime_admin.rs` + `try_dispatch_runtime_local_tool`)
@@ -609,7 +613,7 @@ fn collect_daemon_owned_ability_names() -> Vec<String> {
     // names — these are the names `meta.list_abilities` would
     // surface to a remote caller. Driven by the same source the
     // runtime-local registry surfaces via list_tools.
-    names.extend(crate::runtime::agents::published_ability_names());
+    names.extend(crate::runtime::system_ability_catalog::published_ability_names());
 
     // Per-user-agent abilities — `<agent>.chat` and any
     // `<agent>.<verb>` declared in the agent's
@@ -619,7 +623,9 @@ fn collect_daemon_owned_ability_names() -> Vec<String> {
     // `republish_with_minter` does at advertise time.
     if let Ok(reg) = crate::registry::agents::load_agents() {
         for (agent_name, entry) in &reg.agents {
-            for spec in crate::runtime::abilities::abilities_for_publication(agent_name, entry) {
+            for spec in
+                crate::runtime::agent_ability_specs::abilities_for_publication(agent_name, entry)
+            {
                 names.push(spec.name().to_string());
             }
         }
@@ -713,8 +719,8 @@ fn runtime_admin_resource_ura(realm: &str, tenant_id: &str, ability_name: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::facade::cli::test_support::HomeGuard;
-    use crate::runtime::agents::profiles::bootstrap::LlmSubAgent;
+    use crate::cli::test_support::HomeGuard;
+    use crate::runtime::system_ability_catalog::profiles::bootstrap::LlmSubAgent;
     use std::cell::RefCell;
 
     /// Recording fake invoker; mirrors the one in advertise.rs but

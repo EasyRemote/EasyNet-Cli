@@ -1287,11 +1287,11 @@ impl McpExec {
 /// as a `chat` ability so external callers can reach it over the
 /// network without any extra operator action.
 ///
-/// Parity with `runtime::abilities::chat_ability`
+/// Parity with `runtime::agent_ability_specs::chat_ability`
 /// ----------------------------------------------
 /// Two sources of truth exist for the `chat` ability's shape until
 /// a later PR collapses them: this helper (on-disk template) and
-/// `runtime::abilities::chat_ability` (hardcoded baseline used by
+/// `runtime::agent_ability_specs::chat_ability` (hardcoded baseline used by
 /// today's dispatch + discovery). Only the **input_schema** is a
 /// protocol contract that must match — publishing two different
 /// tool specs depending on which path discovery goes through is
@@ -1303,7 +1303,7 @@ impl McpExec {
 ///
 /// The input_schema parity is pinned by
 /// `hardcoded_chat_ability_input_schema_agrees_with_default_chat_manifest`
-/// in `runtime::abilities`'s test module — if you touch the shape
+/// in `runtime::agent_ability_specs`'s test module — if you touch the shape
 /// on either side, update both or the parity test will fail loud.
 pub fn default_chat_manifest() -> AbilityManifest {
     // The schema below is the wire contract for the chat ability. It
@@ -1657,7 +1657,7 @@ mod tests {
     #[test]
     fn default_chat_manifest_matches_hardcoded_baseline_shape() {
         // Guards against the default-manifest helper drifting away
-        // from the runtime::abilities baseline before the two paths
+        // from the runtime::agent_ability_specs baseline before the two paths
         // converge in a later PR. If this breaks, update both
         // sides in the same PR, not one at a time.
         let m = default_chat_manifest();

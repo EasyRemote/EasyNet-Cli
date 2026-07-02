@@ -510,15 +510,16 @@ mod cases {
         // that hides the driver's live stderr timeline inside the
         // daemon process. The local path fails here on the bogus
         // binary name, not on missing control.json.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let mut registry = AgentRegistry::default();
         registry
             .agents
             .insert("alice".to_string(), dummy_agent_entry());
 
         let agent_id = crate::core::agent_id::AgentId::parse("alice").expect("valid agent id");
-        let ability = AbilityName::parse(crate::runtime::agents::chat_ability::ABILITY_VERB)
-            .expect("valid chat ability");
+        let ability =
+            AbilityName::parse(crate::runtime::system_abilities::agents::chat::ABILITY_VERB)
+                .expect("valid chat ability");
         let err = dispatch_to_agent(
             &registry,
             &agent_id,

@@ -7,9 +7,9 @@
 // described by an AbilityDescriptor. This is the Rust home for
 // that schema. Today's CLI carries two ad-hoc precursors:
 //
-//   * `runtime::abilities::AgentAbilitySpec` — per-agent on-disk
+//   * `runtime::agent_ability_specs::AgentAbilitySpec` — per-agent on-disk
 //     manifest shape, used for chat / skill manifests.
-//   * `runtime::agents::SystemAbilityMetadata` — in-memory shape
+//   * `runtime::system_ability_catalog::SystemAbilityMetadata` — in-memory shape
 //     for built-in abilities (observe.*, agent.*, …).
 //
 // Both pre-date RFC-001 and lack visibility/scope. AbilityDescriptor

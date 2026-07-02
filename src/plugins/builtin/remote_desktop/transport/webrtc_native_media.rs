@@ -27,7 +27,7 @@ use crate::plugins::remote_desktop::screencapturekit_capture::{
 use crate::plugins::remote_desktop::session::now_ms;
 use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
-use crate::runtime::agents::media::screen_snapshot::ScreenCaptureOptions;
+use crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenCaptureOptions;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
 ///

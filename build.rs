@@ -28,7 +28,7 @@
 // Plan v10.5 R1 wants Client bindings to use proto as the cross-
 // language source of truth. But on the Rust daemon side we are
 // still writing JSON frames directly (see
-// src/services/control/frames.rs); a premature flip to
+// src/daemon/control/frames.rs); a premature flip to
 // prost-generated types would double-specify the same shapes.
 // Gating behind `proto-gen` lets:
 //   (1) the schema files land as truth source for other-language

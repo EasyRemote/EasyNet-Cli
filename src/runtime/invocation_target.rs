@@ -18,7 +18,7 @@
 // call site to update when those land.
 //
 // A second reason is the CI grep rule in
-// `scripts/check-dispatch-boundary.sh`: handlers under
+// `engineering/scripts/check-dispatch-boundary.sh`: handlers under
 // `src/runtime/system/*_ability.rs` are forbidden from branching on
 // `self.node_id` or `target_node == self`. All those checks happen
 // once, here.
@@ -167,7 +167,7 @@ pub struct InvocationTarget {
     /// can read it. Per **INV-SUBJECT-ENVELOPE**: handlers that
     /// need a subject MUST consume it from this field; they MUST
     /// NOT accept a `subject` key in `normalized_args`. The
-    /// `reject_subject_in_args` guard in media_abilities enforces
+    /// `reject_subject_in_args` guard in resources::media enforces
     /// the negative half. `None` is not an implicit missing tuple:
     /// the LocalRuntime adapter resolves it through its typed
     /// `LocalRuntimeSubjectPolicy` as a descriptor default. Resource

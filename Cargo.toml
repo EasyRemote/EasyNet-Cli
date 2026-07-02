@@ -99,11 +99,11 @@ path = "src/bin/easynet-daemon.rs"
 name = "easynet-keyring"
 path = "src/bin/easynet-keyring.rs"
 
-# Maintainer tool. Regenerates every abilities/system/<name>.ability.toml
+# Maintainer tool. Regenerates every ability-descriptors/system/<name>.ability.toml
 # descriptor from the live `published_abilities()` metadata. Run after
 # any change to a `description_*` / `input_schema_*` function; the
 # `every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer`
-# test in src/runtime/agents/mod.rs fails CI if the on-disk TOML
+# test in src/runtime/system_ability_catalog/assembly_tests.rs fails CI if the on-disk TOML
 # drifts from what this binary would emit.
 #
 #   cargo run --bin gen-ability-tomls
@@ -402,7 +402,7 @@ objc2-video-toolbox = { version = "0.3", features = [
 # invocation-transport reply-deadline tests fire the 60s timer
 # instantly instead of sleeping it for real. Test builds only.
 tokio = { version = "1", features = ["test-util"] }
-# T0.4 carrier baseline harness (benches/session_frame_carrier.rs).
+# T0.4 carrier baseline harness (engineering/benches/session_frame_carrier.rs).
 criterion = "0.5"
 # prost::Message in the bench encodes the pb frames the same way the
 # tonic wire does; version pinned to easynet-axon's prost.

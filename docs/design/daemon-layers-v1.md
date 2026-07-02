@@ -40,7 +40,7 @@ Inside `easynet-daemon`:
     ↓
 [libc-equivalent]        IPC client (in lib, not shown)
     ↓
-[Control]                src/services/control/            (PR-DAEMON landing)
+[Control]                src/daemon/control/              (local boot/status IPC)
     ↓  (only via KernelApi trait)
 [KernelApi]              src/runtime/kernel_api.rs        ← SYSCALL BOUNDARY
     ↓  (trait impl on the Kernel)
@@ -60,36 +60,39 @@ Inside `easynet-daemon`:
 
 The layering is enforced at CI time:
 
-- `scripts/check-kernel-boundary.sh` — Control layer may only
-  import `kernel_api`, `invocation`, `domain`,
-  `invocation_target` from `crate::runtime`. Anything else is
-  rejected.
-- `scripts/check-kernel-boundary.sh` (rule 2) — Daemon Invocation
+- `engineering/scripts/check-kernel-boundary.sh` — Control layer may only
+  import syscall-boundary runtime modules plus stable ability-name constants
+  from `crate::runtime`. Anything else is rejected.
+- `engineering/scripts/check-kernel-boundary.sh` (rule 2) — Daemon Invocation
   transport may import the explicitly listed runtime adapters it
   needs to translate Axon `Invocation` frames into daemon-local
-  execution. `ability_wire` is allowed only as a metadata boundary:
-  the transport reads the local bidi codec profile from
-  `AbilityWireRegistry`, but plugin package ownership and execution
-  policy remain in `runtime/plugin_host` and the Axon
-  `LocalRuntime`. Plugin packages contribute `AbilityImpl` bindings;
-  `DaemonPluginBinder` applies daemon authority policy before writing them
-  into `AxonAbilityCatalog`. Resource, permission, and realtime transport
-  readiness are projected by daemon-owned plugin-host brokers/adapters; plugin
-  packages do not own policy, caller/callee identity, or transport admission.
-  `plugin_host` itself is allowed only for the boot-injected
-  `PluginRuntimeManager` handle used to execute already-loaded plugin-backed
-  abilities; install/load policy stays in `runtime/plugin_host`. See
-  `docs/design/plugin-contribution-boundary.md`.
-- `scripts/check-kernel-boundary.sh` (rule 3) — Execution may
+  execution. The allowed names are the current semantic owners:
+  ability model/descriptors/names, system abilities, system ability catalog,
+  hosted-agent ability specs, local invocation identity, owner projection,
+  resources, failure-code projection, keyring, publish/advertise, federation
+  helpers, Axon bridge, execution handles, ability wire metadata, and
+  plugin-host runtime handles. `ability_wire` is allowed only as a metadata
+  boundary: the transport reads the local bidi codec profile from
+  `AbilityWireRegistry`, but plugin package ownership and execution policy
+  remain in `runtime/plugin_host` and the Axon `LocalRuntime`. Plugin packages
+  contribute `AbilityImpl` bindings; `DaemonPluginBinder` applies daemon
+  authority policy before writing them into `AxonAbilityCatalog`. Resource,
+  permission, and realtime transport readiness are projected by daemon-owned
+  plugin-host brokers/adapters; plugin packages do not own policy,
+  caller/callee identity, or transport admission. `plugin_host` itself is
+  allowed only for the boot-injected `PluginRuntimeManager` handle used to
+  execute already-loaded plugin-backed abilities; install/load policy stays in
+  `runtime/plugin_host`. See `docs/design/plugin-contribution-boundary.md`.
+- `engineering/scripts/check-kernel-boundary.sh` (rule 3) — Execution may
   only touch the network via `crate::runtime::gateway_api`, not
   the concrete `runtime::gateway`.
-- `scripts/check-subservice-isolation.sh` — Execution
+- `engineering/scripts/check-subservice-isolation.sh` — Execution
   sub-services cannot import each other.
-- `scripts/check-invocation-unity.sh` — IPC/Kernel/Gateway
+- `engineering/scripts/check-invocation-unity.sh` — IPC/Kernel/Gateway
   method signatures must not speak `args_json`;
   `Kernel::invoke` cannot be called from inside an Execution
   sub-service.
-- `scripts/check-dispatch-boundary.sh` — ability handlers under
+- `engineering/scripts/check-dispatch-boundary.sh` — ability handlers under
   `runtime/system/` cannot branch on node identity.
 
 ## 3. Scheme X justification — one daemon, not two

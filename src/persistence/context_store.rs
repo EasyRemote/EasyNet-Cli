@@ -22,7 +22,7 @@
 //   favorites.json   [{"id","kind","label","reference","added_at"}]
 //
 // Clipboard capture itself lives in `services::clipboard_tracker`;
-// the `context.*` abilities in `runtime::agents::context_ability` are
+// the `context.*` abilities in `runtime::system_abilities::resources::context` are
 // read/toggle surfaces over this store.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn clipboard_tracking_round_trip() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         assert!(!clipboard_tracking(), "default is off");
         set_clipboard_tracking(true).unwrap();
         assert!(clipboard_tracking());
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn clips_append_and_list_newest_first() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         for i in 0..3 {
             append_clip(&ClipEntry {
                 id: format!("c{i}"),
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn clip_summaries_collapse_duplicates_with_latest_entry_and_counts() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let rows = [
             ("old-a", "2026-06-10T00:00:00Z", "alpha"),
             ("only-b", "2026-06-10T00:01:00Z", "beta"),
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn folder_mapping_add_list_remove_and_containment() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/a.txt"), b"x").unwrap();
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn captures_record_list_get_round_trip() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let entry = record_capture(CaptureRecord {
             device: "easynet:///r/localhost/device/d1",
             ability: "screen.snapshot",
@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn favorites_round_trip() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let f = add_favorite("clipboard", "snippet", "c1").unwrap();
         assert_eq!(list_favorites().len(), 1);
         // duplicate refused

@@ -444,7 +444,7 @@ fn failure_detail_code(message: &str, fallback: JoinFailureCode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::facade::cli::test_support::HomeGuard;
+    use crate::cli::test_support::HomeGuard;
 
     fn creds() -> Credentials {
         Credentials {

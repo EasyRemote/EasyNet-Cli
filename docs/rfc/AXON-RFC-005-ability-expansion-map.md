@@ -70,7 +70,7 @@ terminal/wshandler.go:308` opens `InvokeBidi` against
 `fleet.session_attach` with the daemon-side PTY session_id as
 `initial_args`, then runs symmetric `pumpReader` /
 `pumpWriter` goroutines. The ability is owned by the
-device-profile and lives in `EasyNet-Cli/abilities/system/
+device-profile and lives in `EasyNet-Cli/ability-descriptors/system/
 fleet.session_attach.ability.toml` plus
 `fleet.pty_session_attach.ability.toml`, with handlers under
 `EasyNet-Cli/src/runtime/agents/pty_attach_ability.rs`.

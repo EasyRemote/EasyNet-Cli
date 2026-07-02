@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::daemon::control::{discovery, transport};
 use crate::persistence::config;
 use crate::persistence::daemon_config::{
     DaemonConfig, DaemonMode as PersistedDaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
     DEFAULT_DAEMON_UDS_PATH,
 };
-use crate::services::control::{discovery, transport};
 use crate::support::{local_daemon_grpc, net};
 
 use super::{DaemonError, Result};

@@ -897,7 +897,7 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
     // fake dir — but it eliminates the trivial-forgery case and
     // catches the common bug pattern of "user set the env var by
     // mistake".
-    let mission_run_dir = crate::facade::cli::mission_runs::root_dir().join(&mission_id);
+    let mission_run_dir = crate::cli::mission_runs::root_dir().join(&mission_id);
     if !mission_run_dir.exists() {
         anyhow::bail!(
             "mission_id={} does not correspond to an existing \
@@ -973,7 +973,7 @@ mod tests {
     #[test]
     fn recursion_guard_allows_depth_1() {
         let entry = dummy_entry();
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let res =
             send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1), None);
         match res {
@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn dispatch_rejects_registry_row_without_root_path() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let entry = dummy_entry();
         let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None)
             .expect_err("missing root_path must stop dispatch");
@@ -1003,7 +1003,7 @@ mod tests {
 
     #[test]
     fn dispatch_rejects_registry_root_whose_spec_names_another_agent() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let root = crate::persistence::config::agents_root().join("alice");
         let spec = crate::core::agent_spec::AgentSpec::new(
             "bob",
@@ -1047,7 +1047,7 @@ mod tests {
 
     #[test]
     fn send_to_agent_rejects_missing_mission_context_before_registry_root() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
         let entry = dummy_entry();
@@ -1066,7 +1066,7 @@ mod tests {
 
     #[test]
     fn send_to_agent_rejects_forged_mission_id_without_run_dir() {
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         std::env::set_var("EASYNET_MISSION_ID", "forged-mission");
         std::env::set_var("EASYNET_AGENT_DEPTH", "0");
         let entry = dummy_entry();
@@ -1164,7 +1164,7 @@ mod tests {
         // observing that the depth-limit is not tripped is the guarantee
         // callers need.
         let entry = dummy_entry();
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         std::env::set_var("EASYNET_AGENT_DEPTH", MAX_AGENT_DEPTH.to_string());
         let res = send_external("claude", &entry, "hello", None);
         std::env::remove_var("EASYNET_AGENT_DEPTH");
@@ -1185,7 +1185,7 @@ mod tests {
         // (release). `send_external` must bypass via depth_override = 0
         // and fail only at the downstream spawn path.
         std::env::remove_var("EASYNET_MISSION_ID");
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let entry = dummy_entry();
         let res = send_external("claude", &entry, "hello", None);
         let err = res.expect_err("no real claude binary in tests");
@@ -1208,7 +1208,7 @@ mod tests {
         // content of the downstream error (process spawn), only that
         // neither flavour is gated by the top-of-function checks.
         let entry = dummy_entry();
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         for ctx in [None, Some("be terse")] {
             let res = send_external("claude", &entry, "hello", ctx);
             let err = res.expect_err("no real claude binary in tests");
@@ -1270,7 +1270,7 @@ mod tests {
 
         // Create the fake mission run dir so the anti-forgery check
         // doesn't fire before the depth check does.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let runs_root = crate::persistence::config::state_dir()
             .join("missions")
             .join("runs");
@@ -1611,7 +1611,7 @@ mod tests {
         // disagreeing one. Run the real dispatch path. The
         // meta.json left behind by the dispatcher must record
         // the spec's model, not the entry's.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let mut entry = seed_agent_with_spec("alice", Some("spec-chosen-model"), None);
         entry.model = Some("stale-registry-model".into());
         let root = entry.root_path.clone().unwrap();
@@ -1644,7 +1644,7 @@ mod tests {
         // so pre-v2 registry rows continue to dispatch to the
         // model their row names — operators whose agents have
         // not been touched since upgrade must see no regression.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let mut entry = seed_agent_with_spec("alice", None, None);
         entry.model = Some("legacy-entry-model".into());
         let root = entry.root_path.clone().unwrap();
@@ -1668,7 +1668,7 @@ mod tests {
         // default model, but that's the driver's concern; from
         // dispatch's perspective the correct record is "no
         // operator preference".
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let mut entry = seed_agent_with_spec("alice", None, None);
         entry.model = None;
         let root = entry.root_path.clone().unwrap();
@@ -1845,7 +1845,7 @@ mod tests {
         // dispatch entry, and `failed` at the terminal point.
         // The meta.json must carry the invocation_id; the
         // timeline file must carry both events in sequence order.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", Some("model-x"), None);
         let root = entry.root_path.clone().unwrap();
 
@@ -1935,7 +1935,7 @@ mod tests {
         // hypothetical refactor where the terminal emit gets
         // skipped (e.g. added behind a flag) — the index would
         // stay at RUNNING and P4 would be silently violated.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
         let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
@@ -1987,7 +1987,7 @@ mod tests {
         // JSONL driver output becomes `chunk`; garbage lines
         // become `raw`. Both shapes round-trip through disk.
         use crate::runtime::session::Session;
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let session = Session::new(None);
         session.writer().emit("admitted", None).unwrap();
         simulate_driver_progress(
@@ -2023,7 +2023,7 @@ mod tests {
         // against a future refactor that drops broadcast wake
         // from the emit path.
         use crate::runtime::session::Session;
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let session = Session::new(None);
         let mut rx = session.subscribe();
         session.writer().emit("admitted", None).unwrap();
@@ -2068,7 +2068,7 @@ mod tests {
         // run_dir with {prompt.txt, meta.json} but NOT
         // trace.jsonl. This is the visible contract change
         // operators see on disk.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
         let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
@@ -2106,7 +2106,7 @@ mod tests {
         // from meta.json into a grep on the log dir must land
         // on the run's events. If a future refactor separates
         // the two allocation sites, this test trips.
-        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
         let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);

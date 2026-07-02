@@ -22,7 +22,7 @@ use crate::plugins::remote_desktop::transport::webrtc_baseline_media::{
 use crate::plugins::remote_desktop::transport::webrtc_native_media::{
     run_direct_webrtc_native_stream, NativeMediaInputs,
 };
-use crate::runtime::agents::media::screen_snapshot::{
+use crate::runtime::system_abilities::resources::media::screen_snapshot::{
     open_display_recorder_with_xcap, ScreenCaptureOptions,
 };
 

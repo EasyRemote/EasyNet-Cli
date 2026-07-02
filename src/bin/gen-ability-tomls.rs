@@ -22,7 +22,7 @@
 //      feature gated for specialist `--no-default-features` builds; ordinary
 //      daemon/product builds include the remote desktop package by default.
 //   3. For each, render the canonical TOML via
-//      `runtime::agents::ability_toml::render_ability_toml`.
+//      `runtime::system_ability_catalog::ability_toml::render_ability_toml`.
 //   4. Write to the canonical descriptor path, overwriting any prior content.
 //      Files no longer present in their owning system/package index are
 //      deleted from that owner directory.
@@ -30,12 +30,12 @@
 // Why a separate binary (and not part of cargo build)
 // ---------------------------------------------------
 // build.rs runs *before* the crate's own modules compile, so it
-// cannot call `runtime::agents::published_system_abilities()` (which
+// cannot call `runtime::system_ability_catalog::published_system_abilities()` (which
 // depends on every ability module being compiled). Putting the
 // generator in `src/bin/` lets it link the full crate and run
 // after any code change with a single command.
 //
-// The drift test in `src/runtime/agents/mod.rs` is the safety
+// The drift test in `src/runtime/system_ability_catalog/catalog_metadata.rs` is the safety
 // net: if a contributor edits `description_for` and forgets to
 // regenerate, `cargo test` fails with a message naming every
 // drifted ability and telling them to run this binary.
@@ -45,7 +45,7 @@
 // * Delete handwritten TOMLs that aren't owned by the system registry or a
 //   plugin package manifest.
 //   `chat.ability.toml` is lazily seeded at runtime to the
-//   per-install path (see runtime/abilities.rs); a future
+//   per-install path (see runtime/agent_ability_specs.rs); a future
 //   non-system descriptor (e.g. for a third-party ability shipped
 //   alongside) might also live in this directory. We delete only
 //   files matching the strict `<published_name>.ability.toml`
@@ -58,18 +58,19 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use easynet_cli::runtime::agents::{ability_toml, descriptor_path_for, published_system_abilities};
 use easynet_cli::runtime::plugin_host::{
     PluginDescriptorProjector, PluginPackageIndex, PluginWireRegistry,
 };
-
-const TARGET_DIR: &str = "abilities/system";
+use easynet_cli::runtime::system_ability_catalog::{
+    ability_toml, descriptor_path_for, published_system_abilities, system_ability_descriptor_root,
+    SYSTEM_ABILITY_DESCRIPTOR_ROOT,
+};
 
 fn main() -> anyhow::Result<()> {
-    let target_dir = PathBuf::from(TARGET_DIR);
+    let target_dir = system_ability_descriptor_root();
     if !target_dir.exists() {
         anyhow::bail!(
-            "{TARGET_DIR} directory not found. \
+            "{SYSTEM_ABILITY_DESCRIPTOR_ROOT} directory not found. \
              Run this binary from the crate root."
         );
     }
