@@ -7,8 +7,8 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
+use crate::daemon::ability::wire::AbilityWireRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_wire::AbilityWireRegistry;
 use crate::runtime::plugin_host::contribution::DaemonPluginBinder;
 use crate::runtime::plugin_host::errors::{PluginHostError, Result};
 use crate::runtime::plugin_host::host_api::{

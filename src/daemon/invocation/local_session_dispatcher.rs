@@ -92,26 +92,26 @@ pub struct LocalAxonSessionDispatcher {
     /// Daemon-owned wire profile registry for local bidi abilities. Plugin
     /// declarations are projected into this table at boot so the dispatcher
     /// does not query package state through process-global helpers.
-    ability_wire: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+    ability_wire: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
     /// On-miss caller key sync for device and same-realm user
     /// origin-caller claims (see `device_trust_sync`). `None` outside
     /// device-mode boot.
     device_trust_sync: Option<Arc<crate::daemon::invocation::device_trust_sync::DeviceTrustSync>>,
 }
 
-type LocalBidiWireKind = crate::runtime::ability_wire::AbilityBidiWireKind;
+type LocalBidiWireKind = crate::daemon::ability::wire::AbilityBidiWireKind;
 
 fn local_bidi_wire_kind_for(
-    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
     ability: &str,
 ) -> Option<LocalBidiWireKind> {
     registry
         .bidi_wire_kind_for(ability)
-        .or_else(|| crate::runtime::ability_wire::core_bidi_wire_kind_for(ability))
+        .or_else(|| crate::daemon::ability::wire::core_bidi_wire_kind_for(ability))
 }
 
 fn local_is_bidi_wire_ability(
-    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
     ability: &str,
 ) -> bool {
     local_bidi_wire_kind_for(registry, ability).is_some()
@@ -635,7 +635,7 @@ impl LocalAxonSessionDispatcher {
     }
 
     fn is_json_frame_bidi_with(
-        registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+        registry: &crate::daemon::ability::wire::AbilityWireRegistry,
         ability: &str,
     ) -> bool {
         matches!(
@@ -652,7 +652,7 @@ impl LocalAxonSessionDispatcher {
             remote_bidi_sessions: Arc::new(Mutex::new(HashMap::new())),
             remote_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             local_runtime: None,
-            ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
+            ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
             device_trust_sync: None,
         }
     }
@@ -662,7 +662,7 @@ impl LocalAxonSessionDispatcher {
     #[must_use]
     pub fn with_ability_wire_registry(
         mut self,
-        registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+        registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
     ) -> Self {
         self.ability_wire = registry;
         self
@@ -1259,7 +1259,7 @@ impl LocalAxonSessionDispatcher {
     }
 
     fn map_remote_bidi_output_with(
-        registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+        registry: &crate::daemon::ability::wire::AbilityWireRegistry,
         call_id: u64,
         ability: &str,
         value: &Value,
@@ -2104,7 +2104,7 @@ mod tests {
 
     #[test]
     fn session_bidi_gate_recognizes_core_browser_attach_wire() {
-        let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
+        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
         let ability =
             crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
 
@@ -3726,9 +3726,9 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     fn remote_desktop_wire_dispatcher() -> LocalAxonSessionDispatcher {
         LocalAxonSessionDispatcher::new().with_ability_wire_registry(Arc::new(
-            crate::runtime::ability_wire::AbilityWireRegistry::for_test_plugin_bidi([(
+            crate::daemon::ability::wire::AbilityWireRegistry::for_test_plugin_bidi([(
                 "remote_desktop.attach".to_string(),
-                crate::runtime::ability_wire::AbilityBidiWireKind::JsonFrames,
+                crate::daemon::ability::wire::AbilityBidiWireKind::JsonFrames,
             )]),
         ))
     }

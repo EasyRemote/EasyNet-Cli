@@ -96,7 +96,7 @@ pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[&str] =
     &[ABILITY_INVOKE_REMOTE, ABILITY_SESSION_OPEN];
 
 fn local_bidi_wire_kind_for(
-    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
     ability: &str,
 ) -> Option<LocalBidiWireKind> {
     local_bidi_wire_kind_for_registry_key(registry, ability).or_else(|| {
@@ -106,12 +106,12 @@ fn local_bidi_wire_kind_for(
 }
 
 fn local_bidi_wire_kind_for_registry_key(
-    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
     ability: &str,
 ) -> Option<LocalBidiWireKind> {
     registry
         .bidi_wire_kind_for(ability)
-        .or_else(|| crate::runtime::ability_wire::core_bidi_wire_kind_for(ability))
+        .or_else(|| crate::daemon::ability::wire::core_bidi_wire_kind_for(ability))
 }
 
 fn descriptor_ref_local_registry_key(ability: &str) -> Option<String> {
@@ -127,7 +127,7 @@ fn descriptor_ref_local_registry_key(ability: &str) -> Option<String> {
 }
 
 fn local_is_bidi_wire_ability(
-    registry: &crate::runtime::ability_wire::AbilityWireRegistry,
+    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
     ability: &str,
 ) -> bool {
     local_bidi_wire_kind_for(registry, ability).is_some()
@@ -246,7 +246,7 @@ impl BidiDispatcher {
                     .bidi_wire_kind_for(other)
                     .is_some();
                 let core_known =
-                    crate::runtime::ability_wire::core_bidi_wire_kind_for(other).is_some();
+                    crate::daemon::ability::wire::core_bidi_wire_kind_for(other).is_some();
                 crate::op_event!(
                     component = daemon_invocation,
                     kind = invoke_bidi_unwired_ability,
@@ -1641,7 +1641,7 @@ impl TerminalReceiptFailure {
 
 const LOCAL_BIDI_DEFAULT_STREAM_ID: u32 = 1;
 
-pub(crate) type LocalBidiWireKind = crate::runtime::ability_wire::AbilityBidiWireKind;
+pub(crate) type LocalBidiWireKind = crate::daemon::ability::wire::AbilityBidiWireKind;
 
 fn local_bidi_stdout_stream_id(envelope_open: &EnvelopeOpen) -> u32 {
     envelope_open
@@ -3352,7 +3352,7 @@ mod tests {
 
     #[test]
     fn invoke_bidi_gate_recognizes_core_browser_attach_wire() {
-        let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
+        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
         let ability =
             crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
 
@@ -3365,7 +3365,7 @@ mod tests {
 
     #[test]
     fn invoke_bidi_gate_recognizes_descriptor_ref_wire_target() {
-        let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
+        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
         let ability =
             crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
         let owner_ura = crate::ura::device_ura("test-realm", "dev-a");

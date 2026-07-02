@@ -16,3 +16,4 @@ pub mod builtins;
 pub mod catalog;
 pub mod health;
 pub mod names;
+pub mod wire;

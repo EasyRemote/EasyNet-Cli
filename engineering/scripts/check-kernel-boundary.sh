@@ -174,11 +174,6 @@ fi
 #                           translates each wire frame into an
 #                           Axon LocalRuntime invocation through
 #                           the bridge.
-#   * ability_wire        — daemon-facing wire profile registry for
-#                           local bidi abilities. The transport
-#                           reads codec metadata from this boundary;
-#                           it does not inspect plugin packages or
-#                           own execution policy.
 #   * plugin_host         — daemon plugin runtime manager handle
 #                           injected at boot so Invocation dispatch
 #                           can execute already-loaded plugin-backed
@@ -188,7 +183,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge|ability_wire|plugin_host'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge|plugin_host'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

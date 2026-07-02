@@ -19,6 +19,7 @@ make_sandbox() {
         "$sandbox/src/cli" \
         "$sandbox/src/daemon/ability" \
         "$sandbox/src/daemon/ability/names" \
+        "$sandbox/src/daemon/ability/wire" \
         "$sandbox/src/daemon/axon_bridge" \
         "$sandbox/src/daemon/context" \
         "$sandbox/src/daemon/control" \
@@ -48,6 +49,7 @@ make_sandbox() {
     printf '%s\n' '// daemon ability catalog root' > "$sandbox/src/daemon/ability/catalog/mod.rs"
     printf '%s\n' '// daemon ability health' > "$sandbox/src/daemon/ability/health.rs"
     printf '%s\n' '// daemon ability names root' > "$sandbox/src/daemon/ability/names/mod.rs"
+    printf '%s\n' '// daemon ability wire root' > "$sandbox/src/daemon/ability/wire/mod.rs"
     printf '%s\n' '// daemon axon bridge root' > "$sandbox/src/daemon/axon_bridge/mod.rs"
     printf '%s\n' '// daemon context root' > "$sandbox/src/daemon/context/mod.rs"
     printf '%s\n' '// daemon clipboard tracker' > "$sandbox/src/daemon/context/clipboard_tracker.rs"
@@ -126,6 +128,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/ability_names directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired ability wire module' > "$SB/src/runtime/ability_wire.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/ability_wire.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/axon_bridge"
 printf '%s\n' '// retired axon bridge root' > "$SB/src/runtime/axon_bridge/mod.rs"
 rc=0
@@ -176,6 +185,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::ability_names import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::ability_wire::AbilityWireRegistry::core; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::ability_wire import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::axon_bridge::runtime_factory::build_local_runtime; }' > "$SB/src/lib.rs"

@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use crate::daemon::ability::wire::AbilityWireRegistry;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
@@ -38,7 +39,6 @@ use crate::daemon::invocation::state::pending_dispatch::{
     PendingDispatchMap, PendingStreamDispatchMap,
 };
 use crate::daemon::invocation::state::presence::PresenceRegistry;
-use crate::runtime::ability_wire::AbilityWireRegistry;
 use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
 
 /// Directory read plane: live device sessions, hosted-agent rows,

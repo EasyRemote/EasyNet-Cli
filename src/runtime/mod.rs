@@ -130,7 +130,6 @@ pub mod executors;
 pub mod ability;
 pub mod ability_descriptor;
 pub mod ability_dispatch;
-pub mod ability_wire;
 pub mod advertise;
 pub mod dispatch_receipt;
 pub mod federation_client;

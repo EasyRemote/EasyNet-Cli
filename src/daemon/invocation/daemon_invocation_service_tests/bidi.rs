@@ -384,7 +384,7 @@ fn map_local_bidi_up_payload_translates_file_transfer_eof_control() {
 #[test]
 #[cfg(feature = "remote-desktop")]
 fn remote_desktop_bidi_uses_json_frame_wire_kind() {
-    let registry = crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile()
+    let registry = crate::daemon::ability::wire::AbilityWireRegistry::load_default_profile()
         .expect("remote desktop plugin wire profile loads");
     assert_eq!(
         registry.bidi_wire_kind_for("remote_desktop.attach"),

@@ -1,17 +1,17 @@
 // EasyNet CLI — ability wire profiles
 // ====================================
 //
-// File: src/runtime/ability_wire.rs
-// Description: Canonical runtime mapping from ability name to bidi wire codec.
+// File: src/daemon/ability/wire/mod.rs
+// Description: Canonical daemon mapping from ability name to bidi wire codec.
 //
 // Protocol Responsibility:
 // - Names the local bidi wire adapter used by daemon gRPC and `session.open`.
 // - Keeps built-in ability adapters and plugin-declared adapters behind one
-//   runtime query surface.
+//   daemon query surface.
 //
 // Architectural Position:
-// - Runtime metadata boundary. Services ask this module what wire profile an
-//   ability uses; they do not inspect plugin packages directly.
+// - Daemon ability metadata boundary. Invocation dispatch asks this module what
+//   wire profile an ability uses; it does not inspect plugin packages directly.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};

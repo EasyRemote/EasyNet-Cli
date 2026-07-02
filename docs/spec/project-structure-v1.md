@@ -24,7 +24,7 @@ runtime semantics, these sources are higher priority:
    directory/listing complexity, facade rules, and aggregate fan-out state
    machines.
 3. `src/runtime/ability/mod.rs`, `src/runtime/ability_dispatch.rs`,
-   `src/runtime/ability_wire.rs`, and `src/daemon/axon_bridge/` for the current
+   `src/daemon/ability/wire/mod.rs`, and `src/daemon/axon_bridge/` for the current
    daemon-side split among AbilityDescriptor, AuthorityBinding, AbilityImpl,
    dispatch compatibility, wire-profile lookup, and Axon glue.
 4. `src/daemon/control/` for local boot/status IPC, `src/daemon/invocation/`
@@ -53,7 +53,7 @@ owners already exist:
   AbilityDescriptor, AuthorityBinding, AbilityImpl, and their registries.
 - `runtime/ability_dispatch.rs` is a compatibility facade over the catalog and
   handler registration path, not a new protocol layer.
-- `runtime/ability_wire.rs` owns daemon wire-profile lookup for bidi/session
+- `daemon/ability/wire/mod.rs` owns daemon wire-profile lookup for bidi/session
   bridges.
 - `daemon/axon_bridge/` is glue to Axon SDK types and must not grow EasyNet
   product policy.
@@ -198,7 +198,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `core/` | zero-dependency domain/value types | filesystem walking, daemon policy, transport |
 | `runtime/ability/` | AbilityDescriptor, AuthorityBinding, AbilityImpl, control-plane registration | product handler bodies, plugin process management |
 | `runtime/ability_dispatch.rs` | compatibility catalog facade and handler registration bridge | new protocol semantics, product policy branching |
-| `runtime/ability_wire.rs` | local ability-to-wire-profile projection | plugin package loading, transport sessions |
+| `daemon/ability/wire/mod.rs` | local ability-to-wire-profile projection | plugin package loading, transport sessions |
 | `daemon/ability/catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
 | `daemon/ability/builtins/` | daemon-owned/system ability handlers grouped by product module | transport admission, receipt canonicalization, persistent service state |
 | `runtime/executors/` | reusable execution engines used by handlers or manifest-bound abilities | public ability registration |

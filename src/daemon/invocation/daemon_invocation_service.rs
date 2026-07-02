@@ -441,7 +441,7 @@ impl DaemonInvocationService {
             runtime: RuntimePlane {
                 local_runtime: None,
                 invocation_ledger: None,
-                ability_wire: Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core()),
+                ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
             },
         }
     }
@@ -798,7 +798,7 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_ability_wire_registry(
         mut self,
-        registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+        registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
     ) -> Self {
         self.runtime.ability_wire = registry;
         self

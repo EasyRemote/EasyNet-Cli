@@ -96,6 +96,7 @@ require_path "src/cli/mod.rs"
 require_path "src/daemon/mod.rs"
 require_path "src/daemon/ability/health.rs"
 require_path "src/daemon/ability/names"
+require_path "src/daemon/ability/wire/mod.rs"
 require_path "src/daemon/axon_bridge/mod.rs"
 require_path "src/daemon/context/clipboard_tracker.rs"
 require_path "src/daemon/control"
@@ -131,6 +132,7 @@ require_path "tests/scripts"
 reject_path "src/runtime/ability_runtime"
 reject_path "src/runtime/agents"
 reject_path "src/runtime/ability_names"
+reject_path "src/runtime/ability_wire.rs"
 reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/system_abilities"
 reject_path "src/runtime/system_ability_catalog"
@@ -192,6 +194,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::ability_wire paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::ability_wire::|easynet_cli::runtime::ability_wire::|runtime::ability_wire::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::axon_bridge paths" \
     '(^|[^[:alnum:]_])(crate::runtime::axon_bridge::|easynet_cli::runtime::axon_bridge::|runtime::axon_bridge::)' \
     "${SCAN_ROOTS[@]}"
@@ -219,6 +226,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/ability_names physical path" \
     'src/runtime/ability_names(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/ability_wire.rs physical path" \
+    'src/runtime/ability_wire\.rs|runtime/ability_wire\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

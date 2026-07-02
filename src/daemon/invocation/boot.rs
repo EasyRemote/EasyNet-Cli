@@ -505,7 +505,7 @@ pub fn start_daemon_invocation_transport(
         .as_ref()
         .map(|manager| manager.ability_wire_registry())
         .unwrap_or_else(|| {
-            match crate::runtime::ability_wire::AbilityWireRegistry::load_default_profile() {
+            match crate::daemon::ability::wire::AbilityWireRegistry::load_default_profile() {
                 Ok(registry) => Arc::new(registry),
                 Err(err) => {
                     let error = err.to_string();
@@ -516,7 +516,7 @@ pub fn start_daemon_invocation_transport(
                         error = error.as_str(),
                         message = "daemon will use core bidi wire profiles only",
                     );
-                    Arc::new(crate::runtime::ability_wire::AbilityWireRegistry::core())
+                    Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core())
                 }
             }
         });
@@ -927,7 +927,7 @@ struct SessionSupervisorConfig {
     hub_ca_pem_path: Option<std::path::PathBuf>,
     escalation_state: Option<DeviceEscalationState>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
-    ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
+    ability_wire_registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
     hub_published_abilities: Arc<
         crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
