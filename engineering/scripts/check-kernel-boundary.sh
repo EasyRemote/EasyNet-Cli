@@ -145,9 +145,6 @@ fi
 #                           lease expiry, and advertised callable
 #                           summaries used during session/presence
 #                           updates.
-#   * resources           — resource-ref helpers for filesystem
-#                           transfer abilities; no handler policy
-#                           is owned in the transport.
 #   * join_connection_state
 #                         — typed presence/join state snapshots
 #                           recorded by session initiation.
@@ -177,7 +174,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

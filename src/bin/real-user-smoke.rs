@@ -42,12 +42,12 @@ use easynet_cli::daemon::ability::catalog::{
     build_registry_for_daemon, build_registry_with_runtime, RegistryBuildServices,
     RegistryDaemonBuildConfig,
 };
+use easynet_cli::daemon::resources::filesystem::{
+    resource_ref_for_local_path, FilesystemResourceCapability,
+};
 use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
-use easynet_cli::runtime::resources::filesystem::{
-    resource_ref_for_local_path, FilesystemResourceCapability,
-};
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {

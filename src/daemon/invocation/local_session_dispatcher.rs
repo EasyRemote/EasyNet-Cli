@@ -2327,9 +2327,9 @@ mod tests {
 
         let args = serde_json::to_vec(&json!({
             "mode": "upload",
-            "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+            "resource_ref": crate::daemon::resources::filesystem::resource_ref_for_local_path(
                 &target,
-                crate::runtime::resources::filesystem::FilesystemResourceCapability::Write,
+                crate::daemon::resources::filesystem::FilesystemResourceCapability::Write,
             )
             .expect("local fs ResourceRef"),
         }))
@@ -3468,9 +3468,9 @@ mod tests {
         let session_tx = SessionUpSender::new(tx);
 
         let args = serde_json::json!({
-            "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+            "resource_ref": crate::daemon::resources::filesystem::resource_ref_for_local_path(
                 &target,
-                crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+                crate::daemon::resources::filesystem::FilesystemResourceCapability::Read,
             )
             .expect("local fs ResourceRef"),
             "encoding": "utf8",
@@ -3541,9 +3541,9 @@ mod tests {
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "upload",
-                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                    "resource_ref": crate::daemon::resources::filesystem::resource_ref_for_local_path(
                         &target,
-                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Write,
+                        crate::daemon::resources::filesystem::FilesystemResourceCapability::Write,
                     )
                     .expect("local fs ResourceRef"),
                 }))
@@ -3755,9 +3755,9 @@ mod tests {
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "download",
-                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                    "resource_ref": crate::daemon::resources::filesystem::resource_ref_for_local_path(
                         &target,
-                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+                        crate::daemon::resources::filesystem::FilesystemResourceCapability::Read,
                     )
                     .expect("local fs ResourceRef"),
                 }))
@@ -3842,9 +3842,9 @@ mod tests {
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "download",
-                    "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+                    "resource_ref": crate::daemon::resources::filesystem::resource_ref_for_local_path(
                         &target,
-                        crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+                        crate::daemon::resources::filesystem::FilesystemResourceCapability::Read,
                     )
                     .expect("local fs ResourceRef"),
                 }))

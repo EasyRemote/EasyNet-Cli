@@ -1,7 +1,7 @@
 // EasyNet CLI — Filesystem ResourceRef Domain
 // ===========================================
 //
-// File: src/runtime/resources/filesystem.rs
+// File: src/daemon/resources/filesystem.rs
 // Description: ResourceRef generation and revalidation for daemon-local
 //              filesystem abilities.
 //

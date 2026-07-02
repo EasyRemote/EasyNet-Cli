@@ -709,9 +709,9 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
 
     let args = serde_json::to_vec(&serde_json::json!({
         "mode": "download",
-        "resource_ref": crate::runtime::resources::filesystem::resource_ref_for_local_path(
+        "resource_ref": crate::daemon::resources::filesystem::resource_ref_for_local_path(
             &path,
-            crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+            crate::daemon::resources::filesystem::FilesystemResourceCapability::Read,
         )
         .expect("local fs ResourceRef"),
     }))

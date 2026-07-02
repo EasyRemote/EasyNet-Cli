@@ -203,7 +203,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `daemon/ability/builtins/` | daemon-owned/system ability handlers grouped by product module | transport admission, receipt canonicalization, persistent service state |
 | `runtime/executors/` | reusable execution engines used by handlers or manifest-bound abilities | public ability registration |
 | `runtime/execution/` | stateful runtime services such as PTY, schedule, loop, permission, session, MCP execution state | descriptor identity, facade rendering |
-| `runtime/resources/` | resource models and shared resource projection helpers | product ability handler bodies |
+| `daemon/resources/` | resource models and shared resource projection helpers | product ability handler bodies |
 | `daemon/plugins/` | plugin manifest parsing, install/activation, sidecar protocol, daemon contribution registration | core Ability ontology |
 | `daemon/axon_bridge/` | Axon SDK glue and wire/type adapters | EasyNet product policy, plugin lifecycle decisions |
 | `daemon/federation/read_model/` | federation resolver/catalog read models such as advertised agents, owner ability projections, and hub-published abilities | Axon protocol authority, transport dialing, product handler bodies |

@@ -45,6 +45,7 @@ pub mod invocation;
 pub mod keyring;
 pub mod plugins;
 mod process;
+pub mod resources;
 pub mod trust;
 
 #[cfg(feature = "axon-pb")]

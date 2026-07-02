@@ -34,7 +34,7 @@ use clap::Args;
 use console::style;
 use serde_json::json;
 
-use crate::runtime::resources::filesystem::{
+use crate::daemon::resources::filesystem::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
 use crate::support::local_invoke::invoke_local_ability_with_subject;

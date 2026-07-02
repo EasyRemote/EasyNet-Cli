@@ -91,9 +91,9 @@ use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope}
 
 fn fs_ref(
     path: &std::path::Path,
-    capability: crate::runtime::resources::filesystem::FilesystemResourceCapability,
+    capability: crate::daemon::resources::filesystem::FilesystemResourceCapability,
 ) -> Value {
-    crate::runtime::resources::filesystem::resource_ref_for_local_path(path, capability)
+    crate::daemon::resources::filesystem::resource_ref_for_local_path(path, capability)
         .expect("local fs ResourceRef")
 }
 
@@ -830,7 +830,7 @@ fn real_fs_write_round_trips_through_real_disk() {
     let resp = invoke(
         "fs.write",
         json!({
-            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
             "content": payload,
             "encoding": "utf8",
         }),
@@ -975,7 +975,7 @@ fn real_fs_read_reads_this_crates_cargo_toml() {
     let resp = invoke(
         "fs.read",
         json!({
-            "resource_ref": fs_ref(&cargo_toml, crate::runtime::resources::filesystem::FilesystemResourceCapability::Read),
+            "resource_ref": fs_ref(&cargo_toml, crate::daemon::resources::filesystem::FilesystemResourceCapability::Read),
             "encoding": "utf8",
         }),
     );
@@ -1006,7 +1006,7 @@ fn real_fs_read_reads_an_actual_file() {
     let resp = invoke(
         "fs.read",
         json!({
-            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Read),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Read),
             "encoding":"utf8"
         }),
     );
@@ -1028,7 +1028,7 @@ fn real_fs_stat_reports_file_metadata() {
     let resp = invoke(
         "fs.stat",
         json!({
-            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Stat),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Stat),
         }),
     );
 
@@ -1065,7 +1065,7 @@ fn real_fs_write_creates_a_file_with_expected_content() {
     let resp = invoke(
         "fs.write",
         json!({
-            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
             "content": "real write",
             "encoding": "utf8",
         }),
@@ -1087,7 +1087,7 @@ fn real_fs_list_lists_directory_entries() {
     let resp = invoke(
         "fs.list",
         json!({
-            "resource_ref": fs_ref(&dir, crate::runtime::resources::filesystem::FilesystemResourceCapability::List)
+            "resource_ref": fs_ref(&dir, crate::daemon::resources::filesystem::FilesystemResourceCapability::List)
         }),
     );
     let body = resp.as_object().expect("object response");
@@ -1142,7 +1142,7 @@ fn real_fs_edit_replaces_a_unique_match() {
     let resp = invoke(
         "fs.edit",
         json!({
-            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
             "old_string": "old",
             "new_string": "new",
         }),
@@ -2404,7 +2404,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "upload",
-            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
         }),
     );
     t.call_mode = CallMode::Bidi;
@@ -2462,7 +2462,7 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "download",
-            "resource_ref": fs_ref(&path, crate::runtime::resources::filesystem::FilesystemResourceCapability::Read),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Read),
         }),
     );
     t.call_mode = CallMode::Bidi;

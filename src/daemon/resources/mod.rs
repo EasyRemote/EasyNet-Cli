@@ -1,4 +1,4 @@
-//! Runtime-owned resource reference domains.
+//! Daemon-owned resource reference domains.
 //!
 //! This module contains EasyNet-Cli daemon resource policy, not Axon
 //! protocol canonicalization. Axon owns Invocation and receipt semantics;

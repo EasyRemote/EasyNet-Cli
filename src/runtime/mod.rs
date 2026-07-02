@@ -37,7 +37,6 @@ pub(crate) mod directory;
 pub(crate) mod dispatch;
 pub(crate) mod drivers;
 pub(crate) mod process_runner;
-pub mod resources;
 pub(crate) mod run_store;
 pub(crate) mod session;
 pub(crate) mod skill_store;

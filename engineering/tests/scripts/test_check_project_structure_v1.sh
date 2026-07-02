@@ -30,6 +30,7 @@ make_sandbox() {
         "$sandbox/src/daemon/invocation/state" \
         "$sandbox/src/daemon/keyring" \
         "$sandbox/src/daemon/plugins" \
+        "$sandbox/src/daemon/resources" \
         "$sandbox/src/daemon/trust" \
         "$sandbox/ability-descriptors/system" \
         "$sandbox/schemas" \
@@ -75,6 +76,7 @@ make_sandbox() {
     printf '%s\n' '// usage quota' > "$sandbox/src/daemon/invocation/state/usage_quota.rs"
     printf '%s\n' '// daemon keyring root' > "$sandbox/src/daemon/keyring/mod.rs"
     printf '%s\n' '// daemon plugins root' > "$sandbox/src/daemon/plugins/mod.rs"
+    printf '%s\n' '// daemon resources root' > "$sandbox/src/daemon/resources/mod.rs"
     printf '%s\n' '// daemon trust root' > "$sandbox/src/daemon/trust/mod.rs"
     printf '%s\n' '// daemon trust anchor' > "$sandbox/src/daemon/trust/anchor.rs"
     printf '%s\n' '// daemon trust cell' > "$sandbox/src/daemon/trust/cell.rs"
@@ -153,6 +155,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/plugin_host directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/resources"
+printf '%s\n' '// retired resources root' > "$SB/src/runtime/resources/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/resources directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/system_abilities"
 printf '%s\n' '// retired system abilities root' > "$SB/src/runtime/system_abilities/mod.rs"
 rc=0
@@ -216,6 +226,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::plugin_host import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::resources::filesystem::resource_ref_schema; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::resources import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::system_abilities::agents::chat::register; }' > "$SB/src/lib.rs"

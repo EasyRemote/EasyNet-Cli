@@ -102,8 +102,8 @@ use sha2::{Digest, Sha256};
 
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
+use crate::daemon::resources::filesystem::{self, FilesystemResourceCapability};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::resources::filesystem::{self, FilesystemResourceCapability};
 /// Wire name. Pinned by the Tier 2.5 surface; rename = protocol break.
 pub const ABILITY_NAME: &str = crate::daemon::ability::names::device_control::FS_EDIT;
 
@@ -419,7 +419,7 @@ pub fn input_schema() -> Value {
         "required": ["resource_ref", "old_string", "new_string"],
         "additionalProperties": false,
         "properties": {
-            "resource_ref": crate::runtime::resources::filesystem::resource_ref_schema(),
+            "resource_ref": crate::daemon::resources::filesystem::resource_ref_schema(),
             "old_string": {
                 "type": "string",
                 "description": "Exact substring to find. Empty string + non-existent file = create-new-file with new_string as content."
@@ -476,9 +476,9 @@ mod tests {
     }
 
     fn edit_ref(path: &Path) -> Value {
-        crate::runtime::resources::filesystem::resource_ref_for_local_path(
+        crate::daemon::resources::filesystem::resource_ref_for_local_path(
             path,
-            crate::runtime::resources::filesystem::FilesystemResourceCapability::Write,
+            crate::daemon::resources::filesystem::FilesystemResourceCapability::Write,
         )
         .unwrap()
     }
@@ -747,9 +747,9 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "old");
-        let resource_ref = crate::runtime::resources::filesystem::resource_ref_for_local_path(
+        let resource_ref = crate::daemon::resources::filesystem::resource_ref_for_local_path(
             &path,
-            crate::runtime::resources::filesystem::FilesystemResourceCapability::Read,
+            crate::daemon::resources::filesystem::FilesystemResourceCapability::Read,
         )
         .unwrap();
         let err = handler(json!({

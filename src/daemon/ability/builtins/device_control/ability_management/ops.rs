@@ -46,9 +46,9 @@ use crate::daemon::ability::builtins::device_control::ability_management::store:
     manifest_digest, DeviceAbilityRecord,
 };
 use crate::daemon::ability::builtins::integrations::federation_probe;
+use crate::daemon::resources::filesystem::{self, FilesystemResourceCapability};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
-use crate::runtime::resources::filesystem::{self, FilesystemResourceCapability};
 use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 /// Shared, late-wired cell holding the device-ability registrar.

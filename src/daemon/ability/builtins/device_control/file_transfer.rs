@@ -75,11 +75,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiOutputFrame, BidiSource};
-use crate::runtime::resources::filesystem::{
+use crate::daemon::resources::filesystem::{
     self, FilesystemResourceCapability, ResolvedFilesystemPath,
 };
+use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiOutputFrame, BidiSource};
 pub const ABILITY_FILE_TRANSFER: &str = crate::daemon::ability::names::device_control::FS_TRANSFER;
 
 /// Maximum bytes per file_transfer call. 1 GiB matches order-of-
@@ -563,7 +563,7 @@ pub fn input_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "mode": {"type": "string", "enum": ["upload", "download"]},
-            "resource_ref": crate::runtime::resources::filesystem::resource_ref_schema(),
+            "resource_ref": crate::daemon::resources::filesystem::resource_ref_schema(),
         },
     })
 }
@@ -652,7 +652,7 @@ mod tests {
     }
 
     fn transfer_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
-        crate::runtime::resources::filesystem::resource_ref_for_local_path(path, capability)
+        crate::daemon::resources::filesystem::resource_ref_for_local_path(path, capability)
             .expect("local transfer ResourceRef")
     }
 
