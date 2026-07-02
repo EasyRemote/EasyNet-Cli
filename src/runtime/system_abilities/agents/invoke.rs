@@ -66,7 +66,7 @@ use crate::runtime::local_runtime_invoker::is_not_found_error;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.invoke`.
-pub const ABILITY_VERB: &str = crate::runtime::ability_names::agents::INVOKE;
+pub const ABILITY_VERB: &str = crate::daemon::ability::names::agents::INVOKE;
 
 /// Register `<agent_name>.invoke` on the registry.
 ///

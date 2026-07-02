@@ -87,7 +87,7 @@ use crate::runtime::ability_dispatch::{
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str =
-    crate::runtime::ability_names::device_control::TERMINAL_ATTACH;
+    crate::daemon::ability::names::device_control::TERMINAL_ATTACH;
 
 /// Description published by the dispatcher's `description_for`
 /// arm. Sibling of terminal.create / close — those are

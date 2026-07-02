@@ -83,28 +83,28 @@ use crate::runtime::system_ability_catalog::ability_toml::Rfc006Metadata;
 //    pull from one place) ──────────────────────────────────────
 
 pub const ABILITY_MIC_SUBSCRIBE: &str =
-    crate::runtime::ability_names::resources::MEDIA_MIC_SUBSCRIBE;
+    crate::daemon::ability::names::resources::MEDIA_MIC_SUBSCRIBE;
 pub const ABILITY_CAMERA_SUBSCRIBE: &str =
-    crate::runtime::ability_names::resources::MEDIA_CAMERA_SUBSCRIBE;
+    crate::daemon::ability::names::resources::MEDIA_CAMERA_SUBSCRIBE;
 pub const ABILITY_CAMERA_SNAPSHOT: &str =
-    crate::runtime::ability_names::resources::MEDIA_CAMERA_SNAPSHOT;
+    crate::daemon::ability::names::resources::MEDIA_CAMERA_SNAPSHOT;
 pub const ABILITY_CAMERA_RECORD_START: &str =
-    crate::runtime::ability_names::resources::MEDIA_CAMERA_RECORD_START;
+    crate::daemon::ability::names::resources::MEDIA_CAMERA_RECORD_START;
 pub const ABILITY_CAMERA_RECORD_STOP: &str =
-    crate::runtime::ability_names::resources::MEDIA_CAMERA_RECORD_STOP;
+    crate::daemon::ability::names::resources::MEDIA_CAMERA_RECORD_STOP;
 pub const ABILITY_SCREEN_SUBSCRIBE: &str =
-    crate::runtime::ability_names::resources::MEDIA_SCREEN_SUBSCRIBE;
+    crate::daemon::ability::names::resources::MEDIA_SCREEN_SUBSCRIBE;
 pub const ABILITY_SCREEN_SNAPSHOT: &str =
-    crate::runtime::ability_names::resources::MEDIA_SCREEN_SNAPSHOT;
+    crate::daemon::ability::names::resources::MEDIA_SCREEN_SNAPSHOT;
 pub const ABILITY_SPEAKER_PUBLISH: &str =
-    crate::runtime::ability_names::resources::MEDIA_SPEAKER_PUBLISH;
-pub const ABILITY_VOICE_SUBSCRIBE: &str = crate::runtime::ability_names::resources::VOICE_SUBSCRIBE;
+    crate::daemon::ability::names::resources::MEDIA_SPEAKER_PUBLISH;
+pub const ABILITY_VOICE_SUBSCRIBE: &str = crate::daemon::ability::names::resources::VOICE_SUBSCRIBE;
 /// Wire name `voice.transcribe` (not bare `transcribe`) because
 /// `AbilityDescriptor::new` requires `<namespace>.<verb>` and the
 /// transcribe resource is the inverse of voice synthesis (audio →
 /// text vs text → audio); both live on the llm-profile.
 pub const ABILITY_VOICE_TRANSCRIBE: &str =
-    crate::runtime::ability_names::resources::VOICE_TRANSCRIBE;
+    crate::daemon::ability::names::resources::VOICE_TRANSCRIBE;
 
 /// String literal used inside `reject_subject_in_args` errors and
 /// matched by the dispatcher's terminal-receipt path. Pinned as a

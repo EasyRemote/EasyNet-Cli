@@ -63,17 +63,17 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
-pub const ABILITY_PUBLISH: &str = crate::runtime::ability_names::resources::SKILL_PUBLISH;
+pub const ABILITY_PUBLISH: &str = crate::daemon::ability::names::resources::SKILL_PUBLISH;
 /// Wire name: `skill.unpublish`. Curator + operator both call it.
-pub const ABILITY_UNPUBLISH: &str = crate::runtime::ability_names::resources::SKILL_UNPUBLISH;
+pub const ABILITY_UNPUBLISH: &str = crate::daemon::ability::names::resources::SKILL_UNPUBLISH;
 /// Wire name: `skill.list`.
-pub const ABILITY_LIST: &str = crate::runtime::ability_names::resources::SKILL_LIST;
+pub const ABILITY_LIST: &str = crate::daemon::ability::names::resources::SKILL_LIST;
 /// Wire name: `skill.tree`. Returns a bounded file tree for a skill package.
-pub const ABILITY_TREE: &str = crate::runtime::ability_names::resources::SKILL_TREE;
+pub const ABILITY_TREE: &str = crate::daemon::ability::names::resources::SKILL_TREE;
 /// Wire name: `skill.read_file`. Reads one UTF-8 file inside a skill package.
-pub const ABILITY_READ_FILE: &str = crate::runtime::ability_names::resources::SKILL_READ_FILE;
+pub const ABILITY_READ_FILE: &str = crate::daemon::ability::names::resources::SKILL_READ_FILE;
 /// Wire name: `skill.write_file`. Writes one UTF-8 file inside a skill package.
-pub const ABILITY_WRITE_FILE: &str = crate::runtime::ability_names::resources::SKILL_WRITE_FILE;
+pub const ABILITY_WRITE_FILE: &str = crate::daemon::ability::names::resources::SKILL_WRITE_FILE;
 
 const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 

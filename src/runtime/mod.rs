@@ -130,7 +130,6 @@ pub mod executors;
 pub mod ability;
 pub mod ability_descriptor;
 pub mod ability_dispatch;
-pub mod ability_names;
 pub mod ability_wire;
 pub mod advertise;
 /// Bridge layer between daemon-owned state (trust anchors,

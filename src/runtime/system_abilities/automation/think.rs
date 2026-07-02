@@ -84,7 +84,7 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Wire name. Pinned because the CLI (`easynet mission think`) and
 /// any future EAL caller bind to it by string.
-pub const ABILITY_THINK: &str = crate::runtime::ability_names::automation::MISSION_THINK;
+pub const ABILITY_THINK: &str = crate::daemon::ability::names::automation::MISSION_THINK;
 
 /// Default max worker+judge cycles. Mirrors `mission.discuss_round`'s
 /// default — same rationale (give the model enough turns to

@@ -46,7 +46,7 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_ADMIN_STATUS: &str = crate::runtime::ability_names::governance::ADMIN_STATUS;
+pub const ABILITY_ADMIN_STATUS: &str = crate::daemon::ability::names::governance::ADMIN_STATUS;
 
 /// Register `admin.status` on the registry.
 ///

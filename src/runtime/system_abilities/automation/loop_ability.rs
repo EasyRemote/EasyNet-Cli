@@ -27,10 +27,10 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::execution::loop_instance::LoopService;
 
-pub const ABILITY_CREATE: &str = crate::runtime::ability_names::automation::LOOP_CREATE;
-pub const ABILITY_STATUS: &str = crate::runtime::ability_names::automation::LOOP_STATUS;
-pub const ABILITY_SUBSCRIBE: &str = crate::runtime::ability_names::automation::LOOP_SUBSCRIBE;
-pub const ABILITY_CANCEL: &str = crate::runtime::ability_names::automation::LOOP_CANCEL;
+pub const ABILITY_CREATE: &str = crate::daemon::ability::names::automation::LOOP_CREATE;
+pub const ABILITY_STATUS: &str = crate::daemon::ability::names::automation::LOOP_STATUS;
+pub const ABILITY_SUBSCRIBE: &str = crate::daemon::ability::names::automation::LOOP_SUBSCRIBE;
+pub const ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::LOOP_CANCEL;
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<LoopService>) {
     let a = Arc::clone(&svc);

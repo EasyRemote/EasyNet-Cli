@@ -51,9 +51,9 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::runtime::system_ability_catalog::{self, AbilityDiscoveryHintSnapshot};
 use serde_json::{json, Value};
 
-pub const ABILITY_DESCRIBE: &str = crate::runtime::ability_names::governance::META_DESCRIBE;
+pub const ABILITY_DESCRIBE: &str = crate::daemon::ability::names::governance::META_DESCRIBE;
 pub const ABILITY_LIST_ABILITIES: &str =
-    crate::runtime::ability_names::governance::META_LIST_ABILITIES;
+    crate::daemon::ability::names::governance::META_LIST_ABILITIES;
 
 /// Register both meta abilities on the registry.
 ///

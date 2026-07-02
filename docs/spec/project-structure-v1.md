@@ -98,9 +98,9 @@ names; others are private error reasons, environment variable names, profile
 versions, internal stream IDs, test fixtures, or plugin-local implementation
 details.
 
-Fix: `runtime/ability_names/` is only for stable public wire names and stable
-metadata keys used across modules. Private constants remain with their owning
-implementation module.
+Fix: `daemon/ability/names/` is only for stable public Ability wire names and
+stable metadata keys used across modules. Private constants remain with their
+owning implementation module.
 
 ### 5. Complexity And Fan-out Were Missing
 
@@ -198,7 +198,6 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | --- | --- | --- |
 | `core/` | zero-dependency domain/value types | filesystem walking, daemon policy, transport |
 | `runtime/ability/` | AbilityDescriptor, AuthorityBinding, AbilityImpl, control-plane registration | product handler bodies, plugin process management |
-| `runtime/ability_names/` | stable public Ability wire-name constants and stable public metadata keys | private reason strings, test fixtures, env vars |
 | `runtime/ability_dispatch.rs` | compatibility catalog facade and handler registration bridge | new protocol semantics, product policy branching |
 | `runtime/ability_wire.rs` | local ability-to-wire-profile projection | plugin package loading, transport sessions |
 | `runtime/system_ability_catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
@@ -210,6 +209,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `runtime/axon_bridge/` | Axon SDK glue and wire/type adapters | EasyNet product policy, plugin lifecycle decisions |
 | `daemon/federation/read_model/` | federation resolver/catalog read models such as advertised agents, owner ability projections, and hub-published abilities | Axon protocol authority, transport dialing, product handler bodies |
 | `daemon/ability/` | daemon-owned ability support services such as manifest ability health monitoring | AbilityDescriptor ontology, handler implementation bodies, plugin process ownership |
+| `daemon/ability/names/` | stable public Ability wire-name constants and stable public metadata keys | private reason strings, test fixtures, env vars |
 | `daemon/context/` | daemon-owned background loops for the local Context surface | context persistence format, product ability handler bodies |
 | `daemon/` | Rust daemon SDK facade, local boot/status IPC under `daemon/control`, daemon-owned Invocation transport under `daemon/invocation`, and daemon semantic state directories | Axon protocol semantics, one method per ability, generic service catch-all ownership |
 | `cli/` | command-line facade, clap command tree, presentation, and CLI-only ergonomic adapters | daemon policy, hidden fan-out loops, Axon canonical algorithms |
@@ -473,15 +473,6 @@ src/runtime/
 │  ├─ error.rs
 │  ├─ impl_binding.rs
 │  └─ registry.rs
-├─ ability_names/
-│  ├─ mod.rs
-│  ├─ agents.rs
-│  ├─ device_control.rs
-│  ├─ resources.rs
-│  ├─ automation.rs
-│  ├─ integrations.rs
-│  ├─ governance.rs
-│  └─ federation.rs
 ├─ ability_dispatch.rs
 ├─ ability_descriptor.rs
 ├─ ability_wire.rs
@@ -567,7 +558,7 @@ Rules:
 
 ## Ability Name Constants
 
-`runtime/ability_names/` is the canonical home for stable public Ability wire
+`daemon/ability/names/` is the canonical home for stable public Ability wire
 names used by more than one module.
 
 Allowed content:
@@ -606,12 +597,12 @@ pub mod resources {
 Compatibility alias example:
 
 ```rust
-pub const ABILITY_TREE: &str = crate::runtime::ability_names::resources::SKILL_TREE;
+pub const ABILITY_TREE: &str = crate::daemon::ability::names::resources::SKILL_TREE;
 ```
 
 Rules:
 
-1. New cross-module code imports from `crate::runtime::ability_names`.
+1. New cross-module code imports from `crate::daemon::ability::names`.
 2. Handler modules may re-export old names only as phase-scoped compatibility.
 3. A moved name must have an inventory of all importers before the move.
 4. A compatibility alias must point to the new constant. Duplicating the string
@@ -751,7 +742,7 @@ directly.
 - MCP client execution state.
 
 Handlers may call these services through explicit handles. Services must not
-import handler modules to discover names; they use `runtime/ability_names/` or
+import handler modules to discover names; they use `daemon/ability/names/` or
 typed service contracts.
 
 ## Product Module Classification
@@ -1245,11 +1236,11 @@ Do not move descriptor contract files while code still hard-codes
    - current descriptor generated output;
    - `rg` inventory for handler constants imported outside their modules;
    - `rg` inventory for hard-coded `abilities/system`.
-1. Add `runtime/ability_names/`.
-2. Move stable public wire constants into `ability_names/`.
-3. Keep old handler constants as aliases to `ability_names/`.
+1. Add `daemon/ability/names/`.
+2. Move stable public wire constants into `daemon/ability/names/`.
+3. Keep old handler constants as aliases to `daemon/ability/names/`.
 4. Update transport, plugin, facade, and tests to import public names from
-   `runtime::ability_names`.
+   `daemon::ability::names`.
 5. Rename `runtime/abilities.rs` to `runtime/agent_ability_specs.rs`, then
    retire the `runtime::abilities` compatibility re-export after callers move.
 6. Add `runtime/system_abilities/` and `runtime/system_ability_catalog/`
@@ -1360,8 +1351,9 @@ Complexity/fan-out:
 
 Boundary:
 
-18. Transport/services import ability names from `runtime::ability_names` or
-    typed service contracts, not from handler modules.
+18. Transport and daemon surfaces import ability names from
+    `daemon::ability::names` or typed service contracts, not from handler
+    modules.
 19. Plugin code does not depend on core handler-module paths for public wire
     constants.
 20. Descriptor generation does not hard-code `abilities/system`.

@@ -44,20 +44,20 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_RUN: &str = crate::runtime::ability_names::automation::MISSION_RUN;
+pub const ABILITY_RUN: &str = crate::daemon::ability::names::automation::MISSION_RUN;
 /// `mission.track(run_id)` — read the persisted state of a prior
 /// `mission.run` invocation. Returns the same shape `mission.run`
 /// surfaces (run_id, run_dir, outputs, meta, ok), reconstructed
 /// off the on-disk run dir. Use case: an LLM kicks off a long
 /// mission (multi-agent fan-out), polls track until status leaves
 /// `running`, then composes a final answer.
-pub const ABILITY_TRACK: &str = crate::runtime::ability_names::automation::MISSION_TRACK;
+pub const ABILITY_TRACK: &str = crate::daemon::ability::names::automation::MISSION_TRACK;
 /// `mission.cancel(run_id)` — flip an in-flight mission to
 /// `cancelled`. No-op (with informative result) on a run that is
 /// already terminal. Best-effort: removes the pid file and rewrites
 /// meta.json; long-running step processes are not killed today,
 /// they just stop being expected.
-pub const ABILITY_CANCEL: &str = crate::runtime::ability_names::automation::MISSION_CANCEL;
+pub const ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::MISSION_CANCEL;
 
 /// Register every mission ability on the registry. Called once at
 /// boot from `runtime::system_ability_catalog::build_registry_with_services`.

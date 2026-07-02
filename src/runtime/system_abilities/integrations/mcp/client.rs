@@ -53,8 +53,8 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::mcp_client::McpClientService;
 use crate::runtime::system_ability_catalog::profiles::DEFAULT_MCP_AGENT_ID;
 
-pub const ABILITY_LIST: &str = crate::runtime::ability_names::integrations::MCP_CLIENT_LIST;
-pub const ABILITY_CALL: &str = crate::runtime::ability_names::integrations::MCP_CLIENT_CALL;
+pub const ABILITY_LIST: &str = crate::daemon::ability::names::integrations::MCP_CLIENT_LIST;
+pub const ABILITY_CALL: &str = crate::daemon::ability::names::integrations::MCP_CLIENT_CALL;
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<McpClientService>) {
     let svc_for_list = Arc::clone(&svc);

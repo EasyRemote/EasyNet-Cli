@@ -100,7 +100,7 @@ use crate::runtime::dispatch::{AgentResponse, DriverOverrides, ToolCall};
 ///
 /// Pinning the constant in one place lets that future PR find the
 /// surface area with a single grep.
-pub const ABILITY_VERB: &str = crate::runtime::ability_names::agents::CHAT;
+pub const ABILITY_VERB: &str = crate::daemon::ability::names::agents::CHAT;
 
 /// Wire sentinel for the agent's lifelong (default) session. A caller
 /// that sends `session_id: "lifelong"` selects the agent's one durable

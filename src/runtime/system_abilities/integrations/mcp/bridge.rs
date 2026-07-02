@@ -61,9 +61,9 @@ use crate::runtime::system_ability_catalog::profiles::mcp::{
 use crate::runtime::system_ability_catalog::profiles::DEFAULT_MCP_AGENT_ID;
 
 pub const ABILITY_LIST_TOOLS: &str =
-    crate::runtime::ability_names::integrations::MCP_BRIDGE_LIST_TOOLS;
+    crate::daemon::ability::names::integrations::MCP_BRIDGE_LIST_TOOLS;
 pub const ABILITY_CALL_TOOL: &str =
-    crate::runtime::ability_names::integrations::MCP_BRIDGE_CALL_TOOL;
+    crate::daemon::ability::names::integrations::MCP_BRIDGE_CALL_TOOL;
 
 /// Register both bridge abilities on the registry.
 ///

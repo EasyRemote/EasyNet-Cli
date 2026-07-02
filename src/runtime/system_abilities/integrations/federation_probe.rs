@@ -30,8 +30,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use serde_json::{json, Value};
 
+use crate::daemon::ability::names::{federation, governance};
 use crate::persistence::config;
-use crate::runtime::ability_names::{federation, governance};
 use crate::runtime::advertise::{self, BridgeAbilityInvoker};
 use crate::runtime::federation_client::{ForwardInvokeReceipt, ResolvedAgent};
 

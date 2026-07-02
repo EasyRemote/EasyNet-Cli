@@ -80,7 +80,7 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiOutputFrame, Bidi
 use crate::runtime::resources::filesystem::{
     self, FilesystemResourceCapability, ResolvedFilesystemPath,
 };
-pub const ABILITY_FILE_TRANSFER: &str = crate::runtime::ability_names::device_control::FS_TRANSFER;
+pub const ABILITY_FILE_TRANSFER: &str = crate::daemon::ability::names::device_control::FS_TRANSFER;
 
 /// Maximum bytes per file_transfer call. 1 GiB matches order-of-
 /// magnitude what an HTTP upload through nginx would tolerate;

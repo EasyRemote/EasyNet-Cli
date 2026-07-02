@@ -131,7 +131,7 @@ use easynet_axon::pb::axon::v1::{BidiControl, BinaryChunk, InvokeBidiDown, Invok
 /// `session.open` is the daemon-owned long-lived carrier for device
 /// session membership. It is a direct wire break from the historical
 /// caller-relative alias; no dual-name acceptance is retained.
-pub const ABILITY_SESSION_OPEN: &str = crate::runtime::ability_names::device_control::SESSION_OPEN;
+pub const ABILITY_SESSION_OPEN: &str = crate::daemon::ability::names::device_control::SESSION_OPEN;
 
 /// Stream id used by every BinaryChunk on the session bidi. PR-2
 /// sub-spec §2.1 (and the wider RFC-003 transport plane) declares

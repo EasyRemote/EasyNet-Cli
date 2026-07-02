@@ -38,26 +38,26 @@ use crate::persistence::context_store;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 
 pub const ABILITY_CLIPBOARD_LIST: &str =
-    crate::runtime::ability_names::resources::CONTEXT_CLIPBOARD_LIST;
+    crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_LIST;
 pub const ABILITY_CLIPBOARD_GET: &str =
-    crate::runtime::ability_names::resources::CONTEXT_CLIPBOARD_GET;
+    crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_GET;
 pub const ABILITY_CLIPBOARD_TRACK: &str =
-    crate::runtime::ability_names::resources::CONTEXT_CLIPBOARD_TRACK;
+    crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_TRACK;
 pub const ABILITY_CLIPBOARD_REMOVE: &str =
-    crate::runtime::ability_names::resources::CONTEXT_CLIPBOARD_REMOVE;
+    crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_REMOVE;
 pub const ABILITY_FOLDERS_LIST: &str =
-    crate::runtime::ability_names::resources::CONTEXT_FOLDERS_LIST;
-pub const ABILITY_FS_LIST: &str = crate::runtime::ability_names::resources::CONTEXT_FS_LIST;
+    crate::daemon::ability::names::resources::CONTEXT_FOLDERS_LIST;
+pub const ABILITY_FS_LIST: &str = crate::daemon::ability::names::resources::CONTEXT_FS_LIST;
 pub const ABILITY_FAVORITES_LIST: &str =
-    crate::runtime::ability_names::resources::CONTEXT_FAVORITES_LIST;
+    crate::daemon::ability::names::resources::CONTEXT_FAVORITES_LIST;
 pub const ABILITY_FAVORITES_ADD: &str =
-    crate::runtime::ability_names::resources::CONTEXT_FAVORITES_ADD;
+    crate::daemon::ability::names::resources::CONTEXT_FAVORITES_ADD;
 pub const ABILITY_FAVORITES_REMOVE: &str =
-    crate::runtime::ability_names::resources::CONTEXT_FAVORITES_REMOVE;
+    crate::daemon::ability::names::resources::CONTEXT_FAVORITES_REMOVE;
 pub const ABILITY_CAPTURES_LIST: &str =
-    crate::runtime::ability_names::resources::CONTEXT_CAPTURES_LIST;
+    crate::daemon::ability::names::resources::CONTEXT_CAPTURES_LIST;
 pub const ABILITY_CAPTURES_GET: &str =
-    crate::runtime::ability_names::resources::CONTEXT_CAPTURES_GET;
+    crate::daemon::ability::names::resources::CONTEXT_CAPTURES_GET;
 
 /// Register every context ability. Called from
 /// `runtime::system_ability_catalog::build_registry`.

@@ -70,11 +70,11 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name. Pinned by AXIOM Tier 2.5.
-pub const ABILITY_NAME: &str = crate::runtime::ability_names::device_control::HTTP_REQUEST;
+pub const ABILITY_NAME: &str = crate::daemon::ability::names::device_control::HTTP_REQUEST;
 
 /// Profile version echoed in every receipt.
 pub const PROFILE_VERSION: &str =
-    crate::runtime::ability_names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
+    crate::daemon::ability::names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
 
 /// Default timeout when the caller omits it. 30 s mirrors
 /// process.exec / shell.run defaults so policy is uniform

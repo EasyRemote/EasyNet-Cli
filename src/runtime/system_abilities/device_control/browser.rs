@@ -43,15 +43,15 @@ use crate::runtime::ability_dispatch::{
 };
 
 pub const ABILITY_OPEN_SESSION: &str =
-    crate::runtime::ability_names::device_control::BROWSER_OPEN_SESSION;
+    crate::daemon::ability::names::device_control::BROWSER_OPEN_SESSION;
 pub const ABILITY_SEND_INPUT: &str =
-    crate::runtime::ability_names::device_control::BROWSER_SEND_INPUT;
+    crate::daemon::ability::names::device_control::BROWSER_SEND_INPUT;
 pub const ABILITY_CAPTURE_VIEWPORT: &str =
-    crate::runtime::ability_names::device_control::BROWSER_CAPTURE_VIEWPORT;
+    crate::daemon::ability::names::device_control::BROWSER_CAPTURE_VIEWPORT;
 pub const ABILITY_CLOSE_SESSION: &str =
-    crate::runtime::ability_names::device_control::BROWSER_CLOSE_SESSION;
+    crate::daemon::ability::names::device_control::BROWSER_CLOSE_SESSION;
 pub const ABILITY_ATTACH_SESSION: &str =
-    crate::runtime::ability_names::device_control::BROWSER_ATTACH_SESSION;
+    crate::daemon::ability::names::device_control::BROWSER_ATTACH_SESSION;
 
 const DEFAULT_VIEWPORT_W: u32 = 1280;
 const DEFAULT_VIEWPORT_H: u32 = 800;

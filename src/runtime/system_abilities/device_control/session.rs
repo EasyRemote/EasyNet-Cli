@@ -42,8 +42,8 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::execution::session::SessionService;
 
-pub const ABILITY_LIST: &str = crate::runtime::ability_names::device_control::SESSION_LIST;
-pub const ABILITY_ATTACH: &str = crate::runtime::ability_names::device_control::SESSION_ATTACH;
+pub const ABILITY_LIST: &str = crate::daemon::ability::names::device_control::SESSION_LIST;
+pub const ABILITY_ATTACH: &str = crate::daemon::ability::names::device_control::SESSION_ATTACH;
 
 /// Register the two session abilities on the registry. Called from
 /// `runtime::system_ability_catalog::build_registry`.

@@ -29,9 +29,9 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::execution::discuss::DiscussService;
 
-pub const ABILITY_CREATE: &str = crate::runtime::ability_names::automation::DISCUSS_CREATE;
-pub const ABILITY_POST: &str = crate::runtime::ability_names::automation::DISCUSS_POST;
-pub const ABILITY_SUBSCRIBE: &str = crate::runtime::ability_names::automation::DISCUSS_SUBSCRIBE;
+pub const ABILITY_CREATE: &str = crate::daemon::ability::names::automation::DISCUSS_CREATE;
+pub const ABILITY_POST: &str = crate::daemon::ability::names::automation::DISCUSS_POST;
+pub const ABILITY_SUBSCRIBE: &str = crate::daemon::ability::names::automation::DISCUSS_SUBSCRIBE;
 /// `discuss.list_turns` — snapshot of every turn in a room as an
 /// RPC. Sibling of `discuss.subscribe` (the streaming variant);
 /// callers that only need the current state without holding a
@@ -40,7 +40,7 @@ pub const ABILITY_SUBSCRIBE: &str = crate::runtime::ability_names::automation::D
 /// schema mirrors subscribe's snapshot half — same `turns` array
 /// shape, same field names — so a future caller upgrading from
 /// list_turns to subscribe gets the same data layout.
-pub const ABILITY_LIST_TURNS: &str = crate::runtime::ability_names::automation::DISCUSS_LIST_TURNS;
+pub const ABILITY_LIST_TURNS: &str = crate::daemon::ability::names::automation::DISCUSS_LIST_TURNS;
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<DiscussService>) {
     let a = Arc::clone(&svc);

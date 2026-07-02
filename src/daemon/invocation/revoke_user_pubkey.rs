@@ -47,7 +47,7 @@ use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// Canonical daemon identity/trust ability name.
 pub const ABILITY_IDENTITY_REVOKE_USER_PUBKEY: &str =
-    crate::runtime::ability_names::federation::IDENTITY_REVOKE_USER_PUBKEY;
+    crate::daemon::ability::names::federation::IDENTITY_REVOKE_USER_PUBKEY;
 
 #[derive(Debug, Deserialize)]
 struct RevokeArgs {

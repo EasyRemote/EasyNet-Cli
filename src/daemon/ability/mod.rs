@@ -13,3 +13,4 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod health;
+pub mod names;

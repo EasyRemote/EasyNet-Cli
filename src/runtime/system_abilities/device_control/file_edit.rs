@@ -105,11 +105,11 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::resources::filesystem::{self, FilesystemResourceCapability};
 /// Wire name. Pinned by the Tier 2.5 surface; rename = protocol break.
-pub const ABILITY_NAME: &str = crate::runtime::ability_names::device_control::FS_EDIT;
+pub const ABILITY_NAME: &str = crate::daemon::ability::names::device_control::FS_EDIT;
 
 /// Profile membership marker echoed in every receipt.
 pub const PROFILE_VERSION: &str =
-    crate::runtime::ability_names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
+    crate::daemon::ability::names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
 
 /// Hard upper bound on the file size fs.edit will read. 1 GiB
 /// matches AliveCode's MAX_EDIT_FILE_SIZE; bigger targets are

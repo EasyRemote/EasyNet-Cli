@@ -28,12 +28,12 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
 pub const ABILITY_HISTORY_LIST: &str =
-    crate::runtime::ability_names::governance::INVOCATION_HISTORY_LIST;
+    crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
 pub const ABILITY_HISTORY_GET: &str =
-    crate::runtime::ability_names::governance::INVOCATION_HISTORY_GET;
-pub const ABILITY_TRACE_GET: &str = crate::runtime::ability_names::governance::INVOCATION_TRACE_GET;
+    crate::daemon::ability::names::governance::INVOCATION_HISTORY_GET;
+pub const ABILITY_TRACE_GET: &str = crate::daemon::ability::names::governance::INVOCATION_TRACE_GET;
 pub const ABILITY_HISTORY_PATH: &str =
-    crate::runtime::ability_names::governance::INVOCATION_HISTORY_PATH;
+    crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH;
 
 /// Daemon-internal, side-effect-free read RPC: fetch one ledger record by
 /// `request_id`.
@@ -46,7 +46,7 @@ pub const ABILITY_HISTORY_PATH: &str =
 /// projection of a request it just issued, instead of opening the daemon-owned
 /// redb file (which redb forbids from a second process via its exclusive lock).
 pub const ABILITY_INVOCATION_RECORD_GET: &str =
-    crate::runtime::ability_names::governance::INVOCATION_RECORD_GET;
+    crate::daemon::ability::names::governance::INVOCATION_RECORD_GET;
 
 /// Fetch one ledger record by `request_id` directly off an in-process ledger
 /// handle, with no dispatch and no ledger write. Returns `None` when no record

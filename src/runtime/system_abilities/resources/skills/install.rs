@@ -61,9 +61,9 @@ use crate::runtime::owner_projection::skill_resource_ura;
 use crate::runtime::skill_store::{install_skill, remove_skill, upgrade_skill, InstallRecord};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_INSTALL: &str = crate::runtime::ability_names::resources::SKILL_INSTALL;
-pub const ABILITY_REMOVE: &str = crate::runtime::ability_names::resources::SKILL_REMOVE;
-pub const ABILITY_UPGRADE: &str = crate::runtime::ability_names::resources::SKILL_UPGRADE;
+pub const ABILITY_INSTALL: &str = crate::daemon::ability::names::resources::SKILL_INSTALL;
+pub const ABILITY_REMOVE: &str = crate::daemon::ability::names::resources::SKILL_REMOVE;
+pub const ABILITY_UPGRADE: &str = crate::daemon::ability::names::resources::SKILL_UPGRADE;
 
 /// Register all three skill-management abilities on the registry.
 /// Stateless: no service handle because the helpers read the agent

@@ -8,14 +8,14 @@
 use super::{build_registry, build_system_registry};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::runtime::ability::CallMode as DescriptorCallMode;
-use crate::runtime::ability_descriptor::AbilityHints;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_names::{
+use crate::daemon::ability::names::{
     agents as agent_names, automation as automation_names, device_control as device_names,
     federation as federation_names, governance as governance_names,
     integrations as integration_names, resources as resource_names,
 };
+use crate::runtime::ability::CallMode as DescriptorCallMode;
+use crate::runtime::ability_descriptor::AbilityHints;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::system_abilities::{
     agents::{
         chat_history as chat_history_ability, discover as discover_ability,

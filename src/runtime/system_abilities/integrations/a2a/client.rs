@@ -58,7 +58,7 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_SEND_TASK: &str =
-    crate::runtime::ability_names::integrations::A2A_CLIENT_SEND_TASK;
+    crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK;
 
 /// Register `a2a.client.send_task` on the registry. Stateless;
 /// every call dials the local daemon's `federation.forward_invoke`

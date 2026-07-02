@@ -57,9 +57,9 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_LIST_SKILLS: &str =
-    crate::runtime::ability_names::integrations::A2A_BRIDGE_LIST_SKILLS;
+    crate::daemon::ability::names::integrations::A2A_BRIDGE_LIST_SKILLS;
 pub const ABILITY_SEND_TASK: &str =
-    crate::runtime::ability_names::integrations::A2A_BRIDGE_SEND_TASK;
+    crate::daemon::ability::names::integrations::A2A_BRIDGE_SEND_TASK;
 
 /// Register both bridge abilities on the registry.
 ///

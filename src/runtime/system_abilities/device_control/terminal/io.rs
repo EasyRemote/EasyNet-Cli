@@ -76,11 +76,11 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_INPUT: &str =
-    crate::runtime::ability_names::device_control::TERMINAL_INPUT;
+    crate::daemon::ability::names::device_control::TERMINAL_INPUT;
 pub const ABILITY_PTY_SESSION_READ: &str =
-    crate::runtime::ability_names::device_control::TERMINAL_READ;
+    crate::daemon::ability::names::device_control::TERMINAL_READ;
 pub const ABILITY_PTY_SESSION_RESIZE: &str =
-    crate::runtime::ability_names::device_control::TERMINAL_RESIZE;
+    crate::daemon::ability::names::device_control::TERMINAL_RESIZE;
 
 /// Default per-call read budget when the caller doesn't supply one.
 /// 5s matches backend PTYDriver's poll cadence (~200 ms idle reads

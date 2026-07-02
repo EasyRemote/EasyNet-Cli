@@ -75,12 +75,12 @@ use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope}
 
 /// Verb portion of the per-agent discover ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.discover`.
-pub const ABILITY_VERB: &str = crate::runtime::ability_names::agents::DISCOVER;
+pub const ABILITY_VERB: &str = crate::daemon::ability::names::agents::DISCOVER;
 /// Daemon-owned aggregate discover entry used by top-level
 /// `easynet discover` when the caller does not select a self agent.
 /// The owner is already `OwnerKind::Device`, so the dispatch key must
 /// stay owner-local instead of duplicating a `device.` prefix.
-pub const DEVICE_DISCOVER_ABILITY: &str = crate::runtime::ability_names::agents::DISCOVER;
+pub const DEVICE_DISCOVER_ABILITY: &str = crate::daemon::ability::names::agents::DISCOVER;
 
 /// Shared resolver object for federation-backed discover tiers.
 ///

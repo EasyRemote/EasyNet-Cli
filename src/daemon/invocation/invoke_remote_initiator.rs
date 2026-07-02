@@ -88,7 +88,7 @@ use easynet_axon::pb::axon::v1::{
 /// dispatch carrier. Backend and CLI track this string verbatim; no
 /// historical caller-relative alias is accepted.
 pub const ABILITY_INVOKE_REMOTE: &str =
-    crate::runtime::ability_names::federation::RUNTIME_INVOKE_REMOTE;
+    crate::daemon::ability::names::federation::RUNTIME_INVOKE_REMOTE;
 
 /// Stream id used by every BinaryChunk on the invoke_remote bidi.
 /// PR-3 sub-spec §2.1 declares one StreamDescriptor (id=0,

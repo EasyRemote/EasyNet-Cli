@@ -28,10 +28,10 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::schedule::ScheduleService;
 
-pub const ABILITY_ADD: &str = crate::runtime::ability_names::automation::SCHEDULE_ADD;
-pub const ABILITY_LIST: &str = crate::runtime::ability_names::automation::SCHEDULE_LIST;
-pub const ABILITY_REMOVE: &str = crate::runtime::ability_names::automation::SCHEDULE_REMOVE;
-pub const ABILITY_ENABLE: &str = crate::runtime::ability_names::automation::SCHEDULE_ENABLE;
+pub const ABILITY_ADD: &str = crate::daemon::ability::names::automation::SCHEDULE_ADD;
+pub const ABILITY_LIST: &str = crate::daemon::ability::names::automation::SCHEDULE_LIST;
+pub const ABILITY_REMOVE: &str = crate::daemon::ability::names::automation::SCHEDULE_REMOVE;
+pub const ABILITY_ENABLE: &str = crate::daemon::ability::names::automation::SCHEDULE_ENABLE;
 
 pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<ScheduleService>) {
     let a = Arc::clone(&svc);

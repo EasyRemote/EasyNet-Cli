@@ -52,7 +52,7 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::system_abilities::integrations::federation_probe;
 
 pub const ABILITY_NETWORK_HEALTH: &str =
-    crate::runtime::ability_names::governance::OBSERVE_NETWORK_HEALTH;
+    crate::daemon::ability::names::governance::OBSERVE_NETWORK_HEALTH;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(

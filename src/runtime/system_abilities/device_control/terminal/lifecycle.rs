@@ -42,11 +42,11 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_CREATE: &str =
-    crate::runtime::ability_names::device_control::TERMINAL_CREATE;
+    crate::daemon::ability::names::device_control::TERMINAL_CREATE;
 pub const ABILITY_PTY_SESSION_LIST: &str =
-    crate::runtime::ability_names::device_control::TERMINAL_LIST;
+    crate::daemon::ability::names::device_control::TERMINAL_LIST;
 pub const ABILITY_PTY_SESSION_CLOSE: &str =
-    crate::runtime::ability_names::device_control::TERMINAL_CLOSE;
+    crate::daemon::ability::names::device_control::TERMINAL_CLOSE;
 
 /// Description published by the dispatcher's `description_for`
 /// arm. Mirrors AXIOM Tier 2.5 §"Baseline Locomotion / pty"

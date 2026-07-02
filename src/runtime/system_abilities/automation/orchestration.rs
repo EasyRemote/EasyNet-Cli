@@ -72,7 +72,7 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::discuss::DiscussService;
 
 pub const ABILITY_DISCUSS_ROUND: &str =
-    crate::runtime::ability_names::automation::MISSION_DISCUSS_ROUND;
+    crate::daemon::ability::names::automation::MISSION_DISCUSS_ROUND;
 
 /// Default upper bound on cycles per sub-turn. Generous enough that
 /// a healthy discussion converges (3–5 cycles typical), small

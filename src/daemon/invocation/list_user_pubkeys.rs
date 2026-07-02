@@ -30,7 +30,7 @@ use tonic::Status;
 use crate::daemon::invocation::runtime_trust::RuntimeTrustReader;
 
 pub const ABILITY_IDENTITY_LIST_USER_PUBKEYS: &str =
-    crate::runtime::ability_names::federation::IDENTITY_LIST_USER_PUBKEYS;
+    crate::daemon::ability::names::federation::IDENTITY_LIST_USER_PUBKEYS;
 
 #[derive(Debug, Deserialize)]
 struct ListArgs {

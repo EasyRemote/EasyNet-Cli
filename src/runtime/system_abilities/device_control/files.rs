@@ -77,16 +77,16 @@ pub use crate::runtime::resources::filesystem::{
 use crate::runtime::resources::filesystem;
 // ── Wire-name constants (cross-language pins) ─────────────────────
 
-pub const ABILITY_FS_READ: &str = crate::runtime::ability_names::device_control::FS_READ;
-pub const ABILITY_FS_WRITE: &str = crate::runtime::ability_names::device_control::FS_WRITE;
-pub const ABILITY_FS_STAT: &str = crate::runtime::ability_names::device_control::FS_STAT;
-pub const ABILITY_FS_LIST: &str = crate::runtime::ability_names::device_control::FS_LIST;
+pub const ABILITY_FS_READ: &str = crate::daemon::ability::names::device_control::FS_READ;
+pub const ABILITY_FS_WRITE: &str = crate::daemon::ability::names::device_control::FS_WRITE;
+pub const ABILITY_FS_STAT: &str = crate::daemon::ability::names::device_control::FS_STAT;
+pub const ABILITY_FS_LIST: &str = crate::daemon::ability::names::device_control::FS_LIST;
 
 /// Profile membership marker. Receivers MAY surface this in
 /// `agent.describe` so callers can confirm the profile contract
 /// before invoking. Mirrors AXIOM §"Tier 2.5" `ability_profile_version`.
 pub const PROFILE_VERSION: &str =
-    crate::runtime::ability_names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
+    crate::daemon::ability::names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
 
 /// Default cap on `fs.read` size when the caller does not name a
 /// `max_bytes` limit. 8 MiB is large enough to read most config

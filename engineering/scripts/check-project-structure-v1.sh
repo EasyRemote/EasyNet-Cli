@@ -90,12 +90,12 @@ SCAN_ROOTS=(Cargo.toml build.rs src tests scripts engineering/scripts engineerin
 
 require_path "src/runtime/system_abilities"
 require_path "src/runtime/system_ability_catalog"
-require_path "src/runtime/ability_names"
 require_path "src/runtime/executors"
 require_path "src/runtime/agent_ability_specs.rs"
 require_path "src/cli/mod.rs"
 require_path "src/daemon/mod.rs"
 require_path "src/daemon/ability/health.rs"
+require_path "src/daemon/ability/names"
 require_path "src/daemon/context/clipboard_tracker.rs"
 require_path "src/daemon/control"
 require_path "src/daemon/federation/client"
@@ -129,6 +129,7 @@ require_path "tests/scripts"
 
 reject_path "src/runtime/ability_runtime"
 reject_path "src/runtime/agents"
+reject_path "src/runtime/ability_names"
 reject_path "src/runtime/abilities"
 reject_path "src/runtime/abilities.rs"
 reject_path "src/daemon.rs"
@@ -182,6 +183,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::ability_names paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::ability_names::|easynet_cli::runtime::ability_names::|runtime::ability_names::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::abilities paths" \
     '(^|[^[:alnum:]_])(crate::runtime::abilities::|runtime::abilities::)' \
     "${SCAN_ROOTS[@]}"
@@ -189,6 +195,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/agents physical paths" \
     'src/runtime/agents/' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/ability_names physical path" \
+    'src/runtime/ability_names(/|$)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

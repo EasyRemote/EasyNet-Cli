@@ -89,11 +89,11 @@ use crate::runtime::directory::ABILITY_MANIFEST_SUFFIX;
 /// Wire name of the publish meta-ability. Pinned because the
 /// curator session in `mission.think` calls it by string; a rename
 /// breaks every published mission.
-pub const ABILITY_PUBLISH: &str = crate::runtime::ability_names::federation::ABILITY_PUBLISH;
+pub const ABILITY_PUBLISH: &str = crate::daemon::ability::names::federation::ABILITY_PUBLISH;
 
 /// Wire name of the unpublish meta-ability. Same pinning rationale
 /// as `ABILITY_PUBLISH`.
-pub const ABILITY_UNPUBLISH: &str = crate::runtime::ability_names::federation::ABILITY_UNPUBLISH;
+pub const ABILITY_UNPUBLISH: &str = crate::daemon::ability::names::federation::ABILITY_UNPUBLISH;
 
 /// Register both verbs on the registry. Stateless: the handlers
 /// reach disk directly and read the agent registry on every call,

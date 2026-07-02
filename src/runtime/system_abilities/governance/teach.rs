@@ -45,9 +45,9 @@ use crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell;
 use crate::support::errors::append_cleanup_error;
 use crate::ura::AbilitySelector;
 
-pub const TEACH: &str = crate::runtime::ability_names::governance::META_TEACH;
-pub const ACQUIRE: &str = crate::runtime::ability_names::governance::META_ACQUIRE;
-pub const FORGET: &str = crate::runtime::ability_names::governance::META_FORGET;
+pub const TEACH: &str = crate::daemon::ability::names::governance::META_TEACH;
+pub const ACQUIRE: &str = crate::daemon::ability::names::governance::META_ACQUIRE;
+pub const FORGET: &str = crate::daemon::ability::names::governance::META_FORGET;
 const TRANSFER_KIND_DISCOVERY_ONLY_MANIFEST: &str = "discovery_only_manifest";
 const INVOCATION_STATUS_NOT_INVOKABLE_WITHOUT_EXEC_BINDING: &str =
     "not_invokable_without_exec_binding";

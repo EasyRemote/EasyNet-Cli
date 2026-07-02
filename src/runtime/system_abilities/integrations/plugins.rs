@@ -16,14 +16,14 @@ use crate::runtime::plugin_host::{
 
 /// Daemon-local ability used by `easynet plugin install/update/remove` after
 /// the filesystem transaction commits.
-pub const RELOAD_ABILITY: &str = crate::runtime::ability_names::integrations::PLUGIN_RELOAD;
+pub const RELOAD_ABILITY: &str = crate::daemon::ability::names::integrations::PLUGIN_RELOAD;
 /// Daemon-local ability used by `easynet plugin list` to report actual runtime
 /// plugin status instead of an offline load-plan approximation.
-pub const STATUS_ABILITY: &str = crate::runtime::ability_names::integrations::PLUGIN_STATUS;
+pub const STATUS_ABILITY: &str = crate::daemon::ability::names::integrations::PLUGIN_STATUS;
 /// Daemon-local ability used by `easynet plugin activate-realtime` to project
 /// a package's realtime declaration into concrete runtime prerequisites.
 pub const ACTIVATE_REALTIME_ABILITY: &str =
-    crate::runtime::ability_names::integrations::PLUGIN_ACTIVATE_REALTIME;
+    crate::daemon::ability::names::integrations::PLUGIN_ACTIVATE_REALTIME;
 
 pub type SharedPluginRegistryCell = OnceLock<Arc<AxonAbilityCatalog>>;
 

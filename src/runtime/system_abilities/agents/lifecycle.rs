@@ -70,9 +70,9 @@ use crate::runtime::system_ability_catalog::profiles::bootstrap::{
 };
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_START_AGENT: &str = crate::runtime::ability_names::agents::AGENT_START;
-pub const ABILITY_STOP_AGENT: &str = crate::runtime::ability_names::agents::AGENT_STOP;
-pub const ABILITY_REFRESH_AGENTS: &str = crate::runtime::ability_names::agents::AGENT_REFRESH;
+pub const ABILITY_START_AGENT: &str = crate::daemon::ability::names::agents::AGENT_START;
+pub const ABILITY_STOP_AGENT: &str = crate::daemon::ability::names::agents::AGENT_STOP;
+pub const ABILITY_REFRESH_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_REFRESH;
 
 /// Late-wired `Arc<HotAgentRegistrar>` shared between boot and the
 /// `agent.start` / `agent.stop` handler closures.

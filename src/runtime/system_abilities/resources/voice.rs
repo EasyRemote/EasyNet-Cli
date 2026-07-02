@@ -40,15 +40,15 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_axon::{VoiceCallState, VoiceEndReason, VoiceEventType, VoiceNetworkMetrics};
 
-pub const ABILITY_CREATE_CALL: &str = crate::runtime::ability_names::resources::VOICE_CREATE_CALL;
-pub const ABILITY_SHOW_CALL: &str = crate::runtime::ability_names::resources::VOICE_SHOW_CALL;
-pub const ABILITY_JOIN_CALL: &str = crate::runtime::ability_names::resources::VOICE_JOIN_CALL;
-pub const ABILITY_LEAVE_CALL: &str = crate::runtime::ability_names::resources::VOICE_LEAVE_CALL;
-pub const ABILITY_END_CALL: &str = crate::runtime::ability_names::resources::VOICE_END_CALL;
-pub const ABILITY_WATCH_CALL: &str = crate::runtime::ability_names::resources::VOICE_WATCH_CALL;
+pub const ABILITY_CREATE_CALL: &str = crate::daemon::ability::names::resources::VOICE_CREATE_CALL;
+pub const ABILITY_SHOW_CALL: &str = crate::daemon::ability::names::resources::VOICE_SHOW_CALL;
+pub const ABILITY_JOIN_CALL: &str = crate::daemon::ability::names::resources::VOICE_JOIN_CALL;
+pub const ABILITY_LEAVE_CALL: &str = crate::daemon::ability::names::resources::VOICE_LEAVE_CALL;
+pub const ABILITY_END_CALL: &str = crate::daemon::ability::names::resources::VOICE_END_CALL;
+pub const ABILITY_WATCH_CALL: &str = crate::daemon::ability::names::resources::VOICE_WATCH_CALL;
 pub const ABILITY_REPORT_METRICS: &str =
-    crate::runtime::ability_names::resources::VOICE_REPORT_METRICS;
-pub const ABILITY_LIST_CALLS: &str = crate::runtime::ability_names::resources::VOICE_LIST_CALLS;
+    crate::daemon::ability::names::resources::VOICE_REPORT_METRICS;
+pub const ABILITY_LIST_CALLS: &str = crate::daemon::ability::names::resources::VOICE_LIST_CALLS;
 
 #[derive(Debug, Clone)]
 struct CallState {

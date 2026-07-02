@@ -38,10 +38,10 @@ use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::execution::permission::PermissionService;
 use crate::runtime::system_ability_catalog::profiles::DEFAULT_CONSENT_AGENT_ID;
 
-pub const ABILITY_SUBSCRIBE: &str = crate::runtime::ability_names::governance::CONSENT_SUBSCRIBE;
-pub const ABILITY_DECIDE: &str = crate::runtime::ability_names::governance::CONSENT_DECIDE;
+pub const ABILITY_SUBSCRIBE: &str = crate::daemon::ability::names::governance::CONSENT_SUBSCRIBE;
+pub const ABILITY_DECIDE: &str = crate::daemon::ability::names::governance::CONSENT_DECIDE;
 pub const ABILITY_LIST_PENDING: &str =
-    crate::runtime::ability_names::governance::CONSENT_LIST_PENDING;
+    crate::daemon::ability::names::governance::CONSENT_LIST_PENDING;
 
 /// Register the three permission abilities on the registry.
 pub fn register(reg: &mut AxonAbilityCatalog, perms: Arc<PermissionService>) {

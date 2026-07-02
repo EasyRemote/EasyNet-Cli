@@ -51,7 +51,7 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::system_ability_catalog::ability_toml::Rfc006Metadata;
 
 pub const ABILITY_META_LIST_RESOURCES: &str =
-    crate::runtime::ability_names::resources::META_LIST_RESOURCES;
+    crate::daemon::ability::names::resources::META_LIST_RESOURCES;
 
 /// Register `meta.list_resources` on the registry.
 pub fn register(reg: &mut AxonAbilityCatalog) {

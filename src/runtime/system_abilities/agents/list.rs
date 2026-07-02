@@ -42,7 +42,7 @@ use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_LIST_AGENTS: &str = crate::runtime::ability_names::agents::AGENT_LIST;
+pub const ABILITY_LIST_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_LIST;
 
 /// Register `agent.list` on the registry.
 ///

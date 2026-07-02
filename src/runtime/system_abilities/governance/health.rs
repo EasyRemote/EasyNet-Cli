@@ -35,7 +35,7 @@ use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name of the ability. Pinned so a future rename trips a
 /// fixture-byte-stability test in `registry::a2a_labels`.
-pub const ABILITY_NAME: &str = crate::runtime::ability_names::governance::OBSERVE_HEALTH;
+pub const ABILITY_NAME: &str = crate::daemon::ability::names::governance::OBSERVE_HEALTH;
 
 /// Register the `observe.health` handler on the supplied registry.
 /// Called from `runtime::system_ability_catalog::build_registry`.

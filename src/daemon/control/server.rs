@@ -56,7 +56,7 @@ use crate::daemon::control::frames::{IncomingFrame, OutgoingFrame};
 use crate::daemon::control::transport::{self, ControlAddress, ControlListener};
 
 /// Ability name reserved for daemon boot progress.
-pub const WATCH_BOOT_ABILITY: &str = crate::runtime::ability_names::governance::SYSTEM_WATCH_BOOT;
+pub const WATCH_BOOT_ABILITY: &str = crate::daemon::ability::names::governance::SYSTEM_WATCH_BOOT;
 
 type CancelRegistry = Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>;
 

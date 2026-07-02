@@ -89,11 +89,11 @@ use crate::support::shellguard::runner::{
 use crate::support::shellguard::security::{self, SecurityVerdict};
 
 /// Wire name. Pinned by AXIOM Tier 2.5; rename = protocol break.
-pub const ABILITY_NAME: &str = crate::runtime::ability_names::device_control::SHELL_RUN;
+pub const ABILITY_NAME: &str = crate::daemon::ability::names::device_control::SHELL_RUN;
 
 /// AXIOM Tier 2.5 profile version. Echoed in every receipt.
 pub const PROFILE_VERSION: &str =
-    crate::runtime::ability_names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
+    crate::daemon::ability::names::device_control::BASELINE_LOCOMOTION_PROFILE_VERSION;
 
 /// Bash binary the receiver always uses. Paths checked in
 /// order — first existing one wins. Not configurable: the

@@ -65,7 +65,7 @@ use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// Canonical daemon identity/trust ability name.
 pub const ABILITY_IDENTITY_REGISTER_PUBKEY: &str =
-    crate::runtime::ability_names::federation::IDENTITY_REGISTER_PUBKEY;
+    crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY;
 
 /// JSON-shaped argument tuple. `role` is a free string here (rather
 /// than `TrustedAgentRole` directly) so that an unknown role from a

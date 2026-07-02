@@ -15,10 +15,10 @@ make_sandbox() {
     mkdir -p \
         "$sandbox/src/runtime/system_abilities" \
         "$sandbox/src/runtime/system_ability_catalog" \
-        "$sandbox/src/runtime/ability_names" \
         "$sandbox/src/runtime/executors" \
         "$sandbox/src/cli" \
         "$sandbox/src/daemon/ability" \
+        "$sandbox/src/daemon/ability/names" \
         "$sandbox/src/daemon/context" \
         "$sandbox/src/daemon/control" \
         "$sandbox/src/daemon/federation/client" \
@@ -44,6 +44,7 @@ make_sandbox() {
     printf '%s\n' '// daemon root' > "$sandbox/src/daemon/mod.rs"
     printf '%s\n' '// daemon ability root' > "$sandbox/src/daemon/ability/mod.rs"
     printf '%s\n' '// daemon ability health' > "$sandbox/src/daemon/ability/health.rs"
+    printf '%s\n' '// daemon ability names root' > "$sandbox/src/daemon/ability/names/mod.rs"
     printf '%s\n' '// daemon context root' > "$sandbox/src/daemon/context/mod.rs"
     printf '%s\n' '// daemon clipboard tracker' > "$sandbox/src/daemon/context/clipboard_tracker.rs"
     printf '%s\n' '// daemon control root' > "$sandbox/src/daemon/control/mod.rs"
@@ -113,6 +114,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/agents directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/ability_names"
+printf '%s\n' '// retired ability names root' > "$SB/src/runtime/ability_names/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/ability_names directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/abilities/system"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -132,6 +141,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::abilities import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::ability_names::agents::CHAT; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::ability_names import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::facade::cli::run; }' > "$SB/src/lib.rs"
