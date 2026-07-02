@@ -125,6 +125,8 @@ require_path "src/daemon/invocation/state/pending_dispatch.rs"
 require_path "src/daemon/invocation/state/presence.rs"
 require_path "src/daemon/invocation/state/session_failure.rs"
 require_path "src/daemon/invocation/state/usage_quota.rs"
+require_path "src/daemon/invocation/receipt_subscriber.rs"
+require_path "src/daemon/invocation/runtime_record.rs"
 require_path "src/daemon/invocation/target.rs"
 require_path "src/daemon/keyring/mod.rs"
 require_path "src/daemon/plugins/mod.rs"
@@ -152,10 +154,12 @@ reject_path "src/runtime/ability_names"
 reject_path "src/runtime/ability_wire.rs"
 reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/execution"
+reject_path "src/runtime/invocation.rs"
 reject_path "src/runtime/invocation_target.rs"
 reject_path "src/runtime/local_invocation_identity.rs"
 reject_path "src/runtime/local_runtime_invoker.rs"
 reject_path "src/runtime/plugin_host"
+reject_path "src/runtime/receipt_subscriber.rs"
 reject_path "src/runtime/resources"
 reject_path "src/runtime/system_abilities"
 reject_path "src/runtime/system_ability_catalog"
@@ -257,6 +261,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::invocation paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::invocation::|easynet_cli::runtime::invocation::|runtime::invocation::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::local_runtime_invoker paths" \
     '(^|[^[:alnum:]_])(crate::runtime::local_runtime_invoker::|easynet_cli::runtime::local_runtime_invoker::|runtime::local_runtime_invoker::)' \
     "${SCAN_ROOTS[@]}"
@@ -264,6 +273,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not import through retired runtime::plugin_host paths" \
     '(^|[^[:alnum:]_])(crate::runtime::plugin_host::|easynet_cli::runtime::plugin_host::|runtime::plugin_host::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::receipt_subscriber paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::receipt_subscriber::|easynet_cli::runtime::receipt_subscriber::|runtime::receipt_subscriber::)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
@@ -337,6 +351,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not reference retired src/runtime/invocation.rs physical path" \
+    'src/runtime/invocation\.rs|runtime/invocation\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not reference retired src/runtime/local_runtime_invoker.rs physical path" \
     'src/runtime/local_runtime_invoker\.rs|runtime/local_runtime_invoker\.rs' \
     "${SCAN_ROOTS[@]}"
@@ -344,6 +363,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/plugin_host physical path" \
     'src/runtime/plugin_host(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/receipt_subscriber.rs physical path" \
+    'src/runtime/receipt_subscriber\.rs|runtime/receipt_subscriber\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

@@ -89,6 +89,8 @@ make_sandbox() {
     printf '%s\n' '// presence' > "$sandbox/src/daemon/invocation/state/presence.rs"
     printf '%s\n' '// session failure' > "$sandbox/src/daemon/invocation/state/session_failure.rs"
     printf '%s\n' '// usage quota' > "$sandbox/src/daemon/invocation/state/usage_quota.rs"
+    printf '%s\n' '// daemon invocation receipt subscriber' > "$sandbox/src/daemon/invocation/receipt_subscriber.rs"
+    printf '%s\n' '// daemon invocation runtime record' > "$sandbox/src/daemon/invocation/runtime_record.rs"
     printf '%s\n' '// daemon invocation target resolver' > "$sandbox/src/daemon/invocation/target.rs"
     printf '%s\n' '// daemon keyring root' > "$sandbox/src/daemon/keyring/mod.rs"
     printf '%s\n' '// daemon plugins root' > "$sandbox/src/daemon/plugins/mod.rs"
@@ -207,6 +209,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/invocation_target.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired invocation record' > "$SB/src/runtime/invocation.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/invocation.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' '// retired local runtime invoker' > "$SB/src/runtime/local_runtime_invoker.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -220,6 +229,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/plugin_host directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired receipt subscriber' > "$SB/src/runtime/receipt_subscriber.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/receipt_subscriber.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/resources"
@@ -330,6 +346,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::invocation_target import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::invocation::RuntimeInvocation; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::invocation import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::local_runtime_invoker::invoke_local_rpc_sync; }' > "$SB/src/lib.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -342,6 +365,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::plugin_host import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::receipt_subscriber::empty_registry; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::receipt_subscriber import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::resources::filesystem::resource_ref_schema; }' > "$SB/src/lib.rs"
@@ -631,6 +661,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/state/usage_quota.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/receipt_subscriber.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/receipt_subscriber.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/runtime_record.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/runtime_record.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/invocation/target.rs"

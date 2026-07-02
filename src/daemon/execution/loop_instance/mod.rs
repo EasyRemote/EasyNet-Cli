@@ -21,7 +21,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, NodeId, SessionId, TenantId};
-use crate::runtime::invocation::{
+use crate::daemon::invocation::runtime_record::{
     runtime_invocation_id, RuntimeCausalContext, RuntimeInvocation, TerminalState,
 };
 use crate::runtime::kernel_api::KernelApi;

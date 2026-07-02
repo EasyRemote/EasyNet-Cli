@@ -30,7 +30,7 @@
 // Architectural Position
 // ----------------------
 // This is the wire-facade counterpart to `crate::ura` (canonical URA
-// construction/parsing) and `runtime::invocation` (domain invocation
+// construction/parsing) and `daemon::invocation::runtime_record` (domain invocation
 // records). It does not perform admission. When a caller provides a
 // `SelfIdentity`, it can attach the caller signature over Axon's
 // descriptor-bound canonical bytes so production daemon IPC has one

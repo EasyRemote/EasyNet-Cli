@@ -10,8 +10,8 @@
 #   * `control.sock` remains boot/status only.
 #   * product callers build `DaemonInvocation` through the complete
 #     tuple builder instead of direct struct construction.
-#   * `runtime::invocation` remains a daemon-local adapter over Axon
-#     canonical bytes, not a second canonical Invocation model.
+#   * `daemon::invocation::runtime_record` remains a daemon-local adapter
+#     over Axon canonical bytes, not a second canonical Invocation model.
 #
 # Historical docs are intentionally out of scope. They may cite
 # retired frame names or old canonical formulas while explaining why
@@ -118,7 +118,7 @@ if [[ -n "$bad_daemon_invocation_constructors" ]]; then
 Use DaemonInvocation::builder(caller, callee, ability, subject) so caller/callee/ability/subject/nonce/causal_context stay complete and inspectable."
 fi
 
-if require_file "src/runtime/invocation.rs"; then
+if require_file "src/daemon/invocation/runtime_record.rs"; then
     bad_runtime_semantics="$(
         awk '
             /^[[:space:]]*\/\// { next }
@@ -128,12 +128,12 @@ if require_file "src/runtime/invocation.rs"; then
             /^[[:space:]]*pub[[:space:]]+enum[[:space:]]+CausalContext([^[:alnum:]_]|$)/ {
                 print FILENAME ":" NR ":" $0
             }
-        ' src/runtime/invocation.rs
+        ' src/daemon/invocation/runtime_record.rs
     )"
     if [[ -n "$bad_runtime_semantics" ]]; then
-        record_violation "runtime::invocation reintroduces CLI-owned Invocation semantics" \
+        record_violation "daemon::invocation::runtime_record reintroduces CLI-owned Invocation semantics" \
             "$bad_runtime_semantics
-Keep RuntimeInvocation as an adapter over easynet_axon::invocation::canonical_invocation_bytes."
+Keep RuntimeInvocation as an adapter over easynet_axon descriptor-bound canonical bytes."
     fi
 fi
 

@@ -1,10 +1,10 @@
 // EasyNet CLI — Receipt Subscriber (v2 extension point)
 // ======================================================
 //
-// File: src/runtime/receipt_subscriber.rs
+// File: src/daemon/invocation/receipt_subscriber.rs
 // Description: v1-trait-only placeholder for the v2 extension point
-//              that lets runtime consumers observe Receipts as they
-//              are written.
+//              that lets daemon invocation consumers observe Receipts
+//              as they are written.
 //
 // Why this exists in v1 if no one consumes it
 // -------------------------------------------
@@ -24,11 +24,11 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::runtime::invocation::Receipt;
+use crate::daemon::invocation::runtime_record::Receipt;
 
 /// v2 extension point. A future replay engine / causal scheduler /
 /// audit consumer implements this trait and registers itself with
-/// the runtime; every terminal Receipt is forwarded to all
+/// daemon invocation; every terminal Receipt is forwarded to all
 /// registered subscribers after it lands on disk.
 ///
 /// In v1 the registry is empty (see `empty_registry` below) and

@@ -2372,8 +2372,8 @@ mod tests {
 
     #[test]
     fn kernel_invoke_routes_chat_through_registered_handler() {
+        use crate::daemon::invocation::runtime_record::{RuntimeCausalContext, RuntimeInvocation};
         use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
         use crate::runtime::kernel::Kernel;
         use crate::runtime::kernel_api::KernelApi;
         use easynet_axon::invocation::{
@@ -2456,7 +2456,7 @@ mod tests {
         let receipt = kernel.invoke(inv).expect("invoke ok");
         assert!(matches!(
             receipt.terminal,
-            crate::runtime::invocation::TerminalState::Succeeded
+            crate::daemon::invocation::runtime_record::TerminalState::Succeeded
         ));
         assert_eq!(
             counter.load(Ordering::SeqCst),

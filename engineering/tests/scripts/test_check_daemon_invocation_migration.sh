@@ -76,11 +76,11 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "stale README product runtime text should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-printf '\npub fn invocation_id_of() {}\n' >>"$SB/src/runtime/invocation.rs"
+printf '\npub fn invocation_id_of() {}\n' >>"$SB/src/daemon/invocation/runtime_record.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "runtime invocation semantic fork should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "daemon invocation runtime-record semantic fork should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 cat >>"$SB/src/daemon/invocation/daemon_invocation_service.rs" <<'RS'

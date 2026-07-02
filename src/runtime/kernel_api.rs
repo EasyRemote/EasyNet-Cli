@@ -16,7 +16,7 @@
 //
 // CI enforcement lives in `engineering/scripts/check-kernel-boundary.sh`:
 // anything under `src/daemon/control/` may import
-// `crate::runtime::kernel_api`, `crate::runtime::invocation`,
+// `crate::runtime::kernel_api`, `crate::daemon::invocation::runtime_record`,
 // `crate::core::domain`, and nothing else from `crate::runtime`.
 //
 // Why v1 KernelApi is still thin
@@ -39,7 +39,7 @@ use crate::core::domain::{
     DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest, RoomId,
     ScheduleEntry, ScheduleId, Session, SessionId,
 };
-use crate::runtime::invocation::{Receipt, RuntimeInvocation};
+use crate::daemon::invocation::runtime_record::{Receipt, RuntimeInvocation};
 use serde_json::Value;
 
 /// v1 KernelApi surface. Each method is the runtime analogue of a

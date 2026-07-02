@@ -65,24 +65,12 @@ pub fn enter_mission_context_for_current_thread(
     ))
 }
 
-// v10.5 R1 (PR-DAEMON) — Invocation as the system-level unit of
-// execution + domain object model at the KernelApi boundary +
-// Receipt subscriber v2 extension point. These modules are `pub`
-// because:
-//   * `domain` and `invocation` types appear in KernelApi method
-//     signatures and must be reachable from Control-layer code
-//     under `src/daemon/control/` (to be added in a follow-up
-//     commit of PR-DAEMON).
-//   * `kernel_api` is the trait the Control layer consumes; its
-//     only legal import path from Control is via this crate root.
-//   * `receipt_subscriber` exposes a v2 extension point; v1 code
-//     never consumes it, but the trait needs to be reachable from
-//     future out-of-tree consumers.
+// v10.5 R1 (PR-DAEMON) — runtime-adjacent contracts that still
+// await full daemon/kernel classification. `kernel_api` is the trait
+// the Control layer consumes; its implementation lives in `kernel.rs`.
 pub mod failure_codes;
-pub mod invocation;
 pub mod join_connection_state;
 pub mod kernel_api;
-pub mod receipt_subscriber;
 
 // Runtime→Network boundary: GatewayApi is the trait the Execution
 // layer uses when it needs to touch federation (publish an ability,

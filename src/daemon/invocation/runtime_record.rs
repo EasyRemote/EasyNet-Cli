@@ -1,13 +1,13 @@
-// EasyNet CLI — Runtime Invocation Adapter Record
-// ===============================================
+// EasyNet CLI — daemon runtime invocation record
+// ==============================================
 //
-// File: src/runtime/invocation.rs
+// File: src/daemon/invocation/runtime_record.rs
 // Description: Daemon-local adapter record for scheduled/loop/kernel
 //              execution, plus the Receipt terminal record used by
 //              daemon-internal runtime services.
 //
-// Why this module is the root of runtime types
-// --------------------------------------------
+// Why this module exists
+// ----------------------
 // The public Invocation primitive belongs to Axon. This module does
 // not define canonical Invocation semantics and does not sign or
 // verify protocol bytes. It exists only because a few daemon-owned
