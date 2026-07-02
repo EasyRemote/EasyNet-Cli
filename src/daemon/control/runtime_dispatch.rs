@@ -409,7 +409,8 @@ fn build_response_line(req: &DispatchRequest, adapter: &RuntimeDispatchAdapter) 
             // Translate the canonical "ability not found" reason
             // strings (centralised in `local_runtime_invoker`) into
             // NOT_FOUND; anything else is generic ABILITY_FAILED.
-            let code = if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
+            let code = if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg)
+            {
                 "NOT_FOUND"
             } else {
                 "ABILITY_FAILED"
@@ -480,7 +481,8 @@ where
         Err(msg) => {
             // Centralised "ability not found" classification — see
             // `local_runtime_invoker::is_not_found_error`.
-            let code = if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
+            let code = if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg)
+            {
                 "NOT_FOUND"
             } else {
                 "ABILITY_FAILED"

@@ -3219,7 +3219,7 @@ impl AxonAbilityCatalog {
         let target = self
             .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Rpc)
             .map_err(|err| anyhow::anyhow!("{err}; local Axon runtime loopback path"))?;
-        crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(runtime, target)
+        crate::daemon::invocation::local_runtime_invoker::invoke_local_rpc_sync(runtime, target)
             .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
@@ -4577,15 +4577,14 @@ impl AxonAbilityCatalog {
         let target = self
             .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Rpc)
             .map_err(|err| anyhow::anyhow!("{err}; local Axon runtime loopback path"))?;
-        crate::runtime::local_runtime_invoker::invoke_local_rpc_sync(runtime, target).map_err(
-            |err| {
-                if crate::runtime::local_runtime_invoker::is_not_found_error(&err) {
+        crate::daemon::invocation::local_runtime_invoker::invoke_local_rpc_sync(runtime, target)
+            .map_err(|err| {
+                if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&err) {
                     anyhow::anyhow!("{err}; local Axon runtime loopback path")
                 } else {
                     anyhow::anyhow!("{err}")
                 }
-            },
-        )
+            })
     }
 
     /// Test-only convenience wrapper that opens the stream through
@@ -4617,7 +4616,7 @@ impl AxonAbilityCatalog {
             })?;
         runtime_stream_source(runtime, target).map_err(|err| {
             let msg = err.to_string();
-            if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
+            if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg) {
                 anyhow::anyhow!(
                     "no local stream handler registered for ability {ability} (local Axon runtime)"
                 )
@@ -4656,7 +4655,7 @@ impl AxonAbilityCatalog {
             })?;
         runtime_bidi_source(runtime, target).map_err(|err| {
             let msg = err.to_string();
-            if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
+            if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg) {
                 anyhow::anyhow!(
                     "no local bidi handler registered for ability {ability} (local Axon runtime)"
                 )
@@ -4688,7 +4687,7 @@ fn runtime_stream_source(
             };
             rt.block_on(async move {
                 let mut handle =
-                    match crate::runtime::local_runtime_invoker::open_local_stream(runtime, target)
+                    match crate::daemon::invocation::local_runtime_invoker::open_local_stream(runtime, target)
                         .await
                     {
                         Ok(handle) => handle,
@@ -4709,7 +4708,7 @@ fn runtime_stream_source(
                     {
                         Ok(Some(Ok(frame))) => {
                             if !frame.payload.is_empty() {
-                                match crate::runtime::local_runtime_invoker::ability_frame_to_json(
+                                match crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(
                                     &frame,
                                 ) {
                                     Ok(value) => snapshot.push(value),
@@ -4752,7 +4751,7 @@ fn runtime_stream_source(
                     };
                     if !frame.payload.is_empty() {
                         if let Ok(value) =
-                            crate::runtime::local_runtime_invoker::ability_frame_to_json(&frame)
+                            crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(&frame)
                         {
                             let _ = tx.send(value);
                         }
@@ -4790,7 +4789,7 @@ fn runtime_bidi_source(
             };
             rt.block_on(async move {
                 let source =
-                    match crate::runtime::local_runtime_invoker::open_local_bidi(runtime, target)
+                    match crate::daemon::invocation::local_runtime_invoker::open_local_bidi(runtime, target)
                         .await
                     {
                         Ok(source) => source,
@@ -4814,7 +4813,7 @@ fn runtime_bidi_source(
                 {
                     Ok(Some(Ok(frame))) => {
                         if !frame.payload.is_empty() {
-                            match crate::runtime::local_runtime_invoker::ability_frame_to_json(
+                            match crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(
                                 &frame,
                             ) {
                                 Ok(value) => {
@@ -4867,7 +4866,7 @@ fn runtime_bidi_source(
                             let output_frame = if frame.content_type == "application/json"
                                 || frame.content_type.is_empty()
                             {
-                                match crate::runtime::local_runtime_invoker::ability_frame_to_json(
+                                match crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(
                                     &frame,
                                 ) {
                                     Ok(value) => Ok(BidiOutputFrame::json(value)),

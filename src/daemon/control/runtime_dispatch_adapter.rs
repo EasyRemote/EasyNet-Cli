@@ -35,10 +35,10 @@ use std::sync::Arc;
 use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
 
 use crate::core::domain::NodeId;
+use crate::daemon::invocation::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
 #[cfg(test)]
 use crate::runtime::invocation_target::LocalNodeResolver;
 use crate::runtime::invocation_target::{CallMode, InvocationPlan, TargetResolver};
-use crate::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
 use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 /// Daemon-internal runtime-dispatch adapter.
@@ -190,7 +190,7 @@ mod tests {
             .execute_runtime_dispatch("nope.does_not_exist", serde_json::json!({}), None)
             .expect_err("unknown ability must fail");
         assert!(
-            crate::runtime::local_runtime_invoker::is_not_found_error(&err),
+            crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&err),
             "error should classify as not_found; got {err:?}"
         );
     }

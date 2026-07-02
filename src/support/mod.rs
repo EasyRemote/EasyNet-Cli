@@ -106,7 +106,7 @@
 /// `block_on_*` helpers that used to live in
 /// `daemon/ability/dispatch.rs`,
 /// the agent lifecycle system ability, and
-/// `runtime/local_runtime_invoker.rs`.
+/// `daemon/invocation/local_runtime_invoker.rs`.
 pub mod async_bridge;
 
 /// `append_cleanup_error()` — fold a best-effort cleanup outcome into a

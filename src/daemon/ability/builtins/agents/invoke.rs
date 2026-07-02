@@ -60,9 +60,9 @@ use serde_json::{json, Value};
 
 use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::invocation::local_runtime_invoker::is_not_found_error;
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use crate::runtime::local_runtime_invoker::is_not_found_error;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.invoke`.

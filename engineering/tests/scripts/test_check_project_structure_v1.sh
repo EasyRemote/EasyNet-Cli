@@ -82,6 +82,7 @@ make_sandbox() {
     printf '%s\n' '// daemon local invocation identity' > "$sandbox/src/daemon/identity/local_invocation.rs"
     printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
+    printf '%s\n' '// daemon local runtime invoker' > "$sandbox/src/daemon/invocation/local_runtime_invoker.rs"
     printf '%s\n' '// daemon invocation state root' > "$sandbox/src/daemon/invocation/state/mod.rs"
     printf '%s\n' '// nonce replay' > "$sandbox/src/daemon/invocation/state/nonce_replay.rs"
     printf '%s\n' '// pending dispatch' > "$sandbox/src/daemon/invocation/state/pending_dispatch.rs"
@@ -198,6 +199,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/local_invocation_identity.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired local runtime invoker' > "$SB/src/runtime/local_runtime_invoker.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/local_runtime_invoker.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/plugin_host"
 printf '%s\n' '// retired plugin host root' > "$SB/src/runtime/plugin_host/mod.rs"
 rc=0
@@ -305,6 +313,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::local_invocation_identity import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::local_runtime_invoker::invoke_local_rpc_sync; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::local_runtime_invoker import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::plugin_host::PluginRuntimeManager::new; }' > "$SB/src/lib.rs"
@@ -545,6 +560,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/invocation should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/invocation/local_runtime_invoker.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/invocation/local_runtime_invoker.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/identity/self_identity.rs"

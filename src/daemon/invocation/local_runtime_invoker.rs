@@ -1,11 +1,12 @@
-// EasyNet CLI - Axon LocalRuntime JSON invoker
-// ============================================
+// EasyNet CLI — daemon LocalRuntime invocation adapter
+// ====================================================
 //
-// Small adapter for CLI-owned JSON ability payloads crossing into
-// Axon's daemon-hosted LocalRuntime. Callers stay at the EasyNet
+// Small daemon-side adapter for JSON ability payloads crossing into
+// Axon's embedded LocalRuntime. Callers stay at the EasyNet
 // `InvocationTarget` / `serde_json::Value` layer; this module owns
 // the byte payload, terminal event, stream frame, and bidi split
-// mechanics required by the Axon SDK.
+// mechanics required by the Axon SDK. It is not an external agent
+// runtime adapter and does not own handler bodies.
 
 use std::sync::Arc;
 
@@ -28,6 +29,12 @@ use crate::daemon::identity::local_invocation::{
 };
 use crate::runtime::invocation_target::{InvocationTarget, TargetScope};
 
+/// Bidirectional LocalRuntime stream halves exposed to daemon dispatchers.
+///
+/// The source owns the split after Axon's `StreamingInvocationHandle`
+/// has accepted a bidi request. It deliberately carries only the Axon
+/// sender/receiver pair; session policy, admission, and caller-visible
+/// framing remain in daemon invocation/ability dispatch layers.
 pub struct RuntimeBidiSource {
     pub to_client: BidiInputSender,
     pub from_client: BidiOutputReceiver,

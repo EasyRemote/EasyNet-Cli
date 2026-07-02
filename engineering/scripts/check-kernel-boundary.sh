@@ -67,15 +67,6 @@ echo "== check-kernel-boundary.sh =="
 #   * system              — build_registry() factory the convenience
 #                           proxy constructor calls to materialise
 #                           the local handler set
-#   * local_runtime_invoker — peer of kernel_api: the LocalRuntime
-#                           JSON adapter the proxy uses to translate
-#                           Control-plane wire frames into Axon
-#                           ability invocations. Lives one module
-#                           down so the proxy's `crate::runtime::*`
-#                           import surface stays small; the helpers
-#                           themselves are syscall-boundary types
-#                           (block_on_runtime, ability_frame_to_json,
-#                           open_local_stream, …).
 #   * hosted_receipt      — typed receipt-header shape carried in
 #                           control-plane Result envelopes. Peer of
 #                           invocation::Receipt; lives in its own
@@ -91,7 +82,7 @@ echo "== check-kernel-boundary.sh =="
 # struct, and runtime::session (a legacy path that pre-dates the
 # Kernel boundary).
 if [ -d "src/daemon/control" ]; then
-    control_allowed='kernel_api|invocation|invocation_target|domain|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability_names'
+    control_allowed='kernel_api|invocation|invocation_target|domain|gateway_api|gateway|system|hosted_receipt|ability_names'
     control_files=$(find src/daemon/control -name '*.rs' | sort)
     for f in $control_files; do
         awk '
@@ -151,7 +142,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|gateway_api|gateway|system|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

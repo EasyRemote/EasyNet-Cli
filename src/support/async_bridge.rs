@@ -7,7 +7,7 @@
 // Before this module, three near-identical implementations lived in
 // `daemon/ability/dispatch.rs` (`block_on_runtime_sync`),
 // the agent lifecycle system ability (`block_on_hot_registrar`),
-// and `runtime/local_runtime_invoker.rs` (`block_on_runtime`). They
+// and `daemon/invocation/local_runtime_invoker.rs` (`block_on_runtime`). They
 // disagreed on what to do when called from outside a tokio runtime —
 // `block_on_runtime_sync` fell back to `futures::executor::block_on`,
 // `block_on_hot_registrar` returned `None`, and `block_on_runtime`

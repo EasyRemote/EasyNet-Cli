@@ -90,6 +90,7 @@ pub mod invocation_wire;
 pub mod invoke_remote_initiator;
 pub(crate) mod ledger_projection;
 pub mod list_user_pubkeys;
+pub mod local_runtime_invoker;
 pub mod local_session_dispatcher;
 pub mod origin_caller;
 pub(crate) mod peer_envelope_signer;
