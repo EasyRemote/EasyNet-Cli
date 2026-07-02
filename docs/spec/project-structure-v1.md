@@ -30,12 +30,12 @@ runtime semantics, these sources are higher priority:
 4. `src/daemon/control/` for local boot/status IPC, `src/daemon/invocation/`
    for daemon-owned Invocation transport/admission/session dispatch and state,
    `src/daemon/federation/` for daemon-owned outbound peer-hub dialing,
-   cross-realm directory projection, peer-map reload state, and federation
-   discovery read boundaries, `src/daemon/trust/` for trust-anchor state and
-   Axon key-resolution adapters, `src/daemon/identity/` and
-   `src/daemon/keyring/` for host identity signing and vault state, and
-   `src/services/` for the remaining migration-stage quota and store
-   infrastructure.
+   cross-realm directory projection, peer-map reload state, federation
+   discovery read boundaries, and federation read models,
+   `src/daemon/trust/` for trust-anchor state and Axon key-resolution adapters,
+   `src/daemon/identity/` and `src/daemon/keyring/` for host identity signing
+   and vault state, `src/daemon/ability/` for daemon ability support services,
+   and `src/daemon/context/` for daemon-owned context capture services.
 
 ## Review Findings Grouped By Root Cause
 
@@ -128,8 +128,8 @@ they do not loop over targets and invoke governed abilities directly.
 
 The old draft listed moves from `runtime/agents/`, but did not acknowledge the
 current adjacent modules such as `runtime/ability/`, `ability_dispatch.rs`,
-`ability_wire.rs`, `runtime/agent_ability_specs.rs`, `services/`, and plugin
-packages.
+`ability_wire.rs`, `runtime/agent_ability_specs.rs`, daemon semantic
+directories, and plugin packages.
 
 Fix: every migration phase now has a caller-inventory gate before code moves,
 and high-risk moves are sequenced after name extraction, path compatibility, and
@@ -183,8 +183,8 @@ stable cross-module core contract.
 10. Plugins remain extension packages. A plugin contributes descriptors,
     implementation bindings, sidecars, or runtime state; it does not become a
     core source module by directory move.
-11. Daemon control and remaining services transport/trust infrastructure are
-    not force-fit into product modules.
+11. The retired `services/` catch-all must not return; daemon state belongs in
+    explicit daemon semantic directories.
 12. Ordinary list APIs are read-model queries. Distributed fan-out is explicit,
     bounded, and hosted by daemon/hub aggregate abilities.
 
@@ -208,8 +208,10 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `runtime/resources/` | resource models and shared resource projection helpers | product ability handler bodies |
 | `runtime/plugin_host/` | plugin manifest parsing, install/activation, sidecar protocol, runtime contribution registration | core Ability ontology |
 | `runtime/axon_bridge/` | Axon SDK glue and wire/type adapters | EasyNet product policy, plugin lifecycle decisions |
-| `services/` | migration-stage trust, federation, quota, and store state that has not yet reached a clean daemon semantic directory | user-facing CLI/MCP rendering, product handler grouping, local boot/status control IPC, daemon Invocation transport |
-| `daemon/` | Rust daemon SDK facade, local boot/status control IPC under `daemon/control`, and daemon-owned Invocation transport under `daemon/invocation` | Axon protocol semantics, one method per ability, generic service catch-all ownership |
+| `daemon/federation/read_model/` | federation resolver/catalog read models such as advertised agents, owner ability projections, and hub-published abilities | Axon protocol authority, transport dialing, product handler bodies |
+| `daemon/ability/` | daemon-owned ability support services such as manifest ability health monitoring | AbilityDescriptor ontology, handler implementation bodies, plugin process ownership |
+| `daemon/context/` | daemon-owned background loops for the local Context surface | context persistence format, product ability handler bodies |
+| `daemon/` | Rust daemon SDK facade, local boot/status IPC under `daemon/control`, daemon-owned Invocation transport under `daemon/invocation`, and daemon semantic state directories | Axon protocol semantics, one method per ability, generic service catch-all ownership |
 | `cli/` | command-line facade, clap command tree, presentation, and CLI-only ergonomic adapters | daemon policy, hidden fan-out loops, Axon canonical algorithms |
 | `facade/` | retired legacy compatibility namespace | all new ownership; use `cli/`, `ffi/`, `daemon/`, or future `sdk/` |
 | `ffi/` | C ABI projection over daemon/client surfaces | one method per ability as the stable model |
@@ -414,7 +416,6 @@ EasyNet-Cli/
 │  ├─ daemon/
 │  ├─ cli/
 │  ├─ runtime/
-│  ├─ services/
 │  ├─ persistence/
 │  ├─ registry/
 │  ├─ eal/
@@ -688,8 +689,8 @@ Disallowed content:
 
 OOP/encapsulation rules:
 
-1. Stateful managers live under `runtime/execution/`, `services/`, or
-   `persistence/`, not inside handler modules.
+1. Stateful managers live under `runtime/execution/`, explicit `daemon/`
+   semantic directories, or `persistence/`, not inside handler modules.
 2. Stateful structs must have private fields and constructor-based dependency
    injection. No public fields on state-holding structs.
 3. Handler modules receive dependencies through registry/catalog build services
@@ -1297,9 +1298,10 @@ the phase blocked.
 | Daemon control ownership | Control-plane source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/control/` exists, `src/services/control/` is retired, and active code does not import through `services::control` | New local control-plane code lands under `src/services/control`, or active code imports the retired services control path |
 | Daemon Invocation ownership | Invocation transport source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/` exists, `src/services/invocation_transport/` is retired, and active code does not import through `services::invocation_transport` | New Invocation transport logic lands under `src/services/invocation_transport`, or active code imports the retired services Invocation path |
 | Daemon Invocation state ownership | Invocation presence, pending dispatch, replay, quota, and failure-state source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/state/{presence,pending_dispatch,nonce_replay,usage_quota,session_failure}.rs` exist; retired Invocation state files under `src/services/` do not; active code does not import through retired services Invocation-state paths | New daemon Invocation liveness, pending-dispatch, replay, quota, or failure-state code lands under `src/services`, or active code imports retired services state paths |
-| Daemon federation ownership | Federation transport, directory, peer-map, and read-boundary source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, and `src/daemon/federation/peers.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::federation_*` paths | New daemon federation transport, directory, peer-map, or discovery-reader code lands under `src/services`, or active code imports retired services federation paths |
+| Daemon federation ownership | Federation transport, directory, peer-map, discovery read-boundary, and read-model source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, `src/daemon/federation/peers.rs`, and `src/daemon/federation/read_model/{ability_catalog,advertised_agents,hub_published_abilities}.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::*` paths | New daemon federation transport, directory, peer-map, discovery-reader, or read-model code lands under `src/services`, or active code imports retired services paths |
 | Daemon trust ownership | Trust-anchor state, hot-reload cell, and Axon key-resolver source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/trust/anchor.rs`, `src/daemon/trust/cell.rs`, and `src/daemon/trust/key_resolver.rs` exist; retired trust files under `src/services/` do not; active code does not import through retired `services::realm_trust_anchor`, `services::trust_anchor_cell`, or `services::trust_anchor_key_resolver` paths | New daemon trust state or key-resolution adapters land under `src/services`, or active code imports retired services trust paths |
 | Daemon identity/keyring ownership | Host signing handle and keyring vault source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/identity/self_identity.rs` and `src/daemon/keyring/mod.rs` exist; retired identity/keyring files under `src/services/` do not; active code does not import through retired `services::self_identity` or `services::keyring` paths | New host identity signing or keyring vault code lands under `src/services`, or active code imports retired services identity/keyring paths |
+| Daemon ability/context ownership | Ability-health monitor and context-capture background services | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/ability/health.rs` and `src/daemon/context/clipboard_tracker.rs` exist; `src/services/` is absent; active code does not import through `services::*` | New ability support services or context capture loops land under `src/services`, or active code imports retired services paths |
 | Facade fan-out ban | CLI, FFI, SDK, backend adapter work | Audit of facade code paths plus search for loops/concurrency over devices, agents, or abilities in facade layers | A default list/helper performs governed per-target fan-out |
 | Aggregate fan-out contract | Aggregate ability work | State machine, max concurrency, deadline, page size, partial-result type, child receipt refs, and per-target typed errors | Aggregation is hidden behind ordinary list naming or lacks bounded/typed partial semantics |
 | Compile gate | Every code phase | `cargo fmt --check` and a narrow compile command such as `cargo check --lib --features axon-pb` or a phase-specific stricter gate | Formatting fails, compilation fails, or the chosen compile gate does not cover touched modules |
@@ -1390,7 +1392,7 @@ Use this list to decide whether the next review has no remaining issues.
 11. Do plugin packages remain plugin packages?
 12. Do skills remain implementation/resource packages?
 13. Does any handler own long-lived state that belongs in `execution/`,
-    `services/`, or `persistence/`?
+    explicit `daemon/` semantic directories, or `persistence/`?
 14. Do stateful structs keep private fields and constructor-injected
     dependencies?
 15. Did any CLI/SDK/backend-facing code import Axon internals or duplicate Axon

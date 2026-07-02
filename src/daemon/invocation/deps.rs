@@ -28,6 +28,8 @@ use std::sync::Arc;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
+use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
+use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
 use crate::daemon::invocation::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::session_escalation::SessionEscalationHandle;
@@ -38,8 +40,6 @@ use crate::daemon::invocation::state::pending_dispatch::{
 use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::runtime::ability_wire::AbilityWireRegistry;
 use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
-use crate::services::ability_catalog_store::AbilityCatalogStore;
-use crate::services::advertised_agent_store::AdvertisedAgentStore;
 
 /// Directory read plane: live device sessions, hosted-agent rows,
 /// per-agent ability catalogs, and the federated directory view.

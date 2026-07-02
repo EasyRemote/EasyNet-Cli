@@ -232,7 +232,7 @@ fn session_control_heartbeat_renews_caller_owner_projection_lease() {
     let public_name = "agent.list";
     let ability_ura = crate::ura::owner_ability_ura(owner_ura, public_name).expect("ability ura");
     svc.directory.ability_catalog.upsert_projection(
-        crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+        crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
             owner_ura.to_string(),
             1,
@@ -302,7 +302,7 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
         tx
     });
     svc.directory.ability_catalog.upsert_projection(
-        crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+        crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
             owner_ura.to_string(),
             1,
@@ -1405,24 +1405,24 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
         "easynet:///r/local/agent/alice.researcher",
     ] {
         svc.directory.advertised_agents.upsert(
-            crate::services::advertised_agent_store::AdvertisedAgentRecord {
+            crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentRecord {
                 agent_ura: agent_ura.to_string(),
                 public_key_hex: String::new(),
                 host_node_id: Some("alice-laptop".to_string()),
                 signing_authority:
-                    crate::services::advertised_agent_store::AdvertisedAgentSigningAuthority::HostedBy {
+                    crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentSigningAuthority::HostedBy {
                         host_ura: host_ura.to_string(),
                     },
             },
         );
     }
     svc.directory.advertised_agents.upsert(
-        crate::services::advertised_agent_store::AdvertisedAgentRecord {
+        crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentRecord {
             agent_ura: "easynet:///r/local/agent/bob.helper".to_string(),
             public_key_hex: String::new(),
             host_node_id: Some("bob-laptop".to_string()),
             signing_authority:
-                crate::services::advertised_agent_store::AdvertisedAgentSigningAuthority::HostedBy {
+                crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentSigningAuthority::HostedBy {
                     host_ura: "easynet:///r/local/device/bob-laptop".to_string(),
                 },
         },

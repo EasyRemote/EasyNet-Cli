@@ -3,12 +3,11 @@
 # ==========================
 #
 # CI gate for the daemon-layers boundary documented under
-# docs/design/daemon-layers-v1.md, src/daemon/control/mod.rs, and
-# src/services/mod.rs.
+# docs/design/daemon-layers-v1.md and src/daemon/control/mod.rs.
 #
 # Five rules.
 #
-# Rules 1–2 cover services/* → runtime/*: the daemon's network-
+# Rules 1–2 cover daemon/* → runtime/*: the daemon's network-
 # facing surfaces (control plane, gRPC Invocation server) are
 # allowed to reach into a bounded set of runtime modules because
 # every one of those concerns surfaces on a wire RPC.
@@ -26,15 +25,15 @@
 # (The former Rule 3 for `services/axon_bridge/` was retired on
 # 2026-05-29 when that subtree moved to `runtime/axon_bridge/`. Its
 # imports went almost entirely to `runtime/*` — keeping it under
-# `services/` was a false hierarchy. Rule 6 below enforces the
+# `services/` was a false hierarchy. Rule 5 below enforces the
 # inverse direction for the moved tree.)
 #
 # Rule 3 (renumbered): Execution → GatewayApi only.
 #
-# Rules 4–5 cover the reverse direction (runtime/* → services/*).
+# Rules 4–5 cover the reverse direction (runtime/* → daemon/*).
 # Most of `runtime/` is daemon-agnostic in-process plumbing; the
 # only legitimate upward references are the few cells that hold
-# cross-cutting state (trust anchor, hub-published ability store).
+# cross-cutting daemon state (trust anchor).
 # Rule 4 rejects the retired `runtime/agents/` compatibility tree.
 # Rule 5 bounds `runtime/axon_bridge/` with a tiny explicit allowlist
 # so a new upward reference surfaces in code review.
@@ -251,18 +250,16 @@ fi
 
 # ── Rule 5 ────────────────────────────────────────────────────────
 # runtime/axon_bridge/ — the Axon-SDK glue. Lives in `runtime/`
-# (formerly `services/`) precisely because its dependency
-# direction is into runtime, not services. The only legitimate
-# upward references are the trust-anchor cells the bridge reads
-# at boot:
+# direction is into runtime. The only legitimate upward references
+# are the daemon trust adapters the bridge reads at boot:
 #
-#   * trust_anchor_cell — `SharedTrustAnchor` typed cell the
+#   * daemon::trust::cell — `SharedTrustAnchor` typed cell the
 #     `RealmTrustAnchorKeyResolver` snapshots on resolve.
-#   * realm_trust_anchor — concrete `RealmTrustAnchor` /
+#   * daemon::trust::anchor — concrete `RealmTrustAnchor` /
 #     `TrustedAgent` types used in unit tests; in production
 #     the bridge depends only on the cell.
 if [ -d "src/runtime/axon_bridge" ]; then
-    bridge_up_allowed='trust_anchor_cell|realm_trust_anchor'
+    bridge_up_allowed='trust'
     bridge_up_files=$(find src/runtime/axon_bridge -name '*.rs' | sort)
     for f in $bridge_up_files; do
         awk '
@@ -271,13 +268,13 @@ if [ -d "src/runtime/axon_bridge" ]; then
             { print FILENAME ":" NR ":" $0 }
         ' "$f"
     done \
-        | grep -E "crate::services::([a-zA-Z_][a-zA-Z0-9_]*)" \
+        | grep -E "crate::daemon::([a-zA-Z_][a-zA-Z0-9_]*)" \
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
-        | grep -vE "crate::services::(${bridge_up_allowed})\b" > /tmp/kb_bridge_up.$$ || true
+        | grep -vE "crate::daemon::(${bridge_up_allowed})\b" > /tmp/kb_bridge_up.$$ || true
     if [ -s /tmp/kb_bridge_up.$$ ]; then
-        echo "ERROR: runtime/axon_bridge/ may not import these services modules:"
+        echo "ERROR: runtime/axon_bridge/ may not import these daemon modules:"
         cat /tmp/kb_bridge_up.$$
-        echo "  Permitted: crate::services::{${bridge_up_allowed}}"
+        echo "  Permitted: crate::daemon::{${bridge_up_allowed}}"
         violations=$((violations + 1))
     fi
     rm -f /tmp/kb_bridge_up.$$

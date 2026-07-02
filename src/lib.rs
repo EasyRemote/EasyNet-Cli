@@ -64,7 +64,6 @@ pub mod persistence;
 pub mod plugins;
 pub mod registry;
 pub mod runtime;
-pub mod services;
 pub mod support;
 pub mod ura;
 

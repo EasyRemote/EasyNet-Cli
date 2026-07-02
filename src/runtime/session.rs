@@ -273,7 +273,7 @@ mod tests {
     fn session_clone_shares_the_writer() {
         // Clone semantics: two Session handles pointing at the
         // same writer share sequence counter + broadcast channel
-        // + disk log. This is how services/loop_exec can hold a
+        // + disk log. This is how loop execution can hold a
         // Session and fan it out to N subscribers without
         // re-opening the log.
         let (s1, _dir) = new_session("clone");

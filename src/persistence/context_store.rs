@@ -21,7 +21,7 @@
 //                    folders (`easynet context add/remove`).
 //   favorites.json   [{"id","kind","label","reference","added_at"}]
 //
-// Clipboard capture itself lives in `services::clipboard_tracker`;
+// Clipboard capture itself lives in `daemon::context::clipboard_tracker`;
 // the `context.*` abilities in `runtime::system_abilities::resources::context` are
 // read/toggle surfaces over this store.
 //

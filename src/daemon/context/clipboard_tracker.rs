@@ -1,7 +1,7 @@
-// EasyNet CLI — clipboard tracker (daemon background service)
-// =============================================================
+// EasyNet CLI — daemon clipboard tracker
+// =======================================
 //
-// File: src/services/clipboard_tracker.rs
+// File: src/daemon/context/clipboard_tracker.rs
 // Description: Opt-in clipboard history capture for the Context
 //              surface. A dedicated OS thread polls the system
 //              clipboard; on change it appends a `ClipEntry`

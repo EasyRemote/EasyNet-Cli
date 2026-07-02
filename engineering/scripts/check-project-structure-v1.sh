@@ -95,11 +95,16 @@ require_path "src/runtime/executors"
 require_path "src/runtime/agent_ability_specs.rs"
 require_path "src/cli/mod.rs"
 require_path "src/daemon/mod.rs"
+require_path "src/daemon/ability/health.rs"
+require_path "src/daemon/context/clipboard_tracker.rs"
 require_path "src/daemon/control"
 require_path "src/daemon/federation/client"
 require_path "src/daemon/federation/directory.rs"
 require_path "src/daemon/federation/directory_reader.rs"
 require_path "src/daemon/federation/peers.rs"
+require_path "src/daemon/federation/read_model/ability_catalog.rs"
+require_path "src/daemon/federation/read_model/advertised_agents.rs"
+require_path "src/daemon/federation/read_model/hub_published_abilities.rs"
 require_path "src/daemon/identity/self_identity.rs"
 require_path "src/daemon/invocation"
 require_path "src/daemon/invocation/state/nonce_replay.rs"
@@ -128,6 +133,7 @@ reject_path "src/runtime/abilities"
 reject_path "src/runtime/abilities.rs"
 reject_path "src/daemon.rs"
 reject_path "src/facade"
+reject_path "src/services"
 reject_path "src/services/control"
 reject_path "src/services/federated_directory_reader.rs"
 reject_path "src/services/federated_peers_cell.rs"
@@ -206,6 +212,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired services paths" \
+    '(^|[^[:alnum:]_])(crate::services::|easynet_cli::services::|services::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired services::control paths" \
     '(^|[^[:alnum:]_])(crate::services::control::|easynet_cli::services::control::|services::control::)' \
     "${SCAN_ROOTS[@]}"
@@ -243,6 +254,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/facade physical paths" \
     'src/facade(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/services physical paths" \
+    '(^|[^[:alnum:]_./-])src/services(/|$)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

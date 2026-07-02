@@ -141,10 +141,10 @@ pub mod advertise;
 /// independent state of its own beyond holding `Arc` handles to
 /// daemon state + the constructed Axon objects.
 ///
-/// Lives under `runtime/` (not `services/`) because it imports only
-/// Axon SDK types and runtime ability dispatch, system abilities, and
-/// invocation_target glue. Daemon-owned state is adapted in its
-/// semantic daemon domain and injected through traits.
+/// Lives under `runtime/` because it imports only Axon SDK types and
+/// runtime ability dispatch, system abilities, and invocation_target
+/// glue. Daemon-owned state is adapted in its semantic daemon domain
+/// and injected through traits.
 pub mod axon_bridge;
 pub mod dispatch_receipt;
 pub mod federation_client;

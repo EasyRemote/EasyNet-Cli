@@ -412,10 +412,10 @@ impl DaemonInvocationService {
             directory: DirectoryPlane {
                 presence,
                 advertised_agents: Arc::new(
-                    crate::services::advertised_agent_store::AdvertisedAgentStore::new(),
+                    crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
                 ),
                 ability_catalog: Arc::new(
-                    crate::services::ability_catalog_store::AbilityCatalogStore::new(),
+                    crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
                 ),
                 federated_directory:
                     crate::daemon::federation::directory::SharedFederatedDirectoryView::default(),
@@ -455,8 +455,12 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_directory_read_models(
         mut self,
-        advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
-        ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
+        advertised_agents: Arc<
+            crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore,
+        >,
+        ability_catalog: Arc<
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
+        >,
     ) -> Self {
         self.directory.advertised_agents = advertised_agents;
         self.directory.ability_catalog = ability_catalog;

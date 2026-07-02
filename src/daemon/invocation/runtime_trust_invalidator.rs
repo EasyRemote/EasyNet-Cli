@@ -26,12 +26,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
 use crate::daemon::invocation::state::presence::PresenceRegistry;
 use crate::persistence::config::Credentials;
 use crate::runtime::join_connection_state::{
     record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinTransition,
 };
-use crate::services::advertised_agent_store::AdvertisedAgentStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeTrustInvalidation {
@@ -191,12 +191,12 @@ impl RuntimeTrustInvalidator {
 mod tests {
     use super::*;
     use crate::cli::test_support::HomeGuard;
+    use crate::daemon::federation::read_model::advertised_agents::{
+        AdvertisedAgentRecord, AdvertisedAgentSigningAuthority,
+    };
     use crate::daemon::invocation::state::presence::DISPATCH_CHANNEL_CAPACITY;
     use crate::persistence::config::Credentials;
     use crate::runtime::join_connection_state::load_snapshot;
-    use crate::services::advertised_agent_store::{
-        AdvertisedAgentRecord, AdvertisedAgentSigningAuthority,
-    };
 
     fn sender() -> crate::daemon::invocation::state::presence::DispatchSender {
         let (tx, _rx) = tokio::sync::mpsc::channel(DISPATCH_CHANNEL_CAPACITY);

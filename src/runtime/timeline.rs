@@ -11,7 +11,7 @@
 //      See EasyNet-Axon/document/concepts/INVOCATION_LIFECYCLE_ACROSS_PROCESSES.md.
 //
 //   2. A `tokio::sync::broadcast::Sender<TimelineEvent>` so in-process
-//      subscribers (services/chat, services/loop_exec in PR-10, the
+//      subscribers (chat, loop execution in PR-10, the
 //      Session's resume path) can tail events live without polling
 //      the disk. The broadcast channel uses drop-oldest semantics
 //      under subscriber lag, which is correct for "tail" consumers:

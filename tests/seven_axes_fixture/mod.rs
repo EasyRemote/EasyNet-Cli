@@ -844,10 +844,12 @@ fn start_daemon_at(
         Some(Arc::clone(&ledger)),
     );
     let presence = Arc::new(PresenceRegistry::new());
-    let advertised_agents =
-        Arc::new(easynet_cli::services::advertised_agent_store::AdvertisedAgentStore::new());
-    let ability_catalog =
-        Arc::new(easynet_cli::services::ability_catalog_store::AbilityCatalogStore::new());
+    let advertised_agents = Arc::new(
+        easynet_cli::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
+    );
+    let ability_catalog = Arc::new(
+        easynet_cli::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
+    );
     let discover_resolver = Arc::new(
         easynet_cli::runtime::system_abilities::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
             Arc::clone(&presence),

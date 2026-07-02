@@ -48,11 +48,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::daemon::invocation::state::presence::PresenceRegistry;
-use crate::runtime::ability::conformance;
-use crate::services::advertised_agent_store::{
+use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
+use crate::daemon::invocation::state::presence::PresenceRegistry;
+use crate::runtime::ability::conformance;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1 as axon_pb;
 pub use easynet_axon::{
@@ -395,13 +395,13 @@ pub struct AdvertiseAbilitiesResponse {
 #[must_use]
 pub(crate) fn handle_advertise_abilities(
     request: &AdvertiseAbilitiesRequest,
-    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
 ) -> AdvertiseAbilitiesResponse {
     let count = request.ability_summaries.len();
     let stored = if let Some(store) = catalog {
         store
             .upsert_projection(
-                crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+                crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
                     request.owner_ura.clone(),
                     request.host_device_ura.clone(),
                     request.projection_revision,
@@ -466,7 +466,7 @@ pub struct HeartbeatResponse {
 pub(crate) fn handle_heartbeat(
     request: &HeartbeatRequest,
     registry: &PresenceRegistry,
-    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     now_unix_ms: i64,
 ) -> HeartbeatResponse {
     // RFC-005: heartbeat renews the owner projection lease only; it must
@@ -519,7 +519,7 @@ pub fn handle_resolve(
     request: &ResolveRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     self_device_ura: Option<&str>,
 ) -> ResolveResponse {
     handle_resolve_at(
@@ -540,7 +540,7 @@ pub(crate) fn handle_resolve_at(
     request: &ResolveRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     self_device_ura: Option<&str>,
     now_unix_ms: i64,
 ) -> ResolveResponse {
@@ -621,7 +621,7 @@ pub fn handle_namespace_resolve(
     query: &Value,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
 ) -> Value {
     handle_namespace_resolve_at(
         query,
@@ -637,7 +637,7 @@ pub(crate) fn handle_namespace_resolve_at(
     query: &Value,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     now_unix_ms: i64,
 ) -> Value {
     crate::daemon::invocation::route_resolver::DaemonRouteResolver::new(
@@ -675,7 +675,7 @@ pub(crate) fn handle_namespace_resolve_at(
 /// empty Abilities page and `terminal.list`/`agent.list`/`skill.list`
 /// "owner is online but does not publish" failures.
 fn resolved_owner_projection_values(
-    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     owner_ura: &str,
     self_device_ura: Option<&str>,
     now_unix_ms: i64,
@@ -1162,8 +1162,8 @@ mod tests {
     fn projection_row_for(
         owner_ura: &str,
         summaries: Vec<crate::runtime::owner_projection::AbilityProjectionSummary>,
-    ) -> crate::services::ability_catalog_store::OwnerAbilityProjectionRow {
-        crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+    ) -> crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow {
+        crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
             "easynet:///r/realm/device/dev-1".to_string(),
             7,
@@ -1312,7 +1312,8 @@ mod tests {
 
     #[test]
     fn handle_advertise_abilities_stores_owner_projection_row() {
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let owner_ura = "easynet:///r/realm/device/dev-1";
         let req = AdvertiseAbilitiesRequest {
             owner_ura: owner_ura.to_string(),
@@ -1346,7 +1347,8 @@ mod tests {
 
     #[test]
     fn handle_advertise_abilities_rejects_stale_projection_for_read_model() {
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let owner_ura = "easynet:///r/realm/device/dev-1";
         let newer = AdvertiseAbilitiesRequest {
             owner_ura: owner_ura.to_string(),
@@ -1424,7 +1426,8 @@ mod tests {
         // with NODATA. Heartbeat must renew the lease so the projection
         // stays resolvable without a full re-advertise.
         let registry = PresenceRegistry::new();
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let owner_ura = "easynet:///r/realm/device/a";
         registry.insert(owner_ura.to_string(), make_dispatch_sender());
 
@@ -1433,7 +1436,7 @@ mod tests {
         let publish_at = 1_000_i64;
         let lease = crate::runtime::owner_projection::lease_expiry_from_now(publish_at);
         catalog.upsert_projection(
-            crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+            crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
                 owner_ura.to_string(),
                 owner_ura.to_string(),
                 1,
@@ -1485,7 +1488,8 @@ mod tests {
     #[test]
     fn handle_heartbeat_skips_unknown_owner() {
         let registry = PresenceRegistry::new();
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let req = HeartbeatRequest {
             agent_ura: "easynet:///r/realm/device/a".to_string(),
             refresh_owner_uras: vec!["easynet:///r/realm/device/never-published".to_string()],
@@ -1655,7 +1659,8 @@ mod tests {
             "easynet:///r/realm/device/dev-1".to_string(),
             make_dispatch_sender(),
         );
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         catalog.upsert_projection(projection_row_for(
             "easynet:///r/realm/agent/user.alice",
             vec![projection_summary(
@@ -1703,9 +1708,10 @@ mod tests {
             "easynet:///r/realm/device/dev-1".to_string(),
             make_dispatch_sender(),
         );
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         catalog.upsert_projection(
-            crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+            crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
                 "easynet:///r/realm/device/dev-1".to_string(),
                 "easynet:///r/realm/device/dev-1".to_string(),
                 7,
@@ -1758,7 +1764,8 @@ mod tests {
         let ability_ura =
             crate::ura::owner_ability_ura(owner_ura, "agent.list").expect("device ability ura");
         registry.insert(owner_ura.to_string(), make_dispatch_sender());
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         catalog.upsert_projection(projection_row_for(
             owner_ura,
             vec![projection_summary(owner_ura, &ability_ura, "agent", "list")],
@@ -1802,7 +1809,8 @@ mod tests {
         let registry = PresenceRegistry::new();
         let owner_ura = "easynet:///r/realm/device/dev-1";
         registry.insert(owner_ura.to_string(), make_dispatch_sender());
-        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({

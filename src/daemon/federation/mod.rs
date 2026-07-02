@@ -15,3 +15,4 @@ pub mod client;
 pub mod directory;
 pub mod directory_reader;
 pub mod peers;
+pub mod read_model;

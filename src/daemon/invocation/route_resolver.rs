@@ -30,11 +30,11 @@ use serde_json::{json, Value};
 
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
+use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
+use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
 use crate::daemon::invocation::federation_wrappers::{self, ResolveAgentSummary, ResolveRequest};
 use crate::daemon::invocation::hub_resolver::{HubResolution, HubResolver};
 use crate::daemon::invocation::state::presence::PresenceRegistry;
-use crate::services::ability_catalog_store::AbilityCatalogStore;
-use crate::services::advertised_agent_store::AdvertisedAgentStore;
 
 use easynet_axon::pb::axon::v1 as axon_pb;
 
@@ -1678,11 +1678,13 @@ mod tests {
 
     use crate::daemon::federation::directory::SharedFederatedDirectoryView;
     use crate::daemon::federation::peers::SharedFederatedPeers;
-    use crate::daemon::invocation::state::presence::PresenceRegistry;
-    use crate::services::ability_catalog_store::{AbilityCatalogStore, OwnerAbilityProjectionRow};
-    use crate::services::advertised_agent_store::{
+    use crate::daemon::federation::read_model::ability_catalog::{
+        AbilityCatalogStore, OwnerAbilityProjectionRow,
+    };
+    use crate::daemon::federation::read_model::advertised_agents::{
         AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
     };
+    use crate::daemon::invocation::state::presence::PresenceRegistry;
 
     const TEST_NOW_MS: i64 = 1_700_000_000_000;
     const LEASE_EXPIRES_MS: i64 = 4_102_444_800_000;

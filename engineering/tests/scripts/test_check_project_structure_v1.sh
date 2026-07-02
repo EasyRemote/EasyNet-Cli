@@ -18,14 +18,16 @@ make_sandbox() {
         "$sandbox/src/runtime/ability_names" \
         "$sandbox/src/runtime/executors" \
         "$sandbox/src/cli" \
+        "$sandbox/src/daemon/ability" \
+        "$sandbox/src/daemon/context" \
         "$sandbox/src/daemon/control" \
         "$sandbox/src/daemon/federation/client" \
+        "$sandbox/src/daemon/federation/read_model" \
         "$sandbox/src/daemon/identity" \
         "$sandbox/src/daemon/invocation" \
         "$sandbox/src/daemon/invocation/state" \
         "$sandbox/src/daemon/keyring" \
         "$sandbox/src/daemon/trust" \
-        "$sandbox/src/services" \
         "$sandbox/ability-descriptors/system" \
         "$sandbox/schemas" \
         "$sandbox/engineering/benches" \
@@ -40,12 +42,20 @@ make_sandbox() {
         "$sandbox/scripts"
     printf '%s\n' '// cli root' > "$sandbox/src/cli/mod.rs"
     printf '%s\n' '// daemon root' > "$sandbox/src/daemon/mod.rs"
+    printf '%s\n' '// daemon ability root' > "$sandbox/src/daemon/ability/mod.rs"
+    printf '%s\n' '// daemon ability health' > "$sandbox/src/daemon/ability/health.rs"
+    printf '%s\n' '// daemon context root' > "$sandbox/src/daemon/context/mod.rs"
+    printf '%s\n' '// daemon clipboard tracker' > "$sandbox/src/daemon/context/clipboard_tracker.rs"
     printf '%s\n' '// daemon control root' > "$sandbox/src/daemon/control/mod.rs"
     printf '%s\n' '// daemon federation root' > "$sandbox/src/daemon/federation/mod.rs"
     printf '%s\n' '// daemon federation client root' > "$sandbox/src/daemon/federation/client/mod.rs"
     printf '%s\n' '// daemon federation directory' > "$sandbox/src/daemon/federation/directory.rs"
     printf '%s\n' '// daemon federation directory reader' > "$sandbox/src/daemon/federation/directory_reader.rs"
     printf '%s\n' '// daemon federation peers' > "$sandbox/src/daemon/federation/peers.rs"
+    printf '%s\n' '// daemon federation read model root' > "$sandbox/src/daemon/federation/read_model/mod.rs"
+    printf '%s\n' '// ability catalog read model' > "$sandbox/src/daemon/federation/read_model/ability_catalog.rs"
+    printf '%s\n' '// advertised agents read model' > "$sandbox/src/daemon/federation/read_model/advertised_agents.rs"
+    printf '%s\n' '// hub published abilities read model' > "$sandbox/src/daemon/federation/read_model/hub_published_abilities.rs"
     printf '%s\n' '// daemon identity root' > "$sandbox/src/daemon/identity/mod.rs"
     printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
@@ -85,6 +95,14 @@ run_check() {
 SB="$(make_sandbox)"
 run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: project structure guard should pass"; }
 rm -rf "$SB"
+
+SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
+printf '%s\n' '// retired services root' > "$SB/src/services/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services root should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/agents"
@@ -414,6 +432,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/federation_client should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired federation directory path' > "$SB/src/services/federation_directory.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -421,6 +440,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/federation_directory.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired federated peers path' > "$SB/src/services/federated_peers_cell.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -428,6 +448,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/federated_peers_cell.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired federated directory reader path' > "$SB/src/services/federated_directory_reader.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -443,6 +464,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/invocation_transport should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired realm trust anchor path' > "$SB/src/services/realm_trust_anchor.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -450,6 +472,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/realm_trust_anchor.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired trust anchor cell path' > "$SB/src/services/trust_anchor_cell.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -457,6 +480,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/trust_anchor_cell.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired trust anchor key resolver path' > "$SB/src/services/trust_anchor_key_resolver.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -464,6 +488,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/trust_anchor_key_resolver.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired keyring path' > "$SB/src/services/keyring.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -471,6 +496,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/keyring.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired self identity path' > "$SB/src/services/self_identity.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -478,6 +504,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/self_identity.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired presence registry path' > "$SB/src/services/presence_registry.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -485,6 +512,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/presence_registry.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired pending dispatch path' > "$SB/src/services/pending_dispatch.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -492,6 +520,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/pending_dispatch.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired nonce replay store path' > "$SB/src/services/nonce_replay_store.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -499,6 +528,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/nonce_replay_store.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired usage quota store path' > "$SB/src/services/usage_quota_store.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -506,6 +536,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/usage_quota_store.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/services"
 printf '%s\n' '// retired session failure path' > "$SB/src/services/session_failure.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?

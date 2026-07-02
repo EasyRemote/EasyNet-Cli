@@ -1963,8 +1963,8 @@ mod tests {
     /// `runtime/drivers/codex.rs`). Called from the test below
     /// to simulate the stream without spawning a real binary.
     ///
-    /// The payload shape is part of the contract PR-10
-    /// services/chat + Frontend AgentDetailPage will read, so
+    /// The payload shape is part of the contract PR-10 chat
+    /// subscriber + Frontend AgentDetailPage will read, so
     /// pinning it here protects downstream consumers against a
     /// future driver refactor that drops the `driver` / `chunk`
     /// keys.
@@ -1982,7 +1982,7 @@ mod tests {
 
     #[test]
     fn timeline_progress_events_carry_driver_and_chunk_shape() {
-        // The contract PR-10 services relies on: every progress
+        // The contract PR-10 subscriber relies on: every progress
         // event carries `{driver, chunk|raw}`. Structured
         // JSONL driver output becomes `chunk`; garbage lines
         // become `raw`. Both shapes round-trip through disk.
@@ -2018,7 +2018,7 @@ mod tests {
     fn timeline_broadcast_delivers_progress_events_live() {
         // A subscriber attached BEFORE emit sees each progress
         // event in the order the driver produced it. This is the
-        // path services/chat will use in PR-10 to tail active
+        // path the PR-10 chat subscriber will use to tail active
         // invocations; pinning it here protects the capability
         // against a future refactor that drops broadcast wake
         // from the emit path.

@@ -91,8 +91,8 @@ use futures::Stream;
 use tokio::sync::mpsc;
 use tonic::Status;
 
+use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::runtime::ability_descriptor::AbilityDescriptor;
-use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
 
 mod envelope;
 mod frame_loop;

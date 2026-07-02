@@ -34,7 +34,7 @@ axon-pb = [
 # default so production builds cannot honour `EASYNET_DEMO_PRESENCE_SEED`
 # (or any future demo env var) regardless of operator misconfig.
 # Demo / e2e scripts pass `--features demo-fixture` to opt in. See
-# `services::axon_serve::boot::maybe_seed_demo_presence`.
+# `daemon::invocation::boot::presence_seed::maybe_seed_demo_presence`.
 demo-fixture = []
 
 # Compile the in-tree remote desktop plugin package and its media transport

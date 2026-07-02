@@ -185,7 +185,7 @@ pub fn start_daemon_invocation_transport(
     >,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
     hub_published_abilities: Arc<
-        crate::services::hub_published_ability_store::HubPublishedAbilityStore,
+        crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
     >,
     discover_federation_resolver: Option<
         Arc<crate::runtime::system_abilities::agents::discover::DeferredDiscoverFederationResolver>,
@@ -250,10 +250,12 @@ pub fn start_daemon_invocation_transport(
     // restart.
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
     let presence = Arc::new(PresenceRegistry::new());
-    let advertised_agents =
-        Arc::new(crate::services::advertised_agent_store::AdvertisedAgentStore::new());
-    let ability_catalog =
-        Arc::new(crate::services::ability_catalog_store::AbilityCatalogStore::new());
+    let advertised_agents = Arc::new(
+        crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
+    );
+    let ability_catalog = Arc::new(
+        crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
+    );
     if let Some(resolver_cell) = discover_federation_resolver {
         let resolver = Arc::new(
             crate::runtime::system_abilities::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
@@ -927,8 +929,9 @@ struct SessionSupervisorConfig {
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::runtime::ability_wire::AbilityWireRegistry>,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
-    hub_published_abilities:
-        Arc<crate::services::hub_published_ability_store::HubPublishedAbilityStore>,
+    hub_published_abilities: Arc<
+        crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
+    >,
     user_trust_sync: crate::daemon::invocation::session_initiator::UserTrustSync,
 }
 
@@ -1796,7 +1799,7 @@ mod tests {
                 crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell::new(),
             ),
             None,
-            crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
+            crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
             None,
         )
         .expect("missing config is a soft skip");
@@ -1826,7 +1829,7 @@ mod tests {
                 crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell::new(),
             ),
             None,
-            crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
+            crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
             None,
         );
         assert!(
@@ -1972,7 +1975,7 @@ tls_key_pem = {key:?}
                     crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell::new(),
                 ),
                 None,
-                crate::services::hub_published_ability_store::HubPublishedAbilityStore::new(),
+                crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
                 None,
             );
         }));

@@ -1,7 +1,7 @@
-// EasyNet CLI — Services Layer — AbilityCatalogStore
-// ==================================================
+// EasyNet CLI — daemon federation read model — AbilityCatalogStore
+// ================================================================
 //
-// File: src/services/ability_catalog_store.rs
+// File: src/daemon/federation/read_model/ability_catalog.rs
 //
 // Why this exists
 // ---------------

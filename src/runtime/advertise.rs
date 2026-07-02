@@ -490,7 +490,7 @@ pub fn heartbeat<I: AbilityInvoker>(
     invoker: &I,
     tenant_id: &str,
     realm: &str,
-    store: &crate::services::hub_published_ability_store::HubPublishedAbilityStore,
+    store: &crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
 ) -> Result<crate::runtime::federation_client::HeartbeatReceipt, String> {
     let resource_ura = heartbeat_resource_ura(realm, tenant_id);
     // AXON-RFC-001 v4.1.7 hub-broadcast contract: pass the
@@ -900,7 +900,7 @@ mod tests {
             "membership_status": "active",
             "realm_directory_size": 1
         }));
-        let store = crate::services::hub_published_ability_store::HubPublishedAbilityStore::new();
+        let store = crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new();
         let _receipt = heartbeat(&invoker, "tenant", "acme", &store).expect("heartbeat succeeds");
 
         let payload = invoker.last_payload.borrow().clone().unwrap();

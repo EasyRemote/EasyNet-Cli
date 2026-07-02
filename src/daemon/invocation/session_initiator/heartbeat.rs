@@ -8,7 +8,7 @@ use super::prelude::{invoke_prelude_unary, signed_prelude_request};
 use super::tasks::AbortOnDrop;
 use super::SessionSigningSeed;
 use super::{SessionUpSender, SESSION_UP_HEARTBEAT_INTERVAL};
-use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
+use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 
 pub(super) struct SessionUpHeartbeatTask {
     handle: tokio::task::JoinHandle<()>,

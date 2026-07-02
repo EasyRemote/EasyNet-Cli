@@ -96,12 +96,12 @@ fn publish_test_route_hosted_by(
     let host_ura = match crate::ura::parse_ura(owner_ura).map(|parsed| parsed.kind) {
         Ok(crate::ura::URAKind::Agent) => {
             svc.directory.advertised_agents.upsert(
-                crate::services::advertised_agent_store::AdvertisedAgentRecord {
+                crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentRecord {
                     agent_ura: owner_ura.to_string(),
                     public_key_hex: String::new(),
                     host_node_id: Some(hosted_agent_host_ura.to_string()),
                     signing_authority:
-                        crate::services::advertised_agent_store::AdvertisedAgentSigningAuthority::HostedBy {
+                        crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentSigningAuthority::HostedBy {
                             host_ura: hosted_agent_host_ura.to_string(),
                         },
                 },
@@ -120,7 +120,7 @@ fn publish_test_route_hosted_by(
             (namespace, local_name)
         });
     svc.directory.ability_catalog.upsert_projection(
-        crate::services::ability_catalog_store::OwnerAbilityProjectionRow::new(
+        crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
             host_ura,
             1,

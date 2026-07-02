@@ -1,7 +1,7 @@
-// EasyNet CLI — Services Layer — AdvertisedAgentStore
-// ====================================================
+// EasyNet CLI — daemon federation read model — AdvertisedAgentStore
+// =================================================================
 //
-// File: src/services/advertised_agent_store.rs
+// File: src/daemon/federation/read_model/advertised_agents.rs
 //
 // Why this exists
 // ---------------

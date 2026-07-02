@@ -10,8 +10,8 @@ use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
 use super::SessionError;
+use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::runtime::ability_descriptor::AbilityDescriptor;
-use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
 
 pub struct SessionPreludeInputs<'a> {
     pub(super) ability_descriptors: &'a [AbilityDescriptor],

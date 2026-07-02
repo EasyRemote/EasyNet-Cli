@@ -45,10 +45,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::runtime::system_ability_catalog::{self, AbilityDiscoveryHintSnapshot};
-use crate::services::hub_published_ability_store::HubPublishedAbilityStore;
 use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = crate::runtime::ability_names::governance::META_DESCRIBE;
@@ -399,7 +399,7 @@ fn list_abilities_handler(
         .map(|d| {
             let descriptor = match d
                 .canonical_ability_ura()
-                .and_then(|ura| crate::services::ability_health::snapshot(&ura))
+                .and_then(|ura| crate::daemon::ability::health::snapshot(&ura))
             {
                 Some(health) => {
                     let mut d = d
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn list_abilities_stamps_health_metadata_from_monitor_store() {
-        use crate::services::ability_health::{self, AbilityHealthRecord, HealthStatus};
+        use crate::daemon::ability::health::{self, AbilityHealthRecord, HealthStatus};
 
         // Seed the process-wide health store under THIS test's unique
         // owner so parallel tests cannot collide (same residue

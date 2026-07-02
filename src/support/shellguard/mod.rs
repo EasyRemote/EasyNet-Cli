@@ -45,9 +45,9 @@
 // Architectural Position
 // ----------------------
 // Leaf-level subsystem under `src/support/`. Has no dependency
-// on `runtime/`, `persistence/`, `registry/`, `services/`. The
-// only crate-internal types it needs are in `core/` (typed
-// errors, IDs).
+// on `runtime/`, `persistence/`, `registry/`, or daemon state
+// modules. The only crate-internal types it needs are in `core/`
+// (typed errors, IDs).
 //
 // Implementation reference
 // ------------------------

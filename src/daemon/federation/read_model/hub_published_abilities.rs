@@ -1,7 +1,7 @@
-// EasyNet CLI — Services Layer — HubPublishedAbilityStore
-// ========================================================
+// EasyNet CLI — daemon federation read model — HubPublishedAbilityStore
+// ====================================================================
 //
-// File: src/services/hub_published_ability_store.rs
+// File: src/daemon/federation/read_model/hub_published_abilities.rs
 //
 // Why this exists
 // ---------------

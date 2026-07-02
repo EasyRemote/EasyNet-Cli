@@ -3192,11 +3192,11 @@ impl InnerPayload {
 //   * `op_event!(component = daemon_invocation, kind = forward_invoke_*)`
 //     log lines for transport-level miss / fail diagnostics.
 //
-// The trade-off (documented in src/services/mod.rs): admission-time
-// emission of any audit artefact is gone. An admission that succeeds
-// but whose invocation never reaches a terminal state leaves no
-// record. Closing that gap is a Week-5+ topic; for now the operator
-// log is the audit source for non-terminal calls.
+// The trade-off: admission-time emission of any audit artefact is
+// gone. An admission that succeeds but whose invocation never reaches
+// a terminal state leaves no record. Closing that gap is a Week-5+
+// topic; for now the operator log is the audit source for
+// non-terminal calls.
 
 /// step-3b hub arm (DEC-F004): pick the bidi-open carrier by the
 /// execution host's negotiated contract. A v1 host with the caller's

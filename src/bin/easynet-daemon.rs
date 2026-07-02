@@ -31,10 +31,13 @@ use std::time::Duration;
 
 use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
+use easynet_cli::daemon::ability::health as ability_health;
+use easynet_cli::daemon::context::clipboard_tracker;
 use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
 use easynet_cli::daemon::control::discovery::DaemonIdentity;
 use easynet_cli::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 use easynet_cli::daemon::control::{discovery, runtime_dispatch, server};
+use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
@@ -281,8 +284,7 @@ async fn main() -> anyhow::Result<()> {
         easynet_cli::runtime::system_abilities::resources::pages::PagesIdentity::from_env();
     let invocation_ledger = open_invocation_ledger();
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
-    let hub_published_abilities =
-        easynet_cli::services::hub_published_ability_store::HubPublishedAbilityStore::new();
+    let hub_published_abilities = HubPublishedAbilityStore::new();
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -420,7 +422,7 @@ async fn main() -> anyhow::Result<()> {
     // on` flips the persisted flag, so an off-by-default user pays one
     // sleeping thread and zero clipboard access.
     boot_bus.emit_started("clipboard-tracker");
-    easynet_cli::services::clipboard_tracker::spawn();
+    clipboard_tracker::spawn();
     boot_bus.emit_ok("clipboard-tracker");
 
     // Ability service-health monitor. Probes manifest abilities that
@@ -430,7 +432,7 @@ async fn main() -> anyhow::Result<()> {
     // a `[health]` section cost nothing — the thread only ticks over
     // declared probes.
     boot_bus.emit_started("ability-health");
-    easynet_cli::services::ability_health::spawn();
+    ability_health::spawn();
     boot_bus.emit_ok("ability-health");
 
     // Schedule tick runner. Fires due schedules every TICK_PERIOD

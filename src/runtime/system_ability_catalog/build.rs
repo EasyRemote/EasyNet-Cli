@@ -165,15 +165,16 @@ pub struct BuiltAbilityRegistry {
 
 #[derive(Clone)]
 pub struct RegistrySharedStores {
-    pub hub_published_abilities:
-        Arc<crate::services::hub_published_ability_store::HubPublishedAbilityStore>,
+    pub hub_published_abilities: Arc<
+        crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
+    >,
 }
 
 impl RegistrySharedStores {
     #[must_use]
     pub fn new(
         hub_published_abilities: Arc<
-            crate::services::hub_published_ability_store::HubPublishedAbilityStore,
+            crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
         >,
     ) -> Self {
         Self {
@@ -184,7 +185,7 @@ impl RegistrySharedStores {
 
 impl Default for RegistrySharedStores {
     fn default() -> Self {
-        Self::new(crate::services::hub_published_ability_store::HubPublishedAbilityStore::new())
+        Self::new(crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new())
     }
 }
 

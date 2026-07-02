@@ -31,8 +31,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod ability;
 #[cfg(feature = "axon-pb")]
 mod client;
+pub mod context;
 pub mod control;
 mod error;
 pub mod federation;

@@ -1,7 +1,7 @@
-// EasyNet CLI — ability service-health monitor (daemon background service)
-// ========================================================================
+// EasyNet CLI — daemon ability-health monitor
+// ============================================
 //
-// File: src/services/ability_health.rs
+// File: src/daemon/ability/health.rs
 // Description: Probes the external services behind manifest abilities
 //              that declare a `[health]` section, runs their `[boot]`
 //              script when the service is down, and publishes the
