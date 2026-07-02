@@ -194,7 +194,7 @@ impl ProtoEnvelope {
         function_name: impl Into<String>,
         descriptor_ability_ref: impl Into<String>,
         arguments: Vec<u8>,
-        signer: &dyn crate::services::self_identity::SelfIdentity,
+        signer: &dyn crate::daemon::identity::self_identity::SelfIdentity,
     ) -> anyhow::Result<InvokeRequest> {
         let function_name = function_name.into();
         if function_name.trim().is_empty() {
@@ -224,7 +224,7 @@ impl ProtoEnvelope {
         mut self,
         ability: &str,
         arguments: &[u8],
-        signer: &dyn crate::services::self_identity::SelfIdentity,
+        signer: &dyn crate::daemon::identity::self_identity::SelfIdentity,
     ) -> anyhow::Result<Self> {
         let descriptor = self.descriptor_bound_envelope(ability, arguments)?;
         let caller_ura = descriptor.envelope().caller.ura.clone();
@@ -511,19 +511,20 @@ mod tests {
 
     struct TestSigner(SigningKey);
 
-    impl crate::services::self_identity::SelfIdentity for TestSigner {
+    impl crate::daemon::identity::self_identity::SelfIdentity for TestSigner {
         fn sign(
             &self,
             _self_ura: &str,
             canonical_bytes: &[u8],
-        ) -> Result<Signature, crate::services::self_identity::SelfIdentityError> {
+        ) -> Result<Signature, crate::daemon::identity::self_identity::SelfIdentityError> {
             Ok(self.0.sign(canonical_bytes))
         }
 
         fn public_key(
             &self,
             _self_ura: &str,
-        ) -> Result<VerifyingKey, crate::services::self_identity::SelfIdentityError> {
+        ) -> Result<VerifyingKey, crate::daemon::identity::self_identity::SelfIdentityError>
+        {
             Ok(self.0.verifying_key())
         }
     }

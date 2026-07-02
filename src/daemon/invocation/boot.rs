@@ -1605,7 +1605,7 @@ mod tests {
 
     #[test]
     fn daemon_identity_prefers_keyring_seed_over_deterministic_derive() {
-        use crate::services::keyring::{MasterKeySource, Vault};
+        use crate::daemon::keyring::{MasterKeySource, Vault};
         use ed25519_dalek::SigningKey;
         use std::sync::Mutex;
         // Serialise against other env-mutating tests in this file

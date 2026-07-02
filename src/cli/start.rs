@@ -386,7 +386,7 @@ fn with_keyring_passphrase_env(
         // it through the normal env propagation, so do not duplicate.
         return cfg;
     }
-    match std::fs::read_to_string(crate::services::keyring::default_passphrase_path()) {
+    match std::fs::read_to_string(crate::daemon::keyring::default_passphrase_path()) {
         Ok(pass) if !pass.trim().is_empty() => {
             cfg.with_env("EASYNET_KEYRING_PASSPHRASE", pass.trim())
         }

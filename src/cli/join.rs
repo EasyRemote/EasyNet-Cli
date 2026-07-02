@@ -608,12 +608,13 @@ impl DeterministicJoinSigner {
 }
 
 #[cfg(feature = "axon-pb")]
-impl crate::services::self_identity::SelfIdentity for DeterministicJoinSigner {
+impl crate::daemon::identity::self_identity::SelfIdentity for DeterministicJoinSigner {
     fn sign(
         &self,
         _self_ura: &str,
         canonical_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, crate::services::self_identity::SelfIdentityError> {
+    ) -> Result<ed25519_dalek::Signature, crate::daemon::identity::self_identity::SelfIdentityError>
+    {
         use ed25519_dalek::Signer as _;
         Ok(ed25519_dalek::SigningKey::from_bytes(&self.seed).sign(canonical_bytes))
     }
@@ -621,8 +622,10 @@ impl crate::services::self_identity::SelfIdentity for DeterministicJoinSigner {
     fn public_key(
         &self,
         _self_ura: &str,
-    ) -> Result<ed25519_dalek::VerifyingKey, crate::services::self_identity::SelfIdentityError>
-    {
+    ) -> Result<
+        ed25519_dalek::VerifyingKey,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    > {
         Ok(ed25519_dalek::SigningKey::from_bytes(&self.seed).verifying_key())
     }
 }
@@ -856,7 +859,9 @@ fn refresh_running_runtime_after_join(creds: &config::Credentials) {
 /// pre-existing entry stays). Errors only on transport faults
 /// the operator should see.
 fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
-    use crate::services::self_identity::{canonical_self_uras, KeyringClient, SelfIdentityError};
+    use crate::daemon::identity::self_identity::{
+        canonical_self_uras, KeyringClient, SelfIdentityError,
+    };
 
     let realm = creds.realm.trim();
     let node_id = creds.node_id.trim();
@@ -897,8 +902,8 @@ fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<
 /// injects into the `easynet-daemon` environment so the daemon can
 /// read the same vault across restarts.
 fn ensure_keyring_daemon_running() -> anyhow::Result<()> {
-    use crate::services::keyring::{default_socket_path, load_or_create_passphrase};
-    use crate::services::self_identity::KeyringClient;
+    use crate::daemon::identity::self_identity::KeyringClient;
+    use crate::daemon::keyring::{default_socket_path, load_or_create_passphrase};
     use anyhow::Context as _;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};

@@ -49,6 +49,7 @@ use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_axon::pb::axon::v1::InvokeRequest;
+use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::invocation_wire::ProtoEnvelope;
@@ -57,7 +58,6 @@ use easynet_cli::runtime::ability_dispatch::{
     AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, OwnerKind,
 };
 use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::self_identity::{SelfIdentity, SelfIdentityError};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::json;
 use tokio::net::UnixListener;

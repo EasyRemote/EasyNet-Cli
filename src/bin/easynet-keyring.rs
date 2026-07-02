@@ -38,7 +38,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use easynet_cli::services::keyring::{
+use easynet_cli::daemon::keyring::{
     default_socket_path, home_relative, vault_error_to_response, KeyringRequest, KeyringResponse,
     MasterKeySource, Vault, DEFAULT_VAULT_REL,
 };

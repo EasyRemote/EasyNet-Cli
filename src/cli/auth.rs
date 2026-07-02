@@ -38,10 +38,10 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::ability_catalog_row::AbilityCatalogueRow;
+use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentity, SelfIdentityError};
 use crate::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
 };
-use crate::services::self_identity::{KeyringClient, SelfIdentity, SelfIdentityError};
 use crate::support::output;
 use crate::ura;
 

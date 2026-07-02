@@ -20,7 +20,9 @@ make_sandbox() {
         "$sandbox/src/cli" \
         "$sandbox/src/daemon/control" \
         "$sandbox/src/daemon/federation/client" \
+        "$sandbox/src/daemon/identity" \
         "$sandbox/src/daemon/invocation" \
+        "$sandbox/src/daemon/keyring" \
         "$sandbox/src/daemon/trust" \
         "$sandbox/src/services" \
         "$sandbox/ability-descriptors/system" \
@@ -43,7 +45,10 @@ make_sandbox() {
     printf '%s\n' '// daemon federation directory' > "$sandbox/src/daemon/federation/directory.rs"
     printf '%s\n' '// daemon federation directory reader' > "$sandbox/src/daemon/federation/directory_reader.rs"
     printf '%s\n' '// daemon federation peers' > "$sandbox/src/daemon/federation/peers.rs"
+    printf '%s\n' '// daemon identity root' > "$sandbox/src/daemon/identity/mod.rs"
+    printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
+    printf '%s\n' '// daemon keyring root' > "$sandbox/src/daemon/keyring/mod.rs"
     printf '%s\n' '// daemon trust root' > "$sandbox/src/daemon/trust/mod.rs"
     printf '%s\n' '// daemon trust anchor' > "$sandbox/src/daemon/trust/anchor.rs"
     printf '%s\n' '// daemon trust cell' > "$sandbox/src/daemon/trust/cell.rs"
@@ -181,6 +186,20 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "services::trust_anchor_key_resolver import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::keyring::Vault; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::keyring import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::self_identity::SelfIdentityError; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::self_identity import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/facade/cli"
 printf '%s\n' '// retired cli path' > "$SB/src/facade/cli/mod.rs"
 rc=0
@@ -265,6 +284,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/invocation should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/identity/self_identity.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/identity/self_identity.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/keyring/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/keyring/mod.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/trust/anchor.rs"
@@ -354,6 +387,20 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/trust_anchor_key_resolver.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' '// retired keyring path' > "$SB/src/services/keyring.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/keyring.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired self identity path' > "$SB/src/services/self_identity.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/self_identity.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/daemon.rs' > "$SB/src/lib.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -436,6 +483,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/services/trust_anchor_key_resolver.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/keyring.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/keyring.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/self_identity.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/self_identity.rs reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/docker"

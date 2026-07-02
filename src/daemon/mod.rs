@@ -36,8 +36,10 @@ mod client;
 pub mod control;
 mod error;
 pub mod federation;
+pub mod identity;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
+pub mod keyring;
 mod process;
 pub mod trust;
 

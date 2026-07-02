@@ -26,7 +26,7 @@
 // This module is a migration-stage holding area, not the final
 // architecture. New daemon-owned control-plane code goes under
 // `daemon/control`; daemon Invocation has moved under
-// `daemon/invocation`; identity, keyring, quota, persistence, and resource
+// `daemon/invocation`; quota, persistence, and resource
 // state should keep moving toward the semantic directories named in
 // `docs/spec/project-structure-v1.md`.
 //
@@ -122,24 +122,6 @@ pub mod nonce_replay_store;
 /// enforcement is serving-node runtime state, the wire shape stays
 /// Axon's.
 pub mod usage_quota_store;
-
-/// EasyNet-native device identity vault (RFC-001 plan v4.1.5
-/// Phase 3A). Process-external Ed25519 keypair store sealed under
-/// an Argon2id-derived AES-GCM key. Backend / daemon / CLI on the
-/// same host all reach this module's `Vault` (directly in-process
-/// or over the `easynet-keyring` daemon's UDS) to obtain
-/// signatures without ever holding the raw seed bytes. Role-overlay
-/// lookup means the same keypair signs as both `HubURI(realm)` and
-/// `DeviceURI(realm, uuid)` — the host's identity is unitary across
-/// roles.
-pub mod keyring;
-
-/// SelfIdentity client (RFC-001 plan v4.1.5 Phase 3B). Typed
-/// `sign(self_ura, canonical_bytes) -> Signature` handle backed
-/// by the `easynet-keyring` daemon's UDS or an in-process
-/// `Vault`. Boot wiring picks the impl; callsites take an
-/// `Arc<dyn SelfIdentity>` and never touch raw seed bytes.
-pub mod self_identity;
 
 // `axon_bridge` moved to `crate::runtime::axon_bridge` per the
 // 2026-05-29 industrial-textbook review: its imports go almost

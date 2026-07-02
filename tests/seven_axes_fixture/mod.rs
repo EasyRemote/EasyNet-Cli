@@ -32,9 +32,14 @@ use base64::Engine as _;
 use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::keyring::{
+    home_relative, vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource,
+    Vault, DEFAULT_VAULT_REL,
+};
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 use easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
@@ -42,12 +47,7 @@ use easynet_cli::persistence::config::{self, RuntimeKind, RuntimeState};
 use easynet_cli::runtime::system_ability_catalog::{
     build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
 };
-use easynet_cli::services::keyring::{
-    home_relative, vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource,
-    Vault, DEFAULT_VAULT_REL,
-};
 use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::self_identity::{SelfIdentity, SelfIdentityError};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -171,7 +171,7 @@ impl Drop for TestKeyring {
 }
 
 fn start_test_keyring(primary_self: String) -> TestKeyring {
-    let socket_path = easynet_cli::services::keyring::default_socket_path();
+    let socket_path = easynet_cli::daemon::keyring::default_socket_path();
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).expect("keyring socket parent");
     }
@@ -190,7 +190,7 @@ fn start_test_keyring(primary_self: String) -> TestKeyring {
         seed_hex,
     ) {
         Ok(()) => vault.seal().expect("seal test keyring vault"),
-        Err(easynet_cli::services::keyring::VaultError::AlreadyExists(_)) => {}
+        Err(easynet_cli::daemon::keyring::VaultError::AlreadyExists(_)) => {}
         Err(err) => panic!("seed test keyring entry: {err}"),
     }
 
@@ -234,13 +234,12 @@ fn start_test_keyring(primary_self: String) -> TestKeyring {
     }
 }
 
-fn test_keyring_seed() -> [u8; easynet_cli::services::keyring::ED25519_SEED_LEN] {
-    [TEST_KEYRING_SEED_BYTE; easynet_cli::services::keyring::ED25519_SEED_LEN]
+fn test_keyring_seed() -> [u8; easynet_cli::daemon::keyring::ED25519_SEED_LEN] {
+    [TEST_KEYRING_SEED_BYTE; easynet_cli::daemon::keyring::ED25519_SEED_LEN]
 }
 
 fn test_keyring_seed_hex() -> String {
-    format!("{:02x}", TEST_KEYRING_SEED_BYTE)
-        .repeat(easynet_cli::services::keyring::ED25519_SEED_LEN)
+    format!("{:02x}", TEST_KEYRING_SEED_BYTE).repeat(easynet_cli::daemon::keyring::ED25519_SEED_LEN)
 }
 
 fn test_keyring_public_key_b64() -> String {

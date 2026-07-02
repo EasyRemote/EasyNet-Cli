@@ -213,7 +213,7 @@ pub(super) fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
 }
 
 fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
-    use crate::services::keyring::{MasterKeySource, Vault, VaultError};
+    use crate::daemon::keyring::{MasterKeySource, Vault, VaultError};
 
     std::env::var("EASYNET_KEYRING_PASSPHRASE")
         .ok()
@@ -221,10 +221,7 @@ fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
     let path = if let Ok(p) = std::env::var("EASYNET_KEYRING_VAULT_PATH") {
         std::path::PathBuf::from(p)
     } else {
-        expand_home(&format!(
-            "~/{}",
-            crate::services::keyring::DEFAULT_VAULT_REL
-        ))
+        expand_home(&format!("~/{}", crate::daemon::keyring::DEFAULT_VAULT_REL))
     };
     if !path.exists() {
         return None;

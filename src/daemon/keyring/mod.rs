@@ -1,7 +1,7 @@
-// EasyNet CLI — `easynet-keyring` device identity vault
+// EasyNet CLI - daemon keyring device identity vault
 // =======================================================
 //
-// File: src/services/keyring.rs
+// File: src/daemon/keyring/mod.rs
 //
 // RFC-001 plan v4.1.5 Phase 3A. The keyring is a process-external
 // vault for the Ed25519 private key(s) this device signs as. Every
@@ -51,7 +51,7 @@
 // - Not a key generator. Pairing flow (`validatePairingLogic`,
 //   `easynet device join`) mints the seed. The keyring just
 //   stores + signs.
-// - Not a client. Phase 3B's `crate::services::self_identity`
+// - Not a client. Phase 3B's `crate::daemon::identity::self_identity`
 //   layers a typed client on top of the wire protocol this
 //   module's serde shapes pin.
 //

@@ -1,7 +1,7 @@
-// EasyNet CLI — SelfIdentity client (RFC-001 plan v4.1.5 Phase 3B)
+// EasyNet CLI - daemon self identity client (RFC-001 plan v4.1.5 Phase 3B)
 // =================================================================
 //
-// File: src/services/self_identity.rs
+// File: src/daemon/identity/self_identity.rs
 //
 // Typed sign-only handle for the device's Ed25519 keypair. Every
 // EasyNet process on a host (the Rust daemon, the CLI, future
@@ -15,8 +15,8 @@
 // --------
 // `KeyringClient` — production. Connects to the keyring daemon at
 //   ~/.easynet/keyring.sock and speaks the length-prefixed JSON
-//   wire from `crate::services::keyring`.
-// `InMemoryVault` — test backend. Wraps a `services::keyring::Vault`
+//   wire from `crate::daemon::keyring`.
+// `InMemoryVault` — test backend. Wraps a `daemon::keyring::Vault`
 //   directly so unit tests don't need to spawn a daemon. Behaves
 //   identically except no IPC.
 //
@@ -41,7 +41,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 
-use crate::services::keyring::{
+use crate::daemon::keyring::{
     default_socket_path, KeyringRequest, KeyringResponse, MasterKeySource, Vault,
 };
 
@@ -432,7 +432,7 @@ pub fn keyring_daemon_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::keyring::{MasterKeySource, Vault};
+    use crate::daemon::keyring::{MasterKeySource, Vault};
     use ed25519_dalek::Verifier;
     use rand::rngs::OsRng;
     use rand::RngCore;

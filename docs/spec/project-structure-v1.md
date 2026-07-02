@@ -32,8 +32,10 @@ runtime semantics, these sources are higher priority:
    `src/daemon/federation/` for daemon-owned outbound peer-hub dialing,
    cross-realm directory projection, peer-map reload state, and federation
    discovery read boundaries, `src/daemon/trust/` for trust-anchor state and
-   Axon key-resolution adapters, and `src/services/` for the remaining
-   migration-stage quota and store infrastructure.
+   Axon key-resolution adapters, `src/daemon/identity/` and
+   `src/daemon/keyring/` for host identity signing and vault state, and
+   `src/services/` for the remaining migration-stage quota and store
+   infrastructure.
 
 ## Review Findings Grouped By Root Cause
 
@@ -1296,6 +1298,7 @@ the phase blocked.
 | Daemon Invocation ownership | Invocation transport source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/` exists, `src/services/invocation_transport/` is retired, and active code does not import through `services::invocation_transport` | New Invocation transport logic lands under `src/services/invocation_transport`, or active code imports the retired services Invocation path |
 | Daemon federation ownership | Federation transport, directory, peer-map, and read-boundary source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, and `src/daemon/federation/peers.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::federation_*` paths | New daemon federation transport, directory, peer-map, or discovery-reader code lands under `src/services`, or active code imports retired services federation paths |
 | Daemon trust ownership | Trust-anchor state, hot-reload cell, and Axon key-resolver source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/trust/anchor.rs`, `src/daemon/trust/cell.rs`, and `src/daemon/trust/key_resolver.rs` exist; retired trust files under `src/services/` do not; active code does not import through retired `services::realm_trust_anchor`, `services::trust_anchor_cell`, or `services::trust_anchor_key_resolver` paths | New daemon trust state or key-resolution adapters land under `src/services`, or active code imports retired services trust paths |
+| Daemon identity/keyring ownership | Host signing handle and keyring vault source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/identity/self_identity.rs` and `src/daemon/keyring/mod.rs` exist; retired identity/keyring files under `src/services/` do not; active code does not import through retired `services::self_identity` or `services::keyring` paths | New host identity signing or keyring vault code lands under `src/services`, or active code imports retired services identity/keyring paths |
 | Facade fan-out ban | CLI, FFI, SDK, backend adapter work | Audit of facade code paths plus search for loops/concurrency over devices, agents, or abilities in facade layers | A default list/helper performs governed per-target fan-out |
 | Aggregate fan-out contract | Aggregate ability work | State machine, max concurrency, deadline, page size, partial-result type, child receipt refs, and per-target typed errors | Aggregation is hidden behind ordinary list naming or lacks bounded/typed partial semantics |
 | Compile gate | Every code phase | `cargo fmt --check` and a narrow compile command such as `cargo check --lib --features axon-pb` or a phase-specific stricter gate | Formatting fails, compilation fails, or the chosen compile gate does not cover touched modules |
