@@ -28,13 +28,15 @@ pub(super) async fn connect_session_channel(
         .tcp_keepalive(Some(Duration::from_secs(15)));
 
     if let Some(ca_path) = hub_ca_pem_path {
-        let tls = crate::services::federation_client::pinned_tls_config(ca_path).map_err(
-            |err| match err {
-                crate::services::federation_client::PinnedTlsError::ReadFailed { path, source } => {
-                    SessionError::TlsCaRead { path, source }
-                }
-            },
-        )?;
+        let tls =
+            crate::daemon::federation::client::pinned_tls_config(ca_path).map_err(
+                |err| match err {
+                    crate::daemon::federation::client::PinnedTlsError::ReadFailed {
+                        path,
+                        source,
+                    } => SessionError::TlsCaRead { path, source },
+                },
+            )?;
         endpoint = endpoint
             .tls_config(tls)
             .map_err(|err| SessionError::TlsConfig {

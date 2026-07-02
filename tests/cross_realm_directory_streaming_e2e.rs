@@ -48,12 +48,12 @@ use futures::StreamExt;
 
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
+use easynet_cli::daemon::federation::client::{
+    DirectoryEventStream, FederationClient, FederationClientError, HubUri,
+};
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
-use easynet_cli::services::federation_client::{
-    DirectoryEventStream, FederationClient, FederationClientError, HubUri,
-};
 use easynet_cli::services::federation_directory::{
     run_per_peer_supervisor, DirectoryEvent, SharedFederatedDirectoryView,
 };

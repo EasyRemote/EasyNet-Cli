@@ -76,11 +76,11 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
     InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
 };
+use easynet_cli::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::services::federated_peers_cell::SharedFederatedPeers;
-use easynet_cli::services::federation_client::{FederationClient, FederationClientError, HubUri};
 use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 

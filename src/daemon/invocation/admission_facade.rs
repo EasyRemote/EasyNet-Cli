@@ -99,6 +99,7 @@ use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
+use crate::daemon::federation::client::FederationClient;
 use crate::daemon::invocation::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
@@ -119,7 +120,6 @@ use crate::runtime::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
 use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_client::FederationClient;
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
@@ -2405,17 +2405,17 @@ mod tests {
     struct NoopFederationClient;
 
     #[async_trait::async_trait]
-    impl crate::services::federation_client::FederationClient for NoopFederationClient {
+    impl crate::daemon::federation::client::FederationClient for NoopFederationClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::services::federation_client::HubUri,
+            _target_hub: &crate::daemon::federation::client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
-            crate::services::federation_client::FederationClientError,
+            crate::daemon::federation::client::FederationClientError,
         > {
             Err(
-                crate::services::federation_client::FederationClientError::DialFailed {
+                crate::daemon::federation::client::FederationClientError::DialFailed {
                     hub: "https://noop.test:50443".to_string(),
                     detail: "noop test client".to_string(),
                 },

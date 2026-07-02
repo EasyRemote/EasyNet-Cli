@@ -23,7 +23,7 @@
 //      this realm. Hub endpoint is normalised from the
 //      `axon://host:port` shape the Hub returns to the
 //      `https://host:port` shape the cross-hub dialer needs
-//      (see `services/federation_client/cross_hub_dial.rs`).
+//      (see `daemon/federation/client/cross_hub_dial.rs`).
 //   3. Atomically rename-replace daemon-config.toml.
 //   4. Best-effort SIGHUP the running daemon (Unix only) so the
 //      `SharedFederatedPeers` cell picks up the new entry without

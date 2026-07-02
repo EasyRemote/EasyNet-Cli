@@ -502,7 +502,7 @@ fn forward_invoke_args_for_ability_ura(
 /// tests assert the cross-realm arm dialed the right peer
 /// hub with the right ability + arguments.
 struct RecordingFederationClient {
-    recorded: std::sync::Mutex<Vec<(crate::services::federation_client::HubUri, InvokeRequest)>>,
+    recorded: std::sync::Mutex<Vec<(crate::daemon::federation::client::HubUri, InvokeRequest)>>,
     canned: InvokeResponse,
 }
 
@@ -514,7 +514,7 @@ impl RecordingFederationClient {
         }
     }
 
-    fn calls(&self) -> Vec<(crate::services::federation_client::HubUri, InvokeRequest)> {
+    fn calls(&self) -> Vec<(crate::daemon::federation::client::HubUri, InvokeRequest)> {
         self.recorded.lock().expect("mutex").clone()
     }
 }
@@ -523,9 +523,9 @@ impl RecordingFederationClient {
 impl FederationClient for RecordingFederationClient {
     async fn forward_invoke(
         &self,
-        target_hub: &crate::services::federation_client::HubUri,
+        target_hub: &crate::daemon::federation::client::HubUri,
         request: InvokeRequest,
-    ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError> {
+    ) -> Result<InvokeResponse, crate::daemon::federation::client::FederationClientError> {
         self.recorded
             .lock()
             .expect("mutex")

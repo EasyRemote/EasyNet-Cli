@@ -1,7 +1,7 @@
-// EasyNet CLI — federation_client (cross-hub federation transport)
+// EasyNet CLI - daemon federation client (cross-hub transport)
 // =================================================================
 //
-// File: src/services/federation_client/mod.rs
+// File: src/daemon/federation/client/mod.rs
 //
 // PR-N1 commit 1/N (RFC-N hub-to-hub federation, master plan
 // `letters/2026-05-01-49-haifeng-to-cto-mohao-liangbing-RFC-N-implement-master-plan.md`).
@@ -14,8 +14,8 @@
 // What lives here
 // ---------------
 // - `FederationClient` trait — the abstract surface
-//   `invocation_transport::federation_wrappers::handle_forward_invoke` will
-//   consume in PR-N1 commit 3/N. Sync trait method shape mirrors
+//   `daemon::invocation::federation_wrappers::handle_forward_invoke` consumes.
+//   Sync trait method shape mirrors
 //   `daemon_grpc::Client::Invoke` so the federation client can be
 //   swapped for tests + future protocol versions without touching
 //   call sites.

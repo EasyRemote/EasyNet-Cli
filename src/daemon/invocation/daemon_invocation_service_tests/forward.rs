@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn with_federation_client_attaches_client_field() {
-    use crate::services::federation_client::CrossHubDialer;
+    use crate::daemon::federation::client::CrossHubDialer;
 
     let svc = make_service();
     assert!(svc.federation.client.is_none());
@@ -1211,9 +1211,9 @@ struct ForwardingPeerClient {
 impl FederationClient for ForwardingPeerClient {
     async fn forward_invoke(
         &self,
-        _target_hub: &crate::services::federation_client::HubUri,
+        _target_hub: &crate::daemon::federation::client::HubUri,
         mut request: InvokeRequest,
-    ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError> {
+    ) -> Result<InvokeResponse, crate::daemon::federation::client::FederationClientError> {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.signing_seed);
         request.envelope = Some(signed_test_envelope(
             &self.caller_ura,
@@ -1228,7 +1228,7 @@ impl FederationClient for ForwardingPeerClient {
             .invoke(Request::new(request))
             .await
             .map_err(|status| {
-                crate::services::federation_client::FederationClientError::InnerInvokeFailed {
+                crate::daemon::federation::client::FederationClientError::InnerInvokeFailed {
                     hub: "in-process-peer".to_string(),
                     status: format!("code={:?} message={}", status.code(), status.message()),
                 }

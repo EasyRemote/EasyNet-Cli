@@ -703,7 +703,7 @@ pub struct PollOutcome {
 /// just retries on the next interval.
 #[cfg(feature = "axon-pb")]
 pub async fn poll_once(
-    federation_client: &dyn crate::services::federation_client::FederationClient,
+    federation_client: &dyn crate::daemon::federation::client::FederationClient,
     peers_snapshot: &std::collections::BTreeMap<String, String>,
     daemon_ura: Option<&str>,
     directory_cell: &SharedFederatedDirectoryView,
@@ -801,7 +801,7 @@ pub async fn poll_once(
 /// FSM + DirectoryView together with the §2.4 rewrite chokepoint.
 /// The real tonic subscribe-stream dial that produces those
 /// events lives in a follow-up commit (N3-3.1) that integrates
-/// with `services::federation_client::CrossHubDialer`. The split
+/// with `daemon::federation::client::CrossHubDialer`. The split
 /// keeps the data-plane logic — which is the actual security
 /// boundary — unit-testable without a tokio + tonic harness.
 pub struct RemoteDirectoryClient {
@@ -931,7 +931,7 @@ pub async fn run_per_peer_supervisor(
     peer_realm: String,
     peer_hub_endpoint: String,
     caller_ura: String,
-    federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
+    federation_client: std::sync::Arc<dyn crate::daemon::federation::client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -1022,7 +1022,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
     peer_realm: String,
     peer_hub_endpoint: String,
     caller_ura: String,
-    federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
+    federation_client: std::sync::Arc<dyn crate::daemon::federation::client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
     idle_timeout_ms: u64,
@@ -1872,7 +1872,7 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     mod supervisor_tests {
         use super::*;
-        use crate::services::federation_client::{
+        use crate::daemon::federation::client::{
             DirectoryEventStream, FederationClient, FederationClientError, HubUri,
         };
         use async_trait::async_trait;
@@ -2900,7 +2900,7 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     mod poll_tests {
         use super::*;
-        use crate::services::federation_client::{FederationClient, FederationClientError, HubUri};
+        use crate::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
         use async_trait::async_trait;
         use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse};
         use std::sync::Mutex;

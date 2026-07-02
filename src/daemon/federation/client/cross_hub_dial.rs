@@ -1,7 +1,7 @@
 // EasyNet CLI — cross-hub gRPC outbound dialer (PR-N1 commit 4/N)
 // =================================================================
 //
-// File: src/services/federation_client/cross_hub_dial.rs
+// File: src/daemon/federation/client/cross_hub_dial.rs
 //
 // PR-N1 commit 4/N — adds timeout + per-peer circuit-breaker on
 // top of the schema-B + TLS-pinned dial shipped by commit 2/N

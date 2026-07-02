@@ -295,7 +295,7 @@ pub fn start_daemon_invocation_transport(
     // clone that stays stable for the duration of one read.
     // The per-peer `RemoteDirectoryClient` tasks that populate
     // this cell are spawned by the follow-up commit (N3-3.1)
-    // that integrates with `services::federation_client::
+    // that integrates with `daemon::federation::client::
     // CrossHubDialer`'s subscribe-stream surface; today the
     // cell starts empty so consumers see no peer entries yet
     // (and gracefully degrade to local-only behaviour, the
@@ -310,10 +310,10 @@ pub fn start_daemon_invocation_transport(
     // resolved via `federation.resolve_key` against the peer hub.
     // Device-mode daemons never originate federation calls, so
     // both surfaces stay local-only.
-    let dialer: Option<Arc<dyn crate::services::federation_client::FederationClient>> =
+    let dialer: Option<Arc<dyn crate::daemon::federation::client::FederationClient>> =
         if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
             Some(Arc::new(
-                crate::services::federation_client::CrossHubDialer::with_trust_anchor_cell(
+                crate::daemon::federation::client::CrossHubDialer::with_trust_anchor_cell(
                     trust_anchor_cell.clone(),
                 ),
             ))
@@ -1283,7 +1283,7 @@ fn spawn_unified_sighup_reload_task(
 /// for the next interval.
 #[allow(dead_code)]
 fn spawn_federated_directory_poll_task(
-    federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
+    federation_client: Arc<dyn crate::daemon::federation::client::FederationClient>,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
     daemon_ura: Option<String>,
     federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
@@ -1343,7 +1343,7 @@ fn spawn_federated_directory_poll_task(
 /// and tokio drops the runtime (the supervisor's awaits
 /// abort).
 fn spawn_federated_directory_streaming_supervisor(
-    federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
+    federation_client: Arc<dyn crate::daemon::federation::client::FederationClient>,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
     federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
     caller_ura: String,

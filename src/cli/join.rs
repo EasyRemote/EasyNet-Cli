@@ -564,7 +564,7 @@ async fn connect_hub_invocation_channel(
         .tcp_keepalive(Some(Duration::from_secs(15)));
 
     if let Some(ca_path) = hub_ca {
-        let tls = crate::services::federation_client::pinned_tls_config(ca_path)
+        let tls = crate::daemon::federation::client::pinned_tls_config(ca_path)
             .map_err(|err| anyhow::anyhow!("{err}"))?;
         endpoint = endpoint
             .tls_config(tls)

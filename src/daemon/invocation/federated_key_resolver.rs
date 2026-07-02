@@ -56,9 +56,9 @@ use easynet_axon::invocation::axiom::KeyResolver;
 use easynet_axon::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 use ed25519_dalek::VerifyingKey;
 
+use crate::daemon::federation::client::FederationClient;
 use crate::daemon::invocation::peer_envelope_signer::PeerInvokeRequest;
 use crate::daemon::invocation::session_initiator::SessionSigningSeed;
-use crate::services::federation_client::FederationClient;
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1::InvokeRequest;
@@ -579,11 +579,11 @@ mod tests {
     impl FederationClient for CannedFederationClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::services::federation_client::HubUri,
+            _target_hub: &crate::daemon::federation::client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
-            crate::services::federation_client::FederationClientError,
+            crate::daemon::federation::client::FederationClientError,
         > {
             Ok(easynet_axon::pb::axon::v1::InvokeResponse {
                 result: self.canned_response.clone(),
@@ -600,14 +600,14 @@ mod tests {
     impl FederationClient for DialFailedClient {
         async fn forward_invoke(
             &self,
-            target_hub: &crate::services::federation_client::HubUri,
+            target_hub: &crate::daemon::federation::client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
-            crate::services::federation_client::FederationClientError,
+            crate::daemon::federation::client::FederationClientError,
         > {
             Err(
-                crate::services::federation_client::FederationClientError::DialFailed {
+                crate::daemon::federation::client::FederationClientError::DialFailed {
                     hub: target_hub.clone(),
                     detail: "test-injected failure".to_string(),
                 },
@@ -778,11 +778,11 @@ mod tests {
     impl FederationClient for CountingFederationClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::services::federation_client::HubUri,
+            _target_hub: &crate::daemon::federation::client::HubUri,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
-            crate::services::federation_client::FederationClientError,
+            crate::daemon::federation::client::FederationClientError,
         > {
             self.dial_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -819,11 +819,11 @@ mod tests {
     impl FederationClient for EchoPresentedPubkeyClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::services::federation_client::HubUri,
+            _target_hub: &crate::daemon::federation::client::HubUri,
             request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
-            crate::services::federation_client::FederationClientError,
+            crate::daemon::federation::client::FederationClientError,
         > {
             self.dial_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

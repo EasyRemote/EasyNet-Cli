@@ -1,11 +1,11 @@
-// EasyNet CLI — federation_client — peer_dial helpers
+// EasyNet CLI - daemon federation client - peer_dial helpers
 // =====================================================
 //
-// File: src/services/federation_client/peer_dial.rs
+// File: src/daemon/federation/client/peer_dial.rs
 // Description: Pure-function TLS-pinning helpers shared by every
 //              outbound dial that targets a hub-mode peer
 //              (`cross_hub_dial::resolve_peer_channel` for hub-to-hub
-//              cross-realm forward_invoke, `invocation_transport::session_
+//              cross-realm forward_invoke, `daemon::invocation::session_
 //              initiator::dial_and_run_session` for device-to-hub
 //              `session.open` bootstrap).
 //

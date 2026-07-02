@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use crate::daemon::federation::client::FederationClient;
 use crate::daemon::invocation::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::session_escalation::SessionEscalationHandle;
@@ -34,7 +35,6 @@ use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
 use crate::services::ability_catalog_store::AbilityCatalogStore;
 use crate::services::advertised_agent_store::AdvertisedAgentStore;
 use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_client::FederationClient;
 use crate::services::federation_directory::SharedFederatedDirectoryView;
 use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
 use crate::services::presence_registry::PresenceRegistry;

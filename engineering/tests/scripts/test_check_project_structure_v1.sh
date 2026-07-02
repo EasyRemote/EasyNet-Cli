@@ -19,6 +19,7 @@ make_sandbox() {
         "$sandbox/src/runtime/executors" \
         "$sandbox/src/cli" \
         "$sandbox/src/daemon/control" \
+        "$sandbox/src/daemon/federation/client" \
         "$sandbox/src/daemon/invocation" \
         "$sandbox/ability-descriptors/system" \
         "$sandbox/schemas" \
@@ -35,6 +36,8 @@ make_sandbox() {
     printf '%s\n' '// cli root' > "$sandbox/src/cli/mod.rs"
     printf '%s\n' '// daemon root' > "$sandbox/src/daemon/mod.rs"
     printf '%s\n' '// daemon control root' > "$sandbox/src/daemon/control/mod.rs"
+    printf '%s\n' '// daemon federation root' > "$sandbox/src/daemon/federation/mod.rs"
+    printf '%s\n' '// daemon federation client root' > "$sandbox/src/daemon/federation/client/mod.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
     printf '%s\n' '// agent ability specs' > "$sandbox/src/runtime/agent_ability_specs.rs"
     printf '%s\n' '[package]' 'name = "fixture"' > "$sandbox/Cargo.toml"
@@ -113,6 +116,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "services::control import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::federation_client::FederationClient; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::federation_client import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::services::invocation_transport::DaemonInvocationService; }' > "$SB/src/lib.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -171,6 +181,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/control should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+rm -rf "$SB/src/daemon/federation/client"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/client should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 rm -rf "$SB/src/daemon/invocation"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -184,6 +201,14 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/control should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+mkdir -p "$SB/src/services/federation_client"
+printf '%s\n' '// retired federation client path' > "$SB/src/services/federation_client/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/federation_client should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/services/invocation_transport"
@@ -220,6 +245,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/services/control reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/federation_client' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/federation_client reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/services/invocation_transport' > "$SB/src/lib.rs"

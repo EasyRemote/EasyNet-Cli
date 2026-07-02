@@ -103,6 +103,7 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::daemon::federation::client::FederationClient;
 use crate::daemon::invocation::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::bidi_dispatcher::{
     validate_and_extract_bidi_frame0, BidiDispatcher, BidiDispatcherDeps,
@@ -135,7 +136,6 @@ use crate::runtime::system_abilities::governance::invocation_history::{
     record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
 };
 use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_client::FederationClient;
 
 use crate::services::federation_directory::now_unix_ms;
 use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
