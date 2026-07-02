@@ -1,7 +1,7 @@
 // EasyNet CLI — Hub: pages HTTP listener
 // ======================================
 //
-// File: src/runtime/hub/pages_listener.rs
+// File: src/daemon/hub/pages_listener.rs
 // Description: in-daemon axum listener bound to
 //              `127.0.0.1:<port>`. Per-request: parses the Host
 //              header into `(project, user)`, calls the Hub's

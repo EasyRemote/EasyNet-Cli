@@ -81,9 +81,3 @@ pub mod dispatch_receipt;
 pub mod provisional_ura;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
 pub mod keyring;
-
-/// RFC-006-B v0.6 — Hub module. v0 carries the in-daemon Pages
-/// listener (HTTP boundary for the Pages reference system).
-/// Production traffic enters via the Go backend; this listener
-/// is the dev-mode existence proof.
-pub mod hub;

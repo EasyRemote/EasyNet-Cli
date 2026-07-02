@@ -40,6 +40,7 @@ pub mod control;
 mod error;
 pub mod execution;
 pub mod federation;
+pub mod hub;
 pub mod identity;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;

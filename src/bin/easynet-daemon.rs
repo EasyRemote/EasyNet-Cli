@@ -481,9 +481,9 @@ async fn main() -> anyhow::Result<()> {
             return Err(err);
         }
     };
-    let pages_port = match easynet_cli::runtime::hub::pages_listener::spawn_first_available(
+    let pages_port = match easynet_cli::daemon::hub::pages_listener::spawn_first_available(
         pages_start_port,
-        easynet_cli::runtime::hub::pages_listener::DEFAULT_PORT_PROBE_SPAN,
+        easynet_cli::daemon::hub::pages_listener::DEFAULT_PORT_PROBE_SPAN,
     )
     .await
     {

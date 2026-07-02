@@ -1,7 +1,7 @@
 // EasyNet CLI — Hub module
 // ========================
 //
-// File: src/runtime/hub/mod.rs
+// File: src/daemon/hub/mod.rs
 // Description: in-daemon Hub responsibilities. The daemon owns the local
 //              Hub-side runtime surfaces; product backends wrap these daemon
 //              abilities instead of re-implementing a second Hub runtime.

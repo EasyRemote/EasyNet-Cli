@@ -825,7 +825,7 @@ EasyNet-Cli/
 关键结构规则:
 
 1. `src/daemon` 只负责 daemon 生命周期、mode、control/invocation endpoint、join bootstrap，不放具体业务能力实现。
-2. `src/runtime/hub` 承载 Hub baseline ability 的 daemon-owned 实现，不承载 canonical baseline list。
+2. `src/daemon/hub` 承载 Hub baseline ability 的 daemon-owned 实现，不承载 canonical baseline list。
 3. `src/runtime/ability` 承载 descriptor、registry、catalog projection、baseline conformance。
 4. `src/services/invocation_transport/route_resolver.rs` 是当前 namespace/proxy route owner；若迁移到 `src/runtime/resolver`，必须删除旧 owner 并更新所有 call sites，EasyNet backend 不再有 authoritative resolver。
 5. `src/services/invocation_transport` 承载 unary/stream/bidi 的 daemon transport 与 wrapper，不承载产品 API。
@@ -835,7 +835,7 @@ EasyNet-Cli/
 
 现有目录与目标结构的对应关系:
 
-1. `src/runtime/hub` 继续作为 Hub runtime 收口点，但需要补全 baseline ability。
+1. `src/daemon/hub` 继续作为 Hub runtime 收口点，但需要补全 baseline ability。
 2. `src/services/invocation_transport` 继续作为 daemon invocation transport 收口点，但需要确保完整 Invocation 七元组。
 3. `src/services/invocation_transport/route_resolver.rs` 继续作为当前 concrete route resolver；不得为了目标目录图再创建第二个 `src/runtime/resolver`。
 4. `src/runtime/agents/profiles` 继续承载 device/profile projection，但不应变成 backend profile source。
@@ -1298,7 +1298,7 @@ Register user
 ### 13.8 Project Structure Checklist
 
 - [ ] EasyNet-Cli `src/daemon` only owns daemon lifecycle/mode/endpoints/bootstrap。
-- [ ] EasyNet-Cli `src/runtime/hub` owns Hub baseline ability implementations。
+- [ ] EasyNet-Cli `src/daemon/hub` owns Hub baseline ability implementations。
 - [ ] EasyNet-Cli `src/runtime/ability` owns descriptor registry, catalog projection, and baseline conformance。
 - [ ] EasyNet-Cli has exactly one namespace/proxy route owner: current `src/services/invocation_transport/route_resolver.rs` or an atomic replacement, never both。
 - [ ] EasyNet-Cli `src/services/invocation_transport` owns unary/stream/bidi transport with full Invocation。
@@ -1321,7 +1321,7 @@ Register user
 
 1. `aggregate.list_abilities_catalog` 不进入 canonical daemon baseline。默认迁移到 `meta.list_abilities` + daemon catalog projection。
 2. `federation.status` 成为 daemon read-only ability，读取 `FederationStatusProbe` / `FederationInitOutcome` 投影。
-3. Baseline contract canonical source 放在 EasyNet-Cli `src/daemon/ability/conformance.rs`，不是 `src/runtime/hub` 或 transport wrapper。
+3. Baseline contract canonical source 放在 EasyNet-Cli `src/daemon/ability/conformance.rs`，不是 `src/daemon/hub` 或 transport wrapper。
 4. 通配 ability group 必须在实现前展开成 typed rows。
 5. EasyNet backend 当前 `daemon_grpc` 是 daemon client 边界的具体实现；迁移不得并行制造第二套 runtime client。
 6. EasyNet backend `runtime` 可以作为产品会话 kernel / driver adapter 保留，但不能成为 ability runtime。
@@ -1329,7 +1329,7 @@ Register user
 8. `federation.advertise_agent` 与 `federation.advertise_abilities` 是 projection/read-model 发布，不是 ability implementation registry。
 9. EasyNet-Cli 当前 route owner 是 `DaemonRouteResolver`；任何目录迁移必须替换它，不能复制它。
 10. EasyNet backend `aggregator.Register` / `MaintainRegistration` 的 backend-profile self-advertise loop 默认删除；若临时保留，必须作为有 owner/expiry/telemetry/deletion criteria 的 transitional alias。
-11. EasyNet 对外应称为 Product API wrapping CLI daemon；不得用 “Hub API” 表达 backend 自己拥有 runtime/hub ability。
+11. EasyNet 对外应称为 Product API wrapping CLI daemon；不得用 “Hub API” 表达 backend 自己拥有 daemon/hub ability。
 12. 前端 legacy endpoint 路径默认不保留；若产品发布需要短期兼容，必须按第 11 节 compatibility wrapper 规则显式写 owner、expiry、telemetry 与删除条件。
 
 ### 14.2 需要 review 的开放问题

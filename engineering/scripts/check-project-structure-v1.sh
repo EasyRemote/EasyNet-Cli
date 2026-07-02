@@ -127,6 +127,9 @@ require_path "src/daemon/federation/read_model/ability_catalog.rs"
 require_path "src/daemon/federation/read_model/advertised_agents.rs"
 require_path "src/daemon/federation/read_model/hub_published_abilities.rs"
 require_path "src/daemon/federation/read_model/owner_projection.rs"
+require_path "src/daemon/hub/mod.rs"
+require_path "src/daemon/hub/pages_listener.rs"
+require_path "src/daemon/hub/pages_serve_ability.rs"
 require_path "src/daemon/identity/local_invocation.rs"
 require_path "src/daemon/identity/self_identity.rs"
 require_path "src/daemon/invocation"
@@ -172,6 +175,7 @@ reject_path "src/runtime/federation_client.rs"
 reject_path "src/runtime/federation_init"
 reject_path "src/runtime/gateway.rs"
 reject_path "src/runtime/gateway_api.rs"
+reject_path "src/runtime/hub"
 reject_path "src/runtime/invocation.rs"
 reject_path "src/runtime/invocation_target.rs"
 reject_path "src/runtime/kernel.rs"
@@ -296,6 +300,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not import through retired runtime::gateway_api paths" \
     '(^|[^[:alnum:]_])(crate::runtime::gateway_api::|easynet_cli::runtime::gateway_api::|runtime::gateway_api::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::hub paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::hub::|easynet_cli::runtime::hub::|runtime::hub::)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
@@ -436,6 +445,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/gateway_api.rs physical path" \
     'src/runtime/gateway_api\.rs|runtime/gateway_api\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/hub physical path" \
+    'src/runtime/hub(/|$)|runtime/hub(/|$)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

@@ -30,6 +30,7 @@ make_sandbox() {
         "$sandbox/src/daemon/federation/client" \
         "$sandbox/src/daemon/federation/init" \
         "$sandbox/src/daemon/federation/read_model" \
+        "$sandbox/src/daemon/hub" \
         "$sandbox/src/daemon/identity" \
         "$sandbox/src/daemon/invocation" \
         "$sandbox/src/daemon/invocation/state" \
@@ -91,6 +92,9 @@ make_sandbox() {
     printf '%s\n' '// hub published abilities read model' > "$sandbox/src/daemon/federation/read_model/hub_published_abilities.rs"
     printf '%s\n' '// owner projection read model' > "$sandbox/src/daemon/federation/read_model/owner_projection.rs"
     printf '%s\n' '// daemon federation resolver' > "$sandbox/src/daemon/federation/resolver.rs"
+    printf '%s\n' '// daemon hub root' > "$sandbox/src/daemon/hub/mod.rs"
+    printf '%s\n' '// daemon hub pages listener' > "$sandbox/src/daemon/hub/pages_listener.rs"
+    printf '%s\n' '// daemon hub pages serve ability' > "$sandbox/src/daemon/hub/pages_serve_ability.rs"
     printf '%s\n' '// daemon identity root' > "$sandbox/src/daemon/identity/mod.rs"
     printf '%s\n' '// daemon local invocation identity' > "$sandbox/src/daemon/identity/local_invocation.rs"
     printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
@@ -244,6 +248,14 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/gateway_api.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/hub"
+printf '%s\n' '// retired hub root' > "$SB/src/runtime/hub/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/hub directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// retired local invocation identity' > "$SB/src/runtime/local_invocation_identity.rs"
@@ -452,6 +464,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::gateway_api import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::hub::pages_listener::DEFAULT_PORT_PROBE_SPAN; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::hub import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA; }' > "$SB/src/lib.rs"
@@ -834,6 +853,27 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/resolver.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/hub/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/hub/mod.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/hub/pages_listener.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/hub/pages_listener.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/hub/pages_serve_ability.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/hub/pages_serve_ability.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 rm -rf "$SB/src/daemon/invocation"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -1114,6 +1154,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/runtime/resolver reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/runtime/hub/pages_listener.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/runtime/hub reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/facade/mcp' > "$SB/src/lib.rs"

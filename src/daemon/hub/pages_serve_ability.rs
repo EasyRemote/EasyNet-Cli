@@ -1,7 +1,7 @@
 // EasyNet CLI — Hub: pages.serve adapter ability
 // ===============================================
 //
-// File: src/runtime/hub/pages_serve_ability.rs
+// File: src/daemon/hub/pages_serve_ability.rs
 // Description: implements the body of `01HUB.pages.serve` —
 //              the pure transport adapter that forwards an HTTP
 //              request into the project's `<user>.<project>.page.fetch`
