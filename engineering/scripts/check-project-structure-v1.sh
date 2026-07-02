@@ -16,6 +16,18 @@ require_rg() {
     command -v rg >/dev/null 2>&1 || fail "ripgrep is required"
 }
 
+reject_unexpected_runtime_top_level() {
+    [[ -d "src/runtime" ]] || return 0
+
+    local allowed='^(adapter\.rs|agent_ability_specs\.rs|context\.rs|directory\.rs|dispatch\.rs|dispatch_receipt\.rs|drivers|executors|failure_codes\.rs|join_connection_state\.rs|keyring|mod\.rs|process_runner\.rs|provisional_ura\.rs|run_store\.rs|session\.rs|skill_store\.rs|stream_ui\.rs|timeline\.rs|toml_escape\.rs|workspace\.rs)$'
+    local path base
+    for path in src/runtime/* src/runtime/.[!.]* src/runtime/..?*; do
+        [[ -e "$path" ]] || continue
+        base="$(basename "$path")"
+        [[ "$base" =~ $allowed ]] || fail "unexpected src/runtime top-level entry: $path"
+    done
+}
+
 require_path() {
     local path="$1"
     [[ -e "$path" ]] || fail "missing required path: $path"
@@ -85,6 +97,7 @@ require_tool_wrapper() {
 }
 
 require_rg
+reject_unexpected_runtime_top_level
 
 SCAN_ROOTS=(Cargo.toml build.rs src tests scripts engineering/scripts engineering/tests/scripts)
 

@@ -145,6 +145,14 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: project structur
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/misc"
+printf '%s\n' '// unexpected runtime bucket' > "$SB/src/runtime/misc/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "unexpected runtime top-level entry should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/services"
 printf '%s\n' '// retired services root' > "$SB/src/services/mod.rs"
 rc=0

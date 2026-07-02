@@ -469,9 +469,26 @@ the clean final daemon source layout.
 
 ```text
 src/runtime/
+├─ adapter.rs
 ├─ agent_ability_specs.rs
+├─ context.rs
+├─ directory.rs
+├─ dispatch.rs
+├─ dispatch_receipt.rs
+├─ drivers/
 ├─ executors/
-└─ keyring/
+├─ failure_codes.rs
+├─ join_connection_state.rs
+├─ keyring/
+├─ process_runner.rs
+├─ provisional_ura.rs
+├─ run_store.rs
+├─ session.rs
+├─ skill_store.rs
+├─ stream_ui.rs
+├─ timeline.rs
+├─ toml_escape.rs
+└─ workspace.rs
 ```
 
 ```text
@@ -555,6 +572,10 @@ Notes:
   `daemon/ability/builtins/`.
 - `runtime/abilities.rs` has become `runtime/agent_ability_specs.rs`; the
   `runtime::abilities` compatibility export is retired and must not return.
+- `src/runtime` is now a named allowlist of external-agent runtime adapters,
+  run/session/workspace support, keyring implementation, and narrow projection
+  helpers. New top-level runtime buckets must not appear without updating the
+  structure guard and this spec.
 - `daemon/invocation/local_runtime_invoker.rs` owns the daemon-local Axon
   `LocalRuntime` adapter. The retired `runtime/local_runtime_invoker.rs`
   path and `runtime::local_runtime_invoker` import must not return.
@@ -1447,17 +1468,20 @@ Code and structure:
     under `daemon/federation/resolver.rs`.
 19. `runtime/hub/` is absent; in-daemon Hub Pages listener and serve adapter
     live under `daemon/hub/`.
+20. `src/runtime` contains only the named migration-compatible allowlist:
+    external-agent runtime adapters, run/session/workspace support, keyring
+    implementation, and narrow projection helpers.
 
 Behavior:
 
-20. Existing public Ability names remain byte-identical.
-21. `meta.list_abilities` returns the same ability names before and after a
+21. Existing public Ability names remain byte-identical.
+22. `meta.list_abilities` returns the same ability names before and after a
    structural move.
-22. Ability call modes remain unchanged.
-23. Descriptor generation output remains byte-identical unless the phase is
+23. Ability call modes remain unchanged.
+24. Descriptor generation output remains byte-identical unless the phase is
     explicitly a descriptor-format change.
-24. No product-module source move changes Invocation or Receipt semantics.
-25. No runtime registry tree is introduced.
+25. No product-module source move changes Invocation or Receipt semantics.
+26. No runtime registry tree is introduced.
 
 Complexity/fan-out:
 
