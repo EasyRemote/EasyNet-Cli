@@ -27,7 +27,7 @@ use crate::daemon::axon_bridge::local_runtime_request::{
 use crate::daemon::identity::local_invocation::{
     agent_identity, local_device_ura, system_agent_identity,
 };
-use crate::runtime::invocation_target::{InvocationTarget, TargetScope};
+use crate::daemon::invocation::target::{InvocationTarget, TargetScope};
 
 /// Bidirectional LocalRuntime stream halves exposed to daemon dispatchers.
 ///
@@ -332,7 +332,7 @@ mod tests {
     use super::*;
     use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions};
 
-    use crate::runtime::invocation_target::CallMode;
+    use crate::daemon::invocation::target::CallMode;
     use serde_json::json;
 
     const TEST_DESCRIPTOR_VERSION: &str = "1.0.0";

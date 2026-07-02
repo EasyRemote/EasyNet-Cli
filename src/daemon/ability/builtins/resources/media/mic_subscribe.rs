@@ -498,10 +498,10 @@ fn wav_from_s16le(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
     use crate::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
-    use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     fn seed_mic(file: &mut ResourcesFile, hardware_id: &str) -> String {
         upsert_resource(

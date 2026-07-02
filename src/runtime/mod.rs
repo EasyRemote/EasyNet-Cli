@@ -93,13 +93,6 @@ pub mod receipt_subscriber;
 // by engineering/scripts/check-kernel-boundary.sh.
 pub mod gateway_api;
 
-// Stage 1 of two-stage dispatch: InvocationPlan → InvocationTarget.
-// The resolver decides `Local` vs `Remote { node_id }` in one place
-// so handlers never re-implement `target_node == self.node_id` logic.
-// Stage 2 (the executor) is a follow-up file `ability_dispatch.rs`;
-// PR-SYS swaps the existing dispatch.rs call sites over to it.
-pub mod invocation_target;
-
 // Kernel + Gateway implementations.
 // - `kernel` provides the single execution entry Kernel::invoke that
 //   schedule tick / loop controller / permission broker / Client FFI
@@ -112,8 +105,8 @@ pub mod kernel;
 pub mod executors;
 
 // Stage-2 dispatch executor for daemon-owned and agent-owned abilities.
-// `ability_dispatch` consumes `InvocationTarget` (from
-// stage-1 resolver in `invocation_target.rs`) and routes either to
+// `ability_dispatch` consumes `InvocationTarget` (from the daemon
+// stage-1 resolver in `daemon::invocation::target`) and routes either to
 // the in-process `AxonAbilityCatalog` or via `GatewayApi`.
 // `daemon::ability::catalog::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;

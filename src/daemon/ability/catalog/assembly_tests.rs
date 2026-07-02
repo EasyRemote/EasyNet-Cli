@@ -365,7 +365,7 @@ fn every_published_ability_resolves_to_a_handler() {
 #[test]
 fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
     let _home = crate::cli::test_support::HomeGuard::new();
-    use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 
     let reg = build_system_registry();
     let dispatcher = Arc::clone(&reg);

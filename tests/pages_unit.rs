@@ -41,7 +41,7 @@ use easynet_cli::daemon::ability::builtins::resources::pages::publish::handle_pu
 use easynet_cli::daemon::ability::builtins::resources::pages::state::PUBLISHED_PROJECTS;
 use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::ura;
 use std::sync::Arc;
 

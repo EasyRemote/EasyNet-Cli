@@ -6,11 +6,11 @@
 # Documented under docs/design/daemon-layers-v1.md and
 # docs/design/invocation-unity-v1.md "Stage 1/2 separation".
 #
-# Ability handlers (under `src/runtime/system/*_ability.rs` once
-# PR-SYS lands) must NOT decide locality by inspecting
+# Ability handlers under `src/daemon/ability/builtins/` must NOT decide
+# locality by inspecting
 # `target_node == self.node_id` style predicates. That decision
 # belongs to the Stage 1 resolver in
-# `src/runtime/invocation_target.rs` and is materialised as
+# `src/daemon/invocation/target.rs` and is materialised as
 # `InvocationTarget::scope`. Handlers consume the scope; they
 # do not re-derive it.
 #
@@ -25,10 +25,11 @@ cd "$ROOT"
 
 echo "== check-dispatch-boundary.sh =="
 
-# Handler dir does not exist until PR-SYS lands. That's fine: the
-# script still runs and reports a success for the empty set.
-if [ ! -d "src/runtime/system" ]; then
-    echo "ok (src/runtime/system not present; nothing to check)"
+# Handler dir may be absent in reduced fixtures. That's fine: the script still
+# runs and reports a success for the empty set.
+HANDLER_DIR="src/daemon/ability/builtins"
+if [ ! -d "$HANDLER_DIR" ]; then
+    echo "ok ($HANDLER_DIR not present; nothing to check)"
     exit 0
 fi
 
@@ -50,13 +51,13 @@ violations=0
 # Whole-line `//` comments are excluded — module / function doc
 # comments may name `target_node` while explaining why handlers
 # do not touch it.
-bad=$(grep -rnE 'self\.node_id|\btarget_node[[:space:]]*==|==[[:space:]]*\btarget_node|\bmy_node[[:space:]]*==' src/runtime/system \
+bad=$(grep -rnE 'self\.node_id|\btarget_node[[:space:]]*==|==[[:space:]]*\btarget_node|\bmy_node[[:space:]]*==' "$HANDLER_DIR" \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
 if [ -n "$bad" ]; then
     echo "ERROR: ability handler branches on locality directly:"
     echo "$bad"
     echo "  Consume InvocationTarget::scope from the stage-1 resolver"
-    echo "  in src/runtime/invocation_target.rs; handlers do not branch"
+    echo "  in src/daemon/invocation/target.rs; handlers do not branch"
     echo "  on locality themselves."
     violations=$((violations + 1))
 fi

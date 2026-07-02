@@ -52,7 +52,7 @@ use serde_json::{json, Value};
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 use crate::ura::AbilitySelector;
 
 /// Process-wide handle to the live ability registry. Set once at

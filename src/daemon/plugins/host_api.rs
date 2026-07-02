@@ -494,11 +494,11 @@ mod tests {
     use super::*;
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
+    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
     use crate::daemon::plugins::package::PluginPackage;
     use crate::daemon::plugins::{
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
     };
-    use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     #[test]
     fn plugin_runtime_host_registers_exec_declarative_rpc() {

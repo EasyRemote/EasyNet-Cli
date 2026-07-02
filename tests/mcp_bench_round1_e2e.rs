@@ -34,7 +34,7 @@ use std::sync::Arc;
 use easynet_axon::invocation::LocalRuntime;
 use easynet_cli::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
 use easynet_cli::daemon::invocation::local_runtime_invoker::open_local_stream;
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 
 /// Build the in-process Python echo MCP server fixture used
 /// throughout this round. Same script shape as the `mcp_client`

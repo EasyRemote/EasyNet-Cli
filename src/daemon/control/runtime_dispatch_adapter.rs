@@ -37,8 +37,8 @@ use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
 use crate::core::domain::NodeId;
 use crate::daemon::invocation::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
 #[cfg(test)]
-use crate::runtime::invocation_target::LocalNodeResolver;
-use crate::runtime::invocation_target::{CallMode, InvocationPlan, TargetResolver};
+use crate::daemon::invocation::target::LocalNodeResolver;
+use crate::daemon::invocation::target::{CallMode, InvocationPlan, TargetResolver};
 use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 /// Daemon-internal runtime-dispatch adapter.
@@ -135,7 +135,7 @@ impl RuntimeDispatchAdapter {
         args: serde_json::Value,
         call_mode: CallMode,
         subject: Option<String>,
-    ) -> Result<crate::runtime::invocation_target::InvocationTarget, String> {
+    ) -> Result<crate::daemon::invocation::target::InvocationTarget, String> {
         let plan = InvocationPlan {
             ability: ability.to_string(),
             target_node_hint: extract_node_hint(&args),
@@ -215,9 +215,9 @@ mod tests {
         fn resolve(
             &self,
             plan: InvocationPlan,
-        ) -> anyhow::Result<crate::runtime::invocation_target::InvocationTarget> {
-            Ok(crate::runtime::invocation_target::InvocationTarget {
-                scope: crate::runtime::invocation_target::TargetScope::Local,
+        ) -> anyhow::Result<crate::daemon::invocation::target::InvocationTarget> {
+            Ok(crate::daemon::invocation::target::InvocationTarget {
+                scope: crate::daemon::invocation::target::TargetScope::Local,
                 ability: plan.ability,
                 normalized_args: plan.args,
                 call_mode: plan.call_mode,

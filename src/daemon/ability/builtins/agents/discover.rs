@@ -70,8 +70,8 @@ use serde_json::{json, Value};
 
 use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
 /// Verb portion of the per-agent discover ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.discover`.

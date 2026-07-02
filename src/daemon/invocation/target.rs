@@ -1,7 +1,7 @@
-// EasyNet CLI — InvocationTarget Resolver (dispatch stage 1)
-// ===========================================================
+// EasyNet CLI — daemon InvocationTarget resolver (dispatch stage 1)
+// =================================================================
 //
-// File: src/runtime/invocation_target.rs
+// File: src/daemon/invocation/target.rs
 // Description: The *explicit* resolver stage that turns a caller's
 //              `InvocationPlan` (ability name + args + hints) into
 //              an `InvocationTarget` (scope = Local | Remote,
@@ -19,7 +19,7 @@
 //
 // A second reason is the CI grep rule in
 // `engineering/scripts/check-dispatch-boundary.sh`: handlers under
-// `src/runtime/system/*_ability.rs` are forbidden from branching on
+// `src/daemon/ability/builtins/` are forbidden from branching on
 // `self.node_id` or `target_node == self`. All those checks happen
 // once, here.
 //

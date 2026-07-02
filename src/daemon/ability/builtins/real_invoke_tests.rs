@@ -85,7 +85,7 @@ use crate::daemon::ability::builtins::{
 };
 use crate::daemon::ability::catalog::{build_registry, is_publishable_catalog_name};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 
 // ── Helpers ──────────────────────────────────────────────────────
 

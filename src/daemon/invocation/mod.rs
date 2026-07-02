@@ -105,6 +105,7 @@ pub mod session_escalation;
 pub mod session_initiator;
 pub mod state;
 pub(crate) mod stream_dispatcher;
+pub mod target;
 pub(crate) mod target_gate;
 pub(crate) mod unary_dispatcher;
 

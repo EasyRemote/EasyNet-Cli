@@ -125,6 +125,7 @@ require_path "src/daemon/invocation/state/pending_dispatch.rs"
 require_path "src/daemon/invocation/state/presence.rs"
 require_path "src/daemon/invocation/state/session_failure.rs"
 require_path "src/daemon/invocation/state/usage_quota.rs"
+require_path "src/daemon/invocation/target.rs"
 require_path "src/daemon/keyring/mod.rs"
 require_path "src/daemon/plugins/mod.rs"
 require_path "src/daemon/resources/mod.rs"
@@ -151,6 +152,7 @@ reject_path "src/runtime/ability_names"
 reject_path "src/runtime/ability_wire.rs"
 reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/execution"
+reject_path "src/runtime/invocation_target.rs"
 reject_path "src/runtime/local_invocation_identity.rs"
 reject_path "src/runtime/local_runtime_invoker.rs"
 reject_path "src/runtime/plugin_host"
@@ -250,6 +252,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::invocation_target paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::invocation_target::|easynet_cli::runtime::invocation_target::|runtime::invocation_target::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::local_runtime_invoker paths" \
     '(^|[^[:alnum:]_])(crate::runtime::local_runtime_invoker::|easynet_cli::runtime::local_runtime_invoker::|runtime::local_runtime_invoker::)' \
     "${SCAN_ROOTS[@]}"
@@ -322,6 +329,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/local_invocation_identity.rs physical path" \
     'src/runtime/local_invocation_identity\.rs|runtime/local_invocation_identity\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/invocation_target.rs physical path" \
+    'src/runtime/invocation_target\.rs|runtime/invocation_target\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

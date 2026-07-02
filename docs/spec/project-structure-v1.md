@@ -515,6 +515,7 @@ src/daemon/
 │  ├─ local_invocation.rs
 │  └─ self_identity.rs
 ├─ invocation/
+│  ├─ target.rs
 │  └─ local_runtime_invoker.rs
 └─ axon_bridge/
 ```
@@ -534,6 +535,10 @@ Notes:
 - `daemon/invocation/local_runtime_invoker.rs` owns the daemon-local Axon
   `LocalRuntime` adapter. The retired `runtime/local_runtime_invoker.rs`
   path and `runtime::local_runtime_invoker` import must not return.
+- `daemon/invocation/target.rs` owns stage-1 target resolution and the
+  `InvocationTarget` value objects consumed by daemon dispatch. The retired
+  `runtime/invocation_target.rs` path and `runtime::invocation_target`
+  import must not return.
 
 ## CLI Boundary
 
@@ -1306,7 +1311,7 @@ the phase blocked.
 | CLI/MCP facade retirement | CLI source moves and facade namespace retirement | `engineering/scripts/check-project-structure-v1.sh` proving `src/cli/mod.rs` exists, `src/facade` is absent, active code does not import through `facade::cli` or `facade::mcp`, and MCP front-door code stays in `src/cli` plus the runtime MCP profile | New CLI/MCP code lands under `src/facade/*`, or active code imports retired facade paths |
 | Daemon SDK root ownership | Daemon SDK source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/mod.rs` exists, `src/daemon.rs` is retired, and active code does not reference the retired physical path | New daemon SDK root logic lands in `src/daemon.rs`, or docs/scripts keep treating it as the active SDK root |
 | Daemon control ownership | Control-plane source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/control/` exists, `src/services/control/` is retired, and active code does not import through `services::control` | New local control-plane code lands under `src/services/control`, or active code imports the retired services control path |
-| Daemon Invocation ownership | Invocation transport source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/` and `src/daemon/invocation/local_runtime_invoker.rs` exist, `src/services/invocation_transport/` and `src/runtime/local_runtime_invoker.rs` are retired, and active code does not import through `services::invocation_transport` or `runtime::local_runtime_invoker` | New Invocation transport logic lands under `src/services/invocation_transport` or `src/runtime/local_runtime_invoker.rs`, or active code imports the retired services/runtime Invocation paths |
+| Daemon Invocation ownership | Invocation transport source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/`, `src/daemon/invocation/target.rs`, and `src/daemon/invocation/local_runtime_invoker.rs` exist, `src/services/invocation_transport/`, `src/runtime/invocation_target.rs`, and `src/runtime/local_runtime_invoker.rs` are retired, and active code does not import through `services::invocation_transport`, `runtime::invocation_target`, or `runtime::local_runtime_invoker` | New Invocation transport or target-resolution logic lands under `src/services/invocation_transport`, `src/runtime/invocation_target.rs`, or `src/runtime/local_runtime_invoker.rs`, or active code imports the retired services/runtime Invocation paths |
 | Daemon Invocation state ownership | Invocation presence, pending dispatch, replay, quota, and failure-state source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/state/{presence,pending_dispatch,nonce_replay,usage_quota,session_failure}.rs` exist; retired Invocation state files under `src/services/` do not; active code does not import through retired services Invocation-state paths | New daemon Invocation liveness, pending-dispatch, replay, quota, or failure-state code lands under `src/services`, or active code imports retired services state paths |
 | Daemon federation ownership | Federation transport, directory, peer-map, discovery read-boundary, and read-model source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, `src/daemon/federation/peers.rs`, and `src/daemon/federation/read_model/{ability_catalog,advertised_agents,hub_published_abilities}.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::*` paths | New daemon federation transport, directory, peer-map, discovery-reader, or read-model code lands under `src/services`, or active code imports retired services paths |
 | Daemon trust ownership | Trust-anchor state, hot-reload cell, and Axon key-resolver source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/trust/anchor.rs`, `src/daemon/trust/cell.rs`, and `src/daemon/trust/key_resolver.rs` exist; retired trust files under `src/services/` do not; active code does not import through retired `services::realm_trust_anchor`, `services::trust_anchor_cell`, or `services::trust_anchor_key_resolver` paths | New daemon trust state or key-resolution adapters land under `src/services`, or active code imports retired services trust paths |
@@ -1347,42 +1352,44 @@ Code and structure:
 7. `runtime/agents/` is absent after the retirement phase.
 8. `runtime/local_runtime_invoker.rs` is absent; LocalRuntime invocation
    adapter code lives under `daemon/invocation/`.
+9. `runtime/invocation_target.rs` is absent; Invocation target resolution
+   code lives under `daemon/invocation/`.
 
 Behavior:
 
-9. Existing public Ability names remain byte-identical.
-10. `meta.list_abilities` returns the same ability names before and after a
+10. Existing public Ability names remain byte-identical.
+11. `meta.list_abilities` returns the same ability names before and after a
    structural move.
-11. Ability call modes remain unchanged.
-12. Descriptor generation output remains byte-identical unless the phase is
+12. Ability call modes remain unchanged.
+13. Descriptor generation output remains byte-identical unless the phase is
     explicitly a descriptor-format change.
-13. No product-module source move changes Invocation or Receipt semantics.
-14. No runtime registry tree is introduced.
+14. No product-module source move changes Invocation or Receipt semantics.
+15. No runtime registry tree is introduced.
 
 Complexity/fan-out:
 
-15. Ordinary list methods satisfy their documented complexity contracts.
-16. Ordinary list/facade methods do not run per-agent/per-device governed
+16. Ordinary list methods satisfy their documented complexity contracts.
+17. Ordinary list/facade methods do not run per-agent/per-device governed
     fan-out loops.
-17. Any aggregate fan-out is a named daemon/hub aggregate ability with bounded
+18. Any aggregate fan-out is a named daemon/hub aggregate ability with bounded
     concurrency, deadline, partial result semantics, child receipt refs, and
     typed per-target errors.
-18. Facade methods that invoke aggregate abilities are named as aggregate
+19. Facade methods that invoke aggregate abilities are named as aggregate
     helpers.
 
 Boundary:
 
-19. Transport and daemon surfaces import ability names from
+20. Transport and daemon surfaces import ability names from
     `daemon::ability::names` or typed service contracts, not from handler
     modules.
-20. Plugin code does not depend on core handler-module paths for public wire
+21. Plugin code does not depend on core handler-module paths for public wire
     constants.
-21. Descriptor generation does not hard-code `abilities/system`.
-22. Descriptor lookup uses root, per-ability path, or iterator helpers and does
+22. Descriptor generation does not hard-code `abilities/system`.
+23. Descriptor lookup uses root, per-ability path, or iterator helpers and does
     not assume a flat descriptor directory.
-23. Skills are not treated as protocol-callable objects unless wrapped by an
+24. Skills are not treated as protocol-callable objects unless wrapped by an
     explicit AbilityDescriptor.
-24. Axon protocol semantics are not duplicated in CLI/backend/facade code.
+25. Axon protocol semantics are not duplicated in CLI/backend/facade code.
 
 ## Review Checklist For The Next Audit
 

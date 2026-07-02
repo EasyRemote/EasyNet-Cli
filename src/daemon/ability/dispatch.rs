@@ -34,7 +34,7 @@ use crate::daemon::ability::{
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, RuntimeEnv,
     HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
-use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 
 /// Module-local sync→async bridge for the ability-dispatch registry
 /// path. These calls sit on catalogue construction and discovery,

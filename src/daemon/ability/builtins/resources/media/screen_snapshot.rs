@@ -897,10 +897,10 @@ fn resolve_screen_subject(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
     use crate::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
-    use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     fn seed_display(file: &mut ResourcesFile, hardware_id: &str) -> String {
         upsert_resource(

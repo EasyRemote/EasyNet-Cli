@@ -46,10 +46,10 @@ use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
 use easynet_cli::daemon::invocation::local_runtime_invoker::{
     invoke_local_rpc_sync, open_local_stream,
 };
+use easynet_cli::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::daemon::resources::filesystem::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {

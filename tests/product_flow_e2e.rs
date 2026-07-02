@@ -20,8 +20,8 @@
 use easynet_axon::invocation::LocalRuntime;
 use easynet_cli::daemon::ability::builtins::agents::invoke as invoke_ability;
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::registry::agents::{AgentEntry, AgentRegistry, AgentType};
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::runtime::keyring::forward as fwd;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};

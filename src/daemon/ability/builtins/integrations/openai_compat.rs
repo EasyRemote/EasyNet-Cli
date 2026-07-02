@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use crate::daemon::ability::builtins::governance::api_key;
 use crate::daemon::ability::builtins::resources::pages::PagesIdentity;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler};
-use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 use crate::support::process_singleton::ProcessSingleton;
 
 /// Process-wide handle to the live ability registry. The inner

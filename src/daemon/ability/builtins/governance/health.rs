@@ -90,7 +90,7 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
 
     #[test]
     fn handler_returns_health_contract_and_stamps_timestamp() {

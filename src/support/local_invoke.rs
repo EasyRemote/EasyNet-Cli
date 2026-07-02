@@ -40,7 +40,7 @@
 
 use serde_json::Value;
 
-pub use crate::runtime::invocation_target::LocalAbilityTarget;
+pub use crate::daemon::invocation::target::LocalAbilityTarget;
 
 /// One decoded frame from a daemon-hosted server-stream ability.
 ///

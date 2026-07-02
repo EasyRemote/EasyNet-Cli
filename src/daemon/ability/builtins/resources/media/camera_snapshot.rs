@@ -1250,10 +1250,10 @@ fn parse_positive_u32(ability: &'static str, raw: &str, name: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
     use crate::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
-    use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     /// Build a one-resource ResourcesFile and return its URA. The
     /// caller passes the file to `lookup_by_ura` via the on-disk

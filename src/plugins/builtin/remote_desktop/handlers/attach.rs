@@ -85,6 +85,7 @@ mod tests {
         EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend, SyntheticScreenBackend,
     };
     use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
         PluginRequirementSet,
@@ -99,7 +100,6 @@ mod tests {
     use crate::plugins::remote_desktop::test_support::{
         env_for, seed_display, test_consent_causal_context, test_lock, test_runtime_limits,
     };
-    use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     #[derive(Debug)]
     struct FailingScreenBackend;
