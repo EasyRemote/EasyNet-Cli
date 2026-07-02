@@ -1,7 +1,7 @@
 // EasyNet CLI — Federation init outcome enum
 // =============================================
 //
-// File: src/runtime/federation_init/outcome.rs
+// File: src/daemon/federation/init/outcome.rs
 //
 // `FederationInitOutcome` is the protocol between
 // `try_install_federation_routing` and its callers (daemon boot,

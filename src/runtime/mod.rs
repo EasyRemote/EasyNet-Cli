@@ -81,16 +81,9 @@ pub mod dispatch_receipt;
 pub mod provisional_ura;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
 pub mod keyring;
-// RFC-002 tenant suffix resolver: maps tenant_id to admission mode +
-// URA scope + hub endpoints.
-/// RFC-002.2 daemon-side federation initialisation. Pure decision
-/// over (Credentials, KeyringHandle, Bridge?) → install + record
-/// outcome. Daemon boot calls one function; the status probe
-/// surfaces the result for operators.
-pub mod federation_init;
+
 /// RFC-006-B v0.6 — Hub module. v0 carries the in-daemon Pages
 /// listener (HTTP boundary for the Pages reference system).
 /// Production traffic enters via the Go backend; this listener
 /// is the dev-mode existence proof.
 pub mod hub;
-pub mod resolver;

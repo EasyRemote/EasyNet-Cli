@@ -28,6 +28,7 @@ make_sandbox() {
         "$sandbox/src/daemon/control" \
         "$sandbox/src/daemon/execution" \
         "$sandbox/src/daemon/federation/client" \
+        "$sandbox/src/daemon/federation/init" \
         "$sandbox/src/daemon/federation/read_model" \
         "$sandbox/src/daemon/identity" \
         "$sandbox/src/daemon/invocation" \
@@ -79,12 +80,17 @@ make_sandbox() {
     printf '%s\n' '// daemon federation directory reader' > "$sandbox/src/daemon/federation/directory_reader.rs"
     printf '%s\n' '// daemon federation gateway' > "$sandbox/src/daemon/federation/gateway.rs"
     printf '%s\n' '// daemon federation gateway api' > "$sandbox/src/daemon/federation/gateway_api.rs"
+    printf '%s\n' '// daemon federation init root' > "$sandbox/src/daemon/federation/init/mod.rs"
+    printf '%s\n' '// federation init outcome' > "$sandbox/src/daemon/federation/init/outcome.rs"
+    printf '%s\n' '// federation init probe' > "$sandbox/src/daemon/federation/init/probe.rs"
+    printf '%s\n' '// federation init resolver seed' > "$sandbox/src/daemon/federation/init/resolver_seed.rs"
     printf '%s\n' '// daemon federation peers' > "$sandbox/src/daemon/federation/peers.rs"
     printf '%s\n' '// daemon federation read model root' > "$sandbox/src/daemon/federation/read_model/mod.rs"
     printf '%s\n' '// ability catalog read model' > "$sandbox/src/daemon/federation/read_model/ability_catalog.rs"
     printf '%s\n' '// advertised agents read model' > "$sandbox/src/daemon/federation/read_model/advertised_agents.rs"
     printf '%s\n' '// hub published abilities read model' > "$sandbox/src/daemon/federation/read_model/hub_published_abilities.rs"
     printf '%s\n' '// owner projection read model' > "$sandbox/src/daemon/federation/read_model/owner_projection.rs"
+    printf '%s\n' '// daemon federation resolver' > "$sandbox/src/daemon/federation/resolver.rs"
     printf '%s\n' '// daemon identity root' > "$sandbox/src/daemon/identity/mod.rs"
     printf '%s\n' '// daemon local invocation identity' > "$sandbox/src/daemon/identity/local_invocation.rs"
     printf '%s\n' '// daemon self identity' > "$sandbox/src/daemon/identity/self_identity.rs"
@@ -218,6 +224,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/federation_client.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/federation_init"
+printf '%s\n' '// retired federation init root' > "$SB/src/runtime/federation_init/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/federation_init directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' '// retired gateway' > "$SB/src/runtime/gateway.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -309,6 +323,14 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/resources directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/resolver"
+printf '%s\n' '// retired realm resolver root' > "$SB/src/runtime/resolver/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/resolver directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/system_abilities"
@@ -411,6 +433,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::federation_client import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::federation_init::FederationStatusProbe::render; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::federation_init import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::gateway::NoopGateway::new; }' > "$SB/src/lib.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -500,6 +529,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::resources import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::resolver::ResolverConfig::default; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::resolver import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::system_abilities::agents::chat::register; }' > "$SB/src/lib.rs"
@@ -742,6 +778,34 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/gateway_api.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/init/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/init/mod.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/init/outcome.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/init/outcome.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/init/probe.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/init/probe.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/init/resolver_seed.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/init/resolver_seed.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/federation/publish.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -761,6 +825,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/peers.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/resolver.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/resolver.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -rf "$SB/src/daemon/invocation"
@@ -1029,6 +1100,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/runtime/publish.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/runtime/federation_init/mod.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/runtime/federation_init reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/runtime/resolver/mod.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/runtime/resolver reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/facade/mcp' > "$SB/src/lib.rs"

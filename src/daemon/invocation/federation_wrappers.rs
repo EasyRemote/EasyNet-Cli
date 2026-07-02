@@ -190,7 +190,7 @@ pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str =
     conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY;
 
 /// `federation.status` — read-only boot-state projection backed by
-/// `runtime::federation_init::FederationStatusProbe`.
+/// `daemon::federation::init::FederationStatusProbe`.
 pub const ABILITY_FEDERATION_STATUS: &str = conformance::ABILITY_FEDERATION_STATUS;
 
 /// All federation.* ability names in deterministic order.
@@ -216,7 +216,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
 
 #[must_use]
 pub fn handle_status() -> serde_json::Value {
-    crate::runtime::federation_init::FederationStatusProbe::render()
+    crate::daemon::federation::init::FederationStatusProbe::render()
 }
 
 // ─── federation.join ───────────────────────────────────────────────

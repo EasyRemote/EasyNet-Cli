@@ -1,7 +1,7 @@
 // EasyNet CLI — Shard resolver seed loader
 // ===========================================
 //
-// File: src/runtime/federation_init/resolver_seed.rs
+// File: src/daemon/federation/init/resolver_seed.rs
 //
 // Loads `~/.config/easynet/shards.json` (operator-curated realm
 // → shard endpoint map) into a `ResolverSeed` value the daemon

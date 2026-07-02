@@ -1,7 +1,7 @@
 // EasyNet CLI — Federation status probe
 // ========================================
 //
-// File: src/runtime/federation_init/probe.rs
+// File: src/daemon/federation/init/probe.rs
 //
 // Process-wide observability slot for the federation init outcome.
 // Daemon boot writes the outcome here once; the

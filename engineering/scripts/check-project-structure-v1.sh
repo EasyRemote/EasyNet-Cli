@@ -116,8 +116,13 @@ require_path "src/daemon/federation/directory.rs"
 require_path "src/daemon/federation/directory_reader.rs"
 require_path "src/daemon/federation/gateway.rs"
 require_path "src/daemon/federation/gateway_api.rs"
+require_path "src/daemon/federation/init/mod.rs"
+require_path "src/daemon/federation/init/outcome.rs"
+require_path "src/daemon/federation/init/probe.rs"
+require_path "src/daemon/federation/init/resolver_seed.rs"
 require_path "src/daemon/federation/peers.rs"
 require_path "src/daemon/federation/publish.rs"
+require_path "src/daemon/federation/resolver.rs"
 require_path "src/daemon/federation/read_model/ability_catalog.rs"
 require_path "src/daemon/federation/read_model/advertised_agents.rs"
 require_path "src/daemon/federation/read_model/hub_published_abilities.rs"
@@ -164,6 +169,7 @@ reject_path "src/runtime/advertise.rs"
 reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/execution"
 reject_path "src/runtime/federation_client.rs"
+reject_path "src/runtime/federation_init"
 reject_path "src/runtime/gateway.rs"
 reject_path "src/runtime/gateway_api.rs"
 reject_path "src/runtime/invocation.rs"
@@ -177,6 +183,7 @@ reject_path "src/runtime/plugin_host"
 reject_path "src/runtime/publish.rs"
 reject_path "src/runtime/receipt_subscriber.rs"
 reject_path "src/runtime/resources"
+reject_path "src/runtime/resolver"
 reject_path "src/runtime/system_abilities"
 reject_path "src/runtime/system_ability_catalog"
 reject_path "src/runtime/abilities"
@@ -277,6 +284,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::federation_init paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::federation_init::|easynet_cli::runtime::federation_init::|runtime::federation_init::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::gateway paths" \
     '(^|[^[:alnum:]_])(crate::runtime::gateway::|easynet_cli::runtime::gateway::|runtime::gateway::)' \
     "${SCAN_ROOTS[@]}"
@@ -339,6 +351,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not import through retired runtime::resources paths" \
     '(^|[^[:alnum:]_])(crate::runtime::resources::|easynet_cli::runtime::resources::|runtime::resources::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::resolver paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::resolver::|easynet_cli::runtime::resolver::|runtime::resolver::)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
@@ -407,6 +424,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not reference retired src/runtime/federation_init physical path" \
+    'src/runtime/federation_init(/|$)|runtime/federation_init(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not reference retired src/runtime/gateway.rs physical path" \
     'src/runtime/gateway\.rs|runtime/gateway\.rs' \
     "${SCAN_ROOTS[@]}"
@@ -469,6 +491,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/resources physical path" \
     'src/runtime/resources(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/resolver physical path" \
+    'src/runtime/resolver(/|$)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

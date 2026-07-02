@@ -45,12 +45,12 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use easynet_cli::daemon::federation::advertise::{forward_invoke, AbilityInvoker};
-use easynet_cli::persistence::config::Credentials;
-use easynet_cli::runtime::federation_init::{
+use easynet_cli::daemon::federation::init::{
     try_install_federation_routing, FederationInitInputs, FederationInitOutcome, FederationStage,
 };
+use easynet_cli::daemon::federation::resolver as tenant_resolver;
+use easynet_cli::persistence::config::Credentials;
 use easynet_cli::runtime::keyring::KeyringHandle;
-use easynet_cli::runtime::resolver as tenant_resolver;
 
 // ── Fixtures ───────────────────────────────────────────────────────
 

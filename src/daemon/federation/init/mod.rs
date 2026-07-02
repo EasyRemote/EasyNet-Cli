@@ -1,7 +1,7 @@
 // EasyNet CLI — Federation initialisation (RFC-002 + RFC-002.2)
 // ==============================================================
 //
-// File: src/runtime/federation_init/mod.rs
+// File: src/daemon/federation/init/mod.rs
 //
 // Single seam where the daemon decides whether to participate in
 // federation and, if so, installs the production wiring:
@@ -68,10 +68,10 @@ pub use probe::FederationStatusProbe;
 
 use std::sync::Arc;
 
+use super::resolver as tenant_resolver;
 use crate::persistence::config::Credentials;
 use crate::runtime::keyring::bridge_forward::BridgeForwardInvoker;
 use crate::runtime::keyring::KeyringHandle;
-use crate::runtime::resolver as tenant_resolver;
 
 /// Environment opt-out. When set to "1" / "true", the daemon
 /// runs without federation wiring even if credentials look

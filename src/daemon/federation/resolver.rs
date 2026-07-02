@@ -1,6 +1,8 @@
 // EasyNet CLI — Realm suffix resolver (RFC-002 §7)
 // ===================================================
 //
+// File: src/daemon/federation/resolver.rs
+//
 // Maps realm strings (the values stored in the credentials file
 // under `realm`) to:
 //

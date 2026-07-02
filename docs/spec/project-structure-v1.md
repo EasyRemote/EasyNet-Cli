@@ -472,8 +472,7 @@ src/runtime/
 ├─ agent_ability_specs.rs
 ├─ executors/
 ├─ keyring/
-├─ hub/
-└─ resolver/
+└─ hub/
 ```
 
 ```text
@@ -520,6 +519,11 @@ src/daemon/
 ├─ federation/
 │  ├─ advertise.rs
 │  ├─ publish.rs
+│  ├─ init/
+│  │  ├─ mod.rs
+│  │  ├─ outcome.rs
+│  │  ├─ probe.rs
+│  │  └─ resolver_seed.rs
 │  ├─ client/
 │  │  └─ ability_contract.rs
 │  ├─ read_model/
@@ -531,7 +535,8 @@ src/daemon/
 │  ├─ directory_reader.rs
 │  ├─ gateway.rs
 │  ├─ gateway_api.rs
-│  └─ peers.rs
+│  ├─ peers.rs
+│  └─ resolver.rs
 └─ axon_bridge/
 ```
 
@@ -584,6 +589,13 @@ Notes:
   registration, advertise batching, descriptor publication, and revoke. The
   retired `runtime/publish.rs` path and `runtime::publish` import must not
   return.
+- `daemon/federation/init/` owns the daemon federation initialization state
+  machine, operator-facing status probe, typed terminal outcomes, and resolver
+  seed loader. The retired `runtime/federation_init/` path and
+  `runtime::federation_init` import must not return.
+- `daemon/federation/resolver.rs` owns realm-suffix to federation posture
+  resolution and canonical device-URA helper logic. The retired
+  `runtime/resolver/` path and `runtime::resolver` import must not return.
 
 ## CLI Boundary
 
@@ -1363,6 +1375,8 @@ the phase blocked.
 | Daemon federation ability contract ownership | federation.* DTO source move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/ability_contract.rs` exists, `src/runtime/federation_client.rs` is retired, and active code does not import through `runtime::federation_client` | New typed argument/response helpers for hub-profile `federation.*` abilities land under `src/runtime/federation_client.rs`, or active code imports the retired runtime federation client path |
 | Daemon federation advertise ownership | federation.* advertise/heartbeat client move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/advertise.rs` exists, `src/runtime/advertise.rs` is retired, and active code does not import through `runtime::advertise` | New federation advertise, heartbeat, resolve, revoke, resolve_key, or forward_invoke wrapper logic lands under `src/runtime/advertise.rs`, or active code imports the retired runtime advertise path |
 | Daemon federation publish ownership | federation publish/registration orchestration move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/publish.rs` exists, `src/runtime/publish.rs` is retired, and active code does not import through `runtime::publish` | New local-agent bootstrap, self-identity bootstrap caller, runtime-local registration, advertise batching, descriptor publication, or revoke orchestration lands under `src/runtime/publish.rs`, or active code imports the retired runtime publish path |
+| Daemon federation init ownership | federation boot state machine move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/init/{mod,outcome,probe,resolver_seed}.rs` exist, `src/runtime/federation_init/` is retired, and active code does not import through `runtime::federation_init` | New federation boot decision, operator-facing status probe, typed init outcome, or shard resolver seed loader lands under `src/runtime/federation_init/`, or active code imports the retired runtime federation-init path |
+| Daemon federation resolver ownership | realm federation posture resolver move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/resolver.rs` exists, `src/runtime/resolver/` is retired, and active code does not import through `runtime::resolver` | New realm-suffix admission-mode, hub endpoint, or canonical device-URA resolver logic lands under `src/runtime/resolver/`, or active code imports the retired runtime resolver path |
 | Daemon Invocation state ownership | Invocation presence, pending dispatch, replay, quota, and failure-state source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/state/{presence,pending_dispatch,nonce_replay,usage_quota,session_failure}.rs` exist; retired Invocation state files under `src/services/` do not; active code does not import through retired services Invocation-state paths | New daemon Invocation liveness, pending-dispatch, replay, quota, or failure-state code lands under `src/services`, or active code imports retired services state paths |
 | Daemon federation ownership | Federation transport, directory, peer-map, discovery read-boundary, and read-model source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, `src/daemon/federation/peers.rs`, and `src/daemon/federation/read_model/{ability_catalog,advertised_agents,hub_published_abilities}.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::*` paths | New daemon federation transport, directory, peer-map, discovery-reader, or read-model code lands under `src/services`, or active code imports retired services paths |
 | Daemon trust ownership | Trust-anchor state, hot-reload cell, and Axon key-resolver source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/trust/anchor.rs`, `src/daemon/trust/cell.rs`, and `src/daemon/trust/key_resolver.rs` exist; retired trust files under `src/services/` do not; active code does not import through retired `services::realm_trust_anchor`, `services::trust_anchor_cell`, or `services::trust_anchor_key_resolver` paths | New daemon trust state or key-resolution adapters land under `src/services`, or active code imports retired services trust paths |
@@ -1420,17 +1434,21 @@ Code and structure:
     client code lives under `daemon/federation/`.
 16. `runtime/publish.rs` is absent; federation publish/registration
     orchestration lives under `daemon/federation/`.
+17. `runtime/federation_init/` is absent; federation boot state machine and
+    status probe live under `daemon/federation/init/`.
+18. `runtime/resolver/` is absent; realm federation posture resolution lives
+    under `daemon/federation/resolver.rs`.
 
 Behavior:
 
-17. Existing public Ability names remain byte-identical.
-18. `meta.list_abilities` returns the same ability names before and after a
+19. Existing public Ability names remain byte-identical.
+20. `meta.list_abilities` returns the same ability names before and after a
    structural move.
-19. Ability call modes remain unchanged.
-20. Descriptor generation output remains byte-identical unless the phase is
+21. Ability call modes remain unchanged.
+22. Descriptor generation output remains byte-identical unless the phase is
     explicitly a descriptor-format change.
-21. No product-module source move changes Invocation or Receipt semantics.
-22. No runtime registry tree is introduced.
+23. No product-module source move changes Invocation or Receipt semantics.
+24. No runtime registry tree is introduced.
 
 Complexity/fan-out:
 
