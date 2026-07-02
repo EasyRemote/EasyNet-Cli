@@ -138,9 +138,9 @@ use crate::runtime::system_abilities::governance::invocation_history::{
 };
 
 use crate::daemon::federation::directory::now_unix_ms;
+use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
 use crate::services::presence_registry::PresenceRegistry;
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Production unary daemon Invocation routes served by the exact-match arms
 /// in [`Invocation::invoke`]. The dispatcher and conformance gate both use

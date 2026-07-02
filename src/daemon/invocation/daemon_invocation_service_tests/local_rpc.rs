@@ -247,9 +247,8 @@ async fn self_targeted_origin_claim_warms_device_trust_on_miss() {
     .unwrap();
 
     let anchor_dir = tempfile::tempdir().expect("tmp anchor dir");
-    let cell = crate::services::trust_anchor_cell::SharedTrustAnchor::new(Arc::new(
-        crate::services::realm_trust_anchor::RealmTrustAnchor::from_entries(vec![])
-            .expect("empty anchor"),
+    let cell = crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(
+        crate::daemon::trust::anchor::RealmTrustAnchor::from_entries(vec![]).expect("empty anchor"),
     ));
     let sync = Arc::new(
         crate::daemon::invocation::device_trust_sync::DeviceTrustSync::with_static_source_for_tests(

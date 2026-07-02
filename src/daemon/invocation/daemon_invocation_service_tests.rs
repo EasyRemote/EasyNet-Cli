@@ -56,7 +56,7 @@ use easynet_axon::pb::axon::v1::{
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::services::usage_quota_store::SharedUsageQuotaGate;
 use easynet_axon::pb::axon::v1::{
     AgentIdentity, CallerSignature, Envelope, InvocationReceipt, InvocationUsage, SubjectIdentity,

@@ -13,8 +13,8 @@ use easynet_axon::pb::axon::v1::{
     SubjectIdentity as PbSubjectIdentity,
 };
 use easynet_cli::daemon::invocation::AdmissionFacade;
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::runtime::ability::{canonical_json_bytes, DEFAULT_ABILITY_DESCRIPTOR_VERSION};
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
 use sha2::Digest as _;

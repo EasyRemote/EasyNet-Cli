@@ -57,8 +57,8 @@ use easynet_cli::daemon::federation::directory::{
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 
 /// In-process forwarder. `subscribe_directory_v2` opens an
 /// `invoke_stream` call against the target daemon, then JSON-

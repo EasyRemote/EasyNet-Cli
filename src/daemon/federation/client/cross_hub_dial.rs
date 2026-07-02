@@ -55,8 +55,8 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use tonic::transport::{Channel, Endpoint};
 
-use crate::services::realm_trust_anchor::RealmTrustAnchor;
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use crate::daemon::trust::anchor::RealmTrustAnchor;
+use crate::daemon::trust::cell::SharedTrustAnchor;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 
@@ -884,7 +884,7 @@ mod tests {
     //!   gate + cache + plumbing surface.
 
     use super::*;
-    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
     use easynet_axon::pb::axon::v1::ResponseHeader;
     use std::collections::HashMap;
     use std::path::PathBuf;

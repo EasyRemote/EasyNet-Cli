@@ -761,7 +761,7 @@ fn session_hub_ura(caller_ura: &str) -> Result<String, Status> {
 pub struct UserTrustSync {
     pub daemon_realm: String,
     pub trust_anchor_path: PathBuf,
-    pub cell: crate::services::trust_anchor_cell::SharedTrustAnchor,
+    pub cell: crate::daemon::trust::cell::SharedTrustAnchor,
 }
 
 const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);

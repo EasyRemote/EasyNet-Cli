@@ -1,7 +1,7 @@
-// EasyNet CLI — shared trust-anchor cell (PR-7 commit 5/N)
+// EasyNet CLI - daemon trust-anchor cell (PR-7 commit 5/N)
 // =========================================================
 //
-// File: src/services/trust_anchor_cell.rs
+// File: src/daemon/trust/cell.rs
 // Description: A reload-friendly cell holding the daemon's current
 //              `RealmTrustAnchor`. Built once at boot, shared by
 //              the admission facade and the
@@ -48,7 +48,7 @@ use std::sync::{
     Arc, Mutex, MutexGuard, RwLock,
 };
 
-use crate::services::realm_trust_anchor::RealmTrustAnchor;
+use crate::daemon::trust::anchor::RealmTrustAnchor;
 
 /// Shared, reload-friendly cell over the daemon's current
 /// `RealmTrustAnchor`. Cheap to clone (one outer `Arc` bump).
@@ -151,7 +151,7 @@ impl Default for SharedTrustAnchor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
 
     fn hub(realm: &str) -> String {
         crate::ura::hub_ura(realm)

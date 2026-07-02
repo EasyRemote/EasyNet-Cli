@@ -1,14 +1,14 @@
 //! `RealmTrustAnchor` -> `easynet_axon::invocation::KeyResolver`.
 //!
-//! This is a services-layer adapter: the daemon owns
-//! `RealmTrustAnchor` and its hot-reload cell, while Axon's
-//! `LocalRuntime` only needs a `KeyResolver` trait object.
+//! This is a daemon-trust adapter: the daemon owns `RealmTrustAnchor`
+//! and its hot-reload cell, while Axon's `LocalRuntime` only needs a
+//! `KeyResolver` trait object.
 
 use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
 use easynet_axon::invocation::{AxonError, KeyResolver};
 use ed25519_dalek::VerifyingKey;
 
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// `easynet_axon::invocation::KeyResolver` wired to the daemon's
 /// `SharedTrustAnchor`.
@@ -89,7 +89,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::*;
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
     fn make_anchor_with(agent_ura: &str, signing_key: &SigningKey) -> SharedTrustAnchor {
         let entry = TrustedAgent {

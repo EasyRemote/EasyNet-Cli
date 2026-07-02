@@ -17,8 +17,8 @@ use clap::{Args, Subcommand};
 use console::style;
 use serde_json::json;
 
-use crate::services::realm_trust_anchor::trust_anchor_path_from_env_or_default;
-use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default;
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::support::output::OutputFormat;
 
 #[derive(Debug, Args)]

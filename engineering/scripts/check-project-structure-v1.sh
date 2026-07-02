@@ -101,6 +101,9 @@ require_path "src/daemon/federation/directory.rs"
 require_path "src/daemon/federation/directory_reader.rs"
 require_path "src/daemon/federation/peers.rs"
 require_path "src/daemon/invocation"
+require_path "src/daemon/trust/anchor.rs"
+require_path "src/daemon/trust/cell.rs"
+require_path "src/daemon/trust/key_resolver.rs"
 require_path "ability-descriptors/system"
 require_path "schemas"
 require_path "engineering/benches"
@@ -124,6 +127,9 @@ reject_path "src/services/federated_peers_cell.rs"
 reject_path "src/services/federation_client"
 reject_path "src/services/federation_directory.rs"
 reject_path "src/services/invocation_transport"
+reject_path "src/services/realm_trust_anchor.rs"
+reject_path "src/services/trust_anchor_cell.rs"
+reject_path "src/services/trust_anchor_key_resolver.rs"
 reject_path "abilities/system"
 reject_path "docker"
 reject_path "macos"
@@ -206,6 +212,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired services trust paths" \
+    '(^|[^[:alnum:]_])(crate::services::realm_trust_anchor::|easynet_cli::services::realm_trust_anchor::|services::realm_trust_anchor::|crate::services::trust_anchor_cell::|easynet_cli::services::trust_anchor_cell::|services::trust_anchor_cell::|crate::services::trust_anchor_key_resolver::|easynet_cli::services::trust_anchor_key_resolver::|services::trust_anchor_key_resolver::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not reference retired src/facade physical paths" \
     'src/facade(/|$)' \
     "${SCAN_ROOTS[@]}"
@@ -228,6 +239,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/services/invocation_transport physical path" \
     'src/services/invocation_transport(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/services trust physical paths" \
+    'src/services/(realm_trust_anchor\.rs|trust_anchor_cell\.rs|trust_anchor_key_resolver\.rs)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

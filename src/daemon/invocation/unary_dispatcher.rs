@@ -83,8 +83,8 @@ use crate::daemon::invocation::target_gate::{
     envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
     selected_host_unavailable_message, TargetGate,
 };
+use crate::daemon::trust::anchor::TrustedAgentRole;
 use crate::services::pending_dispatch::DispatchResult;
-use crate::services::realm_trust_anchor::TrustedAgentRole;
 use crate::services::session_failure::SessionFailure;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -840,7 +840,7 @@ impl UnaryDispatcher {
         let is_hub_role = trust_anchor.lookup(caller_ura).is_some_and(|entry| {
             matches!(
                 entry.role,
-                crate::services::realm_trust_anchor::TrustedAgentRole::Hub
+                crate::daemon::trust::anchor::TrustedAgentRole::Hub
             )
         });
         let is_loopback = self
@@ -879,7 +879,7 @@ impl UnaryDispatcher {
         let is_backend_role = trusted_entry.is_some_and(|entry| {
             matches!(
                 entry.role,
-                crate::services::realm_trust_anchor::TrustedAgentRole::Backend
+                crate::daemon::trust::anchor::TrustedAgentRole::Backend
             )
         });
         let is_local_hub_identity = self
@@ -891,8 +891,8 @@ impl UnaryDispatcher {
             && trusted_entry.is_some_and(|entry| {
                 matches!(
                     entry.role,
-                    crate::services::realm_trust_anchor::TrustedAgentRole::Backend
-                        | crate::services::realm_trust_anchor::TrustedAgentRole::Hub
+                    crate::daemon::trust::anchor::TrustedAgentRole::Backend
+                        | crate::daemon::trust::anchor::TrustedAgentRole::Hub
                 )
             });
         let is_loopback = self

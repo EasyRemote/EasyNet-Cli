@@ -93,8 +93,8 @@ pub(crate) fn handle(
 mod tests {
     use super::*;
     use crate::daemon::invocation::runtime_trust::RuntimeTrustReader;
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
-    use crate::services::trust_anchor_cell::SharedTrustAnchor;
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::cell::SharedTrustAnchor;
     use base64::prelude::*;
     use serde_json::json;
     use std::sync::Arc;

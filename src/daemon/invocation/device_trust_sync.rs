@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use crate::daemon::invocation::invoke_remote_initiator::RequestOutcome;
 use crate::daemon::invocation::session_escalation::SessionEscalationHandle;
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// How long a hub "unknown caller" answer suppresses re-resolving the
 /// same URA. Long enough to bound storms, short enough that a freshly
@@ -344,7 +344,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::*;
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
     fn empty_cell() -> SharedTrustAnchor {
         SharedTrustAnchor::new(Arc::new(

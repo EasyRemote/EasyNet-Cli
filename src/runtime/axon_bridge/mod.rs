@@ -14,15 +14,15 @@
 //! `LocalRuntime`, `invoke_externally_signed_*`, `LedgerSink`,
 //! `KeyResolver`. The bridge layer here is the gradual handoff:
 //! each submodule contains one small adapter that lets the rest of
-//! the CLI consume an Axon type while existing services continue to
-//! own the data they're responsible for. Service-owned adapters
-//! such as `RealmTrustAnchor` -> `KeyResolver` live in `services`;
-//! this module depends only on Axon SDK types and runtime-side
-//! ability dispatch glue.
+//! the CLI consume an Axon type while daemon-owned domains continue
+//! to own the data they're responsible for. Trust-owned adapters
+//! such as `RealmTrustAnchor` -> `KeyResolver` live in
+//! `daemon::trust`; this module depends only on Axon SDK types and
+//! runtime-side ability dispatch glue.
 //!
 //! Phase mapping (matches the task list at the top of the migration):
 //!
-//!   * Phase 1 — services adapt `RealmTrustAnchor` → `KeyResolver`.
+//!   * Phase 1 — daemon trust adapts `RealmTrustAnchor` -> `KeyResolver`.
 //!   * Phase 2 — `runtime_factory`: build & wire `Arc<LocalRuntime>`
 //!     + `LedgerSink` at daemon boot.
 //!   * Phase 3 — registration sites write directly to the shared

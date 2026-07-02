@@ -133,18 +133,18 @@ pub mod ability_dispatch;
 pub mod ability_names;
 pub mod ability_wire;
 pub mod advertise;
-/// Bridge layer between CLI's existing services (RealmTrustAnchor,
+/// Bridge layer between daemon-owned state (trust anchors,
 /// InvocationLedger, etc.) and `easynet_axon::invocation`'s SDK
-/// types (`KeyResolver`, `LedgerSink`, `LocalRuntime`). Phase 1–5
+/// types (`KeyResolver`, `LedgerSink`, `LocalRuntime`). Phase 1-5
 /// of the "use Axon SDK directly, stop reinventing" migration lives
 /// here. Everything in this module is glue: it carries no
 /// independent state of its own beyond holding `Arc` handles to
-/// existing services + the constructed Axon objects.
+/// daemon state + the constructed Axon objects.
 ///
 /// Lives under `runtime/` (not `services/`) because it imports only
 /// Axon SDK types and runtime ability dispatch, system abilities, and
-/// invocation_target glue. Service-owned state is adapted in the
-/// services layer and injected through traits.
+/// invocation_target glue. Daemon-owned state is adapted in its
+/// semantic daemon domain and injected through traits.
 pub mod axon_bridge;
 pub mod dispatch_receipt;
 pub mod federation_client;

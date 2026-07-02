@@ -80,9 +80,9 @@ use easynet_cli::daemon::federation::client::{FederationClient, FederationClient
 use easynet_cli::daemon::federation::peers::SharedFederatedPeers;
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
 const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";

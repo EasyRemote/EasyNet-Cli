@@ -47,8 +47,8 @@ use easynet_cli::daemon::federation::directory::{
 };
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 
 /// In-process forwarder that delivers `forward_invoke` calls
 /// straight to a target `DaemonInvocationService`. Stamps daemon

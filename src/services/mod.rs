@@ -14,12 +14,7 @@
 // `services/` sits below user-facing `cli`/`ffi` surfaces and reaches the
 // runtime through hard trait/type boundaries. The exact allowlist
 // is per-subtree because the remaining service families play
-// different roles:
-//
-//   * `services/trust_anchor_key_resolver` — the adapter from the
-//     daemon-owned trust-anchor cell to Axon's `KeyResolver` trait.
-//     It stays in services so `runtime/axon_bridge` receives only a
-//     trait object and never imports services internals.
+// different roles.
 //
 // `engineering/scripts/check-kernel-boundary.sh` is the CI gate. Adding a new
 // permitted import requires updating both the allowlist there AND
@@ -31,7 +26,7 @@
 // This module is a migration-stage holding area, not the final
 // architecture. New daemon-owned control-plane code goes under
 // `daemon/control`; daemon Invocation has moved under
-// `daemon/invocation`; trust, federation, persistence, and resource
+// `daemon/invocation`; identity, keyring, quota, persistence, and resource
 // state should keep moving toward the semantic directories named in
 // `docs/spec/project-structure-v1.md`.
 //
@@ -82,15 +77,6 @@ pub mod session_failure;
 #[cfg(feature = "axon-pb")]
 pub mod presence_registry;
 
-/// On-disk trust set (`/etc/easynet/realm-trust.toml`) the daemon
-/// admission gate consults to answer "is this caller permitted to
-/// join this realm". RFC-003 PR-1 spec §5.2 — PR-1 reads, PR-7
-/// authors via the device-pairing flow. Always built into the
-/// library since the data structure is pure data + std crates;
-/// only consumers in `daemon::invocation` need the proto plumbing the
-/// `axon-pb` feature gates.
-pub mod realm_trust_anchor;
-
 /// Cross-call correlation table for `runtime.invoke_remote` (PR-3
 /// writer) and `session.open` (PR-2 completer). Outside
 /// `presence_registry` because the concerns differ: presence is
@@ -136,15 +122,6 @@ pub mod nonce_replay_store;
 /// enforcement is serving-node runtime state, the wire shape stays
 /// Axon's.
 pub mod usage_quota_store;
-
-/// Reload-friendly wrapper around the daemon's `RealmTrustAnchor`.
-/// `identity.register_pubkey` appends an
-/// entry, persists via atomic rename, then `replace`s the cell so
-/// the admission gate's next read reflects the new entry. Built
-/// once at boot and shared by clone between the admission facade
-/// and the register-pubkey handler. DEC-010 mechanism layer.
-pub mod trust_anchor_cell;
-pub mod trust_anchor_key_resolver;
 
 /// EasyNet-native device identity vault (RFC-001 plan v4.1.5
 /// Phase 3A). Process-external Ed25519 keypair store sealed under

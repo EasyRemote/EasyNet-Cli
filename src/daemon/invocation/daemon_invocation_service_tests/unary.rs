@@ -1023,7 +1023,7 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
     // The request is signed so the general admission gate passes;
     // the dispatch arm then reads the trust anchor again and finds
     // the role is Device, not Hub.
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
@@ -1580,7 +1580,7 @@ async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
 
 #[tokio::test]
 async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamps_peer_metadata() {
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
     let peer_hub_url = "https://peer-hub.example:50443";
     let peer_hub_ura = crate::ura::hub_ura("peer-realm");
@@ -1647,7 +1647,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamp
 
 #[tokio::test]
 async fn federation_proxy_caller_gate_accepts_local_hub_identity_with_hub_role() {
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
     let local_hub_ura = crate::ura::hub_ura("local-realm");
     let anchor = Arc::new(
@@ -1683,7 +1683,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
     let caller_signing_key = SigningKey::from_bytes(&[0x22; 32]);
     let caller_ura = crate::ura::hub_ura("peer-realm");
@@ -1780,7 +1780,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
 
 #[tokio::test]
 async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
     let peer_hub_url = "https://peer-hub.example:50443";
     let peer_hub_ura = crate::ura::hub_ura("peer-realm");
@@ -1885,7 +1885,7 @@ async fn invoke_dispatches_federation_resolve_key_returns_pubkey_when_present() 
     // surfaces the local trust anchor's `public_key_b64` for
     // a known URA. Cross-hub `FederatedKeyResolver` consumes
     // this exact wire shape.
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     let entry = TrustedAgent {
         agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
         public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),

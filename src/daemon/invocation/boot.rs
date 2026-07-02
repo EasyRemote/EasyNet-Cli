@@ -88,12 +88,12 @@ use crate::daemon::invocation::local_session_dispatcher::LocalAxonSessionDispatc
 use crate::daemon::invocation::session_initiator::{
     initial_session_admission_probe, run_session_supervisor,
 };
+use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::persistence::daemon_config::{
     DaemonConfig, DaemonConfigError, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
 };
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
 mod identity;
@@ -104,7 +104,7 @@ mod paths;
 mod presence_seed;
 mod trust;
 
-use crate::services::realm_trust_anchor::trust_anchor_path_from_env_or_default;
+use crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default;
 #[cfg(test)]
 use identity::{
     canonical_caller_ura_from_stored_identity, daemon_identity_from_stored, StoredDeviceIdentity,
@@ -436,7 +436,7 @@ pub fn start_daemon_invocation_transport(
     crate::runtime::axon_bridge::runtime_factory::configure_local_runtime(
         &local_runtime,
         Some(Arc::new(
-            crate::services::trust_anchor_key_resolver::RealmTrustAnchorKeyResolver::new(
+            crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
                 trust_anchor_cell.clone(),
             ),
         )),
@@ -1412,7 +1412,7 @@ fn spawn_federated_directory_streaming_supervisor(
 #[cfg(test)]
 mod tests {
     use super::SessionShutdown;
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 

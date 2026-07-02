@@ -967,10 +967,10 @@ async fn forward_invoke_cross_realm_peer_request_admits_against_hub_anchor() {
     let caller_signing_key = SigningKey::from_bytes(&[0x11; 32]);
     let caller_pubkey_b64 = BASE64_STANDARD.encode(caller_signing_key.verifying_key().to_bytes());
     let peer_anchor = Arc::new(
-        RealmTrustAnchor::from_entries(vec![crate::services::realm_trust_anchor::TrustedAgent {
+        RealmTrustAnchor::from_entries(vec![crate::daemon::trust::anchor::TrustedAgent {
             agent_ura: caller_ura,
             public_key_b64: caller_pubkey_b64,
-            role: crate::services::realm_trust_anchor::TrustedAgentRole::Hub,
+            role: crate::daemon::trust::anchor::TrustedAgentRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some("test-realm".to_string()),
             hub_endpoint: Some("https://peer-hub.example:50443".to_string()),
@@ -1030,10 +1030,10 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     // in-process federation client below signs the rebuilt peer
     // request with the matching private key, so daemon B exercises
     // the same strict Device-caller admission path as production callers.
-    let daemon_a_in_b_trust = vec![crate::services::realm_trust_anchor::TrustedAgent {
+    let daemon_a_in_b_trust = vec![crate::daemon::trust::anchor::TrustedAgent {
         agent_ura: DAEMON_A_URI.to_string(),
         public_key_b64: daemon_a_pubkey_b64,
-        role: crate::services::realm_trust_anchor::TrustedAgentRole::Device,
+        role: crate::daemon::trust::anchor::TrustedAgentRole::Device,
         added_at_unix_ms: 1_714_492_800_000,
         origin_realm: None,
         hub_endpoint: None,

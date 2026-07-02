@@ -113,6 +113,8 @@ use crate::daemon::invocation::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUB
 use crate::daemon::invocation::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::session_initiator::SessionSigningSeed;
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
+use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::runtime::ability::canonical_json_bytes;
 use crate::runtime::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
@@ -121,8 +123,6 @@ use crate::runtime::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
-use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::usage_quota_store::{QuotaDenyReason, SharedUsageQuotaGate};
 use easynet_axon::pb::axon::v1::{
     Envelope, EnvelopeOpen, InvokeRequest, InvokeServerStreamRequest, RateLimitInfo,
@@ -1636,7 +1636,7 @@ fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
     use easynet_axon::pb::axon::v1::CallerSignature as PbCallerSignature;
     use ed25519_dalek::{Signer, SigningKey};
 

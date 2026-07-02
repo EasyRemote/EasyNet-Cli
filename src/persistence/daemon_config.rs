@@ -20,7 +20,7 @@
 // -----------------------
 // - It is **not** the gRPC server. `daemon/invocation` owns that.
 // - It is **not** the realm trust anchor (`realm-trust.toml`). That
-//   file is read by `services/realm_trust_anchor` and is authored by
+//   file is read by `daemon/trust/anchor` and is authored by
 //   the device-pairing flow shipping in PR-7. The daemon uses both
 //   files at boot but they have distinct lifecycles.
 // - It does **not** rebuild listeners or TLS state after boot. The

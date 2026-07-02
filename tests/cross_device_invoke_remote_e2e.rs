@@ -74,10 +74,10 @@ use easynet_cli::daemon::invocation::local_session_dispatcher::LocalAxonSessionD
 use easynet_cli::daemon::invocation::session_initiator::{
     SessionFrameDispatcher, SessionUpSender, ABILITY_SESSION_OPEN, SESSION_STREAM_ID,
 };
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
 use easynet_cli::services::presence_registry::{OfflineReason, PresenceEvent, PresenceRegistry};
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 use ed25519_dalek::SigningKey;
 use futures::StreamExt;
 use serde_json::json;

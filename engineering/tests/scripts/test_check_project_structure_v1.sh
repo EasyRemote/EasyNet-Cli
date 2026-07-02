@@ -21,6 +21,7 @@ make_sandbox() {
         "$sandbox/src/daemon/control" \
         "$sandbox/src/daemon/federation/client" \
         "$sandbox/src/daemon/invocation" \
+        "$sandbox/src/daemon/trust" \
         "$sandbox/src/services" \
         "$sandbox/ability-descriptors/system" \
         "$sandbox/schemas" \
@@ -43,6 +44,10 @@ make_sandbox() {
     printf '%s\n' '// daemon federation directory reader' > "$sandbox/src/daemon/federation/directory_reader.rs"
     printf '%s\n' '// daemon federation peers' > "$sandbox/src/daemon/federation/peers.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
+    printf '%s\n' '// daemon trust root' > "$sandbox/src/daemon/trust/mod.rs"
+    printf '%s\n' '// daemon trust anchor' > "$sandbox/src/daemon/trust/anchor.rs"
+    printf '%s\n' '// daemon trust cell' > "$sandbox/src/daemon/trust/cell.rs"
+    printf '%s\n' '// daemon trust key resolver' > "$sandbox/src/daemon/trust/key_resolver.rs"
     printf '%s\n' '// agent ability specs' > "$sandbox/src/runtime/agent_ability_specs.rs"
     printf '%s\n' '[package]' 'name = "fixture"' > "$sandbox/Cargo.toml"
     printf '%s\n' '// build fixture' > "$sandbox/build.rs"
@@ -155,6 +160,27 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "services::invocation_transport import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::realm_trust_anchor::RealmTrustAnchor; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::realm_trust_anchor import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::trust_anchor_cell::SharedTrustAnchor; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::trust_anchor_cell import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::trust_anchor_key_resolver::RealmTrustAnchorKeyResolver; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::trust_anchor_key_resolver import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/facade/cli"
 printf '%s\n' '// retired cli path' > "$SB/src/facade/cli/mod.rs"
 rc=0
@@ -241,6 +267,27 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/invocation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/trust/anchor.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/trust/anchor.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/trust/cell.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/trust/cell.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/trust/key_resolver.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/trust/key_resolver.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/services/control"
 printf '%s\n' '// retired control path' > "$SB/src/services/control/mod.rs"
 rc=0
@@ -284,6 +331,27 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/invocation_transport should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired realm trust anchor path' > "$SB/src/services/realm_trust_anchor.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/realm_trust_anchor.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired trust anchor cell path' > "$SB/src/services/trust_anchor_cell.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/trust_anchor_cell.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired trust anchor key resolver path' > "$SB/src/services/trust_anchor_key_resolver.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/trust_anchor_key_resolver.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/daemon.rs' > "$SB/src/lib.rs"
@@ -347,6 +415,27 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/services/invocation_transport reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/realm_trust_anchor.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/realm_trust_anchor.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/trust_anchor_cell.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/trust_anchor_cell.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/trust_anchor_key_resolver.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/trust_anchor_key_resolver.rs reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/docker"

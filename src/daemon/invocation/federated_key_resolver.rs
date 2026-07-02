@@ -59,7 +59,7 @@ use ed25519_dalek::VerifyingKey;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::invocation::peer_envelope_signer::PeerInvokeRequest;
 use crate::daemon::invocation::session_initiator::SessionSigningSeed;
-use crate::services::realm_trust_anchor::RealmTrustAnchor;
+use crate::daemon::trust::anchor::RealmTrustAnchor;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1::InvokeRequest;
 
@@ -530,7 +530,7 @@ fn caller_key_not_found(agent_ura: &str, detail: &str) -> AxonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
     use ed25519_dalek::SigningKey;
     use std::collections::BTreeMap;
 

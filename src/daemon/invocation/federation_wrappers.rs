@@ -750,7 +750,7 @@ fn resolve_key_response(public_key_b64: &str, all_keys_b64: Vec<String>) -> Reso
 /// URA; empty for single-key roles (device/backend/hub), letting
 /// `resolve_key_response` fall back to the primary key.
 fn all_user_keys_b64(
-    trust_anchor: &crate::services::realm_trust_anchor::RealmTrustAnchor,
+    trust_anchor: &crate::daemon::trust::anchor::RealmTrustAnchor,
     agent_ura: &str,
 ) -> Vec<String> {
     trust_anchor
@@ -772,7 +772,7 @@ fn all_user_keys_b64(
 #[must_use]
 pub fn handle_resolve_key(
     request: &ResolveKeyRequest,
-    trust_anchor: &crate::services::realm_trust_anchor::RealmTrustAnchor,
+    trust_anchor: &crate::daemon::trust::anchor::RealmTrustAnchor,
 ) -> Option<ResolveKeyResponse> {
     // DEC-EU multi-device user URAs: caller supplies the pubkey it
     // observed on the envelope; we confirm it's in the user bucket.
@@ -1870,9 +1870,7 @@ mod tests {
 
     #[test]
     fn handle_resolve_key_returns_pubkey_when_present_in_anchor() {
-        use crate::services::realm_trust_anchor::{
-            RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
-        };
+        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
         let entry = TrustedAgent {
             agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
@@ -1904,7 +1902,7 @@ mod tests {
 
     #[test]
     fn handle_resolve_key_returns_none_when_ura_not_in_anchor() {
-        use crate::services::realm_trust_anchor::RealmTrustAnchor;
+        use crate::daemon::trust::anchor::RealmTrustAnchor;
         let anchor = RealmTrustAnchor::default();
         let resp = handle_resolve_key(
             &ResolveKeyRequest {
@@ -1922,9 +1920,7 @@ mod tests {
 
     #[test]
     fn handle_resolve_key_user_role_pins_the_presented_pubkey() {
-        use crate::services::realm_trust_anchor::{
-            RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
-        };
+        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
         let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";

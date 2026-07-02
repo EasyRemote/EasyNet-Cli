@@ -626,7 +626,7 @@ fn validate_session_realm_accepts_cross_realm_when_trust_anchor_has_caller() {
     // but the local trust anchor on realm-a's hub has an
     // explicit entry for it. Mirrors the admission gate's
     // existing FederatedKeyResolver hit; closes LB-49.
-    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
     let entry = TrustedAgent {
         agent_ura: "easynet:///r/realm-b/device/device-1".to_string(),
         public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),

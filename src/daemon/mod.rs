@@ -39,6 +39,7 @@ pub mod federation;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
 mod process;
+pub mod trust;
 
 #[cfg(feature = "axon-pb")]
 pub use client::{DaemonBidiSession, DaemonClient};

@@ -44,11 +44,11 @@ use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use tonic::Status;
 
-use crate::persistence::file_lock::ExclusiveFileLock;
-use crate::services::realm_trust_anchor::{
+use crate::daemon::trust::anchor::{
     RealmTrustAnchor, RealmTrustError, TrustedAgent, TrustedAgentRole,
 };
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use crate::daemon::trust::cell::SharedTrustAnchor;
+use crate::persistence::file_lock::ExclusiveFileLock;
 
 /// Stable daemon runtime trust context. This is threaded through the
 /// identity plane once at boot and borrowed per invocation.

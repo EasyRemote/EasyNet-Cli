@@ -43,7 +43,7 @@ use serde::Deserialize;
 use tonic::Status;
 
 use crate::daemon::invocation::runtime_trust::RuntimeTrust;
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
+use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// Canonical daemon identity/trust ability name.
 pub const ABILITY_IDENTITY_REVOKE_USER_PUBKEY: &str =
@@ -159,8 +159,8 @@ pub(crate) fn parse_revoke_user_pubkey_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
-    use crate::services::trust_anchor_cell::SharedTrustAnchor;
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::cell::SharedTrustAnchor;
     use base64::prelude::*;
     use serde_json::json;
     use std::sync::Arc;

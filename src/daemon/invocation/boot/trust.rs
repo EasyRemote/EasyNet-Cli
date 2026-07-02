@@ -5,9 +5,9 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::persistence::daemon_config::DaemonConfig;
-use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::usage_quota_store::SharedUsageQuotaGate;
 
 pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {

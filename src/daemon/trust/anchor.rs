@@ -1,7 +1,7 @@
-// EasyNet CLI — Services Layer — Realm Trust Anchor
+// EasyNet CLI - daemon trust anchor
 // ===================================================
 //
-// File: src/services/realm_trust_anchor.rs
+// File: src/daemon/trust/anchor.rs
 // Description: TOML-backed loader for the per-host realm trust set
 //              (`/etc/easynet/realm-trust.toml`). The daemon's
 //              admission gate consults a `RealmTrustAnchor` to

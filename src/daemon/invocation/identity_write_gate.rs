@@ -34,8 +34,8 @@ use tonic::Status;
 
 use crate::daemon::invocation::register_device_pubkey::RegisterPubkeyIntent;
 use crate::daemon::invocation::revoke_user_pubkey::RevokeUserPubkeyIntent;
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA;
-use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 
 pub(crate) struct IdentityWriteGate {
     trust_anchor: Arc<RealmTrustAnchor>,
@@ -218,9 +218,9 @@ mod tests {
     fn anchor_entry(
         agent_ura: &str,
         role: TrustedAgentRole,
-    ) -> crate::services::realm_trust_anchor::TrustedAgent {
+    ) -> crate::daemon::trust::anchor::TrustedAgent {
         let key = SigningKey::from_bytes(&[0x42; 32]);
-        crate::services::realm_trust_anchor::TrustedAgent {
+        crate::daemon::trust::anchor::TrustedAgent {
             agent_ura: agent_ura.to_string(),
             public_key_b64: BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
             role,
@@ -231,7 +231,7 @@ mod tests {
         }
     }
 
-    fn gate(entries: Vec<crate::services::realm_trust_anchor::TrustedAgent>) -> IdentityWriteGate {
+    fn gate(entries: Vec<crate::daemon::trust::anchor::TrustedAgent>) -> IdentityWriteGate {
         IdentityWriteGate::new(
             Arc::new(RealmTrustAnchor::from_entries(entries).expect("test trust anchor")),
             Some("easynet:///r/local/device/daemon".to_string()),
