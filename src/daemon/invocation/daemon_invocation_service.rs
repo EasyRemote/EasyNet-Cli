@@ -104,6 +104,7 @@ use futures::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::daemon::federation::client::FederationClient;
+use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::invocation::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::bidi_dispatcher::{
     validate_and_extract_bidi_frame0, BidiDispatcher, BidiDispatcherDeps,
@@ -135,9 +136,8 @@ use crate::runtime::ability::conformance::BaselineCallMode;
 use crate::runtime::system_abilities::governance::invocation_history::{
     record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
 };
-use crate::services::federated_peers_cell::SharedFederatedPeers;
 
-use crate::services::federation_directory::now_unix_ms;
+use crate::daemon::federation::directory::now_unix_ms;
 use crate::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
@@ -416,7 +416,7 @@ impl DaemonInvocationService {
                     crate::services::ability_catalog_store::AbilityCatalogStore::new(),
                 ),
                 federated_directory:
-                    crate::services::federation_directory::SharedFederatedDirectoryView::default(),
+                    crate::daemon::federation::directory::SharedFederatedDirectoryView::default(),
                 federated_bindings: None,
                 subscribe_v2_heartbeat_interval_ms: 30_000,
             },
@@ -854,7 +854,7 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_federated_directory_cell(
         mut self,
-        cell: crate::services::federation_directory::SharedFederatedDirectoryView,
+        cell: crate::daemon::federation::directory::SharedFederatedDirectoryView,
     ) -> Self {
         self.directory.federated_directory = cell;
         self

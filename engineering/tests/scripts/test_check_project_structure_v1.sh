@@ -21,6 +21,7 @@ make_sandbox() {
         "$sandbox/src/daemon/control" \
         "$sandbox/src/daemon/federation/client" \
         "$sandbox/src/daemon/invocation" \
+        "$sandbox/src/services" \
         "$sandbox/ability-descriptors/system" \
         "$sandbox/schemas" \
         "$sandbox/engineering/benches" \
@@ -38,6 +39,9 @@ make_sandbox() {
     printf '%s\n' '// daemon control root' > "$sandbox/src/daemon/control/mod.rs"
     printf '%s\n' '// daemon federation root' > "$sandbox/src/daemon/federation/mod.rs"
     printf '%s\n' '// daemon federation client root' > "$sandbox/src/daemon/federation/client/mod.rs"
+    printf '%s\n' '// daemon federation directory' > "$sandbox/src/daemon/federation/directory.rs"
+    printf '%s\n' '// daemon federation directory reader' > "$sandbox/src/daemon/federation/directory_reader.rs"
+    printf '%s\n' '// daemon federation peers' > "$sandbox/src/daemon/federation/peers.rs"
     printf '%s\n' '// daemon invocation root' > "$sandbox/src/daemon/invocation/mod.rs"
     printf '%s\n' '// agent ability specs' > "$sandbox/src/runtime/agent_ability_specs.rs"
     printf '%s\n' '[package]' 'name = "fixture"' > "$sandbox/Cargo.toml"
@@ -123,6 +127,27 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "services::federation_client import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::federation_directory::DirectoryEntry; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::federation_directory import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::federated_peers_cell::SharedFederatedPeers; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::federated_peers_cell import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::services::federated_directory_reader::read_federated_directory; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "services::federated_directory_reader import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::services::invocation_transport::DaemonInvocationService; }' > "$SB/src/lib.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -188,6 +213,27 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/client should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/directory.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/directory.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/directory_reader.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/directory_reader.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/peers.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/peers.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 rm -rf "$SB/src/daemon/invocation"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -209,6 +255,27 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired src/services/federation_client should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired federation directory path' > "$SB/src/services/federation_directory.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/federation_directory.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired federated peers path' > "$SB/src/services/federated_peers_cell.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/federated_peers_cell.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired federated directory reader path' > "$SB/src/services/federated_directory_reader.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired src/services/federated_directory_reader.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/services/invocation_transport"
@@ -252,6 +319,27 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "src/services/federation_client reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/federation_directory.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/federation_directory.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/federated_peers_cell.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/federated_peers_cell.rs reference should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// doc mentions src/services/federated_directory_reader.rs' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "src/services/federated_directory_reader.rs reference should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// doc mentions src/services/invocation_transport' > "$SB/src/lib.rs"

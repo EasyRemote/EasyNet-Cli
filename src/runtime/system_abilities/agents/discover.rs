@@ -752,7 +752,7 @@ fn resolve_via_federation(
         // compiles regardless of the `axon-pb` feature. With the
         // feature off, the reader returns an explicit capability error
         // rather than fabricating an empty directory.
-        match crate::services::federated_directory_reader::read_federated_directory(None) {
+        match crate::daemon::federation::directory_reader::read_federated_directory(None) {
             Ok(entries) => rows.extend(federated_directory_candidates(&entries)),
             Err(error) if rows.is_empty() => {
                 return Ok(error_envelope(

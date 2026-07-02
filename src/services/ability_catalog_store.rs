@@ -208,7 +208,7 @@ impl AbilityCatalogStore {
     pub fn get(&self, owner_ura: &str) -> Option<Vec<Value>> {
         self.get_at(
             owner_ura,
-            crate::services::federation_directory::now_unix_ms(),
+            crate::daemon::federation::directory::now_unix_ms(),
         )
     }
 

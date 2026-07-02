@@ -37,7 +37,7 @@ fn federated_peers_cell_picks_up_replace_without_service_rebuild() {
     // `cell.replace(new_map)` on TOML re-parse success. The
     // dispatcher's per-call `snapshot()` must see the new
     // map without a `DaemonInvocationService` rebuild.
-    use crate::services::federated_peers_cell::SharedFederatedPeers;
+    use crate::daemon::federation::peers::SharedFederatedPeers;
 
     let cell = SharedFederatedPeers::default();
     let svc = make_service().with_federated_peers_cell(cell.clone());
@@ -603,7 +603,7 @@ async fn forward_invoke_cross_realm_auto_routes_via_federated_directory_when_opt
     //
     // The default-off counterpart lives in
     // `forward_invoke_cross_realm_directory_fallback_surfaces_resolver_noroute_by_default`.
-    use crate::services::federation_directory::{
+    use crate::daemon::federation::directory::{
         DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
     use std::collections::BTreeMap;
@@ -682,7 +682,7 @@ async fn forward_invoke_cross_realm_directory_fallback_surfaces_resolver_noroute
     // default, an unmapped realm always resolves to typed
     // `NEGATIVE_REASON_NOROUTE`, regardless of what the
     // directory sync observed.
-    use crate::services::federation_directory::{
+    use crate::daemon::federation::directory::{
         DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
     use std::collections::BTreeMap;
@@ -740,7 +740,7 @@ async fn forward_invoke_cross_realm_directory_entry_without_hub_endpoint_surface
     // rather than dialing some default. Operators relying on auto-route
     // need to know their directory sync is missing the endpoint
     // field, not get a misleading "delivered" outcome.
-    use crate::services::federation_directory::{
+    use crate::daemon::federation::directory::{
         DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
     use std::collections::BTreeMap;

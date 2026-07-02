@@ -78,7 +78,7 @@ async fn invoke_stream_dispatches_subscribe_directory_initial_frame_then_pump() 
 async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events() {
     // PR-N3 N3-streaming-1. v2 stream emits DirectoryEvent
     // shapes (Snapshot first, then Upsert/Remove).
-    use crate::services::federation_directory::DirectoryEvent;
+    use crate::daemon::federation::directory::DirectoryEvent;
     use futures::StreamExt;
 
     let presence = Arc::new(PresenceRegistry::new());
@@ -131,7 +131,7 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
             assert_eq!(agent_ura, "easynet:///r/test-realm/device/n1");
             assert_eq!(
                 signing_authority,
-                crate::services::federation_directory::SigningAuthority::SelfSigned
+                crate::daemon::federation::directory::SigningAuthority::SelfSigned
             );
         }
         other => panic!("expected AgentAdvertised; got {other:?}"),
@@ -178,7 +178,7 @@ async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
     // via `with_subscribe_v2_heartbeat_interval_ms` so it
     // runs in real time without virtualised clocks; spec
     // §2.3 production cadence is 30 000ms.
-    use crate::services::federation_directory::DirectoryEvent;
+    use crate::daemon::federation::directory::DirectoryEvent;
     use futures::StreamExt;
 
     let presence = Arc::new(PresenceRegistry::new());

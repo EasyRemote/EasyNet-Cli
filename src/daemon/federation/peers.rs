@@ -1,7 +1,7 @@
-// EasyNet CLI — shared federated_peers cell (PR-N1 commit 10/N)
+// EasyNet CLI - daemon federation peers cell (PR-N1 commit 10/N)
 // =================================================================
 //
-// File: src/services/federated_peers_cell.rs
+// File: src/daemon/federation/peers.rs
 // Description: A reload-friendly cell holding the daemon's current
 //              operator-curated `realm → hub_endpoint` map. Built once
 //              at boot from `DaemonConfig::federated_peers`,

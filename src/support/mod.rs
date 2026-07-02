@@ -116,7 +116,7 @@ pub mod async_bridge;
 pub(crate) mod errors;
 
 // federation_invoke moved under daemon::invocation, and the
-// product read boundary lives in services::federated_directory_reader.
+// product read boundary lives in daemon::federation::directory_reader.
 // Keeping both out of support prevents this module from reaching upward into
 // services — the production back-edge this split removed.
 

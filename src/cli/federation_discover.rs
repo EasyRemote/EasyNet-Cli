@@ -78,7 +78,7 @@ pub struct DiscoverArgs {
 /// service boundary. The facade owns argument mapping and rendering;
 /// transport signing and gRPC details live below it.
 pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
-    let entries = crate::services::federated_directory_reader::read_federated_directory_filtered(
+    let entries = crate::daemon::federation::directory_reader::read_federated_directory_filtered(
         args.agent_ura.as_deref(),
         args.local_user_id.as_deref(),
     )?;

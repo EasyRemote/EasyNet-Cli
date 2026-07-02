@@ -23,7 +23,7 @@
 // Wire shape (post-cut)
 // ---------------------
 // `federation.discover` returns `{ entries: [DirectoryEntry] }`
-// per `services::federation_directory::DirectoryEntry`:
+// per `daemon::federation::directory::DirectoryEntry`:
 //
 //   {
 //     agent_ura: "easynet:///r/<realm>/device/<id>",

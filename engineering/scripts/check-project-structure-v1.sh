@@ -97,6 +97,9 @@ require_path "src/cli/mod.rs"
 require_path "src/daemon/mod.rs"
 require_path "src/daemon/control"
 require_path "src/daemon/federation/client"
+require_path "src/daemon/federation/directory.rs"
+require_path "src/daemon/federation/directory_reader.rs"
+require_path "src/daemon/federation/peers.rs"
 require_path "src/daemon/invocation"
 require_path "ability-descriptors/system"
 require_path "schemas"
@@ -116,7 +119,10 @@ reject_path "src/runtime/abilities.rs"
 reject_path "src/daemon.rs"
 reject_path "src/facade"
 reject_path "src/services/control"
+reject_path "src/services/federated_directory_reader.rs"
+reject_path "src/services/federated_peers_cell.rs"
 reject_path "src/services/federation_client"
+reject_path "src/services/federation_directory.rs"
 reject_path "src/services/invocation_transport"
 reject_path "abilities/system"
 reject_path "docker"
@@ -190,6 +196,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired services federation directory paths" \
+    '(^|[^[:alnum:]_])(crate::services::federation_directory::|easynet_cli::services::federation_directory::|services::federation_directory::|crate::services::federated_directory_reader::|easynet_cli::services::federated_directory_reader::|services::federated_directory_reader::|crate::services::federated_peers_cell::|easynet_cli::services::federated_peers_cell::|services::federated_peers_cell::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired services::invocation_transport paths" \
     '(^|[^[:alnum:]_])(crate::services::invocation_transport::|easynet_cli::services::invocation_transport::|services::invocation_transport::)' \
     "${SCAN_ROOTS[@]}"
@@ -207,6 +218,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/services/federation_client physical path" \
     'src/services/federation_client(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/services federation directory physical paths" \
+    'src/services/(federation_directory\.rs|federated_directory_reader\.rs|federated_peers_cell\.rs)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

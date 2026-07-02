@@ -71,7 +71,6 @@
 /// self-heal). Advisory only — the invoke path never consults it.
 pub mod ability_health;
 pub mod clipboard_tracker;
-pub(crate) mod federated_directory_reader;
 pub mod session_failure;
 
 /// In-memory registry of live `session.open` reverse-channel
@@ -98,14 +97,6 @@ pub mod realm_trust_anchor;
 /// "who is online right now"; pending_dispatch is "outstanding
 /// cross-device calls awaiting reply". Pure data — no feature gate.
 pub mod pending_dispatch;
-
-/// Reload-friendly cell holding the daemon's current
-/// operator-curated `tenant → hub_endpoint` map (PR-N1 commit 10/N —
-/// closes the LB-37 §2.3 fallback Scope A defer note). Mirrors
-/// `trust_anchor_cell` so SIGHUP-triggered `daemon-config.toml`
-/// reloads republish the federated_peers map without daemon
-/// restart. Pure data; no feature gate.
-pub mod federated_peers_cell;
 
 /// Owner projection read model updated by `federation.advertise_abilities`.
 /// Read by `federation.resolve` when the caller sets `include_abilities =
@@ -172,20 +163,6 @@ pub mod keyring;
 /// `Vault`. Boot wiring picks the impl; callsites take an
 /// `Arc<dyn SelfIdentity>` and never touch raw seed bytes.
 pub mod self_identity;
-
-/// Cross-realm directory federation wire shapes (RFC-N PR-N3).
-/// PR-N3 commit N3-1 lands `DirectoryEntry` with schema-B
-/// `origin_realm` / `hub_endpoint` / `last_seen_unix_ms` fields
-/// per `pr-drafts/PR-N3-spec-cross-realm-directory-v2.md §2.1`.
-/// `DirectoryEvent` (the event-stream tagged enum) lands in
-/// N3-2; the `RemoteDirectoryClient` per-peer FSM and
-/// `SharedFederatedDirectoryView` cell land in N3-3. Pure data
-/// + serde, but the current file also hosts the streaming
-/// supervisor path that depends on proto-generated request types.
-/// Keep it behind `axon-pb` until the pure-data portion is split
-/// out.
-#[cfg(feature = "axon-pb")]
-pub mod federation_directory;
 
 // `axon_bridge` moved to `crate::runtime::axon_bridge` per the
 // 2026-05-29 industrial-textbook review: its imports go almost

@@ -198,7 +198,7 @@ pub(super) struct ReloadedDaemonConfigCells {
 /// that are intentionally SIGHUP-managed from that file.
 pub(super) fn reload_daemon_config_cells_from(
     path: &Path,
-    federated_peers_cell: &crate::services::federated_peers_cell::SharedFederatedPeers,
+    federated_peers_cell: &crate::daemon::federation::peers::SharedFederatedPeers,
     quota_gate: &SharedUsageQuotaGate,
 ) -> anyhow::Result<ReloadedDaemonConfigCells> {
     let next_config = DaemonConfig::load(path)

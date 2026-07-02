@@ -35,7 +35,6 @@
 mod client;
 pub mod control;
 mod error;
-#[cfg(feature = "axon-pb")]
 pub mod federation;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;

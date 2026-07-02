@@ -100,6 +100,7 @@ use easynet_axon::invocation::{
 };
 
 use crate::daemon::federation::client::FederationClient;
+use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::invocation::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
@@ -119,7 +120,6 @@ use crate::runtime::ability::{
 use crate::runtime::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
-use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;

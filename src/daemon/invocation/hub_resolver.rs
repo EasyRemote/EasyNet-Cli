@@ -78,10 +78,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_directory::{
+use crate::daemon::federation::directory::{
     lookup_in_federated_view, SharedFederatedDirectoryView,
 };
+use crate::daemon::federation::peers::SharedFederatedPeers;
 
 /// Outcome of [`HubResolver::resolve`].
 ///
@@ -194,7 +194,7 @@ impl<'a> HubResolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::federation_directory::{DirectoryEntry, DirectoryView};
+    use crate::daemon::federation::directory::{DirectoryEntry, DirectoryView};
     use std::collections::BTreeMap;
     use std::sync::Arc;
 

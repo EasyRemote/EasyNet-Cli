@@ -51,12 +51,12 @@ use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStre
 use easynet_cli::daemon::federation::client::{
     DirectoryEventStream, FederationClient, FederationClientError, HubUri,
 };
+use easynet_cli::daemon::federation::directory::{
+    run_per_peer_supervisor, DirectoryEvent, SharedFederatedDirectoryView,
+};
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
-use easynet_cli::services::federation_directory::{
-    run_per_peer_supervisor, DirectoryEvent, SharedFederatedDirectoryView,
-};
 use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 

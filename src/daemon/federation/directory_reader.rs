@@ -1,8 +1,8 @@
-// EasyNet CLI — federated directory reader
+// EasyNet CLI - daemon federation directory reader
 // ========================================
 //
-// File: src/services/federated_directory_reader.rs
-// Description: Product-layer read boundary for federation discovery.
+// File: src/daemon/federation/directory_reader.rs
+// Description: Product-layer read boundary for daemon federation discovery.
 //
 // `daemon::invocation::federation_invoke` is gated behind
 // `axon-pb` because it depends on tonic and SDK-owned protobuf types.

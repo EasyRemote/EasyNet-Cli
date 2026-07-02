@@ -190,7 +190,7 @@ impl StreamDispatcher {
     pub(crate) fn dispatch_subscribe_directory_v2(
         &self,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        use crate::services::federation_directory::{
+        use crate::daemon::federation::directory::{
             presence_event_to_directory_event, DirectoryEvent,
         };
 
@@ -279,7 +279,7 @@ impl StreamDispatcher {
                         // 60s idle-timeout watcher does not
                         // tear down a healthy stream.
                         let hb_evt = DirectoryEvent::Heartbeat {
-                            unix_ms: crate::services::federation_directory::now_unix_ms(),
+                            unix_ms: crate::daemon::federation::directory::now_unix_ms(),
                         };
                         let payload = serde_json::to_vec(&hb_evt)
                             .expect("DirectoryEvent::Heartbeat is statically Serialize");

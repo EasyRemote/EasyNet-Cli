@@ -28,12 +28,12 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
+use crate::daemon::federation::directory::SharedFederatedDirectoryView;
+use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::invocation::federation_wrappers::{self, ResolveAgentSummary, ResolveRequest};
 use crate::daemon::invocation::hub_resolver::{HubResolution, HubResolver};
 use crate::services::ability_catalog_store::AbilityCatalogStore;
 use crate::services::advertised_agent_store::AdvertisedAgentStore;
-use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_directory::SharedFederatedDirectoryView;
 use crate::services::presence_registry::PresenceRegistry;
 
 use easynet_axon::pb::axon::v1 as axon_pb;
@@ -582,7 +582,7 @@ impl<'a> DaemonRouteResolver<'a> {
             catalog,
             peer_delegation: None,
             device_local: None,
-            now_unix_ms: crate::services::federation_directory::now_unix_ms(),
+            now_unix_ms: crate::daemon::federation::directory::now_unix_ms(),
         }
     }
 
@@ -1676,12 +1676,12 @@ mod tests {
 
     use std::collections::BTreeMap;
 
+    use crate::daemon::federation::directory::SharedFederatedDirectoryView;
+    use crate::daemon::federation::peers::SharedFederatedPeers;
     use crate::services::ability_catalog_store::{AbilityCatalogStore, OwnerAbilityProjectionRow};
     use crate::services::advertised_agent_store::{
         AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
     };
-    use crate::services::federated_peers_cell::SharedFederatedPeers;
-    use crate::services::federation_directory::SharedFederatedDirectoryView;
     use crate::services::presence_registry::PresenceRegistry;
 
     const TEST_NOW_MS: i64 = 1_700_000_000_000;

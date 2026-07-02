@@ -313,7 +313,7 @@ pub trait FederationClient: Send + Sync {
 /// JSON-decode + filter step; test mocks wrap an in-memory
 /// vector via `futures::stream::iter`.
 pub type DirectoryEventStream = std::pin::Pin<
-    Box<dyn futures::Stream<Item = crate::services::federation_directory::DirectoryEvent> + Send>,
+    Box<dyn futures::Stream<Item = crate::daemon::federation::directory::DirectoryEvent> + Send>,
 >;
 
 /// tonic-backed concrete implementation. Holds:
@@ -821,13 +821,13 @@ impl CrossHubDialer {
     fn stream_chunks_to_directory_events(
         inner: tonic::Streaming<easynet_axon::pb::axon::v1::InvokeStreamChunk>,
         target_hub: HubUri,
-    ) -> impl futures::Stream<Item = crate::services::federation_directory::DirectoryEvent> + Send
+    ) -> impl futures::Stream<Item = crate::daemon::federation::directory::DirectoryEvent> + Send
     {
         futures::stream::unfold((inner, target_hub), |(mut inner, target_hub)| async move {
             loop {
                 match inner.message().await {
                     Ok(Some(chunk)) => match serde_json::from_slice::<
-                        crate::services::federation_directory::DirectoryEvent,
+                        crate::daemon::federation::directory::DirectoryEvent,
                     >(&chunk.payload)
                     {
                         Ok(event) => return Some((event, (inner, target_hub))),

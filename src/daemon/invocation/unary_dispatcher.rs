@@ -43,6 +43,7 @@ use std::collections::{BTreeMap, HashMap};
 use tokio::sync::mpsc;
 
 use crate::daemon::federation::client::FederationClient;
+use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::invocation::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RuntimePlane, SessionPlane,
@@ -82,7 +83,6 @@ use crate::daemon::invocation::target_gate::{
     envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
     selected_host_unavailable_message, TargetGate,
 };
-use crate::services::federation_directory::now_unix_ms;
 use crate::services::pending_dispatch::DispatchResult;
 use crate::services::realm_trust_anchor::TrustedAgentRole;
 use crate::services::session_failure::SessionFailure;

@@ -740,7 +740,7 @@ async fn invoke_dispatches_federation_discover_returns_peer_entries_when_view_po
     // test we manually `replace` the cell with a populated
     // map), discover surfaces them with origin_realm
     // stamped per §2.4.
-    use crate::services::federation_directory::{
+    use crate::daemon::federation::directory::{
         DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
     use std::collections::BTreeMap;
@@ -780,7 +780,7 @@ async fn invoke_dispatches_federation_discover_returns_peer_entries_when_view_po
 
 #[tokio::test]
 async fn invoke_dispatches_federation_discover_with_ura_filter_returns_single_hit() {
-    use crate::services::federation_directory::{
+    use crate::daemon::federation::directory::{
         DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
     use std::collections::BTreeMap;
@@ -834,10 +834,10 @@ async fn invoke_discover_with_user_id_filters_unbound_cross_realm_entries() {
     // Daemon's session_realm = realm-b. View has realm-c
     // entry (unbound for the calling user). Bindings store
     // is empty, so the cross-realm entry is filtered out.
-    use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
-    use crate::services::federation_directory::{
+    use crate::daemon::federation::directory::{
         DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
+    use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
     use std::collections::BTreeMap;
 
     let cell = SharedFederatedDirectoryView::default();
@@ -880,7 +880,7 @@ async fn invoke_discover_without_user_id_does_not_filter() {
     // Same setup as above but no local_user_id ⇒ unfiltered
     // path. Cross-realm unbound entries surface (operator /
     // audit query path).
-    use crate::services::federation_directory::{
+    use crate::daemon::federation::directory::{
         DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
     use std::collections::BTreeMap;
@@ -918,11 +918,11 @@ async fn invoke_discover_without_user_id_does_not_filter() {
 
 #[tokio::test]
 async fn invoke_discover_with_user_id_keeps_bound_entry() {
+    use crate::daemon::federation::directory::{
+        DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
+    };
     use crate::runtime::keyring::federated_bindings::{
         FederatedBindingsStore, FederatedUserBinding,
-    };
-    use crate::services::federation_directory::{
-        DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
     };
     use std::collections::BTreeMap;
 

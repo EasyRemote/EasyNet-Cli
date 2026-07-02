@@ -282,7 +282,7 @@ pub fn start_daemon_invocation_transport(
     // DaemonInvocationService (for cross-hub `forward_invoke`
     // routing) and the AdmissionFacade (for `FederatedKeyResolver`
     // cross-realm signature verify against peer hubs).
-    let federated_peers_cell = crate::services::federated_peers_cell::SharedFederatedPeers::new(
+    let federated_peers_cell = crate::daemon::federation::peers::SharedFederatedPeers::new(
         config.federated_peers().clone(),
     );
 
@@ -301,7 +301,7 @@ pub fn start_daemon_invocation_transport(
     // (and gracefully degrade to local-only behaviour, the
     // same shape they show on a single-realm daemon).
     let federated_directory_cell =
-        crate::services::federation_directory::SharedFederatedDirectoryView::default();
+        crate::daemon::federation::directory::SharedFederatedDirectoryView::default();
 
     // PR-N1 commit 9/N + PR-N2 commit 1/N: hub-mode daemons
     // construct one CrossHubDialer that backs both the daemon's
@@ -1160,7 +1160,7 @@ fn spawn_unified_sighup_reload_task(
     trust_anchor_path: PathBuf,
     trust_anchor_cell: SharedTrustAnchor,
     daemon_config_path: PathBuf,
-    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    federated_peers_cell: crate::daemon::federation::peers::SharedFederatedPeers,
     quota_gate: SharedUsageQuotaGate,
     federated_key_cache: crate::daemon::invocation::federated_key_resolver::SharedFederatedKeyCache,
 ) {
@@ -1260,7 +1260,7 @@ fn spawn_unified_sighup_reload_task(
     _trust_anchor_path: PathBuf,
     _trust_anchor_cell: SharedTrustAnchor,
     _daemon_config_path: PathBuf,
-    _federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    _federated_peers_cell: crate::daemon::federation::peers::SharedFederatedPeers,
     _quota_gate: SharedUsageQuotaGate,
     _federated_key_cache: crate::daemon::invocation::federated_key_resolver::SharedFederatedKeyCache,
 ) {
@@ -1284,9 +1284,9 @@ fn spawn_unified_sighup_reload_task(
 #[allow(dead_code)]
 fn spawn_federated_directory_poll_task(
     federation_client: Arc<dyn crate::daemon::federation::client::FederationClient>,
-    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    federated_peers_cell: crate::daemon::federation::peers::SharedFederatedPeers,
     daemon_ura: Option<String>,
-    federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
+    federated_directory_cell: crate::daemon::federation::directory::SharedFederatedDirectoryView,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -1301,7 +1301,7 @@ fn spawn_federated_directory_poll_task(
             if peers.is_empty() {
                 continue;
             }
-            let outcome = crate::services::federation_directory::poll_once(
+            let outcome = crate::daemon::federation::directory::poll_once(
                 federation_client.as_ref(),
                 &peers,
                 daemon_ura.as_deref(),
@@ -1344,8 +1344,8 @@ fn spawn_federated_directory_poll_task(
 /// abort).
 fn spawn_federated_directory_streaming_supervisor(
     federation_client: Arc<dyn crate::daemon::federation::client::FederationClient>,
-    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
-    federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
+    federated_peers_cell: crate::daemon::federation::peers::SharedFederatedPeers,
+    federated_directory_cell: crate::daemon::federation::directory::SharedFederatedDirectoryView,
     caller_ura: String,
 ) {
     tokio::spawn(async move {
@@ -1366,7 +1366,7 @@ fn spawn_federated_directory_streaming_supervisor(
             let federation_client_outer = Arc::clone(&federation_client);
             let directory_cell_outer = federated_directory_cell.clone();
             let (spawned, cancelled) =
-                crate::services::federation_directory::reconcile_streaming_supervisors(
+                crate::daemon::federation::directory::reconcile_streaming_supervisors(
                     &snapshot,
                     &mut active,
                     |peer_realm, peer_hub_endpoint| {
@@ -1377,7 +1377,7 @@ fn spawn_federated_directory_streaming_supervisor(
                         let client_clone = Arc::clone(&federation_client_outer);
                         let cell_clone = directory_cell_outer.clone();
                         tokio::spawn(async move {
-                            crate::services::federation_directory::run_per_peer_supervisor(
+                            crate::daemon::federation::directory::run_per_peer_supervisor(
                                 realm_owned,
                                 uri_owned,
                                 caller_owned,

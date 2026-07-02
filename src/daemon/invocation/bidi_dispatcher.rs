@@ -1239,7 +1239,7 @@ impl BidiDispatcher {
             // written here, not in the drain.
             let ledger_for_receipt = self.runtime.invocation_ledger.clone();
             let ability_for_receipt = dispatch_ability.clone();
-            let dispatch_started_unix_ms = crate::services::federation_directory::now_unix_ms();
+            let dispatch_started_unix_ms = crate::daemon::federation::directory::now_unix_ms();
             tokio::spawn(async move {
                 let frame = match handle.await_reply().await {
                     Ok(DispatchResult {
@@ -3064,7 +3064,7 @@ fn refresh_session_owner_projection_lease(dispatcher: &BidiDispatcher, caller_ur
     refresh_session_owner_projection_lease_at(
         dispatcher,
         caller_ura,
-        crate::services::federation_directory::now_unix_ms(),
+        crate::daemon::federation::directory::now_unix_ms(),
     )
 }
 

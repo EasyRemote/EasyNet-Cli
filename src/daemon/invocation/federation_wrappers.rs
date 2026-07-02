@@ -528,7 +528,7 @@ pub fn handle_resolve(
         advertised_agents,
         catalog,
         self_device_ura,
-        crate::services::federation_directory::now_unix_ms(),
+        crate::daemon::federation::directory::now_unix_ms(),
     )
 }
 
@@ -628,7 +628,7 @@ pub fn handle_namespace_resolve(
         registry,
         advertised_agents,
         catalog,
-        crate::services::federation_directory::now_unix_ms(),
+        crate::daemon::federation::directory::now_unix_ms(),
     )
 }
 
@@ -821,13 +821,13 @@ pub fn handle_resolve_key(
 #[must_use]
 pub fn handle_discover(
     request: &DiscoverRequest,
-    view: &crate::services::federation_directory::SharedFederatedDirectoryView,
+    view: &crate::daemon::federation::directory::SharedFederatedDirectoryView,
 ) -> DiscoverResponse {
     let entries = match request.agent_ura.as_deref() {
-        Some(ura) => crate::services::federation_directory::lookup_in_federated_view(view, ura)
+        Some(ura) => crate::daemon::federation::directory::lookup_in_federated_view(view, ura)
             .map(|e| vec![e])
             .unwrap_or_default(),
-        None => crate::services::federation_directory::flatten_federated_view(view),
+        None => crate::daemon::federation::directory::flatten_federated_view(view),
     };
     DiscoverResponse { entries }
 }
@@ -848,15 +848,15 @@ pub fn handle_discover(
 #[must_use]
 pub fn handle_discover_with_user_filter(
     request: &DiscoverRequest,
-    view: &crate::services::federation_directory::SharedFederatedDirectoryView,
+    view: &crate::daemon::federation::directory::SharedFederatedDirectoryView,
     resolver: &crate::runtime::keyring::resolver::FederatedUserResolver,
 ) -> DiscoverResponse {
     use crate::runtime::keyring::resolver::FederatedUserOutcome;
     let raw = match request.agent_ura.as_deref() {
-        Some(ura) => crate::services::federation_directory::lookup_in_federated_view(view, ura)
+        Some(ura) => crate::daemon::federation::directory::lookup_in_federated_view(view, ura)
             .map(|e| vec![e])
             .unwrap_or_default(),
-        None => crate::services::federation_directory::flatten_federated_view(view),
+        None => crate::daemon::federation::directory::flatten_federated_view(view),
     };
     let entries = raw
         .into_iter()
@@ -890,7 +890,7 @@ pub struct ProxyListUserDevicesRequest {
 /// to the backend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProxyListUserDevicesResponse {
-    pub devices: Vec<crate::services::federation_directory::DirectoryEntry>,
+    pub devices: Vec<crate::daemon::federation::directory::DirectoryEntry>,
 }
 
 /// Request payload for `namespace.proxy_resolve`.
@@ -956,7 +956,7 @@ pub fn handle_list_user_devices(
                 }
                 _ => String::new(),
             };
-            crate::services::federation_directory::DirectoryEntry {
+            crate::daemon::federation::directory::DirectoryEntry {
                 agent_ura: ura,
                 node_id,
                 display_name: None,
@@ -1115,10 +1115,10 @@ pub fn build_subscribe_directory_initial(registry: &PresenceRegistry) -> Subscri
 #[must_use]
 pub fn build_subscribe_directory_v2_snapshot(
     registry: &PresenceRegistry,
-) -> crate::services::federation_directory::DirectoryEvent {
-    crate::services::federation_directory::presence_uras_to_directory_snapshot(
+) -> crate::daemon::federation::directory::DirectoryEvent {
+    crate::daemon::federation::directory::presence_uras_to_directory_snapshot(
         registry.snapshot(),
-        crate::services::federation_directory::now_unix_ms(),
+        crate::daemon::federation::directory::now_unix_ms(),
     )
 }
 
@@ -1981,8 +1981,8 @@ mod tests {
     // ── N3-N4 bridge: handle_discover_with_user_filter ─────────
 
     fn populated_view_two_realms(
-    ) -> crate::services::federation_directory::SharedFederatedDirectoryView {
-        use crate::services::federation_directory::{
+    ) -> crate::daemon::federation::directory::SharedFederatedDirectoryView {
+        use crate::daemon::federation::directory::{
             DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
         };
         let cell = SharedFederatedDirectoryView::default();

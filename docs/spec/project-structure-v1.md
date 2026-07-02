@@ -29,9 +29,10 @@ runtime semantics, these sources are higher priority:
    dispatch compatibility, wire-profile lookup, and Axon glue.
 4. `src/daemon/control/` for local boot/status IPC, `src/daemon/invocation/`
    for daemon-owned Invocation transport/admission/session dispatch,
-   `src/daemon/federation/client/` for daemon-owned outbound peer-hub dialing,
-   and `src/services/` for the remaining migration-stage trust, federation,
-   quota, and store infrastructure.
+   `src/daemon/federation/` for daemon-owned outbound peer-hub dialing,
+   cross-realm directory projection, peer-map reload state, and federation
+   discovery read boundaries, and `src/services/` for the remaining
+   migration-stage trust, quota, and store infrastructure.
 
 ## Review Findings Grouped By Root Cause
 
@@ -1292,7 +1293,7 @@ the phase blocked.
 | Daemon SDK root ownership | Daemon SDK source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/mod.rs` exists, `src/daemon.rs` is retired, and active code does not reference the retired physical path | New daemon SDK root logic lands in `src/daemon.rs`, or docs/scripts keep treating it as the active SDK root |
 | Daemon control ownership | Control-plane source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/control/` exists, `src/services/control/` is retired, and active code does not import through `services::control` | New local control-plane code lands under `src/services/control`, or active code imports the retired services control path |
 | Daemon Invocation ownership | Invocation transport source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/` exists, `src/services/invocation_transport/` is retired, and active code does not import through `services::invocation_transport` | New Invocation transport logic lands under `src/services/invocation_transport`, or active code imports the retired services Invocation path |
-| Daemon federation client ownership | Federation transport source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/` exists, `src/services/federation_client/` is retired, and active code does not import through `services::federation_client` | New outbound peer-hub dialing code lands under `src/services/federation_client`, or active code imports the retired services federation-client path |
+| Daemon federation ownership | Federation transport, directory, peer-map, and read-boundary source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, and `src/daemon/federation/peers.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::federation_*` paths | New daemon federation transport, directory, peer-map, or discovery-reader code lands under `src/services`, or active code imports retired services federation paths |
 | Facade fan-out ban | CLI, FFI, SDK, backend adapter work | Audit of facade code paths plus search for loops/concurrency over devices, agents, or abilities in facade layers | A default list/helper performs governed per-target fan-out |
 | Aggregate fan-out contract | Aggregate ability work | State machine, max concurrency, deadline, page size, partial-result type, child receipt refs, and per-target typed errors | Aggregation is hidden behind ordinary list naming or lacks bounded/typed partial semantics |
 | Compile gate | Every code phase | `cargo fmt --check` and a narrow compile command such as `cargo check --lib --features axon-pb` or a phase-specific stricter gate | Formatting fails, compilation fails, or the chosen compile gate does not cover touched modules |

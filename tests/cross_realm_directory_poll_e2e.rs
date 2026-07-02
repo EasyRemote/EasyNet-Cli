@@ -10,7 +10,7 @@
 //
 // Why this test
 // -------------
-// The unit tests in `services::federation_directory` mock the
+// The unit tests in `daemon::federation::directory` mock the
 // `FederationClient`; they prove the data plane (rewrite chokepoint,
 // per-peer view, cell semantics) but not the wire path. This test
 // uses a real `DaemonInvocationService` for daemon A and an in-
@@ -42,11 +42,11 @@ use async_trait::async_trait;
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse};
 use easynet_cli::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
-use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
-use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::federation_directory::{
+use easynet_cli::daemon::federation::directory::{
     poll_once, DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
 };
+use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 

@@ -1,8 +1,8 @@
-// EasyNet CLI — Cross-realm directory federation types (RFC-N3)
+// EasyNet CLI - daemon federation directory (RFC-N3)
 // ===============================================================
 //
-// File: src/services/federation_directory.rs
-// Description: Runtime projection helpers for the cross-realm
+// File: src/daemon/federation/directory.rs
+// Description: Daemon runtime projection helpers for the cross-realm
 //              directory federation surface introduced by PR-N3
 //              (`pr-drafts/PR-N3-spec-cross-realm-directory-v2.md`).
 //              The wire shapes themselves are Axon SDK exports.
