@@ -185,7 +185,7 @@ pub(super) fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
             return;
         }
     };
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
+    let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
         &bridge,
         identity.caller_ura.clone(),
     );

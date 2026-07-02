@@ -39,8 +39,8 @@ use crate::daemon::ability::catalog::profiles::{
     self as profiles_mod,
     bootstrap::{self, BootstrapOutcome, BootstrapPlan, UraMinter, UuidMinter},
 };
+use crate::daemon::federation::advertise::{self, AbilityInvoker, AdvertiseOutcome};
 use crate::persistence::local_agents::{self, LocalAgentsFile};
-use crate::runtime::advertise::{self, AbilityInvoker, AdvertiseOutcome};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
@@ -649,7 +649,7 @@ pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
     agent_ura: &str,
     reason: &str,
 ) -> PublishOutcome {
-    let resource_ura = crate::runtime::advertise::revoke_resource_ura(realm, tenant_id);
+    let resource_ura = crate::daemon::federation::advertise::revoke_resource_ura(realm, tenant_id);
     let payload = serde_json::json!({
         "agent_ura": agent_ura,
         "reason": reason,

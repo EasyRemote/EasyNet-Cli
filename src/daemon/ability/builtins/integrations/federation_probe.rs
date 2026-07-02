@@ -31,9 +31,9 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::names::{federation, governance};
+use crate::daemon::federation::advertise::{self, BridgeAbilityInvoker};
 use crate::daemon::federation::client::ability_contract::{ForwardInvokeReceipt, ResolvedAgent};
 use crate::persistence::config;
-use crate::runtime::advertise::{self, BridgeAbilityInvoker};
 
 const DEVICE_HEALTH_ABILITY: &str = governance::OBSERVE_HEALTH;
 const DEVICE_NODE_LIST_ABILITY: &str = federation::NODE_LIST;

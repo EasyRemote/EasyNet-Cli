@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use super::forward::CliForwardInvoker;
 use super::handle::KeyringHandle;
-use crate::runtime::advertise::{forward_invoke, BridgeAbilityInvoker};
+use crate::daemon::federation::advertise::{forward_invoke, BridgeAbilityInvoker};
 
 /// Production `CliForwardInvoker` impl. Holds an `Arc` over the
 /// daemon's bridge so the same gRPC connection that does

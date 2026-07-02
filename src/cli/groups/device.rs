@@ -267,7 +267,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     // Joint-plan unified path: `device remove` calls
     // `federation.revoke` directly through the daemon's gRPC
     // InvocationServer (the same surface
-    // `runtime/advertise.rs::revoke_agent` and the heartbeat
+    // `daemon/federation/advertise.rs::revoke_agent` and the heartbeat
     // sidecar's shutdown hook use). The legacy `node.remove`
     // ability was a P1.5 placeholder — local-arm refused with
     // "use device reset", remote-arm raised `federation_not_wired`

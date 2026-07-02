@@ -471,7 +471,7 @@ pub(crate) fn republish_via_federation_best_effort(
     // bridge stamps `envelope.caller.uri` to a canonical URA —
     // `plan.host_device_ura` already carries that shape (see
     // `build_bootstrap_plan_from`).
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
+    let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
         bridge,
         plan.host_device_ura.clone(),
     );

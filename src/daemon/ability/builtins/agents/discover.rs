@@ -143,9 +143,10 @@ impl DiscoverFederationResolver for BridgeDiscoverFederationResolver {
                  scope=\"user\" or scope=\"public\""
             ))
         })?;
-        let invoker =
-            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(&bridge, caller_ura);
-        crate::runtime::advertise::resolve_agents_with_filter(
+        let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
+            &bridge, caller_ura,
+        );
+        crate::daemon::federation::advertise::resolve_agents_with_filter(
             &invoker,
             tenant,
             realm,

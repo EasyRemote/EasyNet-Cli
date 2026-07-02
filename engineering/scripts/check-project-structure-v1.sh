@@ -109,6 +109,7 @@ require_path "src/daemon/axon_bridge/mod.rs"
 require_path "src/daemon/context/clipboard_tracker.rs"
 require_path "src/daemon/control"
 require_path "src/daemon/execution/mod.rs"
+require_path "src/daemon/federation/advertise.rs"
 require_path "src/daemon/federation/client"
 require_path "src/daemon/federation/client/ability_contract.rs"
 require_path "src/daemon/federation/directory.rs"
@@ -158,6 +159,7 @@ reject_path "src/runtime/ability_runtime"
 reject_path "src/runtime/agents"
 reject_path "src/runtime/ability_names"
 reject_path "src/runtime/ability_wire.rs"
+reject_path "src/runtime/advertise.rs"
 reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/execution"
 reject_path "src/runtime/federation_client.rs"
@@ -250,6 +252,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not import through retired runtime::ability_wire paths" \
     '(^|[^[:alnum:]_])(crate::runtime::ability_wire::|easynet_cli::runtime::ability_wire::|runtime::ability_wire::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::advertise paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::advertise::|easynet_cli::runtime::advertise::|runtime::advertise::)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
@@ -370,6 +377,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/ability_wire.rs physical path" \
     'src/runtime/ability_wire\.rs|runtime/ability_wire\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/advertise.rs physical path" \
+    'src/runtime/advertise\.rs|runtime/advertise\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

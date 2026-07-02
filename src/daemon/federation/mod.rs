@@ -9,6 +9,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod advertise;
 pub mod client;
 #[cfg(feature = "axon-pb")]
 pub mod directory;

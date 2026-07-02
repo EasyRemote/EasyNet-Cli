@@ -1,7 +1,7 @@
 // EasyNet CLI — Federation Advertise (RFC-001 §3 step 6)
 // =========================================================
 //
-// File: src/runtime/advertise.rs
+// File: src/daemon/federation/advertise.rs
 //
 // Wraps `bridge.ability_call_raw` for the two federation.advertise_*
 // abilities the daemon calls at boot to register itself + its
@@ -30,8 +30,9 @@
 //   boot sequence (mint URAs from local-agents.json, then call
 //   advertise_*). For now this module is callable from any context
 //   that has a live bridge.
-// - Not a replacement for `publish.rs` yet. P4.7 deletes
-//   publish.rs's Ok(false) stubs in favor of calls into here.
+// - Not a replacement for the higher-level publish orchestration.
+//   That path decides which local/hosted agents to advertise; this
+//   module only owns typed federation ability calls.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

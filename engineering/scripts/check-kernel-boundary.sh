@@ -19,7 +19,7 @@
 #   * daemon/invocation/ — the daemon's gRPC Invocation server.
 #                            Wider allowlist; covers ability
 #                            dispatch, agents catalog, keyring,
-#                            publish, execution, advertise, abilities.
+#                            publish, execution, abilities.
 #
 # (The former Rule 3 for `services/axon_bridge/` was retired on
 # 2026-05-29 when that subtree moved out of `services/`. It now lives
@@ -120,14 +120,10 @@ fi
 #                           admission/bootstrap paths.
 #   * federation_init     — daemon-side federation initialization
 #                           decision surface referenced by boot.
-#   * advertise           — federation.advertise_* helpers the boot
-#                           sequence drives to register the daemon's
-#                           Agents in the realm directory. Pure
-#                           ability-call wrapper; no internal state.
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='domain|system|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|join_connection_state|provisional_ura|federation_init|advertise'
+    serve_allowed='domain|system|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|join_connection_state|provisional_ura|federation_init'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

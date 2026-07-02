@@ -519,6 +519,7 @@ src/daemon/
 │  ├─ receipt_subscriber.rs
 │  └─ local_runtime_invoker.rs
 ├─ federation/
+│  ├─ advertise.rs
 │  ├─ client/
 │  │  └─ ability_contract.rs
 │  ├─ read_model/
@@ -575,6 +576,9 @@ Notes:
   argument/response DTOs for hub-profile `federation.*` abilities. The retired
   `runtime/federation_client.rs` path and `runtime::federation_client` import
   must not return.
+- `daemon/federation/advertise.rs` owns typed federation advertise, heartbeat,
+  resolve, resolve_key, revoke, and forward_invoke ability calls. The retired
+  `runtime/advertise.rs` path and `runtime::advertise` import must not return.
 
 ## CLI Boundary
 
@@ -1352,6 +1356,7 @@ the phase blocked.
 | Daemon federation gateway ownership | Gateway and GatewayApi source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/gateway.rs` and `src/daemon/federation/gateway_api.rs` exist, `src/runtime/gateway.rs` and `src/runtime/gateway_api.rs` are retired, and active code does not import through `runtime::gateway` or `runtime::gateway_api` | New daemon federation lifecycle/discovery gateway logic lands under `src/runtime/gateway*.rs`, or active code imports retired runtime gateway paths |
 | Daemon federation owner projection ownership | Owner projection read-model move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/read_model/owner_projection.rs` exists, `src/runtime/owner_projection.rs` is retired, and active code does not import through `runtime::owner_projection` | New owner ability projection, lease refresh, or advertised callable summary logic lands under `src/runtime/owner_projection.rs`, or active code imports the retired runtime owner projection path |
 | Daemon federation ability contract ownership | federation.* DTO source move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/ability_contract.rs` exists, `src/runtime/federation_client.rs` is retired, and active code does not import through `runtime::federation_client` | New typed argument/response helpers for hub-profile `federation.*` abilities land under `src/runtime/federation_client.rs`, or active code imports the retired runtime federation client path |
+| Daemon federation advertise ownership | federation.* advertise/heartbeat client move | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/advertise.rs` exists, `src/runtime/advertise.rs` is retired, and active code does not import through `runtime::advertise` | New federation advertise, heartbeat, resolve, revoke, resolve_key, or forward_invoke wrapper logic lands under `src/runtime/advertise.rs`, or active code imports the retired runtime advertise path |
 | Daemon Invocation state ownership | Invocation presence, pending dispatch, replay, quota, and failure-state source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/invocation/state/{presence,pending_dispatch,nonce_replay,usage_quota,session_failure}.rs` exist; retired Invocation state files under `src/services/` do not; active code does not import through retired services Invocation-state paths | New daemon Invocation liveness, pending-dispatch, replay, quota, or failure-state code lands under `src/services`, or active code imports retired services state paths |
 | Daemon federation ownership | Federation transport, directory, peer-map, discovery read-boundary, and read-model source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/federation/client/`, `src/daemon/federation/directory.rs`, `src/daemon/federation/directory_reader.rs`, `src/daemon/federation/peers.rs`, and `src/daemon/federation/read_model/{ability_catalog,advertised_agents,hub_published_abilities}.rs` exist; retired federation files under `src/services/` do not; active code does not import through retired `services::*` paths | New daemon federation transport, directory, peer-map, discovery-reader, or read-model code lands under `src/services`, or active code imports retired services paths |
 | Daemon trust ownership | Trust-anchor state, hot-reload cell, and Axon key-resolver source moves | `engineering/scripts/check-project-structure-v1.sh` proving `src/daemon/trust/anchor.rs`, `src/daemon/trust/cell.rs`, and `src/daemon/trust/key_resolver.rs` exist; retired trust files under `src/services/` do not; active code does not import through retired `services::realm_trust_anchor`, `services::trust_anchor_cell`, or `services::trust_anchor_key_resolver` paths | New daemon trust state or key-resolution adapters land under `src/services`, or active code imports retired services trust paths |
@@ -1405,17 +1410,19 @@ Code and structure:
     model code lives under `daemon/federation/read_model/`.
 14. `runtime/federation_client.rs` is absent; typed federation ability DTOs
     live under `daemon/federation/client/`.
+15. `runtime/advertise.rs` is absent; typed federation advertise/heartbeat
+    client code lives under `daemon/federation/`.
 
 Behavior:
 
-15. Existing public Ability names remain byte-identical.
-16. `meta.list_abilities` returns the same ability names before and after a
+16. Existing public Ability names remain byte-identical.
+17. `meta.list_abilities` returns the same ability names before and after a
    structural move.
-17. Ability call modes remain unchanged.
-18. Descriptor generation output remains byte-identical unless the phase is
+18. Ability call modes remain unchanged.
+19. Descriptor generation output remains byte-identical unless the phase is
     explicitly a descriptor-format change.
-19. No product-module source move changes Invocation or Receipt semantics.
-20. No runtime registry tree is introduced.
+20. No product-module source move changes Invocation or Receipt semantics.
+21. No runtime registry tree is introduced.
 
 Complexity/fan-out:
 

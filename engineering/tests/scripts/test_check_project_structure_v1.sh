@@ -71,6 +71,7 @@ make_sandbox() {
     printf '%s\n' '// daemon control root' > "$sandbox/src/daemon/control/mod.rs"
     printf '%s\n' '// daemon execution root' > "$sandbox/src/daemon/execution/mod.rs"
     printf '%s\n' '// daemon federation root' > "$sandbox/src/daemon/federation/mod.rs"
+    printf '%s\n' '// daemon federation advertise client' > "$sandbox/src/daemon/federation/advertise.rs"
     printf '%s\n' '// federation ability contract DTOs' > "$sandbox/src/daemon/federation/client/ability_contract.rs"
     printf '%s\n' '// daemon federation client root' > "$sandbox/src/daemon/federation/client/mod.rs"
     printf '%s\n' '// daemon federation directory' > "$sandbox/src/daemon/federation/directory.rs"
@@ -184,6 +185,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/ability_wire.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired federation advertise client' > "$SB/src/runtime/advertise.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/advertise.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/axon_bridge"
@@ -365,6 +373,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::ability_wire import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::advertise::AbilityInvoker; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::advertise import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::axon_bridge::runtime_factory::build_local_runtime; }' > "$SB/src/lib.rs"
@@ -668,6 +683,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/client should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/advertise.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/advertise.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/federation/client/ability_contract.rs"

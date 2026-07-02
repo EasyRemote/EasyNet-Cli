@@ -435,7 +435,7 @@ fn start_agent_handler(
                 // `heartbeat_refresh_owner_uras`. Also build the wire
                 // payload so the advertiser pushes it to the hub NOW
                 // (event-driven), not at the next heartbeat. ISS-002.
-                match crate::runtime::advertise::advertise_abilities_payload(
+                match crate::daemon::federation::advertise::advertise_abilities_payload(
                     &agent_ura,
                     &publication,
                 )
@@ -681,7 +681,7 @@ fn stop_agent_handler(
                 &host_device_ura,
             ) {
                 Ok(Some(publication)) => {
-                    let tombstone_payload = crate::runtime::advertise::advertise_abilities_payload(
+                    let tombstone_payload = crate::daemon::federation::advertise::advertise_abilities_payload(
                         &agent_ura,
                         &publication,
                     )

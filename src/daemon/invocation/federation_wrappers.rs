@@ -428,7 +428,7 @@ pub(crate) fn handle_advertise_abilities(
 pub struct HeartbeatRequest {
     /// URA of the agent reporting in. Used only for log context now;
     /// liveness comes from the registry's stream membership. The device's
-    /// heartbeat payload (see `runtime/advertise.rs`) does not send this
+    /// heartbeat payload (see `daemon/federation/advertise.rs`) does not send this
     /// field, so it must deserialize as optional — a missing `agent_ura`
     /// is a valid heartbeat, not a wire error.
     #[serde(default)]
@@ -1516,7 +1516,7 @@ mod tests {
 
     #[test]
     fn heartbeat_request_deserializes_device_payload_without_agent_ura() {
-        // The device's actual heartbeat payload (runtime/advertise.rs) sends
+        // The device's actual heartbeat payload (daemon/federation/advertise.rs) sends
         // `since_abilities_revision` + `refresh_owner_uras` and NO
         // `agent_ura`. The wrapper request must accept it — a missing
         // `agent_ura` is a valid heartbeat, not a deserialization error.

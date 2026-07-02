@@ -44,8 +44,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Value};
 
+use easynet_cli::daemon::federation::advertise::{forward_invoke, AbilityInvoker};
 use easynet_cli::persistence::config::Credentials;
-use easynet_cli::runtime::advertise::{forward_invoke, AbilityInvoker};
 use easynet_cli::runtime::federation_init::{
     try_install_federation_routing, FederationInitInputs, FederationInitOutcome, FederationStage,
 };
